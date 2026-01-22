@@ -1,0 +1,1358 @@
+{
+  "project": "Yokohama Travel 2026",
+  "version": "3.0.0",
+  "currency": "JPY",
+  "default_timezone": "Asia/Tokyo",
+  "meta": {
+    "readiness_definition": "Can proceed to next dependent process",
+    "status_values": [
+      "pending",
+      "researched",
+      "selected",
+      "booked",
+      "confirmed"
+    ],
+    "datetime_format": "ISO-8601 with timezone offset (e.g., 2026-02-11T10:00:00+09:00)",
+    "datetime_policy": {
+      "offset_is_authoritative": true,
+      "timezone_fields_optional": true,
+      "default_timezone_applies_when_timezone_missing": true
+    },
+    "readiness_rule_language": "v1"
+  },
+  "readiness_rules": {
+    "process_1_date_anchor": {
+      "ready_to_proceed": {
+        "all": [
+          {
+            "type": "present",
+            "path": "process_1_date_anchor.set_out_date"
+          },
+          {
+            "type": "present",
+            "path": "process_1_date_anchor.duration_days"
+          },
+          {
+            "type": "present",
+            "path": "process_1_date_anchor.return_date"
+          }
+        ]
+      },
+      "milestones": {
+        "confirmed": {
+          "all": [
+            {
+              "type": "present",
+              "path": "process_1_date_anchor.set_out_date"
+            },
+            {
+              "type": "present",
+              "path": "process_1_date_anchor.duration_days"
+            },
+            {
+              "type": "present",
+              "path": "process_1_date_anchor.return_date"
+            }
+          ]
+        }
+      }
+    },
+    "process_2_destination": {
+      "ready_to_proceed": {
+        "all": [
+          {
+            "type": "present",
+            "path": "process_2_destination.primary_destination"
+          },
+          {
+            "type": "present",
+            "path": "process_2_destination.country"
+          }
+        ]
+      },
+      "milestones": {
+        "confirmed": {
+          "all": [
+            {
+              "type": "present",
+              "path": "process_2_destination.primary_destination"
+            },
+            {
+              "type": "present",
+              "path": "process_2_destination.country"
+            }
+          ]
+        }
+      }
+    },
+    "process_3_transportation": {
+      "ready_to_proceed": {
+        "all": [
+          {
+            "type": "present",
+            "path": "process_3_transportation.flight.outbound.airline"
+          },
+          {
+            "type": "present",
+            "path": "process_3_transportation.flight.outbound.departure_airport"
+          },
+          {
+            "type": "present",
+            "path": "process_3_transportation.flight.outbound.arrival_airport"
+          },
+          {
+            "type": "present",
+            "path": "process_3_transportation.flight.outbound.departure_datetime"
+          }
+        ]
+      },
+      "milestones": {
+        "researched": {
+          "any": [
+            {
+              "type": "min_length",
+              "path": "process_3_transportation.flight.candidates",
+              "min": 1
+            },
+            {
+              "type": "min_length",
+              "path": "process_3_transportation.home_to_airport.candidates",
+              "min": 1
+            },
+            {
+              "type": "min_length",
+              "path": "process_3_transportation.airport_to_hotel.candidates",
+              "min": 1
+            }
+          ]
+        },
+        "selected": {
+          "all": [
+            {
+              "type": "present",
+              "path": "process_3_transportation.flight.outbound.airline"
+            },
+            {
+              "type": "present",
+              "path": "process_3_transportation.flight.outbound.departure_airport"
+            },
+            {
+              "type": "present",
+              "path": "process_3_transportation.flight.outbound.arrival_airport"
+            },
+            {
+              "type": "present",
+              "path": "process_3_transportation.flight.outbound.departure_datetime"
+            }
+          ]
+        },
+        "booked": {
+          "all": [
+            {
+              "type": "present",
+              "path": "process_3_transportation.flight.outbound.booking_ref"
+            },
+            {
+              "type": "present",
+              "path": "process_3_transportation.flight.return.booking_ref"
+            }
+          ]
+        }
+      }
+    },
+    "process_4_accommodation": {
+      "ready_to_proceed": {
+        "all": [
+          {
+            "type": "present",
+            "path": "process_4_accommodation.location_zone.selected_area"
+          }
+        ]
+      },
+      "milestones": {
+        "zone_researched": {
+          "all": [
+            {
+              "type": "min_length",
+              "path": "process_4_accommodation.location_zone.candidates",
+              "min": 1
+            }
+          ]
+        },
+        "zone_selected": {
+          "all": [
+            {
+              "type": "present",
+              "path": "process_4_accommodation.location_zone.selected_area"
+            }
+          ]
+        },
+        "hotel_researched": {
+          "all": [
+            {
+              "type": "min_length",
+              "path": "process_4_accommodation.hotel.candidates",
+              "min": 1
+            }
+          ]
+        },
+        "hotel_selected": {
+          "all": [
+            {
+              "type": "present",
+              "path": "process_4_accommodation.hotel.selected_hotel"
+            }
+          ]
+        },
+        "hotel_booked": {
+          "all": [
+            {
+              "type": "present",
+              "path": "process_4_accommodation.hotel.booking.confirmation_number"
+            }
+          ]
+        }
+      }
+    },
+    "process_5_daily_itinerary": {
+      "ready_to_proceed": {
+        "all": [
+          {
+            "type": "for_each",
+            "path": "process_5_daily_itinerary.days",
+            "all": [
+              {
+                "type": "min_length",
+                "path": "morning.activities",
+                "min": 1
+              },
+              {
+                "type": "min_length",
+                "path": "afternoon.activities",
+                "min": 1
+              }
+            ]
+          }
+        ]
+      },
+      "milestones": {
+        "researched": {
+          "all": [
+            {
+              "type": "for_each",
+              "path": "process_5_daily_itinerary.days",
+              "all": [
+                {
+                  "type": "min_length",
+                  "path": "morning.activities",
+                  "min": 1
+                },
+                {
+                  "type": "min_length",
+                  "path": "afternoon.activities",
+                  "min": 1
+                }
+              ]
+            }
+          ]
+        },
+        "selected": {
+          "all": [
+            {
+              "type": "for_each",
+              "path": "process_5_daily_itinerary.days",
+              "all": [
+                {
+                  "type": "min_length",
+                  "path": "morning.activities",
+                  "min": 1
+                },
+                {
+                  "type": "min_length",
+                  "path": "afternoon.activities",
+                  "min": 1
+                },
+                {
+                  "type": "for_each",
+                  "path": "morning.activities",
+                  "all": [
+                    {
+                      "type": "present",
+                      "path": "name"
+                    }
+                  ]
+                },
+                {
+                  "type": "for_each",
+                  "path": "afternoon.activities",
+                  "all": [
+                    {
+                      "type": "present",
+                      "path": "name"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "confirmed": {
+          "all": [
+            {
+              "type": "for_each",
+              "path": "process_5_daily_itinerary.days",
+              "all": [
+                {
+                  "type": "min_length",
+                  "path": "morning.activities",
+                  "min": 1
+                },
+                {
+                  "type": "min_length",
+                  "path": "afternoon.activities",
+                  "min": 1
+                },
+                {
+                  "type": "for_each",
+                  "path": "morning.activities",
+                  "all": [
+                    {
+                      "type": "present",
+                      "path": "name"
+                    },
+                    {
+                      "type": "present",
+                      "path": "location.name"
+                    },
+                    {
+                      "type": "present",
+                      "path": "time.start"
+                    }
+                  ]
+                },
+                {
+                  "type": "for_each",
+                  "path": "afternoon.activities",
+                  "all": [
+                    {
+                      "type": "present",
+                      "path": "name"
+                    },
+                    {
+                      "type": "present",
+                      "path": "location.name"
+                    },
+                    {
+                      "type": "present",
+                      "path": "time.start"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "budget": {
+    "total_cap": null,
+    "flight_cap": null,
+    "accommodation_cap": null,
+    "daily_cap": null
+  },
+  "process_1_date_anchor": {
+    "status": "confirmed",
+    "set_out_date": "2026-02-18",
+    "duration_days": 6,
+    "return_date": "2026-02-23"
+  },
+  "process_2_destination": {
+    "status": "confirmed",
+    "primary_destination": "Yokohama",
+    "country": "Japan",
+    "region": "Kanto",
+    "sub_areas": []
+  },
+  "process_3_transportation": {
+    "status": "researched",
+    "flight": {
+      "status": "researched",
+      "outbound": {
+        "airline": null,
+        "flight_number": null,
+        "departure_airport": null,
+        "departure_airport_code": null,
+        "arrival_airport": null,
+        "arrival_airport_code": null,
+        "departure_datetime": null,
+        "departure_timezone": null,
+        "arrival_datetime": null,
+        "arrival_timezone": null,
+        "fare": null,
+        "fare_class": null,
+        "booking_ref": null,
+        "booking_url": null,
+        "notes": null
+      },
+      "return": {
+        "airline": null,
+        "flight_number": null,
+        "departure_airport": null,
+        "departure_airport_code": null,
+        "arrival_airport": null,
+        "arrival_airport_code": null,
+        "departure_datetime": null,
+        "departure_timezone": null,
+        "arrival_datetime": null,
+        "arrival_timezone": null,
+        "fare": null,
+        "fare_class": null,
+        "booking_ref": null,
+        "booking_url": null,
+        "notes": null
+      },
+      "candidates": [
+        {
+          "id": "flight_outbound_mkp92wdg_clwr",
+          "direction": "outbound",
+          "airline": "Tigerair Taiwan",
+          "flight_number": "IT200",
+          "departure_airport": "Taipei Songshan Airport",
+          "departure_airport_code": "TSA",
+          "arrival_airport": "Tokyo Narita Airport",
+          "arrival_airport_code": "NRT",
+          "departure_datetime": "2026-02-18T13:55:00+08:00",
+          "departure_timezone": "Asia/Taipei",
+          "arrival_datetime": "2026-02-18T18:00:00+09:00",
+          "arrival_timezone": "Asia/Tokyo",
+          "duration_minutes": 185,
+          "stops": 0,
+          "layover_airports": [],
+          "fare": 21794,
+          "fare_class": "Economy",
+          "baggage_included": "Standard",
+          "refundable": false,
+          "booking_url": null,
+          "pros": [
+            "Direct flight",
+            "Convenient departure time from Songshan"
+          ],
+          "cons": [
+            "Budget airline",
+            "Limited baggage allowance"
+          ]
+        },
+        {
+          "id": "flight_return_mkp932fb_m2au",
+          "direction": "return",
+          "airline": "Tigerair Taiwan",
+          "flight_number": "IT201",
+          "departure_airport": "Tokyo Narita Airport",
+          "departure_airport_code": "NRT",
+          "arrival_airport": "Taipei Songshan Airport",
+          "arrival_airport_code": "TSA",
+          "departure_datetime": "2026-02-23T18:25:00+09:00",
+          "departure_timezone": "Asia/Tokyo",
+          "arrival_datetime": "2026-02-23T21:50:00+08:00",
+          "arrival_timezone": "Asia/Taipei",
+          "duration_minutes": 265,
+          "stops": 0,
+          "layover_airports": [],
+          "fare": 21794,
+          "fare_class": "Economy",
+          "baggage_included": "Standard",
+          "refundable": false,
+          "booking_url": null,
+          "pros": [
+            "Direct flight",
+            "Evening departure allows full day"
+          ],
+          "cons": [
+            "Budget airline",
+            "Limited baggage allowance"
+          ]
+        }
+      ]
+    },
+    "home_to_airport": {
+      "status": "pending",
+      "method": null,
+      "route_description": null,
+      "departure_point": null,
+      "arrival_point": null,
+      "departure_time": null,
+      "duration_minutes": null,
+      "cost": null,
+      "booking_ref": null,
+      "candidates": [],
+      "notes": null
+    },
+    "airport_to_hotel": {
+      "status": "pending",
+      "method": null,
+      "route_description": null,
+      "departure_point": null,
+      "arrival_point": null,
+      "departure_time": null,
+      "duration_minutes": null,
+      "cost": null,
+      "booking_ref": null,
+      "candidates": [],
+      "notes": null
+    }
+  },
+  "process_4_accommodation": {
+    "status": "researched",
+    "location_zone": {
+      "status": "pending",
+      "selected_area": null,
+      "selection_criteria": null,
+      "candidates": []
+    },
+    "hotel": {
+      "status": "researched",
+      "selected_hotel": null,
+      "candidates": [
+        {
+          "id": "hotel_mkp93jgo_wggk",
+          "name": "Yokohama Country Hotel",
+          "name_local": "橫濱遠東鄉村酒店",
+          "address": "Near Sakuragicho Station, 350m walk",
+          "area": "Sakuragicho",
+          "rating": 8.2,
+          "review_count": 5747,
+          "price_per_night": 17094,
+          "total_price": 85470,
+          "amenities": [
+            "Near Metro",
+            "Minato Mirai 21 access"
+          ],
+          "room_types": [],
+          "distance_to_station": null,
+          "nearest_station": null,
+          "booking_url": null,
+          "cancellation_policy": null,
+          "pros": [
+            "Best location",
+            "5min walk to station",
+            "Great value with discount",
+            "High rating"
+          ],
+          "cons": [
+            "Popular - limited availability"
+          ]
+        },
+        {
+          "id": "hotel_mkp93s44_2rhx",
+          "name": "APA Hotel Yokohama Kannai",
+          "name_local": "APA橫濱關內酒店",
+          "address": "400m from Kannai Station, 700m from Sakuragicho",
+          "area": "Kannai",
+          "rating": 7.6,
+          "review_count": 2369,
+          "price_per_night": 14749,
+          "total_price": 73746,
+          "amenities": [
+            "Near Metro",
+            "Free cancellation"
+          ],
+          "room_types": [],
+          "distance_to_station": null,
+          "nearest_station": null,
+          "booking_url": null,
+          "cancellation_policy": null,
+          "pros": [
+            "Excellent location",
+            "Good value",
+            "Free cancellation",
+            "Discount available"
+          ],
+          "cons": [
+            "Lower rating than Country Hotel"
+          ]
+        }
+      ],
+      "booking": {
+        "confirmation_number": null,
+        "check_in_date": null,
+        "check_in_time": null,
+        "check_out_date": null,
+        "check_out_time": null,
+        "room_type": null,
+        "total_price": null,
+        "price_per_night": null,
+        "cancellation_policy": null,
+        "cancellation_deadline": null,
+        "booking_url": null
+      }
+    }
+  },
+  "process_5_daily_itinerary": {
+    "status": "pending",
+    "days": [
+      {
+        "date": "2026-02-18",
+        "day_number": 1,
+        "day_type": "arrival",
+        "status": "pending",
+        "morning": {
+          "time_block": {
+            "start": null,
+            "end": "12:00"
+          },
+          "activities": [],
+          "notes": "Arrival day - flight lands"
+        },
+        "afternoon": {
+          "time_block": {
+            "start": "12:00",
+            "end": "18:00"
+          },
+          "activities": [],
+          "notes": null
+        },
+        "evening": {
+          "time_block": {
+            "start": "18:00",
+            "end": null
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9b8pb_9wtp",
+              "name": "Yokohama Chinatown Dinner",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        }
+      },
+      {
+        "date": "2026-02-19",
+        "day_number": 2,
+        "day_type": "full",
+        "status": "selected",
+        "morning": {
+          "time_block": {
+            "start": "09:00",
+            "end": "12:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9bhgd_f238",
+              "name": "Minato Mirai 21 Walk",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "afternoon": {
+          "time_block": {
+            "start": "12:00",
+            "end": "18:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9bp75_3wjl",
+              "name": "teamLab Planets TOKYO",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "evening": {
+          "time_block": {
+            "start": "18:00",
+            "end": null
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9by3l_ccat",
+              "name": "Shinjuku Kabukicho Adult Show",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        }
+      },
+      {
+        "date": "2026-02-20",
+        "day_number": 3,
+        "day_type": "full",
+        "status": "selected",
+        "morning": {
+          "time_block": {
+            "start": "09:00",
+            "end": "12:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9c6nu_5zkb",
+              "name": "Shinjuku Second-hand Luxury Shopping",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "afternoon": {
+          "time_block": {
+            "start": "12:00",
+            "end": "18:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9ccb8_abkc",
+              "name": "Continue Shopping & Shinjuku Gyoen",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "evening": {
+          "time_block": {
+            "start": "18:00",
+            "end": null
+          },
+          "activities": [],
+          "notes": null
+        }
+      },
+      {
+        "date": "2026-02-21",
+        "day_number": 4,
+        "day_type": "full",
+        "status": "selected",
+        "morning": {
+          "time_block": {
+            "start": "09:00",
+            "end": "12:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9cji9_97iz",
+              "name": "Kamakura Tsurugaoka Hachimangu",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "afternoon": {
+          "time_block": {
+            "start": "12:00",
+            "end": "18:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9cqoa_9f93",
+              "name": "Great Buddha & Enoshima",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "evening": {
+          "time_block": {
+            "start": "18:00",
+            "end": null
+          },
+          "activities": [],
+          "notes": null
+        }
+      },
+      {
+        "date": "2026-02-22",
+        "day_number": 5,
+        "day_type": "full",
+        "status": "selected",
+        "morning": {
+          "time_block": {
+            "start": "09:00",
+            "end": "12:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9cz0c_57r6",
+              "name": "Yokohama Landmark Tower",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "afternoon": {
+          "time_block": {
+            "start": "12:00",
+            "end": "18:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9d4op_6yd7",
+              "name": "Shin-Yokohama Ramen Museum",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "evening": {
+          "time_block": {
+            "start": "18:00",
+            "end": null
+          },
+          "activities": [],
+          "notes": null
+        }
+      },
+      {
+        "date": "2026-02-23",
+        "day_number": 6,
+        "day_type": "departure",
+        "status": "selected",
+        "morning": {
+          "time_block": {
+            "start": "09:00",
+            "end": "12:00"
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9db0c_8n05",
+              "name": "Last minute shopping & check-out",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": null
+        },
+        "afternoon": {
+          "time_block": {
+            "start": "12:00",
+            "end": null
+          },
+          "activities": [
+            {
+              "id": "activity_mkp9dh9k_inzy",
+              "name": "Travel to Narita Airport",
+              "type": null,
+              "location": {
+                "name": null,
+                "address": null,
+                "coordinates": null,
+                "nearest_station": null,
+                "walking_minutes_from_station": null
+              },
+              "time": {
+                "start": null,
+                "end": null,
+                "duration_minutes": null,
+                "flexible": false
+              },
+              "cost": {
+                "admission": null,
+                "estimated_spending": null,
+                "currency": "JPY"
+              },
+              "booking": {
+                "required": false,
+                "booking_ref": null,
+                "booking_url": null,
+                "booked": false
+              },
+              "transit_to_next": {
+                "method": null,
+                "duration_minutes": null,
+                "cost": null,
+                "route": null
+              },
+              "notes": null,
+              "priority": null,
+              "weather_dependent": false
+            }
+          ],
+          "notes": "Departure day - head to airport"
+        },
+        "evening": {
+          "time_block": {
+            "start": null,
+            "end": null
+          },
+          "activities": [],
+          "notes": null
+        }
+      }
+    ]
+  },
+  "schemas": {
+    "flight_candidate": {
+      "id": null,
+      "airline": null,
+      "flight_number": null,
+      "departure_airport": null,
+      "departure_airport_code": null,
+      "arrival_airport": null,
+      "arrival_airport_code": null,
+      "departure_datetime": null,
+      "departure_timezone": null,
+      "arrival_datetime": null,
+      "arrival_timezone": null,
+      "duration_minutes": null,
+      "stops": 0,
+      "layover_airports": [],
+      "fare": null,
+      "fare_class": null,
+      "baggage_included": null,
+      "refundable": false,
+      "booking_url": null,
+      "pros": [],
+      "cons": []
+    },
+    "transport_candidate": {
+      "id": null,
+      "method": null,
+      "operator": null,
+      "route_description": null,
+      "departure_point": null,
+      "arrival_point": null,
+      "departure_time": null,
+      "duration_minutes": null,
+      "cost": null,
+      "booking_required": false,
+      "booking_url": null,
+      "frequency": null,
+      "pros": [],
+      "cons": []
+    },
+    "zone_candidate": {
+      "id": null,
+      "name": null,
+      "description": null,
+      "pros": [],
+      "cons": [],
+      "main_stations": [],
+      "hotel_price_range": {
+        "min": null,
+        "max": null
+      },
+      "distance_to_center": null,
+      "vibe": null
+    },
+    "hotel_candidate": {
+      "id": null,
+      "name": null,
+      "address": null,
+      "area": null,
+      "rating": null,
+      "review_count": null,
+      "price_per_night": null,
+      "total_price": null,
+      "amenities": [],
+      "room_types": [],
+      "distance_to_station": null,
+      "nearest_station": null,
+      "booking_url": null,
+      "cancellation_policy": null,
+      "pros": [],
+      "cons": []
+    },
+    "activity": {
+      "id": null,
+      "name": null,
+      "type": null,
+      "location": {
+        "name": null,
+        "address": null,
+        "coordinates": {
+          "lat": null,
+          "lng": null
+        },
+        "nearest_station": null,
+        "walking_minutes_from_station": null
+      },
+      "time": {
+        "start": null,
+        "end": null,
+        "duration_minutes": null,
+        "flexible": false
+      },
+      "cost": {
+        "admission": null,
+        "estimated_spending": null,
+        "currency": "JPY"
+      },
+      "booking": {
+        "required": false,
+        "booking_ref": null,
+        "booking_url": null,
+        "booked": false
+      },
+      "transit_to_next": {
+        "method": null,
+        "duration_minutes": null,
+        "cost": null,
+        "route": null
+      },
+      "notes": null,
+      "priority": null,
+      "weather_dependent": false
+    }
+  }
+}

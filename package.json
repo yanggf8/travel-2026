@@ -1,0 +1,19 @@
+{
+  "name": "yokohama-travel-2026",
+  "version": "1.0.0",
+  "description": "Travel planning project with status check and process automation",
+  "main": "src/status/status-check.ts",
+  "scripts": {
+    "status": "ts-node src/status/status-check.ts",
+    "status:json": "ts-node src/status/status-check.ts --json",
+    "status:ascii": "ts-node src/status/status-check.ts --ascii",
+    "transport": "ts-node src/process/transportation.ts",
+    "accom": "ts-node src/process/accommodation.ts",
+    "itinerary": "ts-node src/process/itinerary.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}
