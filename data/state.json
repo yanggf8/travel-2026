@@ -17,11 +17,12 @@
       ]
     },
     "p3_flights": {
-      "state": "researching",
+      "state": "researched",
       "events": [
         {"event": "started_research", "from": "pending", "to": "researching", "at": "2026-01-23T11:00:00+08:00"},
         {"event": "found_routes", "data": {"routes": ["TPE-NRT", "TPE-HND", "TSA-HND", "TSA-NRT"]}, "at": "2026-01-23T11:30:00+08:00"},
-        {"event": "received_comet_data", "data": {"candidates": 3, "source": "comet_agent"}, "at": "2026-01-23T12:00:00+08:00"}
+        {"event": "received_comet_data", "data": {"candidates": 3, "source": "comet_agent"}, "at": "2026-01-23T12:00:00+08:00"},
+        {"event": "candidates_added_to_json", "from": "researching", "to": "researched", "data": {"total_candidates": 5}, "at": "2026-01-23T14:30:00+08:00"}
       ]
     },
     "p4_hotels": {
@@ -48,10 +49,9 @@
   "current_focus": "p3_flights",
 
   "next_actions": [
-    "update_json_schema_p2",
-    "define_p3_questionnaire",
-    "create_p3_skill_spec",
-    "add_flight_candidates_to_json"
+    "test_status_check",
+    "select_flight_candidate",
+    "start_p4_hotels"
   ],
 
   "data_gathered": {
@@ -82,6 +82,11 @@
     {"event": "analyzed_airport_combinations", "at": "2026-01-23T11:30:00+08:00"},
     {"event": "received_comet_agent_data", "at": "2026-01-23T12:00:00+08:00"},
     {"event": "discussed_architecture", "data": {"decided": "questionnaire + skill + tool + json"}, "at": "2026-01-23T12:30:00+08:00"},
-    {"event": "designed_state_manager", "at": "2026-01-23T13:00:00+08:00"}
+    {"event": "designed_state_manager", "at": "2026-01-23T13:00:00+08:00"},
+    {"event": "created_state_json", "at": "2026-01-23T13:30:00+08:00"},
+    {"event": "updated_p2_schema", "data": {"added": ["cities", "shopping", "origin_city"]}, "at": "2026-01-23T14:00:00+08:00"},
+    {"event": "created_p3_questionnaire", "file": "src/questionnaire/definitions/p3-transportation.json", "at": "2026-01-23T14:15:00+08:00"},
+    {"event": "created_p3_skill_spec", "file": "src/skills/p3-flights.md", "at": "2026-01-23T14:20:00+08:00"},
+    {"event": "added_flight_candidates", "data": {"count": 3, "source": "comet_agent"}, "at": "2026-01-23T14:30:00+08:00"}
   ]
 }

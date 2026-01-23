@@ -62,11 +62,12 @@
         "all": [
           {
             "type": "present",
-            "path": "process_2_destination.primary_destination"
+            "path": "process_2_destination.destination_country"
           },
           {
-            "type": "present",
-            "path": "process_2_destination.country"
+            "type": "min_length",
+            "path": "process_2_destination.cities",
+            "min": 1
           }
         ]
       },
@@ -75,11 +76,16 @@
           "all": [
             {
               "type": "present",
-              "path": "process_2_destination.primary_destination"
+              "path": "process_2_destination.origin_city"
             },
             {
               "type": "present",
-              "path": "process_2_destination.country"
+              "path": "process_2_destination.destination_country"
+            },
+            {
+              "type": "min_length",
+              "path": "process_2_destination.cities",
+              "min": 1
             }
           ]
         }
@@ -334,10 +340,62 @@
   },
   "process_2_destination": {
     "status": "confirmed",
-    "primary_destination": "Yokohama",
-    "country": "Japan",
+    "origin_city": "Taipei",
+    "origin_country": "Taiwan",
+    "destination_country": "Japan",
     "region": "Kanto",
-    "sub_areas": []
+    "cities": [
+      {
+        "name": "Yokohama",
+        "role": "primary",
+        "nights": 4,
+        "attractions": [
+          "Minato Mirai 21",
+          "Chinatown",
+          "Red Brick Warehouse",
+          "Yamashita Park",
+          "Landmark Tower",
+          "Ramen Museum"
+        ]
+      },
+      {
+        "name": "Tokyo",
+        "role": "day_trip",
+        "nights": 0,
+        "attractions": [
+          "teamLab Planets",
+          "Shinjuku Gyoen"
+        ]
+      },
+      {
+        "name": "Kamakura",
+        "role": "day_trip",
+        "nights": 0,
+        "attractions": [
+          "Tsurugaoka Hachimangu",
+          "Great Buddha (Kotoku-in)",
+          "Enoshima"
+        ]
+      }
+    ],
+    "shopping": [
+      {
+        "type": "second_hand_luxury",
+        "stores": [
+          "BRAND COLLECT Shinjuku",
+          "KOMEHYO Shinjuku",
+          "ALLU Shinjuku"
+        ]
+      },
+      {
+        "type": "general",
+        "stores": [
+          "Queen's Square Yokohama",
+          "MARK IS Minato Mirai",
+          "Komachi-dori Kamakura"
+        ]
+      }
+    ]
   },
   "process_3_transportation": {
     "status": "researched",
@@ -436,6 +494,110 @@
           "cons": [
             "Budget airline",
             "Limited baggage allowance"
+          ]
+        },
+        {
+          "id": "flight_combo_jetstar_001",
+          "type": "roundtrip",
+          "source": "comet_agent",
+          "airline": "Jetstar Japan",
+          "route": "TPE-NRT",
+          "outbound": {
+            "flight_number": null,
+            "departure_airport_code": "TPE",
+            "arrival_airport_code": "NRT",
+            "departure_time": "02:30",
+            "arrival_time": "06:35"
+          },
+          "return": {
+            "flight_number": null,
+            "departure_airport_code": "NRT",
+            "arrival_airport_code": "TPE",
+            "departure_time": "08:30",
+            "arrival_time": "11:50"
+          },
+          "passengers": 2,
+          "total_price": 31873,
+          "price_per_person": 15937,
+          "currency": "TWD",
+          "pros": [
+            "Cheapest option",
+            "Direct flights"
+          ],
+          "cons": [
+            "Red-eye outbound (02:30)",
+            "Early return (08:30) - loses last day",
+            "Narita is far from Yokohama"
+          ]
+        },
+        {
+          "id": "flight_combo_scoot_tigerair_002",
+          "type": "roundtrip",
+          "source": "comet_agent",
+          "airlines": ["Scoot", "Tigerair Taiwan"],
+          "route": "TPE-NRT",
+          "outbound": {
+            "airline": "Scoot",
+            "flight_number": null,
+            "departure_airport_code": "TPE",
+            "arrival_airport_code": "NRT",
+            "departure_time": "06:40",
+            "arrival_time": "10:40"
+          },
+          "return": {
+            "airline": "Tigerair Taiwan",
+            "flight_number": null,
+            "departure_airport_code": "NRT",
+            "arrival_airport_code": "TPE",
+            "departure_time": "11:25",
+            "arrival_time": "14:45"
+          },
+          "passengers": 2,
+          "total_price": 34230,
+          "price_per_person": 17115,
+          "currency": "TWD",
+          "pros": [
+            "Better outbound time than Jetstar",
+            "Direct flights"
+          ],
+          "cons": [
+            "Early return (11:25) - loses last day",
+            "Mixed airlines",
+            "Narita is far from Yokohama"
+          ]
+        },
+        {
+          "id": "flight_combo_scoot_003",
+          "type": "roundtrip",
+          "source": "comet_agent",
+          "airline": "Scoot",
+          "route": "TPE-NRT",
+          "outbound": {
+            "flight_number": null,
+            "departure_airport_code": "TPE",
+            "arrival_airport_code": "NRT",
+            "departure_time": "06:40",
+            "arrival_time": "10:40"
+          },
+          "return": {
+            "flight_number": null,
+            "departure_airport_code": "NRT",
+            "arrival_airport_code": "TPE",
+            "departure_time": "11:55",
+            "arrival_time": "15:10"
+          },
+          "passengers": 2,
+          "total_price": 34877,
+          "price_per_person": 17439,
+          "currency": "TWD",
+          "pros": [
+            "Best time among budget options",
+            "Same airline both ways",
+            "22% lower carbon emissions"
+          ],
+          "cons": [
+            "Early return (11:55) - loses last day",
+            "Narita is far from Yokohama"
           ]
         }
       ]

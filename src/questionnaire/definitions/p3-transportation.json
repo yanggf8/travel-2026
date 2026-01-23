@@ -1,0 +1,149 @@
+{
+  "id": "p3_transportation",
+  "name": "Transportation Questionnaire",
+  "description": "Collect inputs for flight and ground transportation search",
+  "version": "1.0",
+
+  "pre_fill_sources": [
+    "process_1_date_anchor",
+    "process_2_destination"
+  ],
+
+  "fields": [
+    {
+      "key": "origin_city",
+      "label": "Departure City",
+      "type": "text",
+      "required": true,
+      "pre_fill_path": "process_2_destination.origin_city",
+      "example": "Taipei"
+    },
+    {
+      "key": "origin_airports",
+      "label": "Origin Airports to Consider",
+      "type": "multi_select",
+      "required": true,
+      "options": ["TPE (Taoyuan)", "TSA (Songshan)"],
+      "default": ["TPE", "TSA"],
+      "note": "TSA is closer to city, TPE has more flights"
+    },
+    {
+      "key": "destination_city",
+      "label": "Destination City",
+      "type": "text",
+      "required": true,
+      "pre_fill_path": "process_2_destination.cities[0].name",
+      "example": "Yokohama"
+    },
+    {
+      "key": "destination_airports",
+      "label": "Destination Airports to Consider",
+      "type": "multi_select",
+      "required": true,
+      "options": ["NRT (Narita)", "HND (Haneda)"],
+      "default": ["NRT", "HND"],
+      "note": "HND is closer to Yokohama, NRT has more budget options"
+    },
+    {
+      "key": "departure_date",
+      "label": "Departure Date",
+      "type": "date",
+      "required": true,
+      "pre_fill_path": "process_1_date_anchor.set_out_date"
+    },
+    {
+      "key": "return_date",
+      "label": "Return Date",
+      "type": "date",
+      "required": true,
+      "pre_fill_path": "process_1_date_anchor.return_date"
+    },
+    {
+      "key": "passengers",
+      "label": "Number of Passengers",
+      "type": "number",
+      "required": true,
+      "default": 2,
+      "min": 1,
+      "max": 9
+    },
+    {
+      "key": "budget_preference",
+      "label": "Budget Preference",
+      "type": "select",
+      "required": true,
+      "options": [
+        {"value": "budget", "label": "Budget (LCC airlines)"},
+        {"value": "balanced", "label": "Balanced (mix of price and convenience)"},
+        {"value": "convenience", "label": "Convenience (full-service, better times)"}
+      ],
+      "default": "balanced"
+    },
+    {
+      "key": "preferred_departure_time",
+      "label": "Preferred Outbound Departure Time",
+      "type": "select",
+      "required": false,
+      "options": [
+        {"value": "early", "label": "Early morning (before 8am)"},
+        {"value": "morning", "label": "Morning (8am-12pm)"},
+        {"value": "afternoon", "label": "Afternoon (12pm-5pm)"},
+        {"value": "evening", "label": "Evening (after 5pm)"},
+        {"value": "any", "label": "Any time"}
+      ],
+      "default": "any"
+    },
+    {
+      "key": "preferred_return_time",
+      "label": "Preferred Return Departure Time",
+      "type": "select",
+      "required": false,
+      "options": [
+        {"value": "early", "label": "Early (maximize last day)"},
+        {"value": "afternoon", "label": "Afternoon (some last day activities)"},
+        {"value": "evening", "label": "Evening (full last day)"},
+        {"value": "any", "label": "Any time"}
+      ],
+      "default": "evening",
+      "note": "Evening return allows full last day in destination"
+    },
+    {
+      "key": "airline_preference",
+      "label": "Airline Preference",
+      "type": "multi_select",
+      "required": false,
+      "options": [
+        "Tigerair Taiwan",
+        "Peach Aviation",
+        "Scoot",
+        "Jetstar",
+        "EVA Air",
+        "China Airlines",
+        "Starlux",
+        "JAL",
+        "ANA"
+      ],
+      "default": []
+    }
+  ],
+
+  "output_mapping": {
+    "search_params": {
+      "origin": "{origin_city}",
+      "origin_airports": "{origin_airports}",
+      "destination": "{destination_city}",
+      "destination_airports": "{destination_airports}",
+      "dates": {
+        "outbound": "{departure_date}",
+        "return": "{return_date}"
+      },
+      "passengers": "{passengers}",
+      "preferences": {
+        "budget": "{budget_preference}",
+        "outbound_time": "{preferred_departure_time}",
+        "return_time": "{preferred_return_time}",
+        "airlines": "{airline_preference}"
+      }
+    }
+  }
+}
