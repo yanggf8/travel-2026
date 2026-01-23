@@ -1,0 +1,87 @@
+{
+  "session": "2026-01-23",
+  "project": "yokohama-travel",
+  "version": "1.0",
+
+  "processes": {
+    "p1_dates": {
+      "state": "confirmed",
+      "events": [
+        {"event": "user_confirmed_dates", "from": "pending", "to": "confirmed", "data": {"dates": "2026-02-11 to 2026-02-15"}, "at": "2026-01-23T10:00:00+08:00"}
+      ]
+    },
+    "p2_destination": {
+      "state": "confirmed",
+      "events": [
+        {"event": "user_confirmed_destination", "from": "pending", "to": "confirmed", "data": {"destination": "Yokohama, Japan"}, "at": "2026-01-23T10:00:00+08:00"}
+      ]
+    },
+    "p3_flights": {
+      "state": "researching",
+      "events": [
+        {"event": "started_research", "from": "pending", "to": "researching", "at": "2026-01-23T11:00:00+08:00"},
+        {"event": "found_routes", "data": {"routes": ["TPE-NRT", "TPE-HND", "TSA-HND", "TSA-NRT"]}, "at": "2026-01-23T11:30:00+08:00"},
+        {"event": "received_comet_data", "data": {"candidates": 3, "source": "comet_agent"}, "at": "2026-01-23T12:00:00+08:00"}
+      ]
+    },
+    "p4_hotels": {
+      "state": "pending",
+      "events": []
+    },
+    "p5_itinerary": {
+      "state": "pending",
+      "events": []
+    }
+  },
+
+  "transitions": {
+    "pending": ["researching"],
+    "researching": ["researched", "pending"],
+    "researched": ["selecting", "researching"],
+    "selecting": ["selected", "researched"],
+    "selected": ["booking", "selecting"],
+    "booking": ["booked", "selected"],
+    "booked": ["confirmed"],
+    "confirmed": []
+  },
+
+  "current_focus": "p3_flights",
+
+  "next_actions": [
+    "update_json_schema_p2",
+    "define_p3_questionnaire",
+    "create_p3_skill_spec",
+    "add_flight_candidates_to_json"
+  ],
+
+  "data_gathered": {
+    "flights": {
+      "routes_analyzed": ["TPE-NRT", "TPE-HND", "TSA-HND"],
+      "airlines_found": ["Tigerair", "Peach", "Scoot", "Jetstar", "EVA", "China Airlines", "Starlux", "JAL", "ANA"],
+      "comet_candidates": [
+        {"airline": "Jetstar Japan", "price_twd": 31873, "pax": 2, "route": "TPE-NRT", "outbound": "02:30-06:35", "return": "08:30-11:50"},
+        {"airline": "Scoot+Tigerair", "price_twd": 34230, "pax": 2, "route": "TPE-NRT", "outbound": "06:40-10:40", "return": "11:25-14:45"},
+        {"airline": "Scoot", "price_twd": 34877, "pax": 2, "route": "TPE-NRT", "outbound": "06:40-10:40", "return": "11:55-15:10"}
+      ],
+      "our_research": {
+        "tsa_hnd": {"airlines": ["EVA", "China Airlines", "JAL", "ANA"], "type": "full_service", "flights_per_day": 8},
+        "tpe_hnd": {"airlines": ["Tigerair", "Peach"], "type": "budget", "note": "red-eye flights"},
+        "tpe_nrt": {"airlines": ["Tigerair", "Peach", "EVA", "Starlux"], "type": "mixed"}
+      }
+    }
+  },
+
+  "event_log": [
+    {"event": "session_start", "at": "2026-01-23T09:00:00+08:00"},
+    {"event": "reviewed_commits", "at": "2026-01-23T09:10:00+08:00"},
+    {"event": "cleaned_git_history", "at": "2026-01-23T09:20:00+08:00"},
+    {"event": "fixed_json_dates", "data": {"from": "2026-02-18", "to": "2026-02-11"}, "at": "2026-01-23T09:30:00+08:00"},
+    {"event": "fixed_currency", "data": {"from": "JPY", "to": "TWD"}, "at": "2026-01-23T09:35:00+08:00"},
+    {"event": "fixed_itinerary_rules", "data": {"change": "relaxed day_type handling"}, "at": "2026-01-23T09:40:00+08:00"},
+    {"event": "started_flight_research", "at": "2026-01-23T11:00:00+08:00"},
+    {"event": "analyzed_airport_combinations", "at": "2026-01-23T11:30:00+08:00"},
+    {"event": "received_comet_agent_data", "at": "2026-01-23T12:00:00+08:00"},
+    {"event": "discussed_architecture", "data": {"decided": "questionnaire + skill + tool + json"}, "at": "2026-01-23T12:30:00+08:00"},
+    {"event": "designed_state_manager", "at": "2026-01-23T13:00:00+08:00"}
+  ]
+}

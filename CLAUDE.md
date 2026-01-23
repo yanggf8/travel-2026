@@ -32,11 +32,18 @@
 - Ready when: all 3 date fields filled
 
 #### Process 2: Destination
-- **Primary destination**: City/Region (e.g., Yokohama)
-- **Country**: Japan
-- **Sub-areas**: Districts or neighborhoods to visit
+- **Origin**: City and country of departure (e.g., Taipei, Taiwan)
+- **Destination country**: Japan
+- **Cities**: List of cities to visit with role and attractions
+  - `name`: City name (e.g., Yokohama)
+  - `role`: primary | day_trip
+  - `nights`: Number of nights staying
+  - `attractions[]`: Places to visit
+- **Shopping**: Standalone shopping goals (cross-city)
+  - `type`: Category (e.g., second_hand_luxury, general)
+  - `stores[]`: Specific stores to visit
 - Milestones: `pending` → `confirmed`
-- Ready when: primary_destination + country filled
+- Ready when: destination_country + at least one city filled
 
 #### Process 3: Transportation
 - **3.1 Flight**: Airline, flight number, departure/arrival times
@@ -88,13 +95,59 @@ For each day:
 - Package into reusable travel planning skill
 - Templated workflows for any destination
 
+## Architecture
+
+### System Design
+```
+Base Info Questionnaire → fills P1 + P2 directly
+         ↓
+    Skill (search) → Tool (validate) → JSON (store)
+         ↓
+    State Manager (event-driven state tracking)
+```
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| **Questionnaire** | Collect inputs per process |
+| **Skills** | `/p3-flights`, `/p4-hotels`, `/p5-itinerary` |
+| **Tools** | Validate, merge, rank candidates (TypeScript) |
+| **State Manager** | Event-driven state tracking |
+| **JSON** | Single source of truth + readiness rules |
+
+### State Machine Model
+- Events trigger state changes
+- Valid transitions defined in `data/state.json`
+- States: `pending` → `researching` → `researched` → `selecting` → `selected` → `booking` → `booked` → `confirmed`
+
+### Process-Skill Mapping
+
+| Process | Questionnaire | Skill | Tool |
+|---------|--------------|-------|------|
+| P1 Date + P2 Dest | `base_info` | (none - direct fill) | - |
+| P3 Transportation | `p3_transport` | `/p3-flights` | `transportation.ts` |
+| P4 Accommodation | `p4_hotel` | `/p4-hotels` | `accommodation.ts` |
+| P5 Itinerary | `p5_itinerary` | `/p5-itinerary` | `itinerary.ts` |
+
 ## Project Structure
 ```
 /
-├── CLAUDE.md           # Project configuration and goals
-├── src/                # Source code
-│   ├── status/         # Status check program
-│   └── process/        # Process automation tools
-├── data/               # Travel data and itineraries
-└── docs/               # Documentation
+├── CLAUDE.md              # Project configuration and goals
+├── src/
+│   ├── status/            # Status check program
+│   │   ├── status-check.ts
+│   │   └── rule-evaluator.ts
+│   ├── process/           # Process automation tools
+│   │   ├── types.ts
+│   │   ├── plan-updater.ts
+│   │   ├── transportation.ts
+│   │   ├── accommodation.ts
+│   │   └── itinerary.ts
+│   ├── questionnaire/     # (planned) Input collection
+│   └── skills/            # (planned) Skill definitions
+├── data/
+│   ├── travel-plan.json   # Trip data + readiness rules
+│   └── state.json         # Event-driven state tracking
+└── docs/                  # Documentation
 ```

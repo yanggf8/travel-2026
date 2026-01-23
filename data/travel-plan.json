@@ -1,7 +1,7 @@
 {
   "project": "Yokohama Travel 2026",
   "version": "3.0.0",
-  "currency": "JPY",
+  "currency": "TWD",
   "default_timezone": "Asia/Tokyo",
   "meta": {
     "readiness_definition": "Can proceed to next dependent process",
@@ -215,12 +215,13 @@
       }
     },
     "process_5_daily_itinerary": {
+      "_comment": "Rules relaxed: arrival days need evening activity, departure days need morning activity, full days need morning+afternoon",
       "ready_to_proceed": {
         "all": [
           {
             "type": "for_each",
             "path": "process_5_daily_itinerary.days",
-            "all": [
+            "any": [
               {
                 "type": "min_length",
                 "path": "morning.activities",
@@ -229,6 +230,11 @@
               {
                 "type": "min_length",
                 "path": "afternoon.activities",
+                "min": 1
+              },
+              {
+                "type": "min_length",
+                "path": "evening.activities",
                 "min": 1
               }
             ]
@@ -241,7 +247,7 @@
             {
               "type": "for_each",
               "path": "process_5_daily_itinerary.days",
-              "all": [
+              "any": [
                 {
                   "type": "min_length",
                   "path": "morning.activities",
@@ -250,6 +256,11 @@
                 {
                   "type": "min_length",
                   "path": "afternoon.activities",
+                  "min": 1
+                },
+                {
+                  "type": "min_length",
+                  "path": "evening.activities",
                   "min": 1
                 }
               ]
@@ -261,7 +272,7 @@
             {
               "type": "for_each",
               "path": "process_5_daily_itinerary.days",
-              "all": [
+              "any": [
                 {
                   "type": "min_length",
                   "path": "morning.activities",
@@ -273,24 +284,9 @@
                   "min": 1
                 },
                 {
-                  "type": "for_each",
-                  "path": "morning.activities",
-                  "all": [
-                    {
-                      "type": "present",
-                      "path": "name"
-                    }
-                  ]
-                },
-                {
-                  "type": "for_each",
-                  "path": "afternoon.activities",
-                  "all": [
-                    {
-                      "type": "present",
-                      "path": "name"
-                    }
-                  ]
+                  "type": "min_length",
+                  "path": "evening.activities",
+                  "min": 1
                 }
               ]
             }
@@ -301,7 +297,7 @@
             {
               "type": "for_each",
               "path": "process_5_daily_itinerary.days",
-              "all": [
+              "any": [
                 {
                   "type": "min_length",
                   "path": "morning.activities",
@@ -313,40 +309,9 @@
                   "min": 1
                 },
                 {
-                  "type": "for_each",
-                  "path": "morning.activities",
-                  "all": [
-                    {
-                      "type": "present",
-                      "path": "name"
-                    },
-                    {
-                      "type": "present",
-                      "path": "location.name"
-                    },
-                    {
-                      "type": "present",
-                      "path": "time.start"
-                    }
-                  ]
-                },
-                {
-                  "type": "for_each",
-                  "path": "afternoon.activities",
-                  "all": [
-                    {
-                      "type": "present",
-                      "path": "name"
-                    },
-                    {
-                      "type": "present",
-                      "path": "location.name"
-                    },
-                    {
-                      "type": "present",
-                      "path": "time.start"
-                    }
-                  ]
+                  "type": "min_length",
+                  "path": "evening.activities",
+                  "min": 1
                 }
               ]
             }
@@ -363,9 +328,9 @@
   },
   "process_1_date_anchor": {
     "status": "confirmed",
-    "set_out_date": "2026-02-18",
-    "duration_days": 6,
-    "return_date": "2026-02-23"
+    "set_out_date": "2026-02-11",
+    "duration_days": 5,
+    "return_date": "2026-02-15"
   },
   "process_2_destination": {
     "status": "confirmed",
@@ -422,9 +387,9 @@
           "departure_airport_code": "TSA",
           "arrival_airport": "Tokyo Narita Airport",
           "arrival_airport_code": "NRT",
-          "departure_datetime": "2026-02-18T13:55:00+08:00",
+          "departure_datetime": "2026-02-11T13:55:00+08:00",
           "departure_timezone": "Asia/Taipei",
-          "arrival_datetime": "2026-02-18T18:00:00+09:00",
+          "arrival_datetime": "2026-02-11T18:00:00+09:00",
           "arrival_timezone": "Asia/Tokyo",
           "duration_minutes": 185,
           "stops": 0,
@@ -452,9 +417,9 @@
           "departure_airport_code": "NRT",
           "arrival_airport": "Taipei Songshan Airport",
           "arrival_airport_code": "TSA",
-          "departure_datetime": "2026-02-23T18:25:00+09:00",
+          "departure_datetime": "2026-02-15T18:25:00+09:00",
           "departure_timezone": "Asia/Tokyo",
-          "arrival_datetime": "2026-02-23T21:50:00+08:00",
+          "arrival_datetime": "2026-02-15T21:50:00+08:00",
           "arrival_timezone": "Asia/Taipei",
           "duration_minutes": 265,
           "stops": 0,
@@ -592,7 +557,7 @@
     "status": "pending",
     "days": [
       {
-        "date": "2026-02-18",
+        "date": "2026-02-11",
         "day_number": 1,
         "day_type": "arrival",
         "status": "pending",
@@ -638,7 +603,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -661,7 +626,7 @@
         }
       },
       {
-        "date": "2026-02-19",
+        "date": "2026-02-12",
         "day_number": 2,
         "day_type": "full",
         "status": "selected",
@@ -691,7 +656,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -738,7 +703,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -785,7 +750,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -808,7 +773,7 @@
         }
       },
       {
-        "date": "2026-02-20",
+        "date": "2026-02-13",
         "day_number": 3,
         "day_type": "full",
         "status": "selected",
@@ -838,7 +803,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -885,7 +850,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -916,7 +881,7 @@
         }
       },
       {
-        "date": "2026-02-21",
+        "date": "2026-02-14",
         "day_number": 4,
         "day_type": "full",
         "status": "selected",
@@ -946,7 +911,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -993,7 +958,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -1024,116 +989,8 @@
         }
       },
       {
-        "date": "2026-02-22",
+        "date": "2026-02-15",
         "day_number": 5,
-        "day_type": "full",
-        "status": "selected",
-        "morning": {
-          "time_block": {
-            "start": "09:00",
-            "end": "12:00"
-          },
-          "activities": [
-            {
-              "id": "activity_mkp9cz0c_57r6",
-              "name": "Yokohama Landmark Tower",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "JPY"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
-          ],
-          "notes": null
-        },
-        "afternoon": {
-          "time_block": {
-            "start": "12:00",
-            "end": "18:00"
-          },
-          "activities": [
-            {
-              "id": "activity_mkp9d4op_6yd7",
-              "name": "Shin-Yokohama Ramen Museum",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "JPY"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
-          ],
-          "notes": null
-        },
-        "evening": {
-          "time_block": {
-            "start": "18:00",
-            "end": null
-          },
-          "activities": [],
-          "notes": null
-        }
-      },
-      {
-        "date": "2026-02-23",
-        "day_number": 6,
         "day_type": "departure",
         "status": "selected",
         "morning": {
@@ -1162,7 +1019,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -1209,7 +1066,7 @@
               "cost": {
                 "admission": null,
                 "estimated_spending": null,
-                "currency": "JPY"
+                "currency": "TWD"
               },
               "booking": {
                 "required": false,
@@ -1336,7 +1193,7 @@
       "cost": {
         "admission": null,
         "estimated_spending": null,
-        "currency": "JPY"
+        "currency": "TWD"
       },
       "booking": {
         "required": false,
