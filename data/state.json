@@ -1,7 +1,7 @@
 {
   "session": "2026-01-23",
-  "project": "yokohama-travel",
-  "version": "1.0",
+  "project": "nagoya-travel",
+  "version": "2.0",
 
   "processes": {
     "p1_dates": {
@@ -13,7 +13,8 @@
     "p2_destination": {
       "state": "confirmed",
       "events": [
-        {"event": "user_confirmed_destination", "from": "pending", "to": "confirmed", "data": {"destination": "Yokohama, Japan"}, "at": "2026-01-23T10:00:00+08:00"}
+        {"event": "user_confirmed_destination", "from": "pending", "to": "confirmed", "data": {"destination": "Yokohama, Japan"}, "at": "2026-01-23T10:00:00+08:00"},
+        {"event": "destination_changed", "from": "confirmed", "to": "confirmed", "data": {"from": "Yokohama", "to": "Nagoya", "reason": "Better flight pricing during CNY"}, "at": "2026-01-23T16:00:00+08:00"}
       ]
     },
     "p3_flights": {
@@ -22,7 +23,9 @@
         {"event": "started_research", "from": "pending", "to": "researching", "at": "2026-01-23T11:00:00+08:00"},
         {"event": "found_routes", "data": {"routes": ["TPE-NRT", "TPE-HND", "TSA-HND", "TSA-NRT"]}, "at": "2026-01-23T11:30:00+08:00"},
         {"event": "received_comet_data", "data": {"candidates": 3, "source": "comet_agent"}, "at": "2026-01-23T12:00:00+08:00"},
-        {"event": "candidates_added_to_json", "from": "researching", "to": "researched", "data": {"total_candidates": 5}, "at": "2026-01-23T14:30:00+08:00"}
+        {"event": "compared_alternative_airports", "data": {"airports": ["IBR", "NGO", "FUK"], "reason": "CNY pricing analysis"}, "at": "2026-01-23T15:00:00+08:00"},
+        {"event": "selected_ngo", "data": {"airport": "NGO", "reason": "Best balance of price, daily flights, and convenience"}, "at": "2026-01-23T16:00:00+08:00"},
+        {"event": "candidates_updated", "from": "researched", "to": "researched", "data": {"route": "TPE-NGO", "airline": "Tigerair"}, "at": "2026-01-23T16:30:00+08:00"}
       ]
     },
     "p4_hotels": {
@@ -49,25 +52,32 @@
   "current_focus": "p3_flights",
 
   "next_actions": [
-    "test_status_check",
-    "select_flight_candidate",
-    "start_p4_hotels"
+    "confirm_ngo_flight_booking",
+    "start_p4_hotels_nagoya",
+    "finalize_itinerary"
   ],
 
   "data_gathered": {
     "flights": {
-      "routes_analyzed": ["TPE-NRT", "TPE-HND", "TSA-HND"],
-      "airlines_found": ["Tigerair", "Peach", "Scoot", "Jetstar", "EVA", "China Airlines", "Starlux", "JAL", "ANA"],
-      "comet_candidates": [
-        {"airline": "Jetstar Japan", "price_twd": 31873, "pax": 2, "route": "TPE-NRT", "outbound": "02:30-06:35", "return": "08:30-11:50"},
-        {"airline": "Scoot+Tigerair", "price_twd": 34230, "pax": 2, "route": "TPE-NRT", "outbound": "06:40-10:40", "return": "11:25-14:45"},
-        {"airline": "Scoot", "price_twd": 34877, "pax": 2, "route": "TPE-NRT", "outbound": "06:40-10:40", "return": "11:55-15:10"}
-      ],
-      "our_research": {
-        "tsa_hnd": {"airlines": ["EVA", "China Airlines", "JAL", "ANA"], "type": "full_service", "flights_per_day": 8},
-        "tpe_hnd": {"airlines": ["Tigerair", "Peach"], "type": "budget", "note": "red-eye flights"},
-        "tpe_nrt": {"airlines": ["Tigerair", "Peach", "EVA", "Starlux"], "type": "mixed"}
+      "original_routes_analyzed": ["TPE-NRT", "TPE-HND", "TSA-HND", "TSA-NRT"],
+      "alternative_airports_compared": {
+        "IBR": {"pros": "Cheapest, low CNY premium", "cons": "Only Thu/Sun, bus to Tokyo"},
+        "NGO": {"pros": "Daily flights, direct to destination, good times", "cons": "Slight CNY premium"},
+        "FUK": {"pros": "Many flights, great city", "cons": "Far from central Japan"}
+      },
+      "selected_route": {
+        "route": "TPE-NGO",
+        "airline": "Tigerair Taiwan",
+        "outbound": {"flight": "IT206", "time": "09:00-12:55"},
+        "return": {"flight": "IT207", "time": "13:45-15:55"},
+        "price_estimate_2pax": "NT$13,400-16,000",
+        "reason": "Best balance: daily flights, good times, direct to Nagoya"
       }
+    },
+    "destination_change": {
+      "from": "Yokohama",
+      "to": "Nagoya",
+      "reason": "CNY flight pricing - NGO offers better value than Tokyo airports"
     }
   },
 
@@ -87,6 +97,11 @@
     {"event": "updated_p2_schema", "data": {"added": ["cities", "shopping", "origin_city"]}, "at": "2026-01-23T14:00:00+08:00"},
     {"event": "created_p3_questionnaire", "file": "src/questionnaire/definitions/p3-transportation.json", "at": "2026-01-23T14:15:00+08:00"},
     {"event": "created_p3_skill_spec", "file": "src/skills/p3-flights.md", "at": "2026-01-23T14:20:00+08:00"},
-    {"event": "added_flight_candidates", "data": {"count": 3, "source": "comet_agent"}, "at": "2026-01-23T14:30:00+08:00"}
+    {"event": "added_flight_candidates", "data": {"count": 3, "source": "comet_agent"}, "at": "2026-01-23T14:30:00+08:00"},
+    {"event": "analyzed_cny_pricing", "data": {"finding": "Tokyo flights 3x normal price"}, "at": "2026-01-23T15:00:00+08:00"},
+    {"event": "compared_alternative_airports", "data": {"airports": ["IBR", "NGO", "FUK"]}, "at": "2026-01-23T15:30:00+08:00"},
+    {"event": "user_selected_ngo", "data": {"reason": "daily flights, good times, Feb is cheapest month"}, "at": "2026-01-23T16:00:00+08:00"},
+    {"event": "destination_changed", "data": {"from": "Yokohama", "to": "Nagoya"}, "at": "2026-01-23T16:00:00+08:00"},
+    {"event": "updated_travel_plan", "data": {"changes": ["destination", "flights", "hotels", "itinerary"]}, "at": "2026-01-23T16:30:00+08:00"}
   ]
 }

@@ -1,0 +1,634 @@
+{
+  "meta": {
+    "version": "1.0",
+    "description": "Flight search cache - will migrate to LokiJS later",
+    "future_db": "LokiJS",
+    "created_at": "2026-01-23T17:00:00+08:00"
+  },
+  "search_params": {
+    "origin": "TPE",
+    "outbound_date": "2026-02-11",
+    "return_date": "2026-02-15",
+    "passengers": 2,
+    "cabin": "economy"
+  },
+  "flights": [
+    {
+      "id": "flt_ngo_tigerair_001",
+      "destination": "NGO",
+      "destination_name": "Nagoya",
+      "airline": "Tigerair Taiwan",
+      "airline_code": "IT",
+      "flight_numbers": {
+        "outbound": "IT206",
+        "return": "IT207"
+      },
+      "outbound": {
+        "departure": "08:45",
+        "arrival": "12:25",
+        "duration_minutes": 160
+      },
+      "return": {
+        "departure": "19:40",
+        "arrival": "22:15",
+        "duration_minutes": 155
+      },
+      "total_price": 20636,
+      "price_per_person": 10318,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "skyscanner",
+      "last_day_playable": true,
+      "red_eye": false,
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_ngo_tigerair_002",
+      "destination": "NGO",
+      "destination_name": "Nagoya",
+      "airline": "Tigerair Taiwan",
+      "airline_code": "IT",
+      "flight_numbers": {
+        "outbound": "IT206",
+        "return": "IT207"
+      },
+      "outbound": {
+        "departure": "08:45",
+        "arrival": "12:25",
+        "duration_minutes": 160
+      },
+      "return": {
+        "departure": "19:40",
+        "arrival": "22:15",
+        "duration_minutes": 155
+      },
+      "total_price": 38796,
+      "price_per_person": 19398,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "official",
+      "notes": "Official website price - much higher than Skyscanner",
+      "last_day_playable": true,
+      "red_eye": false,
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_ngo_peach_001",
+      "destination": "NGO",
+      "destination_name": "Nagoya",
+      "airline": "Peach Aviation",
+      "airline_code": "MM",
+      "flight_numbers": {
+        "outbound": null,
+        "return": null
+      },
+      "outbound": {
+        "departure": "02:55",
+        "arrival": "06:25",
+        "duration_minutes": 210
+      },
+      "return": {
+        "departure": "22:45",
+        "arrival": "01:25+1",
+        "duration_minutes": 220
+      },
+      "total_price": 16304,
+      "price_per_person": 8152,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "skyscanner",
+      "last_day_playable": true,
+      "red_eye": true,
+      "notes": "Cheapest but red-eye both ways",
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_ngo_eva_001",
+      "destination": "NGO",
+      "destination_name": "Nagoya",
+      "airline": "EVA Air",
+      "airline_code": "BR",
+      "flight_numbers": {
+        "outbound": null,
+        "return": null
+      },
+      "outbound": {
+        "departure": "08:00",
+        "arrival": "11:15",
+        "duration_minutes": 195
+      },
+      "return": {
+        "departure": "12:15",
+        "arrival": "13:50",
+        "duration_minutes": 155
+      },
+      "total_price": 20683,
+      "price_per_person": 10342,
+      "currency": "TWD",
+      "baggage_included": true,
+      "source": "skyscanner",
+      "last_day_playable": false,
+      "red_eye": false,
+      "notes": "Return too early - lose last day",
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_ngo_starlux_001",
+      "destination": "NGO",
+      "destination_name": "Nagoya",
+      "airline": "Starlux Airlines",
+      "airline_code": "JX",
+      "flight_numbers": {
+        "outbound": "JX838",
+        "return": "JX839"
+      },
+      "outbound": {
+        "departure": "14:55",
+        "arrival": "18:45",
+        "duration_minutes": 170
+      },
+      "return": {
+        "departure": "19:30",
+        "arrival": "21:35",
+        "duration_minutes": 185
+      },
+      "total_price": 28000,
+      "price_per_person": 14000,
+      "currency": "TWD",
+      "baggage_included": true,
+      "source": "web_search",
+      "price_note": "Estimated, need to confirm on official site",
+      "last_day_playable": true,
+      "red_eye": false,
+      "notes": "Premium service, late departure loses half of Day 1",
+      "queried_at": "2026-01-23T17:00:00+08:00"
+    },
+    {
+      "id": "flt_ngo_mixed_001",
+      "destination": "NGO",
+      "destination_name": "Nagoya",
+      "airline": "Tigerair + China Airlines",
+      "airline_code": "IT/CI",
+      "flight_numbers": {
+        "outbound": "IT206",
+        "return": null
+      },
+      "outbound": {
+        "departure": "08:45",
+        "arrival": "12:25",
+        "duration_minutes": 160
+      },
+      "return": {
+        "departure": "12:05",
+        "arrival": "14:40",
+        "duration_minutes": 155
+      },
+      "total_price": 21891,
+      "price_per_person": 10946,
+      "currency": "TWD",
+      "baggage_included": "mixed",
+      "source": "skyscanner",
+      "last_day_playable": false,
+      "red_eye": false,
+      "notes": "Mixed airlines, return early",
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_fuk_tigerair_airasia_001",
+      "destination": "FUK",
+      "destination_name": "Fukuoka",
+      "airline": "Tigerair + AirAsia",
+      "airline_code": "IT/AK",
+      "flight_numbers": {
+        "outbound": "IT240",
+        "return": null
+      },
+      "outbound": {
+        "departure": "06:45",
+        "arrival": "10:00",
+        "duration_minutes": 135
+      },
+      "return": {
+        "departure": "18:00",
+        "arrival": "19:30",
+        "duration_minutes": 150
+      },
+      "total_price": 12068,
+      "price_per_person": 6034,
+      "currency": "TWD",
+      "baggage_included": "mixed",
+      "source": "skyscanner",
+      "last_day_playable": true,
+      "red_eye": false,
+      "notes": "Cheapest option overall",
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_fuk_airasia_001",
+      "destination": "FUK",
+      "destination_name": "Fukuoka",
+      "airline": "AirAsia",
+      "airline_code": "AK",
+      "flight_numbers": {
+        "outbound": null,
+        "return": null
+      },
+      "outbound": {
+        "departure": "11:55",
+        "arrival": "15:15",
+        "duration_minutes": 140
+      },
+      "return": {
+        "departure": "18:00",
+        "arrival": "19:30",
+        "duration_minutes": 150
+      },
+      "total_price": 13602,
+      "price_per_person": 6801,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "skyscanner",
+      "last_day_playable": true,
+      "red_eye": false,
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_fuk_tigerair_001",
+      "destination": "FUK",
+      "destination_name": "Fukuoka",
+      "airline": "Tigerair Taiwan",
+      "airline_code": "IT",
+      "flight_numbers": {
+        "outbound": "IT240",
+        "return": "IT241"
+      },
+      "outbound": {
+        "departure": "06:45",
+        "arrival": "10:00",
+        "duration_minutes": 135
+      },
+      "return": {
+        "departure": "10:55",
+        "arrival": "12:40",
+        "duration_minutes": 165
+      },
+      "total_price": 14443,
+      "price_per_person": 7222,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "skyscanner",
+      "last_day_playable": false,
+      "red_eye": false,
+      "notes": "Return too early - lose last day",
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_fuk_tigerair_002",
+      "destination": "FUK",
+      "destination_name": "Fukuoka",
+      "airline": "Tigerair Taiwan",
+      "airline_code": "IT",
+      "flight_numbers": {
+        "outbound": "IT240",
+        "return": "IT241"
+      },
+      "outbound": {
+        "departure": "06:45",
+        "arrival": "10:00",
+        "duration_minutes": 135
+      },
+      "return": {
+        "departure": "10:55",
+        "arrival": "12:40",
+        "duration_minutes": 165
+      },
+      "total_price": 25396,
+      "price_per_person": 12698,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "official",
+      "notes": "Official website price",
+      "last_day_playable": false,
+      "red_eye": false,
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_fuk_eva_001",
+      "destination": "FUK",
+      "destination_name": "Fukuoka",
+      "airline": "EVA Air",
+      "airline_code": "BR",
+      "flight_numbers": {
+        "outbound": null,
+        "return": null
+      },
+      "outbound": {
+        "departure": "08:00",
+        "arrival": "11:15",
+        "duration_minutes": 135
+      },
+      "return": {
+        "departure": "12:15",
+        "arrival": "13:50",
+        "duration_minutes": 155
+      },
+      "total_price": 20683,
+      "price_per_person": 10342,
+      "currency": "TWD",
+      "baggage_included": true,
+      "source": "skyscanner",
+      "last_day_playable": false,
+      "red_eye": false,
+      "notes": "Return too early - lose last day",
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_fuk_starlux_001",
+      "destination": "FUK",
+      "destination_name": "Fukuoka",
+      "airline": "Starlux Airlines",
+      "airline_code": "JX",
+      "flight_numbers": {
+        "outbound": null,
+        "return": null
+      },
+      "outbound": {
+        "departure": "14:45",
+        "arrival": "18:00",
+        "duration_minutes": 135
+      },
+      "return": {
+        "departure": "19:10",
+        "arrival": "20:50",
+        "duration_minutes": 160
+      },
+      "total_price": 23148,
+      "price_per_person": 11574,
+      "currency": "TWD",
+      "baggage_included": true,
+      "source": "comet",
+      "last_day_playable": true,
+      "red_eye": false,
+      "notes": "Best schedule for Fukuoka with premium service",
+      "queried_at": "2026-01-23T16:00:00+08:00"
+    },
+    {
+      "id": "flt_ibr_tigerair_7day_001",
+      "destination": "IBR",
+      "destination_name": "Ibaraki (Tokyo)",
+      "trip_type": "7_day_extended",
+      "airline": "Tigerair Taiwan",
+      "airline_code": "IT",
+      "flight_numbers": {
+        "outbound": "IT218",
+        "return": "IT219"
+      },
+      "outbound_date": "2026-02-08",
+      "return_date": "2026-02-15",
+      "outbound": {
+        "departure": "09:50",
+        "arrival": "14:00",
+        "duration_minutes": 190
+      },
+      "return": {
+        "departure": "15:00",
+        "arrival": "17:30",
+        "duration_minutes": 210
+      },
+      "total_price": 10000,
+      "price_per_person": 5000,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "estimate",
+      "price_note": "Estimated - IBR is off-peak, 7 nights Sun-Sun",
+      "days": 8,
+      "nights": 7,
+      "last_day_playable": true,
+      "red_eye": false,
+      "ground_transfer": {
+        "method": "bus",
+        "to": "Tokyo Station",
+        "duration_minutes": 100,
+        "cost_jpy": 1650
+      },
+      "notes": "7 nights, Feb is quiet month for IBR, Bus to Tokyo 1650 yen",
+      "queried_at": "2026-01-23T17:30:00+08:00"
+    },
+    {
+      "id": "flt_openjaw_ngo_ibr_001",
+      "destination": "NGO-IBR",
+      "destination_name": "Open Jaw: Nagoya in, Ibaraki out",
+      "trip_type": "open_jaw",
+      "airlines": [
+        "Tigerair Taiwan",
+        "Tigerair Taiwan"
+      ],
+      "airline_code": "IT",
+      "flight_numbers": {
+        "outbound": "IT206",
+        "return": "IT219"
+      },
+      "outbound_date": "2026-02-11",
+      "return_date": "2026-02-15",
+      "outbound": {
+        "departure": "08:45",
+        "arrival": "12:25",
+        "airport": "NGO",
+        "duration_minutes": 160
+      },
+      "return": {
+        "departure": "15:00",
+        "arrival": "17:30",
+        "airport": "IBR",
+        "duration_minutes": 210
+      },
+      "total_price": 15000,
+      "price_per_person": 7500,
+      "currency": "TWD",
+      "baggage_included": false,
+      "source": "estimate",
+      "price_note": "Estimated - NGO one-way + IBR one-way",
+      "days": 5,
+      "nights": 4,
+      "last_day_playable": true,
+      "red_eye": false,
+      "route_note": "Fly into Nagoya, explore Chubu, travel to Tokyo area, fly out from Ibaraki",
+      "ground_transfer": {
+        "from_ibr": {
+          "method": "bus",
+          "to": "Tokyo Station",
+          "duration_minutes": 100,
+          "cost_jpy": 1650
+        }
+      },
+      "notes": "No backtracking - NGO to Tokyo by shinkansen, then IBR out",
+      "queried_at": "2026-01-23T17:30:00+08:00"
+    },
+    {
+      "id": "flt_ngo_tigerair_feb12_001",
+      "destination": "NGO",
+      "airline": "Tigerair Taiwan",
+      "outbound": {
+        "date": "2026-02-12",
+        "departure": "08:45",
+        "arrival": "12:45",
+        "flight": "IT206"
+      },
+      "return": {
+        "date": "2026-02-16",
+        "departure": "19:40",
+        "arrival": "22:00",
+        "flight": "IT207"
+      },
+      "total_price": 17334,
+      "currency": "TWD",
+      "passengers": 2,
+      "baggage_included": false,
+      "last_day_playable": true,
+      "red_eye": false,
+      "source": "estimate (16% Thu discount)",
+      "queried_at": "2026-01-23"
+    },
+    {
+      "id": "flt_ngo_peach_feb12_001",
+      "destination": "NGO",
+      "airline": "Peach Aviation",
+      "outbound": {
+        "date": "2026-02-12",
+        "departure": "02:55",
+        "arrival": "06:55",
+        "flight": "MM"
+      },
+      "return": {
+        "date": "2026-02-16",
+        "departure": "22:45",
+        "arrival": "01:05",
+        "flight": "MM"
+      },
+      "total_price": 13695,
+      "currency": "TWD",
+      "passengers": 2,
+      "baggage_included": false,
+      "last_day_playable": true,
+      "red_eye": true,
+      "source": "estimate (16% Thu discount)",
+      "queried_at": "2026-01-23"
+    },
+    {
+      "id": "flt_ngo_starlux_feb12_001",
+      "destination": "NGO",
+      "airline": "Starlux Airlines",
+      "outbound": {
+        "date": "2026-02-12",
+        "departure": "14:55",
+        "arrival": "18:55",
+        "flight": "JX"
+      },
+      "return": {
+        "date": "2026-02-16",
+        "departure": "19:30",
+        "arrival": "22:00",
+        "flight": "JX"
+      },
+      "total_price": 23520,
+      "currency": "TWD",
+      "passengers": 2,
+      "baggage_included": true,
+      "last_day_playable": true,
+      "red_eye": false,
+      "source": "estimate (16% Thu discount)",
+      "queried_at": "2026-01-23"
+    },
+    {
+      "id": "flt_ngo_eva_feb12_unavailable",
+      "destination": "NGO",
+      "airline": "EVA Air",
+      "outbound_date": "2026-02-12",
+      "return_date": "2026-02-16",
+      "status": "NOT_AVAILABLE",
+      "reason": "EVA Air does not fly TPE-NGO on Thursdays (Feb 12). Only available Wed/other days.",
+      "source": "skyscanner_search",
+      "queried_at": "2026-01-23"
+    },
+    {
+      "id": "flt_ngo_oneway_outbound_feb12",
+      "destination": "NGO",
+      "type": "one_way_outbound",
+      "date": "2026-02-12",
+      "options": [
+        {"airline": "Peach", "time": "02:55→06:25", "price_2pax": 9731, "note": "red-eye"},
+        {"airline": "Thai Lion Air", "time": "09:20→13:00", "price_2pax": 11025},
+        {"airline": "Tigerair", "time": "15:10→18:50", "price_2pax": 10965},
+        {"airline": "China Airlines", "time": "07:35→11:05", "price_2pax": 21298, "baggage": true}
+      ],
+      "source": "skyscanner",
+      "queried_at": "2026-01-23"
+    },
+    {
+      "id": "flt_ngo_oneway_return_feb16",
+      "destination": "NGO",
+      "type": "one_way_return",
+      "date": "2026-02-16",
+      "options": [
+        {"airline": "Thai Lion Air", "time": "13:40→16:00", "price_2pax": 5294},
+        {"airline": "Peach", "time": "22:45→01:25+1", "price_2pax": 5361, "note": "best for last day"},
+        {"airline": "Cathay Pacific", "time": "16:40→19:15", "price_2pax": 6963},
+        {"airline": "China Airlines", "time": "12:05→14:40", "price_2pax": 7800, "note": "lose last day"}
+      ],
+      "source": "skyscanner",
+      "queried_at": "2026-01-23"
+    }
+  ],
+  "booking_notes": {
+    "peach_official_vs_skyscanner": {
+      "price_difference": "0-10% (官網通常貴 0-1500 TWD)",
+      "recommendation": "Book on official site for easier baggage add-ons",
+      "peach_schedule_period": {
+        "winter_2025_26": "2025-10-26 to 2026-03-28",
+        "summer_2026": "2026-03-29 to 2026-10-24"
+      },
+      "booking_window": "~9-10 months in advance",
+      "queried_at": "2026-01-23"
+    }
+  },
+  "summary": {
+    "total_flights": 12,
+    "destinations": [
+      "NGO",
+      "FUK"
+    ],
+    "cheapest": {
+      "overall": {
+        "id": "flt_fuk_tigerair_airasia_001",
+        "price": 12068,
+        "destination": "FUK"
+      },
+      "NGO": {
+        "id": "flt_ngo_peach_001",
+        "price": 16304,
+        "note": "red-eye"
+      },
+      "FUK": {
+        "id": "flt_fuk_tigerair_airasia_001",
+        "price": 12068
+      }
+    },
+    "best_schedule": {
+      "NGO": {
+        "id": "flt_ngo_tigerair_001",
+        "price": 20636,
+        "note": "arrive noon, depart 19:40"
+      },
+      "FUK": {
+        "id": "flt_fuk_starlux_001",
+        "price": 23148,
+        "note": "full last day, premium"
+      }
+    },
+    "recommendations": {
+      "budget": "flt_fuk_tigerair_airasia_001",
+      "balanced": "flt_ngo_tigerair_001",
+      "premium": "flt_ngo_starlux_001"
+    }
+  }
+}

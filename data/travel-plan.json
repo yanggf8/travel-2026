@@ -1,5 +1,5 @@
 {
-  "project": "Yokohama Travel 2026",
+  "project": "Nagoya Travel 2026",
   "version": "3.0.0",
   "currency": "TWD",
   "default_timezone": "Asia/Tokyo",
@@ -343,38 +343,39 @@
     "origin_city": "Taipei",
     "origin_country": "Taiwan",
     "destination_country": "Japan",
-    "region": "Kanto",
+    "region": "Chubu",
     "cities": [
       {
-        "name": "Yokohama",
+        "name": "Nagoya",
         "role": "primary",
         "nights": 4,
         "attractions": [
-          "Minato Mirai 21",
-          "Chinatown",
-          "Red Brick Warehouse",
-          "Yamashita Park",
-          "Landmark Tower",
-          "Ramen Museum"
+          "Nagoya Castle",
+          "Atsuta Shrine",
+          "Osu Shopping District",
+          "Sakae",
+          "Toyota Commemorative Museum",
+          "Nagoya Station Area"
         ]
       },
       {
-        "name": "Tokyo",
+        "name": "Takayama",
         "role": "day_trip",
         "nights": 0,
         "attractions": [
-          "teamLab Planets",
-          "Shinjuku Gyoen"
+          "Old Town (Sanmachi Suji)",
+          "Takayama Jinya",
+          "Morning Markets"
         ]
       },
       {
-        "name": "Kamakura",
+        "name": "Inuyama",
         "role": "day_trip",
         "nights": 0,
         "attractions": [
-          "Tsurugaoka Hachimangu",
-          "Great Buddha (Kotoku-in)",
-          "Enoshima"
+          "Inuyama Castle (National Treasure)",
+          "Meiji Mura",
+          "Urakuen Garden"
         ]
       }
     ],
@@ -382,19 +383,26 @@
       {
         "type": "second_hand_luxury",
         "stores": [
-          "BRAND COLLECT Shinjuku",
-          "KOMEHYO Shinjuku",
-          "ALLU Shinjuku"
+          "KOMEHYO Nagoya Main Store",
+          "BRAND OFF Nagoya Sakae",
+          "Daikokuya Nagoya"
         ]
       },
       {
         "type": "general",
         "stores": [
-          "Queen's Square Yokohama",
-          "MARK IS Minato Mirai",
-          "Komachi-dori Kamakura"
+          "Osu Shopping Street",
+          "JR Gate Tower",
+          "Mitsukoshi Sakae"
         ]
       }
+    ],
+    "local_food": [
+      "Hitsumabushi (鰻魚飯)",
+      "Miso Katsu (味噌豬排)",
+      "Tebasaki (手羽先)",
+      "Kishimen (棊子麵)",
+      "Taiwan Ramen (台灣拉麵)"
     ]
   },
   "process_3_transportation": {
@@ -437,167 +445,46 @@
       },
       "candidates": [
         {
-          "id": "flight_outbound_mkp92wdg_clwr",
-          "direction": "outbound",
+          "id": "flight_ngo_tigerair_001",
+          "type": "roundtrip",
+          "source": "research",
           "airline": "Tigerair Taiwan",
-          "flight_number": "IT200",
-          "departure_airport": "Taipei Songshan Airport",
-          "departure_airport_code": "TSA",
-          "arrival_airport": "Tokyo Narita Airport",
-          "arrival_airport_code": "NRT",
-          "departure_datetime": "2026-02-11T13:55:00+08:00",
-          "departure_timezone": "Asia/Taipei",
-          "arrival_datetime": "2026-02-11T18:00:00+09:00",
-          "arrival_timezone": "Asia/Tokyo",
-          "duration_minutes": 185,
-          "stops": 0,
-          "layover_airports": [],
-          "fare": 21794,
-          "fare_class": "Economy",
-          "baggage_included": "Standard",
-          "refundable": false,
-          "booking_url": null,
-          "pros": [
-            "Direct flight",
-            "Convenient departure time from Songshan"
-          ],
-          "cons": [
-            "Budget airline",
-            "Limited baggage allowance"
-          ]
-        },
-        {
-          "id": "flight_return_mkp932fb_m2au",
-          "direction": "return",
-          "airline": "Tigerair Taiwan",
-          "flight_number": "IT201",
-          "departure_airport": "Tokyo Narita Airport",
-          "departure_airport_code": "NRT",
-          "arrival_airport": "Taipei Songshan Airport",
-          "arrival_airport_code": "TSA",
-          "departure_datetime": "2026-02-15T18:25:00+09:00",
-          "departure_timezone": "Asia/Tokyo",
-          "arrival_datetime": "2026-02-15T21:50:00+08:00",
-          "arrival_timezone": "Asia/Taipei",
-          "duration_minutes": 265,
-          "stops": 0,
-          "layover_airports": [],
-          "fare": 21794,
-          "fare_class": "Economy",
-          "baggage_included": "Standard",
-          "refundable": false,
-          "booking_url": null,
-          "pros": [
-            "Direct flight",
-            "Evening departure allows full day"
-          ],
-          "cons": [
-            "Budget airline",
-            "Limited baggage allowance"
-          ]
-        },
-        {
-          "id": "flight_combo_jetstar_001",
-          "type": "roundtrip",
-          "source": "comet_agent",
-          "airline": "Jetstar Japan",
-          "route": "TPE-NRT",
+          "route": "TPE-NGO",
           "outbound": {
-            "flight_number": null,
+            "flight_number": "IT206",
+            "departure_airport": "Taipei Taoyuan Airport",
             "departure_airport_code": "TPE",
-            "arrival_airport_code": "NRT",
-            "departure_time": "02:30",
-            "arrival_time": "06:35"
+            "arrival_airport": "Nagoya Chubu Centrair Airport",
+            "arrival_airport_code": "NGO",
+            "departure_datetime": "2026-02-11T09:00:00+08:00",
+            "arrival_datetime": "2026-02-11T12:55:00+09:00",
+            "duration_minutes": 175
           },
           "return": {
-            "flight_number": null,
-            "departure_airport_code": "NRT",
+            "flight_number": "IT207",
+            "departure_airport": "Nagoya Chubu Centrair Airport",
+            "departure_airport_code": "NGO",
+            "arrival_airport": "Taipei Taoyuan Airport",
             "arrival_airport_code": "TPE",
-            "departure_time": "08:30",
-            "arrival_time": "11:50"
+            "departure_datetime": "2026-02-15T13:45:00+09:00",
+            "arrival_datetime": "2026-02-15T15:55:00+08:00",
+            "duration_minutes": 190
           },
           "passengers": 2,
-          "total_price": 31873,
-          "price_per_person": 15937,
+          "total_price_estimate": 13400,
+          "price_per_person_estimate": 6700,
           "currency": "TWD",
+          "price_note": "Estimate based on normal pricing ~NT$6,699 round-trip, may vary for CNY period",
           "pros": [
-            "Cheapest option",
-            "Direct flights"
+            "Daily flights - flexible",
+            "Good times (09:00 out, 13:45 return)",
+            "Arrive home by 16:00",
+            "Direct to destination city",
+            "February is cheapest month for NGO"
           ],
           "cons": [
-            "Red-eye outbound (02:30)",
-            "Early return (08:30) - loses last day",
-            "Narita is far from Yokohama"
-          ]
-        },
-        {
-          "id": "flight_combo_scoot_tigerair_002",
-          "type": "roundtrip",
-          "source": "comet_agent",
-          "airlines": ["Scoot", "Tigerair Taiwan"],
-          "route": "TPE-NRT",
-          "outbound": {
-            "airline": "Scoot",
-            "flight_number": null,
-            "departure_airport_code": "TPE",
-            "arrival_airport_code": "NRT",
-            "departure_time": "06:40",
-            "arrival_time": "10:40"
-          },
-          "return": {
-            "airline": "Tigerair Taiwan",
-            "flight_number": null,
-            "departure_airport_code": "NRT",
-            "arrival_airport_code": "TPE",
-            "departure_time": "11:25",
-            "arrival_time": "14:45"
-          },
-          "passengers": 2,
-          "total_price": 34230,
-          "price_per_person": 17115,
-          "currency": "TWD",
-          "pros": [
-            "Better outbound time than Jetstar",
-            "Direct flights"
-          ],
-          "cons": [
-            "Early return (11:25) - loses last day",
-            "Mixed airlines",
-            "Narita is far from Yokohama"
-          ]
-        },
-        {
-          "id": "flight_combo_scoot_003",
-          "type": "roundtrip",
-          "source": "comet_agent",
-          "airline": "Scoot",
-          "route": "TPE-NRT",
-          "outbound": {
-            "flight_number": null,
-            "departure_airport_code": "TPE",
-            "arrival_airport_code": "NRT",
-            "departure_time": "06:40",
-            "arrival_time": "10:40"
-          },
-          "return": {
-            "flight_number": null,
-            "departure_airport_code": "NRT",
-            "arrival_airport_code": "TPE",
-            "departure_time": "11:55",
-            "arrival_time": "15:10"
-          },
-          "passengers": 2,
-          "total_price": 34877,
-          "price_per_person": 17439,
-          "currency": "TWD",
-          "pros": [
-            "Best time among budget options",
-            "Same airline both ways",
-            "22% lower carbon emissions"
-          ],
-          "cons": [
-            "Early return (11:55) - loses last day",
-            "Narita is far from Yokohama"
+            "CNY period may have slight price increase",
+            "Need to check actual price on booking"
           ]
         }
       ]
@@ -630,76 +517,42 @@
     }
   },
   "process_4_accommodation": {
-    "status": "researched",
+    "status": "pending",
     "location_zone": {
       "status": "pending",
       "selected_area": null,
       "selection_criteria": null,
-      "candidates": []
-    },
-    "hotel": {
-      "status": "researched",
-      "selected_hotel": null,
       "candidates": [
         {
-          "id": "hotel_mkp93jgo_wggk",
-          "name": "Yokohama Country Hotel",
-          "name_local": "橫濱遠東鄉村酒店",
-          "address": "Near Sakuragicho Station, 350m walk",
-          "area": "Sakuragicho",
-          "rating": 8.2,
-          "review_count": 5747,
-          "price_per_night": 17094,
-          "total_price": 85470,
-          "amenities": [
-            "Near Metro",
-            "Minato Mirai 21 access"
-          ],
-          "room_types": [],
-          "distance_to_station": null,
-          "nearest_station": null,
-          "booking_url": null,
-          "cancellation_policy": null,
-          "pros": [
-            "Best location",
-            "5min walk to station",
-            "Great value with discount",
-            "High rating"
-          ],
-          "cons": [
-            "Popular - limited availability"
-          ]
+          "id": "zone_nagoya_station",
+          "name": "Nagoya Station Area",
+          "name_local": "名古屋駅",
+          "description": "Main transportation hub, best for day trips",
+          "pros": ["Best transport access", "JR Gate Tower shopping", "Easy airport access"],
+          "cons": ["Less local atmosphere", "Higher prices"]
         },
         {
-          "id": "hotel_mkp93s44_2rhx",
-          "name": "APA Hotel Yokohama Kannai",
-          "name_local": "APA橫濱關內酒店",
-          "address": "400m from Kannai Station, 700m from Sakuragicho",
-          "area": "Kannai",
-          "rating": 7.6,
-          "review_count": 2369,
-          "price_per_night": 14749,
-          "total_price": 73746,
-          "amenities": [
-            "Near Metro",
-            "Free cancellation"
-          ],
-          "room_types": [],
-          "distance_to_station": null,
-          "nearest_station": null,
-          "booking_url": null,
-          "cancellation_policy": null,
-          "pros": [
-            "Excellent location",
-            "Good value",
-            "Free cancellation",
-            "Discount available"
-          ],
-          "cons": [
-            "Lower rating than Country Hotel"
-          ]
+          "id": "zone_sakae",
+          "name": "Sakae",
+          "name_local": "栄",
+          "description": "Downtown entertainment and shopping district",
+          "pros": ["Nightlife", "Shopping", "Osu nearby"],
+          "cons": ["Further from station for day trips"]
+        },
+        {
+          "id": "zone_fushimi",
+          "name": "Fushimi",
+          "name_local": "伏見",
+          "description": "Between Nagoya Station and Sakae, quieter area",
+          "pros": ["Quieter", "Good value", "Central location"],
+          "cons": ["Less exciting"]
         }
-      ],
+      ]
+    },
+    "hotel": {
+      "status": "pending",
+      "selected_hotel": null,
+      "candidates": [],
       "booking": {
         "confirmation_number": null,
         "check_in_date": null,
@@ -724,65 +577,21 @@
         "day_type": "arrival",
         "status": "pending",
         "morning": {
-          "time_block": {
-            "start": null,
-            "end": "12:00"
-          },
+          "time_block": {"start": "09:00", "end": "12:00"},
           "activities": [],
-          "notes": "Arrival day - flight lands"
+          "notes": "Flight departs TPE 09:00"
         },
         "afternoon": {
-          "time_block": {
-            "start": "12:00",
-            "end": "18:00"
-          },
-          "activities": [],
-          "notes": null
+          "time_block": {"start": "12:00", "end": "18:00"},
+          "activities": [
+            {"id": "act_d1_1", "name": "Arrive NGO 12:55, transfer to hotel", "type": "transport"}
+          ],
+          "notes": "Check-in, rest, explore hotel area"
         },
         "evening": {
-          "time_block": {
-            "start": "18:00",
-            "end": null
-          },
+          "time_block": {"start": "18:00", "end": null},
           "activities": [
-            {
-              "id": "activity_mkp9b8pb_9wtp",
-              "name": "Yokohama Chinatown Dinner",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d1_2", "name": "Hitsumabushi Dinner (鰻魚飯)", "type": "food", "location": {"area": "Nagoya Station or Sakae"}}
           ],
           "notes": null
         }
@@ -791,145 +600,26 @@
         "date": "2026-02-12",
         "day_number": 2,
         "day_type": "full",
-        "status": "selected",
+        "status": "pending",
         "morning": {
-          "time_block": {
-            "start": "09:00",
-            "end": "12:00"
-          },
+          "time_block": {"start": "09:00", "end": "12:00"},
           "activities": [
-            {
-              "id": "activity_mkp9bhgd_f238",
-              "name": "Minato Mirai 21 Walk",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d2_1", "name": "Nagoya Castle (名古屋城)", "type": "sightseeing"}
           ],
           "notes": null
         },
         "afternoon": {
-          "time_block": {
-            "start": "12:00",
-            "end": "18:00"
-          },
+          "time_block": {"start": "12:00", "end": "18:00"},
           "activities": [
-            {
-              "id": "activity_mkp9bp75_3wjl",
-              "name": "teamLab Planets TOKYO",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d2_2", "name": "Miso Katsu Lunch (味噌豬排)", "type": "food"},
+            {"id": "act_d2_3", "name": "Osu Shopping District (大須商店街)", "type": "shopping"}
           ],
-          "notes": null
+          "notes": "Second-hand luxury stores in Osu/Sakae"
         },
         "evening": {
-          "time_block": {
-            "start": "18:00",
-            "end": null
-          },
+          "time_block": {"start": "18:00", "end": null},
           "activities": [
-            {
-              "id": "activity_mkp9by3l_ccat",
-              "name": "Shinjuku Kabukicho Adult Show",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d2_4", "name": "Sakae Nightlife", "type": "entertainment"}
           ],
           "notes": null
         }
@@ -938,107 +628,27 @@
         "date": "2026-02-13",
         "day_number": 3,
         "day_type": "full",
-        "status": "selected",
+        "status": "pending",
         "morning": {
-          "time_block": {
-            "start": "09:00",
-            "end": "12:00"
-          },
+          "time_block": {"start": "09:00", "end": "12:00"},
           "activities": [
-            {
-              "id": "activity_mkp9c6nu_5zkb",
-              "name": "Shinjuku Second-hand Luxury Shopping",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d3_1", "name": "Atsuta Shrine (熱田神宮)", "type": "sightseeing"}
           ],
-          "notes": null
+          "notes": "One of Japan's most important shrines"
         },
         "afternoon": {
-          "time_block": {
-            "start": "12:00",
-            "end": "18:00"
-          },
+          "time_block": {"start": "12:00", "end": "18:00"},
           "activities": [
-            {
-              "id": "activity_mkp9ccb8_abkc",
-              "name": "Continue Shopping & Shinjuku Gyoen",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d3_2", "name": "Toyota Commemorative Museum", "type": "museum"},
+            {"id": "act_d3_3", "name": "Noritake Garden", "type": "sightseeing"}
           ],
           "notes": null
         },
         "evening": {
-          "time_block": {
-            "start": "18:00",
-            "end": null
-          },
-          "activities": [],
+          "time_block": {"start": "18:00", "end": null},
+          "activities": [
+            {"id": "act_d3_4", "name": "Tebasaki Dinner (手羽先)", "type": "food", "location": {"name": "Sekai no Yamachan or Furaibo"}}
+          ],
           "notes": null
         }
       },
@@ -1046,216 +656,54 @@
         "date": "2026-02-14",
         "day_number": 4,
         "day_type": "full",
-        "status": "selected",
+        "status": "pending",
         "morning": {
-          "time_block": {
-            "start": "09:00",
-            "end": "12:00"
-          },
+          "time_block": {"start": "08:00", "end": "12:00"},
           "activities": [
-            {
-              "id": "activity_mkp9cji9_97iz",
-              "name": "Kamakura Tsurugaoka Hachimangu",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d4_1", "name": "Day trip to Inuyama", "type": "day_trip", "notes": "30min from Nagoya by Meitetsu"}
           ],
-          "notes": null
+          "notes": "Inuyama Castle is a National Treasure"
         },
         "afternoon": {
-          "time_block": {
-            "start": "12:00",
-            "end": "18:00"
-          },
+          "time_block": {"start": "12:00", "end": "18:00"},
           "activities": [
-            {
-              "id": "activity_mkp9cqoa_9f93",
-              "name": "Great Buddha & Enoshima",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d4_2", "name": "Inuyama Castle (犬山城)", "type": "sightseeing"},
+            {"id": "act_d4_3", "name": "Inuyama Old Town & Castle Town", "type": "walking"}
           ],
-          "notes": null
+          "notes": "Valentine's Day - castle town has nice cafes"
         },
         "evening": {
-          "time_block": {
-            "start": "18:00",
-            "end": null
-          },
-          "activities": [],
-          "notes": null
+          "time_block": {"start": "18:00", "end": null},
+          "activities": [
+            {"id": "act_d4_4", "name": "Return to Nagoya, special dinner", "type": "food"}
+          ],
+          "notes": "Valentine's Day dinner"
         }
       },
       {
         "date": "2026-02-15",
         "day_number": 5,
         "day_type": "departure",
-        "status": "selected",
+        "status": "pending",
         "morning": {
-          "time_block": {
-            "start": "09:00",
-            "end": "12:00"
-          },
+          "time_block": {"start": "09:00", "end": "12:00"},
           "activities": [
-            {
-              "id": "activity_mkp9db0c_8n05",
-              "name": "Last minute shopping & check-out",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d5_1", "name": "Check-out, last shopping at JR Gate Tower", "type": "shopping"},
+            {"id": "act_d5_2", "name": "Travel to NGO Airport", "type": "transport", "notes": "μ-sky 28min from Nagoya Station"}
           ],
-          "notes": null
+          "notes": "Flight IT207 departs 13:45"
         },
         "afternoon": {
-          "time_block": {
-            "start": "12:00",
-            "end": null
-          },
+          "time_block": {"start": "12:00", "end": null},
           "activities": [
-            {
-              "id": "activity_mkp9dh9k_inzy",
-              "name": "Travel to Narita Airport",
-              "type": null,
-              "location": {
-                "name": null,
-                "address": null,
-                "coordinates": null,
-                "nearest_station": null,
-                "walking_minutes_from_station": null
-              },
-              "time": {
-                "start": null,
-                "end": null,
-                "duration_minutes": null,
-                "flexible": false
-              },
-              "cost": {
-                "admission": null,
-                "estimated_spending": null,
-                "currency": "TWD"
-              },
-              "booking": {
-                "required": false,
-                "booking_ref": null,
-                "booking_url": null,
-                "booked": false
-              },
-              "transit_to_next": {
-                "method": null,
-                "duration_minutes": null,
-                "cost": null,
-                "route": null
-              },
-              "notes": null,
-              "priority": null,
-              "weather_dependent": false
-            }
+            {"id": "act_d5_3", "name": "Depart NGO 13:45 → Arrive TPE 15:55", "type": "transport"}
           ],
-          "notes": "Departure day - head to airport"
+          "notes": "Home by dinner time"
         },
         "evening": {
-          "time_block": {
-            "start": null,
-            "end": null
-          },
+          "time_block": {"start": null, "end": null},
           "activities": [],
-          "notes": null
+          "notes": "Back in Taiwan"
         }
       }
     ]

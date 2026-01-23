@@ -1,8 +1,8 @@
-# Yokohama Travel Project
+# Nagoya Travel Project
 
 ## Trip Details
 - **Dates**: February 11-15, 2026 (20260211 - 20260215)
-- **Destination**: Yokohama, Japan
+- **Destination**: Nagoya, Japan (changed from Yokohama due to CNY flight pricing)
 
 ## Project Goals
 
@@ -121,6 +121,29 @@ Base Info Questionnaire → fills P1 + P2 directly
 - Valid transitions defined in `data/state.json`
 - States: `pending` → `researching` → `researched` → `selecting` → `selected` → `booking` → `booked` → `confirmed`
 
+### Database (Future)
+- **Current**: Plain JSON files (`travel-plan.json`, `state.json`, `flights-cache.json`)
+- **Future**: **LokiJS** migration planned
+  - In-memory with optional persistence
+  - Very fast performance
+  - MongoDB-like queries
+  - ~100KB footprint
+  - Actively maintained
+
+### Flight Cache Schema
+```
+data/flights-cache.json
+├── meta              # Version, description
+├── search_params     # Origin, dates, passengers
+├── flights[]         # All flight options
+│   ├── id, destination, airline
+│   ├── outbound/return times
+│   ├── total_price, baggage_included
+│   ├── last_day_playable, red_eye
+│   └── source, queried_at
+└── summary           # Cheapest, best schedule, recommendations
+```
+
 ### Process-Skill Mapping
 
 | Process | Questionnaire | Skill | Tool |
@@ -148,6 +171,7 @@ Base Info Questionnaire → fills P1 + P2 directly
 │   └── skills/            # (planned) Skill definitions
 ├── data/
 │   ├── travel-plan.json   # Trip data + readiness rules
-│   └── state.json         # Event-driven state tracking
+│   ├── state.json         # Event-driven state tracking
+│   └── flights-cache.json # Flight search results cache
 └── docs/                  # Documentation
 ```
