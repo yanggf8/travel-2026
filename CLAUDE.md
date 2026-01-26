@@ -134,29 +134,43 @@ travel-plan.json
 ## Project Structure
 ```
 /
-├── CLAUDE.md
+├── README.md                  # Project overview & quick start
+├── CLAUDE.md                  # AI assistant context (this file)
 ├── data/
-│   ├── travel-plan.json       # v4.2.0 destination-scoped
-│   ├── state.json             # Event-driven state
-│   ├── flights-cache.json     # Legacy flight cache
+│   ├── travel-plan.json       # Main travel plan (v4.2.0)
+│   ├── state.json             # Event-driven state tracking
+│   ├── besttour-*.json        # BestTour scrape results (date-specific pricing)
 │   ├── liontravel-*.json      # Lion Travel scrape results
-│   └── tigerair-*.json        # Tigerair scrape results
+│   ├── eztravel-*.json        # ezTravel scrape results
+│   ├── tigerair-*.json        # Tigerair scrape results
+│   └── flights-cache.json     # Legacy flight cache (Nagoya research)
 ├── src/
 │   ├── cascade/               # Cascade runner library
-│   │   ├── types.ts           # Type definitions
-│   │   ├── wildcard.ts        # Schema-driven expansion
-│   │   ├── runner.ts          # Core logic
-│   │   └── index.ts           # Module exports
+│   │   ├── index.ts           # Module exports
+│   │   ├── runner.ts          # Core cascade logic
+│   │   ├── types.ts           # TypeScript definitions
+│   │   └── wildcard.ts        # Schema-driven path expansion
 │   ├── cli/
-│   │   └── cascade.ts         # Cascade CLI
-│   ├── status/
-│   ├── process/
-│   ├── questionnaire/definitions/
-│   └── skills/
-│       ├── p3-flights.md
-│       └── p3p4-packages.md
+│   │   ├── cascade.ts         # Cascade CLI
+│   │   └── p3p4-test.ts       # Package skill test CLI
+│   ├── process/               # Process handlers
+│   │   ├── accommodation.ts
+│   │   ├── itinerary.ts
+│   │   ├── plan-updater.ts
+│   │   ├── transportation.ts
+│   │   └── types.ts
+│   ├── questionnaire/
+│   │   └── definitions/
+│   │       └── p3-transportation.json
+│   ├── skills/                # Reusable planning skills
+│   │   ├── p3-flights.md      # Standalone flight search (v1.1.0)
+│   │   └── p3p4-packages.md   # Package search (v1.0.0)
+│   └── status/
+│       ├── rule-evaluator.ts
+│       └── status-check.ts
 ├── scripts/
-│   └── scrape_package.py      # Playwright OTA scraper
+│   ├── scrape_package.py           # Generic Playwright OTA scraper
+│   └── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
 └── tsconfig.json
 ```
 
@@ -178,26 +192,45 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 |---------|-------|--------|
 | P1 Dates | ✅ confirmed | ✅ confirmed |
 | P2 Destination | ✅ confirmed | ✅ confirmed |
-| P3+4 Packages | 🔄 researched (4 offers) | ⏳ pending |
+| P3+4 Packages | 🔄 researched (date-specific pricing) | ⏳ pending (archived) |
 | P3 Transportation | ⏳ pending | 🔄 researched |
 | P4 Accommodation | ⏳ pending | ⏳ pending |
 | P5 Itinerary | ⏳ pending | ⏳ pending |
 
-### Tokyo Package Offers (2 pax)
-| Source | Price | Type | Note |
-|--------|-------|------|------|
-| Lion Travel | TWD 19,560起 | Package | Kawaguchiko area |
-| Lion Travel | TWD 19,860起 | Package | Skytree + 24hr metro |
-| Lion Travel | TWD 29,776起 | Package | Disney + ticket |
-| Besttour | TWD 36,776 | Package | Feb 22, Hamamatsucho |
+### ⚠️ IMPORTANT: Feb 11-13 SOLD OUT
+Original dates (Feb 11-15) are **sold out** on BestTour. Consider alternative dates.
+
+### Tokyo Package - BestTour Date-Specific Pricing (2 pax, updated 2026-01-26)
+| Date | Price (TWD) | Availability | Note |
+|------|-------------|--------------|------|
+| Feb 11 | 42,776 | ❌ Sold Out | Original preferred date |
+| Feb 12 | 46,776 | ❌ Sold Out | |
+| Feb 13 | 55,776 | ❌ Sold Out | |
+| Feb 14 | 69,776 | ✅ Available (2) | CNY peak - expensive |
+| Feb 20 | 46,776 | ✅ Available (2) | Post-CNY |
+| **Feb 21** | **39,776** | ✅ Available (2) | Preferred alternative |
+| **Feb 22** | **36,776** | ✅ Available (2) | **BEST VALUE** |
+| Feb 24 | 38,776 | ✅ Available (2) | |
+
+### Lion Travel Base Prices (starting from, 2-3 nights)
+| Package | Base Price | Note |
+|---------|------------|------|
+| 富士山/河口湖 | TWD 9,780起 | Mt. Fuji area |
+| 晴空塔+24hr Metro | TWD 9,930起 | Central Tokyo |
+| teamLab | TWD 10,800起 | Includes museum ticket |
+| Disney | TWD 14,888起 | Includes park ticket |
+
+*Note: Lion Travel prices are base rates. 5-day actual pricing requires booking flow.*
 
 ## Completed
 - ✅ Cascade runner (TypeScript library + CLI)
 - ✅ Lion Travel OTA integration
 - ✅ Tigerair OTA integration (limited - no date-specific pricing)
 - ✅ Canonical offer schema normalization
+- ✅ BestTour date-specific pricing scraper (full Feb 2026 calendar)
+- ✅ Lion Travel dated search scraper (`scripts/scrape_liontravel_dated.py`)
 
 ## Next Steps
-1. **Add eztravel scraper** - Normalize to canonical_offer_schema
-2. **Build comparison tool** - Derive rankings from destinations/*
-3. **Package selection flow** - Select offer and trigger cascade populate
+1. **Select travel dates** - Feb 22 is best value (TWD 36,776/2pax), Feb 21 is 2nd best
+2. **Book package** - BestTour TAVINOS Hamamatsucho if dates work
+3. **Build comparison tool** - Derive rankings from destinations/*

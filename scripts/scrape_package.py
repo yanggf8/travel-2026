@@ -1,7 +1,26 @@
 #!/usr/bin/env python3
 """
-Scrape travel package details from besttour.com.tw
-Uses Playwright for JavaScript rendering
+Generic OTA Package Scraper
+
+Scrape travel package details from various OTA websites using Playwright.
+Supports JavaScript-rendered pages and extracts raw text + structured elements.
+
+Supported OTAs:
+- BestTour (besttour.com.tw) - Full calendar pricing
+- Lion Travel (liontravel.com) - Package search results
+- ezTravel (eztravel.com.tw) - Limited support
+- Any URL with standard page structure
+
+Usage:
+    python scrape_package.py <url> [output.json]
+
+Examples:
+    python scrape_package.py "https://www.besttour.com.tw/itinerary/TYO05MM260211AM" data/besttour.json
+    python scrape_package.py "https://vacation.liontravel.com/search?Destination=JP_TYO_6" data/liontravel.json
+
+Requirements:
+    pip install playwright
+    playwright install chromium
 """
 
 import asyncio

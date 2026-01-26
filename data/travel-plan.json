@@ -249,12 +249,27 @@
               "includes": ["light_breakfast"],
               "date_pricing": {
                 "2026-02-03": {"price": 19588, "availability": "available", "seats_remaining": 2},
+                "2026-02-04": {"price": 19988, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-05": {"price": 19888, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-06": {"price": 19888, "availability": "sold_out", "seats_remaining": 0},
                 "2026-02-11": {"price": 21388, "availability": "sold_out", "seats_remaining": 0},
                 "2026-02-12": {"price": 23388, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-13": {"price": 27888, "availability": "sold_out", "seats_remaining": 0},
                 "2026-02-14": {"price": 34888, "availability": "available", "seats_remaining": 2},
+                "2026-02-15": {"price": 33888, "availability": "available", "seats_remaining": 2},
+                "2026-02-16": {"price": 33888, "availability": "available", "seats_remaining": 2},
+                "2026-02-17": {"price": 35388, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-18": {"price": 34388, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-19": {"price": 27388, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-20": {"price": 23388, "availability": "available", "seats_remaining": 2},
                 "2026-02-21": {"price": 19888, "availability": "available", "seats_remaining": 2},
-                "2026-02-22": {"price": 18388, "availability": "available", "seats_remaining": 2}
+                "2026-02-22": {"price": 18388, "availability": "available", "seats_remaining": 2},
+                "2026-02-23": {"price": 18388, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-24": {"price": 19388, "availability": "available", "seats_remaining": 2},
+                "2026-02-25": {"price": 22888, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-26": {"price": 22888, "availability": "available", "seats_remaining": 2}
               },
+              "last_price_check": "2026-01-26T17:40:00+08:00",
               "best_value": {"date": "2026-02-22", "price_per_person": 18388, "price_total": 36776},
               "pros": ["Package bundled", "Includes breakfast", "Good location", "Easy Haneda access"],
               "cons": ["Feb 11-13 sold out", "CNY dates expensive", "Return flight unknown"]
@@ -372,10 +387,15 @@
             }
           ],
           "provenance": [
-            {"source_id": "besttour", "scraped_at": "2026-01-26T12:26:39+08:00", "offers_found": 1},
-            {"source_id": "liontravel", "scraped_at": "2026-01-26T15:09:51+08:00", "offers_found": 3}
+            {"source_id": "besttour", "scraped_at": "2026-01-26T17:40:00+08:00", "offers_found": 1, "note": "Full Feb 2026 calendar pricing scraped"},
+            {"source_id": "liontravel", "scraped_at": "2026-01-26T17:38:00+08:00", "offers_found": 3, "note": "Base prices only - 5-day pricing requires booking flow"}
           ],
-          "warnings": ["Return flight details not available", "Feb 11-13 sold out", "Lion Travel prices are 'starting from' - exact date pricing requires booking flow"]
+          "warnings": [
+            "Return flight details not available for BestTour package",
+            "Feb 11-13 SOLD OUT on BestTour - consider Feb 21-22 dates",
+            "Lion Travel prices are 'starting from' for 2-3 nights - 5-day actual prices will be higher",
+            "CNY peak (Feb 14-18): +80-90% premium over best dates"
+          ]
         }
       },
 
@@ -604,20 +624,21 @@
 
   "comparison": {
     "_derived": true,
-    "_generated_at": "2026-01-26T15:15:00+08:00",
+    "_generated_at": "2026-01-26T17:40:00+08:00",
     "_generated_from": ["tokyo_2026", "nagoya_2026"],
     "summary": {
       "tokyo_2026": {
         "display_name": "Tokyo",
         "status": "active",
-        "best_price_2pax": 19560,
-        "best_date": "flex",
+        "best_price_2pax": 36776,
+        "best_date": "2026-02-22",
         "type": "package",
-        "source": "liontravel",
-        "offer_id": "liontravel_tokyo_kawaguchiko",
+        "source": "besttour",
+        "offer_id": "besttour_TYO05MM260211AM",
         "availability": "available",
-        "includes": ["flight", "hotel"],
-        "note": "Starting price - final price varies by date"
+        "seats_remaining": 2,
+        "includes": ["flight", "hotel", "light_breakfast"],
+        "note": "Date-specific pricing confirmed. Feb 11-13 sold out."
       },
       "nagoya_2026": {
         "display_name": "Nagoya",
@@ -632,11 +653,24 @@
       }
     },
     "price_ranking": [
-      {"destination": "nagoya_2026", "price_2pax": 13400, "type": "flight_only", "note": "Needs hotel added"},
-      {"destination": "tokyo_2026", "price_2pax": 19560, "source": "liontravel", "type": "package", "note": "Kawaguchiko area"},
-      {"destination": "tokyo_2026", "price_2pax": 19860, "source": "liontravel", "type": "package", "note": "Skytree + 24hr metro"},
-      {"destination": "tokyo_2026", "price_2pax": 29776, "source": "liontravel", "type": "package", "note": "Disney + ticket"},
-      {"destination": "tokyo_2026", "price_2pax": 36776, "source": "besttour", "type": "package", "note": "Hamamatsucho, Feb 22"}
-    ]
+      {"destination": "nagoya_2026", "price_2pax": 13400, "type": "flight_only", "note": "Needs hotel added - archived"},
+      {"destination": "tokyo_2026", "price_2pax": 36776, "source": "besttour", "date": "2026-02-22", "type": "package", "note": "TAVINOS Hamamatsucho, best available date"},
+      {"destination": "tokyo_2026", "price_2pax": 39776, "source": "besttour", "date": "2026-02-21", "type": "package", "note": "TAVINOS Hamamatsucho, 2nd best"},
+      {"destination": "tokyo_2026", "price_2pax": 46776, "source": "besttour", "date": "2026-02-20", "type": "package", "note": "Post-CNY, still high"},
+      {"destination": "tokyo_2026", "price_2pax": 69776, "source": "besttour", "date": "2026-02-14", "type": "package", "note": "CNY peak - expensive"}
+    ],
+    "recommendation": {
+      "best_option": {
+        "date": "2026-02-22",
+        "package": "besttour_TYO05MM260211AM",
+        "price_2pax": 36776,
+        "reason": "Best price with confirmed availability (2 seats). Depart Sun Feb 22, return Thu Feb 26."
+      },
+      "original_dates_status": {
+        "date": "2026-02-11",
+        "status": "SOLD_OUT",
+        "alternative": "Consider Feb 21-22 departure instead"
+      }
+    }
   }
 }
