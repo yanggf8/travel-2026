@@ -1,40 +1,80 @@
 {
-  "session": "2026-01-23",
-  "project": "nagoya-travel",
-  "version": "2.0",
+  "session": "2026-01-26",
+  "project": "japan-travel",
+  "version": "3.0",
+  "architecture": "destination-scoped",
 
-  "processes": {
+  "active_destination": "tokyo_2026",
+
+  "global_processes": {
     "p1_dates": {
       "state": "confirmed",
       "events": [
-        {"event": "user_confirmed_dates", "from": "pending", "to": "confirmed", "data": {"dates": "2026-02-11 to 2026-02-15"}, "at": "2026-01-23T10:00:00+08:00"}
+        {"event": "user_confirmed_dates", "from": "pending", "to": "confirmed", "data": {"dates": "2026-02-11 to 2026-02-15"}, "at": "2026-01-23T10:00:00+08:00"},
+        {"event": "added_flexibility", "data": {"preferred": ["2026-02-21", "2026-02-22"], "reason": "CNY pricing"}, "at": "2026-01-26T12:30:00+08:00"}
       ]
+    }
+  },
+
+  "destinations": {
+    "tokyo_2026": {
+      "status": "active",
+      "processes": {
+        "p2_destination": {
+          "state": "confirmed",
+          "events": [
+            {"event": "destination_set", "to": "confirmed", "data": {"destination": "Tokyo, Japan"}, "at": "2026-01-26T12:30:00+08:00"}
+          ]
+        },
+        "p3_4_packages": {
+          "state": "researched",
+          "events": [
+            {"event": "started_package_research", "from": "pending", "to": "researching", "at": "2026-01-26T12:00:00+08:00"},
+            {"event": "scraped_besttour", "data": {"url": "besttour.com.tw", "product": "TYO05MM260211AM"}, "at": "2026-01-26T12:26:00+08:00"},
+            {"event": "package_found", "from": "researching", "to": "researched", "data": {"package_id": "pkg_besttour_tavinos_001", "hotel": "TAVINOS HAMAMATSUCHO"}, "at": "2026-01-26T12:30:00+08:00"}
+          ]
+        },
+        "p3_flights": {
+          "state": "pending",
+          "events": []
+        },
+        "p4_hotels": {
+          "state": "pending",
+          "events": []
+        },
+        "p5_itinerary": {
+          "state": "pending",
+          "events": []
+        }
+      }
     },
-    "p2_destination": {
-      "state": "confirmed",
-      "events": [
-        {"event": "user_confirmed_destination", "from": "pending", "to": "confirmed", "data": {"destination": "Yokohama, Japan"}, "at": "2026-01-23T10:00:00+08:00"},
-        {"event": "destination_changed", "from": "confirmed", "to": "confirmed", "data": {"from": "Yokohama", "to": "Nagoya", "reason": "Better flight pricing during CNY"}, "at": "2026-01-23T16:00:00+08:00"}
-      ]
-    },
-    "p3_flights": {
-      "state": "researched",
-      "events": [
-        {"event": "started_research", "from": "pending", "to": "researching", "at": "2026-01-23T11:00:00+08:00"},
-        {"event": "found_routes", "data": {"routes": ["TPE-NRT", "TPE-HND", "TSA-HND", "TSA-NRT"]}, "at": "2026-01-23T11:30:00+08:00"},
-        {"event": "received_comet_data", "data": {"candidates": 3, "source": "comet_agent"}, "at": "2026-01-23T12:00:00+08:00"},
-        {"event": "compared_alternative_airports", "data": {"airports": ["IBR", "NGO", "FUK"], "reason": "CNY pricing analysis"}, "at": "2026-01-23T15:00:00+08:00"},
-        {"event": "selected_ngo", "data": {"airport": "NGO", "reason": "Best balance of price, daily flights, and convenience"}, "at": "2026-01-23T16:00:00+08:00"},
-        {"event": "candidates_updated", "from": "researched", "to": "researched", "data": {"route": "TPE-NGO", "airline": "Tigerair"}, "at": "2026-01-23T16:30:00+08:00"}
-      ]
-    },
-    "p4_hotels": {
-      "state": "pending",
-      "events": []
-    },
-    "p5_itinerary": {
-      "state": "pending",
-      "events": []
+    "nagoya_2026": {
+      "status": "archived",
+      "archived_at": "2026-01-26T12:30:00+08:00",
+      "processes": {
+        "p2_destination": {
+          "state": "confirmed",
+          "events": [
+            {"event": "destination_changed", "from": "confirmed", "to": "confirmed", "data": {"from": "Yokohama", "to": "Nagoya", "reason": "Better flight pricing during CNY"}, "at": "2026-01-23T16:00:00+08:00"}
+          ]
+        },
+        "p3_flights": {
+          "state": "researched",
+          "events": [
+            {"event": "started_research", "from": "pending", "to": "researching", "at": "2026-01-23T11:00:00+08:00"},
+            {"event": "selected_ngo", "data": {"airport": "NGO", "reason": "Best balance of price, daily flights, and convenience"}, "at": "2026-01-23T16:00:00+08:00"},
+            {"event": "candidates_updated", "from": "researching", "to": "researched", "data": {"route": "TPE-NGO", "airline": "Tigerair"}, "at": "2026-01-23T16:30:00+08:00"}
+          ]
+        },
+        "p4_hotels": {
+          "state": "pending",
+          "events": []
+        },
+        "p5_itinerary": {
+          "state": "pending",
+          "events": []
+        }
+      }
     }
   },
 
@@ -49,59 +89,32 @@
     "confirmed": []
   },
 
-  "current_focus": "p3_flights",
-
-  "next_actions": [
-    "confirm_ngo_flight_booking",
-    "start_p4_hotels_nagoya",
-    "finalize_itinerary"
-  ],
-
-  "data_gathered": {
-    "flights": {
-      "original_routes_analyzed": ["TPE-NRT", "TPE-HND", "TSA-HND", "TSA-NRT"],
-      "alternative_airports_compared": {
-        "IBR": {"pros": "Cheapest, low CNY premium", "cons": "Only Thu/Sun, bus to Tokyo"},
-        "NGO": {"pros": "Daily flights, direct to destination, good times", "cons": "Slight CNY premium"},
-        "FUK": {"pros": "Many flights, great city", "cons": "Far from central Japan"}
-      },
-      "selected_route": {
-        "route": "TPE-NGO",
-        "airline": "Tigerair Taiwan",
-        "outbound": {"flight": "IT206", "time": "09:00-12:55"},
-        "return": {"flight": "IT207", "time": "13:45-15:55"},
-        "price_estimate_2pax": "NT$13,400-16,000",
-        "reason": "Best balance: daily flights, good times, direct to Nagoya"
-      }
-    },
-    "destination_change": {
-      "from": "Yokohama",
-      "to": "Nagoya",
-      "reason": "CNY flight pricing - NGO offers better value than Tokyo airports"
-    }
+  "destination_transitions": {
+    "active": ["archived"],
+    "archived": ["active"]
   },
 
+  "current_focus": "tokyo_2026.p3_4_packages",
+
+  "next_actions": [
+    "select_tokyo_package_date",
+    "compare_other_otas",
+    "book_package_if_selected"
+  ],
+
   "event_log": [
-    {"event": "session_start", "at": "2026-01-23T09:00:00+08:00"},
-    {"event": "reviewed_commits", "at": "2026-01-23T09:10:00+08:00"},
-    {"event": "cleaned_git_history", "at": "2026-01-23T09:20:00+08:00"},
-    {"event": "fixed_json_dates", "data": {"from": "2026-02-18", "to": "2026-02-11"}, "at": "2026-01-23T09:30:00+08:00"},
-    {"event": "fixed_currency", "data": {"from": "JPY", "to": "TWD"}, "at": "2026-01-23T09:35:00+08:00"},
-    {"event": "fixed_itinerary_rules", "data": {"change": "relaxed day_type handling"}, "at": "2026-01-23T09:40:00+08:00"},
-    {"event": "started_flight_research", "at": "2026-01-23T11:00:00+08:00"},
-    {"event": "analyzed_airport_combinations", "at": "2026-01-23T11:30:00+08:00"},
-    {"event": "received_comet_agent_data", "at": "2026-01-23T12:00:00+08:00"},
-    {"event": "discussed_architecture", "data": {"decided": "questionnaire + skill + tool + json"}, "at": "2026-01-23T12:30:00+08:00"},
-    {"event": "designed_state_manager", "at": "2026-01-23T13:00:00+08:00"},
-    {"event": "created_state_json", "at": "2026-01-23T13:30:00+08:00"},
-    {"event": "updated_p2_schema", "data": {"added": ["cities", "shopping", "origin_city"]}, "at": "2026-01-23T14:00:00+08:00"},
-    {"event": "created_p3_questionnaire", "file": "src/questionnaire/definitions/p3-transportation.json", "at": "2026-01-23T14:15:00+08:00"},
-    {"event": "created_p3_skill_spec", "file": "src/skills/p3-flights.md", "at": "2026-01-23T14:20:00+08:00"},
-    {"event": "added_flight_candidates", "data": {"count": 3, "source": "comet_agent"}, "at": "2026-01-23T14:30:00+08:00"},
-    {"event": "analyzed_cny_pricing", "data": {"finding": "Tokyo flights 3x normal price"}, "at": "2026-01-23T15:00:00+08:00"},
-    {"event": "compared_alternative_airports", "data": {"airports": ["IBR", "NGO", "FUK"]}, "at": "2026-01-23T15:30:00+08:00"},
-    {"event": "user_selected_ngo", "data": {"reason": "daily flights, good times, Feb is cheapest month"}, "at": "2026-01-23T16:00:00+08:00"},
-    {"event": "destination_changed", "data": {"from": "Yokohama", "to": "Nagoya"}, "at": "2026-01-23T16:00:00+08:00"},
-    {"event": "updated_travel_plan", "data": {"changes": ["destination", "flights", "hotels", "itinerary"]}, "at": "2026-01-23T16:30:00+08:00"}
-  ]
+    {"event": "session_start", "at": "2026-01-26T12:00:00+08:00"},
+    {"event": "reviewed_commits", "at": "2026-01-26T12:05:00+08:00"},
+    {"event": "user_found_package", "data": {"source": "besttour.com.tw"}, "at": "2026-01-26T12:10:00+08:00"},
+    {"event": "created_scraper", "file": "scripts/scrape_package.py", "at": "2026-01-26T12:20:00+08:00"},
+    {"event": "scraped_package", "data": {"hotel": "TAVINOS HAMAMATSUCHO", "airline": "Peach"}, "at": "2026-01-26T12:26:00+08:00"},
+    {"event": "user_confirmed_tokyo", "data": {"switched_from": "nagoya"}, "at": "2026-01-26T12:28:00+08:00"},
+    {"event": "architecture_redesign", "data": {"change": "destination-scoped structure"}, "at": "2026-01-26T12:30:00+08:00"},
+    {"event": "refactored_travel_plan", "data": {"version": "4.0.0", "destinations": ["tokyo_2026", "nagoya_2026"]}, "at": "2026-01-26T12:35:00+08:00"}
+  ],
+
+  "skills_enhancement": {
+    "added": ["package_scraping", "multi_destination_support"],
+    "pending": ["p3p4_packages_skill", "ota_comparison", "destination_comparison"]
+  }
 }

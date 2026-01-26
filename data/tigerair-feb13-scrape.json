@@ -1,0 +1,18 @@
+{
+  "url": "https://booking.tigerairtw.com/Search/OneWay?oriCity=TPE&desCity=NGO&departDate=2026-02-13&adult=2&child=0&infant=0&promoCode=",
+  "scraped_at": "2026-01-26T15:02:25.594525",
+  "title": "台灣虎航 Tigerair Taiwan│網路訂位",
+  "raw_text": "很抱歉，網頁不存在或連結有誤\n回搜尋航班\nwww.tigerairtw.com 使用 Cookie 分析和其他追蹤技術為您提供更好的使用體驗。通過繼續使用我們的官網，您確認並同意我們的隱私保護政策。更多關於隱私保護及法律事宜訊息，請閱讀台灣虎航的隱私權政策及運送條款。\n接受",
+  "extracted": {
+    "flight": {},
+    "hotel": {},
+    "price": {},
+    "dates": {},
+    "inclusions": []
+  },
+  "extracted_elements": {
+    "main": [
+      "很抱歉，網頁不存在或連結有誤\n回搜尋航班"
+    ]
+  }
+}

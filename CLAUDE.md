@@ -1,177 +1,203 @@
-# Nagoya Travel Project
+# Japan Travel Project
 
 ## Trip Details
-- **Dates**: February 11-15, 2026 (20260211 - 20260215)
-- **Destination**: Nagoya, Japan (changed from Yokohama due to CNY flight pricing)
+- **Dates**: February 11-15, 2026 (flexible: Feb 21-22 preferred due to CNY pricing)
+- **Active Destination**: Tokyo, Japan
+- **Archived Destination**: Nagoya, Japan
+
+## Schema Version
+- **Current**: `4.2.0`
+- **Architecture**: Destination-scoped with canonical offer model
 
 ## Project Goals
 
 ### Primary Objectives
-1. **Status Check Program** - Create a program to check and report travel project status
-2. **Process Program as Agent Tool** - Build process automation that can be used as an agent tool to assist in completing travel planning tasks
-3. **Claude Skill Conversion** - Eventually convert this project into a reusable Claude skill for travel planning
+1. **Status Check Program** - Check and report travel project status
+2. **Process Program as Agent Tool** - Automation for travel planning tasks
+3. **Claude Skill Conversion** - Reusable travel planning skill
 
-### Travel Planning Processes
+## Architecture (v4.2.0)
 
-#### Status & Milestone System
-**Readiness definition**: "Can proceed to next dependent process"
-
-| Status | Meaning |
-|--------|---------|
-| `pending` | Not started |
-| `researched` | Options gathered, ready for selection |
-| `selected` | Choice made, ready for booking |
-| `booked` | Reservation confirmed |
-| `confirmed` | Verified and finalized |
-
-#### Process 1: Date Anchor
-- **Set out date**: The departure date
-- **Duration**: Number of travel days
-- **Return date**: Calculated from set out date + duration
-- Milestones: `pending` → `confirmed`
-- Ready when: all 3 date fields filled
-
-#### Process 2: Destination
-- **Origin**: City and country of departure (e.g., Taipei, Taiwan)
-- **Destination country**: Japan
-- **Cities**: List of cities to visit with role and attractions
-  - `name`: City name (e.g., Yokohama)
-  - `role`: primary | day_trip
-  - `nights`: Number of nights staying
-  - `attractions[]`: Places to visit
-- **Shopping**: Standalone shopping goals (cross-city)
-  - `type`: Category (e.g., second_hand_luxury, general)
-  - `stores[]`: Specific stores to visit
-- Milestones: `pending` → `confirmed`
-- Ready when: destination_country + at least one city filled
-
-#### Process 3: Transportation
-- **3.1 Flight**: Airline, flight number, departure/arrival times
-- **3.2 Home → Airport**: Route, transport method, duration, cost
-- **3.3 Airport → Hotel**: Route, transport method, duration, cost
-- Milestones: `pending` → `researched` → `selected` → `booked`
-- Ready when: flight outbound has airline + airports + datetime
-
-#### Process 4: Accommodation
-- **4.1 Location Zone**: Select area/district for hotel
-- **4.2 Hotel Selection**: Exact hotel or candidate list with comparison
-- Criteria: Price, location, amenities, reviews
-- Milestones:
-  - Zone: `pending` → `researched` → `selected`
-  - Hotel: `pending` → `researched` → `selected` → `booked`
-- Ready for zone: selected_area filled
-- Ready for hotel: selected_hotel filled + booking confirmation
-
-#### Process 5: Daily Itinerary
-For each day:
-- **Morning session** (before lunch): Attractions, activities, timing
-- **Afternoon session** (after lunch): Attractions, activities, timing
-- **Evening session** (optional): Dinner, night activities
-- Milestones per day: `pending` → `researched` → `selected` → `confirmed`
-- Ready when: morning has ≥1 activity AND afternoon has ≥1 activity
-
-### Process Dependencies
+### Data Model
 ```
-[1. Date Anchor] ──┬──→ [3. Transportation] ──→ [4.1 Location Zone]
-                   │                                    ↓
-[2. Destination] ──┘                           [4.2 Hotel Selection]
-                                                        ↓
-                                               [5. Daily Itinerary]
+travel-plan.json
+├── schema_version: "4.2.0"
+├── active_destination: "tokyo_2026"
+├── process_1_date_anchor          # Shared across destinations
+├── destinations/
+│   ├── tokyo_2026/                # ACTIVE
+│   │   ├── process_2_destination
+│   │   ├── process_3_4_packages   # Package-first path
+│   │   ├── process_3_transportation
+│   │   ├── process_4_accommodation
+│   │   └── process_5_daily_itinerary
+│   └── nagoya_2026/               # ARCHIVED
+├── cascade_rules/                 # Machine-checkable rules
+├── cascade_state/                 # Per-destination dirty flags
+├── canonical_offer_schema/        # All scrapers normalize to this
+├── ota_sources/                   # Plugin registry for OTAs
+├── skill_io_contracts/            # Standardized IO for skills
+└── comparison/                    # DERIVED (regenerate from destinations)
 ```
 
-### Development Phases
-
-#### Phase 1: Status Check Program
-- Check completion status of all 5 processes
-- Report missing information
-- Calculate overall readiness percentage
-
-#### Phase 2: Process Program (Agent Tool)
-- Execute each process step with agent assistance
-- Research and gather options
-- Provide structured outputs for decision making
-
-#### Phase 3: Claude Skill
-- Package into reusable travel planning skill
-- Templated workflows for any destination
-
-## Architecture
-
-### System Design
+### Process Flow
 ```
-Base Info Questionnaire → fills P1 + P2 directly
-         ↓
-    Skill (search) → Tool (validate) → JSON (store)
-         ↓
-    State Manager (event-driven state tracking)
-```
-
-### Components
-
-| Component | Purpose |
-|-----------|---------|
-| **Questionnaire** | Collect inputs per process |
-| **Skills** | `/p3-flights`, `/p4-hotels`, `/p5-itinerary` |
-| **Tools** | Validate, merge, rank candidates (TypeScript) |
-| **State Manager** | Event-driven state tracking |
-| **JSON** | Single source of truth + readiness rules |
-
-### State Machine Model
-- Events trigger state changes
-- Valid transitions defined in `data/state.json`
-- States: `pending` → `researching` → `researched` → `selecting` → `selected` → `booking` → `booked` → `confirmed`
-
-### Database (Future)
-- **Current**: Plain JSON files (`travel-plan.json`, `state.json`, `flights-cache.json`)
-- **Future**: **LokiJS** migration planned
-  - In-memory with optional persistence
-  - Very fast performance
-  - MongoDB-like queries
-  - ~100KB footprint
-  - Actively maintained
-
-### Flight Cache Schema
-```
-data/flights-cache.json
-├── meta              # Version, description
-├── search_params     # Origin, dates, passengers
-├── flights[]         # All flight options
-│   ├── id, destination, airline
-│   ├── outbound/return times
-│   ├── total_price, baggage_included
-│   ├── last_day_playable, red_eye
-│   └── source, queried_at
-└── summary           # Cheapest, best schedule, recommendations
+┌─────────────────────────────────────────────────────┐
+│  P1 Dates (shared)                                  │
+└────────────────────┬────────────────────────────────┘
+                     │
+         ┌───────────┴───────────┐
+         ▼                       ▼
+   ┌───────────┐          ┌───────────┐
+   │ Tokyo     │          │ Nagoya    │
+   │ (active)  │          │ (archived)│
+   └─────┬─────┘          └───────────┘
+         │
+    ┌────┴────┐
+    ▼         ▼
+┌────────┐  ┌────────┐
+│Packages│  │Separate│
+│ (P3+4) │  │P3 + P4 │
+└───┬────┘  └────────┘
+    │ populate_on_select
+    ▼
+┌────────────────┐
+│ P5 Itinerary   │
+└────────────────┘
 ```
 
-### Process-Skill Mapping
+### Cascade Rules
+| Trigger | Reset | Scope |
+|---------|-------|-------|
+| `active_destination_change` | `process_5_*` | new destination |
+| `process_1_date_anchor_change` | `process_3_*`, `process_4_*`, `process_5_*` | all destinations |
+| `process_2_destination_change` | `process_3_*`, `process_4_*`, `process_5_*` | current destination |
+| `process_3_4_packages_selected` | populate P3+P4 from chosen offer | current destination |
 
-| Process | Questionnaire | Skill | Tool |
-|---------|--------------|-------|------|
-| P1 Date + P2 Dest | `base_info` | (none - direct fill) | - |
-| P3 Transportation | `p3_transport` | `/p3-flights` | `transportation.ts` |
-| P4 Accommodation | `p4_hotel` | `/p4-hotels` | `accommodation.ts` |
-| P5 Itinerary | `p5_itinerary` | `/p5-itinerary` | `itinerary.ts` |
+### Canonical Offer Schema (Required Fields)
+```typescript
+{
+  id: string;              // {source_id}_{product_code}
+  source_id: string;
+  type: 'package' | 'flight' | 'hotel';
+  currency: string;
+  price_per_person: number;
+  availability: 'available' | 'sold_out' | 'limited';
+  flight?: { airline, outbound, return };
+  hotel?: { name, slug, area, access[] };
+  includes?: ['light_breakfast', ...];
+  date_pricing: { [date]: { price, availability } };
+  best_value: { date, price_per_person, price_total };
+}
+```
+
+## Skills
+
+### Available
+| Skill | Path | Purpose |
+|-------|------|---------|
+| `/p3-flights` | `src/skills/p3-flights.md` | Search flights separately |
+| `/p3p4-packages` | `src/skills/p3p4-packages.md` | Search OTA packages (flight+hotel) |
+
+### Skill IO Contract
+```typescript
+// Common Input
+{
+  active_destination: string;
+  date_filters: { start_date, end_date, flexible, preferred_dates, avoid_dates };
+  pax: number;
+  budget: { total_cap, per_person_cap };
+  constraints: { avoid_red_eye, prefer_direct, require_breakfast };
+}
+
+// Common Output
+{
+  offers: CanonicalOffer[];
+  chosen_offer: CanonicalOffer | null;
+  provenance: [{ source_id, scraped_at, offers_found }];
+  warnings: string[];
+}
+```
+
+## OTA Sources (Plugin Registry)
+
+| Source ID | Name | Type | Supported |
+|-----------|------|------|-----------|
+| `besttour` | 喜鴻假期 | package | ✅ |
+| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ |
+| `tigerair` | 台灣虎航 | flight | ✅ (limited) |
+| `eztravel` | 易遊網 | package, flight, hotel | ❌ |
+
+### Lion Travel Promo
+- Code: `FITPKG` - TWD 400 off on Thursdays (min TWD 20,000)
 
 ## Project Structure
 ```
 /
-├── CLAUDE.md              # Project configuration and goals
-├── src/
-│   ├── status/            # Status check program
-│   │   ├── status-check.ts
-│   │   └── rule-evaluator.ts
-│   ├── process/           # Process automation tools
-│   │   ├── types.ts
-│   │   ├── plan-updater.ts
-│   │   ├── transportation.ts
-│   │   ├── accommodation.ts
-│   │   └── itinerary.ts
-│   ├── questionnaire/     # (planned) Input collection
-│   └── skills/            # (planned) Skill definitions
+├── CLAUDE.md
 ├── data/
-│   ├── travel-plan.json   # Trip data + readiness rules
-│   ├── state.json         # Event-driven state tracking
-│   └── flights-cache.json # Flight search results cache
-└── docs/                  # Documentation
+│   ├── travel-plan.json       # v4.2.0 destination-scoped
+│   ├── state.json             # Event-driven state
+│   ├── flights-cache.json     # Legacy flight cache
+│   ├── liontravel-*.json      # Lion Travel scrape results
+│   └── tigerair-*.json        # Tigerair scrape results
+├── src/
+│   ├── cascade/               # Cascade runner library
+│   │   ├── types.ts           # Type definitions
+│   │   ├── wildcard.ts        # Schema-driven expansion
+│   │   ├── runner.ts          # Core logic
+│   │   └── index.ts           # Module exports
+│   ├── cli/
+│   │   └── cascade.ts         # Cascade CLI
+│   ├── status/
+│   ├── process/
+│   ├── questionnaire/definitions/
+│   └── skills/
+│       ├── p3-flights.md
+│       └── p3p4-packages.md
+├── scripts/
+│   └── scrape_package.py      # Playwright OTA scraper
+└── tsconfig.json
 ```
+
+### Cascade CLI Usage
+```bash
+# Dry-run (default)
+npx ts-node src/cli/cascade.ts
+
+# Apply changes
+npx ts-node src/cli/cascade.ts --apply
+
+# Custom input/output
+npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.json
+```
+
+## Current Status
+
+| Process | Tokyo | Nagoya |
+|---------|-------|--------|
+| P1 Dates | ✅ confirmed | ✅ confirmed |
+| P2 Destination | ✅ confirmed | ✅ confirmed |
+| P3+4 Packages | 🔄 researched (4 offers) | ⏳ pending |
+| P3 Transportation | ⏳ pending | 🔄 researched |
+| P4 Accommodation | ⏳ pending | ⏳ pending |
+| P5 Itinerary | ⏳ pending | ⏳ pending |
+
+### Tokyo Package Offers (2 pax)
+| Source | Price | Type | Note |
+|--------|-------|------|------|
+| Lion Travel | TWD 19,560起 | Package | Kawaguchiko area |
+| Lion Travel | TWD 19,860起 | Package | Skytree + 24hr metro |
+| Lion Travel | TWD 29,776起 | Package | Disney + ticket |
+| Besttour | TWD 36,776 | Package | Feb 22, Hamamatsucho |
+
+## Completed
+- ✅ Cascade runner (TypeScript library + CLI)
+- ✅ Lion Travel OTA integration
+- ✅ Tigerair OTA integration (limited - no date-specific pricing)
+- ✅ Canonical offer schema normalization
+
+## Next Steps
+1. **Add eztravel scraper** - Normalize to canonical_offer_schema
+2. **Build comparison tool** - Derive rankings from destinations/*
+3. **Package selection flow** - Select offer and trigger cascade populate
