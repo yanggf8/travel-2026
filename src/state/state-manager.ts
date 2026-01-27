@@ -38,7 +38,7 @@ export class StateManager {
   constructor(planPath?: string, statePath?: string) {
     this.planPath = planPath || DEFAULT_PLAN_PATH;
     this.statePath = statePath || DEFAULT_STATE_PATH;
-    this.timestamp = this.now();
+    this.timestamp = this.freshTimestamp();
     this.plan = this.loadPlan();
     this.eventLog = this.loadEventLog();
   }
@@ -48,18 +48,44 @@ export class StateManager {
   // ============================================================================
 
   /**
-   * Get atomic ISO timestamp for current operation.
+   * Get atomic ISO timestamp for current session.
    * All updates in a single StateManager session use the same timestamp.
    */
   now(): string {
+    return this.timestamp;
+  }
+
+  /**
+   * Generate a fresh ISO timestamp (for new sessions/batches).
+   */
+  freshTimestamp(): string {
     return new Date().toISOString();
   }
 
   /**
-   * Refresh timestamp for new batch of operations.
+   * Refresh session timestamp for new batch of operations.
    */
   refreshTimestamp(): void {
-    this.timestamp = this.now();
+    this.timestamp = this.freshTimestamp();
+  }
+
+  // ============================================================================
+  // Cascade Run Tracking
+  // ============================================================================
+
+  /**
+   * Mark that a cascade run has completed.
+   * Only the cascade runner should call this.
+   */
+  markCascadeRun(): void {
+    this.plan.cascade_state.last_cascade_run = this.timestamp;
+  }
+
+  /**
+   * Get the timestamp of the last cascade run.
+   */
+  getLastCascadeRun(): string {
+    return this.plan.cascade_state.last_cascade_run;
   }
 
   // ============================================================================
@@ -309,11 +335,9 @@ export class StateManager {
 
   /**
    * Save both travel plan and event log atomically.
+   * Note: Does NOT update last_cascade_run - that is cascade-runner-owned.
    */
   save(): void {
-    // Update last cascade run timestamp
-    this.plan.cascade_state.last_cascade_run = this.timestamp;
-
     // Save travel plan
     writeFileSync(
       this.planPath,

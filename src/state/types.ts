@@ -14,18 +14,20 @@ export type ProcessStatus =
   | 'selected'
   | 'booking'
   | 'booked'
-  | 'confirmed';
+  | 'confirmed'
+  | 'skipped';
 
 // Valid status transitions
 export const STATUS_TRANSITIONS: Record<ProcessStatus, ProcessStatus[]> = {
-  pending: ['researching'],
-  researching: ['researched', 'pending'],
-  researched: ['selecting', 'researching'],
-  selecting: ['selected', 'researched'],
-  selected: ['booking', 'selecting'],
-  booking: ['booked', 'selected'],
-  booked: ['confirmed'],
+  pending: ['researching', 'skipped'],
+  researching: ['researched', 'pending', 'skipped'],
+  researched: ['selecting', 'researching', 'skipped'],
+  selecting: ['selected', 'researched', 'skipped'],
+  selected: ['booking', 'selecting', 'skipped'],
+  booking: ['booked', 'selected', 'skipped'],
+  booked: ['confirmed', 'skipped'],
   confirmed: [],
+  skipped: ['pending'],  // Can unskip back to pending
 };
 
 // Process identifiers
