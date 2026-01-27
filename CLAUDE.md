@@ -96,8 +96,9 @@ travel-plan.json
 ### Available
 | Skill | Path | Purpose |
 |-------|------|---------|
-| `/p3-flights` | `src/skills/p3-flights.md` | Search flights separately |
-| `/p3p4-packages` | `src/skills/p3p4-packages.md` | Search OTA packages (flight+hotel) |
+| `travel-shared` | `src/skills/travel-shared/SKILL.md` | Shared references used by all travel skills |
+| `/p3-flights` | `src/skills/p3-flights/SKILL.md` | Search flights separately |
+| `/p3p4-packages` | `src/skills/p3p4-packages/SKILL.md` | Search OTA packages (flight+hotel) |
 
 ### Skill IO Contract
 ```typescript
@@ -124,7 +125,7 @@ travel-plan.json
 | Source ID | Name | Type | Supported |
 |-----------|------|------|-----------|
 | `besttour` | 喜鴻假期 | package | ✅ |
-| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ |
+| `liontravel` | 雄獅旅遊 | package, flight, hotel | ❌ |
 | `tigerair` | 台灣虎航 | flight | ✅ (limited) |
 | `eztravel` | 易遊網 | package, flight, hotel | ❌ |
 
@@ -134,7 +135,6 @@ travel-plan.json
 ## Project Structure
 ```
 /
-├── README.md                  # Project overview & quick start
 ├── CLAUDE.md                  # AI assistant context (this file)
 ├── data/
 │   ├── travel-plan.json       # Main travel plan (v4.2.0)
@@ -163,8 +163,15 @@ travel-plan.json
 │   │   └── definitions/
 │   │       └── p3-transportation.json
 │   ├── skills/                # Reusable planning skills
-│   │   ├── p3-flights.md      # Standalone flight search (v1.1.0)
-│   │   └── p3p4-packages.md   # Package search (v1.0.0)
+│   │   ├── travel-shared/     # Shared references (bundle)
+│   │   │   ├── SKILL.md
+│   │   │   └── references/
+│   │   ├── p3-flights/
+│   │   │   ├── SKILL.md
+│   │   │   └── references/legacy-spec.md
+│   │   └── p3p4-packages/
+│   │       ├── SKILL.md
+│   │       └── references/legacy-spec.md
 │   └── status/
 │       ├── rule-evaluator.ts
 │       └── status-check.ts
@@ -205,7 +212,7 @@ Original dates (Feb 11) sold out. Agent offered **Feb 13** as alternative.
 |------|-------------|--------------|------|
 | Feb 11 | 42,776 | ❌ Sold Out | Original preferred date |
 | Feb 12 | 46,776 | ❌ Sold Out | |
-| **Feb 13** | **55,776** | ✅ Available (2) | **★ AGENT OFFERED** |
+| **Feb 13** | **55,776** | ❌ Sold Out | **★ previously offered; sold out as of 2026-01-26 scrape** |
 | Feb 14 | 69,776 | ✅ Available (2) | CNY peak - expensive |
 | Feb 20 | 46,776 | ✅ Available (2) | Post-CNY |
 | Feb 21 | 39,776 | ✅ Available (2) | Budget option |
