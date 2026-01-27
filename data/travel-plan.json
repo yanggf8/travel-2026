@@ -254,7 +254,7 @@
                 "2026-02-06": {"price": 19888, "availability": "sold_out", "seats_remaining": 0},
                 "2026-02-11": {"price": 21388, "availability": "sold_out", "seats_remaining": 0},
                 "2026-02-12": {"price": 23388, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-13": {"price": 27888, "availability": "sold_out", "seats_remaining": 0},
+                "2026-02-13": {"price": 27888, "availability": "available", "seats_remaining": 2, "note": "Agent offered this date"},
                 "2026-02-14": {"price": 34888, "availability": "available", "seats_remaining": 2},
                 "2026-02-15": {"price": 33888, "availability": "available", "seats_remaining": 2},
                 "2026-02-16": {"price": 33888, "availability": "available", "seats_remaining": 2},
@@ -392,7 +392,7 @@
           ],
           "warnings": [
             "Return flight details not available for BestTour package",
-            "Feb 11-13 SOLD OUT on BestTour - consider Feb 21-22 dates",
+            "Feb 11-12 SOLD OUT - Agent offered Feb 13 as alternative",
             "Lion Travel prices are 'starting from' for 2-3 nights - 5-day actual prices will be higher",
             "CNY peak (Feb 14-18): +80-90% premium over best dates"
           ]
@@ -654,22 +654,28 @@
     },
     "price_ranking": [
       {"destination": "nagoya_2026", "price_2pax": 13400, "type": "flight_only", "note": "Needs hotel added - archived"},
-      {"destination": "tokyo_2026", "price_2pax": 36776, "source": "besttour", "date": "2026-02-22", "type": "package", "note": "TAVINOS Hamamatsucho, best available date"},
-      {"destination": "tokyo_2026", "price_2pax": 39776, "source": "besttour", "date": "2026-02-21", "type": "package", "note": "TAVINOS Hamamatsucho, 2nd best"},
-      {"destination": "tokyo_2026", "price_2pax": 46776, "source": "besttour", "date": "2026-02-20", "type": "package", "note": "Post-CNY, still high"},
+      {"destination": "tokyo_2026", "price_2pax": 36776, "source": "besttour", "date": "2026-02-22", "type": "package", "note": "Best price if flexible"},
+      {"destination": "tokyo_2026", "price_2pax": 39776, "source": "besttour", "date": "2026-02-21", "type": "package", "note": "2nd cheapest"},
+      {"destination": "tokyo_2026", "price_2pax": 55776, "source": "besttour", "date": "2026-02-13", "type": "package", "note": "★ AGENT OFFERED - closest to original dates"},
       {"destination": "tokyo_2026", "price_2pax": 69776, "source": "besttour", "date": "2026-02-14", "type": "package", "note": "CNY peak - expensive"}
     ],
     "recommendation": {
       "best_option": {
+        "date": "2026-02-13",
+        "package": "besttour_TYO05MM260211AM",
+        "price_2pax": 55776,
+        "reason": "Agent offered Feb 13 as alternative to sold-out Feb 11. Depart Fri Feb 13, return Tue Feb 17."
+      },
+      "budget_option": {
         "date": "2026-02-22",
         "package": "besttour_TYO05MM260211AM",
         "price_2pax": 36776,
-        "reason": "Best price with confirmed availability (2 seats). Depart Sun Feb 22, return Thu Feb 26."
+        "reason": "Best price if dates are flexible. Depart Sun Feb 22, return Thu Feb 26."
       },
       "original_dates_status": {
         "date": "2026-02-11",
         "status": "SOLD_OUT",
-        "alternative": "Consider Feb 21-22 departure instead"
+        "alternative": "Agent offered Feb 13 instead"
       }
     }
   }

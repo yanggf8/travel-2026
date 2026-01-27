@@ -197,20 +197,24 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 | P4 Accommodation | ⏳ pending | ⏳ pending |
 | P5 Itinerary | ⏳ pending | ⏳ pending |
 
-### ⚠️ IMPORTANT: Feb 11-13 SOLD OUT
-Original dates (Feb 11-15) are **sold out** on BestTour. Consider alternative dates.
+### ⚠️ UPDATE: Agent offered Feb 13 (Feb 11-12 sold out)
+Original dates (Feb 11) sold out. Agent offered **Feb 13** as alternative.
 
 ### Tokyo Package - BestTour Date-Specific Pricing (2 pax, updated 2026-01-26)
 | Date | Price (TWD) | Availability | Note |
 |------|-------------|--------------|------|
 | Feb 11 | 42,776 | ❌ Sold Out | Original preferred date |
 | Feb 12 | 46,776 | ❌ Sold Out | |
-| Feb 13 | 55,776 | ❌ Sold Out | |
+| **Feb 13** | **55,776** | ✅ Available (2) | **★ AGENT OFFERED** |
 | Feb 14 | 69,776 | ✅ Available (2) | CNY peak - expensive |
 | Feb 20 | 46,776 | ✅ Available (2) | Post-CNY |
-| **Feb 21** | **39,776** | ✅ Available (2) | Preferred alternative |
-| **Feb 22** | **36,776** | ✅ Available (2) | **BEST VALUE** |
+| Feb 21 | 39,776 | ✅ Available (2) | Budget option |
+| Feb 22 | 36,776 | ✅ Available (2) | Cheapest |
 | Feb 24 | 38,776 | ✅ Available (2) | |
+
+### Decision Options
+1. **Feb 13** - TWD 55,776/2pax - Closest to original dates, CNY pricing
+2. **Feb 22** - TWD 36,776/2pax - Best value, post-CNY
 
 ### Lion Travel Base Prices (starting from, 2-3 nights)
 | Package | Base Price | Note |
