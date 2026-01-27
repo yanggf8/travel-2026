@@ -3,19 +3,34 @@
   "project": "japan-travel",
   "version": "3.0",
   "architecture": "destination-scoped",
-
   "active_destination": "tokyo_2026",
-
   "global_processes": {
     "p1_dates": {
       "state": "confirmed",
       "events": [
-        {"event": "user_confirmed_dates", "from": "pending", "to": "confirmed", "data": {"dates": "2026-02-11 to 2026-02-15"}, "at": "2026-01-23T10:00:00+08:00"},
-        {"event": "added_flexibility", "data": {"preferred": ["2026-02-21", "2026-02-22"], "reason": "CNY pricing"}, "at": "2026-01-26T12:30:00+08:00"}
+        {
+          "event": "user_confirmed_dates",
+          "from": "pending",
+          "to": "confirmed",
+          "data": {
+            "dates": "2026-02-11 to 2026-02-15"
+          },
+          "at": "2026-01-23T10:00:00+08:00"
+        },
+        {
+          "event": "added_flexibility",
+          "data": {
+            "preferred": [
+              "2026-02-21",
+              "2026-02-22"
+            ],
+            "reason": "CNY pricing"
+          },
+          "at": "2026-01-26T12:30:00+08:00"
+        }
       ]
     }
   },
-
   "destinations": {
     "tokyo_2026": {
       "status": "active",
@@ -23,15 +38,43 @@
         "p2_destination": {
           "state": "confirmed",
           "events": [
-            {"event": "destination_set", "to": "confirmed", "data": {"destination": "Tokyo, Japan"}, "at": "2026-01-26T12:30:00+08:00"}
+            {
+              "event": "destination_set",
+              "to": "confirmed",
+              "data": {
+                "destination": "Tokyo, Japan"
+              },
+              "at": "2026-01-26T12:30:00+08:00"
+            }
           ]
         },
         "p3_4_packages": {
           "state": "researched",
           "events": [
-            {"event": "started_package_research", "from": "pending", "to": "researching", "at": "2026-01-26T12:00:00+08:00"},
-            {"event": "scraped_besttour", "data": {"url": "besttour.com.tw", "product": "TYO05MM260211AM"}, "at": "2026-01-26T12:26:00+08:00"},
-            {"event": "package_found", "from": "researching", "to": "researched", "data": {"package_id": "pkg_besttour_tavinos_001", "hotel": "TAVINOS HAMAMATSUCHO"}, "at": "2026-01-26T12:30:00+08:00"}
+            {
+              "event": "started_package_research",
+              "from": "pending",
+              "to": "researching",
+              "at": "2026-01-26T12:00:00+08:00"
+            },
+            {
+              "event": "scraped_besttour",
+              "data": {
+                "url": "besttour.com.tw",
+                "product": "TYO05MM260211AM"
+              },
+              "at": "2026-01-26T12:26:00+08:00"
+            },
+            {
+              "event": "package_found",
+              "from": "researching",
+              "to": "researched",
+              "data": {
+                "package_id": "pkg_besttour_tavinos_001",
+                "hotel": "TAVINOS HAMAMATSUCHO"
+              },
+              "at": "2026-01-26T12:30:00+08:00"
+            }
           ]
         },
         "p3_flights": {
@@ -45,6 +88,81 @@
         "p5_itinerary": {
           "state": "pending",
           "events": []
+        },
+        "process_1_date_anchor": {
+          "state": "pending",
+          "events": [
+            {
+              "event": "date_anchor_changed",
+              "destination": "tokyo_2026",
+              "process": "process_1_date_anchor",
+              "data": {
+                "from_dates": null,
+                "to_dates": "2026-02-13 to 2026-02-17",
+                "start": "2026-02-13",
+                "end": "2026-02-17",
+                "days": 5,
+                "reason": "Agent offered Feb 13 instead of sold-out Feb 11"
+              },
+              "at": "2026-01-27T09:50:37.324Z"
+            }
+          ]
+        },
+        "process_3_transportation": {
+          "state": "pending",
+          "events": [
+            {
+              "event": "marked_dirty",
+              "destination": "tokyo_2026",
+              "process": "process_3_transportation",
+              "data": {
+                "dirty": true
+              },
+              "at": "2026-01-27T09:50:37.324Z"
+            }
+          ]
+        },
+        "process_3_4_packages": {
+          "state": "pending",
+          "events": [
+            {
+              "event": "marked_dirty",
+              "destination": "tokyo_2026",
+              "process": "process_3_4_packages",
+              "data": {
+                "dirty": true
+              },
+              "at": "2026-01-27T09:50:37.324Z"
+            }
+          ]
+        },
+        "process_4_accommodation": {
+          "state": "pending",
+          "events": [
+            {
+              "event": "marked_dirty",
+              "destination": "tokyo_2026",
+              "process": "process_4_accommodation",
+              "data": {
+                "dirty": true
+              },
+              "at": "2026-01-27T09:50:37.324Z"
+            }
+          ]
+        },
+        "process_5_daily_itinerary": {
+          "state": "pending",
+          "events": [
+            {
+              "event": "marked_dirty",
+              "destination": "tokyo_2026",
+              "process": "process_5_daily_itinerary",
+              "data": {
+                "dirty": true
+              },
+              "at": "2026-01-27T09:50:37.324Z"
+            }
+          ]
         }
       }
     },
@@ -55,15 +173,46 @@
         "p2_destination": {
           "state": "confirmed",
           "events": [
-            {"event": "destination_changed", "from": "confirmed", "to": "confirmed", "data": {"from": "Yokohama", "to": "Nagoya", "reason": "Better flight pricing during CNY"}, "at": "2026-01-23T16:00:00+08:00"}
+            {
+              "event": "destination_changed",
+              "from": "confirmed",
+              "to": "confirmed",
+              "data": {
+                "from": "Yokohama",
+                "to": "Nagoya",
+                "reason": "Better flight pricing during CNY"
+              },
+              "at": "2026-01-23T16:00:00+08:00"
+            }
           ]
         },
         "p3_flights": {
           "state": "researched",
           "events": [
-            {"event": "started_research", "from": "pending", "to": "researching", "at": "2026-01-23T11:00:00+08:00"},
-            {"event": "selected_ngo", "data": {"airport": "NGO", "reason": "Best balance of price, daily flights, and convenience"}, "at": "2026-01-23T16:00:00+08:00"},
-            {"event": "candidates_updated", "from": "researching", "to": "researched", "data": {"route": "TPE-NGO", "airline": "Tigerair"}, "at": "2026-01-23T16:30:00+08:00"}
+            {
+              "event": "started_research",
+              "from": "pending",
+              "to": "researching",
+              "at": "2026-01-23T11:00:00+08:00"
+            },
+            {
+              "event": "selected_ngo",
+              "data": {
+                "airport": "NGO",
+                "reason": "Best balance of price, daily flights, and convenience"
+              },
+              "at": "2026-01-23T16:00:00+08:00"
+            },
+            {
+              "event": "candidates_updated",
+              "from": "researching",
+              "to": "researched",
+              "data": {
+                "route": "TPE-NGO",
+                "airline": "Tigerair"
+              },
+              "at": "2026-01-23T16:30:00+08:00"
+            }
           ]
         },
         "p4_hotels": {
@@ -77,44 +226,171 @@
       }
     }
   },
-
   "transitions": {
-    "pending": ["researching"],
-    "researching": ["researched", "pending"],
-    "researched": ["selecting", "researching"],
-    "selecting": ["selected", "researched"],
-    "selected": ["booking", "selecting"],
-    "booking": ["booked", "selected"],
-    "booked": ["confirmed"],
+    "pending": [
+      "researching"
+    ],
+    "researching": [
+      "researched",
+      "pending"
+    ],
+    "researched": [
+      "selecting",
+      "researching"
+    ],
+    "selecting": [
+      "selected",
+      "researched"
+    ],
+    "selected": [
+      "booking",
+      "selecting"
+    ],
+    "booking": [
+      "booked",
+      "selected"
+    ],
+    "booked": [
+      "confirmed"
+    ],
     "confirmed": []
   },
-
   "destination_transitions": {
-    "active": ["archived"],
-    "archived": ["active"]
+    "active": [
+      "archived"
+    ],
+    "archived": [
+      "active"
+    ]
   },
-
   "current_focus": "tokyo_2026.p3_4_packages",
-
   "next_actions": [
     "select_tokyo_package_date",
     "compare_other_otas",
     "book_package_if_selected"
   ],
-
   "event_log": [
-    {"event": "session_start", "at": "2026-01-26T12:00:00+08:00"},
-    {"event": "reviewed_commits", "at": "2026-01-26T12:05:00+08:00"},
-    {"event": "user_found_package", "data": {"source": "besttour.com.tw"}, "at": "2026-01-26T12:10:00+08:00"},
-    {"event": "created_scraper", "file": "scripts/scrape_package.py", "at": "2026-01-26T12:20:00+08:00"},
-    {"event": "scraped_package", "data": {"hotel": "TAVINOS HAMAMATSUCHO", "airline": "Peach"}, "at": "2026-01-26T12:26:00+08:00"},
-    {"event": "user_confirmed_tokyo", "data": {"switched_from": "nagoya"}, "at": "2026-01-26T12:28:00+08:00"},
-    {"event": "architecture_redesign", "data": {"change": "destination-scoped structure"}, "at": "2026-01-26T12:30:00+08:00"},
-    {"event": "refactored_travel_plan", "data": {"version": "4.0.0", "destinations": ["tokyo_2026", "nagoya_2026"]}, "at": "2026-01-26T12:35:00+08:00"}
+    {
+      "event": "session_start",
+      "at": "2026-01-26T12:00:00+08:00"
+    },
+    {
+      "event": "reviewed_commits",
+      "at": "2026-01-26T12:05:00+08:00"
+    },
+    {
+      "event": "user_found_package",
+      "data": {
+        "source": "besttour.com.tw"
+      },
+      "at": "2026-01-26T12:10:00+08:00"
+    },
+    {
+      "event": "created_scraper",
+      "file": "scripts/scrape_package.py",
+      "at": "2026-01-26T12:20:00+08:00"
+    },
+    {
+      "event": "scraped_package",
+      "data": {
+        "hotel": "TAVINOS HAMAMATSUCHO",
+        "airline": "Peach"
+      },
+      "at": "2026-01-26T12:26:00+08:00"
+    },
+    {
+      "event": "user_confirmed_tokyo",
+      "data": {
+        "switched_from": "nagoya"
+      },
+      "at": "2026-01-26T12:28:00+08:00"
+    },
+    {
+      "event": "architecture_redesign",
+      "data": {
+        "change": "destination-scoped structure"
+      },
+      "at": "2026-01-26T12:30:00+08:00"
+    },
+    {
+      "event": "refactored_travel_plan",
+      "data": {
+        "version": "4.0.0",
+        "destinations": [
+          "tokyo_2026",
+          "nagoya_2026"
+        ]
+      },
+      "at": "2026-01-26T12:35:00+08:00"
+    },
+    {
+      "event": "date_anchor_changed",
+      "destination": "tokyo_2026",
+      "process": "process_1_date_anchor",
+      "data": {
+        "from_dates": null,
+        "to_dates": "2026-02-13 to 2026-02-17",
+        "start": "2026-02-13",
+        "end": "2026-02-17",
+        "days": 5,
+        "reason": "Agent offered Feb 13 instead of sold-out Feb 11"
+      },
+      "at": "2026-01-27T09:50:37.324Z"
+    },
+    {
+      "event": "marked_global_dirty",
+      "process": "process_1_date_anchor",
+      "data": {
+        "dirty": true
+      },
+      "at": "2026-01-27T09:50:37.324Z"
+    },
+    {
+      "event": "marked_dirty",
+      "destination": "tokyo_2026",
+      "process": "process_3_transportation",
+      "data": {
+        "dirty": true
+      },
+      "at": "2026-01-27T09:50:37.324Z"
+    },
+    {
+      "event": "marked_dirty",
+      "destination": "tokyo_2026",
+      "process": "process_3_4_packages",
+      "data": {
+        "dirty": true
+      },
+      "at": "2026-01-27T09:50:37.324Z"
+    },
+    {
+      "event": "marked_dirty",
+      "destination": "tokyo_2026",
+      "process": "process_4_accommodation",
+      "data": {
+        "dirty": true
+      },
+      "at": "2026-01-27T09:50:37.324Z"
+    },
+    {
+      "event": "marked_dirty",
+      "destination": "tokyo_2026",
+      "process": "process_5_daily_itinerary",
+      "data": {
+        "dirty": true
+      },
+      "at": "2026-01-27T09:50:37.324Z"
+    }
   ],
-
   "skills_enhancement": {
-    "added": ["package_scraping", "multi_destination_support"],
-    "pending": ["p3p4_packages_skill", "ota_comparison", "destination_comparison"]
+    "added": [
+      "package_scraping",
+      "multi_destination_support"
+    ],
+    "pending": [
+      "p3p4_packages_skill",
+      "ota_comparison",
+      "destination_comparison"
+    ]
   }
 }

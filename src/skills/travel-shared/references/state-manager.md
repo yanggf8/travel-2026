@@ -12,6 +12,10 @@
 
 Import: `import { StateManager, getStateManager } from '../state'`
 
+Types:
+- `ProcessId` — `'process_1_date_anchor' | 'process_2_destination' | 'process_3_4_packages' | 'process_3_transportation' | 'process_4_accommodation' | 'process_5_daily_itinerary'`
+- `ProcessStatus` — includes `skipped` (see `src/state/types.ts`)
+
 ### Timestamps (atomic per session)
 
 ```typescript
@@ -25,17 +29,17 @@ sm.refreshTimestamp() // Start new session batch
 Valid statuses: `pending` → `researching` → `researched` → `selecting` → `selected` → `booking` → `booked` → `confirmed` | `skipped`
 
 ```typescript
-sm.setProcessStatus(destination, process, newStatus)  // Validates transition
-sm.getProcessStatus(destination, process)             // Returns current status
+sm.setProcessStatus(destination, process: ProcessId, newStatus)  // Validates transition
+sm.getProcessStatus(destination, process: ProcessId)             // Returns current status
 sm.isValidTransition(from, to)                        // Check if allowed
 ```
 
 ### Dirty Flags
 
 ```typescript
-sm.markDirty(destination, process)      // Mark for cascade re-evaluation
-sm.clearDirty(destination, process)     // Clear after cascade processes
-sm.isDirty(destination, process)        // Check if dirty
+sm.markDirty(destination, process: ProcessId)      // Mark for cascade re-evaluation
+sm.clearDirty(destination, process: ProcessId)     // Clear after cascade processes
+sm.isDirty(destination, process: ProcessId)        // Check if dirty
 sm.getDirtyFlags()                      // Get all cascade_state
 sm.markGlobalDirty('process_1_date_anchor')  // Global trigger
 ```
@@ -70,5 +74,10 @@ The cascade runner (`src/cascade/runner.ts`) owns:
 - Clearing dirty flags for fired triggers
 - Updating `cascade_state.last_cascade_run`
 
-Skills should NOT call `markCascadeRun()` - that's cascade-runner-only.
+Cascade-runner-only helper:
 
+```typescript
+sm.markCascadeRun(timestamp?) // pass cascadePlan.computed_at for exact match
+```
+
+Skills should NOT call `markCascadeRun()` - that's cascade-runner-only.

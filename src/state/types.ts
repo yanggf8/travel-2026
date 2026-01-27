@@ -12,6 +12,7 @@ export type ProcessStatus =
   | 'researched'
   | 'selecting'
   | 'selected'
+  | 'populated'    // Filled from package selection
   | 'booking'
   | 'booked'
   | 'confirmed'
@@ -19,11 +20,12 @@ export type ProcessStatus =
 
 // Valid status transitions
 export const STATUS_TRANSITIONS: Record<ProcessStatus, ProcessStatus[]> = {
-  pending: ['researching', 'skipped'],
+  pending: ['researching', 'populated', 'skipped'],
   researching: ['researched', 'pending', 'skipped'],
   researched: ['selecting', 'researching', 'skipped'],
   selecting: ['selected', 'researched', 'skipped'],
-  selected: ['booking', 'selecting', 'skipped'],
+  selected: ['booking', 'selecting', 'populated', 'skipped'],
+  populated: ['booking', 'selected', 'pending', 'skipped'],  // From package cascade
   booking: ['booked', 'selected', 'skipped'],
   booked: ['confirmed', 'skipped'],
   confirmed: ['skipped'],  // Can skip confirmed if plans change

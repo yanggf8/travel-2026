@@ -17,34 +17,55 @@
   "project": "Japan Travel 2026",
   "default_timezone": "Asia/Tokyo",
   "active_destination": "tokyo_2026",
-
   "cascade_rules": {
     "wildcard_expansion": {
       "mode": "schema_driven",
       "note": "Wildcards expand against schema_contract.process_nodes, not regex",
       "examples": {
-        "process_3_*": ["process_3_4_packages", "process_3_transportation"],
-        "process_*": ["process_2_destination", "process_3_4_packages", "process_3_transportation", "process_4_accommodation", "process_5_daily_itinerary"]
+        "process_3_*": [
+          "process_3_4_packages",
+          "process_3_transportation"
+        ],
+        "process_*": [
+          "process_2_destination",
+          "process_3_4_packages",
+          "process_3_transportation",
+          "process_4_accommodation",
+          "process_5_daily_itinerary"
+        ]
       }
     },
     "triggers": [
       {
         "id": "cascade_active_dest_change",
         "trigger": "active_destination_change",
-        "reset": ["process_5_daily_itinerary"],
+        "reset": [
+          "process_5_daily_itinerary"
+        ],
         "scope": "new_active_destination"
       },
       {
         "id": "cascade_date_change",
         "trigger": "process_1_date_anchor_change",
-        "reset": ["process_3_*", "process_4_accommodation", "process_5_daily_itinerary"],
+        "reset": [
+          "process_3_*",
+          "process_4_accommodation",
+          "process_5_daily_itinerary"
+        ],
         "scope": "all_destinations"
       },
       {
         "id": "cascade_dest_region_change",
         "trigger": "process_2_destination_change",
-        "condition": {"field": "region", "changed": true},
-        "reset": ["process_3_*", "process_4_accommodation", "process_5_daily_itinerary"],
+        "condition": {
+          "field": "region",
+          "changed": true
+        },
+        "reset": [
+          "process_3_*",
+          "process_4_accommodation",
+          "process_5_daily_itinerary"
+        ],
         "scope": "current_destination"
       },
       {
@@ -60,97 +81,255 @@
       }
     ]
   },
-
   "cascade_state": {
     "last_cascade_run": "2026-01-26T12:35:00+08:00",
     "global": {
-      "process_1_date_anchor": {"dirty": false, "last_changed": "2026-01-26T12:30:00+08:00"},
+      "process_1_date_anchor": {
+        "dirty": true,
+        "last_changed": "2026-01-27T09:50:37.324Z"
+      },
       "active_destination_last": "tokyo_2026"
     },
     "destinations": {
       "tokyo_2026": {
-        "process_2_destination": {"dirty": false, "last_changed": "2026-01-26T12:30:00+08:00"},
-        "process_3_4_packages": {"dirty": false, "last_changed": "2026-01-26T12:35:00+08:00"},
-        "process_3_transportation": {"dirty": false, "last_changed": "2026-01-26T12:35:00+08:00"},
-        "process_4_accommodation": {"dirty": false, "last_changed": "2026-01-26T12:35:00+08:00"},
-        "process_5_daily_itinerary": {"dirty": true, "last_changed": null}
+        "process_2_destination": {
+          "dirty": false,
+          "last_changed": "2026-01-26T12:30:00+08:00"
+        },
+        "process_3_4_packages": {
+          "dirty": true,
+          "last_changed": "2026-01-27T09:50:37.324Z"
+        },
+        "process_3_transportation": {
+          "dirty": true,
+          "last_changed": "2026-01-27T09:50:37.324Z"
+        },
+        "process_4_accommodation": {
+          "dirty": true,
+          "last_changed": "2026-01-27T09:50:37.324Z"
+        },
+        "process_5_daily_itinerary": {
+          "dirty": true,
+          "last_changed": "2026-01-27T09:50:37.324Z"
+        }
       },
       "nagoya_2026": {
-        "process_2_destination": {"dirty": false, "last_changed": "2026-01-23T16:30:00+08:00"},
-        "process_3_4_packages": {"dirty": true, "last_changed": null},
-        "process_3_transportation": {"dirty": false, "last_changed": "2026-01-23T16:30:00+08:00"},
-        "process_4_accommodation": {"dirty": true, "last_changed": null},
-        "process_5_daily_itinerary": {"dirty": true, "last_changed": null}
+        "process_2_destination": {
+          "dirty": false,
+          "last_changed": "2026-01-23T16:30:00+08:00"
+        },
+        "process_3_4_packages": {
+          "dirty": true,
+          "last_changed": null
+        },
+        "process_3_transportation": {
+          "dirty": false,
+          "last_changed": "2026-01-23T16:30:00+08:00"
+        },
+        "process_4_accommodation": {
+          "dirty": true,
+          "last_changed": null
+        },
+        "process_5_daily_itinerary": {
+          "dirty": true,
+          "last_changed": null
+        }
       }
     }
   },
-
   "canonical_offer_schema": {
     "_comment": "All OTA scrapers MUST normalize to this shape",
-    "required_fields": ["id", "source_id", "type", "currency", "price_per_person", "availability"],
+    "required_fields": [
+      "id",
+      "source_id",
+      "type",
+      "currency",
+      "price_per_person",
+      "availability"
+    ],
     "schema": {
-      "id": {"type": "string", "format": "{source_id}_{product_code}"},
-      "source_id": {"type": "string", "from": "ota_sources.{key}.source_id"},
-      "product_code": {"type": "string"},
-      "url": {"type": "string", "format": "uri"},
-      "scraped_at": {"type": "string", "format": "ISO-8601"},
-      "type": {"type": "string", "enum": ["package", "flight", "hotel", "activity"]},
-      "duration_days": {"type": "integer", "required_for": ["package"]},
-      "currency": {"type": "string", "default": "TWD"},
-      "price_per_person": {"type": "number"},
-      "price_total": {"type": "number", "computed": "price_per_person * pax"},
-      "availability": {"type": "string", "enum": ["available", "sold_out", "limited", "unknown"]},
-      "seats_remaining": {"type": "integer", "nullable": true},
+      "id": {
+        "type": "string",
+        "format": "{source_id}_{product_code}"
+      },
+      "source_id": {
+        "type": "string",
+        "from": "ota_sources.{key}.source_id"
+      },
+      "product_code": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "scraped_at": {
+        "type": "string",
+        "format": "ISO-8601"
+      },
+      "type": {
+        "type": "string",
+        "enum": [
+          "package",
+          "flight",
+          "hotel",
+          "activity"
+        ]
+      },
+      "duration_days": {
+        "type": "integer",
+        "required_for": [
+          "package"
+        ]
+      },
+      "currency": {
+        "type": "string",
+        "default": "TWD"
+      },
+      "price_per_person": {
+        "type": "number"
+      },
+      "price_total": {
+        "type": "number",
+        "computed": "price_per_person * pax"
+      },
+      "availability": {
+        "type": "string",
+        "enum": [
+          "available",
+          "sold_out",
+          "limited",
+          "unknown"
+        ]
+      },
+      "seats_remaining": {
+        "type": "integer",
+        "nullable": true
+      },
       "flight": {
         "type": "object",
-        "required_for": ["package", "flight"],
+        "required_for": [
+          "package",
+          "flight"
+        ],
         "schema": {
-          "airline": {"type": "string"},
-          "airline_code": {"type": "string", "format": "IATA 2-letter"},
-          "outbound": {
-            "flight_number": {"type": "string"},
-            "departure_airport_code": {"type": "string", "format": "IATA 3-letter"},
-            "arrival_airport_code": {"type": "string", "format": "IATA 3-letter"},
-            "departure_time": {"type": "string", "format": "HH:MM or ISO-8601"},
-            "arrival_time": {"type": "string", "format": "HH:MM or ISO-8601"}
+          "airline": {
+            "type": "string"
           },
-          "return": {"same_as": "outbound", "nullable": true}
+          "airline_code": {
+            "type": "string",
+            "format": "IATA 2-letter"
+          },
+          "outbound": {
+            "flight_number": {
+              "type": "string"
+            },
+            "departure_airport_code": {
+              "type": "string",
+              "format": "IATA 3-letter"
+            },
+            "arrival_airport_code": {
+              "type": "string",
+              "format": "IATA 3-letter"
+            },
+            "departure_time": {
+              "type": "string",
+              "format": "HH:MM or ISO-8601"
+            },
+            "arrival_time": {
+              "type": "string",
+              "format": "HH:MM or ISO-8601"
+            }
+          },
+          "return": {
+            "same_as": "outbound",
+            "nullable": true
+          }
         }
       },
       "hotel": {
         "type": "object",
-        "required_for": ["package", "hotel"],
+        "required_for": [
+          "package",
+          "hotel"
+        ],
         "schema": {
-          "name": {"type": "string"},
-          "slug": {"type": "string"},
-          "area": {"type": "string"},
-          "star_rating": {"type": "number", "nullable": true},
-          "access": {"type": "array", "items": "string"}
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "area": {
+            "type": "string"
+          },
+          "star_rating": {
+            "type": "number",
+            "nullable": true
+          },
+          "access": {
+            "type": "array",
+            "items": "string"
+          }
         }
       },
-      "includes": {"type": "array", "items": {"type": "string", "enum": ["light_breakfast", "full_breakfast", "airport_transfer", "wifi", "luggage"]}},
+      "includes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "light_breakfast",
+            "full_breakfast",
+            "airport_transfer",
+            "wifi",
+            "luggage"
+          ]
+        }
+      },
       "date_pricing": {
         "type": "object",
         "additionalProperties": {
-          "price": {"type": "number"},
-          "availability": {"type": "string"},
-          "seats_remaining": {"type": "integer", "nullable": true}
+          "price": {
+            "type": "number"
+          },
+          "availability": {
+            "type": "string"
+          },
+          "seats_remaining": {
+            "type": "integer",
+            "nullable": true
+          }
         }
       },
       "best_value": {
-        "date": {"type": "string", "format": "ISO-8601 date"},
-        "price_per_person": {"type": "number"},
-        "price_total": {"type": "number"}
+        "date": {
+          "type": "string",
+          "format": "ISO-8601 date"
+        },
+        "price_per_person": {
+          "type": "number"
+        },
+        "price_total": {
+          "type": "number"
+        }
       },
-      "pros": {"type": "array", "items": "string"},
-      "cons": {"type": "array", "items": "string"}
+      "pros": {
+        "type": "array",
+        "items": "string"
+      },
+      "cons": {
+        "type": "array",
+        "items": "string"
+      }
     }
   },
-
   "process_precedence": {
     "transport_hotel_resolution": {
       "primary": "process_3_4_packages",
-      "fallback": ["process_3_transportation", "process_4_accommodation"],
+      "fallback": [
+        "process_3_transportation",
+        "process_4_accommodation"
+      ],
       "mode": "populate_on_select",
       "rules": [
         "If package selected → copy flight to process_3, hotel to process_4, mark source='package'",
@@ -159,7 +338,6 @@
       ]
     }
   },
-
   "budget": {
     "total_cap": null,
     "flight_cap": null,
@@ -167,7 +345,6 @@
     "daily_cap": null,
     "pax": 2
   },
-
   "process_1_date_anchor": {
     "status": "confirmed",
     "updated_at": "2026-01-26T12:30:00+08:00",
@@ -176,12 +353,18 @@
     "return_date": "2026-02-15",
     "flexibility": {
       "date_flexible": true,
-      "preferred_dates": ["2026-02-21", "2026-02-22"],
-      "avoid_dates": ["2026-02-14", "2026-02-15", "2026-02-16"],
+      "preferred_dates": [
+        "2026-02-21",
+        "2026-02-22"
+      ],
+      "avoid_dates": [
+        "2026-02-14",
+        "2026-02-15",
+        "2026-02-16"
+      ],
       "reason": "CNY peak pricing Feb 14-17"
     }
   },
-
   "destinations": {
     "tokyo_2026": {
       "slug": "tokyo_2026",
@@ -189,7 +372,6 @@
       "status": "active",
       "created_at": "2026-01-26T12:30:00+08:00",
       "updated_at": "2026-01-26T12:35:00+08:00",
-
       "process_2_destination": {
         "status": "confirmed",
         "updated_at": "2026-01-26T12:30:00+08:00",
@@ -199,15 +381,52 @@
         "region": "Kanto",
         "primary_airport": "NRT",
         "cities": [
-          {"slug": "tokyo", "display_name": "Tokyo", "role": "primary", "nights": 4, "attractions": ["Shibuya", "Shinjuku", "Asakusa", "Akihabara", "Harajuku", "Tokyo Tower", "teamLab"]},
-          {"slug": "yokohama", "display_name": "Yokohama", "role": "day_trip", "nights": 0, "attractions": ["Chinatown", "Minato Mirai", "Cup Noodles Museum"]}
+          {
+            "slug": "tokyo",
+            "display_name": "Tokyo",
+            "role": "primary",
+            "nights": 4,
+            "attractions": [
+              "Shibuya",
+              "Shinjuku",
+              "Asakusa",
+              "Akihabara",
+              "Harajuku",
+              "Tokyo Tower",
+              "teamLab"
+            ]
+          },
+          {
+            "slug": "yokohama",
+            "display_name": "Yokohama",
+            "role": "day_trip",
+            "nights": 0,
+            "attractions": [
+              "Chinatown",
+              "Minato Mirai",
+              "Cup Noodles Museum"
+            ]
+          }
         ],
         "shopping": [
-          {"type": "second_hand_luxury", "stores": ["KOMEHYO Shinjuku", "BRAND OFF Shibuya", "Daikokuya"]},
-          {"type": "general", "stores": ["Shibuya 109", "Don Quijote", "Uniqlo Ginza"]}
+          {
+            "type": "second_hand_luxury",
+            "stores": [
+              "KOMEHYO Shinjuku",
+              "BRAND OFF Shibuya",
+              "Daikokuya"
+            ]
+          },
+          {
+            "type": "general",
+            "stores": [
+              "Shibuya 109",
+              "Don Quijote",
+              "Uniqlo Ginza"
+            ]
+          }
         ]
       },
-
       "process_3_4_packages": {
         "status": "researched",
         "updated_at": "2026-01-26T12:35:00+08:00",
@@ -244,35 +463,135 @@
                 "slug": "tavinos_hamamatsucho",
                 "area": "Shimbashi / Hamamatsucho",
                 "star_rating": null,
-                "access": ["JR Hamamatsucho 8min", "Yurikamome Takeshiba 1min", "Tokyo Monorail 8min"]
+                "access": [
+                  "JR Hamamatsucho 8min",
+                  "Yurikamome Takeshiba 1min",
+                  "Tokyo Monorail 8min"
+                ]
               },
-              "includes": ["light_breakfast"],
+              "includes": [
+                "light_breakfast"
+              ],
               "date_pricing": {
-                "2026-02-03": {"price": 19588, "availability": "available", "seats_remaining": 2},
-                "2026-02-04": {"price": 19988, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-05": {"price": 19888, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-06": {"price": 19888, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-11": {"price": 21388, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-12": {"price": 23388, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-13": {"price": 27888, "availability": "available", "seats_remaining": 2, "note": "Agent offered this date"},
-                "2026-02-14": {"price": 34888, "availability": "available", "seats_remaining": 2},
-                "2026-02-15": {"price": 33888, "availability": "available", "seats_remaining": 2},
-                "2026-02-16": {"price": 33888, "availability": "available", "seats_remaining": 2},
-                "2026-02-17": {"price": 35388, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-18": {"price": 34388, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-19": {"price": 27388, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-20": {"price": 23388, "availability": "available", "seats_remaining": 2},
-                "2026-02-21": {"price": 19888, "availability": "available", "seats_remaining": 2},
-                "2026-02-22": {"price": 18388, "availability": "available", "seats_remaining": 2},
-                "2026-02-23": {"price": 18388, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-24": {"price": 19388, "availability": "available", "seats_remaining": 2},
-                "2026-02-25": {"price": 22888, "availability": "sold_out", "seats_remaining": 0},
-                "2026-02-26": {"price": 22888, "availability": "available", "seats_remaining": 2}
+                "2026-02-03": {
+                  "price": 19588,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-04": {
+                  "price": 19988,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-05": {
+                  "price": 19888,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-06": {
+                  "price": 19888,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-11": {
+                  "price": 21388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-12": {
+                  "price": 23388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-13": {
+                  "price": 27888,
+                  "availability": "available",
+                  "seats_remaining": 2,
+                  "note": "Agent offered this date"
+                },
+                "2026-02-14": {
+                  "price": 34888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-15": {
+                  "price": 33888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-16": {
+                  "price": 33888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-17": {
+                  "price": 35388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-18": {
+                  "price": 34388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-19": {
+                  "price": 27388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-20": {
+                  "price": 23388,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-21": {
+                  "price": 19888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-22": {
+                  "price": 18388,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-23": {
+                  "price": 18388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-24": {
+                  "price": 19388,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-25": {
+                  "price": 22888,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-26": {
+                  "price": 22888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                }
               },
               "last_price_check": "2026-01-26T17:40:00+08:00",
-              "best_value": {"date": "2026-02-22", "price_per_person": 18388, "price_total": 36776},
-              "pros": ["Package bundled", "Includes breakfast", "Good location", "Easy Haneda access"],
-              "cons": ["Feb 11-13 sold out", "CNY dates expensive", "Return flight unknown"]
+              "best_value": {
+                "date": "2026-02-22",
+                "price_per_person": 18388,
+                "price_total": 36776
+              },
+              "pros": [
+                "Package bundled",
+                "Includes breakfast",
+                "Good location",
+                "Easy Haneda access"
+              ],
+              "cons": [
+                "Feb 11-13 sold out",
+                "CNY dates expensive",
+                "Return flight unknown"
+              ]
             },
             {
               "id": "liontravel_tokyo_skytree_24hr_metro",
@@ -306,11 +625,27 @@
                 "star_rating": null,
                 "access": []
               },
-              "includes": ["wifi", "24hr_metro_pass"],
+              "includes": [
+                "wifi",
+                "24hr_metro_pass"
+              ],
               "date_pricing": null,
-              "best_value": {"date": "flex", "price_per_person": 9930, "price_total": 19860},
-              "pros": ["Cheapest starting price", "Includes 24hr metro", "Flexible hotel choice", "Good availability"],
-              "cons": ["Starting price only", "Flight details unknown", "Requires booking for exact price"],
+              "best_value": {
+                "date": "flex",
+                "price_per_person": 9930,
+                "price_total": 19860
+              },
+              "pros": [
+                "Cheapest starting price",
+                "Includes 24hr metro",
+                "Flexible hotel choice",
+                "Good availability"
+              ],
+              "cons": [
+                "Starting price only",
+                "Flight details unknown",
+                "Requires booking for exact price"
+              ],
               "note": "適用期間：2025/08/01~2026/06/30"
             },
             {
@@ -344,9 +679,21 @@
               },
               "includes": [],
               "date_pricing": null,
-              "best_value": {"date": "flex", "price_per_person": 9780, "price_total": 19560},
-              "pros": ["Mt. Fuji view", "Lowest starting price", "Lake Kawaguchiko access"],
-              "cons": ["Starting price only", "Far from Tokyo center", "Limited nightlife"],
+              "best_value": {
+                "date": "flex",
+                "price_per_person": 9780,
+                "price_total": 19560
+              },
+              "pros": [
+                "Mt. Fuji view",
+                "Lowest starting price",
+                "Lake Kawaguchiko access"
+              ],
+              "cons": [
+                "Starting price only",
+                "Far from Tokyo center",
+                "Limited nightlife"
+              ],
               "note": "適用期間：2025/11/14~2026/06/30"
             },
             {
@@ -376,19 +723,46 @@
                 "slug": "disney_area",
                 "area": "Tokyo Disney Resort",
                 "star_rating": null,
-                "access": ["JR Maihama Station"]
+                "access": [
+                  "JR Maihama Station"
+                ]
               },
-              "includes": ["wifi", "disney_ticket"],
+              "includes": [
+                "wifi",
+                "disney_ticket"
+              ],
               "date_pricing": null,
-              "best_value": {"date": "flex", "price_per_person": 14888, "price_total": 29776},
-              "pros": ["Includes Disney ticket", "Includes eSIM", "Disney area hotel"],
-              "cons": ["Starting price only", "Far from central Tokyo", "Higher base price"],
+              "best_value": {
+                "date": "flex",
+                "price_per_person": 14888,
+                "price_total": 29776
+              },
+              "pros": [
+                "Includes Disney ticket",
+                "Includes eSIM",
+                "Disney area hotel"
+              ],
+              "cons": [
+                "Starting price only",
+                "Far from central Tokyo",
+                "Higher base price"
+              ],
               "note": "適用期間：2025/11/13~2026/06/30"
             }
           ],
           "provenance": [
-            {"source_id": "besttour", "scraped_at": "2026-01-26T17:40:00+08:00", "offers_found": 1, "note": "Full Feb 2026 calendar pricing scraped"},
-            {"source_id": "liontravel", "scraped_at": "2026-01-26T17:38:00+08:00", "offers_found": 3, "note": "Base prices only - 5-day pricing requires booking flow"}
+            {
+              "source_id": "besttour",
+              "scraped_at": "2026-01-26T17:40:00+08:00",
+              "offers_found": 1,
+              "note": "Full Feb 2026 calendar pricing scraped"
+            },
+            {
+              "source_id": "liontravel",
+              "scraped_at": "2026-01-26T17:38:00+08:00",
+              "offers_found": 3,
+              "note": "Base prices only - 5-day pricing requires booking flow"
+            }
           ],
           "warnings": [
             "Return flight details not available for BestTour package",
@@ -398,16 +772,25 @@
           ]
         }
       },
-
       "process_3_transportation": {
         "status": "pending",
         "updated_at": "2026-01-26T12:35:00+08:00",
         "source": null,
-        "flight": {"status": "pending", "outbound": {}, "return": {}, "candidates": []},
-        "home_to_airport": {"status": "pending", "candidates": []},
-        "airport_to_hotel": {"status": "pending", "candidates": []}
+        "flight": {
+          "status": "pending",
+          "outbound": {},
+          "return": {},
+          "candidates": []
+        },
+        "home_to_airport": {
+          "status": "pending",
+          "candidates": []
+        },
+        "airport_to_hotel": {
+          "status": "pending",
+          "candidates": []
+        }
       },
-
       "process_4_accommodation": {
         "status": "pending",
         "updated_at": "2026-01-26T12:35:00+08:00",
@@ -416,21 +799,60 @@
           "status": "pending",
           "selected_area": null,
           "candidates": [
-            {"slug": "shimbashi", "display_name": "Shimbashi / Hamamatsucho", "pros": ["Easy Haneda access"], "cons": ["Business area"]},
-            {"slug": "shinjuku", "display_name": "Shinjuku", "pros": ["Entertainment", "Shopping"], "cons": ["Far from Haneda"]},
-            {"slug": "asakusa", "display_name": "Asakusa", "pros": ["Traditional"], "cons": ["Far from Shibuya"]}
+            {
+              "slug": "shimbashi",
+              "display_name": "Shimbashi / Hamamatsucho",
+              "pros": [
+                "Easy Haneda access"
+              ],
+              "cons": [
+                "Business area"
+              ]
+            },
+            {
+              "slug": "shinjuku",
+              "display_name": "Shinjuku",
+              "pros": [
+                "Entertainment",
+                "Shopping"
+              ],
+              "cons": [
+                "Far from Haneda"
+              ]
+            },
+            {
+              "slug": "asakusa",
+              "display_name": "Asakusa",
+              "pros": [
+                "Traditional"
+              ],
+              "cons": [
+                "Far from Shibuya"
+              ]
+            }
           ]
         },
-        "hotel": {"status": "pending", "selected_hotel": null, "candidates": []}
+        "hotel": {
+          "status": "pending",
+          "selected_hotel": null,
+          "candidates": []
+        }
       },
-
       "process_5_daily_itinerary": {
         "status": "pending",
         "updated_at": "2026-01-26T12:35:00+08:00",
         "days": []
+      },
+      "process_1_date_anchor": {
+        "confirmed_dates": {
+          "start": "2026-02-13",
+          "end": "2026-02-17"
+        },
+        "days": 5,
+        "status": "confirmed",
+        "updated_at": "2026-01-27T09:50:37.324Z"
       }
     },
-
     "nagoya_2026": {
       "slug": "nagoya_2026",
       "display_name": "Nagoya",
@@ -438,7 +860,6 @@
       "created_at": "2026-01-23T16:00:00+08:00",
       "updated_at": "2026-01-26T12:35:00+08:00",
       "archived_at": "2026-01-26T12:30:00+08:00",
-
       "process_2_destination": {
         "status": "confirmed",
         "updated_at": "2026-01-23T16:30:00+08:00",
@@ -448,19 +869,48 @@
         "region": "Chubu",
         "primary_airport": "NGO",
         "cities": [
-          {"slug": "nagoya", "display_name": "Nagoya", "role": "primary", "nights": 4, "attractions": ["Nagoya Castle", "Atsuta Shrine", "Osu Shopping District"]},
-          {"slug": "takayama", "display_name": "Takayama", "role": "day_trip", "nights": 0, "attractions": ["Old Town", "Morning Markets"]},
-          {"slug": "inuyama", "display_name": "Inuyama", "role": "day_trip", "nights": 0, "attractions": ["Inuyama Castle"]}
+          {
+            "slug": "nagoya",
+            "display_name": "Nagoya",
+            "role": "primary",
+            "nights": 4,
+            "attractions": [
+              "Nagoya Castle",
+              "Atsuta Shrine",
+              "Osu Shopping District"
+            ]
+          },
+          {
+            "slug": "takayama",
+            "display_name": "Takayama",
+            "role": "day_trip",
+            "nights": 0,
+            "attractions": [
+              "Old Town",
+              "Morning Markets"
+            ]
+          },
+          {
+            "slug": "inuyama",
+            "display_name": "Inuyama",
+            "role": "day_trip",
+            "nights": 0,
+            "attractions": [
+              "Inuyama Castle"
+            ]
+          }
         ]
       },
-
       "process_3_4_packages": {
         "status": "pending",
         "updated_at": "2026-01-26T12:35:00+08:00",
         "selected_offer_id": null,
-        "results": {"offers": [], "provenance": [], "warnings": []}
+        "results": {
+          "offers": [],
+          "provenance": [],
+          "warnings": []
+        }
       },
-
       "process_3_transportation": {
         "status": "researched",
         "updated_at": "2026-01-23T16:30:00+08:00",
@@ -480,29 +930,54 @@
               "flight": {
                 "airline": "Tigerair Taiwan",
                 "airline_code": "IT",
-                "outbound": {"flight_number": "IT206", "departure_airport_code": "TPE", "arrival_airport_code": "NGO", "departure_time": "2026-02-11T09:00:00+08:00", "arrival_time": "2026-02-11T12:55:00+09:00"},
-                "return": {"flight_number": "IT207", "departure_airport_code": "NGO", "arrival_airport_code": "TPE", "departure_time": "2026-02-15T13:45:00+09:00", "arrival_time": "2026-02-15T15:55:00+08:00"}
+                "outbound": {
+                  "flight_number": "IT206",
+                  "departure_airport_code": "TPE",
+                  "arrival_airport_code": "NGO",
+                  "departure_time": "2026-02-11T09:00:00+08:00",
+                  "arrival_time": "2026-02-11T12:55:00+09:00"
+                },
+                "return": {
+                  "flight_number": "IT207",
+                  "departure_airport_code": "NGO",
+                  "arrival_airport_code": "TPE",
+                  "departure_time": "2026-02-15T13:45:00+09:00",
+                  "arrival_time": "2026-02-15T15:55:00+08:00"
+                }
               },
-              "pros": ["Daily flights", "Good times", "Direct to Nagoya"],
-              "cons": ["CNY may have premium"]
+              "pros": [
+                "Daily flights",
+                "Good times",
+                "Direct to Nagoya"
+              ],
+              "cons": [
+                "CNY may have premium"
+              ]
             }
           ]
         }
       },
-
       "process_4_accommodation": {
         "status": "pending",
         "updated_at": "2026-01-23T16:30:00+08:00",
         "source": null,
         "location_zone": {
           "candidates": [
-            {"slug": "nagoya_station", "display_name": "Nagoya Station Area"},
-            {"slug": "sakae", "display_name": "Sakae"}
+            {
+              "slug": "nagoya_station",
+              "display_name": "Nagoya Station Area"
+            },
+            {
+              "slug": "sakae",
+              "display_name": "Sakae"
+            }
           ]
         },
-        "hotel": {"status": "pending", "candidates": []}
+        "hotel": {
+          "status": "pending",
+          "candidates": []
+        }
       },
-
       "process_5_daily_itinerary": {
         "status": "pending",
         "updated_at": "2026-01-23T16:30:00+08:00",
@@ -510,24 +985,33 @@
       }
     }
   },
-
   "ota_sources": {
     "besttour": {
       "source_id": "besttour",
       "display_name": "喜鴻假期",
-      "type": ["package"],
+      "type": [
+        "package"
+      ],
       "base_url": "https://www.besttour.com.tw",
       "package_url_pattern": "/itinerary/{product_code}",
-      "markets": ["TW"],
+      "markets": [
+        "TW"
+      ],
       "currency": "TWD",
-      "rate_limit": {"requests_per_minute": 10},
+      "rate_limit": {
+        "requests_per_minute": 10
+      },
       "auth_required": false,
       "supported": true
     },
     "liontravel": {
       "source_id": "liontravel",
       "display_name": "雄獅旅遊",
-      "type": ["package", "flight", "hotel"],
+      "type": [
+        "package",
+        "flight",
+        "hotel"
+      ],
       "base_url": "https://www.liontravel.com",
       "vacation_url": "https://vacation.liontravel.com",
       "event_url": "https://event.liontravel.com",
@@ -537,58 +1021,107 @@
         "detail": "/detail/{product_id}",
         "freely": "/detail_freely/{product_id}"
       },
-      "markets": ["TW"],
+      "markets": [
+        "TW"
+      ],
       "currency": "TWD",
-      "rate_limit": {"requests_per_minute": 10},
+      "rate_limit": {
+        "requests_per_minute": 10
+      },
       "auth_required": false,
       "supported": true,
       "last_scraped": "2026-01-26T15:09:51+08:00",
       "promo_codes": [
-        {"code": "FITPKG", "discount": 400, "min_order": 20000, "valid_days": ["thursday"]}
+        {
+          "code": "FITPKG",
+          "discount": 400,
+          "min_order": 20000,
+          "valid_days": [
+            "thursday"
+          ]
+        }
       ]
     },
     "eztravel": {
       "source_id": "eztravel",
       "display_name": "易遊網",
-      "type": ["package", "flight", "hotel"],
+      "type": [
+        "package",
+        "flight",
+        "hotel"
+      ],
       "base_url": "https://www.eztravel.com.tw",
-      "markets": ["TW"],
+      "markets": [
+        "TW"
+      ],
       "currency": "TWD",
-      "rate_limit": {"requests_per_minute": 10},
+      "rate_limit": {
+        "requests_per_minute": 10
+      },
       "auth_required": false,
       "supported": false
     },
     "tigerair": {
       "source_id": "tigerair",
       "display_name": "台灣虎航",
-      "type": ["flight"],
+      "type": [
+        "flight"
+      ],
       "base_url": "https://www.tigerairtw.com",
       "booking_url": "https://booking.tigerairtw.com",
-      "markets": ["TW"],
+      "markets": [
+        "TW"
+      ],
       "currency": "TWD",
-      "rate_limit": {"requests_per_minute": 5},
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
       "auth_required": false,
       "supported": true,
       "last_scraped": "2026-01-26T15:02:25+08:00",
       "notes": {
         "booking_url_format": "Direct booking requires interactive flow, cannot scrape specific dates easily",
         "promo_pricing_observed": {
-          "kanto_from_tpe_march_2026": {"price": 4299, "currency": "TWD", "note": "One-way, untaxed"},
-          "kix_from_tpe_feb_2026": {"price": 4299, "currency": "TWD", "note": "One-way, untaxed"},
-          "ngo_from_khh_feb_2026": {"price": 4799, "currency": "TWD", "note": "One-way, untaxed"}
+          "kanto_from_tpe_march_2026": {
+            "price": 4299,
+            "currency": "TWD",
+            "note": "One-way, untaxed"
+          },
+          "kix_from_tpe_feb_2026": {
+            "price": 4299,
+            "currency": "TWD",
+            "note": "One-way, untaxed"
+          },
+          "ngo_from_khh_feb_2026": {
+            "price": 4799,
+            "currency": "TWD",
+            "note": "One-way, untaxed"
+          }
         },
         "feb_13_status": "Cannot retrieve specific date pricing - booking page requires interactive search"
       }
     }
   },
-
   "skill_io_contracts": {
     "common_input": {
       "active_destination": "string (slug from destinations.*)",
-      "date_filters": {"start_date": "ISO-8601", "end_date": "ISO-8601", "flexible": "boolean", "preferred_dates": "[ISO-8601]", "avoid_dates": "[ISO-8601]"},
+      "date_filters": {
+        "start_date": "ISO-8601",
+        "end_date": "ISO-8601",
+        "flexible": "boolean",
+        "preferred_dates": "[ISO-8601]",
+        "avoid_dates": "[ISO-8601]"
+      },
       "pax": "integer",
-      "budget": {"total_cap": "number|null", "per_person_cap": "number|null"},
-      "constraints": {"avoid_red_eye": "boolean", "prefer_direct": "boolean", "require_breakfast": "boolean"}
+      "budget": {
+        "total_cap": "number|null",
+        "per_person_cap": "number|null"
+      },
+      "constraints": {
+        "avoid_red_eye": "boolean",
+        "prefer_direct": "boolean",
+        "require_breakfast": "boolean"
+      }
     },
     "common_output": {
       "offers": "[canonical_offer_schema objects]",
@@ -621,11 +1154,13 @@
       }
     }
   },
-
   "comparison": {
     "_derived": true,
     "_generated_at": "2026-01-26T17:40:00+08:00",
-    "_generated_from": ["tokyo_2026", "nagoya_2026"],
+    "_generated_from": [
+      "tokyo_2026",
+      "nagoya_2026"
+    ],
     "summary": {
       "tokyo_2026": {
         "display_name": "Tokyo",
@@ -637,7 +1172,11 @@
         "offer_id": "besttour_TYO05MM260211AM",
         "availability": "available",
         "seats_remaining": 2,
-        "includes": ["flight", "hotel", "light_breakfast"],
+        "includes": [
+          "flight",
+          "hotel",
+          "light_breakfast"
+        ],
         "note": "Date-specific pricing confirmed. Feb 11-13 sold out."
       },
       "nagoya_2026": {
@@ -648,16 +1187,53 @@
         "type": "flight_only",
         "source": "direct_research",
         "availability": "estimated",
-        "includes": ["flight"],
-        "missing": ["hotel"]
+        "includes": [
+          "flight"
+        ],
+        "missing": [
+          "hotel"
+        ]
       }
     },
     "price_ranking": [
-      {"destination": "nagoya_2026", "price_2pax": 13400, "type": "flight_only", "note": "Needs hotel added - archived"},
-      {"destination": "tokyo_2026", "price_2pax": 36776, "source": "besttour", "date": "2026-02-22", "type": "package", "note": "Best price if flexible"},
-      {"destination": "tokyo_2026", "price_2pax": 39776, "source": "besttour", "date": "2026-02-21", "type": "package", "note": "2nd cheapest"},
-      {"destination": "tokyo_2026", "price_2pax": 55776, "source": "besttour", "date": "2026-02-13", "type": "package", "note": "★ AGENT OFFERED - closest to original dates"},
-      {"destination": "tokyo_2026", "price_2pax": 69776, "source": "besttour", "date": "2026-02-14", "type": "package", "note": "CNY peak - expensive"}
+      {
+        "destination": "nagoya_2026",
+        "price_2pax": 13400,
+        "type": "flight_only",
+        "note": "Needs hotel added - archived"
+      },
+      {
+        "destination": "tokyo_2026",
+        "price_2pax": 36776,
+        "source": "besttour",
+        "date": "2026-02-22",
+        "type": "package",
+        "note": "Best price if flexible"
+      },
+      {
+        "destination": "tokyo_2026",
+        "price_2pax": 39776,
+        "source": "besttour",
+        "date": "2026-02-21",
+        "type": "package",
+        "note": "2nd cheapest"
+      },
+      {
+        "destination": "tokyo_2026",
+        "price_2pax": 55776,
+        "source": "besttour",
+        "date": "2026-02-13",
+        "type": "package",
+        "note": "★ AGENT OFFERED - closest to original dates"
+      },
+      {
+        "destination": "tokyo_2026",
+        "price_2pax": 69776,
+        "source": "besttour",
+        "date": "2026-02-14",
+        "type": "package",
+        "note": "CNY peak - expensive"
+      }
     ],
     "recommendation": {
       "best_option": {

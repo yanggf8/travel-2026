@@ -263,6 +263,289 @@ export class StateManager {
   }
 
   // ============================================================================
+  // Date Anchor Management
+  // ============================================================================
+
+  /**
+   * Set or update the date anchor (P1).
+   * Triggers cascade to invalidate all date-dependent processes.
+   * 
+   * @param startDate - Departure date (ISO-8601: YYYY-MM-DD)
+   * @param endDate - Return date (ISO-8601: YYYY-MM-DD)
+   * @param reason - Optional reason for the change (e.g., "Agent offered Feb 13")
+   */
+  setDateAnchor(startDate: string, endDate: string, reason?: string): void {
+    const dest = this.getActiveDestination();
+    const destObj = this.plan.destinations[dest];
+    
+    if (!destObj) {
+      throw new Error(`Active destination not found: ${dest}`);
+    }
+
+    // Get current dates for comparison
+    const p1 = destObj.process_1_date_anchor as Record<string, unknown> | undefined;
+    const currentDates = p1?.confirmed_dates as { start: string; end: string } | undefined;
+    
+    const oldStart = currentDates?.start;
+    const oldEnd = currentDates?.end;
+    
+    // Calculate days
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+    // Update the date anchor
+    if (!destObj.process_1_date_anchor) {
+      (destObj as Record<string, unknown>).process_1_date_anchor = {};
+    }
+    const dateAnchor = destObj.process_1_date_anchor as Record<string, unknown>;
+    dateAnchor.confirmed_dates = { start: startDate, end: endDate };
+    dateAnchor.days = days;
+    dateAnchor.status = 'confirmed';
+    dateAnchor.updated_at = this.timestamp;
+
+    // Emit event
+    this.emitEvent({
+      event: 'date_anchor_changed',
+      destination: dest,
+      process: 'process_1_date_anchor',
+      data: { 
+        from_dates: oldStart ? `${oldStart} to ${oldEnd}` : null,
+        to_dates: `${startDate} to ${endDate}`,
+        start: startDate, 
+        end: endDate, 
+        days,
+        reason: reason || 'User updated dates'
+      },
+    });
+
+    // Mark global dirty and trigger cascade
+    this.markGlobalDirty('process_1_date_anchor');
+    
+    // Mark all date-dependent processes as dirty
+    const dateDependentProcesses: ProcessId[] = [
+      'process_3_transportation',
+      'process_3_4_packages',
+      'process_4_accommodation',
+      'process_5_daily_itinerary',
+    ];
+    
+    for (const process of dateDependentProcesses) {
+      this.markDirty(dest, process);
+    }
+  }
+
+  /**
+   * Get current date anchor.
+   */
+  getDateAnchor(): { start: string; end: string; days: number } | null {
+    const dest = this.getActiveDestination();
+    const destObj = this.plan.destinations[dest];
+    if (!destObj) return null;
+    
+    const p1 = destObj.process_1_date_anchor as Record<string, unknown> | undefined;
+    const dates = p1?.confirmed_dates as { start: string; end: string } | undefined;
+    const days = p1?.days as number | undefined;
+    
+    if (!dates) return null;
+    return { start: dates.start, end: dates.end, days: days || 0 };
+  }
+
+  // ============================================================================
+  // Offer Management
+  // ============================================================================
+
+  /**
+   * Update availability for a specific offer/date combination.
+   * Use this when agent provides new info (e.g., "Feb 13 is now available").
+   * 
+   * @param offerId - The offer ID (e.g., "besttour_TYO05MM260211AM")
+   * @param date - The date to update (ISO-8601: YYYY-MM-DD)
+   * @param availability - New availability status
+   * @param price - Optional new price
+   * @param seatsRemaining - Optional seats remaining
+   * @param source - Source of info (e.g., "agent", "scrape", "user")
+   */
+  updateOfferAvailability(
+    offerId: string,
+    date: string,
+    availability: 'available' | 'sold_out' | 'limited',
+    price?: number,
+    seatsRemaining?: number,
+    source: string = 'user'
+  ): void {
+    const dest = this.getActiveDestination();
+    const destObj = this.plan.destinations[dest];
+    
+    if (!destObj) {
+      throw new Error(`Active destination not found: ${dest}`);
+    }
+
+    // Find the offer in packages
+    const packages = destObj.process_3_4_packages as Record<string, unknown> | undefined;
+    const offers = packages?.offers as Array<Record<string, unknown>> | undefined;
+    
+    if (!offers) {
+      throw new Error(`No offers found in ${dest}.process_3_4_packages`);
+    }
+
+    const offer = offers.find(o => o.id === offerId);
+    if (!offer) {
+      throw new Error(`Offer not found: ${offerId}`);
+    }
+
+    // Update date_pricing
+    let datePricing = offer.date_pricing as Record<string, Record<string, unknown>> | undefined;
+    if (!datePricing) {
+      datePricing = {};
+      offer.date_pricing = datePricing;
+    }
+
+    const previousEntry = datePricing[date];
+    const previousAvailability = previousEntry?.availability;
+
+    datePricing[date] = {
+      ...previousEntry,
+      availability,
+      ...(price !== undefined && { price }),
+      ...(seatsRemaining !== undefined && { seats_remaining: seatsRemaining }),
+      note: `Updated by ${source} at ${this.timestamp}`,
+    };
+
+    // Emit event
+    this.emitEvent({
+      event: 'offer_availability_updated',
+      destination: dest,
+      process: 'process_3_4_packages',
+      data: {
+        offer_id: offerId,
+        date,
+        from: previousAvailability,
+        to: availability,
+        price,
+        seats_remaining: seatsRemaining,
+        source,
+      },
+    });
+  }
+
+  /**
+   * Select an offer for booking.
+   * This marks the package as selected and can trigger cascade populate
+   * to fill P3 (transportation) and P4 (accommodation) from the offer.
+   * 
+   * @param offerId - The offer ID to select
+   * @param date - The specific date to book
+   * @param populateCascade - If true, populate P3/P4 from offer details
+   */
+  selectOffer(offerId: string, date: string, populateCascade: boolean = true): void {
+    const dest = this.getActiveDestination();
+    const destObj = this.plan.destinations[dest];
+    
+    if (!destObj) {
+      throw new Error(`Active destination not found: ${dest}`);
+    }
+
+    const packages = destObj.process_3_4_packages as Record<string, unknown> | undefined;
+    const offers = packages?.offers as Array<Record<string, unknown>> | undefined;
+    
+    if (!offers) {
+      throw new Error(`No offers found in ${dest}.process_3_4_packages`);
+    }
+
+    const offer = offers.find(o => o.id === offerId);
+    if (!offer) {
+      throw new Error(`Offer not found: ${offerId}`);
+    }
+
+    // Mark as chosen
+    if (!packages) {
+      throw new Error('Packages process not found');
+    }
+    packages.chosen_offer = {
+      id: offerId,
+      selected_date: date,
+      selected_at: this.timestamp,
+    };
+
+    // Update process status
+    this.setProcessStatus(dest, 'process_3_4_packages', 'selected');
+
+    // Emit event
+    this.emitEvent({
+      event: 'offer_selected',
+      destination: dest,
+      process: 'process_3_4_packages',
+      data: {
+        offer_id: offerId,
+        date,
+        offer_name: offer.name,
+        hotel: (offer.hotel as Record<string, unknown>)?.name,
+        price_total: (offer.date_pricing as Record<string, Record<string, unknown>>)?.[date]?.price,
+      },
+    });
+
+    // Populate cascade: fill P3 and P4 from the selected offer
+    if (populateCascade) {
+      this.populateFromOffer(dest, offer, date);
+    }
+  }
+
+  /**
+   * Populate P3 (transportation) and P4 (accommodation) from selected offer.
+   * @internal
+   */
+  private populateFromOffer(
+    destination: string,
+    offer: Record<string, unknown>,
+    date: string
+  ): void {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) return;
+
+    // Populate P3 (transportation) from offer flight info
+    const flight = offer.flight as Record<string, unknown> | undefined;
+    if (flight) {
+      const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+      if (p3) {
+        p3.populated_from = `package:${offer.id}`;
+        p3.flight = {
+          ...flight,
+          booked_date: date,
+          populated_at: this.timestamp,
+        };
+        p3.status = 'populated';
+        this.clearDirty(destination, 'process_3_transportation');
+      }
+    }
+
+    // Populate P4 (accommodation) from offer hotel info
+    const hotel = offer.hotel as Record<string, unknown> | undefined;
+    if (hotel) {
+      const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
+      if (p4) {
+        p4.populated_from = `package:${offer.id}`;
+        p4.hotel = {
+          ...hotel,
+          check_in: date,
+          populated_at: this.timestamp,
+        };
+        p4.status = 'populated';
+        this.clearDirty(destination, 'process_4_accommodation');
+      }
+    }
+
+    this.emitEvent({
+      event: 'cascade_populated',
+      destination,
+      data: {
+        source: `package:${offer.id}`,
+        populated: ['process_3_transportation', 'process_4_accommodation'],
+      },
+    });
+  }
+
+  // ============================================================================
   // Active Destination
   // ============================================================================
 
