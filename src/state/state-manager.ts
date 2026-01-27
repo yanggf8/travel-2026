@@ -76,9 +76,10 @@ export class StateManager {
   /**
    * Mark that a cascade run has completed.
    * Only the cascade runner should call this.
+   * @param timestamp - Use cascade plan's computed_at for exact match
    */
-  markCascadeRun(): void {
-    this.plan.cascade_state.last_cascade_run = this.timestamp;
+  markCascadeRun(timestamp?: string): void {
+    this.plan.cascade_state.last_cascade_run = timestamp || this.timestamp;
   }
 
   /**
@@ -95,7 +96,7 @@ export class StateManager {
   /**
    * Mark a process as dirty (needs cascade re-evaluation).
    */
-  markDirty(destination: string, process: string): void {
+  markDirty(destination: string, process: ProcessId): void {
     this.ensureDestinationState(destination);
     this.plan.cascade_state.destinations[destination][process] = {
       dirty: true,
@@ -112,7 +113,7 @@ export class StateManager {
   /**
    * Clear dirty flag (after cascade processes it).
    */
-  clearDirty(destination: string, process: string): void {
+  clearDirty(destination: string, process: ProcessId): void {
     this.ensureDestinationState(destination);
     const current = this.plan.cascade_state.destinations[destination][process];
     if (current) {
@@ -157,7 +158,7 @@ export class StateManager {
   /**
    * Check if a specific process is dirty.
    */
-  isDirty(destination: string, process: string): boolean {
+  isDirty(destination: string, process: ProcessId): boolean {
     const destState = this.plan.cascade_state.destinations[destination];
     return destState?.[process]?.dirty ?? false;
   }
@@ -171,7 +172,7 @@ export class StateManager {
    */
   setProcessStatus(
     destination: string,
-    process: string,
+    process: ProcessId,
     newStatus: ProcessStatus
   ): void {
     const currentStatus = this.getProcessStatus(destination, process);
@@ -212,7 +213,7 @@ export class StateManager {
   /**
    * Get current process status.
    */
-  getProcessStatus(destination: string, process: string): ProcessStatus | null {
+  getProcessStatus(destination: string, process: ProcessId): ProcessStatus | null {
     const dest = this.plan.destinations[destination];
     if (!dest || !dest[process]) return null;
     const processObj = dest[process] as Record<string, unknown>;

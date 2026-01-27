@@ -26,7 +26,7 @@ export const STATUS_TRANSITIONS: Record<ProcessStatus, ProcessStatus[]> = {
   selected: ['booking', 'selecting', 'skipped'],
   booking: ['booked', 'selected', 'skipped'],
   booked: ['confirmed', 'skipped'],
-  confirmed: [],
+  confirmed: ['skipped'],  // Can skip confirmed if plans change
   skipped: ['pending'],  // Can unskip back to pending
 };
 
