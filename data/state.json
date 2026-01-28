@@ -109,7 +109,7 @@
           ]
         },
         "process_3_transportation": {
-          "state": "pending",
+          "state": "populated",
           "events": [
             {
               "event": "marked_dirty",
@@ -119,11 +119,19 @@
                 "dirty": true
               },
               "at": "2026-01-27T09:50:37.324Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_3_transportation",
+              "from": "pending",
+              "to": "populated",
+              "at": "2026-01-28T06:33:50.285Z"
             }
           ]
         },
         "process_3_4_packages": {
-          "state": "pending",
+          "state": "selected",
           "events": [
             {
               "event": "marked_dirty",
@@ -133,11 +141,31 @@
                 "dirty": true
               },
               "at": "2026-01-27T09:50:37.324Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_3_4_packages",
+              "from": "researched",
+              "to": "selected",
+              "at": "2026-01-28T06:33:50.285Z"
+            },
+            {
+              "event": "offer_selected",
+              "destination": "tokyo_2026",
+              "process": "process_3_4_packages",
+              "data": {
+                "offer_id": "besttour_TYO05MM260211AM",
+                "date": "2026-02-13",
+                "hotel": "TAVINOS HAMAMATSUCHO",
+                "price_total": 27888
+              },
+              "at": "2026-01-28T06:33:50.285Z"
             }
           ]
         },
         "process_4_accommodation": {
-          "state": "pending",
+          "state": "populated",
           "events": [
             {
               "event": "marked_dirty",
@@ -147,6 +175,14 @@
                 "dirty": true
               },
               "at": "2026-01-27T09:50:37.324Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_4_accommodation",
+              "from": "pending",
+              "to": "populated",
+              "at": "2026-01-28T06:33:50.285Z"
             }
           ]
         },
@@ -380,6 +416,54 @@
         "dirty": true
       },
       "at": "2026-01-27T09:50:37.324Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_3_4_packages",
+      "from": "researched",
+      "to": "selected",
+      "at": "2026-01-28T06:33:50.285Z"
+    },
+    {
+      "event": "offer_selected",
+      "destination": "tokyo_2026",
+      "process": "process_3_4_packages",
+      "data": {
+        "offer_id": "besttour_TYO05MM260211AM",
+        "date": "2026-02-13",
+        "hotel": "TAVINOS HAMAMATSUCHO",
+        "price_total": 27888
+      },
+      "at": "2026-01-28T06:33:50.285Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_3_transportation",
+      "from": "pending",
+      "to": "populated",
+      "at": "2026-01-28T06:33:50.285Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_4_accommodation",
+      "from": "pending",
+      "to": "populated",
+      "at": "2026-01-28T06:33:50.285Z"
+    },
+    {
+      "event": "cascade_populated",
+      "destination": "tokyo_2026",
+      "data": {
+        "source": "package:besttour_TYO05MM260211AM",
+        "populated": [
+          "process_3_transportation",
+          "process_4_accommodation"
+        ]
+      },
+      "at": "2026-01-28T06:33:50.285Z"
     }
   ],
   "skills_enhancement": {

@@ -152,7 +152,8 @@ travel-plan.json
 │   │   └── wildcard.ts        # Schema-driven path expansion
 │   ├── cli/
 │   │   ├── cascade.ts         # Cascade CLI
-│   │   └── p3p4-test.ts       # Package skill test CLI
+│   │   ├── p3p4-test.ts       # Package skill test CLI
+│   │   └── travel-update.ts   # Travel plan update CLI
 │   ├── process/               # Process handlers
 │   │   ├── accommodation.ts
 │   │   ├── itinerary.ts
@@ -197,41 +198,42 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 
 | Process | Tokyo | Nagoya |
 |---------|-------|--------|
-| P1 Dates | ✅ confirmed | ✅ confirmed |
+| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed |
 | P2 Destination | ✅ confirmed | ✅ confirmed |
-| P3+4 Packages | 🔄 researched (date-specific pricing) | ⏳ pending (archived) |
-| P3 Transportation | ⏳ pending | 🔄 researched |
-| P4 Accommodation | ⏳ pending | ⏳ pending |
+| P3+4 Packages | ✅ **selected** | ⏳ pending (archived) |
+| P3 Transportation | 📦 populated (from package) | 🔄 researched |
+| P4 Accommodation | 📦 populated (from package) | ⏳ pending |
 | P5 Itinerary | ⏳ pending | ⏳ pending |
 
-### ⚠️ UPDATE: Agent offered Feb 13 (Feb 11-12 sold out)
-Original dates (Feb 11) sold out. Agent offered **Feb 13** as alternative.
+### ✅ BOOKED: Tokyo Feb 13-17, 2026
+```
+Package: besttour_TYO05MM260211AM
+Dates:   Fri Feb 13 → Tue Feb 17 (5 days)
+Price:   TWD 27,888/person (TWD 55,776 for 2 pax)
 
-### Tokyo Package - BestTour Date-Specific Pricing (2 pax, updated 2026-01-26)
-| Date | Price (TWD) | Availability | Note |
-|------|-------------|--------------|------|
-| Feb 11 | 42,776 | ❌ Sold Out | Original preferred date |
-| Feb 12 | 46,776 | ❌ Sold Out | |
-| **Feb 13** | **55,776** | ❌ Sold Out | **★ previously offered; sold out as of 2026-01-26 scrape** |
-| Feb 14 | 69,776 | ✅ Available (2) | CNY peak - expensive |
-| Feb 20 | 46,776 | ✅ Available (2) | Post-CNY |
-| Feb 21 | 39,776 | ✅ Available (2) | Budget option |
-| Feb 22 | 36,776 | ✅ Available (2) | Cheapest |
-| Feb 24 | 38,776 | ✅ Available (2) | |
+Flight:  Peach MM626
+         TPE 10:40 → NRT 14:55
 
-### Decision Options
-1. **Feb 13** - TWD 55,776/2pax - Closest to original dates, CNY pricing
-2. **Feb 22** - TWD 36,776/2pax - Best value, post-CNY
+Hotel:   TAVINOS Hamamatsucho
+         Area: Shimbashi / Hamamatsucho
+         Access: JR Hamamatsucho 8min, Yurikamome Takeshiba 1min
+         Includes: Light breakfast
+```
 
-### Lion Travel Base Prices (starting from, 2-3 nights)
-| Package | Base Price | Note |
-|---------|------------|------|
-| 富士山/河口湖 | TWD 9,780起 | Mt. Fuji area |
-| 晴空塔+24hr Metro | TWD 9,930起 | Central Tokyo |
-| teamLab | TWD 10,800起 | Includes museum ticket |
-| Disney | TWD 14,888起 | Includes park ticket |
+### CLI Quick Reference
+```bash
+# View status
+npx ts-node src/cli/travel-update.ts status
 
-*Note: Lion Travel prices are base rates. 5-day actual pricing requires booking flow.*
+# View full booking details
+npx ts-node src/cli/travel-update.ts status --full
+
+# Update dates (triggers cascade)
+npx ts-node src/cli/travel-update.ts set-dates 2026-02-13 2026-02-17
+
+# Select an offer
+npx ts-node src/cli/travel-update.ts select-offer <offer-id> <date>
+```
 
 ## Completed
 - ✅ Cascade runner (TypeScript library + CLI)
@@ -240,8 +242,11 @@ Original dates (Feb 11) sold out. Agent offered **Feb 13** as alternative.
 - ✅ Canonical offer schema normalization
 - ✅ BestTour date-specific pricing scraper (full Feb 2026 calendar)
 - ✅ Lion Travel dated search scraper (`scripts/scrape_liontravel_dated.py`)
+- ✅ StateManager with type-safe ProcessId/ProcessStatus
+- ✅ Plan normalization for legacy schema migration
+- ✅ Travel Update CLI (`src/cli/travel-update.ts`)
+- ✅ Tokyo package selected (Feb 13, BestTour)
 
 ## Next Steps
-1. **Select travel dates** - Feb 22 is best value (TWD 36,776/2pax), Feb 21 is 2nd best
-2. **Book package** - BestTour TAVINOS Hamamatsucho if dates work
-3. **Build comparison tool** - Derive rankings from destinations/*
+1. **Plan daily itinerary** - P5 for Tokyo (5 days)
+2. **Build comparison tool** - Derive rankings from destinations/*

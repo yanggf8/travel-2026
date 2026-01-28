@@ -101,12 +101,12 @@
           "last_changed": "2026-01-27T09:50:37.324Z"
         },
         "process_3_transportation": {
-          "dirty": true,
-          "last_changed": "2026-01-27T09:50:37.324Z"
+          "dirty": false,
+          "last_changed": "2026-01-28T06:33:50.285Z"
         },
         "process_4_accommodation": {
-          "dirty": true,
-          "last_changed": "2026-01-27T09:50:37.324Z"
+          "dirty": false,
+          "last_changed": "2026-01-28T06:33:50.285Z"
         },
         "process_5_daily_itinerary": {
           "dirty": true,
@@ -428,8 +428,8 @@
         ]
       },
       "process_3_4_packages": {
-        "status": "researched",
-        "updated_at": "2026-01-26T12:35:00+08:00",
+        "status": "selected",
+        "updated_at": "2026-01-28T06:33:50.285Z",
         "selected_offer_id": null,
         "results": {
           "offers": [
@@ -770,17 +770,30 @@
             "Lion Travel prices are 'starting from' for 2-3 nights - 5-day actual prices will be higher",
             "CNY peak (Feb 14-18): +80-90% premium over best dates"
           ]
+        },
+        "chosen_offer": {
+          "id": "besttour_TYO05MM260211AM",
+          "selected_date": "2026-02-13",
+          "selected_at": "2026-01-28T06:33:50.285Z"
         }
       },
       "process_3_transportation": {
-        "status": "pending",
-        "updated_at": "2026-01-26T12:35:00+08:00",
+        "status": "populated",
+        "updated_at": "2026-01-28T06:33:50.285Z",
         "source": null,
         "flight": {
-          "status": "pending",
-          "outbound": {},
-          "return": {},
-          "candidates": []
+          "airline": "Peach Aviation",
+          "airline_code": "MM",
+          "outbound": {
+            "flight_number": "MM626",
+            "departure_airport_code": "TPE",
+            "arrival_airport_code": "NRT",
+            "departure_time": "10:40",
+            "arrival_time": "14:55"
+          },
+          "return": null,
+          "booked_date": "2026-02-13",
+          "populated_at": "2026-01-28T06:33:50.285Z"
         },
         "home_to_airport": {
           "status": "pending",
@@ -789,11 +802,12 @@
         "airport_to_hotel": {
           "status": "pending",
           "candidates": []
-        }
+        },
+        "populated_from": "package:besttour_TYO05MM260211AM"
       },
       "process_4_accommodation": {
-        "status": "pending",
-        "updated_at": "2026-01-26T12:35:00+08:00",
+        "status": "populated",
+        "updated_at": "2026-01-28T06:33:50.285Z",
         "source": null,
         "location_zone": {
           "status": "pending",
@@ -833,10 +847,19 @@
           ]
         },
         "hotel": {
-          "status": "pending",
-          "selected_hotel": null,
-          "candidates": []
-        }
+          "name": "TAVINOS HAMAMATSUCHO",
+          "slug": "tavinos_hamamatsucho",
+          "area": "Shimbashi / Hamamatsucho",
+          "star_rating": null,
+          "access": [
+            "JR Hamamatsucho 8min",
+            "Yurikamome Takeshiba 1min",
+            "Tokyo Monorail 8min"
+          ],
+          "check_in": "2026-02-13",
+          "populated_at": "2026-01-28T06:33:50.285Z"
+        },
+        "populated_from": "package:besttour_TYO05MM260211AM"
       },
       "process_5_daily_itinerary": {
         "status": "pending",
