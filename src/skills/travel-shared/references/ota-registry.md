@@ -18,6 +18,34 @@ interface OtaSourceRegistryEntry {
 }
 ```
 
+## Scraper Tools
+
+Python/Playwright scrapers for fetching OTA data:
+
+| Script | OTA | Output |
+|--------|-----|--------|
+| `scripts/scrape_package.py` | BestTour, generic | Raw text + elements |
+| `scripts/scrape_liontravel_dated.py` | Lion Travel | Date-specific pricing |
+
+**Usage:**
+```bash
+# Generic package scraper
+python scripts/scrape_package.py "<url>" data/<output>.json
+
+# Lion Travel with date range
+python scripts/scrape_liontravel_dated.py --start YYYY-MM-DD --end YYYY-MM-DD data/<output>.json
+```
+
+**BestTour page structure:**
+- `交通方式` → 去程 (outbound) / 回程 (return) flights
+- `住宿` → Hotel name, area, amenities
+- `價格` → Per-person pricing, calendar availability
+
+**Known limitations:**
+- Pages are JS-rendered; requires Playwright
+- Return flight may need manual extraction from raw_text
+- Date-specific pricing requires calendar interaction
+
 ## Normalization expectations
 
 - Each scraper maps raw offers to `CanonicalOffer` consistently.

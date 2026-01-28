@@ -430,14 +430,14 @@
       "process_3_4_packages": {
         "status": "selected",
         "updated_at": "2026-01-28T06:33:50.285Z",
-        "selected_offer_id": null,
+        "selected_offer_id": "besttour_TYO06MM260213AM2",
         "results": {
           "offers": [
             {
-              "id": "besttour_TYO05MM260211AM",
+              "id": "besttour_TYO06MM260213AM2",
               "source_id": "besttour",
-              "product_code": "TYO05MM260211AM",
-              "url": "https://www.besttour.com.tw/itinerary/TYO05MM260211AM",
+              "product_code": "TYO06MM260213AM2",
+              "url": "https://www.besttour.com.tw/itinerary/TYO06MM260213AM2",
               "scraped_at": "2026-01-26T12:26:39+08:00",
               "type": "package",
               "duration_days": 5,
@@ -450,13 +450,19 @@
                 "airline": "Peach Aviation",
                 "airline_code": "MM",
                 "outbound": {
-                  "flight_number": "MM626",
+                  "flight_number": "MM620",
                   "departure_airport_code": "TPE",
                   "arrival_airport_code": "NRT",
-                  "departure_time": "10:40",
-                  "arrival_time": "14:55"
+                  "departure_time": "02:25",
+                  "arrival_time": "06:30"
                 },
-                "return": null
+                "return": {
+                  "flight_number": "MM627",
+                  "departure_airport_code": "NRT",
+                  "arrival_airport_code": "TPE",
+                  "departure_time": "22:05",
+                  "arrival_time": "01:25+1"
+                }
               },
               "hotel": {
                 "name": "TAVINOS HAMAMATSUCHO",
@@ -772,7 +778,7 @@
           ]
         },
         "chosen_offer": {
-          "id": "besttour_TYO05MM260211AM",
+          "id": "besttour_TYO06MM260213AM2",
           "selected_date": "2026-02-13",
           "selected_at": "2026-01-28T06:33:50.285Z"
         }
@@ -785,13 +791,21 @@
           "airline": "Peach Aviation",
           "airline_code": "MM",
           "outbound": {
-            "flight_number": "MM626",
+            "flight_number": "MM620",
             "departure_airport_code": "TPE",
             "arrival_airport_code": "NRT",
-            "departure_time": "10:40",
-            "arrival_time": "14:55"
+            "departure_time": "02:25",
+            "arrival_time": "06:30",
+            "date": "2026-02-13"
           },
-          "return": null,
+          "return": {
+            "flight_number": "MM627",
+            "departure_airport_code": "NRT",
+            "arrival_airport_code": "TPE",
+            "departure_time": "22:05",
+            "arrival_time": "01:25+1",
+            "date": "2026-02-17"
+          },
           "booked_date": "2026-02-13",
           "populated_at": "2026-01-28T06:33:50.285Z"
         },

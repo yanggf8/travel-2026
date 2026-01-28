@@ -50,7 +50,19 @@ async def scrape_package(url: str) -> dict:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
         # Wait for content to load
-        await page.wait_for_timeout(5000)
+        await page.wait_for_timeout(3000)
+
+        # Scroll down to load lazy content (交通方式 section)
+        print("Scrolling to load full page content...")
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await page.wait_for_timeout(2000)
+        # Scroll in steps to trigger lazy loading
+        for i in range(5):
+            await page.evaluate(f"window.scrollTo(0, {(i+1) * 1000})")
+            await page.wait_for_timeout(500)
+        # Scroll to bottom again
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await page.wait_for_timeout(2000)
 
         # Extract page content
         content = await page.content()
