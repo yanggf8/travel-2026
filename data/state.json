@@ -109,7 +109,7 @@
           ]
         },
         "process_3_transportation": {
-          "state": "populated",
+          "state": "booked",
           "events": [
             {
               "event": "marked_dirty",
@@ -127,11 +127,27 @@
               "from": "pending",
               "to": "populated",
               "at": "2026-01-28T06:33:50.285Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_3_transportation",
+              "from": "populated",
+              "to": "booking",
+              "at": "2026-01-28T15:46:41.859Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_3_transportation",
+              "from": "booking",
+              "to": "booked",
+              "at": "2026-01-28T15:46:41.859Z"
             }
           ]
         },
         "process_3_4_packages": {
-          "state": "selected",
+          "state": "booked",
           "events": [
             {
               "event": "marked_dirty",
@@ -161,11 +177,27 @@
                 "price_total": 27888
               },
               "at": "2026-01-28T06:33:50.285Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_3_4_packages",
+              "from": "selected",
+              "to": "booking",
+              "at": "2026-01-28T15:46:41.859Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_3_4_packages",
+              "from": "booking",
+              "to": "booked",
+              "at": "2026-01-28T15:46:41.859Z"
             }
           ]
         },
         "process_4_accommodation": {
-          "state": "populated",
+          "state": "booked",
           "events": [
             {
               "event": "marked_dirty",
@@ -183,6 +215,22 @@
               "from": "pending",
               "to": "populated",
               "at": "2026-01-28T06:33:50.285Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_4_accommodation",
+              "from": "populated",
+              "to": "booking",
+              "at": "2026-01-28T15:46:41.859Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_4_accommodation",
+              "from": "booking",
+              "to": "booked",
+              "at": "2026-01-28T15:46:41.859Z"
             }
           ]
         },
@@ -237,6 +285,16 @@
                 ]
               },
               "at": "2026-01-28T09:00:48.959Z"
+            },
+            {
+              "event": "focus_changed",
+              "destination": "tokyo_2026",
+              "process": "process_5_daily_itinerary",
+              "data": {
+                "from": "tokyo_2026.p3_4_packages",
+                "to": "tokyo_2026.process_5_daily_itinerary"
+              },
+              "at": "2026-01-28T15:46:41.859Z"
             }
           ]
         }
@@ -339,11 +397,11 @@
       "active"
     ]
   },
-  "current_focus": "tokyo_2026.p3_4_packages",
+  "current_focus": "tokyo_2026.process_5_daily_itinerary",
   "next_actions": [
-    "select_tokyo_package_date",
-    "compare_other_otas",
-    "book_package_if_selected"
+    "plan_daily_itinerary",
+    "book_teamlab_tickets",
+    "research_restaurant_reservations"
   ],
   "event_log": [
     {
@@ -544,6 +602,93 @@
         ]
       },
       "at": "2026-01-28T09:00:48.959Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_3_4_packages",
+      "from": "selected",
+      "to": "booking",
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_3_4_packages",
+      "from": "booking",
+      "to": "booked",
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_3_transportation",
+      "from": "populated",
+      "to": "booking",
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_3_transportation",
+      "from": "booking",
+      "to": "booked",
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_4_accommodation",
+      "from": "populated",
+      "to": "booking",
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_4_accommodation",
+      "from": "booking",
+      "to": "booked",
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "booking_confirmed",
+      "destination": "tokyo_2026",
+      "data": {
+        "processes": [
+          "process_3_4_packages",
+          "process_3_transportation",
+          "process_4_accommodation"
+        ],
+        "confirmed_at": "2026-01-28T15:46:41.859Z"
+      },
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "next_actions_updated",
+      "data": {
+        "from": [
+          "select_tokyo_package_date",
+          "compare_other_otas",
+          "book_package_if_selected"
+        ],
+        "to": [
+          "plan_daily_itinerary",
+          "book_teamlab_tickets",
+          "research_restaurant_reservations"
+        ]
+      },
+      "at": "2026-01-28T15:46:41.859Z"
+    },
+    {
+      "event": "focus_changed",
+      "destination": "tokyo_2026",
+      "process": "process_5_daily_itinerary",
+      "data": {
+        "from": "tokyo_2026.p3_4_packages",
+        "to": "tokyo_2026.process_5_daily_itinerary"
+      },
+      "at": "2026-01-28T15:46:41.859Z"
     }
   ],
   "skills_enhancement": {

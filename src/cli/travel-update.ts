@@ -62,6 +62,11 @@ Commands:
     Populate itinerary sessions by adding activities from destination clusters (incremental; does not overwrite days).
     Example: populate-itinerary --goals "chanel_shopping,omiyage_premium,teamlab_roppongi,asakusa_classic" --pace balanced
 
+  mark-booked [--dest slug]
+    Mark package, flight, and hotel as booked (selected/populated → booking → booked).
+    Use after user confirms booking is complete.
+    Example: mark-booked
+
   status
     Show current plan status summary.
 
@@ -497,6 +502,83 @@ async function main(): Promise<void> {
           sm.save();
           console.log('\n✅ Itinerary scaffolded');
           console.log('\nNext action: Review day structure, then populate activities with /p5-itinerary');
+        } else {
+          console.log('\n🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
+      case 'mark-booked': {
+        const destination = destOpt || sm.getActiveDestination();
+        const plan = sm.getPlan();
+        const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
+
+        if (!destObj) {
+          console.error(`Error: Destination not found: ${destination}`);
+          process.exit(1);
+        }
+
+        console.log(`\n🎫 Marking booking as confirmed for ${destination}:`);
+
+        // Processes to mark as booked: p3_4_packages, p3_transportation, p4_accommodation
+        const processesToBook: Array<{ id: ProcessId; name: string }> = [
+          { id: 'process_3_4_packages', name: 'P3+4 Packages' },
+          { id: 'process_3_transportation', name: 'P3 Transport' },
+          { id: 'process_4_accommodation', name: 'P4 Accommodation' },
+        ];
+
+        for (const p of processesToBook) {
+          const currentStatus = sm.getProcessStatus(destination, p.id);
+          if (!currentStatus) {
+            console.log(`   ⏭️  ${p.name}: skipped (no status)`);
+            continue;
+          }
+
+          if (currentStatus === 'booked' || currentStatus === 'confirmed') {
+            console.log(`   ✓  ${p.name}: already ${currentStatus}`);
+            continue;
+          }
+
+          // Valid starting states: selected, populated
+          if (!['selected', 'populated'].includes(currentStatus)) {
+            console.log(`   ⚠️  ${p.name}: cannot book from ${currentStatus}`);
+            continue;
+          }
+
+          if (!dryRun) {
+            // Transition: selected/populated → booking → booked
+            sm.setProcessStatus(destination, p.id, 'booking');
+            sm.setProcessStatus(destination, p.id, 'booked');
+            sm.clearDirty(destination, p.id);
+          }
+          console.log(`   ✅ ${p.name}: ${currentStatus} → booking → booked`);
+        }
+
+        if (!dryRun) {
+          // Emit booking confirmation event
+          sm.emitEvent({
+            event: 'booking_confirmed',
+            destination,
+            data: {
+              processes: processesToBook.map(p => p.id),
+              confirmed_at: sm.now(),
+            },
+          });
+
+          // Update next actions
+          sm.setNextActions([
+            'plan_daily_itinerary',
+            'book_teamlab_tickets',
+            'research_restaurant_reservations',
+          ]);
+
+          // Update focus to itinerary
+          sm.setFocus(destination, 'process_5_daily_itinerary');
+
+          sm.save();
+          console.log('\n✅ Booking marked as confirmed');
+          console.log('\nNext action: Plan daily itinerary with scaffold-itinerary or /p5-itinerary');
         } else {
           console.log('\n🔸 DRY RUN - no changes saved');
         }

@@ -97,16 +97,16 @@
           "last_changed": "2026-01-26T12:30:00+08:00"
         },
         "process_3_4_packages": {
-          "dirty": true,
-          "last_changed": "2026-01-27T09:50:37.324Z"
+          "dirty": false,
+          "last_changed": "2026-01-28T15:46:41.859Z"
         },
         "process_3_transportation": {
           "dirty": false,
-          "last_changed": "2026-01-28T06:33:50.285Z"
+          "last_changed": "2026-01-28T15:46:41.859Z"
         },
         "process_4_accommodation": {
           "dirty": false,
-          "last_changed": "2026-01-28T06:33:50.285Z"
+          "last_changed": "2026-01-28T15:46:41.859Z"
         },
         "process_5_daily_itinerary": {
           "dirty": false,
@@ -428,8 +428,8 @@
         ]
       },
       "process_3_4_packages": {
-        "status": "selected",
-        "updated_at": "2026-01-28T06:33:50.285Z",
+        "status": "booked",
+        "updated_at": "2026-01-28T15:46:41.859Z",
         "selected_offer_id": "besttour_TYO06MM260213AM2",
         "results": {
           "offers": [
@@ -784,26 +784,26 @@
         }
       },
       "process_3_transportation": {
-        "status": "populated",
-        "updated_at": "2026-01-28T06:33:50.285Z",
+        "status": "booked",
+        "updated_at": "2026-01-28T15:46:41.859Z",
         "source": null,
         "flight": {
-          "airline": "Peach Aviation",
-          "airline_code": "MM",
+          "airline": "Scoot",
+          "airline_code": "TR",
           "outbound": {
-            "flight_number": "MM620",
+            "flight_number": "TR874",
             "departure_airport_code": "TPE",
             "arrival_airport_code": "NRT",
-            "departure_time": "02:25",
-            "arrival_time": "06:30",
+            "departure_time": "13:55",
+            "arrival_time": "18:00",
             "date": "2026-02-13"
           },
           "return": {
-            "flight_number": "MM627",
+            "flight_number": "TR875",
             "departure_airport_code": "NRT",
             "arrival_airport_code": "TPE",
-            "departure_time": "22:05",
-            "arrival_time": "01:25+1",
+            "departure_time": "19:55",
+            "arrival_time": "23:10",
             "date": "2026-02-17"
           },
           "booked_date": "2026-02-13",
@@ -820,8 +820,8 @@
         "populated_from": "package:besttour_TYO05MM260211AM"
       },
       "process_4_accommodation": {
-        "status": "populated",
-        "updated_at": "2026-01-28T06:33:50.285Z",
+        "status": "booked",
+        "updated_at": "2026-01-28T15:46:41.859Z",
         "source": null,
         "location_zone": {
           "status": "pending",
@@ -886,25 +886,40 @@
             "status": "planned",
             "theme": "Arrival + Rest + Hamamatsucho Explore",
             "morning": {
-              "focus": "Arrival & Check-in",
-              "activities": ["NRT arrival 06:30", "Narita Express or Limousine Bus to Hamamatsucho (~90 min)", "Early check-in or luggage drop at TAVINOS"],
-              "meals": ["Light breakfast at hotel or nearby convenience store"],
-              "transit_notes": "Arrive NRT 06:30 → hotel",
-              "booking_notes": "Check if early check-in available (normal: 15:00)"
+              "focus": "Departure from TPE",
+              "activities": [
+                "TPE Airport",
+                "TR874 TPE 13:55 → NRT 18:00"
+              ],
+              "meals": [
+                "Lunch before flight or airport"
+              ],
+              "transit_notes": "NRT arrival 18:00",
+              "booking_notes": "Arrive Narita by 13:00 for check-in"
             },
             "afternoon": {
-              "focus": "Rest & Light Explore",
-              "activities": ["Nap/rest at hotel (red-eye recovery)", "Walk around Hamamatsucho/Shiodome area", "Hamarikyu Gardens (optional, 5 min walk)"],
-              "meals": ["Late lunch at local restaurant"],
-              "transit_notes": "Stay local, walking distance only",
+              "focus": "Flight & Arrival",
+              "activities": [
+                "Flight time: 4h05m",
+                "Immigration & baggage (~30-45 min)",
+                "Transport to TAVINOS Hamamatsucho (~60-90 min via NEX or Limousine Bus)"
+              ],
+              "meals": [],
+              "transit_notes": "NRT → Hotel",
               "booking_notes": null
             },
             "evening": {
-              "focus": "Easy Dinner",
-              "activities": ["Dinner near hotel", "Early sleep to recover"],
-              "meals": ["Izakaya or ramen near Hamamatsucho Station"],
+              "focus": "Hotel Check-in & Dinner",
+              "activities": [
+                "Hotel check-in",
+                "Dinner near hotel (Hamamatsucho/Shiodome area)",
+                "Rest after travel day"
+              ],
+              "meals": [
+                "Dinner at hotel or nearby restaurant"
+              ],
               "transit_notes": null,
-              "booking_notes": null
+              "booking_notes": "Confirm check-in time (normal: 15:00)"
             }
           },
           {
@@ -915,22 +930,40 @@
             "theme": "Shinjuku: Chanel Shopping + Omiyage",
             "morning": {
               "focus": "KOMEHYO Shinjuku (Chanel Bags)",
-              "activities": ["Hamamatsucho → Shinjuku (JR Yamanote, 25 min)", "KOMEHYO Shinjuku main store (opens 11:00)", "Browse 5 floors, focus on Chanel section"],
-              "meals": ["Breakfast at hotel"],
+              "activities": [
+                "Hamamatsucho → Shinjuku (JR Yamanote, 25 min)",
+                "KOMEHYO Shinjuku main store (opens 11:00)",
+                "Browse 5 floors, focus on Chanel section"
+              ],
+              "meals": [
+                "Breakfast at hotel"
+              ],
               "transit_notes": "JR Hamamatsucho → Shinjuku (Yamanote Line)",
               "booking_notes": "KOMEHYO opens 11:00, arrive early for best selection"
             },
             "afternoon": {
               "focus": "Backup Store + Omiyage",
-              "activities": ["Daikokuya Shinjuku (backup, 5 min walk) if needed", "Isetan Shinjuku B2 for omiyage (Yoku Moku, Henri Charpentier)", "Browse Shinjuku area"],
-              "meals": ["Lunch at Isetan restaurant floor or nearby"],
+              "activities": [
+                "Daikokuya Shinjuku (backup, 5 min walk) if needed",
+                "Isetan Shinjuku B2 for omiyage (Yoku Moku, Henri Charpentier)",
+                "Browse Shinjuku area"
+              ],
+              "meals": [
+                "Lunch at Isetan restaurant floor or nearby"
+              ],
               "transit_notes": "All walking distance in Shinjuku",
               "booking_notes": null
             },
             "evening": {
               "focus": "Shinjuku Nightlife",
-              "activities": ["Omoide Yokocho (Memory Lane) for dinner", "Kabukicho walk-through", "Return to hotel"],
-              "meals": ["Yakitori at Omoide Yokocho"],
+              "activities": [
+                "Omoide Yokocho (Memory Lane) for dinner",
+                "Kabukicho walk-through",
+                "Return to hotel"
+              ],
+              "meals": [
+                "Yakitori at Omoide Yokocho"
+              ],
               "transit_notes": "JR Shinjuku → Hamamatsucho",
               "booking_notes": null
             }
@@ -943,22 +976,39 @@
             "theme": "teamLab Borderless + Azabudai/Roppongi",
             "morning": {
               "focus": "teamLab Borderless",
-              "activities": ["Hamamatsucho → Kamiyacho (Metro, 10 min)", "teamLab Borderless at Azabudai Hills (opens 10:00)", "Allow 2-3 hours for full experience"],
-              "meals": ["Light breakfast at hotel"],
+              "activities": [
+                "Hamamatsucho → Kamiyacho (Metro, 10 min)",
+                "teamLab Borderless at Azabudai Hills (opens 10:00)",
+                "Allow 2-3 hours for full experience"
+              ],
+              "meals": [
+                "Light breakfast at hotel"
+              ],
               "transit_notes": "Metro Hibiya Line: Kamiyacho Station",
               "booking_notes": "BOOK TICKETS IN ADVANCE - often sells out"
             },
             "afternoon": {
               "focus": "Azabudai Hills + Roppongi",
-              "activities": ["Explore Azabudai Hills (new complex)", "Walk to Roppongi Hills", "Mori Art Museum or Tokyo City View (optional)"],
-              "meals": ["Lunch at Azabudai Hills restaurants"],
+              "activities": [
+                "Explore Azabudai Hills (new complex)",
+                "Walk to Roppongi Hills",
+                "Mori Art Museum or Tokyo City View (optional)"
+              ],
+              "meals": [
+                "Lunch at Azabudai Hills restaurants"
+              ],
               "transit_notes": "Walking distance Azabudai → Roppongi",
               "booking_notes": null
             },
             "evening": {
               "focus": "Roppongi Dinner",
-              "activities": ["Dinner in Roppongi", "Return to hotel"],
-              "meals": ["Upscale dining or casual izakaya"],
+              "activities": [
+                "Dinner in Roppongi",
+                "Return to hotel"
+              ],
+              "meals": [
+                "Upscale dining or casual izakaya"
+              ],
               "transit_notes": "Metro Roppongi → Onarimon/Daimon → walk to hotel",
               "booking_notes": null
             }
@@ -971,22 +1021,43 @@
             "theme": "Classic Tokyo: Asakusa + Shibuya",
             "morning": {
               "focus": "Asakusa Traditional",
-              "activities": ["Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)", "Senso-ji Temple", "Nakamise Shopping Street", "Kaminarimon Gate photos"],
-              "meals": ["Breakfast at hotel or skip for early start"],
+              "activities": [
+                "Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)",
+                "Senso-ji Temple",
+                "Nakamise Shopping Street",
+                "Kaminarimon Gate photos"
+              ],
+              "meals": [
+                "Breakfast at hotel or skip for early start"
+              ],
               "transit_notes": "Toei Asakusa Line direct from Daimon",
               "booking_notes": null
             },
             "afternoon": {
               "focus": "Shibuya",
-              "activities": ["Asakusa → Shibuya (Metro, 30 min)", "Shibuya Crossing", "Shibuya Sky observation deck (optional)", "Shibuya 109 / shopping"],
-              "meals": ["Lunch in Asakusa (soba, tempura) or Shibuya"],
+              "activities": [
+                "Asakusa → Shibuya (Metro, 30 min)",
+                "Shibuya Crossing",
+                "Shibuya Sky observation deck (optional)",
+                "Shibuya 109 / shopping"
+              ],
+              "meals": [
+                "Lunch in Asakusa (soba, tempura) or Shibuya"
+              ],
               "transit_notes": "Ginza Line to Shibuya",
               "booking_notes": "Shibuya Sky needs advance booking if interested"
             },
             "evening": {
               "focus": "Shibuya/Harajuku Evening",
-              "activities": ["Walk to Harajuku (10 min)", "Takeshita Street", "Omotesando for upscale window shopping", "Dinner and return"],
-              "meals": ["Dinner in Harajuku/Omotesando area"],
+              "activities": [
+                "Walk to Harajuku (10 min)",
+                "Takeshita Street",
+                "Omotesando for upscale window shopping",
+                "Dinner and return"
+              ],
+              "meals": [
+                "Dinner in Harajuku/Omotesando area"
+              ],
               "transit_notes": "JR Harajuku → Hamamatsucho",
               "booking_notes": null
             }
@@ -999,23 +1070,44 @@
             "theme": "Last-Minute Omiyage + Departure",
             "morning": {
               "focus": "Flexible / Pack",
-              "activities": ["Sleep in", "Pack luggage", "Hotel checkout (11:00)", "Store luggage at hotel or Tokyo Station coin lockers"],
-              "meals": ["Breakfast at hotel"],
+              "activities": [
+                "Sleep in",
+                "Pack luggage",
+                "Hotel checkout (11:00)",
+                "Store luggage at hotel or Tokyo Station coin lockers"
+              ],
+              "meals": [
+                "Breakfast at hotel"
+              ],
               "transit_notes": null,
               "booking_notes": "Confirm luggage storage options"
             },
             "afternoon": {
               "focus": "Tokyo Station + Final Omiyage",
-              "activities": ["Hamamatsucho → Tokyo Station (JR, 5 min)", "Daimaru Tokyo Station B1 for final omiyage", "Tokyo Character Street (if time)", "Lunch at Tokyo Station Ramen Street or GRANSTA"],
-              "meals": ["Lunch at Tokyo Station"],
+              "activities": [
+                "Hamamatsucho → Tokyo Station (JR, 5 min)",
+                "Daimaru Tokyo Station B1 for final omiyage",
+                "Tokyo Character Street (if time)",
+                "Lunch at Tokyo Station Ramen Street or GRANSTA"
+              ],
+              "meals": [
+                "Lunch at Tokyo Station"
+              ],
               "transit_notes": "Short JR ride or walk to Tokyo Station",
               "booking_notes": null
             },
             "evening": {
               "focus": "Airport Transfer",
-              "activities": ["Tokyo Station → Narita Airport (Narita Express, 60 min)", "Aim to arrive NRT by 19:00 for 22:05 flight", "Duty-free shopping if time"],
-              "meals": ["Light dinner at airport or bento on train"],
-              "transit_notes": "Hotel → NRT for 22:05 flight",
+              "activities": [
+                "Tokyo Station → Narita Airport (Narita Express, 60 min)",
+                "Aim to arrive NRT by 17:30 for TR875 19:55 flight",
+                "Check-in and security",
+                "Duty-free shopping if time"
+              ],
+              "meals": [
+                "Light dinner at airport or bento on train"
+              ],
+              "transit_notes": "Hotel → NRT for TR875 19:55",
               "booking_notes": "Book NEX or Limousine Bus in advance"
             }
           }

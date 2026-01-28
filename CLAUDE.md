@@ -227,10 +227,10 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 |---------|-------|--------|
 | P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed |
 | P2 Destination | ✅ confirmed | ✅ confirmed |
-| P3+4 Packages | ✅ **selected** | ⏳ pending (archived) |
-| P3 Transportation | 📦 populated (from package) | 🔄 researched |
-| P4 Accommodation | 📦 populated (from package) | ⏳ pending |
-| P5 Itinerary | ⏳ pending | ⏳ pending |
+| P3+4 Packages | ✅ **booked** | ⏳ pending (archived) |
+| P3 Transportation | 🎫 booked | 🔄 researched |
+| P4 Accommodation | 🎫 booked | ⏳ pending |
+| P5 Itinerary | 📋 scaffolded | ⏳ pending |
 
 ### ✅ BOOKED: Tokyo Feb 13-17, 2026
 ```
@@ -238,9 +238,9 @@ Package: besttour_TYO06MM260213AM2
 Dates:   Fri Feb 13 → Tue Feb 17 (5 days)
 Price:   TWD 27,888/person (TWD 55,776 for 2 pax)
 
-Flight (red-eye both ways):
-  去程: MM620 TPE 02:25 → NRT 06:30 (Feb 13)
-  回程: MM627 NRT 22:05 → TPE 01:25+1 (Feb 17→18)
+Flight (Scoot):
+  去程: TR874 TPE 13:55 → NRT 18:00 (Feb 13)
+  回程: TR875 NRT 19:55 → TPE 23:10 (Feb 17)
 
 Hotel:   TAVINOS Hamamatsucho
          Area: Shimbashi / Hamamatsucho
@@ -301,6 +301,27 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Plan normalization for legacy schema migration
 - ✅ Travel Update CLI (`src/cli/travel-update.ts`)
 - ✅ Tokyo package selected (Feb 13, BestTour)
+
+## Storage Decision (DB)
+
+**Decision criteria**
+- No native DB installs required on agent machines.
+- Strong CLI story for skills (inspect/query/update).
+- JS-native integration with existing Node/ts-node tooling.
+- Keep StateManager as the single write path.
+
+**Comparison (final)**
+| Option | CLI strength | Install requirement | Fit for skills |
+|--------|--------------|---------------------|----------------|
+| DuckDB | Strong (native CLI) | Requires binary install | ❌ (install not allowed) |
+| SQLite | Strong (sqlite3 CLI) | Requires native install | ❌ (install not allowed) |
+| Postgres | Strong (psql) | Requires server install | ❌ (install not allowed) |
+| Redis/Valkey | Strong (redis-cli) | Requires server + CLI | ❌ (install not allowed) |
+| LokiJS | None built-in (provide our own) | Pure JS dependency | ✅ (build CLI wrapper) |
+
+**Decision**
+Use **LokiJS** as the future embedded DB (JS-only). Provide a small Node CLI wrapper for inspection and
+updates so skills have a strong CLI surface without native DB installs.
 
 ## Next Steps
 1. **Plan daily itinerary** - P5 for Tokyo (5 days)
