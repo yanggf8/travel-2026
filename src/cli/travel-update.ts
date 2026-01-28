@@ -22,6 +22,7 @@
  */
 
 import { StateManager } from '../state/state-manager';
+import type { ProcessId } from '../state/types';
 
 const HELP = `
 Travel Update CLI - Quick updates to travel plan
@@ -52,6 +53,7 @@ Commands:
 Options:
   --dry-run    Show what would be changed without saving
   --verbose    Show detailed output
+  --full       Show booked offer/flight/hotel details (status only)
 `;
 
 function formatDate(dateStr: string): string {
@@ -59,11 +61,12 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function showStatus(sm: StateManager): void {
+function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
   const plan = sm.getPlan();
   const dest = sm.getActiveDestination();
   const dates = sm.getDateAnchor();
   const dirty = sm.getDirtyFlags();
+  const full = opts?.full ?? false;
 
   console.log('\n╔════════════════════════════════════════════════════════════╗');
   console.log('║              TRAVEL PLAN STATUS                            ║');
@@ -80,7 +83,7 @@ function showStatus(sm: StateManager): void {
 
   const destObj = plan.destinations[dest];
   if (destObj) {
-    const processes = [
+    const processes: Array<{ id: ProcessId; name: string }> = [
       { id: 'process_1_date_anchor', name: 'P1 Date Anchor' },
       { id: 'process_2_destination', name: 'P2 Destination' },
       { id: 'process_3_4_packages', name: 'P3+4 Packages' },
@@ -92,7 +95,7 @@ function showStatus(sm: StateManager): void {
     for (const p of processes) {
       const proc = destObj[p.id] as Record<string, unknown> | undefined;
       const status = proc?.status as string || 'pending';
-      const isDirty = dirty.destinations[dest]?.[p.id as keyof typeof dirty.destinations[typeof dest]]?.dirty;
+      const isDirty = dirty.destinations?.[dest]?.[p.id]?.dirty;
       
       const statusIcon = {
         pending: '⏳',
@@ -114,13 +117,57 @@ function showStatus(sm: StateManager): void {
 
   // Show chosen offer if any
   const packages = destObj?.process_3_4_packages as Record<string, unknown> | undefined;
-  const chosenOffer = packages?.chosen_offer as Record<string, unknown> | undefined;
-  if (chosenOffer) {
+  const chosenOfferMeta = packages?.chosen_offer as Record<string, unknown> | undefined;
+  const chosenOffer = (packages?.results as Record<string, unknown> | undefined)?.chosen_offer as Record<string, unknown> | undefined;
+  if (chosenOfferMeta || chosenOffer) {
     console.log('\nSelected Offer:');
     console.log('─'.repeat(50));
-    console.log(`  ID: ${chosenOffer.id}`);
-    console.log(`  Date: ${chosenOffer.selected_date}`);
-    console.log(`  Selected: ${chosenOffer.selected_at}`);
+    if (chosenOfferMeta) {
+      console.log(`  ID: ${chosenOfferMeta.id}`);
+      console.log(`  Date: ${chosenOfferMeta.selected_date}`);
+      console.log(`  Selected: ${chosenOfferMeta.selected_at}`);
+    } else if (chosenOffer?.id) {
+      console.log(`  ID: ${chosenOffer.id}`);
+    }
+  }
+
+  if (full && destObj) {
+    const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+    const flight = p3?.flight as Record<string, unknown> | undefined;
+    const outbound = flight?.outbound as Record<string, unknown> | undefined;
+    const inbound = flight?.return as Record<string, unknown> | undefined;
+
+    const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
+    const hotel = p4?.hotel as Record<string, unknown> | undefined;
+
+    if (outbound && (outbound.flight_number || outbound.departure_airport_code)) {
+      console.log('\nFlight Details:');
+      console.log('─'.repeat(50));
+      const airline = flight?.airline as string | undefined;
+      const airlineCode = flight?.airline_code as string | undefined;
+      const num = outbound.flight_number as string | undefined;
+      console.log(`  ${[airlineCode, num].filter(Boolean).join(' ')}${airline ? ` (${airline})` : ''}`);
+      console.log(`  ${outbound.departure_airport_code ?? ''} ${outbound.departure_time ?? ''} → ${outbound.arrival_airport_code ?? ''} ${outbound.arrival_time ?? ''}`);
+      if (inbound && (inbound.flight_number || inbound.departure_airport_code)) {
+        const rnum = inbound.flight_number as string | undefined;
+        console.log(`  Return: ${rnum ?? ''}`);
+        console.log(`  ${inbound.departure_airport_code ?? ''} ${inbound.departure_time ?? ''} → ${inbound.arrival_airport_code ?? ''} ${inbound.arrival_time ?? ''}`);
+      }
+    }
+
+    if (hotel && (hotel.name || hotel.area)) {
+      console.log('\nHotel Details:');
+      console.log('─'.repeat(50));
+      console.log(`  ${hotel.name ?? ''}${hotel.area ? ` (${hotel.area})` : ''}`);
+      const access = hotel.access as unknown;
+      if (Array.isArray(access) && access.length > 0) {
+        console.log(`  Access: ${access.slice(0, 4).join(', ')}`);
+      }
+      const includes = chosenOffer?.includes as unknown;
+      if (Array.isArray(includes) && includes.length > 0) {
+        console.log(`  Includes: ${includes.join(', ')}`);
+      }
+    }
   }
 
   console.log('\n');
@@ -137,6 +184,7 @@ async function main(): Promise<void> {
 
   const dryRun = args.includes('--dry-run');
   const verbose = args.includes('--verbose');
+  const full = args.includes('--full');
   
   // Filter out flags from args
   const cleanArgs = args.filter(a => !a.startsWith('--'));
@@ -146,7 +194,7 @@ async function main(): Promise<void> {
   try {
     switch (command) {
       case 'status': {
-        showStatus(sm);
+        showStatus(sm, { full });
         break;
       }
 

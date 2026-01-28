@@ -5,24 +5,27 @@
  * Used by skills, cascade runner, and state manager.
  */
 
+export const PROCESS_STATUSES = [
+  'pending',
+  'researching',
+  'researched',
+  'selecting',
+  'selected',
+  'populated', // Filled from package selection
+  'booking',
+  'booked',
+  'confirmed',
+  'skipped',
+] as const;
+
 // Process status values
-export type ProcessStatus =
-  | 'pending'
-  | 'researching'
-  | 'researched'
-  | 'selecting'
-  | 'selected'
-  | 'populated'    // Filled from package selection
-  | 'booking'
-  | 'booked'
-  | 'confirmed'
-  | 'skipped';
+export type ProcessStatus = (typeof PROCESS_STATUSES)[number];
 
 // Valid status transitions
 export const STATUS_TRANSITIONS: Record<ProcessStatus, ProcessStatus[]> = {
   pending: ['researching', 'populated', 'confirmed', 'skipped'],
   researching: ['researched', 'pending', 'skipped'],
-  researched: ['selecting', 'researching', 'skipped'],
+  researched: ['selecting', 'selected', 'researching', 'skipped'],
   selecting: ['selected', 'researched', 'skipped'],
   selected: ['booking', 'selecting', 'populated', 'skipped'],
   populated: ['booking', 'selected', 'pending', 'skipped'],  // From package cascade
@@ -32,14 +35,17 @@ export const STATUS_TRANSITIONS: Record<ProcessStatus, ProcessStatus[]> = {
   skipped: ['pending'],  // Can unskip back to pending
 };
 
+export const PROCESS_IDS = [
+  'process_1_date_anchor',
+  'process_2_destination',
+  'process_3_4_packages',
+  'process_3_transportation',
+  'process_4_accommodation',
+  'process_5_daily_itinerary',
+] as const;
+
 // Process identifiers
-export type ProcessId =
-  | 'process_1_date_anchor'
-  | 'process_2_destination'
-  | 'process_3_4_packages'
-  | 'process_3_transportation'
-  | 'process_4_accommodation'
-  | 'process_5_daily_itinerary';
+export type ProcessId = (typeof PROCESS_IDS)[number];
 
 // Dirty flag state
 export interface DirtyFlag {

@@ -347,6 +347,7 @@ function applyResetAction(plan: TravelPlanMinimal, action: ResetAction, timestam
       (process['results'] as Record<string, unknown>)['offers'] = [];
       (process['results'] as Record<string, unknown>)['chosen_offer'] = null;
     }
+    process['chosen_offer'] = null;
     process['selected_offer_id'] = null;
   } else if (action.process === 'process_3_transportation') {
     const flight = process['flight'] as Record<string, unknown> | undefined;

@@ -63,7 +63,9 @@ sm.getPlan()   // Returns current plan (read-only)
 When a package offer is selected:
 
 1. Call `sm.selectOffer(offerId, date, populateCascade=true)`
-   - Sets `process_3_4_packages.chosen_offer = {id, selected_date, selected_at}`
+   - Sets `process_3_4_packages.selected_offer_id = offerId`
+   - Sets `process_3_4_packages.chosen_offer = {id, selected_date, selected_at}` (selection metadata)
+   - Sets `process_3_4_packages.results.chosen_offer = <full offer object>` (for cascade / downstream)
    - Updates status to `selected`
    - If `populateCascade=true`, populates P3/P4 with status `populated`
 

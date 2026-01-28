@@ -40,6 +40,7 @@ export class StateManager {
     this.statePath = statePath || DEFAULT_STATE_PATH;
     this.timestamp = this.freshTimestamp();
     this.plan = this.loadPlan();
+    this.normalizePlan();
     this.eventLog = this.loadEventLog();
   }
 
@@ -405,10 +406,11 @@ export class StateManager {
 
     // Find the offer in packages
     const packages = destObj.process_3_4_packages as Record<string, unknown> | undefined;
-    const offers = packages?.offers as Array<Record<string, unknown>> | undefined;
-    
+    const results = packages?.results as Record<string, unknown> | undefined;
+    const offers = results?.offers as Array<Record<string, unknown>> | undefined;
+
     if (!offers) {
-      throw new Error(`No offers found in ${dest}.process_3_4_packages`);
+      throw new Error(`No offers found in ${dest}.process_3_4_packages.results`);
     }
 
     const offer = offers.find(o => o.id === offerId);
@@ -469,10 +471,11 @@ export class StateManager {
     }
 
     const packages = destObj.process_3_4_packages as Record<string, unknown> | undefined;
-    const offers = packages?.offers as Array<Record<string, unknown>> | undefined;
-    
+    const results = packages?.results as Record<string, unknown> | undefined;
+    const offers = results?.offers as Array<Record<string, unknown>> | undefined;
+
     if (!offers) {
-      throw new Error(`No offers found in ${dest}.process_3_4_packages`);
+      throw new Error(`No offers found in ${dest}.process_3_4_packages.results`);
     }
 
     const offer = offers.find(o => o.id === offerId);
@@ -484,11 +487,16 @@ export class StateManager {
     if (!packages) {
       throw new Error('Packages process not found');
     }
+    packages.selected_offer_id = offerId;
     packages.chosen_offer = {
       id: offerId,
       selected_date: date,
       selected_at: this.timestamp,
     };
+    if (!packages.results || typeof packages.results !== 'object') {
+      packages.results = {};
+    }
+    (packages.results as Record<string, unknown>).chosen_offer = offer;
 
     // Update process status
     this.setProcessStatus(dest, 'process_3_4_packages', 'selected');
@@ -682,6 +690,49 @@ export class StateManager {
         status: 'active',
         processes: {},
       };
+    }
+  }
+
+  /**
+   * Normalize known schema variants to the current contract.
+   * This keeps skills/CLI resilient when older plan shapes exist on disk.
+   */
+  private normalizePlan(): void {
+    for (const dest of Object.values(this.plan.destinations)) {
+      const p34 = (dest as Record<string, unknown>)['process_3_4_packages'] as Record<string, unknown> | undefined;
+      if (!p34 || typeof p34 !== 'object') continue;
+
+      // Ensure results object exists.
+      if (!p34['results'] || typeof p34['results'] !== 'object') {
+        p34['results'] = {};
+      }
+      const results = p34['results'] as Record<string, unknown>;
+
+      // Legacy: offers at process_3_4_packages.offers
+      if (Array.isArray(p34['offers']) && !Array.isArray(results['offers'])) {
+        results['offers'] = p34['offers'];
+        delete p34['offers'];
+      }
+
+      // Legacy: chosen offer at process_3_4_packages.chosen_offer (full offer object).
+      // Current: selection metadata stored at chosen_offer, full offer stored at results.chosen_offer.
+      if (p34['chosen_offer'] && results['chosen_offer'] == null) {
+        const maybeMeta = p34['chosen_offer'] as Record<string, unknown>;
+        if (typeof maybeMeta?.id === 'string' && typeof maybeMeta?.selected_date === 'string') {
+          // This is metadata; keep it as-is.
+        } else {
+          // Treat as legacy full-offer object.
+          results['chosen_offer'] = p34['chosen_offer'];
+        }
+      }
+
+      // Backfill selected_offer_id from results.chosen_offer where possible.
+      if (p34['selected_offer_id'] == null && results['chosen_offer'] && typeof results['chosen_offer'] === 'object') {
+        const id = (results['chosen_offer'] as Record<string, unknown>)['id'];
+        if (typeof id === 'string') {
+          p34['selected_offer_id'] = id;
+        }
+      }
     }
   }
 }
