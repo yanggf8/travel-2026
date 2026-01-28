@@ -801,6 +801,9 @@ function allocateClustersToDays(
   const departureDay = days.find(d => d.day_type === 'departure')?.day_number as number | undefined;
   const dayNumbers = new Set(days.map(d => d.day_number as number));
 
+  const assignedDays = new Set(explicitAssignments?.values() || []);
+  const availableFullDays = fullDays.filter(d => !assignedDays.has(d));
+
   const result: Array<{ clusterId: string; dayNumber: number }> = [];
   let fullIdx = 0;
 
@@ -810,8 +813,7 @@ function allocateClustersToDays(
     if (explicit && dayNumbers.has(explicit)) target = explicit;
     if (id.includes('last_day') && departureDay) target = departureDay;
     if (!target) {
-      // Prefer full days for clusters; allow multiple clusters per full day via round-robin.
-      target = fullDays.length ? fullDays[fullIdx % fullDays.length] : undefined;
+      target = availableFullDays.length ? availableFullDays[fullIdx % availableFullDays.length] : undefined;
       fullIdx++;
     }
     if (!target && arrivalDay) target = arrivalDay;
