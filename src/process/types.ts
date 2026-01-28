@@ -1,5 +1,16 @@
 /**
- * Types for process agent tools
+ * @deprecated LEGACY - Do not use for new development.
+ *
+ * These types use a FLAT schema (plan.process_X) that is incompatible with
+ * the current NESTED schema (plan.destinations.{slug}.process_X).
+ *
+ * Use StateManager from '../state' instead:
+ *   import { StateManager } from '../state';
+ *   const sm = new StateManager();
+ *   sm.scaffoldItinerary(dest, days);
+ *   sm.save();
+ *
+ * Kept for reference only. See src/state/types.ts for current types.
  */
 
 export interface ProcessContext {

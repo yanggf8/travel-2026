@@ -187,7 +187,7 @@
           ]
         },
         "process_5_daily_itinerary": {
-          "state": "pending",
+          "state": "researching",
           "events": [
             {
               "event": "marked_dirty",
@@ -197,6 +197,46 @@
                 "dirty": true
               },
               "at": "2026-01-27T09:50:37.324Z"
+            },
+            {
+              "event": "status_changed",
+              "destination": "tokyo_2026",
+              "process": "process_5_daily_itinerary",
+              "from": "pending",
+              "to": "researching",
+              "at": "2026-01-28T08:52:14.031Z"
+            },
+            {
+              "event": "itinerary_scaffolded",
+              "destination": "tokyo_2026",
+              "process": "process_5_daily_itinerary",
+              "data": {
+                "days_count": 5,
+                "day_types": [
+                  "arrival",
+                  "full",
+                  "full",
+                  "full",
+                  "departure"
+                ]
+              },
+              "at": "2026-01-28T08:52:14.031Z"
+            },
+            {
+              "event": "itinerary_scaffolded",
+              "destination": "tokyo_2026",
+              "process": "process_5_daily_itinerary",
+              "data": {
+                "days_count": 5,
+                "day_types": [
+                  "arrival",
+                  "full",
+                  "full",
+                  "full",
+                  "departure"
+                ]
+              },
+              "at": "2026-01-28T09:00:48.959Z"
             }
           ]
         }
@@ -464,6 +504,46 @@
         ]
       },
       "at": "2026-01-28T06:33:50.285Z"
+    },
+    {
+      "event": "status_changed",
+      "destination": "tokyo_2026",
+      "process": "process_5_daily_itinerary",
+      "from": "pending",
+      "to": "researching",
+      "at": "2026-01-28T08:52:14.031Z"
+    },
+    {
+      "event": "itinerary_scaffolded",
+      "destination": "tokyo_2026",
+      "process": "process_5_daily_itinerary",
+      "data": {
+        "days_count": 5,
+        "day_types": [
+          "arrival",
+          "full",
+          "full",
+          "full",
+          "departure"
+        ]
+      },
+      "at": "2026-01-28T08:52:14.031Z"
+    },
+    {
+      "event": "itinerary_scaffolded",
+      "destination": "tokyo_2026",
+      "process": "process_5_daily_itinerary",
+      "data": {
+        "days_count": 5,
+        "day_types": [
+          "arrival",
+          "full",
+          "full",
+          "full",
+          "departure"
+        ]
+      },
+      "at": "2026-01-28T09:00:48.959Z"
     }
   ],
   "skills_enhancement": {

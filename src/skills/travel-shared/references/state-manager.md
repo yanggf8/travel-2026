@@ -58,6 +58,26 @@ sm.save()      // Writes travel-plan.json + state.json
 sm.getPlan()   // Returns current plan (read-only)
 ```
 
+### Itinerary Management
+
+```typescript
+sm.scaffoldItinerary(destination, days[], force?)  // Create day skeletons for P5
+// force=true resets P5 to pending first, allowing re-scaffold
+```
+
+Day skeleton shape:
+```typescript
+{
+  date: "2026-02-13",
+  day_number: 1,
+  day_type: "arrival" | "full" | "departure",
+  status: "draft",
+  morning: { focus, activities[], meals[], transit_notes, booking_notes },
+  afternoon: { focus, activities[], meals[], transit_notes, booking_notes },
+  evening: { focus, activities[], meals[], transit_notes, booking_notes },
+}
+```
+
 ## Package select convention
 
 When a package offer is selected:
@@ -68,6 +88,19 @@ When a package offer is selected:
    - Sets `process_3_4_packages.results.chosen_offer = <full offer object>` (for cascade / downstream)
    - Updates status to `selected`
    - If `populateCascade=true`, populates P3/P4 with status `populated`
+
+## Itinerary scaffold convention
+
+When creating day skeletons for P5:
+
+1. Call `sm.scaffoldItinerary(destination, days)`
+   - Writes `process_5_daily_itinerary.days = days`
+   - Sets `scaffolded_at` timestamp
+   - Updates status to `researching` (skeleton created, content pending)
+   - Clears dirty flag
+
+2. After populating activities, manually advance:
+   - `sm.setProcessStatus(dest, 'process_5_daily_itinerary', 'researched')`
 
 ## Cascade Runner Ownership
 

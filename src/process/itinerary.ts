@@ -1,6 +1,19 @@
 /**
- * Daily Itinerary Process Tool
- * Commands: status, add, remove, update, set-transit
+ * @deprecated LEGACY - Do not use for new development.
+ *
+ * This tool uses ProcessContext with FLAT schema (plan.process_5_daily_itinerary)
+ * which is incompatible with current NESTED schema
+ * (plan.destinations.{slug}.process_5_daily_itinerary).
+ *
+ * Use travel-update.ts CLI instead:
+ *   npx ts-node src/cli/travel-update.ts scaffold-itinerary
+ *
+ * Or StateManager directly:
+ *   import { StateManager } from '../state';
+ *   const sm = new StateManager();
+ *   sm.scaffoldItinerary(destination, days);
+ *
+ * Kept for reference - activity management logic may be ported to StateManager.
  */
 
 import {

@@ -1,6 +1,15 @@
 /**
- * Accommodation Process Tool
- * Commands: status, add-zone, select-zone, add-hotel, select-hotel, book-hotel
+ * @deprecated LEGACY - Do not use for new development.
+ *
+ * This tool uses ProcessContext with FLAT schema (plan.process_4_accommodation)
+ * which is incompatible with current NESTED schema
+ * (plan.destinations.{slug}.process_4_accommodation).
+ *
+ * Use travel-update.ts CLI instead:
+ *   npx ts-node src/cli/travel-update.ts select-offer <id> <date>
+ *
+ * Or StateManager directly for package-based flow.
+ * Kept for reference only.
  */
 
 import {

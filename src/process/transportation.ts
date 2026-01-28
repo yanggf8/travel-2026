@@ -1,6 +1,15 @@
 /**
- * Transportation Process Tool
- * Commands: status, add-flight, select-flight, add-transport, select-transport
+ * @deprecated LEGACY - Do not use for new development.
+ *
+ * This tool uses ProcessContext with FLAT schema (plan.process_3_transportation)
+ * which is incompatible with current NESTED schema
+ * (plan.destinations.{slug}.process_3_transportation).
+ *
+ * Use travel-update.ts CLI instead:
+ *   npx ts-node src/cli/travel-update.ts select-offer <id> <date>
+ *
+ * Or StateManager directly for package-based flow.
+ * Kept for reference only.
  */
 
 import {

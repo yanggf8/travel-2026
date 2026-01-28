@@ -1,5 +1,15 @@
 /**
- * Plan Updater - Safe read/write operations for travel-plan.json
+ * @deprecated LEGACY - Do not use for new development.
+ *
+ * This module uses ProcessContext which writes to a FLAT schema that is
+ * incompatible with the current destinations-based schema.
+ *
+ * Use StateManager instead:
+ *   import { StateManager } from '../state';
+ *   const sm = new StateManager();
+ *   // sm handles both travel-plan.json and state.json with audit trail
+ *
+ * Kept for reference only.
  */
 
 import * as fs from 'fs';

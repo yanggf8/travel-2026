@@ -109,8 +109,8 @@
           "last_changed": "2026-01-28T06:33:50.285Z"
         },
         "process_5_daily_itinerary": {
-          "dirty": true,
-          "last_changed": "2026-01-27T09:50:37.324Z"
+          "dirty": false,
+          "last_changed": "2026-01-28T09:00:48.959Z"
         }
       },
       "nagoya_2026": {
@@ -876,9 +876,146 @@
         "populated_from": "package:besttour_TYO05MM260211AM"
       },
       "process_5_daily_itinerary": {
-        "status": "pending",
-        "updated_at": "2026-01-26T12:35:00+08:00",
-        "days": []
+        "status": "researching",
+        "updated_at": "2026-01-28T09:00:48.959Z",
+        "days": [
+          {
+            "date": "2026-02-13",
+            "day_number": 1,
+            "day_type": "arrival",
+            "status": "draft",
+            "morning": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": "Arrive NRT 06:30 → hotel",
+              "booking_notes": null
+            },
+            "afternoon": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-14",
+            "day_number": 2,
+            "day_type": "full",
+            "status": "draft",
+            "morning": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "afternoon": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-15",
+            "day_number": 3,
+            "day_type": "full",
+            "status": "draft",
+            "morning": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "afternoon": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-16",
+            "day_number": 4,
+            "day_type": "full",
+            "status": "draft",
+            "morning": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "afternoon": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-17",
+            "day_number": 5,
+            "day_type": "departure",
+            "status": "draft",
+            "morning": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "afternoon": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": null,
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": null,
+              "activities": [],
+              "meals": [],
+              "transit_notes": "Hotel → NRT for 22:05 flight",
+              "booking_notes": null
+            }
+          }
+        ],
+        "scaffolded_at": "2026-01-28T09:00:48.959Z"
       },
       "process_1_date_anchor": {
         "confirmed_dates": {

@@ -633,6 +633,100 @@ export class StateManager {
   }
 
   // ============================================================================
+  // Itinerary Management
+  // ============================================================================
+
+  /**
+   * Scaffold day skeletons for P5 itinerary.
+   * Creates empty day structures based on travel dates.
+   *
+   * @param destination - Destination slug
+   * @param days - Array of day skeleton objects
+   * @param force - If true, reset P5 to pending first to allow re-scaffolding
+   */
+  scaffoldItinerary(
+    destination: string,
+    days: Array<Record<string, unknown>>,
+    force: boolean = false
+  ): void {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) {
+      throw new Error(`Destination not found: ${destination}`);
+    }
+
+    if (!destObj.process_5_daily_itinerary) {
+      (destObj as Record<string, unknown>).process_5_daily_itinerary = {};
+    }
+
+    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown>;
+    const currentStatus = this.getProcessStatus(destination, 'process_5_daily_itinerary');
+
+    // If force and status is beyond researching, reset to pending first
+    if (force && currentStatus && !['pending', 'researching'].includes(currentStatus)) {
+      this.forceSetProcessStatus(destination, 'process_5_daily_itinerary', 'pending', {
+        reason: 'force re-scaffold',
+        from: currentStatus,
+      });
+    }
+
+    p5.days = days;
+    p5.updated_at = this.timestamp;
+    p5.scaffolded_at = this.timestamp;
+
+    // Set status to researching (skeleton created, content still pending)
+    this.setProcessStatus(destination, 'process_5_daily_itinerary', 'researching');
+    this.clearDirty(destination, 'process_5_daily_itinerary');
+
+    this.emitEvent({
+      event: 'itinerary_scaffolded',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: {
+        days_count: days.length,
+        day_types: days.map(d => d.day_type),
+      },
+    });
+  }
+
+  /**
+   * Force-set a process status without transition validation.
+   * Use sparingly for recovery/override paths (e.g. re-scaffolding).
+   */
+  private forceSetProcessStatus(
+    destination: string,
+    process: ProcessId,
+    newStatus: ProcessStatus,
+    data?: Record<string, unknown>
+  ): void {
+    const currentStatus = this.getProcessStatus(destination, process);
+
+    // Update in travel-plan.json (process object)
+    const dest = this.plan.destinations[destination];
+    if (dest && dest[process]) {
+      const processObj = dest[process] as Record<string, unknown>;
+      processObj['status'] = newStatus;
+      processObj['updated_at'] = this.timestamp;
+    }
+
+    // Update in state.json
+    this.ensureEventLogDestination(destination);
+    const destLog = this.eventLog.destinations[destination];
+    if (!destLog.processes[process]) {
+      destLog.processes[process] = { state: newStatus, events: [] };
+    }
+    destLog.processes[process].state = newStatus;
+
+    this.emitEvent({
+      event: 'status_forced',
+      destination,
+      process,
+      from: currentStatus ?? undefined,
+      to: newStatus,
+      data,
+    });
+  }
+
+  // ============================================================================
   // Active Destination
   // ============================================================================
 
