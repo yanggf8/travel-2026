@@ -58,6 +58,10 @@ Commands:
     Use --force to overwrite existing itinerary.
     Example: scaffold-itinerary
 
+  populate-itinerary --goals "<cluster1,cluster2,...>" [--pace relaxed|balanced|packed] [--assign "<cluster:day,...>"] [--dest slug] [--force]
+    Populate itinerary sessions by adding activities from destination clusters (incremental; does not overwrite days).
+    Example: populate-itinerary --goals "chanel_shopping,omiyage_premium,teamlab_roppongi,asakusa_classic" --pace balanced
+
   status
     Show current plan status summary.
 
@@ -70,6 +74,7 @@ Options:
   --dry-run    Show what would be changed without saving
   --verbose    Show detailed output
   --full       Show booked offer/flight/hotel details (status only)
+  --force      Allow overwrites / bypass safeguards (command-specific)
 `;
 
 function formatDate(dateStr: string): string {
@@ -214,9 +219,12 @@ async function main(): Promise<void> {
   const paxOpt = optionValue('--pax');
   const planOpt = optionValue('--plan');
   const stateOpt = optionValue('--state');
+  const goalsOpt = optionValue('--goals');
+  const paceOpt = optionValue('--pace');
+  const assignOpt = optionValue('--assign');
 
   // Filter out flags/options from args
-  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state']);
+  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state', '--goals', '--pace', '--assign']);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -496,6 +504,171 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'populate-itinerary': {
+        const destination = destOpt || sm.getActiveDestination();
+        const force = args.includes('--force');
+        const pace = (paceOpt || 'balanced').toLowerCase();
+        if (!['relaxed', 'balanced', 'packed'].includes(pace)) {
+          console.error('Error: --pace must be one of: relaxed | balanced | packed');
+          process.exit(1);
+        }
+
+        if (!goalsOpt) {
+          console.error('Error: populate-itinerary requires --goals "<cluster1,cluster2,...>"');
+          process.exit(1);
+        }
+
+        const goals = goalsOpt
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+
+        if (goals.length === 0) {
+          console.error('Error: --goals had no usable cluster IDs');
+          process.exit(1);
+        }
+
+        const plan = sm.getPlan();
+        const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
+        if (!destObj) {
+          console.error(`Error: Destination not found: ${destination}`);
+          process.exit(1);
+        }
+
+        const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+        const days = (p5?.days as Array<Record<string, unknown>> | undefined) ?? [];
+        if (days.length === 0) {
+          console.error('Error: No itinerary days found. Run scaffold-itinerary first.');
+          process.exit(1);
+        }
+
+        // Destination reference selection (currently Tokyo-only).
+        const refPath = resolveDestinationRefPath(destination);
+        if (!refPath) {
+          console.error(`Error: No destination reference available for ${destination}. Add a ref under src/skills/travel-shared/references/destinations/.`);
+          process.exit(1);
+        }
+
+        const ref = JSON.parse(fs.readFileSync(refPath, 'utf-8')) as any;
+        const poiById = new Map<string, any>((ref.pois || []).map((p: any) => [p.id, p]));
+        const areaNameById = new Map<string, string>((ref.areas || []).map((a: any) => [a.id, a.name]));
+        const clusters = ref.clusters || {};
+
+        // Plan allocation: map clusters to day numbers.
+        const explicitAssignments = parseAssignments(assignOpt);
+        const allocation = allocateClustersToDays(goals, days, explicitAssignments);
+
+        const plannedAdds: Array<{ day: number; session: 'morning' | 'afternoon' | 'evening'; poiId: string; title: string }> = [];
+        const skipped: string[] = [];
+
+        for (const item of allocation) {
+          const cluster = clusters[item.clusterId];
+          if (!cluster) {
+            skipped.push(`Unknown cluster: ${item.clusterId}`);
+            continue;
+          }
+
+          const poiIds: string[] = Array.isArray(cluster.pois) ? cluster.pois : [];
+          if (poiIds.length === 0) {
+            skipped.push(`Cluster has no POIs: ${item.clusterId}`);
+            continue;
+          }
+
+          const day = days.find(d => d.day_number === item.dayNumber);
+          if (!day) continue;
+
+          const sessionOrder = getSessionOrderForDayType(day.day_type as string);
+          const sessionCount = pace === 'relaxed' ? 1 : pace === 'balanced' ? 2 : 3;
+          const usedSessions = sessionOrder.slice(0, Math.min(sessionCount, sessionOrder.length));
+          const perSession = chunkEvenly(poiIds, usedSessions.length);
+
+          // Theme/focus: set if empty (or if force).
+          if (!dryRun) {
+            if (force || !day.theme) {
+              sm.setDayTheme(destination, item.dayNumber, cluster.name || item.clusterId);
+            }
+            for (const sess of usedSessions) {
+              const sessObj = day[sess] as Record<string, unknown> | undefined;
+              const currentFocus = sessObj?.focus as string | null | undefined;
+              if (force || !currentFocus) {
+                sm.setSessionFocus(destination, item.dayNumber, sess, cluster.name || item.clusterId);
+              }
+            }
+          }
+
+          for (let i = 0; i < usedSessions.length; i++) {
+            const session = usedSessions[i];
+            for (const poiId of perSession[i]) {
+              const poi = poiById.get(poiId);
+              if (!poi) {
+                skipped.push(`Missing POI in ref: ${poiId}`);
+                continue;
+              }
+
+              const title = poi.title || poiId;
+              const existing = ((day[session] as any)?.activities as any[] | undefined) ?? [];
+              const hasDup = existing.some(a => (a?.title || '').toLowerCase() === String(title).toLowerCase());
+              if (hasDup && !force) {
+                continue;
+              }
+
+              plannedAdds.push({ day: item.dayNumber, session, poiId, title });
+
+              if (!dryRun) {
+                const areaId = poi.area || '';
+                const areaName = areaNameById.get(areaId) || areaId || '';
+                const notesParts = [
+                  poi.notes,
+                  poi.hours ? `Hours: ${poi.hours}` : null,
+                  poi.address ? `Address: ${poi.address}` : null,
+                ].filter(Boolean);
+
+                sm.addActivity(destination, item.dayNumber, session, {
+                  title,
+                  area: areaName,
+                  nearest_station: poi.nearest_station || undefined,
+                  duration_min: poi.duration_min ?? undefined,
+                  booking_required: !!poi.booking_required,
+                  booking_url: poi.booking_url || undefined,
+                  cost_estimate: poi.cost_estimate ?? undefined,
+                  tags: Array.isArray(poi.tags) ? poi.tags : [],
+                  notes: notesParts.length ? notesParts.join(' | ') : undefined,
+                  priority: poi.booking_required ? 'must' : 'want',
+                });
+              }
+            }
+          }
+        }
+
+        console.log(`\n🧩 populate-itinerary (${destination})`);
+        console.log(`   Pace: ${pace}`);
+        console.log(`   Goals: ${goals.join(', ')}`);
+        if (assignOpt) console.log(`   Assign: ${assignOpt}`);
+        console.log(`   Ref: ${refPath}`);
+
+        if (skipped.length > 0) {
+          console.log('\nSkipped:');
+          for (const s of skipped.slice(0, 10)) console.log(`  - ${s}`);
+          if (skipped.length > 10) console.log(`  ... and ${skipped.length - 10} more`);
+        }
+
+        console.log(`\nPlanned additions: ${plannedAdds.length}`);
+        for (const a of plannedAdds.slice(0, 20)) {
+          console.log(`  - Day ${a.day} ${a.session}: ${a.title}`);
+        }
+        if (plannedAdds.length > 20) console.log(`  ... and ${plannedAdds.length - 20} more`);
+
+        if (!dryRun) {
+          sm.save();
+          console.log('\n✅ Itinerary populated (incremental adds)');
+          console.log('\nNext action: run status --full, then adjust with updateActivity/removeActivity as needed');
+        } else {
+          console.log('\n🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
       default:
         console.error(`Unknown command: ${command}`);
         console.log(HELP);
@@ -610,3 +783,70 @@ function computeBestValue(datePricing: any, pax: number): { date: string; price_
 }
 
 main();
+
+function resolveDestinationRefPath(destinationSlug: string): string | null {
+  const lower = destinationSlug.toLowerCase();
+  const id = lower.includes('tokyo') ? 'tokyo' : null;
+  if (!id) return null;
+  return path.resolve(__dirname, `../skills/travel-shared/references/destinations/${id}.json`);
+}
+
+function allocateClustersToDays(
+  clusterIds: string[],
+  days: Array<Record<string, unknown>>,
+  explicitAssignments?: Map<string, number>
+): Array<{ clusterId: string; dayNumber: number }> {
+  const fullDays = days.filter(d => d.day_type === 'full').map(d => d.day_number as number);
+  const arrivalDay = days.find(d => d.day_type === 'arrival')?.day_number as number | undefined;
+  const departureDay = days.find(d => d.day_type === 'departure')?.day_number as number | undefined;
+  const dayNumbers = new Set(days.map(d => d.day_number as number));
+
+  const result: Array<{ clusterId: string; dayNumber: number }> = [];
+  let fullIdx = 0;
+
+  for (const id of clusterIds) {
+    let target: number | undefined;
+    const explicit = explicitAssignments?.get(id);
+    if (explicit && dayNumbers.has(explicit)) target = explicit;
+    if (id.includes('last_day') && departureDay) target = departureDay;
+    if (!target) {
+      // Prefer full days for clusters; allow multiple clusters per full day via round-robin.
+      target = fullDays.length ? fullDays[fullIdx % fullDays.length] : undefined;
+      fullIdx++;
+    }
+    if (!target && arrivalDay) target = arrivalDay;
+    if (!target && departureDay) target = departureDay;
+    if (!target) target = 1;
+
+    result.push({ clusterId: id, dayNumber: target });
+  }
+
+  return result;
+}
+
+function parseAssignments(assignOpt: string | undefined): Map<string, number> | undefined {
+  if (!assignOpt) return undefined;
+  const map = new Map<string, number>();
+  for (const part of assignOpt.split(',')) {
+    const [clusterId, dayStr] = part.split(':').map(s => s.trim());
+    if (!clusterId || !dayStr) continue;
+    const day = parseInt(dayStr, 10);
+    if (!Number.isFinite(day) || day <= 0) continue;
+    map.set(clusterId, day);
+  }
+  return map.size ? map : undefined;
+}
+
+function getSessionOrderForDayType(dayType: string): Array<'morning' | 'afternoon' | 'evening'> {
+  if (dayType === 'arrival') return ['afternoon', 'evening'];
+  if (dayType === 'departure') return ['morning', 'afternoon'];
+  return ['morning', 'afternoon', 'evening'];
+}
+
+function chunkEvenly<T>(items: T[], buckets: number): T[][] {
+  const out: T[][] = Array.from({ length: buckets }, () => []);
+  for (let i = 0; i < items.length; i++) {
+    out[i % buckets].push(items[i]);
+  }
+  return out;
+}

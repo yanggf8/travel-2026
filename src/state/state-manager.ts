@@ -850,6 +850,56 @@ export class StateManager {
   }
 
   /**
+   * Set a day's theme field.
+   */
+  setDayTheme(destination: string, dayNumber: number, theme: string | null): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    day.theme = theme;
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'itinerary_day_theme_set',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, theme },
+    });
+  }
+
+  /**
+   * Set a session's focus field.
+   */
+  setSessionFocus(
+    destination: string,
+    dayNumber: number,
+    session: 'morning' | 'afternoon' | 'evening',
+    focus: string | null
+  ): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    const sessionObj = day[session] as Record<string, unknown> | undefined;
+    if (!sessionObj) {
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    sessionObj.focus = focus;
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'itinerary_session_focus_set',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, session, focus },
+    });
+  }
+
+  /**
    * Touch itinerary timestamp.
    */
   private touchItinerary(destination: string): void {

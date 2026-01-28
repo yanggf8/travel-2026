@@ -81,6 +81,10 @@ Day skeleton shape:
 ### Activity CRUD
 
 ```typescript
+// Set day/session themes (optional but recommended)
+sm.setDayTheme(destination, dayNumber, "Shinjuku shopping day")
+sm.setSessionFocus(destination, dayNumber, "morning", "Luxury shopping")
+
 // Add activity to a session
 const id = sm.addActivity(destination, dayNumber, session, {
   title: "KOMEHYO Shinjuku",
