@@ -12,7 +12,19 @@ description: Search and compare flight-only options (standalone), writing candid
 - `../travel-shared/references/state-manager.md`
 - `../travel-shared/references/cascade-triggers.md`
 
+## Agent-First Defaults
+
+- Run the next step and report results; ask only for preferences that change the outcome (dates, budget, constraints).
+- Use `StateManager` (status + dirty flags + event log) rather than direct JSON edits.
+- End every run with one clear “next action” (select a flight candidate, or proceed to P4/P5).
+
+## Workflow
+
+1. Search flights → normalize candidates
+2. Write into `process_3_transportation.flight.candidates`
+3. Update `process_3_transportation.status` + `updated_at`
+4. If user selects, record selection in P3 and move toward `selected` / `booked`
+
 ## Legacy spec
 
 Full spec (historical, detailed): `references/legacy-spec.md`
-
