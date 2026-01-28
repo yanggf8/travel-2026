@@ -14,4 +14,10 @@ export {
   EventLogState,
   TravelPlanMinimal,
   STATUS_TRANSITIONS,
+  // Activity types (P5 Itinerary)
+  SessionType,
+  Activity,
+  DaySession,
+  ItineraryDay,
+  generateActivityId,
 } from './types';

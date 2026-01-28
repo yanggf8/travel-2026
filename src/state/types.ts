@@ -114,3 +114,61 @@ export interface TravelPlanMinimal {
     [process: string]: unknown;
   }>;
 }
+
+// ============================================================================
+// Activity Schema (P5 Itinerary)
+// ============================================================================
+
+export type SessionType = 'morning' | 'afternoon' | 'evening';
+
+/**
+ * Canonical Activity schema for P5 itinerary.
+ * All activities have IDs for CRUD operations.
+ */
+export interface Activity {
+  id: string;                    // Unique ID: activity_{timestamp}_{random}
+  title: string;                 // Display name
+  area: string;                  // Neighborhood/district (e.g., "Shinjuku", "Asakusa")
+  nearest_station: string | null; // Closest train station
+  duration_min: number | null;   // Estimated duration in minutes
+  booking_required: boolean;     // Needs advance booking?
+  booking_url: string | null;    // Booking link if applicable
+  cost_estimate: number | null;  // Estimated cost in local currency
+  tags: string[];                // Categorization: ["shopping", "food", "temple", "museum", etc.]
+  notes: string | null;          // Free-form notes
+  priority: 'must' | 'want' | 'optional'; // Priority level
+}
+
+/**
+ * Session within a day (morning/afternoon/evening).
+ */
+export interface DaySession {
+  focus: string | null;          // Theme for this session
+  activities: Activity[];        // Ordered list of activities
+  meals: string[];               // Meal suggestions
+  transit_notes: string | null;  // Transit info (arrival/departure notes)
+  booking_notes: string | null;  // Booking reminders
+}
+
+/**
+ * Single day in the itinerary.
+ */
+export interface ItineraryDay {
+  date: string;                  // ISO date: YYYY-MM-DD
+  day_number: number;            // 1-indexed day number
+  day_type: 'arrival' | 'full' | 'departure';
+  status: 'draft' | 'planned' | 'confirmed';
+  theme: string | null;          // Day theme
+  morning: DaySession;
+  afternoon: DaySession;
+  evening: DaySession;
+}
+
+/**
+ * Generate unique activity ID.
+ */
+export function generateActivityId(): string {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).substring(2, 6);
+  return `activity_${timestamp}_${random}`;
+}

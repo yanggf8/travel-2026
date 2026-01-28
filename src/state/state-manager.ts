@@ -688,6 +688,180 @@ export class StateManager {
     });
   }
 
+  // ============================================================================
+  // Activity CRUD (P5 Itinerary)
+  // ============================================================================
+
+  /**
+   * Add an activity to a day session.
+   * @param destination - Destination slug
+   * @param dayNumber - 1-indexed day number
+   * @param session - 'morning' | 'afternoon' | 'evening'
+   * @param activity - Activity object (id will be generated if not provided)
+   * @returns The generated activity ID
+   */
+  addActivity(
+    destination: string,
+    dayNumber: number,
+    session: 'morning' | 'afternoon' | 'evening',
+    activity: {
+      title: string;
+      area?: string;
+      nearest_station?: string;
+      duration_min?: number;
+      booking_required?: boolean;
+      booking_url?: string;
+      cost_estimate?: number;
+      tags?: string[];
+      notes?: string;
+      priority?: 'must' | 'want' | 'optional';
+    }
+  ): string {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    const sessionObj = day[session] as { activities: Array<Record<string, unknown>> };
+    if (!sessionObj || !Array.isArray(sessionObj.activities)) {
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    // Generate ID
+    const id = `activity_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    const fullActivity = {
+      id,
+      title: activity.title,
+      area: activity.area || '',
+      nearest_station: activity.nearest_station || null,
+      duration_min: activity.duration_min || null,
+      booking_required: activity.booking_required || false,
+      booking_url: activity.booking_url || null,
+      cost_estimate: activity.cost_estimate || null,
+      tags: activity.tags || [],
+      notes: activity.notes || null,
+      priority: activity.priority || 'want',
+    };
+
+    sessionObj.activities.push(fullActivity);
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'activity_added',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, session, activity_id: id, title: activity.title },
+    });
+
+    return id;
+  }
+
+  /**
+   * Update an existing activity.
+   */
+  updateActivity(
+    destination: string,
+    dayNumber: number,
+    session: 'morning' | 'afternoon' | 'evening',
+    activityId: string,
+    updates: Partial<{
+      title: string;
+      area: string;
+      nearest_station: string;
+      duration_min: number;
+      booking_required: boolean;
+      booking_url: string;
+      cost_estimate: number;
+      tags: string[];
+      notes: string;
+      priority: 'must' | 'want' | 'optional';
+    }>
+  ): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    const sessionObj = day[session] as { activities: Array<Record<string, unknown>> };
+    const activity = sessionObj?.activities?.find(a => a.id === activityId);
+    if (!activity) {
+      throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
+    }
+
+    Object.assign(activity, updates);
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'activity_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, session, activity_id: activityId, updates: Object.keys(updates) },
+    });
+  }
+
+  /**
+   * Remove an activity.
+   */
+  removeActivity(
+    destination: string,
+    dayNumber: number,
+    session: 'morning' | 'afternoon' | 'evening',
+    activityId: string
+  ): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    const sessionObj = day[session] as { activities: Array<Record<string, unknown>> };
+    if (!sessionObj?.activities) {
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    const idx = sessionObj.activities.findIndex(a => a.id === activityId);
+    if (idx === -1) {
+      throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
+    }
+
+    const removed = sessionObj.activities.splice(idx, 1)[0];
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'activity_removed',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, session, activity_id: activityId, title: removed.title },
+    });
+  }
+
+  /**
+   * Get a specific day from itinerary.
+   */
+  private getDay(destination: string, dayNumber: number): Record<string, unknown> | null {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) return null;
+
+    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+    const days = p5?.days as Array<Record<string, unknown>> | undefined;
+    if (!days) return null;
+
+    return days.find(d => d.day_number === dayNumber) || null;
+  }
+
+  /**
+   * Touch itinerary timestamp.
+   */
+  private touchItinerary(destination: string): void {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) return;
+
+    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+    if (p5) {
+      p5.updated_at = this.timestamp;
+    }
+  }
+
   /**
    * Force-set a process status without transition validation.
    * Use sparingly for recovery/override paths (e.g. re-scaffolding).

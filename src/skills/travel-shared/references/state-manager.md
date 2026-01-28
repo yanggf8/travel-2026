@@ -78,6 +78,46 @@ Day skeleton shape:
 }
 ```
 
+### Activity CRUD
+
+```typescript
+// Add activity to a session
+const id = sm.addActivity(destination, dayNumber, session, {
+  title: "KOMEHYO Shinjuku",
+  area: "shinjuku",
+  nearest_station: "Shinjuku",
+  duration_min: 90,
+  booking_required: false,
+  tags: ["shopping", "luxury"],
+  priority: "must",
+});
+
+// Update activity
+sm.updateActivity(destination, dayNumber, session, activityId, {
+  notes: "Focus on Chanel section, 3rd floor",
+});
+
+// Remove activity
+sm.removeActivity(destination, dayNumber, session, activityId);
+```
+
+Activity schema (see `src/state/types.ts`):
+```typescript
+interface Activity {
+  id: string;                    // auto-generated
+  title: string;
+  area: string;
+  nearest_station: string | null;
+  duration_min: number | null;
+  booking_required: boolean;
+  booking_url: string | null;
+  cost_estimate: number | null;
+  tags: string[];
+  notes: string | null;
+  priority: 'must' | 'want' | 'optional';
+}
+```
+
 ## Package select convention
 
 When a package offer is selected:

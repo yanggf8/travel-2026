@@ -876,32 +876,33 @@
         "populated_from": "package:besttour_TYO05MM260211AM"
       },
       "process_5_daily_itinerary": {
-        "status": "researching",
-        "updated_at": "2026-01-28T09:00:48.959Z",
+        "status": "researched",
+        "updated_at": "2026-01-28T10:00:00.000Z",
         "days": [
           {
             "date": "2026-02-13",
             "day_number": 1,
             "day_type": "arrival",
-            "status": "draft",
+            "status": "planned",
+            "theme": "Arrival + Rest + Hamamatsucho Explore",
             "morning": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
+              "focus": "Arrival & Check-in",
+              "activities": ["NRT arrival 06:30", "Narita Express or Limousine Bus to Hamamatsucho (~90 min)", "Early check-in or luggage drop at TAVINOS"],
+              "meals": ["Light breakfast at hotel or nearby convenience store"],
               "transit_notes": "Arrive NRT 06:30 → hotel",
-              "booking_notes": null
+              "booking_notes": "Check if early check-in available (normal: 15:00)"
             },
             "afternoon": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Rest & Light Explore",
+              "activities": ["Nap/rest at hotel (red-eye recovery)", "Walk around Hamamatsucho/Shiodome area", "Hamarikyu Gardens (optional, 5 min walk)"],
+              "meals": ["Late lunch at local restaurant"],
+              "transit_notes": "Stay local, walking distance only",
               "booking_notes": null
             },
             "evening": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
+              "focus": "Easy Dinner",
+              "activities": ["Dinner near hotel", "Early sleep to recover"],
+              "meals": ["Izakaya or ramen near Hamamatsucho Station"],
               "transit_notes": null,
               "booking_notes": null
             }
@@ -910,26 +911,27 @@
             "date": "2026-02-14",
             "day_number": 2,
             "day_type": "full",
-            "status": "draft",
+            "status": "planned",
+            "theme": "Shinjuku: Chanel Shopping + Omiyage",
             "morning": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
-              "booking_notes": null
+              "focus": "KOMEHYO Shinjuku (Chanel Bags)",
+              "activities": ["Hamamatsucho → Shinjuku (JR Yamanote, 25 min)", "KOMEHYO Shinjuku main store (opens 11:00)", "Browse 5 floors, focus on Chanel section"],
+              "meals": ["Breakfast at hotel"],
+              "transit_notes": "JR Hamamatsucho → Shinjuku (Yamanote Line)",
+              "booking_notes": "KOMEHYO opens 11:00, arrive early for best selection"
             },
             "afternoon": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Backup Store + Omiyage",
+              "activities": ["Daikokuya Shinjuku (backup, 5 min walk) if needed", "Isetan Shinjuku B2 for omiyage (Yoku Moku, Henri Charpentier)", "Browse Shinjuku area"],
+              "meals": ["Lunch at Isetan restaurant floor or nearby"],
+              "transit_notes": "All walking distance in Shinjuku",
               "booking_notes": null
             },
             "evening": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Shinjuku Nightlife",
+              "activities": ["Omoide Yokocho (Memory Lane) for dinner", "Kabukicho walk-through", "Return to hotel"],
+              "meals": ["Yakitori at Omoide Yokocho"],
+              "transit_notes": "JR Shinjuku → Hamamatsucho",
               "booking_notes": null
             }
           },
@@ -937,26 +939,27 @@
             "date": "2026-02-15",
             "day_number": 3,
             "day_type": "full",
-            "status": "draft",
+            "status": "planned",
+            "theme": "teamLab Borderless + Azabudai/Roppongi",
             "morning": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
-              "booking_notes": null
+              "focus": "teamLab Borderless",
+              "activities": ["Hamamatsucho → Kamiyacho (Metro, 10 min)", "teamLab Borderless at Azabudai Hills (opens 10:00)", "Allow 2-3 hours for full experience"],
+              "meals": ["Light breakfast at hotel"],
+              "transit_notes": "Metro Hibiya Line: Kamiyacho Station",
+              "booking_notes": "BOOK TICKETS IN ADVANCE - often sells out"
             },
             "afternoon": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Azabudai Hills + Roppongi",
+              "activities": ["Explore Azabudai Hills (new complex)", "Walk to Roppongi Hills", "Mori Art Museum or Tokyo City View (optional)"],
+              "meals": ["Lunch at Azabudai Hills restaurants"],
+              "transit_notes": "Walking distance Azabudai → Roppongi",
               "booking_notes": null
             },
             "evening": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Roppongi Dinner",
+              "activities": ["Dinner in Roppongi", "Return to hotel"],
+              "meals": ["Upscale dining or casual izakaya"],
+              "transit_notes": "Metro Roppongi → Onarimon/Daimon → walk to hotel",
               "booking_notes": null
             }
           },
@@ -964,26 +967,27 @@
             "date": "2026-02-16",
             "day_number": 4,
             "day_type": "full",
-            "status": "draft",
+            "status": "planned",
+            "theme": "Classic Tokyo: Asakusa + Shibuya",
             "morning": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Asakusa Traditional",
+              "activities": ["Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)", "Senso-ji Temple", "Nakamise Shopping Street", "Kaminarimon Gate photos"],
+              "meals": ["Breakfast at hotel or skip for early start"],
+              "transit_notes": "Toei Asakusa Line direct from Daimon",
               "booking_notes": null
             },
             "afternoon": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
-              "booking_notes": null
+              "focus": "Shibuya",
+              "activities": ["Asakusa → Shibuya (Metro, 30 min)", "Shibuya Crossing", "Shibuya Sky observation deck (optional)", "Shibuya 109 / shopping"],
+              "meals": ["Lunch in Asakusa (soba, tempura) or Shibuya"],
+              "transit_notes": "Ginza Line to Shibuya",
+              "booking_notes": "Shibuya Sky needs advance booking if interested"
             },
             "evening": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Shibuya/Harajuku Evening",
+              "activities": ["Walk to Harajuku (10 min)", "Takeshita Street", "Omotesando for upscale window shopping", "Dinner and return"],
+              "meals": ["Dinner in Harajuku/Omotesando area"],
+              "transit_notes": "JR Harajuku → Hamamatsucho",
               "booking_notes": null
             }
           },
@@ -991,31 +995,34 @@
             "date": "2026-02-17",
             "day_number": 5,
             "day_type": "departure",
-            "status": "draft",
+            "status": "planned",
+            "theme": "Last-Minute Omiyage + Departure",
             "morning": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
+              "focus": "Flexible / Pack",
+              "activities": ["Sleep in", "Pack luggage", "Hotel checkout (11:00)", "Store luggage at hotel or Tokyo Station coin lockers"],
+              "meals": ["Breakfast at hotel"],
               "transit_notes": null,
-              "booking_notes": null
+              "booking_notes": "Confirm luggage storage options"
             },
             "afternoon": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
-              "transit_notes": null,
+              "focus": "Tokyo Station + Final Omiyage",
+              "activities": ["Hamamatsucho → Tokyo Station (JR, 5 min)", "Daimaru Tokyo Station B1 for final omiyage", "Tokyo Character Street (if time)", "Lunch at Tokyo Station Ramen Street or GRANSTA"],
+              "meals": ["Lunch at Tokyo Station"],
+              "transit_notes": "Short JR ride or walk to Tokyo Station",
               "booking_notes": null
             },
             "evening": {
-              "focus": null,
-              "activities": [],
-              "meals": [],
+              "focus": "Airport Transfer",
+              "activities": ["Tokyo Station → Narita Airport (Narita Express, 60 min)", "Aim to arrive NRT by 19:00 for 22:05 flight", "Duty-free shopping if time"],
+              "meals": ["Light dinner at airport or bento on train"],
               "transit_notes": "Hotel → NRT for 22:05 flight",
-              "booking_notes": null
+              "booking_notes": "Book NEX or Limousine Bus in advance"
             }
           }
         ],
-        "scaffolded_at": "2026-01-28T09:00:48.959Z"
+        "scaffolded_at": "2026-01-28T09:00:48.959Z",
+        "populated_at": "2026-01-28T10:00:00.000Z",
+        "notes": "Main goals: Chanel bags (KOMEHYO), Omiyage (Isetan + Daimaru), teamLab Borderless. Balanced pace with red-eye recovery Day 1."
       },
       "process_1_date_anchor": {
         "confirmed_dates": {

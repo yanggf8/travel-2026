@@ -1,0 +1,316 @@
+{
+  "destination_id": "tokyo",
+  "display_name": "Tokyo",
+  "country": "Japan",
+  "timezone": "Asia/Tokyo",
+  "currency": "JPY",
+  "primary_airports": ["NRT", "HND"],
+
+  "areas": [
+    {
+      "id": "shinjuku",
+      "name": "Shinjuku",
+      "type": "commercial",
+      "stations": ["Shinjuku", "Shinjuku-sanchome", "Nishi-Shinjuku"],
+      "vibe": "Busy commercial hub, nightlife, shopping",
+      "best_for": ["shopping", "nightlife", "food"]
+    },
+    {
+      "id": "shibuya",
+      "name": "Shibuya",
+      "type": "commercial",
+      "stations": ["Shibuya", "Harajuku", "Omotesando"],
+      "vibe": "Youth culture, fashion, iconic crossing",
+      "best_for": ["shopping", "culture", "food"]
+    },
+    {
+      "id": "asakusa",
+      "name": "Asakusa",
+      "type": "traditional",
+      "stations": ["Asakusa", "Tawaramachi"],
+      "vibe": "Traditional Tokyo, temples, old-town charm",
+      "best_for": ["temple", "traditional", "souvenirs"]
+    },
+    {
+      "id": "roppongi",
+      "name": "Roppongi",
+      "type": "entertainment",
+      "stations": ["Roppongi", "Azabu-juban", "Kamiyacho"],
+      "vibe": "Upscale dining, art museums, nightlife",
+      "best_for": ["art", "dining", "nightlife"]
+    },
+    {
+      "id": "ginza",
+      "name": "Ginza",
+      "type": "luxury",
+      "stations": ["Ginza", "Yurakucho", "Higashi-Ginza"],
+      "vibe": "High-end shopping, department stores",
+      "best_for": ["luxury_shopping", "dining", "theatre"]
+    },
+    {
+      "id": "akihabara",
+      "name": "Akihabara",
+      "type": "specialty",
+      "stations": ["Akihabara", "Suehirocho"],
+      "vibe": "Electronics, anime, otaku culture",
+      "best_for": ["electronics", "anime", "gaming"]
+    },
+    {
+      "id": "hamamatsucho",
+      "name": "Hamamatsucho",
+      "type": "business",
+      "stations": ["Hamamatsucho", "Daimon", "Takeshiba"],
+      "vibe": "Business district, transit hub, Hamarikyu Gardens",
+      "best_for": ["transit", "gardens", "quiet"]
+    },
+    {
+      "id": "tokyo_station",
+      "name": "Tokyo Station",
+      "type": "transit",
+      "stations": ["Tokyo", "Marunouchi", "Otemachi"],
+      "vibe": "Major transit hub, excellent omiyage shopping",
+      "best_for": ["transit", "omiyage", "food"]
+    },
+    {
+      "id": "azabudai",
+      "name": "Azabudai Hills",
+      "type": "modern",
+      "stations": ["Kamiyacho", "Roppongi-itchome"],
+      "vibe": "New development, teamLab Borderless, upscale",
+      "best_for": ["art", "dining", "modern"]
+    }
+  ],
+
+  "pois": [
+    {
+      "id": "komehyo_shinjuku",
+      "title": "KOMEHYO Shinjuku",
+      "area": "shinjuku",
+      "nearest_station": "Shinjuku",
+      "duration_min": 90,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["shopping", "luxury", "second_hand", "bags"],
+      "notes": "5 floors, largest second-hand luxury in Tokyo. Best for Chanel, LV, Hermes.",
+      "hours": "11:00-20:00",
+      "address": "3-26-6 Shinjuku, Shinjuku-ku"
+    },
+    {
+      "id": "daikokuya_shinjuku",
+      "title": "Daikokuya Shinjuku",
+      "area": "shinjuku",
+      "nearest_station": "Shinjuku",
+      "duration_min": 45,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["shopping", "luxury", "second_hand", "bags"],
+      "notes": "Good backup for Chanel. 5 min walk from KOMEHYO.",
+      "hours": "10:30-19:30"
+    },
+    {
+      "id": "isetan_shinjuku",
+      "title": "Isetan Shinjuku B2",
+      "area": "shinjuku",
+      "nearest_station": "Shinjuku-sanchome",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 5000,
+      "tags": ["shopping", "omiyage", "department_store", "food"],
+      "notes": "Premium omiyage: Yoku Moku, Henri Charpentier, Pierre Herme. B1-B2 food halls.",
+      "hours": "10:00-20:00"
+    },
+    {
+      "id": "omoide_yokocho",
+      "title": "Omoide Yokocho (Memory Lane)",
+      "area": "shinjuku",
+      "nearest_station": "Shinjuku",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 2000,
+      "tags": ["food", "izakaya", "yakitori", "nightlife"],
+      "notes": "Narrow alley of tiny yakitori bars. Atmospheric. Cash only.",
+      "hours": "17:00-24:00"
+    },
+    {
+      "id": "teamlab_borderless",
+      "title": "teamLab Borderless",
+      "area": "azabudai",
+      "nearest_station": "Kamiyacho",
+      "duration_min": 150,
+      "booking_required": true,
+      "booking_url": "https://www.teamlab.art/e/borderless-azabudai/",
+      "cost_estimate": 3800,
+      "tags": ["art", "museum", "digital", "experience"],
+      "notes": "New location at Azabudai Hills (opened Feb 2024). Book in advance!",
+      "hours": "10:00-21:00"
+    },
+    {
+      "id": "sensoji",
+      "title": "Senso-ji Temple",
+      "area": "asakusa",
+      "nearest_station": "Asakusa",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["temple", "traditional", "sightseeing", "free"],
+      "notes": "Tokyo's oldest temple. Kaminarimon Gate, Nakamise shopping street.",
+      "hours": "06:00-17:00 (temple), shops 10:00-17:00"
+    },
+    {
+      "id": "nakamise",
+      "title": "Nakamise Shopping Street",
+      "area": "asakusa",
+      "nearest_station": "Asakusa",
+      "duration_min": 30,
+      "booking_required": false,
+      "cost_estimate": 1000,
+      "tags": ["shopping", "traditional", "souvenirs", "snacks"],
+      "notes": "Traditional souvenirs, snacks (ningyo-yaki, senbei). Connected to Senso-ji."
+    },
+    {
+      "id": "shibuya_crossing",
+      "title": "Shibuya Crossing",
+      "area": "shibuya",
+      "nearest_station": "Shibuya",
+      "duration_min": 15,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["sightseeing", "iconic", "free"],
+      "notes": "World's busiest pedestrian crossing. Best viewed from Starbucks or Shibuya Sky."
+    },
+    {
+      "id": "shibuya_sky",
+      "title": "Shibuya Sky",
+      "area": "shibuya",
+      "nearest_station": "Shibuya",
+      "duration_min": 60,
+      "booking_required": true,
+      "booking_url": "https://www.shibuya-scramble-square.com/sky/",
+      "cost_estimate": 2200,
+      "tags": ["observation", "sightseeing", "photo"],
+      "notes": "360° rooftop observation deck. Best at sunset. Book in advance."
+    },
+    {
+      "id": "takeshita_street",
+      "title": "Takeshita Street",
+      "area": "shibuya",
+      "nearest_station": "Harajuku",
+      "duration_min": 45,
+      "booking_required": false,
+      "cost_estimate": 1000,
+      "tags": ["shopping", "youth", "fashion", "crepes"],
+      "notes": "Youth fashion, quirky shops, crepes. Very crowded on weekends."
+    },
+    {
+      "id": "daimaru_tokyo",
+      "title": "Daimaru Tokyo Station B1",
+      "area": "tokyo_station",
+      "nearest_station": "Tokyo",
+      "duration_min": 45,
+      "booking_required": false,
+      "cost_estimate": 5000,
+      "tags": ["shopping", "omiyage", "department_store", "food"],
+      "notes": "Best for last-minute omiyage. Tokyo Banana, all classic gifts. Right in station.",
+      "hours": "10:00-20:00"
+    },
+    {
+      "id": "tokyo_ramen_street",
+      "title": "Tokyo Ramen Street",
+      "area": "tokyo_station",
+      "nearest_station": "Tokyo",
+      "duration_min": 45,
+      "booking_required": false,
+      "cost_estimate": 1200,
+      "tags": ["food", "ramen", "quick"],
+      "notes": "8 famous ramen shops in Tokyo Station B1. Popular = expect lines."
+    },
+    {
+      "id": "hamarikyu_gardens",
+      "title": "Hamarikyu Gardens",
+      "area": "hamamatsucho",
+      "nearest_station": "Shiodome",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 300,
+      "tags": ["garden", "nature", "quiet", "tea"],
+      "notes": "Beautiful traditional garden near Hamamatsucho. Matcha tea house on island."
+    },
+    {
+      "id": "roppongi_hills",
+      "title": "Roppongi Hills",
+      "area": "roppongi",
+      "nearest_station": "Roppongi",
+      "duration_min": 90,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["shopping", "art", "observation", "dining"],
+      "notes": "Mori Art Museum, Tokyo City View, upscale shopping and dining."
+    }
+  ],
+
+  "clusters": {
+    "chanel_shopping": {
+      "name": "Second-Hand Luxury Shopping",
+      "description": "Best stores for pre-owned Chanel bags",
+      "pois": ["komehyo_shinjuku", "daikokuya_shinjuku"],
+      "duration_min": 150,
+      "best_area": "shinjuku"
+    },
+    "omiyage_premium": {
+      "name": "Premium Omiyage",
+      "description": "High-quality gift shopping at department stores",
+      "pois": ["isetan_shinjuku", "daimaru_tokyo"],
+      "duration_min": 90,
+      "best_area": "shinjuku"
+    },
+    "asakusa_classic": {
+      "name": "Classic Asakusa",
+      "description": "Traditional Tokyo experience",
+      "pois": ["sensoji", "nakamise"],
+      "duration_min": 120,
+      "best_area": "asakusa"
+    },
+    "shibuya_harajuku": {
+      "name": "Shibuya + Harajuku",
+      "description": "Youth culture, fashion, iconic spots",
+      "pois": ["shibuya_crossing", "takeshita_street", "shibuya_sky"],
+      "duration_min": 180,
+      "best_area": "shibuya"
+    },
+    "teamlab_roppongi": {
+      "name": "teamLab + Roppongi",
+      "description": "Digital art and upscale district",
+      "pois": ["teamlab_borderless", "roppongi_hills"],
+      "duration_min": 240,
+      "best_area": "azabudai"
+    },
+    "last_day_tokyo_station": {
+      "name": "Last-Day Tokyo Station",
+      "description": "Final omiyage run before departure",
+      "pois": ["daimaru_tokyo", "tokyo_ramen_street"],
+      "duration_min": 90,
+      "best_area": "tokyo_station"
+    }
+  },
+
+  "transit_estimates": {
+    "hamamatsucho_to_shinjuku": { "minutes": 25, "line": "JR Yamanote" },
+    "hamamatsucho_to_shibuya": { "minutes": 20, "line": "JR Yamanote" },
+    "hamamatsucho_to_asakusa": { "minutes": 20, "line": "Toei Asakusa Line" },
+    "hamamatsucho_to_roppongi": { "minutes": 15, "line": "Toei Oedo Line" },
+    "hamamatsucho_to_kamiyacho": { "minutes": 10, "line": "Hibiya Line" },
+    "hamamatsucho_to_tokyo": { "minutes": 5, "line": "JR Yamanote" },
+    "shinjuku_to_shibuya": { "minutes": 10, "line": "JR Yamanote" },
+    "shibuya_to_harajuku": { "minutes": 3, "line": "JR Yamanote or walk" },
+    "asakusa_to_shibuya": { "minutes": 30, "line": "Ginza Line" },
+    "tokyo_to_narita": { "minutes": 60, "line": "Narita Express" }
+  },
+
+  "tips": [
+    "Get Suica/Pasmo IC card at airport for all transit",
+    "KOMEHYO opens at 11:00 - don't arrive early",
+    "teamLab Borderless sells out - book 1-2 weeks ahead",
+    "Omoide Yokocho is cash only",
+    "Tokyo Station omiyage shops open until 20:00 or later"
+  ]
+}
