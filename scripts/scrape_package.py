@@ -27,6 +27,7 @@ import asyncio
 import json
 import sys
 from datetime import datetime
+from typing import Optional, Tuple
 
 try:
     from playwright.async_api import async_playwright
@@ -104,7 +105,8 @@ async def scrape_package(url: str) -> dict:
                 "hotel": {},
                 "price": {},
                 "dates": {},
-                "inclusions": []
+                "inclusions": [],
+                "date_pricing": {}
             }
         }
 
@@ -146,9 +148,18 @@ async def scrape_package(url: str) -> dict:
 
         result["extracted_elements"] = extracted_elements
 
-        # BestTour specific: parse 交通方式 section for flight details
+        # BestTour specific parsing
         if "besttour.com.tw" in url:
-            result["extracted"]["flight"] = parse_besttour_flights(result["raw_text"])
+            flights = parse_besttour_flights(result["raw_text"])
+            result["extracted"]["flight"] = flights
+            result["extracted"]["hotel"] = parse_besttour_hotel(result["raw_text"])
+            ym = infer_year_month_from_besttour_flight_date(
+                (flights.get("outbound") or {}).get("date")
+            )
+            result["extracted"]["date_pricing"] = parse_besttour_date_pricing(
+                result["raw_text"], year_month=ym
+            )
+            result["extracted"]["inclusions"] = parse_besttour_inclusions(result["raw_text"])
 
         await browser.close()
 
@@ -207,6 +218,130 @@ def parse_besttour_flights(raw_text: str) -> dict:
     return flight_info
 
 
+def infer_year_month_from_besttour_flight_date(date_str: Optional[str]) -> Optional[Tuple[int, int]]:
+    """Infer (year, month) from BestTour flight date strings like '2026/02/13(五)'."""
+    if not date_str:
+        return None
+    import re
+    m = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', date_str)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def parse_besttour_inclusions(raw_text: str) -> list:
+    """Extract inclusions like breakfast from BestTour text."""
+    inclusions = []
+    text = raw_text.replace(" ", "")
+    if "早餐" in text and ("含早餐" in text or "包含早餐" in text or "附早餐" in text or "輕食早餐" in text or "簡易早餐" in text):
+        inclusions.append("light_breakfast")
+    return inclusions
+
+
+def parse_besttour_hotel(raw_text: str) -> dict:
+    """Parse BestTour hotel section from raw page text (heuristic)."""
+    import re
+
+    lines = [l.strip() for l in raw_text.split("\n")]
+    hotel = {"name": None, "area": None, "access": []}
+
+    # Heuristic 1: find a '住宿' section and take the next meaningful line as name.
+    for i, line in enumerate(lines):
+        if line in ("住宿", "飯店", "旅館", "酒店") and i + 1 < len(lines):
+            for j in range(i + 1, min(i + 25, len(lines))):
+                candidate = lines[j].strip()
+                if not candidate:
+                    continue
+                if candidate in ("交通方式", "行程內容", "出發日期", "費用說明"):
+                    break
+                # Avoid label-like lines
+                if re.match(r"^(地區|區域|地址|電話|入住|退房)[:：]", candidate):
+                    continue
+                if len(candidate) >= 4:
+                    hotel["name"] = candidate
+                    break
+            if hotel["name"]:
+                break
+
+    # Area label extraction if present
+    for line in lines:
+        m = re.search(r"(地區|區域)[:：]\s*(.+)$", line)
+        if m:
+            hotel["area"] = m.group(2).strip()
+            break
+
+    # Access: collect typical transit lines with minutes
+    access = []
+    for line in lines:
+        if re.search(r"(JR|地鐵|捷運|單軌|Monorail|Yurikamome|ゆりかもめ)", line, re.IGNORECASE) and re.search(r"(\d+)\s*(分|分鐘|min)", line, re.IGNORECASE):
+            access.append(line.strip())
+    hotel["access"] = list(dict.fromkeys(access))[:8]
+
+    return hotel
+
+
+def parse_besttour_date_pricing(raw_text: str, year_month: Optional[Tuple[int, int]] = None) -> dict:
+    """Parse BestTour calendar pricing from raw page text (heuristic)."""
+    import re
+
+    def to_iso(y: int, m: int, d: int) -> str:
+        return f"{y:04d}-{m:02d}-{d:02d}"
+
+    def map_availability(label: str) -> str:
+        if label in ("可售", "可報名", "可預訂"):
+            return "available"
+        if label in ("滿團", "額滿", "已滿", "停售", "滿員"):
+            return "sold_out"
+        if label in ("候補", "關團", "有限"):
+            return "limited"
+        return "limited"
+
+    pricing: dict = {}
+    lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+
+    # Prefer full-date matches if present.
+    full_date_re = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2}).{0,20}?(可售|滿團|候補|額滿|已滿|停售|關團).{0,30}?([0-9]{4,6})")
+    for line in lines:
+        m = full_date_re.search(line)
+        if not m:
+            continue
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        label = m.group(4)
+        price = int(m.group(5))
+        seats_match = re.search(r"可售[:：]?\s*(\d+)", line)
+        seats = int(seats_match.group(1)) if seats_match else None
+        pricing[to_iso(y, mo, d)] = {
+            "price": price,
+            "availability": map_availability(label),
+            "seats_remaining": seats,
+        }
+
+    if pricing:
+        return pricing
+
+    # Fallback: day-of-month calendar lines if year/month is known.
+    if not year_month:
+        return pricing
+    y, mo = year_month
+    day_line_re = re.compile(r"^(\d{1,2})\s*(可售|滿團|候補|額滿|已滿|停售|關團).{0,40}?([0-9]{4,6})")
+    for line in lines:
+        m = day_line_re.match(line)
+        if not m:
+            continue
+        d = int(m.group(1))
+        label = m.group(2)
+        price = int(m.group(3))
+        seats_match = re.search(r"可售[:：]?\s*(\d+)", line)
+        seats = int(seats_match.group(1)) if seats_match else None
+        pricing[to_iso(y, mo, d)] = {
+            "price": price,
+            "availability": map_availability(label),
+            "seats_remaining": seats,
+        }
+
+    return pricing
+
+
 def save_result(result: dict, output_path: str):
     """Save the scraped result to a JSON file."""
     with open(output_path, "w", encoding="utf-8") as f:
@@ -215,26 +350,30 @@ def save_result(result: dict, output_path: str):
 
 
 async def main():
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://www.besttour.com.tw/itinerary/TYO05MM260211AM"
-    output = sys.argv[2] if len(sys.argv) > 2 else "data/package-scrape-result.json"
+    quiet = "--quiet" in sys.argv
+    argv = [a for a in sys.argv[1:] if a != "--quiet"]
+
+    url = argv[0] if len(argv) > 0 else "https://www.besttour.com.tw/itinerary/TYO05MM260211AM"
+    output = argv[1] if len(argv) > 1 else "data/package-scrape-result.json"
 
     result = await scrape_package(url)
 
-    # Print summary
-    print("\n" + "="*60)
-    print(f"Title: {result['title']}")
-    print("="*60)
-    print("\nRaw Text (first 2000 chars):")
-    print("-"*60)
-    print(result["raw_text"][:2000])
-    print("-"*60)
+    if not quiet:
+        # Print summary
+        print("\n" + "="*60)
+        print(f"Title: {result['title']}")
+        print("="*60)
+        print("\nRaw Text (first 2000 chars):")
+        print("-"*60)
+        print(result["raw_text"][:2000])
+        print("-"*60)
 
-    if result.get("extracted_elements"):
-        print("\nExtracted Elements:")
-        for name, texts in result["extracted_elements"].items():
-            print(f"\n[{name}]")
-            for t in texts[:3]:
-                print(f"  - {t[:200]}...")
+        if result.get("extracted_elements"):
+            print("\nExtracted Elements:")
+            for name, texts in result["extracted_elements"].items():
+                print(f"\n[{name}]")
+                for t in texts[:3]:
+                    print(f"  - {t[:200]}...")
 
     save_result(result, output)
 

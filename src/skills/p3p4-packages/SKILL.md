@@ -34,10 +34,19 @@ After scraping, normalize to `CanonicalOffer` and update `travel-plan.json`.
 
 1. Scrape offers → normalize to `CanonicalOffer`
 2. Write to `process_3_4_packages.results.offers`
-3. User selects: `sm.selectOffer(offerId, date)`
-4. Cascade populates P3 (transport) and P4 (accommodation)
+3. Agent recommends the best offer/date (based on constraints + availability)
+4. Apply selection via `sm.selectOffer(offerId, date)` (or CLI `select-offer`)
+5. Cascade populates P3 (transport) and P4 (accommodation)
+
+## Agent-first output format
+
+When running this skill, default to an agent-first response:
+
+- **What I did**: scraped, normalized, wrote offers into `process_3_4_packages.results.offers`
+- **What I recommend**: 1 offer + 1 date, with a short reason
+- **What changed**: any status/dirty flag changes
+- **Next action**: either `select-offer ...` or proceed to P5
 
 ## Legacy spec
 
 Full spec (historical, detailed): `references/legacy-spec.md`
-

@@ -575,6 +575,63 @@ export class StateManager {
     });
   }
 
+  /**
+   * Import normalized package offers (P3+4) into the current destination.
+   * This is typically fed by scrapers and should be used instead of direct JSON edits.
+   */
+  importPackageOffers(
+    destination: string,
+    sourceId: string,
+    offers: Array<Record<string, unknown>>,
+    note?: string,
+    warnings?: string[]
+  ): void {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) {
+      throw new Error(`Destination not found: ${destination}`);
+    }
+
+    if (!destObj.process_3_4_packages) {
+      (destObj as Record<string, unknown>).process_3_4_packages = {};
+    }
+
+    const p34 = destObj.process_3_4_packages as Record<string, unknown>;
+    if (!p34.results || typeof p34.results !== 'object') {
+      p34.results = {};
+    }
+    const results = p34.results as Record<string, unknown>;
+
+    results.offers = offers;
+    const provenance = (results.provenance as Array<Record<string, unknown>> | undefined) ?? [];
+    provenance.push({
+      source_id: sourceId,
+      scraped_at: this.timestamp,
+      offers_found: offers.length,
+      ...(note ? { note } : {}),
+    });
+    results.provenance = provenance;
+
+    if (warnings && warnings.length > 0) {
+      const existing = (results.warnings as string[] | undefined) ?? [];
+      results.warnings = [...existing, ...warnings];
+    }
+
+    const currentStatus = this.getProcessStatus(destination, 'process_3_4_packages');
+    if (!currentStatus || currentStatus === 'pending' || currentStatus === 'researching') {
+      this.setProcessStatus(destination, 'process_3_4_packages', 'researched');
+    } else {
+      // still bump timestamp on the process node for visibility
+      p34.updated_at = this.timestamp;
+    }
+
+    this.emitEvent({
+      event: 'package_offers_imported',
+      destination,
+      process: 'process_3_4_packages',
+      data: { source_id: sourceId, offers_found: offers.length, note },
+    });
+  }
+
   // ============================================================================
   // Active Destination
   // ============================================================================

@@ -7,6 +7,13 @@ description: Shared references for travel planning skills (IO contracts, canonic
 
 Use this bundle when creating/updating any travel planning skill under `src/skills/`.
 
+## Agent-First Defaults
+
+- Lead with action: run the next step and report results; ask only for preferences that change the outcome.
+- Use `StateManager` (status/dirty/event logging) instead of direct JSON writes.
+- Keep the schema contract centralized; avoid re-encoding path strings in multiple files.
+- Always end with one clear “next action” (command or state transition).
+
 ## References (load as needed)
 
 - `references/io-contracts.md` — common input/output envelope and write-back rules
@@ -15,4 +22,3 @@ Use this bundle when creating/updating any travel planning skill under `src/skil
 - `references/ota-registry.md` — OTA source registry fields and normalization expectations
 - `references/state-manager.md` — status + dirty flag conventions
 - `references/cascade-triggers.md` — trigger names, scopes, and populate/reset behavior
-

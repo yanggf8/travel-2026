@@ -93,6 +93,15 @@ travel-plan.json
 
 ## Skills
 
+## Agent-First Workflow
+
+Default mode for this repo is **agent-first**:
+
+- The agent proactively runs the next logical step (scrape → normalize → write → select → cascade) and only asks the user when a preference materially changes the result (dates/budget/constraints/which offer).
+- Prefer calling `StateManager` methods (or the CLI wrappers) over direct JSON edits, so `travel-plan.json` and `state.json` stay consistent and the audit trail stays accurate.
+- Treat schema as canonical and migrate/normalize legacy shapes on load where needed; avoid duplicating path strings in multiple places.
+- Every agent output should include: current status, what changed, and the single best “next action”.
+
 ### Available
 | Skill | Path | Purpose |
 |-------|------|---------|
