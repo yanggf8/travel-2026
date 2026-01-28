@@ -52,7 +52,7 @@ async def scrape_package(url: str) -> dict:
         # Wait for content to load
         await page.wait_for_timeout(3000)
 
-        # Scroll down to load lazy content (交通方式 section)
+        # Scroll down to load lazy content
         print("Scrolling to load full page content...")
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await page.wait_for_timeout(2000)
@@ -63,6 +63,32 @@ async def scrape_package(url: str) -> dict:
         # Scroll to bottom again
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await page.wait_for_timeout(2000)
+
+        # BestTour specific: click 交通方式 tab to load flight details
+        if "besttour.com.tw" in url:
+            print("BestTour detected: clicking 交通方式 tab...")
+            try:
+                # Try multiple selectors for the transportation tab
+                tab_selectors = [
+                    "text=交通方式",
+                    "text=交通",
+                    "[class*='tab']:has-text('交通')",
+                    "button:has-text('交通')",
+                    "a:has-text('交通')",
+                    "div:has-text('交通方式')",
+                ]
+                for selector in tab_selectors:
+                    try:
+                        tab = await page.query_selector(selector)
+                        if tab:
+                            await tab.click()
+                            print(f"  Clicked tab with selector: {selector}")
+                            await page.wait_for_timeout(2000)
+                            break
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"  Could not click 交通方式 tab: {e}")
 
         # Extract page content
         content = await page.content()
@@ -120,9 +146,65 @@ async def scrape_package(url: str) -> dict:
 
         result["extracted_elements"] = extracted_elements
 
+        # BestTour specific: parse 交通方式 section for flight details
+        if "besttour.com.tw" in url:
+            result["extracted"]["flight"] = parse_besttour_flights(result["raw_text"])
+
         await browser.close()
 
         return result
+
+
+def parse_besttour_flights(raw_text: str) -> dict:
+    """Parse BestTour 交通方式 section for flight details."""
+    import re
+
+    flight_info = {"outbound": {}, "return": {}}
+
+    # Pattern: 去程\n日期\n航班\n航空\n機場(CODE)\n時間\n→\n機場(CODE)\n時間
+    lines = raw_text.split('\n')
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+
+        if line == '去程' and i + 8 < len(lines):
+            flight_info["outbound"] = {
+                "date": lines[i+1].strip(),
+                "flight_number": lines[i+2].strip(),
+                "airline": lines[i+3].strip(),
+                "departure_airport": lines[i+4].strip(),
+                "departure_time": lines[i+5].strip(),
+                "arrival_airport": lines[i+7].strip(),  # skip → at i+6
+                "arrival_time": lines[i+8].strip(),
+            }
+            # Extract airport codes
+            dep_match = re.search(r'\(([A-Z]{3})\)', flight_info["outbound"]["departure_airport"])
+            arr_match = re.search(r'\(([A-Z]{3})\)', flight_info["outbound"]["arrival_airport"])
+            if dep_match:
+                flight_info["outbound"]["departure_code"] = dep_match.group(1)
+            if arr_match:
+                flight_info["outbound"]["arrival_code"] = arr_match.group(1)
+
+        elif line == '回程' and i + 8 < len(lines):
+            flight_info["return"] = {
+                "date": lines[i+1].strip(),
+                "flight_number": lines[i+2].strip(),
+                "airline": lines[i+3].strip(),
+                "departure_airport": lines[i+4].strip(),
+                "departure_time": lines[i+5].strip(),
+                "arrival_airport": lines[i+7].strip(),  # skip → at i+6
+                "arrival_time": lines[i+8].strip(),
+            }
+            # Extract airport codes
+            dep_match = re.search(r'\(([A-Z]{3})\)', flight_info["return"]["departure_airport"])
+            arr_match = re.search(r'\(([A-Z]{3})\)', flight_info["return"]["arrival_airport"])
+            if dep_match:
+                flight_info["return"]["departure_code"] = dep_match.group(1)
+            if arr_match:
+                flight_info["return"]["arrival_code"] = arr_match.group(1)
+            break  # Found both, done
+
+    return flight_info
 
 
 def save_result(result: dict, output_path: str):
