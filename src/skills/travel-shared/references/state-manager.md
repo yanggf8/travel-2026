@@ -26,7 +26,7 @@ sm.refreshTimestamp() // Start new session batch
 
 ### Process Status
 
-Valid statuses: `pending` → `researching` → `researched` → `selecting` → `selected` → `booking` → `booked` → `confirmed` | `skipped`
+Valid statuses: `pending` → `researching` → `researched` → `selecting` → `selected` → `booking` → `booked` → `confirmed` | `skipped` | `populated` (from package cascade)
 
 ```typescript
 sm.setProcessStatus(destination, process: ProcessId, newStatus)  // Validates transition
@@ -62,10 +62,10 @@ sm.getPlan()   // Returns current plan (read-only)
 
 When a package offer is selected:
 
-1. Set `destinations.{slug}.process_3_4_packages.selected_offer_id`
-2. Set `destinations.{slug}.process_3_4_packages.results.chosen_offer`
-3. Mark dirty: `sm.markDirty(slug, 'process_3_4_packages')`
-4. Run cascade to populate P3/P4
+1. Call `sm.selectOffer(offerId, date, populateCascade=true)`
+   - Sets `process_3_4_packages.chosen_offer = {id, selected_date, selected_at}`
+   - Updates status to `selected`
+   - If `populateCascade=true`, populates P3/P4 with status `populated`
 
 ## Cascade Runner Ownership
 

@@ -177,6 +177,26 @@ export class StateManager {
   ): void {
     const currentStatus = this.getProcessStatus(destination, process);
 
+    // Idempotent: allow setting the same status without emitting events.
+    if (currentStatus === newStatus) {
+      // Update in travel-plan.json (process object)
+      const dest = this.plan.destinations[destination];
+      if (dest && dest[process]) {
+        const processObj = dest[process] as Record<string, unknown>;
+        processObj['status'] = newStatus;
+        processObj['updated_at'] = this.timestamp;
+      }
+
+      // Update in state.json
+      this.ensureEventLogDestination(destination);
+      const destLog = this.eventLog.destinations[destination];
+      if (!destLog.processes[process]) {
+        destLog.processes[process] = { state: newStatus, events: [] };
+      }
+      destLog.processes[process].state = newStatus;
+      return;
+    }
+
     // Validate transition
     if (currentStatus && !this.isValidTransition(currentStatus, newStatus)) {
       throw new Error(
@@ -301,8 +321,10 @@ export class StateManager {
     const dateAnchor = destObj.process_1_date_anchor as Record<string, unknown>;
     dateAnchor.confirmed_dates = { start: startDate, end: endDate };
     dateAnchor.days = days;
-    dateAnchor.status = 'confirmed';
     dateAnchor.updated_at = this.timestamp;
+
+    // Use setProcessStatus for consistent state tracking
+    this.setProcessStatus(dest, 'process_1_date_anchor', 'confirmed');
 
     // Emit event
     this.emitEvent({
@@ -514,7 +536,7 @@ export class StateManager {
           booked_date: date,
           populated_at: this.timestamp,
         };
-        p3.status = 'populated';
+        this.setProcessStatus(destination, 'process_3_transportation', 'populated');
         this.clearDirty(destination, 'process_3_transportation');
       }
     }
@@ -530,7 +552,7 @@ export class StateManager {
           check_in: date,
           populated_at: this.timestamp,
         };
-        p4.status = 'populated';
+        this.setProcessStatus(destination, 'process_4_accommodation', 'populated');
         this.clearDirty(destination, 'process_4_accommodation');
       }
     }

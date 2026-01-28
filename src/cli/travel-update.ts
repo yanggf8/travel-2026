@@ -86,7 +86,7 @@ function showStatus(sm: StateManager): void {
       { id: 'process_3_4_packages', name: 'P3+4 Packages' },
       { id: 'process_3_transportation', name: 'P3 Transport' },
       { id: 'process_4_accommodation', name: 'P4 Accommodation' },
-      { id: 'process_5_itinerary', name: 'P5 Itinerary' },
+      { id: 'process_5_daily_itinerary', name: 'P5 Itinerary' },
     ];
 
     for (const p of processes) {

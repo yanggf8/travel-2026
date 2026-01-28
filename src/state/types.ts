@@ -20,7 +20,7 @@ export type ProcessStatus =
 
 // Valid status transitions
 export const STATUS_TRANSITIONS: Record<ProcessStatus, ProcessStatus[]> = {
-  pending: ['researching', 'populated', 'skipped'],
+  pending: ['researching', 'populated', 'confirmed', 'skipped'],
   researching: ['researched', 'pending', 'skipped'],
   researched: ['selecting', 'researching', 'skipped'],
   selecting: ['selected', 'researched', 'skipped'],
