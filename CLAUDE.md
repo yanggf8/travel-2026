@@ -102,6 +102,24 @@ Default mode for this repo is **agent-first**:
 - Treat schema as canonical and migrate/normalize legacy shapes on load where needed; avoid duplicating path strings in multiple places.
 - Every agent output should include: current status, what changed, and the single best “next action”.
 
+## Separate Trips (Multi-Plan)
+
+Multi-destination is handled inside one plan via `destinations.*`. For a truly separate trip (e.g., “second trip of 2026”), use separate files:
+
+- `data/trips/<trip-id>/travel-plan.json`
+- `data/trips/<trip-id>/state.json`
+
+Tooling:
+
+- `travel-update` supports `--plan` + `--state` (or set `$TRAVEL_PLAN_PATH` / `$TRAVEL_STATE_PATH`).
+- Most other commands already support `--file` / `--input` pointing at the desired `travel-plan.json`.
+
+Example:
+
+```bash
+npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/travel-plan.json --state data/trips/japan-2026-2/state.json
+```
+
 ### Available
 | Skill | Path | Purpose |
 |-------|------|---------|

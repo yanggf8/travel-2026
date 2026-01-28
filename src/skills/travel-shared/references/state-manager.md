@@ -4,8 +4,8 @@
 
 | File | Owner | Purpose |
 |------|-------|---------|
-| `data/travel-plan.json` | Skills/StateManager | Trip data, status, dirty flags |
-| `data/state.json` | StateManager | Event log, audit trail |
+| `data/travel-plan.json` (or `$TRAVEL_PLAN_PATH`) | Skills/StateManager | Trip data, status, dirty flags |
+| `data/state.json` (or `$TRAVEL_STATE_PATH`) | StateManager | Event log, audit trail |
 | `cascade_state.last_cascade_run` | Cascade Runner | Cascade ownership |
 
 ## StateManager API

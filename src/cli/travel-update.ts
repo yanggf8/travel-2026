@@ -59,6 +59,8 @@ Commands:
     Show this help message.
 
 Options:
+  --plan <path>  Travel plan path (default: data/travel-plan.json or $TRAVEL_PLAN_PATH)
+  --state <path> State log path (default: data/state.json or $TRAVEL_STATE_PATH)
   --dry-run    Show what would be changed without saving
   --verbose    Show detailed output
   --full       Show booked offer/flight/hotel details (status only)
@@ -204,9 +206,11 @@ async function main(): Promise<void> {
 
   const destOpt = optionValue('--dest');
   const paxOpt = optionValue('--pax');
+  const planOpt = optionValue('--plan');
+  const stateOpt = optionValue('--state');
 
   // Filter out flags/options from args
-  const optionsWithValues = new Set(['--dest', '--pax']);
+  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state']);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -217,7 +221,7 @@ async function main(): Promise<void> {
     cleanArgs.push(a);
   }
 
-  const sm = new StateManager();
+  const sm = new StateManager(planOpt, stateOpt);
 
   try {
     switch (command) {

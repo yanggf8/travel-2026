@@ -25,8 +25,8 @@ import {
 } from './types';
 
 // Default paths
-const DEFAULT_PLAN_PATH = 'data/travel-plan.json';
-const DEFAULT_STATE_PATH = 'data/state.json';
+const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
+const DEFAULT_STATE_PATH = process.env.TRAVEL_STATE_PATH || 'data/state.json';
 
 export class StateManager {
   private planPath: string;
