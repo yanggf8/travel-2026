@@ -340,6 +340,14 @@ npm run update -- set-activity-booking <day> <session> "<activity>" <status> [--
 # Set airport transfer
 npm run update -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule" [--candidate "..."]
 # Example: npm run update -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome|85|3200|19:40"
+
+# Set activity time (for fixed constraints/deadlines)
+npm run update -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
+# Example: npm run update -- set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true
+
+# Set session time boundaries
+npm run update -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
+# Example: npm run update -- set-session-time-range 5 afternoon --start 11:00 --end 14:45
 ```
 
 ### Scraper Tools (Python/Playwright)
@@ -390,6 +398,9 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Multi-OTA source registry (`data/ota-sources.json`)
 - ✅ Configuration discovery APIs (`src/config/loader.ts`)
 - ✅ Configurable defaults extraction (`src/config/constants.ts`)
+- ✅ Time-aware scheduling (start_time, end_time, is_fixed_time on Activity)
+- ✅ Session time boundaries (time_range on DaySession)
+- ✅ Fixed-time activities in `status --full` (reservations/deadlines at a glance)
 
 ## Storage Decision (DB)
 
