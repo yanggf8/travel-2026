@@ -278,8 +278,12 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
         title: string;
         start?: string;
         end?: string;
+        sessionStart?: string;
+        sessionEnd?: string;
         bookingStatus?: string;
         bookingRef?: string;
+        bookingRequired?: boolean;
+        isFixedTime?: boolean;
       }> = [];
 
       for (const day of days) {
@@ -287,13 +291,22 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
         const dayDate = day.date as string;
         for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
           const session = day[sessionName] as Record<string, unknown> | undefined;
+          const timeRange = session?.time_range as { start?: string; end?: string } | undefined;
           const activities = session?.activities as Array<unknown> | undefined;
           if (!Array.isArray(activities)) continue;
 
           for (const act of activities) {
             if (typeof act === 'string') continue;
             const a = act as Record<string, unknown>;
-            if (a.is_fixed_time || a.booking_status === 'booked' || a.booking_required) {
+            const isFixedTime = Boolean(a.is_fixed_time);
+            const bookingRequired = Boolean(a.booking_required);
+            const bookingStatus = a.booking_status as string | undefined;
+            const isReservation = bookingRequired || bookingStatus === 'booked' || bookingStatus === 'pending' || bookingStatus === 'waitlist';
+
+            // Include:
+            // - any fixed-time constraints (even if booking_required=false), and
+            // - any reservation/ticket items (booking_required/booking_status)
+            if (isFixedTime || isReservation) {
               fixedActivities.push({
                 day: dayNum,
                 date: dayDate,
@@ -301,8 +314,12 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
                 title: (a.title as string) ?? 'Untitled',
                 start: a.start_time as string | undefined,
                 end: a.end_time as string | undefined,
-                bookingStatus: a.booking_status as string | undefined,
+                sessionStart: timeRange?.start,
+                sessionEnd: timeRange?.end,
+                bookingStatus,
                 bookingRef: a.booking_ref as string | undefined,
+                bookingRequired,
+                isFixedTime,
               });
             }
           }
@@ -312,14 +329,26 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
       if (fixedActivities.length > 0) {
         console.log('\nFixed-Time Activities & Reservations:');
         console.log('─'.repeat(50));
+
+        const sessionOrder = { morning: 0, afternoon: 1, evening: 2 } as const;
+        fixedActivities.sort((a, b) => (
+          (a.day - b.day) ||
+          ((sessionOrder as any)[a.session] - (sessionOrder as any)[b.session]) ||
+          a.title.localeCompare(b.title)
+        ));
+
         for (const fa of fixedActivities) {
           const timeStr = fa.start && fa.end ? `${fa.start}-${fa.end}`
             : fa.start ? `${fa.start}`
             : fa.end ? `by ${fa.end}`
+            : fa.sessionStart && fa.sessionEnd ? `${fa.sessionStart}-${fa.sessionEnd}`
             : '';
+
           const statusIcon = fa.bookingStatus === 'booked' ? '🎫'
-            : fa.bookingStatus === 'pending' ? '⏳'
+            : (fa.bookingRequired || fa.bookingStatus === 'pending' || fa.bookingStatus === 'waitlist') ? '⏳'
+            : fa.isFixedTime ? '📌'
             : '📌';
+
           const refStr = fa.bookingRef ? ` [${fa.bookingRef}]` : '';
           console.log(`  ${statusIcon} Day ${fa.day} ${fa.session.padEnd(9)} ${timeStr.padEnd(11)} ${fa.title}${refStr}`);
         }
