@@ -266,6 +266,65 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
         console.log(`  Includes: ${includes.join(', ')}`);
       }
     }
+
+    // Show fixed-time activities (deadlines, reservations)
+    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+    const days = p5?.days as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(days) && days.length > 0) {
+      const fixedActivities: Array<{
+        day: number;
+        date: string;
+        session: string;
+        title: string;
+        start?: string;
+        end?: string;
+        bookingStatus?: string;
+        bookingRef?: string;
+      }> = [];
+
+      for (const day of days) {
+        const dayNum = day.day_number as number;
+        const dayDate = day.date as string;
+        for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+          const session = day[sessionName] as Record<string, unknown> | undefined;
+          const activities = session?.activities as Array<unknown> | undefined;
+          if (!Array.isArray(activities)) continue;
+
+          for (const act of activities) {
+            if (typeof act === 'string') continue;
+            const a = act as Record<string, unknown>;
+            if (a.is_fixed_time || a.booking_status === 'booked' || a.booking_required) {
+              fixedActivities.push({
+                day: dayNum,
+                date: dayDate,
+                session: sessionName,
+                title: (a.title as string) ?? 'Untitled',
+                start: a.start_time as string | undefined,
+                end: a.end_time as string | undefined,
+                bookingStatus: a.booking_status as string | undefined,
+                bookingRef: a.booking_ref as string | undefined,
+              });
+            }
+          }
+        }
+      }
+
+      if (fixedActivities.length > 0) {
+        console.log('\nFixed-Time Activities & Reservations:');
+        console.log('─'.repeat(50));
+        for (const fa of fixedActivities) {
+          const timeStr = fa.start && fa.end ? `${fa.start}-${fa.end}`
+            : fa.start ? `${fa.start}`
+            : fa.end ? `by ${fa.end}`
+            : '';
+          const statusIcon = fa.bookingStatus === 'booked' ? '🎫'
+            : fa.bookingStatus === 'pending' ? '⏳'
+            : '📌';
+          const refStr = fa.bookingRef ? ` [${fa.bookingRef}]` : '';
+          console.log(`  ${statusIcon} Day ${fa.day} ${fa.session.padEnd(9)} ${timeStr.padEnd(11)} ${fa.title}${refStr}`);
+        }
+      }
+    }
   }
 
   console.log('\n');
