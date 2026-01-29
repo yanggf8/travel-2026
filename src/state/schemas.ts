@@ -51,6 +51,8 @@ export const BookingStatusSchema = z.enum(['not_required', 'pending', 'booked', 
 
 export const AvailabilitySchema = z.enum(['available', 'sold_out', 'limited', 'unknown']);
 
+export const TimeHHMMSchema = z.string().regex(/^\d{2}:\d{2}$/, 'Must be HH:MM');
+
 // Ground transport (airport transfers)
 export const TransferStatusSchema = z.enum(['planned', 'booked']);
 
@@ -183,6 +185,9 @@ export const ActivitySchema = z.object({
   booking_status: BookingStatusSchema.optional(),
   booking_ref: z.string().optional(),
   book_by: z.string().optional(),  // ISO date: YYYY-MM-DD deadline
+  start_time: TimeHHMMSchema.optional(),
+  end_time: TimeHHMMSchema.optional(),
+  is_fixed_time: z.boolean().optional(),
   cost_estimate: z.number().nullable().optional(),
   tags: z.array(z.string()).optional(),
   notes: z.string().nullable().optional(),
@@ -195,6 +200,10 @@ export const DaySessionSchema = z.object({
   meals: z.array(z.string()).optional(),
   transit_notes: z.string().nullable().optional(),
   booking_notes: z.string().nullable().optional(),
+  time_range: z.object({
+    start: TimeHHMMSchema,
+    end: TimeHHMMSchema,
+  }).optional(),
 }).passthrough();
 
 export const ItineraryDaySchema = z.object({

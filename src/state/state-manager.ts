@@ -888,6 +888,9 @@ export class StateManager {
       duration_min: number;
       booking_required: boolean;
       booking_url: string;
+      start_time: string;
+      end_time: string;
+      is_fixed_time: boolean;
       cost_estimate: number;
       tags: string[];
       notes: string;
@@ -930,6 +933,107 @@ export class StateManager {
       destination,
       process: 'process_5_daily_itinerary',
       data: { day_number: dayNumber, session, activity_id: activityObj.id, updates: Object.keys(updates) },
+    });
+  }
+
+  /**
+   * Set time fields for an activity (start/end/fixed-time).
+   * Activity can be found by ID or title; legacy string activities are upgraded.
+   */
+  setActivityTime(
+    destination: string,
+    dayNumber: number,
+    session: 'morning' | 'afternoon' | 'evening',
+    activityIdOrTitle: string,
+    opts: { start_time?: string; end_time?: string; is_fixed_time?: boolean }
+  ): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
+    if (!sessionObj?.activities) {
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    const searchLower = activityIdOrTitle.toLowerCase();
+    let idx = sessionObj.activities.findIndex(a => typeof a !== 'string' && a.id === activityIdOrTitle);
+    if (idx === -1) {
+      idx = sessionObj.activities.findIndex(a => {
+        if (typeof a === 'string') return a.toLowerCase().includes(searchLower);
+        const title = a.title as string | undefined;
+        return Boolean(title && title.toLowerCase().includes(searchLower));
+      });
+    }
+    if (idx === -1) {
+      throw new Error(`Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`);
+    }
+
+    const current = sessionObj.activities[idx];
+    const activityObj = typeof current === 'string'
+      ? this.upgradeStringActivity(current, { booking_required: false })
+      : current;
+    sessionObj.activities[idx] = activityObj;
+
+    const previous = {
+      start_time: activityObj.start_time as string | undefined,
+      end_time: activityObj.end_time as string | undefined,
+      is_fixed_time: activityObj.is_fixed_time as boolean | undefined,
+    };
+
+    if (opts.start_time !== undefined) activityObj.start_time = opts.start_time;
+    if (opts.end_time !== undefined) activityObj.end_time = opts.end_time;
+    if (opts.is_fixed_time !== undefined) activityObj.is_fixed_time = opts.is_fixed_time;
+
+    this.touchItinerary(destination);
+    this.emitEvent({
+      event: 'activity_time_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: {
+        day_number: dayNumber,
+        session,
+        activity_id: activityObj.id,
+        title: activityObj.title,
+        from: previous,
+        to: {
+          start_time: activityObj.start_time,
+          end_time: activityObj.end_time,
+          is_fixed_time: activityObj.is_fixed_time,
+        },
+      },
+    });
+  }
+
+  /**
+   * Set optional time range boundary for a session.
+   */
+  setSessionTimeRange(
+    destination: string,
+    dayNumber: number,
+    session: 'morning' | 'afternoon' | 'evening',
+    start: string,
+    end: string
+  ): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    const sessionObj = day[session] as Record<string, unknown> | undefined;
+    if (!sessionObj) {
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    sessionObj.time_range = { start, end };
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'session_time_range_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, session, start, end },
     });
   }
 

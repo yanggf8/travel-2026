@@ -56,21 +56,41 @@ interface OtaSourcesFile {
 // Cached configs
 let destinationsCache: DestinationsFile | null = null;
 let otaSourcesCache: OtaSourcesFile | null = null;
+let projectRootCache: string | null = null;
 
 /**
  * Get the project root directory.
  */
 function getProjectRoot(): string {
+  if (projectRootCache) return projectRootCache;
   // Walk up from current file to find package.json
   let dir = __dirname;
   while (dir !== path.dirname(dir)) {
     if (fs.existsSync(path.join(dir, 'package.json'))) {
+      projectRootCache = dir;
       return dir;
     }
     dir = path.dirname(dir);
   }
   // Fallback: assume we're in src/config
-  return path.resolve(__dirname, '../..');
+  projectRootCache = path.resolve(__dirname, '../..');
+  return projectRootCache;
+}
+
+function resolveRepoPath(relPath: string, context: string): string {
+  const root = getProjectRoot();
+  if (!relPath || typeof relPath !== 'string') {
+    throw new Error(`${context}: expected a non-empty path string`);
+  }
+  if (path.isAbsolute(relPath)) {
+    throw new Error(`${context}: path must be repo-relative, got absolute path: ${relPath}`);
+  }
+  const resolved = path.resolve(root, relPath);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`${context}: path escapes project root: ${relPath}`);
+  }
+  return resolved;
 }
 
 /**
@@ -79,7 +99,7 @@ function getProjectRoot(): string {
 export function loadDestinations(): DestinationsFile {
   if (destinationsCache) return destinationsCache;
 
-  const configPath = path.join(getProjectRoot(), 'data/destinations.json');
+  const configPath = resolveRepoPath('data/destinations.json', 'Destinations config');
   if (!fs.existsSync(configPath)) {
     throw new Error(`Destinations config not found: ${configPath}`);
   }
@@ -95,7 +115,7 @@ export function loadDestinations(): DestinationsFile {
 export function loadOtaSources(): OtaSourcesFile {
   if (otaSourcesCache) return otaSourcesCache;
 
-  const configPath = path.join(getProjectRoot(), 'data/ota-sources.json');
+  const configPath = resolveRepoPath('data/ota-sources.json', 'OTA sources config');
   if (!fs.existsSync(configPath)) {
     throw new Error(`OTA sources config not found: ${configPath}`);
   }
@@ -111,6 +131,7 @@ export function loadOtaSources(): OtaSourcesFile {
 export function clearConfigCache(): void {
   destinationsCache = null;
   otaSourcesCache = null;
+  projectRootCache = null;
 }
 
 // ============ Destination Discovery APIs ============
@@ -142,14 +163,14 @@ export function resolveDestinationRefPath(slug: string): string | null {
     const config = loadDestinations();
     for (const dest of Object.values(config.destinations)) {
       if (slug.toLowerCase().includes(dest.ref_id.toLowerCase())) {
-        const refPath = path.join(getProjectRoot(), dest.ref_path);
+        const refPath = resolveRepoPath(dest.ref_path, `Destination ref_path (${dest.slug})`);
         return fs.existsSync(refPath) ? refPath : null;
       }
     }
     return null;
   }
 
-  const refPath = path.join(getProjectRoot(), destConfig.ref_path);
+  const refPath = resolveRepoPath(destConfig.ref_path, `Destination ref_path (${destConfig.slug})`);
   return fs.existsSync(refPath) ? refPath : null;
 }
 
@@ -185,7 +206,12 @@ export function getAvailableOtaSources(): string[] {
 export function getSupportedOtaSources(): string[] {
   const config = loadOtaSources();
   return Object.entries(config.sources)
-    .filter(([_, source]) => source.supported)
+    .filter(([_, source]) => {
+      if (!source.supported) return false;
+      if (!source.scraper_script) return false;
+      const scriptPath = resolveRepoPath(source.scraper_script, `OTA scraper_script (${source.source_id})`);
+      return fs.existsSync(scriptPath);
+    })
     .map(([id]) => id);
 }
 
@@ -202,7 +228,11 @@ export function getOtaSourceConfig(sourceId: string): OtaSourceConfig | null {
  */
 export function getOtaSourceCurrency(sourceId: string): string {
   const sourceConfig = getOtaSourceConfig(sourceId);
-  return sourceConfig?.currency || 'TWD';
+  if (!sourceConfig) {
+    const available = getAvailableOtaSources();
+    throw new Error(`Unknown OTA source: ${sourceId}. Available: ${available.join(', ')}`);
+  }
+  return sourceConfig.currency;
 }
 
 /**

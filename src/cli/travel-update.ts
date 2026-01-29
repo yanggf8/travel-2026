@@ -30,6 +30,7 @@ import {
 } from '../state/destination-ref-schema';
 import {
   resolveDestinationRefPath as configResolveDestinationRefPath,
+  getAvailableDestinations,
   getOtaSourceCurrency,
 } from '../config/loader';
 import { execFileSync } from 'child_process';
@@ -89,6 +90,14 @@ Commands:
     status: not_required | pending | booked | waitlist
     Example: set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"
     Example: set-activity-booking 3 morning teamlab pending --book-by 2026-02-01
+
+  set-activity-time <day> <session> <activity> [--start HH:MM] [--end HH:MM] [--fixed true|false]
+    Set optional time fields for an activity (start/end/fixed).
+    Example: set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true
+
+  set-session-time-range <day> <session> --start HH:MM --end HH:MM
+    Set optional time boundaries for a session.
+    Example: set-session-time-range 5 afternoon --start 11:00 --end 14:45
 
   status
     Show current plan status summary.
@@ -310,9 +319,12 @@ async function main(): Promise<void> {
   const bookByOpt = optionValue('--book-by');
   const selectedOpt = optionValue('--selected');
   const candidateOpts = optionValues('--candidate');
+  const startOpt = optionValue('--start');
+  const endOpt = optionValue('--end');
+  const fixedOpt = optionValue('--fixed');
 
   // Filter out flags/options from args
-  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state', '--goals', '--pace', '--assign', '--ref', '--book-by', '--selected', '--candidate']);
+  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state', '--goals', '--pace', '--assign', '--ref', '--book-by', '--selected', '--candidate', '--start', '--end', '--fixed']);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -710,7 +722,10 @@ async function main(): Promise<void> {
         // Destination reference selection (currently Tokyo-only).
         const refPath = resolveDestinationRefPath(destination);
         if (!refPath) {
-          console.error(`Error: No destination reference available for ${destination}. Add a ref under src/skills/travel-shared/references/destinations/.`);
+          const available = getAvailableDestinations();
+          console.error(`Error: No destination reference available for ${destination}.`);
+          console.error('Fix: add/update entry in data/destinations.json and ensure the ref_path exists.');
+          console.error(`Available destinations: ${available.join(', ')}`);
           process.exit(1);
         }
 
@@ -899,6 +914,114 @@ async function main(): Promise<void> {
           });
           sm.save();
           console.log('✅ Airport transfer updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        if (verbose) showStatus(sm, { full });
+        break;
+      }
+
+      case 'set-activity-time': {
+        const [, dayStr, session, activity] = cleanArgs;
+        if (!dayStr || !session || !activity) {
+          console.error('Error: set-activity-time requires <day> <session> <activity>');
+          console.error('Example: set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true');
+          process.exit(1);
+        }
+
+        const dayNumber = parseInt(dayStr, 10);
+        if (!Number.isFinite(dayNumber) || dayNumber <= 0) {
+          console.error('Error: <day> must be a positive integer (1-indexed day number)');
+          process.exit(1);
+        }
+
+        const validSessions = ['morning', 'afternoon', 'evening'];
+        if (!validSessions.includes(session)) {
+          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          process.exit(1);
+        }
+
+        const parseFixed = (value: string | undefined): boolean | undefined => {
+          if (value === undefined) return undefined;
+          const v = value.toLowerCase();
+          if (['true', '1', 'yes', 'y'].includes(v)) return true;
+          if (['false', '0', 'no', 'n'].includes(v)) return false;
+          throw new Error(`Invalid --fixed value: ${value} (use true|false)`);
+        };
+
+        let isFixed: boolean | undefined;
+        try {
+          isFixed = parseFixed(fixedOpt);
+        } catch (e) {
+          console.error(`Error: ${(e as Error).message}`);
+          process.exit(1);
+        }
+
+        if (startOpt === undefined && endOpt === undefined && isFixed === undefined) {
+          console.error('Error: set-activity-time requires at least one of: --start, --end, --fixed');
+          process.exit(1);
+        }
+
+        const destination = destOpt || sm.getActiveDestination();
+
+        console.log(`\n⏱️  Setting activity time:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Day ${dayNumber} ${session}: "${activity}"`);
+        if (startOpt) console.log(`   Start: ${startOpt}`);
+        if (endOpt) console.log(`   End: ${endOpt}`);
+        if (isFixed !== undefined) console.log(`   Fixed: ${isFixed}`);
+
+        if (!dryRun) {
+          sm.setActivityTime(destination, dayNumber, session as any, activity, {
+            start_time: startOpt,
+            end_time: endOpt,
+            is_fixed_time: isFixed,
+          });
+          sm.save();
+          console.log('✅ Activity time updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        if (verbose) showStatus(sm, { full });
+        break;
+      }
+
+      case 'set-session-time-range': {
+        const [, dayStr, session] = cleanArgs;
+        if (!dayStr || !session) {
+          console.error('Error: set-session-time-range requires <day> <session>');
+          console.error('Example: set-session-time-range 5 afternoon --start 11:00 --end 14:45');
+          process.exit(1);
+        }
+
+        const dayNumber = parseInt(dayStr, 10);
+        if (!Number.isFinite(dayNumber) || dayNumber <= 0) {
+          console.error('Error: <day> must be a positive integer (1-indexed day number)');
+          process.exit(1);
+        }
+
+        const validSessions = ['morning', 'afternoon', 'evening'];
+        if (!validSessions.includes(session)) {
+          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          process.exit(1);
+        }
+
+        if (!startOpt || !endOpt) {
+          console.error('Error: set-session-time-range requires --start HH:MM and --end HH:MM');
+          process.exit(1);
+        }
+
+        const destination = destOpt || sm.getActiveDestination();
+        console.log(`\n🕒 Setting session time range:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Day ${dayNumber} ${session}: ${startOpt} → ${endOpt}`);
+
+        if (!dryRun) {
+          sm.setSessionTimeRange(destination, dayNumber, session as any, startOpt, endOpt);
+          sm.save();
+          console.log('✅ Session time range updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
         }

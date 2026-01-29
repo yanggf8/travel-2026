@@ -173,6 +173,46 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     example: 'npm run update -- set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"',
   },
 
+  'set-activity-time': {
+    name: 'set-activity-time',
+    description: 'Set optional time fields for an activity (start/end/fixed).',
+    args: [
+      { name: 'day', type: 'number', required: true, description: 'Day number (1-indexed)' },
+      { name: 'session', type: 'string', required: true, description: 'morning | afternoon | evening' },
+      { name: 'activity', type: 'string', required: true, description: 'Activity ID or title (case-insensitive)' },
+      { name: '--start', type: 'string', required: false, description: 'Start time (HH:MM)' },
+      { name: '--end', type: 'string', required: false, description: 'End time (HH:MM)' },
+      { name: '--fixed', type: 'string', required: false, description: 'true|false (hard constraint)' },
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'void', description: 'Updates state files' },
+    mutates: [
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.activities.*.start_time',
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.activities.*.end_time',
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.activities.*.is_fixed_time',
+      'state.event_log',
+    ],
+    example: 'npm run update -- set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true',
+  },
+
+  'set-session-time-range': {
+    name: 'set-session-time-range',
+    description: 'Set optional time boundaries for a session.',
+    args: [
+      { name: 'day', type: 'number', required: true, description: 'Day number (1-indexed)' },
+      { name: 'session', type: 'string', required: true, description: 'morning | afternoon | evening' },
+      { name: '--start', type: 'string', required: true, description: 'Session start time (HH:MM)' },
+      { name: '--end', type: 'string', required: true, description: 'Session end time (HH:MM)' },
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'void', description: 'Updates state files' },
+    mutates: [
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.time_range',
+      'state.event_log',
+    ],
+    example: 'npm run update -- set-session-time-range 5 afternoon --start 11:00 --end 14:45',
+  },
+
   'update-offer': {
     name: 'update-offer',
     description: 'Update offer availability for a specific date.',
@@ -234,6 +274,8 @@ export const STATE_MANAGER_METHODS = {
   setDayTheme: { args: ['destination', 'dayNumber', 'theme'], returns: 'void', description: 'Set day theme' },
   setSessionFocus: { args: ['destination', 'dayNumber', 'session', 'focus'], returns: 'void', description: 'Set session focus' },
   setActivityBookingStatus: { args: ['destination', 'dayNumber', 'session', 'activityIdOrTitle', 'status', 'ref?', 'bookBy?'], returns: 'void', description: 'Set activity booking status' },
+  setActivityTime: { args: ['destination', 'dayNumber', 'session', 'activityIdOrTitle', 'opts'], returns: 'void', description: 'Set activity time fields (start/end/fixed)' },
+  setSessionTimeRange: { args: ['destination', 'dayNumber', 'session', 'start', 'end'], returns: 'void', description: 'Set session time range boundary' },
   findActivity: { args: ['destination', 'idOrTitle'], returns: '{ dayNumber, session, activity } | null', description: 'Find activity by ID or title' },
 
   // Airport transfers
@@ -322,7 +364,7 @@ export const CONFIG_LOADER_APIS = {
   getSupportedOtaSources: {
     args: [],
     returns: 'string[]',
-    description: 'List OTA sources with working scrapers',
+    description: 'List OTA sources with working scrapers (supported=true + scraper_script exists on disk)',
   },
   getOtaSourceConfig: {
     args: ['sourceId'],
@@ -332,7 +374,7 @@ export const CONFIG_LOADER_APIS = {
   getOtaSourceCurrency: {
     args: ['sourceId'],
     returns: 'string',
-    description: 'Get currency for an OTA source (e.g., TWD)',
+    description: 'Get currency for an OTA source (throws if unknown)',
   },
   getOtaSourcesForMarket: {
     args: ['market'],

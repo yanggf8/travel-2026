@@ -181,6 +181,9 @@ export interface Activity {
   booking_status?: BookingStatus; // Current booking state
   booking_ref?: string;          // Confirmation number/reference
   book_by?: string;              // Deadline to book (ISO date: YYYY-MM-DD)
+  start_time?: string;           // Optional start time ("HH:MM")
+  end_time?: string;             // Optional end time ("HH:MM")
+  is_fixed_time?: boolean;       // True = hard constraint (reservation/flight)
   cost_estimate: number | null;  // Estimated cost in local currency
   tags: string[];                // Categorization: ["shopping", "food", "temple", "museum", etc.]
   notes: string | null;          // Free-form notes
@@ -196,6 +199,7 @@ export interface DaySession {
   meals: string[];               // Meal suggestions
   transit_notes: string | null;  // Transit info (arrival/departure notes)
   booking_notes: string | null;  // Booking reminders
+  time_range?: { start: string; end: string }; // Optional session boundary ("HH:MM")
 }
 
 /**

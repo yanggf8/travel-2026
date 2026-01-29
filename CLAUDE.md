@@ -153,6 +153,10 @@ Configuration files:
 - `data/ota-sources.json` - OTA registry (source_id → URL, currency, scraper script)
 - `src/config/constants.ts` - Default values (pax, pace, project name)
 
+Notes:
+- `ref_path` / `scraper_script` must be **repo-relative** paths (no absolute paths); they’re resolved from the project root so commands work from any CWD.
+- `getSupportedOtaSources()` means: `supported=true` **and** `scraper_script` is set **and** the script exists on disk.
+
 ## Separate Trips (Multi-Plan)
 
 Multi-destination is handled inside one plan via `destinations.*`. For a truly separate trip (e.g., “second trip of 2026”), use separate files:
@@ -200,12 +204,12 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 
 ## OTA Sources (Plugin Registry)
 
-| Source ID | Name | Type | Supported |
-|-----------|------|------|-----------|
-| `besttour` | 喜鴻假期 | package | ✅ |
-| `liontravel` | 雄獅旅遊 | package, flight, hotel | ❌ |
-| `tigerair` | 台灣虎航 | flight | ✅ (limited) |
-| `eztravel` | 易遊網 | package, flight, hotel | ❌ |
+| Source ID | Name | Type | Supported | Scraper |
+|-----------|------|------|-----------|---------|
+| `besttour` | 喜鴻假期 | package | ✅ | ✅ |
+| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ | ✅ |
+| `tigerair` | 台灣虎航 | flight | ✅ | ❌ |
+| `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ |
 
 ### Lion Travel Promo
 - Code: `FITPKG` - TWD 400 off on Thursdays (min TWD 20,000)
