@@ -22,7 +22,15 @@ import {
   EventLogState,
   TravelPlanMinimal,
   STATUS_TRANSITIONS,
+  TransportOption,
+  TransportSegment,
 } from './types';
+import {
+  validateTravelPlan,
+  validateEventLogState,
+  TravelPlan,
+  EventLogState as ZodEventLogState,
+} from './schemas';
 
 // Default paths
 const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
@@ -633,6 +641,113 @@ export class StateManager {
   }
 
   // ============================================================================
+  // Transportation (Ground Transfers)
+  // ============================================================================
+
+  /**
+   * Set airport transfer segment for arrival/departure.
+   */
+  setAirportTransferSegment(
+    destination: string,
+    direction: 'arrival' | 'departure',
+    segment: TransportSegment
+  ): void {
+    const p3 = this.ensureTransportationProcess(destination);
+
+    if (!p3.airport_transfers || typeof p3.airport_transfers !== 'object') {
+      p3.airport_transfers = {};
+    }
+
+    (p3.airport_transfers as Record<string, unknown>)[direction] = segment as unknown as Record<string, unknown>;
+    this.touchTransportation(destination);
+
+    this.emitEvent({
+      event: 'airport_transfer_updated',
+      destination,
+      process: 'process_3_transportation',
+      data: {
+        direction,
+        status: segment.status,
+        selected_id: segment.selected?.id ?? null,
+        candidates_count: segment.candidates?.length ?? 0,
+      },
+    });
+  }
+
+  /**
+   * Add a candidate option to the airport transfer segment.
+   */
+  addAirportTransferCandidate(
+    destination: string,
+    direction: 'arrival' | 'departure',
+    option: TransportOption
+  ): void {
+    const p3 = this.ensureTransportationProcess(destination);
+    if (!p3.airport_transfers || typeof p3.airport_transfers !== 'object') {
+      p3.airport_transfers = {};
+    }
+
+    const transfers = p3.airport_transfers as Record<string, unknown>;
+    const existing = (transfers[direction] as Record<string, unknown> | undefined) ?? {
+      status: 'planned',
+      selected: null,
+      candidates: [],
+    };
+
+    const candidates = (existing.candidates as TransportOption[] | undefined) ?? [];
+    if (!candidates.some(c => c.id === option.id)) {
+      candidates.push(option);
+    }
+    existing.candidates = candidates;
+    transfers[direction] = existing;
+
+    this.touchTransportation(destination);
+    this.emitEvent({
+      event: 'airport_transfer_candidate_added',
+      destination,
+      process: 'process_3_transportation',
+      data: { direction, option_id: option.id, title: option.title },
+    });
+  }
+
+  /**
+   * Select a candidate option as the chosen airport transfer.
+   */
+  selectAirportTransferOption(
+    destination: string,
+    direction: 'arrival' | 'departure',
+    optionId: string
+  ): void {
+    const p3 = this.ensureTransportationProcess(destination);
+    if (!p3.airport_transfers || typeof p3.airport_transfers !== 'object') {
+      throw new Error(`No airport transfers set for ${destination}`);
+    }
+
+    const transfers = p3.airport_transfers as Record<string, unknown>;
+    const segment = transfers[direction] as Record<string, unknown> | undefined;
+    if (!segment) {
+      throw new Error(`No ${direction} airport transfer segment found`);
+    }
+
+    const candidates = (segment.candidates as TransportOption[] | undefined) ?? [];
+    const selected = candidates.find(c => c.id === optionId) as TransportOption | undefined;
+    if (!selected) {
+      throw new Error(`Airport transfer option not found: ${optionId}`);
+    }
+
+    segment.selected = selected;
+    transfers[direction] = segment;
+
+    this.touchTransportation(destination);
+    this.emitEvent({
+      event: 'airport_transfer_selected',
+      destination,
+      process: 'process_3_transportation',
+      data: { direction, option_id: optionId, title: selected.title },
+    });
+  }
+
+  // ============================================================================
   // Itinerary Management
   // ============================================================================
 
@@ -783,20 +898,37 @@ export class StateManager {
       throw new Error(`Day ${dayNumber} not found in ${destination}`);
     }
 
-    const sessionObj = day[session] as { activities: Array<Record<string, unknown>> };
-    const activity = sessionObj?.activities?.find(a => a.id === activityId);
-    if (!activity) {
+    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
+    if (!sessionObj?.activities) {
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    const searchLower = activityId.toLowerCase();
+    let idx = sessionObj.activities.findIndex(a => typeof a !== 'string' && a.id === activityId);
+    if (idx === -1) {
+      idx = sessionObj.activities.findIndex(a => {
+        if (typeof a === 'string') return a.toLowerCase().includes(searchLower);
+        const title = a.title as string | undefined;
+        return Boolean(title && title.toLowerCase().includes(searchLower));
+      });
+    }
+    if (idx === -1) {
       throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
     }
 
-    Object.assign(activity, updates);
+    const current = sessionObj.activities[idx];
+    const activityObj = typeof current === 'string'
+      ? this.upgradeStringActivity(current, { booking_required: false })
+      : current;
+    sessionObj.activities[idx] = activityObj;
+    Object.assign(activityObj, updates);
     this.touchItinerary(destination);
 
     this.emitEvent({
       event: 'activity_updated',
       destination,
       process: 'process_5_daily_itinerary',
-      data: { day_number: dayNumber, session, activity_id: activityId, updates: Object.keys(updates) },
+      data: { day_number: dayNumber, session, activity_id: activityObj.id, updates: Object.keys(updates) },
     });
   }
 
@@ -814,12 +946,16 @@ export class StateManager {
       throw new Error(`Day ${dayNumber} not found in ${destination}`);
     }
 
-    const sessionObj = day[session] as { activities: Array<Record<string, unknown>> };
+    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
     if (!sessionObj?.activities) {
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    const idx = sessionObj.activities.findIndex(a => a.id === activityId);
+    const searchLower = activityId.toLowerCase();
+    const idx = sessionObj.activities.findIndex(a => {
+      if (typeof a === 'string') return a.toLowerCase().includes(searchLower);
+      return a.id === activityId;
+    });
     if (idx === -1) {
       throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
     }
@@ -831,8 +967,170 @@ export class StateManager {
       event: 'activity_removed',
       destination,
       process: 'process_5_daily_itinerary',
-      data: { day_number: dayNumber, session, activity_id: activityId, title: removed.title },
+      data: {
+        day_number: dayNumber,
+        session,
+        activity_id: typeof removed === 'string' ? null : removed.id,
+        title: typeof removed === 'string' ? removed : (removed.title as string | undefined),
+      },
     });
+  }
+
+  /**
+   * Set booking status for an activity.
+   * Use this to track booking progress for activities that require advance booking.
+   *
+   * Handles both legacy string activities and structured Activity objects:
+   * - String activities are upgraded to Activity objects with generated IDs
+   * - Object activities are updated in place
+   *
+   * @param destination - Destination slug
+   * @param dayNumber - 1-indexed day number
+   * @param session - 'morning' | 'afternoon' | 'evening'
+   * @param activityIdOrTitle - Activity ID or title (case-insensitive, substring match for strings)
+   * @param status - Booking status: 'not_required' | 'pending' | 'booked' | 'waitlist'
+   * @param ref - Optional booking reference/confirmation number
+   * @param bookBy - Optional deadline to book (ISO date: YYYY-MM-DD)
+   */
+  setActivityBookingStatus(
+    destination: string,
+    dayNumber: number,
+    session: 'morning' | 'afternoon' | 'evening',
+    activityIdOrTitle: string,
+    status: 'not_required' | 'pending' | 'booked' | 'waitlist',
+    ref?: string,
+    bookBy?: string
+  ): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
+    if (!sessionObj?.activities) {
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    // Find activity by ID, title, or substring match (for string activities)
+    const searchLower = activityIdOrTitle.toLowerCase();
+    let activityIdx = -1;
+    let activity: string | Record<string, unknown> | undefined;
+
+    for (let i = 0; i < sessionObj.activities.length; i++) {
+      const a = sessionObj.activities[i];
+      if (typeof a === 'string') {
+        // String activity: match by substring (case-insensitive)
+        if (a.toLowerCase().includes(searchLower)) {
+          activityIdx = i;
+          activity = a;
+          break;
+        }
+      } else {
+        // Object activity: match by ID or title
+        const id = a.id as string | undefined;
+        const title = a.title as string | undefined;
+        if (id === activityIdOrTitle ||
+            (title && title.toLowerCase().includes(searchLower))) {
+          activityIdx = i;
+          activity = a;
+          break;
+        }
+      }
+    }
+
+    if (activityIdx === -1 || activity === undefined) {
+      throw new Error(
+        `Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`
+      );
+    }
+
+    const wasUpgraded = typeof activity === 'string';
+    const activityObj = typeof activity === 'string'
+      ? this.upgradeStringActivity(activity, { booking_required: true })
+      : activity;
+    if (wasUpgraded) {
+      sessionObj.activities[activityIdx] = activityObj;
+    }
+
+    const previousStatus = activityObj.booking_status as string | undefined;
+    activityObj.booking_status = status;
+
+    if (ref !== undefined) {
+      activityObj.booking_ref = ref;
+    }
+
+    if (bookBy !== undefined) {
+      activityObj.book_by = bookBy;
+    }
+
+    // If marking as booked, also set booking_required to true for consistency
+    if (status === 'booked' || status === 'pending' || status === 'waitlist') {
+      activityObj.booking_required = true;
+    }
+
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'activity_booking_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: {
+        day_number: dayNumber,
+        session,
+        activity_id: activityObj.id,
+        title: activityObj.title,
+        from_status: previousStatus,
+        to_status: status,
+        booking_ref: ref,
+        book_by: bookBy,
+        upgraded_from_string: wasUpgraded,
+      },
+    });
+  }
+
+  /**
+   * Find an activity by ID or title across all days/sessions.
+   * Handles both string activities and Activity objects.
+   * Returns { dayNumber, session, activity, isString } or null if not found.
+   */
+  findActivity(
+    destination: string,
+    idOrTitle: string
+  ): { dayNumber: number; session: 'morning' | 'afternoon' | 'evening'; activity: string | Record<string, unknown>; isString: boolean } | null {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) return null;
+
+    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+    const days = p5?.days as Array<Record<string, unknown>> | undefined;
+    if (!days) return null;
+
+    const sessions: Array<'morning' | 'afternoon' | 'evening'> = ['morning', 'afternoon', 'evening'];
+    const searchLower = idOrTitle.toLowerCase();
+
+    for (const day of days) {
+      const dayNumber = day.day_number as number;
+      for (const session of sessions) {
+        const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> } | undefined;
+        if (!sessionObj?.activities) continue;
+
+        for (const a of sessionObj.activities) {
+          if (typeof a === 'string') {
+            if (a.toLowerCase().includes(searchLower)) {
+              return { dayNumber, session, activity: a, isString: true };
+            }
+          } else {
+            const id = a.id as string | undefined;
+            const title = a.title as string | undefined;
+            if (id === idOrTitle ||
+                (title && title.toLowerCase().includes(searchLower))) {
+              return { dayNumber, session, activity: a, isString: false };
+            }
+          }
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -913,6 +1211,63 @@ export class StateManager {
   }
 
   /**
+   * Touch transportation timestamp.
+   */
+  private touchTransportation(destination: string): void {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) return;
+
+    const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+    if (p3) {
+      p3.updated_at = this.timestamp;
+    }
+  }
+
+  private ensureTransportationProcess(destination: string): Record<string, unknown> {
+    const destObj = this.plan.destinations[destination];
+    if (!destObj) {
+      throw new Error(`Destination not found: ${destination}`);
+    }
+
+    if (!destObj.process_3_transportation) {
+      (destObj as Record<string, unknown>).process_3_transportation = {
+        status: 'pending',
+        updated_at: this.timestamp,
+      };
+    }
+
+    const p3 = destObj.process_3_transportation as Record<string, unknown>;
+    if (typeof p3.status !== 'string') {
+      p3.status = 'pending';
+    }
+    return p3;
+  }
+
+  private upgradeStringActivity(
+    title: string,
+    overrides?: Partial<Record<string, unknown>>
+  ): Record<string, unknown> {
+    const id = `activity_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    return {
+      id,
+      title,
+      area: '',
+      nearest_station: null,
+      duration_min: null,
+      booking_required: false,
+      booking_url: null,
+      booking_status: undefined,
+      booking_ref: undefined,
+      book_by: undefined,
+      cost_estimate: null,
+      tags: [],
+      notes: null,
+      priority: 'want',
+      ...(overrides || {}),
+    };
+  }
+
+  /**
    * Force-set a process status without transition validation.
    * Use sparingly for recovery/override paths (e.g. re-scaffolding).
    */
@@ -984,12 +1339,35 @@ export class StateManager {
     this.eventLog.current_focus = `${destination}.${process}`;
   }
 
+  /**
+   * Set next actions list (for UI/skill coordination).
+   */
+  setNextActions(actions: string[]): void {
+    const previousActions = this.eventLog.next_actions || [];
+    this.eventLog.next_actions = actions;
+
+    this.emitEvent({
+      event: 'next_actions_updated',
+      data: {
+        from: previousActions,
+        to: actions,
+      },
+    });
+  }
+
+  /**
+   * Get next actions list.
+   */
+  getNextActions(): string[] {
+    return this.eventLog.next_actions || [];
+  }
+
   // ============================================================================
   // File I/O
   // ============================================================================
 
   /**
-   * Load travel plan from file.
+   * Load travel plan from file with Zod validation.
    */
   loadPlan(path?: string): TravelPlanMinimal {
     const filePath = path || this.planPath;
@@ -997,11 +1375,14 @@ export class StateManager {
       throw new Error(`Travel plan not found: ${filePath}`);
     }
     const content = readFileSync(filePath, 'utf-8');
-    return JSON.parse(content) as TravelPlanMinimal;
+    const parsed = JSON.parse(content);
+
+    // Validate with Zod
+    return validateTravelPlan(parsed) as TravelPlanMinimal;
   }
 
   /**
-   * Load event log from file.
+   * Load event log from file with Zod validation.
    */
   loadEventLog(path?: string): EventLogState {
     const filePath = path || this.statePath;
@@ -1019,14 +1400,22 @@ export class StateManager {
       };
     }
     const content = readFileSync(filePath, 'utf-8');
-    return JSON.parse(content) as EventLogState;
+    const parsed = JSON.parse(content);
+
+    // Validate with Zod
+    return validateEventLogState(parsed) as EventLogState;
   }
 
   /**
    * Save both travel plan and event log atomically.
+   * Validates before saving to prevent corrupt data.
    * Note: Does NOT update last_cascade_run - that is cascade-runner-owned.
    */
   save(): void {
+    // Validate before saving (catch bugs before writing corrupt data)
+    validateTravelPlan(this.plan);
+    validateEventLogState(this.eventLog);
+
     // Save travel plan
     writeFileSync(
       this.planPath,

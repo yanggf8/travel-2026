@@ -89,6 +89,7 @@ export interface EventLogState {
   version: string;
   active_destination: string;
   current_focus: string;
+  next_actions?: string[];
   event_log: TravelEvent[];
   global_processes: Record<string, {
     state: ProcessStatus;
@@ -121,6 +122,50 @@ export interface TravelPlanMinimal {
 
 export type SessionType = 'morning' | 'afternoon' | 'evening';
 
+// Booking status for activities that require advance booking
+export const BOOKING_STATUSES = [
+  'not_required',  // No booking needed
+  'pending',       // Needs to be booked
+  'booked',        // Confirmed booking
+  'waitlist',      // On waitlist
+] as const;
+
+export type BookingStatus = (typeof BOOKING_STATUSES)[number];
+
+// ============================================================================
+// Transportation (Ground Transfers)
+// ============================================================================
+
+export const TRANSFER_STATUSES = [
+  'planned',
+  'booked',
+] as const;
+
+export type TransferStatus = (typeof TRANSFER_STATUSES)[number];
+
+export interface TransportOption {
+  id: string;
+  title: string;
+  route: string;
+  duration_min?: number | null;
+  price_yen?: number | null;
+  schedule?: string | null;
+  booking_url?: string | null;
+  notes?: string | null;
+  tags?: string[];
+}
+
+export interface TransportSegment {
+  status: TransferStatus;
+  selected?: TransportOption | null;
+  candidates: TransportOption[];
+}
+
+export interface AirportTransfers {
+  arrival?: TransportSegment;
+  departure?: TransportSegment;
+}
+
 /**
  * Canonical Activity schema for P5 itinerary.
  * All activities have IDs for CRUD operations.
@@ -133,6 +178,9 @@ export interface Activity {
   duration_min: number | null;   // Estimated duration in minutes
   booking_required: boolean;     // Needs advance booking?
   booking_url: string | null;    // Booking link if applicable
+  booking_status?: BookingStatus; // Current booking state
+  booking_ref?: string;          // Confirmation number/reference
+  book_by?: string;              // Deadline to book (ISO date: YYYY-MM-DD)
   cost_estimate: number | null;  // Estimated cost in local currency
   tags: string[];                // Categorization: ["shopping", "food", "temple", "museum", etc.]
   notes: string | null;          // Free-form notes
@@ -144,7 +192,7 @@ export interface Activity {
  */
 export interface DaySession {
   focus: string | null;          // Theme for this session
-  activities: Activity[];        // Ordered list of activities
+  activities: Array<Activity | string>; // Ordered list of activities (legacy strings allowed)
   meals: string[];               // Meal suggestions
   transit_notes: string | null;  // Transit info (arrival/departure notes)
   booking_notes: string | null;  // Booking reminders

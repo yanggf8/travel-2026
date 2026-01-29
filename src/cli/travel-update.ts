@@ -22,7 +22,12 @@
  */
 
 import { StateManager } from '../state/state-manager';
-import type { ProcessId } from '../state/types';
+import type { ProcessId, TransportOption } from '../state/types';
+import {
+  validateDestinationRef,
+  validateDestinationRefConsistency,
+  type DestinationRef,
+} from '../state/destination-ref-schema';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -66,6 +71,20 @@ Commands:
     Mark package, flight, and hotel as booked (selected/populated → booking → booked).
     Use after user confirms booking is complete.
     Example: mark-booked
+
+  set-airport-transfer <arrival|departure> <planned|booked> --selected "<title|route|duration_min?|price_yen?|schedule?>" [--candidate "<...>"]...
+    Set airport transfer plan (selected + candidates) for arrival/departure.
+    Spec fields are pipe-delimited. Only title and route are required.
+    Example: set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"
+
+  set-activity-booking <day> <session> <activity> <status> [--ref <ref>] [--book-by <date>]
+    Set booking status for an activity.
+    day: Day number (1-indexed)
+    session: morning | afternoon | evening
+    activity: Activity ID or title (case-insensitive)
+    status: not_required | pending | booked | waitlist
+    Example: set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"
+    Example: set-activity-booking 3 morning teamlab pending --book-by 2026-02-01
 
   status
     Show current plan status summary.
@@ -181,6 +200,46 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
       }
     }
 
+    const transfers = (p3?.airport_transfers as Record<string, unknown> | undefined) ?? undefined;
+    if (transfers && (transfers['arrival'] || transfers['departure'])) {
+      console.log('\nAirport Transfers:');
+      console.log('─'.repeat(50));
+
+      for (const dir of ['arrival', 'departure'] as const) {
+        const seg = transfers[dir] as Record<string, unknown> | undefined;
+        if (!seg) continue;
+
+        const label = dir === 'arrival' ? 'Arrival' : 'Departure';
+        const segStatus = (seg.status as string | undefined) ?? 'planned';
+        console.log(`\n  ${label} (${segStatus})`);
+
+        const selected = seg.selected as Record<string, unknown> | undefined | null;
+        if (selected) {
+          const title = selected.title as string | undefined;
+          const route = selected.route as string | undefined;
+          const duration = selected.duration_min as number | undefined;
+          const price = selected.price_yen as number | undefined;
+          const schedule = selected.schedule as string | undefined;
+          console.log(`   ✓ ${title ?? ''}${price ? ` (¥${price.toLocaleString()})` : ''}${duration ? ` ~${duration} min` : ''}`);
+          if (route) console.log(`     ${route}`);
+          if (schedule) console.log(`     Schedule: ${schedule}`);
+        }
+
+        const candidates = seg.candidates as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(candidates) && candidates.length > 0) {
+          console.log('   Candidates:');
+          for (const c of candidates.slice(0, 5)) {
+            const title = c.title as string | undefined;
+            const route = c.route as string | undefined;
+            const duration = c.duration_min as number | undefined;
+            const price = c.price_yen as number | undefined;
+            console.log(`    - ${title ?? ''}${price ? ` (¥${price.toLocaleString()})` : ''}${duration ? ` ~${duration} min` : ''}${route ? ` — ${route}` : ''}`);
+          }
+          if (candidates.length > 5) console.log(`    ... and ${candidates.length - 5} more`);
+        }
+      }
+    }
+
     if (hotel && (hotel.name || hotel.area)) {
       console.log('\nHotel Details:');
       console.log('─'.repeat(50));
@@ -220,6 +279,22 @@ async function main(): Promise<void> {
     return undefined;
   };
 
+  const optionValues = (name: string): string[] => {
+    const values: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a.startsWith(`${name}=`)) {
+        values.push(a.slice(name.length + 1));
+        continue;
+      }
+      if (a === name && i + 1 < args.length) {
+        values.push(args[i + 1]);
+        i++;
+      }
+    }
+    return values;
+  };
+
   const destOpt = optionValue('--dest');
   const paxOpt = optionValue('--pax');
   const planOpt = optionValue('--plan');
@@ -227,9 +302,13 @@ async function main(): Promise<void> {
   const goalsOpt = optionValue('--goals');
   const paceOpt = optionValue('--pace');
   const assignOpt = optionValue('--assign');
+  const refOpt = optionValue('--ref');
+  const bookByOpt = optionValue('--book-by');
+  const selectedOpt = optionValue('--selected');
+  const candidateOpts = optionValues('--candidate');
 
   // Filter out flags/options from args
-  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state', '--goals', '--pace', '--assign']);
+  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state', '--goals', '--pace', '--assign', '--ref', '--book-by', '--selected', '--candidate']);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -631,10 +710,32 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const ref = JSON.parse(fs.readFileSync(refPath, 'utf-8')) as any;
-        const poiById = new Map<string, any>((ref.pois || []).map((p: any) => [p.id, p]));
-        const areaNameById = new Map<string, string>((ref.areas || []).map((a: any) => [a.id, a.name]));
-        const clusters = ref.clusters || {};
+        // Load and validate destination reference with Zod
+        let ref: DestinationRef;
+        try {
+          const rawRef = JSON.parse(fs.readFileSync(refPath, 'utf-8'));
+          ref = validateDestinationRef(rawRef, refPath);
+
+          // Check internal consistency (dangling references)
+          const refWarnings = validateDestinationRefConsistency(ref, refPath);
+          if (refWarnings.length > 0 && verbose) {
+            console.log('\n⚠️  Destination reference consistency warnings:');
+            for (const w of refWarnings.slice(0, 5)) {
+              console.log(`   - ${w}`);
+            }
+            if (refWarnings.length > 5) {
+              console.log(`   ... and ${refWarnings.length - 5} more`);
+            }
+          }
+        } catch (error) {
+          console.error(`Error: Failed to load destination reference: ${refPath}`);
+          console.error((error as Error).message);
+          process.exit(1);
+        }
+
+        const poiById = new Map(ref.pois.map((p) => [p.id, p]));
+        const areaNameById = new Map(ref.areas.map((a) => [a.id, a.name]));
+        const clusters = ref.clusters;
 
         // Plan allocation: map clusters to day numbers.
         const explicitAssignments = parseAssignments(assignOpt);
@@ -650,7 +751,7 @@ async function main(): Promise<void> {
             continue;
           }
 
-          const poiIds: string[] = Array.isArray(cluster.pois) ? cluster.pois : [];
+          const poiIds = cluster.pois;
           if (poiIds.length === 0) {
             skipped.push(`Cluster has no POIs: ${item.clusterId}`);
             continue;
@@ -667,13 +768,13 @@ async function main(): Promise<void> {
           // Theme/focus: set if empty (or if force).
           if (!dryRun) {
             if (force || !day.theme) {
-              sm.setDayTheme(destination, item.dayNumber, cluster.name || item.clusterId);
+              sm.setDayTheme(destination, item.dayNumber, cluster.name);
             }
             for (const sess of usedSessions) {
               const sessObj = day[sess] as Record<string, unknown> | undefined;
               const currentFocus = sessObj?.focus as string | null | undefined;
               if (force || !currentFocus) {
-                sm.setSessionFocus(destination, item.dayNumber, sess, cluster.name || item.clusterId);
+                sm.setSessionFocus(destination, item.dayNumber, sess, cluster.name);
               }
             }
           }
@@ -687,9 +788,9 @@ async function main(): Promise<void> {
                 continue;
               }
 
-              const title = poi.title || poiId;
-              const existing = ((day[session] as any)?.activities as any[] | undefined) ?? [];
-              const hasDup = existing.some(a => (a?.title || '').toLowerCase() === String(title).toLowerCase());
+              const title = poi.title;
+              const existing = ((day[session] as Record<string, unknown>)?.activities as Array<{ title?: string }> | undefined) ?? [];
+              const hasDup = existing.some(a => (a?.title || '').toLowerCase() === title.toLowerCase());
               if (hasDup && !force) {
                 continue;
               }
@@ -697,23 +798,23 @@ async function main(): Promise<void> {
               plannedAdds.push({ day: item.dayNumber, session, poiId, title });
 
               if (!dryRun) {
-                const areaId = poi.area || '';
-                const areaName = areaNameById.get(areaId) || areaId || '';
+                const areaId = poi.area;
+                const areaName = areaNameById.get(areaId) || areaId;
                 const notesParts = [
                   poi.notes,
                   poi.hours ? `Hours: ${poi.hours}` : null,
                   poi.address ? `Address: ${poi.address}` : null,
-                ].filter(Boolean);
+                ].filter(Boolean) as string[];
 
                 sm.addActivity(destination, item.dayNumber, session, {
                   title,
                   area: areaName,
-                  nearest_station: poi.nearest_station || undefined,
+                  nearest_station: poi.nearest_station ?? undefined,
                   duration_min: poi.duration_min ?? undefined,
-                  booking_required: !!poi.booking_required,
-                  booking_url: poi.booking_url || undefined,
+                  booking_required: poi.booking_required ?? false,
+                  booking_url: poi.booking_url ?? undefined,
                   cost_estimate: poi.cost_estimate ?? undefined,
-                  tags: Array.isArray(poi.tags) ? poi.tags : [],
+                  tags: poi.tags ?? [],
                   notes: notesParts.length ? notesParts.join(' | ') : undefined,
                   priority: poi.booking_required ? 'must' : 'want',
                 });
@@ -746,6 +847,112 @@ async function main(): Promise<void> {
           console.log('\nNext action: run status --full, then adjust with updateActivity/removeActivity as needed');
         } else {
           console.log('\n🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
+      case 'set-airport-transfer': {
+        const [, direction, status] = cleanArgs;
+
+        if (!direction || !status) {
+          console.error('Error: set-airport-transfer requires <arrival|departure> <planned|booked>');
+          console.error('Example: set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome|85|3200|19:40 → ~21:05"');
+          process.exit(1);
+        }
+
+        if (!['arrival', 'departure'].includes(direction)) {
+          console.error('Error: <arrival|departure> must be one of: arrival | departure');
+          process.exit(1);
+        }
+
+        if (!['planned', 'booked'].includes(status)) {
+          console.error('Error: <planned|booked> must be one of: planned | booked');
+          process.exit(1);
+        }
+
+        if (!selectedOpt) {
+          console.error('Error: set-airport-transfer requires --selected "<title|route|...>"');
+          process.exit(1);
+        }
+
+        const destination = destOpt || sm.getActiveDestination();
+        const selected = parseTransferSpec(direction as 'arrival' | 'departure', selectedOpt);
+        const candidates = candidateOpts.map(c => parseTransferSpec(direction as 'arrival' | 'departure', c));
+
+        console.log(`\n🚌 Setting airport transfer:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Direction: ${direction}`);
+        console.log(`   Status: ${status}`);
+        console.log(`   Selected: ${selected.title}`);
+        if (candidates.length) console.log(`   Candidates: ${candidates.length}`);
+
+        if (!dryRun) {
+          sm.setAirportTransferSegment(destination, direction as 'arrival' | 'departure', {
+            status: status as 'planned' | 'booked',
+            selected,
+            candidates,
+          });
+          sm.save();
+          console.log('✅ Airport transfer updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        if (verbose) showStatus(sm, { full });
+        break;
+      }
+
+      case 'set-activity-booking': {
+        const [, dayStr, session, activity, status] = cleanArgs;
+
+        if (!dayStr || !session || !activity || !status) {
+          console.error('Error: set-activity-booking requires <day> <session> <activity> <status>');
+          console.error('Example: set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"');
+          process.exit(1);
+        }
+
+        const dayNumber = parseInt(dayStr, 10);
+        if (!Number.isFinite(dayNumber) || dayNumber <= 0) {
+          console.error('Error: <day> must be a positive integer (1-indexed day number)');
+          process.exit(1);
+        }
+
+        const validSessions = ['morning', 'afternoon', 'evening'];
+        if (!validSessions.includes(session)) {
+          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          process.exit(1);
+        }
+
+        const validStatuses = ['not_required', 'pending', 'booked', 'waitlist'];
+        if (!validStatuses.includes(status)) {
+          console.error('Error: <status> must be one of: not_required | pending | booked | waitlist');
+          process.exit(1);
+        }
+
+        const destination = destOpt || sm.getActiveDestination();
+
+        console.log(`\n🎫 Setting activity booking status:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Day ${dayNumber} ${session}: "${activity}"`);
+        console.log(`   Status: ${status}`);
+        if (refOpt) console.log(`   Reference: ${refOpt}`);
+        if (bookByOpt) console.log(`   Book by: ${bookByOpt}`);
+
+        if (!dryRun) {
+          sm.setActivityBookingStatus(
+            destination,
+            dayNumber,
+            session as 'morning' | 'afternoon' | 'evening',
+            activity,
+            status as 'not_required' | 'pending' | 'booked' | 'waitlist',
+            refOpt,
+            bookByOpt
+          );
+          sm.save();
+          console.log('✅ Activity booking status updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
         }
 
         break;
@@ -933,4 +1140,45 @@ function chunkEvenly<T>(items: T[], buckets: number): T[][] {
     out[i % buckets].push(items[i]);
   }
   return out;
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48);
+}
+
+function hashString(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash) + text.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function parseTransferSpec(direction: 'arrival' | 'departure', spec: string): TransportOption {
+  const parts = spec.split('|').map(p => p.trim());
+  const title = parts[0];
+  const route = parts[1];
+  if (!title || !route) {
+    throw new Error(`Invalid transfer spec (need at least title|route): "${spec}"`);
+  }
+
+  const durationMin = parts[2] ? parseInt(parts[2], 10) : undefined;
+  const priceYen = parts[3] ? parseInt(parts[3], 10) : undefined;
+  const schedule = parts[4] || undefined;
+
+  const id = `${direction}_${slugify(title)}_${hashString(route).slice(0, 6)}`;
+
+  return {
+    id,
+    title,
+    route,
+    ...(Number.isFinite(durationMin) ? { duration_min: durationMin } : {}),
+    ...(Number.isFinite(priceYen) ? { price_yen: priceYen } : {}),
+    ...(schedule ? { schedule } : {}),
+  };
 }

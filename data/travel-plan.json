@@ -1,22 +1,1109 @@
 {
   "schema_version": "4.2.0",
-  "schema_contract": {
-    "id_convention": "snake_case_with_year",
-    "slug_is_authoritative": true,
-    "display_names_in": "destinations.{slug}.display_name",
-    "timestamps": "ISO-8601 with timezone",
-    "currency": "TWD",
-    "process_nodes": [
-      "process_2_destination",
-      "process_3_4_packages",
-      "process_3_transportation",
-      "process_4_accommodation",
-      "process_5_daily_itinerary"
-    ]
-  },
   "project": "Japan Travel 2026",
   "default_timezone": "Asia/Tokyo",
   "active_destination": "tokyo_2026",
+  "budget": {
+    "total_cap": null,
+    "flight_cap": null,
+    "accommodation_cap": null,
+    "daily_cap": null,
+    "pax": 2
+  },
+  "process_1_date_anchor": {
+    "status": "confirmed",
+    "updated_at": "2026-01-26T12:30:00+08:00",
+    "set_out_date": "2026-02-11",
+    "duration_days": 5,
+    "return_date": "2026-02-15",
+    "flexibility": {
+      "date_flexible": true,
+      "preferred_dates": [
+        "2026-02-21",
+        "2026-02-22"
+      ],
+      "avoid_dates": [
+        "2026-02-14",
+        "2026-02-15",
+        "2026-02-16"
+      ],
+      "reason": "CNY peak pricing Feb 14-17"
+    }
+  },
+  "destinations": {
+    "tokyo_2026": {
+      "slug": "tokyo_2026",
+      "display_name": "Tokyo",
+      "status": "active",
+      "created_at": "2026-01-26T12:30:00+08:00",
+      "updated_at": "2026-01-26T12:35:00+08:00",
+      "process_1_date_anchor": {
+        "status": "confirmed",
+        "updated_at": "2026-01-27T09:50:37.324Z",
+        "confirmed_dates": {
+          "start": "2026-02-13",
+          "end": "2026-02-17"
+        },
+        "days": 5
+      },
+      "process_2_destination": {
+        "status": "confirmed",
+        "updated_at": "2026-01-26T12:30:00+08:00",
+        "origin_city": "Taipei",
+        "origin_country": "Taiwan",
+        "destination_country": "Japan",
+        "region": "Kanto",
+        "primary_airport": "NRT",
+        "cities": [
+          {
+            "slug": "tokyo",
+            "display_name": "Tokyo",
+            "role": "primary",
+            "nights": 4,
+            "attractions": [
+              "Shibuya",
+              "Shinjuku",
+              "Asakusa",
+              "Akihabara",
+              "Harajuku",
+              "Tokyo Tower",
+              "teamLab"
+            ]
+          },
+          {
+            "slug": "yokohama",
+            "display_name": "Yokohama",
+            "role": "day_trip",
+            "nights": 0,
+            "attractions": [
+              "Chinatown",
+              "Minato Mirai",
+              "Cup Noodles Museum"
+            ]
+          }
+        ],
+        "shopping": [
+          {
+            "type": "second_hand_luxury",
+            "stores": [
+              "KOMEHYO Shinjuku",
+              "BRAND OFF Shibuya",
+              "Daikokuya"
+            ]
+          },
+          {
+            "type": "general",
+            "stores": [
+              "Shibuya 109",
+              "Don Quijote",
+              "Uniqlo Ginza"
+            ]
+          }
+        ]
+      },
+      "process_3_4_packages": {
+        "status": "booked",
+        "updated_at": "2026-01-28T15:46:41.859Z",
+        "selected_offer_id": "besttour_TYO06MM260213AM2",
+        "results": {
+          "offers": [
+            {
+              "id": "besttour_TYO06MM260213AM2",
+              "source_id": "besttour",
+              "product_code": "TYO06MM260213AM2",
+              "url": "https://www.besttour.com.tw/itinerary/TYO06MM260213AM2",
+              "scraped_at": "2026-01-26T12:26:39+08:00",
+              "type": "package",
+              "duration_days": 5,
+              "currency": "TWD",
+              "price_per_person": 18388,
+              "price_total": 36776,
+              "availability": "available",
+              "seats_remaining": 2,
+              "flight": {
+                "airline": "Peach Aviation",
+                "airline_code": "MM",
+                "outbound": {
+                  "flight_number": "MM620",
+                  "departure_airport_code": "TPE",
+                  "arrival_airport_code": "NRT",
+                  "departure_time": "02:25",
+                  "arrival_time": "06:30"
+                },
+                "return": {
+                  "flight_number": "MM627",
+                  "departure_airport_code": "NRT",
+                  "arrival_airport_code": "TPE",
+                  "departure_time": "22:05",
+                  "arrival_time": "01:25+1"
+                }
+              },
+              "hotel": {
+                "name": "TAVINOS HAMAMATSUCHO",
+                "slug": "tavinos_hamamatsucho",
+                "area": "Shimbashi / Hamamatsucho",
+                "star_rating": null,
+                "access": [
+                  "JR Hamamatsucho 8min",
+                  "Yurikamome Takeshiba 1min",
+                  "Tokyo Monorail 8min"
+                ]
+              },
+              "includes": [
+                "light_breakfast"
+              ],
+              "date_pricing": {
+                "2026-02-03": {
+                  "price": 19588,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-04": {
+                  "price": 19988,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-05": {
+                  "price": 19888,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-06": {
+                  "price": 19888,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-11": {
+                  "price": 21388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-12": {
+                  "price": 23388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-13": {
+                  "price": 27888,
+                  "availability": "available",
+                  "seats_remaining": 2,
+                  "note": "Agent offered this date"
+                },
+                "2026-02-14": {
+                  "price": 34888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-15": {
+                  "price": 33888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-16": {
+                  "price": 33888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-17": {
+                  "price": 35388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-18": {
+                  "price": 34388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-19": {
+                  "price": 27388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-20": {
+                  "price": 23388,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-21": {
+                  "price": 19888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-22": {
+                  "price": 18388,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-23": {
+                  "price": 18388,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-24": {
+                  "price": 19388,
+                  "availability": "available",
+                  "seats_remaining": 2
+                },
+                "2026-02-25": {
+                  "price": 22888,
+                  "availability": "sold_out",
+                  "seats_remaining": 0
+                },
+                "2026-02-26": {
+                  "price": 22888,
+                  "availability": "available",
+                  "seats_remaining": 2
+                }
+              },
+              "best_value": {
+                "date": "2026-02-22",
+                "price_per_person": 18388,
+                "price_total": 36776
+              },
+              "pros": [
+                "Package bundled",
+                "Includes breakfast",
+                "Good location",
+                "Easy Haneda access"
+              ],
+              "cons": [
+                "Feb 11-13 sold out",
+                "CNY dates expensive",
+                "Return flight unknown"
+              ],
+              "last_price_check": "2026-01-26T17:40:00+08:00"
+            },
+            {
+              "id": "liontravel_tokyo_skytree_24hr_metro",
+              "source_id": "liontravel",
+              "product_code": "tokyo_skytree_24hr_metro",
+              "url": "https://event.liontravel.com/zh-tw/japan/tokyo/index",
+              "scraped_at": "2026-01-26T15:09:51+08:00",
+              "type": "package",
+              "duration_days": 5,
+              "currency": "TWD",
+              "price_per_person": 9930,
+              "price_total": 19860,
+              "availability": "available",
+              "seats_remaining": null,
+              "flight": {
+                "airline": "Multiple options",
+                "airline_code": null,
+                "outbound": {
+                  "flight_number": null,
+                  "departure_airport_code": "TPE",
+                  "arrival_airport_code": "NRT",
+                  "departure_time": null,
+                  "arrival_time": null
+                },
+                "return": null
+              },
+              "hotel": {
+                "name": "自選住宿 (Asakusa/Ueno/Shinjuku options)",
+                "slug": "self_select",
+                "area": "Multiple",
+                "star_rating": null,
+                "access": []
+              },
+              "includes": [
+                "wifi",
+                "24hr_metro_pass"
+              ],
+              "date_pricing": null,
+              "best_value": {
+                "date": "flex",
+                "price_per_person": 9930,
+                "price_total": 19860
+              },
+              "pros": [
+                "Cheapest starting price",
+                "Includes 24hr metro",
+                "Flexible hotel choice",
+                "Good availability"
+              ],
+              "cons": [
+                "Starting price only",
+                "Flight details unknown",
+                "Requires booking for exact price"
+              ],
+              "note": "適用期間：2025/08/01~2026/06/30"
+            },
+            {
+              "id": "liontravel_tokyo_kawaguchiko",
+              "source_id": "liontravel",
+              "product_code": "tokyo_kawaguchiko",
+              "url": "https://event.liontravel.com/zh-tw/japan/tokyo/index",
+              "scraped_at": "2026-01-26T15:09:51+08:00",
+              "type": "package",
+              "duration_days": 5,
+              "currency": "TWD",
+              "price_per_person": 9780,
+              "price_total": 19560,
+              "availability": "available",
+              "seats_remaining": null,
+              "flight": {
+                "airline": "Multiple options",
+                "airline_code": null,
+                "outbound": {
+                  "departure_airport_code": "TPE",
+                  "arrival_airport_code": "NRT"
+                },
+                "return": null
+              },
+              "hotel": {
+                "name": "河口湖エリア (Kawaguchiko area)",
+                "slug": "kawaguchiko_area",
+                "area": "Kawaguchiko/Mt. Fuji",
+                "star_rating": null,
+                "access": []
+              },
+              "includes": [],
+              "date_pricing": null,
+              "best_value": {
+                "date": "flex",
+                "price_per_person": 9780,
+                "price_total": 19560
+              },
+              "pros": [
+                "Mt. Fuji view",
+                "Lowest starting price",
+                "Lake Kawaguchiko access"
+              ],
+              "cons": [
+                "Starting price only",
+                "Far from Tokyo center",
+                "Limited nightlife"
+              ],
+              "note": "適用期間：2025/11/14~2026/06/30"
+            },
+            {
+              "id": "liontravel_tokyo_disney",
+              "source_id": "liontravel",
+              "product_code": "tokyo_disney_esim",
+              "url": "https://event.liontravel.com/zh-tw/japan/tokyo/index",
+              "scraped_at": "2026-01-26T15:09:51+08:00",
+              "type": "package",
+              "duration_days": 5,
+              "currency": "TWD",
+              "price_per_person": 14888,
+              "price_total": 29776,
+              "availability": "available",
+              "seats_remaining": null,
+              "flight": {
+                "airline": "Multiple options",
+                "airline_code": null,
+                "outbound": {
+                  "departure_airport_code": "TPE",
+                  "arrival_airport_code": "NRT"
+                },
+                "return": null
+              },
+              "hotel": {
+                "name": "Disney Resort area hotel",
+                "slug": "disney_area",
+                "area": "Tokyo Disney Resort",
+                "star_rating": null,
+                "access": [
+                  "JR Maihama Station"
+                ]
+              },
+              "includes": [
+                "wifi",
+                "disney_ticket"
+              ],
+              "date_pricing": null,
+              "best_value": {
+                "date": "flex",
+                "price_per_person": 14888,
+                "price_total": 29776
+              },
+              "pros": [
+                "Includes Disney ticket",
+                "Includes eSIM",
+                "Disney area hotel"
+              ],
+              "cons": [
+                "Starting price only",
+                "Far from central Tokyo",
+                "Higher base price"
+              ],
+              "note": "適用期間：2025/11/13~2026/06/30"
+            }
+          ],
+          "provenance": [
+            {
+              "source_id": "besttour",
+              "scraped_at": "2026-01-26T17:40:00+08:00",
+              "offers_found": 1,
+              "note": "Full Feb 2026 calendar pricing scraped"
+            },
+            {
+              "source_id": "liontravel",
+              "scraped_at": "2026-01-26T17:38:00+08:00",
+              "offers_found": 3,
+              "note": "Base prices only - 5-day pricing requires booking flow"
+            }
+          ],
+          "warnings": [
+            "Return flight details not available for BestTour package",
+            "Feb 11-12 SOLD OUT - Agent offered Feb 13 as alternative",
+            "Lion Travel prices are 'starting from' for 2-3 nights - 5-day actual prices will be higher",
+            "CNY peak (Feb 14-18): +80-90% premium over best dates"
+          ]
+        },
+        "chosen_offer": {
+          "id": "besttour_TYO06MM260213AM2",
+          "selected_date": "2026-02-13",
+          "selected_at": "2026-01-28T06:33:50.285Z"
+        }
+      },
+      "process_3_transportation": {
+        "status": "booked",
+        "updated_at": "2026-01-29T05:55:27.894Z",
+        "source": null,
+        "flight": {
+          "airline": "Scoot",
+          "airline_code": "TR",
+          "outbound": {
+            "flight_number": "TR874",
+            "departure_airport_code": "TPE",
+            "arrival_airport_code": "NRT",
+            "departure_time": "13:55",
+            "arrival_time": "18:00",
+            "date": "2026-02-13"
+          },
+          "return": {
+            "flight_number": "TR875",
+            "departure_airport_code": "NRT",
+            "arrival_airport_code": "TPE",
+            "departure_time": "19:55",
+            "arrival_time": "23:10",
+            "date": "2026-02-17"
+          },
+          "booked_date": "2026-02-13",
+          "populated_at": "2026-01-28T06:33:50.285Z"
+        },
+        "home_to_airport": {
+          "status": "planned",
+          "candidates": [
+            {
+              "id": "nex_tokyo_nrt_1603",
+              "method": "Narita Express (NEX)",
+              "route": "Hamamatsucho → Tokyo Station → NRT",
+              "departure_time": "16:03",
+              "arrival_time": "17:00",
+              "duration_min": 90,
+              "cost_jpy": 3250,
+              "transfers": 1,
+              "amenities": [
+                "toilet",
+                "reserved_seat"
+              ],
+              "pros": [
+                "Faster (arrive 30 min earlier)",
+                "Train schedule reliable"
+              ],
+              "cons": [
+                "1 transfer at Tokyo Station",
+                "Luggage through station"
+              ]
+            },
+            {
+              "id": "access_express",
+              "method": "Access Express",
+              "route": "Daimon → Asakusa Line → NRT",
+              "duration_min": 100,
+              "cost_jpy": 1270,
+              "transfers": 1,
+              "amenities": [
+                "toilet"
+              ],
+              "pros": [
+                "Cheapest option"
+              ],
+              "cons": [
+                "More crowded",
+                "Less luggage space"
+              ]
+            }
+          ]
+        },
+        "airport_to_hotel": {
+          "status": "planned",
+          "candidates": [
+            {
+              "id": "nex_nrt_tokyo_1903",
+              "method": "Narita Express (NEX)",
+              "route": "NRT → Tokyo Station → Hamamatsucho",
+              "departure_time": "19:03",
+              "arrival_time": "20:15",
+              "duration_min": 72,
+              "cost_jpy": 3250,
+              "transfers": 1,
+              "amenities": [
+                "toilet",
+                "reserved_seat"
+              ],
+              "pros": [
+                "Faster (arrive 1h 10m earlier)",
+                "No traffic delays"
+              ],
+              "cons": [
+                "1 transfer at Tokyo Station",
+                "Less time for dinner at airport"
+              ]
+            },
+            {
+              "id": "access_express",
+              "method": "Access Express",
+              "route": "NRT → Aoto → Asakusa Line → Daimon",
+              "duration_min": 100,
+              "cost_jpy": 1270,
+              "transfers": 1,
+              "amenities": [
+                "toilet"
+              ],
+              "pros": [
+                "Cheapest option"
+              ],
+              "cons": [
+                "More crowded",
+                "Less luggage space",
+                "Multiple transfers"
+              ]
+            },
+            {
+              "id": "skyliner_ueno",
+              "method": "Keisei Skyliner",
+              "route": "NRT → Ueno → JR Hamamatsucho",
+              "duration_min": 75,
+              "cost_jpy": 2700,
+              "transfers": 1,
+              "amenities": [
+                "toilet",
+                "reserved_seat"
+              ],
+              "pros": [
+                "Fast to Ueno"
+              ],
+              "cons": [
+                "Transfer at Ueno",
+                "Longer walk/transfer"
+              ]
+            }
+          ]
+        },
+        "airport_transfers": {
+          "arrival": {
+            "status": "planned",
+            "selected": {
+              "id": "arrival_limousine_bus_nl22oq",
+              "title": "Limousine Bus",
+              "route": "NRT T2 → Shiodome (Takeshiba)",
+              "duration_min": 85,
+              "price_yen": 3200,
+              "schedule": "19:40 → ~21:05"
+            },
+            "candidates": [
+              {
+                "id": "arrival_nex_yamanote_hfe9zm",
+                "title": "NEX + Yamanote",
+                "route": "NRT → Tokyo → Hamamatsucho",
+                "duration_min": 75,
+                "price_yen": 3250
+              },
+              {
+                "id": "arrival_access_express_uiy0mg",
+                "title": "Access Express",
+                "route": "NRT → Aoto → Shimbashi",
+                "duration_min": 90,
+                "price_yen": 1270
+              }
+            ]
+          },
+          "departure": {
+            "status": "planned",
+            "selected": {
+              "id": "departure_limousine_bus_muxda5",
+              "title": "Limousine Bus",
+              "route": "Takeshiba → NRT T2",
+              "duration_min": 120,
+              "price_yen": 3200,
+              "schedule": "15:30 → ~17:30"
+            },
+            "candidates": [
+              {
+                "id": "departure_nex_yamanote_wt5uvm",
+                "title": "NEX + Yamanote",
+                "route": "Hamamatsucho → Tokyo → NRT",
+                "duration_min": 90,
+                "price_yen": 3250
+              },
+              {
+                "id": "departure_access_express_pjjjzu",
+                "title": "Access Express",
+                "route": "Daimon → Asakusa Line → NRT",
+                "duration_min": 100,
+                "price_yen": 1270
+              }
+            ]
+          }
+        },
+        "populated_from": "package:besttour_TYO05MM260211AM"
+      },
+      "process_4_accommodation": {
+        "status": "booked",
+        "updated_at": "2026-01-28T15:46:41.859Z",
+        "source": null,
+        "location_zone": {
+          "status": "pending",
+          "selected_area": null,
+          "candidates": [
+            {
+              "slug": "shimbashi",
+              "display_name": "Shimbashi / Hamamatsucho",
+              "pros": [
+                "Easy Haneda access"
+              ],
+              "cons": [
+                "Business area"
+              ]
+            },
+            {
+              "slug": "shinjuku",
+              "display_name": "Shinjuku",
+              "pros": [
+                "Entertainment",
+                "Shopping"
+              ],
+              "cons": [
+                "Far from Haneda"
+              ]
+            },
+            {
+              "slug": "asakusa",
+              "display_name": "Asakusa",
+              "pros": [
+                "Traditional"
+              ],
+              "cons": [
+                "Far from Shibuya"
+              ]
+            }
+          ]
+        },
+        "hotel": {
+          "name": "TAVINOS HAMAMATSUCHO",
+          "slug": "tavinos_hamamatsucho",
+          "area": "Shimbashi / Hamamatsucho",
+          "star_rating": null,
+          "access": [
+            "JR Hamamatsucho 8min",
+            "Yurikamome Takeshiba 1min",
+            "Tokyo Monorail 8min"
+          ],
+          "check_in": "2026-02-13",
+          "populated_at": "2026-01-28T06:33:50.285Z"
+        },
+        "populated_from": "package:besttour_TYO05MM260211AM"
+      },
+      "process_5_daily_itinerary": {
+        "status": "researched",
+        "updated_at": "2026-01-29T04:54:47.828Z",
+        "days": [
+          {
+            "date": "2026-02-13",
+            "day_number": 1,
+            "day_type": "arrival",
+            "status": "planned",
+            "theme": "Arrival + Rest + Hamamatsucho Explore",
+            "morning": {
+              "focus": "Departure from TPE",
+              "activities": [
+                "TPE Airport",
+                "TR874 TPE 13:55 → NRT 18:00"
+              ],
+              "meals": [
+                "Lunch before flight or airport"
+              ],
+              "transit_notes": "NRT arrival 18:00",
+              "booking_notes": "Arrive Narita by 13:00 for check-in"
+            },
+            "afternoon": {
+              "focus": "Flight & Arrival & Dinner at Narita",
+              "activities": [
+                "Flight time: 4h05m",
+                "18:00 Land NRT T2",
+                "18:45 Immigration & baggage",
+                "18:50-19:30 Dinner at Narita T2",
+                "19:40 Limousine Bus (SuperCabin) to Takeshiba"
+              ],
+              "meals": [
+                "Dinner at Narita T2 (ramen, sushi, udon options)"
+              ],
+              "transit_notes": "Limousine Bus 19:40 → Takeshiba 21:25",
+              "booking_notes": "Pre-book Limousine Bus online"
+            },
+            "evening": {
+              "focus": "Hotel Check-in & Rest",
+              "activities": [
+                "21:25 Arrive Takeshiba stop",
+                "21:30 Walk to TAVINOS Hamamatsucho (3 min)",
+                "Hotel check-in",
+                "Rest after travel day"
+              ],
+              "meals": [
+                "Already ate at Narita"
+              ],
+              "transit_notes": "Takeshiba stop → Hotel (3 min walk)",
+              "booking_notes": "Late check-in OK, hotel has 24h front desk"
+            }
+          },
+          {
+            "date": "2026-02-14",
+            "day_number": 2,
+            "day_type": "full",
+            "status": "planned",
+            "theme": "Shinjuku: Chanel Shopping + Omiyage",
+            "morning": {
+              "focus": "KOMEHYO Shinjuku (Chanel Bags)",
+              "activities": [
+                "Hamamatsucho → Shinjuku (JR Yamanote, 25 min)",
+                "KOMEHYO Shinjuku main store (opens 11:00)",
+                "Browse 5 floors, focus on Chanel section"
+              ],
+              "meals": [
+                "Breakfast at hotel"
+              ],
+              "transit_notes": "JR Hamamatsucho → Shinjuku (Yamanote Line)",
+              "booking_notes": "KOMEHYO opens 11:00, arrive early for best selection"
+            },
+            "afternoon": {
+              "focus": "Backup Store + Omiyage",
+              "activities": [
+                "Daikokuya Shinjuku (backup, 5 min walk) if needed",
+                "Isetan Shinjuku B2 for omiyage (Yoku Moku, Henri Charpentier)",
+                "Browse Shinjuku area"
+              ],
+              "meals": [
+                "Lunch at Isetan restaurant floor or nearby"
+              ],
+              "transit_notes": "All walking distance in Shinjuku",
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": "Shinjuku Nightlife",
+              "activities": [
+                "Omoide Yokocho (Memory Lane) for dinner",
+                "Kabukicho walk-through",
+                "Return to hotel"
+              ],
+              "meals": [
+                "Yakitori at Omoide Yokocho"
+              ],
+              "transit_notes": "JR Shinjuku → Hamamatsucho",
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-15",
+            "day_number": 3,
+            "day_type": "full",
+            "status": "planned",
+            "theme": "teamLab Borderless + Azabudai/Roppongi",
+            "morning": {
+              "focus": "teamLab Borderless",
+              "activities": [
+                "Hamamatsucho → Kamiyacho (Metro, 10 min)",
+                {
+                  "id": "activity_mkyzc52c_9diw",
+                  "title": "teamLab Borderless at Azabudai Hills (opens 10:00)",
+                  "area": "",
+                  "nearest_station": null,
+                  "duration_min": null,
+                  "booking_required": true,
+                  "booking_url": null,
+                  "booking_status": "booked",
+                  "booking_ref": "TLB-2026-FEB15-1234",
+                  "book_by": "2026-02-01",
+                  "cost_estimate": null,
+                  "tags": [],
+                  "notes": null,
+                  "priority": "want"
+                },
+                "Allow 2-3 hours for full experience"
+              ],
+              "meals": [
+                "Light breakfast at hotel"
+              ],
+              "transit_notes": "Metro Hibiya Line: Kamiyacho Station",
+              "booking_notes": "BOOK TICKETS IN ADVANCE - often sells out"
+            },
+            "afternoon": {
+              "focus": "Azabudai Hills + Roppongi",
+              "activities": [
+                "Explore Azabudai Hills (new complex)",
+                "Walk to Roppongi Hills",
+                "Mori Art Museum or Tokyo City View (optional)"
+              ],
+              "meals": [
+                "Lunch at Azabudai Hills restaurants"
+              ],
+              "transit_notes": "Walking distance Azabudai → Roppongi",
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": "Roppongi Dinner",
+              "activities": [
+                "Dinner in Roppongi",
+                "Return to hotel"
+              ],
+              "meals": [
+                "Upscale dining or casual izakaya"
+              ],
+              "transit_notes": "Metro Roppongi → Onarimon/Daimon → walk to hotel",
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-16",
+            "day_number": 4,
+            "day_type": "full",
+            "status": "planned",
+            "theme": "Classic Tokyo: Asakusa + Shibuya",
+            "morning": {
+              "focus": "Asakusa Traditional",
+              "activities": [
+                "Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)",
+                "Senso-ji Temple",
+                "Nakamise Shopping Street",
+                "Kaminarimon Gate photos"
+              ],
+              "meals": [
+                "Breakfast at hotel or skip for early start"
+              ],
+              "transit_notes": "Toei Asakusa Line direct from Daimon",
+              "booking_notes": null
+            },
+            "afternoon": {
+              "focus": "Shibuya",
+              "activities": [
+                "Asakusa → Shibuya (Metro, 30 min)",
+                "Shibuya Crossing",
+                "Shibuya Sky observation deck (optional)",
+                "Shibuya 109 / shopping"
+              ],
+              "meals": [
+                "Lunch in Asakusa (soba, tempura) or Shibuya"
+              ],
+              "transit_notes": "Ginza Line to Shibuya",
+              "booking_notes": "Shibuya Sky needs advance booking if interested"
+            },
+            "evening": {
+              "focus": "Shibuya/Harajuku Evening",
+              "activities": [
+                "Walk to Harajuku (10 min)",
+                "Takeshita Street",
+                "Omotesando for upscale window shopping",
+                "Dinner and return"
+              ],
+              "meals": [
+                "Dinner in Harajuku/Omotesando area"
+              ],
+              "transit_notes": "JR Harajuku → Hamamatsucho",
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-17",
+            "day_number": 5,
+            "day_type": "departure",
+            "status": "planned",
+            "theme": "Last-Minute Omiyage + Departure",
+            "morning": {
+              "focus": "Flexible / Pack",
+              "activities": [
+                "Sleep in",
+                "Pack luggage",
+                "Hotel checkout (11:00)",
+                "Store luggage at hotel or Tokyo Station coin lockers"
+              ],
+              "meals": [
+                "Breakfast at hotel"
+              ],
+              "transit_notes": null,
+              "booking_notes": "Confirm luggage storage options"
+            },
+            "afternoon": {
+              "focus": "Tokyo Station + Final Omiyage",
+              "activities": [
+                "Hamamatsucho → Tokyo Station (JR, 5 min)",
+                "Daimaru Tokyo Station B1 for final omiyage",
+                "Tokyo Character Street (if time)",
+                "Lunch at Tokyo Station Ramen Street or GRANSTA"
+              ],
+              "meals": [
+                "Lunch at Tokyo Station"
+              ],
+              "transit_notes": "Short JR ride or walk to Tokyo Station",
+              "booking_notes": null
+            },
+            "evening": {
+              "focus": "Airport Transfer via Limousine Bus",
+              "activities": [
+                "15:00 Leave hotel with luggage",
+                "15:05 Walk to Takeshiba bus stop (3 min)",
+                "15:30 Limousine Bus (SuperCabin) departs",
+                "17:30 Arrive NRT T2",
+                "Check-in and security",
+                "Duty-free shopping + light dinner at airport",
+                "19:55 TR875 departs NRT → TPE 23:10"
+              ],
+              "meals": [
+                "Light dinner at NRT T2 after check-in"
+              ],
+              "transit_notes": "Limousine Bus: Takeshiba 15:30 → NRT 17:30 (¥3,200)",
+              "booking_notes": "Pre-book Limousine Bus online"
+            }
+          }
+        ],
+        "scaffolded_at": "2026-01-28T09:00:48.959Z",
+        "populated_at": "2026-01-28T10:00:00.000Z",
+        "notes": "Main goals: Chanel bags (KOMEHYO), Omiyage (Isetan + Daimaru), teamLab Borderless. Balanced pace with red-eye recovery Day 1."
+      }
+    },
+    "nagoya_2026": {
+      "slug": "nagoya_2026",
+      "display_name": "Nagoya",
+      "status": "archived",
+      "created_at": "2026-01-23T16:00:00+08:00",
+      "updated_at": "2026-01-26T12:35:00+08:00",
+      "archived_at": "2026-01-26T12:30:00+08:00",
+      "process_2_destination": {
+        "status": "confirmed",
+        "updated_at": "2026-01-23T16:30:00+08:00",
+        "origin_city": "Taipei",
+        "origin_country": "Taiwan",
+        "destination_country": "Japan",
+        "region": "Chubu",
+        "primary_airport": "NGO",
+        "cities": [
+          {
+            "slug": "nagoya",
+            "display_name": "Nagoya",
+            "role": "primary",
+            "nights": 4,
+            "attractions": [
+              "Nagoya Castle",
+              "Atsuta Shrine",
+              "Osu Shopping District"
+            ]
+          },
+          {
+            "slug": "takayama",
+            "display_name": "Takayama",
+            "role": "day_trip",
+            "nights": 0,
+            "attractions": [
+              "Old Town",
+              "Morning Markets"
+            ]
+          },
+          {
+            "slug": "inuyama",
+            "display_name": "Inuyama",
+            "role": "day_trip",
+            "nights": 0,
+            "attractions": [
+              "Inuyama Castle"
+            ]
+          }
+        ]
+      },
+      "process_3_4_packages": {
+        "status": "pending",
+        "updated_at": "2026-01-26T12:35:00+08:00",
+        "selected_offer_id": null,
+        "results": {
+          "offers": [],
+          "provenance": [],
+          "warnings": []
+        }
+      },
+      "process_3_transportation": {
+        "status": "researched",
+        "updated_at": "2026-01-23T16:30:00+08:00",
+        "source": "direct_research",
+        "flight": {
+          "status": "researched",
+          "candidates": [
+            {
+              "id": "direct_flight_ngo_tigerair_001",
+              "source_id": "direct_research",
+              "product_code": "IT206_IT207",
+              "type": "flight",
+              "currency": "TWD",
+              "price_per_person": 6700,
+              "price_total": 13400,
+              "availability": "estimated",
+              "flight": {
+                "airline": "Tigerair Taiwan",
+                "airline_code": "IT",
+                "outbound": {
+                  "flight_number": "IT206",
+                  "departure_airport_code": "TPE",
+                  "arrival_airport_code": "NGO",
+                  "departure_time": "2026-02-11T09:00:00+08:00",
+                  "arrival_time": "2026-02-11T12:55:00+09:00"
+                },
+                "return": {
+                  "flight_number": "IT207",
+                  "departure_airport_code": "NGO",
+                  "arrival_airport_code": "TPE",
+                  "departure_time": "2026-02-15T13:45:00+09:00",
+                  "arrival_time": "2026-02-15T15:55:00+08:00"
+                }
+              },
+              "pros": [
+                "Daily flights",
+                "Good times",
+                "Direct to Nagoya"
+              ],
+              "cons": [
+                "CNY may have premium"
+              ]
+            }
+          ]
+        }
+      },
+      "process_4_accommodation": {
+        "status": "pending",
+        "updated_at": "2026-01-23T16:30:00+08:00",
+        "source": null,
+        "location_zone": {
+          "candidates": [
+            {
+              "slug": "nagoya_station",
+              "display_name": "Nagoya Station Area"
+            },
+            {
+              "slug": "sakae",
+              "display_name": "Sakae"
+            }
+          ]
+        },
+        "hotel": {
+          "status": "pending",
+          "candidates": []
+        }
+      },
+      "process_5_daily_itinerary": {
+        "status": "pending",
+        "updated_at": "2026-01-23T16:30:00+08:00",
+        "days": []
+      }
+    }
+  },
   "cascade_rules": {
     "wildcard_expansion": {
       "mode": "schema_driven",
@@ -338,926 +1425,6 @@
       ]
     }
   },
-  "budget": {
-    "total_cap": null,
-    "flight_cap": null,
-    "accommodation_cap": null,
-    "daily_cap": null,
-    "pax": 2
-  },
-  "process_1_date_anchor": {
-    "status": "confirmed",
-    "updated_at": "2026-01-26T12:30:00+08:00",
-    "set_out_date": "2026-02-11",
-    "duration_days": 5,
-    "return_date": "2026-02-15",
-    "flexibility": {
-      "date_flexible": true,
-      "preferred_dates": [
-        "2026-02-21",
-        "2026-02-22"
-      ],
-      "avoid_dates": [
-        "2026-02-14",
-        "2026-02-15",
-        "2026-02-16"
-      ],
-      "reason": "CNY peak pricing Feb 14-17"
-    }
-  },
-  "destinations": {
-    "tokyo_2026": {
-      "slug": "tokyo_2026",
-      "display_name": "Tokyo",
-      "status": "active",
-      "created_at": "2026-01-26T12:30:00+08:00",
-      "updated_at": "2026-01-26T12:35:00+08:00",
-      "process_2_destination": {
-        "status": "confirmed",
-        "updated_at": "2026-01-26T12:30:00+08:00",
-        "origin_city": "Taipei",
-        "origin_country": "Taiwan",
-        "destination_country": "Japan",
-        "region": "Kanto",
-        "primary_airport": "NRT",
-        "cities": [
-          {
-            "slug": "tokyo",
-            "display_name": "Tokyo",
-            "role": "primary",
-            "nights": 4,
-            "attractions": [
-              "Shibuya",
-              "Shinjuku",
-              "Asakusa",
-              "Akihabara",
-              "Harajuku",
-              "Tokyo Tower",
-              "teamLab"
-            ]
-          },
-          {
-            "slug": "yokohama",
-            "display_name": "Yokohama",
-            "role": "day_trip",
-            "nights": 0,
-            "attractions": [
-              "Chinatown",
-              "Minato Mirai",
-              "Cup Noodles Museum"
-            ]
-          }
-        ],
-        "shopping": [
-          {
-            "type": "second_hand_luxury",
-            "stores": [
-              "KOMEHYO Shinjuku",
-              "BRAND OFF Shibuya",
-              "Daikokuya"
-            ]
-          },
-          {
-            "type": "general",
-            "stores": [
-              "Shibuya 109",
-              "Don Quijote",
-              "Uniqlo Ginza"
-            ]
-          }
-        ]
-      },
-      "process_3_4_packages": {
-        "status": "booked",
-        "updated_at": "2026-01-28T15:46:41.859Z",
-        "selected_offer_id": "besttour_TYO06MM260213AM2",
-        "results": {
-          "offers": [
-            {
-              "id": "besttour_TYO06MM260213AM2",
-              "source_id": "besttour",
-              "product_code": "TYO06MM260213AM2",
-              "url": "https://www.besttour.com.tw/itinerary/TYO06MM260213AM2",
-              "scraped_at": "2026-01-26T12:26:39+08:00",
-              "type": "package",
-              "duration_days": 5,
-              "currency": "TWD",
-              "price_per_person": 18388,
-              "price_total": 36776,
-              "availability": "available",
-              "seats_remaining": 2,
-              "flight": {
-                "airline": "Peach Aviation",
-                "airline_code": "MM",
-                "outbound": {
-                  "flight_number": "MM620",
-                  "departure_airport_code": "TPE",
-                  "arrival_airport_code": "NRT",
-                  "departure_time": "02:25",
-                  "arrival_time": "06:30"
-                },
-                "return": {
-                  "flight_number": "MM627",
-                  "departure_airport_code": "NRT",
-                  "arrival_airport_code": "TPE",
-                  "departure_time": "22:05",
-                  "arrival_time": "01:25+1"
-                }
-              },
-              "hotel": {
-                "name": "TAVINOS HAMAMATSUCHO",
-                "slug": "tavinos_hamamatsucho",
-                "area": "Shimbashi / Hamamatsucho",
-                "star_rating": null,
-                "access": [
-                  "JR Hamamatsucho 8min",
-                  "Yurikamome Takeshiba 1min",
-                  "Tokyo Monorail 8min"
-                ]
-              },
-              "includes": [
-                "light_breakfast"
-              ],
-              "date_pricing": {
-                "2026-02-03": {
-                  "price": 19588,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-04": {
-                  "price": 19988,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-05": {
-                  "price": 19888,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-06": {
-                  "price": 19888,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-11": {
-                  "price": 21388,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-12": {
-                  "price": 23388,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-13": {
-                  "price": 27888,
-                  "availability": "available",
-                  "seats_remaining": 2,
-                  "note": "Agent offered this date"
-                },
-                "2026-02-14": {
-                  "price": 34888,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-15": {
-                  "price": 33888,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-16": {
-                  "price": 33888,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-17": {
-                  "price": 35388,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-18": {
-                  "price": 34388,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-19": {
-                  "price": 27388,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-20": {
-                  "price": 23388,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-21": {
-                  "price": 19888,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-22": {
-                  "price": 18388,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-23": {
-                  "price": 18388,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-24": {
-                  "price": 19388,
-                  "availability": "available",
-                  "seats_remaining": 2
-                },
-                "2026-02-25": {
-                  "price": 22888,
-                  "availability": "sold_out",
-                  "seats_remaining": 0
-                },
-                "2026-02-26": {
-                  "price": 22888,
-                  "availability": "available",
-                  "seats_remaining": 2
-                }
-              },
-              "last_price_check": "2026-01-26T17:40:00+08:00",
-              "best_value": {
-                "date": "2026-02-22",
-                "price_per_person": 18388,
-                "price_total": 36776
-              },
-              "pros": [
-                "Package bundled",
-                "Includes breakfast",
-                "Good location",
-                "Easy Haneda access"
-              ],
-              "cons": [
-                "Feb 11-13 sold out",
-                "CNY dates expensive",
-                "Return flight unknown"
-              ]
-            },
-            {
-              "id": "liontravel_tokyo_skytree_24hr_metro",
-              "source_id": "liontravel",
-              "product_code": "tokyo_skytree_24hr_metro",
-              "url": "https://event.liontravel.com/zh-tw/japan/tokyo/index",
-              "scraped_at": "2026-01-26T15:09:51+08:00",
-              "type": "package",
-              "duration_days": 5,
-              "currency": "TWD",
-              "price_per_person": 9930,
-              "price_total": 19860,
-              "availability": "available",
-              "seats_remaining": null,
-              "flight": {
-                "airline": "Multiple options",
-                "airline_code": null,
-                "outbound": {
-                  "flight_number": null,
-                  "departure_airport_code": "TPE",
-                  "arrival_airport_code": "NRT",
-                  "departure_time": null,
-                  "arrival_time": null
-                },
-                "return": null
-              },
-              "hotel": {
-                "name": "自選住宿 (Asakusa/Ueno/Shinjuku options)",
-                "slug": "self_select",
-                "area": "Multiple",
-                "star_rating": null,
-                "access": []
-              },
-              "includes": [
-                "wifi",
-                "24hr_metro_pass"
-              ],
-              "date_pricing": null,
-              "best_value": {
-                "date": "flex",
-                "price_per_person": 9930,
-                "price_total": 19860
-              },
-              "pros": [
-                "Cheapest starting price",
-                "Includes 24hr metro",
-                "Flexible hotel choice",
-                "Good availability"
-              ],
-              "cons": [
-                "Starting price only",
-                "Flight details unknown",
-                "Requires booking for exact price"
-              ],
-              "note": "適用期間：2025/08/01~2026/06/30"
-            },
-            {
-              "id": "liontravel_tokyo_kawaguchiko",
-              "source_id": "liontravel",
-              "product_code": "tokyo_kawaguchiko",
-              "url": "https://event.liontravel.com/zh-tw/japan/tokyo/index",
-              "scraped_at": "2026-01-26T15:09:51+08:00",
-              "type": "package",
-              "duration_days": 5,
-              "currency": "TWD",
-              "price_per_person": 9780,
-              "price_total": 19560,
-              "availability": "available",
-              "seats_remaining": null,
-              "flight": {
-                "airline": "Multiple options",
-                "airline_code": null,
-                "outbound": {
-                  "departure_airport_code": "TPE",
-                  "arrival_airport_code": "NRT"
-                },
-                "return": null
-              },
-              "hotel": {
-                "name": "河口湖エリア (Kawaguchiko area)",
-                "slug": "kawaguchiko_area",
-                "area": "Kawaguchiko/Mt. Fuji",
-                "star_rating": null,
-                "access": []
-              },
-              "includes": [],
-              "date_pricing": null,
-              "best_value": {
-                "date": "flex",
-                "price_per_person": 9780,
-                "price_total": 19560
-              },
-              "pros": [
-                "Mt. Fuji view",
-                "Lowest starting price",
-                "Lake Kawaguchiko access"
-              ],
-              "cons": [
-                "Starting price only",
-                "Far from Tokyo center",
-                "Limited nightlife"
-              ],
-              "note": "適用期間：2025/11/14~2026/06/30"
-            },
-            {
-              "id": "liontravel_tokyo_disney",
-              "source_id": "liontravel",
-              "product_code": "tokyo_disney_esim",
-              "url": "https://event.liontravel.com/zh-tw/japan/tokyo/index",
-              "scraped_at": "2026-01-26T15:09:51+08:00",
-              "type": "package",
-              "duration_days": 5,
-              "currency": "TWD",
-              "price_per_person": 14888,
-              "price_total": 29776,
-              "availability": "available",
-              "seats_remaining": null,
-              "flight": {
-                "airline": "Multiple options",
-                "airline_code": null,
-                "outbound": {
-                  "departure_airport_code": "TPE",
-                  "arrival_airport_code": "NRT"
-                },
-                "return": null
-              },
-              "hotel": {
-                "name": "Disney Resort area hotel",
-                "slug": "disney_area",
-                "area": "Tokyo Disney Resort",
-                "star_rating": null,
-                "access": [
-                  "JR Maihama Station"
-                ]
-              },
-              "includes": [
-                "wifi",
-                "disney_ticket"
-              ],
-              "date_pricing": null,
-              "best_value": {
-                "date": "flex",
-                "price_per_person": 14888,
-                "price_total": 29776
-              },
-              "pros": [
-                "Includes Disney ticket",
-                "Includes eSIM",
-                "Disney area hotel"
-              ],
-              "cons": [
-                "Starting price only",
-                "Far from central Tokyo",
-                "Higher base price"
-              ],
-              "note": "適用期間：2025/11/13~2026/06/30"
-            }
-          ],
-          "provenance": [
-            {
-              "source_id": "besttour",
-              "scraped_at": "2026-01-26T17:40:00+08:00",
-              "offers_found": 1,
-              "note": "Full Feb 2026 calendar pricing scraped"
-            },
-            {
-              "source_id": "liontravel",
-              "scraped_at": "2026-01-26T17:38:00+08:00",
-              "offers_found": 3,
-              "note": "Base prices only - 5-day pricing requires booking flow"
-            }
-          ],
-          "warnings": [
-            "Return flight details not available for BestTour package",
-            "Feb 11-12 SOLD OUT - Agent offered Feb 13 as alternative",
-            "Lion Travel prices are 'starting from' for 2-3 nights - 5-day actual prices will be higher",
-            "CNY peak (Feb 14-18): +80-90% premium over best dates"
-          ]
-        },
-        "chosen_offer": {
-          "id": "besttour_TYO06MM260213AM2",
-          "selected_date": "2026-02-13",
-          "selected_at": "2026-01-28T06:33:50.285Z"
-        }
-      },
-      "process_3_transportation": {
-        "status": "booked",
-        "updated_at": "2026-01-28T15:46:41.859Z",
-        "source": null,
-        "flight": {
-          "airline": "Scoot",
-          "airline_code": "TR",
-          "outbound": {
-            "flight_number": "TR874",
-            "departure_airport_code": "TPE",
-            "arrival_airport_code": "NRT",
-            "departure_time": "13:55",
-            "arrival_time": "18:00",
-            "date": "2026-02-13"
-          },
-          "return": {
-            "flight_number": "TR875",
-            "departure_airport_code": "NRT",
-            "arrival_airport_code": "TPE",
-            "departure_time": "19:55",
-            "arrival_time": "23:10",
-            "date": "2026-02-17"
-          },
-          "booked_date": "2026-02-13",
-          "populated_at": "2026-01-28T06:33:50.285Z"
-        },
-        "home_to_airport": {
-          "status": "pending",
-          "candidates": []
-        },
-        "airport_to_hotel": {
-          "status": "pending",
-          "candidates": []
-        },
-        "populated_from": "package:besttour_TYO05MM260211AM"
-      },
-      "process_4_accommodation": {
-        "status": "booked",
-        "updated_at": "2026-01-28T15:46:41.859Z",
-        "source": null,
-        "location_zone": {
-          "status": "pending",
-          "selected_area": null,
-          "candidates": [
-            {
-              "slug": "shimbashi",
-              "display_name": "Shimbashi / Hamamatsucho",
-              "pros": [
-                "Easy Haneda access"
-              ],
-              "cons": [
-                "Business area"
-              ]
-            },
-            {
-              "slug": "shinjuku",
-              "display_name": "Shinjuku",
-              "pros": [
-                "Entertainment",
-                "Shopping"
-              ],
-              "cons": [
-                "Far from Haneda"
-              ]
-            },
-            {
-              "slug": "asakusa",
-              "display_name": "Asakusa",
-              "pros": [
-                "Traditional"
-              ],
-              "cons": [
-                "Far from Shibuya"
-              ]
-            }
-          ]
-        },
-        "hotel": {
-          "name": "TAVINOS HAMAMATSUCHO",
-          "slug": "tavinos_hamamatsucho",
-          "area": "Shimbashi / Hamamatsucho",
-          "star_rating": null,
-          "access": [
-            "JR Hamamatsucho 8min",
-            "Yurikamome Takeshiba 1min",
-            "Tokyo Monorail 8min"
-          ],
-          "check_in": "2026-02-13",
-          "populated_at": "2026-01-28T06:33:50.285Z"
-        },
-        "populated_from": "package:besttour_TYO05MM260211AM"
-      },
-      "process_5_daily_itinerary": {
-        "status": "researched",
-        "updated_at": "2026-01-28T10:00:00.000Z",
-        "days": [
-          {
-            "date": "2026-02-13",
-            "day_number": 1,
-            "day_type": "arrival",
-            "status": "planned",
-            "theme": "Arrival + Rest + Hamamatsucho Explore",
-            "morning": {
-              "focus": "Departure from TPE",
-              "activities": [
-                "TPE Airport",
-                "TR874 TPE 13:55 → NRT 18:00"
-              ],
-              "meals": [
-                "Lunch before flight or airport"
-              ],
-              "transit_notes": "NRT arrival 18:00",
-              "booking_notes": "Arrive Narita by 13:00 for check-in"
-            },
-            "afternoon": {
-              "focus": "Flight & Arrival",
-              "activities": [
-                "Flight time: 4h05m",
-                "Immigration & baggage (~30-45 min)",
-                "Transport to TAVINOS Hamamatsucho (~60-90 min via NEX or Limousine Bus)"
-              ],
-              "meals": [],
-              "transit_notes": "NRT → Hotel",
-              "booking_notes": null
-            },
-            "evening": {
-              "focus": "Hotel Check-in & Dinner",
-              "activities": [
-                "Hotel check-in",
-                "Dinner near hotel (Hamamatsucho/Shiodome area)",
-                "Rest after travel day"
-              ],
-              "meals": [
-                "Dinner at hotel or nearby restaurant"
-              ],
-              "transit_notes": null,
-              "booking_notes": "Confirm check-in time (normal: 15:00)"
-            }
-          },
-          {
-            "date": "2026-02-14",
-            "day_number": 2,
-            "day_type": "full",
-            "status": "planned",
-            "theme": "Shinjuku: Chanel Shopping + Omiyage",
-            "morning": {
-              "focus": "KOMEHYO Shinjuku (Chanel Bags)",
-              "activities": [
-                "Hamamatsucho → Shinjuku (JR Yamanote, 25 min)",
-                "KOMEHYO Shinjuku main store (opens 11:00)",
-                "Browse 5 floors, focus on Chanel section"
-              ],
-              "meals": [
-                "Breakfast at hotel"
-              ],
-              "transit_notes": "JR Hamamatsucho → Shinjuku (Yamanote Line)",
-              "booking_notes": "KOMEHYO opens 11:00, arrive early for best selection"
-            },
-            "afternoon": {
-              "focus": "Backup Store + Omiyage",
-              "activities": [
-                "Daikokuya Shinjuku (backup, 5 min walk) if needed",
-                "Isetan Shinjuku B2 for omiyage (Yoku Moku, Henri Charpentier)",
-                "Browse Shinjuku area"
-              ],
-              "meals": [
-                "Lunch at Isetan restaurant floor or nearby"
-              ],
-              "transit_notes": "All walking distance in Shinjuku",
-              "booking_notes": null
-            },
-            "evening": {
-              "focus": "Shinjuku Nightlife",
-              "activities": [
-                "Omoide Yokocho (Memory Lane) for dinner",
-                "Kabukicho walk-through",
-                "Return to hotel"
-              ],
-              "meals": [
-                "Yakitori at Omoide Yokocho"
-              ],
-              "transit_notes": "JR Shinjuku → Hamamatsucho",
-              "booking_notes": null
-            }
-          },
-          {
-            "date": "2026-02-15",
-            "day_number": 3,
-            "day_type": "full",
-            "status": "planned",
-            "theme": "teamLab Borderless + Azabudai/Roppongi",
-            "morning": {
-              "focus": "teamLab Borderless",
-              "activities": [
-                "Hamamatsucho → Kamiyacho (Metro, 10 min)",
-                "teamLab Borderless at Azabudai Hills (opens 10:00)",
-                "Allow 2-3 hours for full experience"
-              ],
-              "meals": [
-                "Light breakfast at hotel"
-              ],
-              "transit_notes": "Metro Hibiya Line: Kamiyacho Station",
-              "booking_notes": "BOOK TICKETS IN ADVANCE - often sells out"
-            },
-            "afternoon": {
-              "focus": "Azabudai Hills + Roppongi",
-              "activities": [
-                "Explore Azabudai Hills (new complex)",
-                "Walk to Roppongi Hills",
-                "Mori Art Museum or Tokyo City View (optional)"
-              ],
-              "meals": [
-                "Lunch at Azabudai Hills restaurants"
-              ],
-              "transit_notes": "Walking distance Azabudai → Roppongi",
-              "booking_notes": null
-            },
-            "evening": {
-              "focus": "Roppongi Dinner",
-              "activities": [
-                "Dinner in Roppongi",
-                "Return to hotel"
-              ],
-              "meals": [
-                "Upscale dining or casual izakaya"
-              ],
-              "transit_notes": "Metro Roppongi → Onarimon/Daimon → walk to hotel",
-              "booking_notes": null
-            }
-          },
-          {
-            "date": "2026-02-16",
-            "day_number": 4,
-            "day_type": "full",
-            "status": "planned",
-            "theme": "Classic Tokyo: Asakusa + Shibuya",
-            "morning": {
-              "focus": "Asakusa Traditional",
-              "activities": [
-                "Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)",
-                "Senso-ji Temple",
-                "Nakamise Shopping Street",
-                "Kaminarimon Gate photos"
-              ],
-              "meals": [
-                "Breakfast at hotel or skip for early start"
-              ],
-              "transit_notes": "Toei Asakusa Line direct from Daimon",
-              "booking_notes": null
-            },
-            "afternoon": {
-              "focus": "Shibuya",
-              "activities": [
-                "Asakusa → Shibuya (Metro, 30 min)",
-                "Shibuya Crossing",
-                "Shibuya Sky observation deck (optional)",
-                "Shibuya 109 / shopping"
-              ],
-              "meals": [
-                "Lunch in Asakusa (soba, tempura) or Shibuya"
-              ],
-              "transit_notes": "Ginza Line to Shibuya",
-              "booking_notes": "Shibuya Sky needs advance booking if interested"
-            },
-            "evening": {
-              "focus": "Shibuya/Harajuku Evening",
-              "activities": [
-                "Walk to Harajuku (10 min)",
-                "Takeshita Street",
-                "Omotesando for upscale window shopping",
-                "Dinner and return"
-              ],
-              "meals": [
-                "Dinner in Harajuku/Omotesando area"
-              ],
-              "transit_notes": "JR Harajuku → Hamamatsucho",
-              "booking_notes": null
-            }
-          },
-          {
-            "date": "2026-02-17",
-            "day_number": 5,
-            "day_type": "departure",
-            "status": "planned",
-            "theme": "Last-Minute Omiyage + Departure",
-            "morning": {
-              "focus": "Flexible / Pack",
-              "activities": [
-                "Sleep in",
-                "Pack luggage",
-                "Hotel checkout (11:00)",
-                "Store luggage at hotel or Tokyo Station coin lockers"
-              ],
-              "meals": [
-                "Breakfast at hotel"
-              ],
-              "transit_notes": null,
-              "booking_notes": "Confirm luggage storage options"
-            },
-            "afternoon": {
-              "focus": "Tokyo Station + Final Omiyage",
-              "activities": [
-                "Hamamatsucho → Tokyo Station (JR, 5 min)",
-                "Daimaru Tokyo Station B1 for final omiyage",
-                "Tokyo Character Street (if time)",
-                "Lunch at Tokyo Station Ramen Street or GRANSTA"
-              ],
-              "meals": [
-                "Lunch at Tokyo Station"
-              ],
-              "transit_notes": "Short JR ride or walk to Tokyo Station",
-              "booking_notes": null
-            },
-            "evening": {
-              "focus": "Airport Transfer",
-              "activities": [
-                "Tokyo Station → Narita Airport (Narita Express, 60 min)",
-                "Aim to arrive NRT by 17:30 for TR875 19:55 flight",
-                "Check-in and security",
-                "Duty-free shopping if time"
-              ],
-              "meals": [
-                "Light dinner at airport or bento on train"
-              ],
-              "transit_notes": "Hotel → NRT for TR875 19:55",
-              "booking_notes": "Book NEX or Limousine Bus in advance"
-            }
-          }
-        ],
-        "scaffolded_at": "2026-01-28T09:00:48.959Z",
-        "populated_at": "2026-01-28T10:00:00.000Z",
-        "notes": "Main goals: Chanel bags (KOMEHYO), Omiyage (Isetan + Daimaru), teamLab Borderless. Balanced pace with red-eye recovery Day 1."
-      },
-      "process_1_date_anchor": {
-        "confirmed_dates": {
-          "start": "2026-02-13",
-          "end": "2026-02-17"
-        },
-        "days": 5,
-        "status": "confirmed",
-        "updated_at": "2026-01-27T09:50:37.324Z"
-      }
-    },
-    "nagoya_2026": {
-      "slug": "nagoya_2026",
-      "display_name": "Nagoya",
-      "status": "archived",
-      "created_at": "2026-01-23T16:00:00+08:00",
-      "updated_at": "2026-01-26T12:35:00+08:00",
-      "archived_at": "2026-01-26T12:30:00+08:00",
-      "process_2_destination": {
-        "status": "confirmed",
-        "updated_at": "2026-01-23T16:30:00+08:00",
-        "origin_city": "Taipei",
-        "origin_country": "Taiwan",
-        "destination_country": "Japan",
-        "region": "Chubu",
-        "primary_airport": "NGO",
-        "cities": [
-          {
-            "slug": "nagoya",
-            "display_name": "Nagoya",
-            "role": "primary",
-            "nights": 4,
-            "attractions": [
-              "Nagoya Castle",
-              "Atsuta Shrine",
-              "Osu Shopping District"
-            ]
-          },
-          {
-            "slug": "takayama",
-            "display_name": "Takayama",
-            "role": "day_trip",
-            "nights": 0,
-            "attractions": [
-              "Old Town",
-              "Morning Markets"
-            ]
-          },
-          {
-            "slug": "inuyama",
-            "display_name": "Inuyama",
-            "role": "day_trip",
-            "nights": 0,
-            "attractions": [
-              "Inuyama Castle"
-            ]
-          }
-        ]
-      },
-      "process_3_4_packages": {
-        "status": "pending",
-        "updated_at": "2026-01-26T12:35:00+08:00",
-        "selected_offer_id": null,
-        "results": {
-          "offers": [],
-          "provenance": [],
-          "warnings": []
-        }
-      },
-      "process_3_transportation": {
-        "status": "researched",
-        "updated_at": "2026-01-23T16:30:00+08:00",
-        "source": "direct_research",
-        "flight": {
-          "status": "researched",
-          "candidates": [
-            {
-              "id": "direct_flight_ngo_tigerair_001",
-              "source_id": "direct_research",
-              "product_code": "IT206_IT207",
-              "type": "flight",
-              "currency": "TWD",
-              "price_per_person": 6700,
-              "price_total": 13400,
-              "availability": "estimated",
-              "flight": {
-                "airline": "Tigerair Taiwan",
-                "airline_code": "IT",
-                "outbound": {
-                  "flight_number": "IT206",
-                  "departure_airport_code": "TPE",
-                  "arrival_airport_code": "NGO",
-                  "departure_time": "2026-02-11T09:00:00+08:00",
-                  "arrival_time": "2026-02-11T12:55:00+09:00"
-                },
-                "return": {
-                  "flight_number": "IT207",
-                  "departure_airport_code": "NGO",
-                  "arrival_airport_code": "TPE",
-                  "departure_time": "2026-02-15T13:45:00+09:00",
-                  "arrival_time": "2026-02-15T15:55:00+08:00"
-                }
-              },
-              "pros": [
-                "Daily flights",
-                "Good times",
-                "Direct to Nagoya"
-              ],
-              "cons": [
-                "CNY may have premium"
-              ]
-            }
-          ]
-        }
-      },
-      "process_4_accommodation": {
-        "status": "pending",
-        "updated_at": "2026-01-23T16:30:00+08:00",
-        "source": null,
-        "location_zone": {
-          "candidates": [
-            {
-              "slug": "nagoya_station",
-              "display_name": "Nagoya Station Area"
-            },
-            {
-              "slug": "sakae",
-              "display_name": "Sakae"
-            }
-          ]
-        },
-        "hotel": {
-          "status": "pending",
-          "candidates": []
-        }
-      },
-      "process_5_daily_itinerary": {
-        "status": "pending",
-        "updated_at": "2026-01-23T16:30:00+08:00",
-        "days": []
-      }
-    }
-  },
   "ota_sources": {
     "besttour": {
       "source_id": "besttour",
@@ -1527,5 +1694,19 @@
         "alternative": "Agent offered Feb 13 instead"
       }
     }
+  },
+  "schema_contract": {
+    "id_convention": "snake_case_with_year",
+    "slug_is_authoritative": true,
+    "display_names_in": "destinations.{slug}.display_name",
+    "timestamps": "ISO-8601 with timezone",
+    "currency": "TWD",
+    "process_nodes": [
+      "process_2_destination",
+      "process_3_4_packages",
+      "process_3_transportation",
+      "process_4_accommodation",
+      "process_5_daily_itinerary"
+    ]
   }
 }

@@ -1,0 +1,13 @@
+#!/bin/bash
+# Pre-commit hook: typecheck before commit
+# Install: npm run hooks:install
+
+echo "Running typecheck..."
+npm run typecheck
+
+if [ $? -ne 0 ]; then
+  echo "❌ Typecheck failed. Fix errors before committing."
+  exit 1
+fi
+
+echo "✅ Typecheck passed"

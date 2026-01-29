@@ -1,7 +1,7 @@
 # Japan Travel Project
 
 ## Trip Details
-- **Dates**: February 11-15, 2026 (flexible: Feb 21-22 preferred due to CNY pricing)
+- **Dates**: February 13-17, 2026 (confirmed, booked)
 - **Active Destination**: Tokyo, Japan
 - **Archived Destination**: Nagoya, Japan
 
@@ -100,7 +100,34 @@ Default mode for this repo is **agent-first**:
 - The agent proactively runs the next logical step (scrape → normalize → write → select → cascade) and only asks the user when a preference materially changes the result (dates/budget/constraints/which offer).
 - Prefer calling `StateManager` methods (or the CLI wrappers) over direct JSON edits, so `travel-plan.json` and `state.json` stay consistent and the audit trail stays accurate.
 - Treat schema as canonical and migrate/normalize legacy shapes on load where needed; avoid duplicating path strings in multiple places.
-- Every agent output should include: current status, what changed, and the single best “next action”.
+- Every agent output should include: current status, what changed, and the single best "next action".
+
+### Skill Contracts (Agent Discovery)
+
+Before invoking CLI operations, agent should check `src/contracts/skill-contracts.ts`:
+
+```typescript
+import { SKILL_CONTRACTS, STATE_MANAGER_METHODS, validateStateManagerInterface } from './contracts';
+
+// List available CLI commands
+Object.keys(SKILL_CONTRACTS);  // ['set-dates', 'select-offer', 'mark-booked', ...]
+
+// Get contract for a command
+SKILL_CONTRACTS['mark-booked'].mutates;  // ['state.next_actions', ...]
+
+// Validate StateManager interface (catch drift early)
+const missing = validateStateManagerInterface(stateManager);
+if (missing.length > 0) throw new Error(`Missing methods: ${missing}`);
+```
+
+Contract version: `1.0.0` (semver: breaking/feature/fix)
+
+### Build Gate
+
+Pre-commit hook runs `npm run typecheck`. Install with:
+```bash
+npm run hooks:install
+```
 
 ## Separate Trips (Multi-Plan)
 
@@ -230,7 +257,13 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 | P3+4 Packages | ✅ **booked** | ⏳ pending (archived) |
 | P3 Transportation | 🎫 booked | 🔄 researched |
 | P4 Accommodation | 🎫 booked | ⏳ pending |
-| P5 Itinerary | 📋 scaffolded | ⏳ pending |
+| P5 Itinerary | 🔄 researched (activities populated) | ⏳ pending |
+
+### Airport Transfers (Tokyo)
+| Direction | Status | Selected |
+|-----------|--------|----------|
+| Arrival | planned | Limousine Bus (NRT T2 → Shiodome) - ¥3,200, ~85min |
+| Departure | planned | Limousine Bus (Shiodome → NRT T2) - ¥3,200, ~85min |
 
 ### ✅ BOOKED: Tokyo Feb 13-17, 2026
 ```
@@ -250,6 +283,9 @@ Hotel:   TAVINOS Hamamatsucho
 
 ### CLI Quick Reference
 ```bash
+# View full booking details (shortcut)
+npm run update:status
+
 # View status
 npx ts-node src/cli/travel-update.ts status
 
@@ -261,6 +297,14 @@ npx ts-node src/cli/travel-update.ts set-dates 2026-02-13 2026-02-17
 
 # Select an offer
 npx ts-node src/cli/travel-update.ts select-offer <offer-id> <date>
+
+# Set activity booking status
+npm run update -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
+# Example: npm run update -- set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"
+
+# Set airport transfer
+npm run update -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule" [--candidate "..."]
+# Example: npm run update -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome|85|3200|19:40"
 ```
 
 ### Scraper Tools (Python/Playwright)
@@ -301,6 +345,12 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Plan normalization for legacy schema migration
 - ✅ Travel Update CLI (`src/cli/travel-update.ts`)
 - ✅ Tokyo package selected (Feb 13, BestTour)
+- ✅ Zod runtime validation for travel-plan.json schema
+- ✅ Activity booking status tracking (booking_status, booking_ref, book_by)
+- ✅ Airport transfer schema (selected + candidates pattern)
+- ✅ Destination reference validation (`src/state/destination-ref-schema.ts`)
+- ✅ Skill contracts for agent CLI discovery (`src/contracts/skill-contracts.ts`)
+- ✅ Pre-commit hook for TypeScript type checking
 
 ## Storage Decision (DB)
 
@@ -324,5 +374,7 @@ Use **LokiJS** as the future embedded DB (JS-only). Provide a small Node CLI wra
 updates so skills have a strong CLI surface without native DB installs.
 
 ## Next Steps
-1. **Plan daily itinerary** - P5 for Tokyo (5 days)
-2. **Build comparison tool** - Derive rankings from destinations/*
+1. **Book teamLab Borderless** - Feb 15, 2026 (most time-sensitive, can sell out)
+2. **Book Limousine Bus** - Low-risk, can buy day-of
+3. **Restaurant reservations** - Based on area/cuisine preferences
+4. **Build comparison tool** - Derive rankings from destinations/*
