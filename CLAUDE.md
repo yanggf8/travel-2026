@@ -382,6 +382,10 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Destination reference validation (`src/state/destination-ref-schema.ts`)
 - ✅ Skill contracts for agent CLI discovery (`src/contracts/skill-contracts.ts`)
 - ✅ Pre-commit hook for TypeScript type checking
+- ✅ Multi-destination configuration (`data/destinations.json`)
+- ✅ Multi-OTA source registry (`data/ota-sources.json`)
+- ✅ Configuration discovery APIs (`src/config/loader.ts`)
+- ✅ Configurable defaults extraction (`src/config/constants.ts`)
 
 ## Storage Decision (DB)
 
