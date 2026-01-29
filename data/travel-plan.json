@@ -935,18 +935,18 @@
               "booking_notes": "Confirm luggage storage options"
             },
             "afternoon": {
-              "focus": "Tokyo Station + Final Omiyage",
+              "focus": "Relax Near Hotel + Lunch",
               "activities": [
-                "Hamamatsucho → Tokyo Station (JR, 5 min)",
-                "Daimaru Tokyo Station B1 for final omiyage",
-                "Tokyo Character Street (if time)",
-                "Lunch at Tokyo Station Ramen Street or GRANSTA"
+                "Stay around Hamamatsucho/Shiodome area",
+                "Hamarikyu Gardens (optional, ¥300, 10 min walk)",
+                "Lunch at Shiodome City Center or Caretta Shiodome",
+                "Return to hotel to pick up luggage by 14:45"
               ],
               "meals": [
-                "Lunch at Tokyo Station"
+                "Lunch in Hamamatsucho/Shiodome area"
               ],
-              "transit_notes": "Hamamatsucho → Tokyo (JR Yamanote Line, ¥160, 5 min). Daimaru is Yaesu side exit.",
-              "booking_notes": null
+              "transit_notes": "All walking distance from hotel. No train needed.",
+              "booking_notes": "Omiyage already done Day 2 at Isetan Shinjuku B2"
             },
             "evening": {
               "focus": "Airport Transfer via Limousine Bus",
