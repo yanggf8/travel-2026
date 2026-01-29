@@ -1,0 +1,40 @@
+{
+  "$schema": "./schemas/destinations.schema.json",
+  "version": "1.0.0",
+  "destinations": {
+    "tokyo_2026": {
+      "slug": "tokyo_2026",
+      "display_name": "Tokyo",
+      "ref_id": "tokyo",
+      "ref_path": "src/skills/travel-shared/references/destinations/tokyo.json",
+      "timezone": "Asia/Tokyo",
+      "currency": "JPY",
+      "markets": ["TW", "JP"],
+      "primary_airports": ["NRT", "HND"],
+      "language": "ja"
+    },
+    "nagoya_2026": {
+      "slug": "nagoya_2026",
+      "display_name": "Nagoya",
+      "ref_id": "nagoya",
+      "ref_path": "src/skills/travel-shared/references/destinations/nagoya.json",
+      "timezone": "Asia/Tokyo",
+      "currency": "JPY",
+      "markets": ["TW", "JP"],
+      "primary_airports": ["NGO"],
+      "language": "ja"
+    },
+    "osaka_2026": {
+      "slug": "osaka_2026",
+      "display_name": "Osaka",
+      "ref_id": "osaka",
+      "ref_path": "src/skills/travel-shared/references/destinations/osaka.json",
+      "timezone": "Asia/Tokyo",
+      "currency": "JPY",
+      "markets": ["TW", "JP"],
+      "primary_airports": ["KIX", "ITM"],
+      "language": "ja"
+    }
+  },
+  "default_destination": "tokyo_2026"
+}

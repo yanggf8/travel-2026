@@ -1,5 +1,5 @@
 /**
- * Skill Contracts v1.0.0
+ * Skill Contracts v1.1.0
  *
  * Defines the interface for all CLI operations.
  * Agent can query this to discover available operations.
@@ -8,9 +8,11 @@
  * - MAJOR: breaking changes to args/output shape
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
+ *
+ * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.0.0';
+export const CONTRACT_VERSION = '1.1.0';
 
 export interface SkillContract {
   name: string;
@@ -278,3 +280,77 @@ export function validateStateManagerInterface(sm: object): string[] {
   }
   return missing;
 }
+
+/**
+ * Configuration Discovery APIs (src/config/loader.ts)
+ * These APIs enable multi-destination and multi-OTA support.
+ */
+export const CONFIG_LOADER_APIS = {
+  // Destination Discovery
+  getAvailableDestinations: {
+    args: [],
+    returns: 'string[]',
+    description: 'List all configured destination slugs',
+  },
+  getDestinationConfig: {
+    args: ['slug'],
+    returns: 'DestinationConfig | null',
+    description: 'Get full destination config by slug',
+  },
+  resolveDestinationRefPath: {
+    args: ['slug'],
+    returns: 'string | null',
+    description: 'Get absolute path to destination reference JSON',
+  },
+  getDefaultDestination: {
+    args: [],
+    returns: 'string',
+    description: 'Get default destination slug from config',
+  },
+  getDestinationCurrency: {
+    args: ['slug'],
+    returns: 'string',
+    description: 'Get default currency for a destination (e.g., JPY)',
+  },
+
+  // OTA Source Discovery
+  getAvailableOtaSources: {
+    args: [],
+    returns: 'string[]',
+    description: 'List all configured OTA source IDs',
+  },
+  getSupportedOtaSources: {
+    args: [],
+    returns: 'string[]',
+    description: 'List OTA sources with working scrapers',
+  },
+  getOtaSourceConfig: {
+    args: ['sourceId'],
+    returns: 'OtaSourceConfig | null',
+    description: 'Get full OTA source config by ID',
+  },
+  getOtaSourceCurrency: {
+    args: ['sourceId'],
+    returns: 'string',
+    description: 'Get currency for an OTA source (e.g., TWD)',
+  },
+  getOtaSourcesForMarket: {
+    args: ['market'],
+    returns: 'OtaSourceConfig[]',
+    description: 'Get OTA sources available in a market (e.g., "TW")',
+  },
+  getOtaSourcesByType: {
+    args: ['type'],
+    returns: 'OtaSourceConfig[]',
+    description: 'Get OTA sources by type (package/flight/hotel)',
+  },
+} as const;
+
+/**
+ * Configuration file paths.
+ */
+export const CONFIG_FILES = {
+  destinations: 'data/destinations.json',
+  otaSources: 'data/ota-sources.json',
+  constants: 'src/config/constants.ts',
+} as const;

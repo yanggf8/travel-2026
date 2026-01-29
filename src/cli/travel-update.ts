@@ -28,6 +28,10 @@ import {
   validateDestinationRefConsistency,
   type DestinationRef,
 } from '../state/destination-ref-schema';
+import {
+  resolveDestinationRefPath as configResolveDestinationRefPath,
+  getOtaSourceCurrency,
+} from '../config/loader';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -975,9 +979,12 @@ async function main(): Promise<void> {
 function normalizeScrapeToOffer(scrape: any, pax: number, warnings: string[]): any {
   const url: string = scrape?.url || '';
   const scrapedAt: string = scrape?.scraped_at || new Date().toISOString();
-  const sourceId = url.includes('besttour.com.tw') ? 'besttour' : 'unknown';
+  const sourceId = inferSourceIdFromUrl(url);
   const productCode = url.split('/').filter(Boolean).pop() || 'unknown';
   const id = `${sourceId}_${productCode}`;
+
+  // Get currency from OTA source config instead of hardcoding
+  const currency = getOtaSourceCurrency(sourceId);
 
   const extracted = scrape?.extracted || {};
   const flight = extracted.flight || {};
@@ -1001,7 +1008,7 @@ function normalizeScrapeToOffer(scrape: any, pax: number, warnings: string[]): a
     url,
     scraped_at: scrapedAt,
     type: 'package',
-    currency: 'TWD',
+    currency,
     availability,
     price_per_person: pricePerPerson ?? 0,
     ...(priceTotal !== undefined ? { price_total: priceTotal } : {}),
@@ -1073,11 +1080,25 @@ function computeBestValue(datePricing: any, pax: number): { date: string; price_
 
 main();
 
+/**
+ * Resolve destination reference file path using config loader.
+ * Falls back to config-based resolution instead of hardcoded Tokyo check.
+ */
 function resolveDestinationRefPath(destinationSlug: string): string | null {
-  const lower = destinationSlug.toLowerCase();
-  const id = lower.includes('tokyo') ? 'tokyo' : null;
-  if (!id) return null;
-  return path.resolve(__dirname, `../skills/travel-shared/references/destinations/${id}.json`);
+  return configResolveDestinationRefPath(destinationSlug);
+}
+
+/**
+ * Infer OTA source ID from URL.
+ */
+function inferSourceIdFromUrl(url: string): string {
+  if (url.includes('besttour.com.tw')) return 'besttour';
+  if (url.includes('liontravel.com')) return 'liontravel';
+  if (url.includes('tigerairtw.com')) return 'tigerair';
+  if (url.includes('eztravel.com.tw')) return 'eztravel';
+  if (url.includes('jalan.net')) return 'jalan';
+  if (url.includes('travel.rakuten.co.jp')) return 'rakuten_travel';
+  return 'unknown';
 }
 
 function allocateClustersToDays(

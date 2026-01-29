@@ -31,6 +31,7 @@ import {
   TravelPlan,
   EventLogState as ZodEventLogState,
 } from './schemas';
+import { DEFAULTS } from '../config/constants';
 
 // Default paths
 const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
@@ -1390,7 +1391,7 @@ export class StateManager {
       // Return minimal state if file doesn't exist
       return {
         session: new Date().toISOString().split('T')[0],
-        project: 'japan-travel',
+        project: DEFAULTS.project,
         version: '3.0',
         active_destination: this.plan?.active_destination || '',
         current_focus: '',

@@ -120,7 +120,7 @@ const missing = validateStateManagerInterface(stateManager);
 if (missing.length > 0) throw new Error(`Missing methods: ${missing}`);
 ```
 
-Contract version: `1.0.0` (semver: breaking/feature/fix)
+Contract version: `1.1.0` (semver: breaking/feature/fix)
 
 ### Build Gate
 
@@ -128,6 +128,30 @@ Pre-commit hook runs `npm run typecheck`. Install with:
 ```bash
 npm run hooks:install
 ```
+
+### Configuration Discovery APIs
+
+The skill pack provides discovery APIs for multi-destination and multi-OTA support:
+
+```typescript
+import {
+  getAvailableDestinations,    // List all configured destinations
+  getDestinationConfig,        // Get full config for a destination
+  resolveDestinationRefPath,   // Get path to POI/cluster reference
+  getAvailableOtaSources,      // List all OTA sources
+  getSupportedOtaSources,      // List OTAs with working scrapers
+  getOtaSourceCurrency,        // Get currency for an OTA (TWD, JPY)
+} from './config/loader';
+
+// Example: Add new destination support
+const destinations = getAvailableDestinations();  // ['tokyo_2026', 'nagoya_2026', 'osaka_2026']
+const tokyoRef = resolveDestinationRefPath('tokyo_2026');  // Absolute path to tokyo.json
+```
+
+Configuration files:
+- `data/destinations.json` - Destination mapping (slug → reference path, currency, airports)
+- `data/ota-sources.json` - OTA registry (source_id → URL, currency, scraper script)
+- `src/config/constants.ts` - Default values (pax, pace, project name)
 
 ## Separate Trips (Multi-Plan)
 
@@ -193,12 +217,21 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 ├── data/
 │   ├── travel-plan.json       # Main travel plan (v4.2.0)
 │   ├── state.json             # Event-driven state tracking
+│   ├── destinations.json      # Destination configuration (multi-destination)
+│   ├── ota-sources.json       # OTA source registry (multi-OTA)
 │   ├── besttour-*.json        # BestTour scrape results (date-specific pricing)
 │   ├── liontravel-*.json      # Lion Travel scrape results
 │   ├── eztravel-*.json        # ezTravel scrape results
 │   ├── tigerair-*.json        # Tigerair scrape results
 │   └── flights-cache.json     # Legacy flight cache (Nagoya research)
 ├── src/
+│   ├── config/                # Skill pack configuration
+│   │   ├── index.ts           # Module exports
+│   │   ├── constants.ts       # Configurable defaults (pax, pace, currency)
+│   │   └── loader.ts          # Config discovery APIs
+│   ├── contracts/             # Skill contracts for agent discovery
+│   │   ├── index.ts           # Module exports
+│   │   └── skill-contracts.ts # CLI operation contracts (v1.1.0)
 │   ├── cascade/               # Cascade runner library
 │   │   ├── index.ts           # Module exports
 │   │   ├── runner.ts          # Core cascade logic
@@ -208,19 +241,16 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   │   ├── cascade.ts         # Cascade CLI
 │   │   ├── p3p4-test.ts       # Package skill test CLI
 │   │   └── travel-update.ts   # Travel plan update CLI
-│   ├── process/               # Process handlers
-│   │   ├── accommodation.ts
-│   │   ├── itinerary.ts
-│   │   ├── plan-updater.ts
-│   │   ├── transportation.ts
-│   │   └── types.ts
-│   ├── questionnaire/
-│   │   └── definitions/
-│   │       └── p3-transportation.json
+│   ├── state/                 # State management
+│   │   ├── index.ts           # Module exports
+│   │   ├── state-manager.ts   # StateManager class
+│   │   ├── types.ts           # TypeScript definitions
+│   │   ├── schemas.ts         # Zod runtime validation
+│   │   └── destination-ref-schema.ts  # POI/cluster validation
 │   ├── skills/                # Reusable planning skills
 │   │   ├── travel-shared/     # Shared references (bundle)
 │   │   │   ├── SKILL.md
-│   │   │   └── references/
+│   │   │   └── references/destinations/  # Per-destination POI/cluster refs
 │   │   ├── p3-flights/
 │   │   │   ├── SKILL.md
 │   │   │   └── references/legacy-spec.md
@@ -231,7 +261,8 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │       ├── rule-evaluator.ts
 │       └── status-check.ts
 ├── scripts/
-│   ├── scrape_package.py           # Generic Playwright OTA scraper
+│   ├── hooks/pre-commit       # Pre-commit TypeScript check
+│   ├── scrape_package.py      # Generic Playwright OTA scraper
 │   └── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
 └── tsconfig.json
 ```

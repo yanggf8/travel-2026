@@ -1,0 +1,97 @@
+{
+  "$schema": "./schemas/ota-sources.schema.json",
+  "version": "1.0.0",
+  "sources": {
+    "besttour": {
+      "source_id": "besttour",
+      "display_name": "喜鴻假期",
+      "display_name_en": "Best Tour",
+      "types": ["package"],
+      "base_url": "https://www.besttour.com.tw",
+      "markets": ["TW"],
+      "currency": "TWD",
+      "supported": true,
+      "scraper_script": "scripts/scrape_package.py",
+      "rate_limit": {
+        "requests_per_minute": 10
+      },
+      "notes": "Full date-specific pricing available via scraper"
+    },
+    "liontravel": {
+      "source_id": "liontravel",
+      "display_name": "雄獅旅遊",
+      "display_name_en": "Lion Travel",
+      "types": ["package", "flight", "hotel"],
+      "base_url": "https://www.liontravel.com",
+      "markets": ["TW"],
+      "currency": "TWD",
+      "supported": true,
+      "scraper_script": "scripts/scrape_liontravel_dated.py",
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
+      "promo_codes": [
+        {
+          "code": "FITPKG",
+          "discount": 400,
+          "currency": "TWD",
+          "min_purchase": 20000,
+          "valid_days": ["Thursday"],
+          "expires": null
+        }
+      ],
+      "notes": "Date-specific scraper available"
+    },
+    "tigerair": {
+      "source_id": "tigerair",
+      "display_name": "台灣虎航",
+      "display_name_en": "Tigerair Taiwan",
+      "types": ["flight"],
+      "base_url": "https://www.tigerairtw.com",
+      "markets": ["TW"],
+      "currency": "TWD",
+      "supported": true,
+      "scraper_script": null,
+      "rate_limit": {
+        "requests_per_minute": 10
+      },
+      "notes": "Limited - no date-specific pricing via scraper"
+    },
+    "eztravel": {
+      "source_id": "eztravel",
+      "display_name": "易遊網",
+      "display_name_en": "ezTravel",
+      "types": ["package", "flight", "hotel"],
+      "base_url": "https://www.eztravel.com.tw",
+      "markets": ["TW"],
+      "currency": "TWD",
+      "supported": false,
+      "scraper_script": null,
+      "notes": "Scraper not yet implemented"
+    },
+    "jalan": {
+      "source_id": "jalan",
+      "display_name": "じゃらん",
+      "display_name_en": "Jalan",
+      "types": ["hotel"],
+      "base_url": "https://www.jalan.net",
+      "markets": ["JP"],
+      "currency": "JPY",
+      "supported": false,
+      "scraper_script": null,
+      "notes": "Japan domestic OTA - for local hotel bookings"
+    },
+    "rakuten_travel": {
+      "source_id": "rakuten_travel",
+      "display_name": "楽天トラベル",
+      "display_name_en": "Rakuten Travel",
+      "types": ["hotel", "package"],
+      "base_url": "https://travel.rakuten.co.jp",
+      "markets": ["JP"],
+      "currency": "JPY",
+      "supported": false,
+      "scraper_script": null,
+      "notes": "Japan domestic OTA"
+    }
+  }
+}
