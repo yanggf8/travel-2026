@@ -341,6 +341,19 @@ npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM]
 npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
 ```
 
+### Agent Output Pattern
+
+Claude Code CLI collapses long Bash/Read tool output (`+N lines, ctrl+o to expand`).
+To ensure visibility, agent must output content as direct text:
+
+```
+1. Bash: npm run view:* > /tmp/view.txt   (capture to file)
+2. Read: /tmp/view.txt                     (agent sees content)
+3. Text: paste content in response         (user sees it)
+```
+
+**Rule**: When user asks "show me X", always use this pattern — never rely on collapsed tool output.
+
 ### Scraper Tools (Python/Playwright)
 
 | Script | Purpose | OTA |
