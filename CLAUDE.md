@@ -318,7 +318,9 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 | 4 | Mon 16 | KOMEHYO (Chanel) | Isetan omiyage | Omoide Yokocho |
 | 5 | Tue 17 | Pack + Checkout | Shiodome area | ✈️ NRT → TPE |
 
-**Pending:** Book teamLab by Feb 10
+**Booking Links:**
+- teamLab Borderless: https://www.teamlab.art/e/borderless-azabudai/ (book by Feb 10)
+- Limousine Bus: https://www.limousinebus.co.jp/en/ (arrival & departure)
 
 ### ✅ BOOKED: Tokyo Feb 13-17, 2026
 ```
