@@ -764,44 +764,48 @@
             "day_number": 2,
             "day_type": "full",
             "status": "planned",
-            "theme": "Shinjuku: Chanel Shopping + Omiyage",
+            "theme": "Classic Tokyo: Asakusa + Shibuya/Harajuku",
             "morning": {
-              "focus": "KOMEHYO Shinjuku (Chanel Bags)",
+              "focus": "Asakusa Traditional (Early to Beat Crowds)",
               "activities": [
-                "Hamamatsucho → Shinjuku (JR Yamanote, 25 min)",
-                "KOMEHYO Shinjuku main store (opens 11:00)",
-                "Browse 5 floors, focus on Chanel section"
+                "Early start (7:30-8:00) to beat weekend crowds",
+                "Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)",
+                "Senso-ji Temple",
+                "Nakamise Shopping Street",
+                "Kaminarimon Gate photos"
               ],
               "meals": [
-                "Breakfast at hotel"
+                "Breakfast at hotel or skip for early start"
               ],
-              "transit_notes": "JR Hamamatsucho Station → Shinjuku (Yamanote Line, ¥200, 25 min). Use Suica/Pasmo IC card.",
-              "booking_notes": "KOMEHYO opens 11:00, arrive early for best selection"
+              "transit_notes": "Daimon → Asakusa (Toei Asakusa Line, ¥280, 20 min direct). Exit A4 for Kaminarimon.",
+              "booking_notes": "Saturday crowds - arrive early for peaceful temple experience"
             },
             "afternoon": {
-              "focus": "Backup Store + Omiyage",
+              "focus": "Shibuya",
               "activities": [
-                "Daikokuya Shinjuku (backup, 5 min walk) if needed",
-                "Isetan Shinjuku B2 for omiyage (Yoku Moku, Henri Charpentier)",
-                "Browse Shinjuku area"
+                "Asakusa → Shibuya (Metro, 30 min)",
+                "Shibuya Crossing",
+                "Shibuya Sky observation deck (optional)",
+                "Shibuya 109 / shopping"
               ],
               "meals": [
-                "Lunch at Isetan restaurant floor or nearby"
+                "Lunch in Asakusa (soba, tempura) or Shibuya"
               ],
-              "transit_notes": "All walking distance in Shinjuku",
-              "booking_notes": null
+              "transit_notes": "Asakusa → Shibuya (Metro Ginza Line, ¥250, 30 min direct). Exit Hachiko side for crossing.",
+              "booking_notes": "Shibuya Sky needs advance booking if interested"
             },
             "evening": {
-              "focus": "Shinjuku Nightlife",
+              "focus": "Shibuya/Harajuku Evening",
               "activities": [
-                "Omoide Yokocho (Memory Lane) for dinner",
-                "Kabukicho walk-through",
-                "Return to hotel"
+                "Walk to Harajuku (10 min)",
+                "Takeshita Street",
+                "Omotesando for upscale window shopping",
+                "Dinner and return"
               ],
               "meals": [
-                "Yakitori at Omoide Yokocho"
+                "Dinner in Harajuku/Omotesando area"
               ],
-              "transit_notes": "JR Shinjuku → Hamamatsucho (Yamanote Line, ¥200, 25 min)",
+              "transit_notes": "Harajuku → Hamamatsucho (JR Yamanote Line, ¥200, 20 min). Or walk Harajuku → Shibuya (10 min) then Yamanote.",
               "booking_notes": null
             }
           },
@@ -869,47 +873,44 @@
             "day_number": 4,
             "day_type": "full",
             "status": "planned",
-            "theme": "Classic Tokyo: Asakusa + Shibuya",
+            "theme": "Shinjuku: KOMEHYO + Omiyage",
             "morning": {
-              "focus": "Asakusa Traditional",
+              "focus": "KOMEHYO Shinjuku (Chanel Bags)",
               "activities": [
-                "Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)",
-                "Senso-ji Temple",
-                "Nakamise Shopping Street",
-                "Kaminarimon Gate photos"
+                "Hamamatsucho → Shinjuku (JR Yamanote, 25 min)",
+                "KOMEHYO Shinjuku main store (opens 11:00)",
+                "Browse 5 floors, focus on Chanel section"
               ],
               "meals": [
-                "Breakfast at hotel or skip for early start"
+                "Breakfast at hotel"
               ],
-              "transit_notes": "Daimon → Asakusa (Toei Asakusa Line, ¥280, 20 min direct). Exit A4 for Kaminarimon.",
-              "booking_notes": null
+              "transit_notes": "JR Hamamatsucho Station → Shinjuku (Yamanote Line, ¥200, 25 min). Use Suica/Pasmo IC card.",
+              "booking_notes": "Monday weekday = less crowded, better service for luxury shopping"
             },
             "afternoon": {
-              "focus": "Shibuya",
+              "focus": "Backup Store + Omiyage",
               "activities": [
-                "Asakusa → Shibuya (Metro, 30 min)",
-                "Shibuya Crossing",
-                "Shibuya Sky observation deck (optional)",
-                "Shibuya 109 / shopping"
+                "Daikokuya Shinjuku (backup, 5 min walk) if needed",
+                "Isetan Shinjuku B2 for omiyage (Yoku Moku, Henri Charpentier)",
+                "Browse Shinjuku area"
               ],
               "meals": [
-                "Lunch in Asakusa (soba, tempura) or Shibuya"
+                "Lunch at Isetan restaurant floor or nearby"
               ],
-              "transit_notes": "Asakusa → Shibuya (Metro Ginza Line, ¥250, 30 min direct). Exit Hachiko side for crossing.",
-              "booking_notes": "Shibuya Sky needs advance booking if interested"
+              "transit_notes": "All walking distance in Shinjuku",
+              "booking_notes": "Buy omiyage today - fresh for departure tomorrow"
             },
             "evening": {
-              "focus": "Shibuya/Harajuku Evening",
+              "focus": "Shinjuku Nightlife",
               "activities": [
-                "Walk to Harajuku (10 min)",
-                "Takeshita Street",
-                "Omotesando for upscale window shopping",
-                "Dinner and return"
+                "Omoide Yokocho (Memory Lane) for dinner",
+                "Kabukicho walk-through",
+                "Return to hotel"
               ],
               "meals": [
-                "Dinner in Harajuku/Omotesando area"
+                "Yakitori at Omoide Yokocho"
               ],
-              "transit_notes": "Harajuku → Hamamatsucho (JR Yamanote Line, ¥200, 20 min). Or walk Harajuku → Shibuya (10 min) then Yamanote.",
+              "transit_notes": "JR Shinjuku → Hamamatsucho (Yamanote Line, ¥200, 25 min)",
               "booking_notes": null
             }
           },
@@ -918,7 +919,7 @@
             "day_number": 5,
             "day_type": "departure",
             "status": "planned",
-            "theme": "Last-Minute Omiyage + Departure",
+            "theme": "Relax + Departure",
             "morning": {
               "focus": "Flexible / Pack",
               "activities": [
@@ -945,7 +946,7 @@
                 "Lunch in Hamamatsucho/Shiodome area"
               ],
               "transit_notes": "All walking distance from hotel. No train needed.",
-              "booking_notes": "Omiyage already done Day 2 at Isetan Shinjuku B2"
+              "booking_notes": "Omiyage done yesterday (Day 4) at Isetan Shinjuku B2 - items are fresh"
             },
             "evening": {
               "focus": "Airport Transfer via Limousine Bus",

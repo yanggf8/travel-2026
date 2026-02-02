@@ -33,6 +33,12 @@ import {
   getAvailableDestinations,
   getOtaSourceCurrency,
 } from '../config/loader';
+import {
+  validateIsoDate,
+  validatePositiveInt,
+  validateTime,
+  validateDateRange,
+} from '../types/validation';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -820,10 +826,14 @@ async function main(): Promise<void> {
         }
 
         const destination = destOpt || sm.getActiveDestination();
-        const pax = paxOpt ? parseInt(paxOpt, 10) : 2;
-        if (!Number.isFinite(pax) || pax <= 0) {
-          console.error('Error: --pax must be a positive integer');
-          process.exit(1);
+        let pax = 2;
+        if (paxOpt) {
+          const paxResult = validatePositiveInt(paxOpt, '--pax');
+          if (!paxResult.ok) {
+            console.error(`Error: ${paxResult.error}`);
+            process.exit(1);
+          }
+          pax = paxResult.value;
         }
 
         const tmpOut = path.join(os.tmpdir(), `package-scrape-${Date.now()}.json`);
@@ -880,9 +890,16 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
+        // Validate date range
+        const rangeResult = validateDateRange(startDate, endDate);
+        if (!rangeResult.ok) {
+          console.error(`Error: ${rangeResult.error}`);
+          process.exit(1);
+        }
+
         const reason = reasonParts.join(' ') || undefined;
-        
-        console.log(`\n📅 Setting dates: ${formatDate(startDate)} → ${formatDate(endDate)}`);
+
+        console.log(`\n📅 Setting dates: ${formatDate(startDate)} → ${formatDate(endDate)} (${rangeResult.value.days} days)`);
         if (reason) console.log(`   Reason: ${reason}`);
 
         if (!dryRun) {
@@ -1397,11 +1414,12 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const dayNumber = parseInt(dayStr, 10);
-        if (!Number.isFinite(dayNumber) || dayNumber <= 0) {
-          console.error('Error: <day> must be a positive integer (1-indexed day number)');
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) {
+          console.error(`Error: ${dayResult.error}`);
           process.exit(1);
         }
+        const dayNumber = dayResult.value;
 
         const validSessions = ['morning', 'afternoon', 'evening'];
         if (!validSessions.includes(session)) {
@@ -1430,19 +1448,39 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
+        // Validate time formats
+        let validatedStart: string | undefined;
+        let validatedEnd: string | undefined;
+        if (startOpt) {
+          const startResult = validateTime(startOpt, '--start');
+          if (!startResult.ok) {
+            console.error(`Error: ${startResult.error}`);
+            process.exit(1);
+          }
+          validatedStart = startResult.value;
+        }
+        if (endOpt) {
+          const endResult = validateTime(endOpt, '--end');
+          if (!endResult.ok) {
+            console.error(`Error: ${endResult.error}`);
+            process.exit(1);
+          }
+          validatedEnd = endResult.value;
+        }
+
         const destination = destOpt || sm.getActiveDestination();
 
         console.log(`\n⏱️  Setting activity time:`);
         console.log(`   Destination: ${destination}`);
         console.log(`   Day ${dayNumber} ${session}: "${activity}"`);
-        if (startOpt) console.log(`   Start: ${startOpt}`);
-        if (endOpt) console.log(`   End: ${endOpt}`);
+        if (validatedStart) console.log(`   Start: ${validatedStart}`);
+        if (validatedEnd) console.log(`   End: ${validatedEnd}`);
         if (isFixed !== undefined) console.log(`   Fixed: ${isFixed}`);
 
         if (!dryRun) {
           sm.setActivityTime(destination, dayNumber, session as any, activity, {
-            start_time: startOpt,
-            end_time: endOpt,
+            start_time: validatedStart,
+            end_time: validatedEnd,
             is_fixed_time: isFixed,
           });
           sm.save();
@@ -1463,11 +1501,12 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const dayNumber = parseInt(dayStr, 10);
-        if (!Number.isFinite(dayNumber) || dayNumber <= 0) {
-          console.error('Error: <day> must be a positive integer (1-indexed day number)');
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) {
+          console.error(`Error: ${dayResult.error}`);
           process.exit(1);
         }
+        const dayNumber = dayResult.value;
 
         const validSessions = ['morning', 'afternoon', 'evening'];
         if (!validSessions.includes(session)) {
@@ -1480,13 +1519,25 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
+        // Validate time formats
+        const startTimeResult = validateTime(startOpt, '--start');
+        if (!startTimeResult.ok) {
+          console.error(`Error: ${startTimeResult.error}`);
+          process.exit(1);
+        }
+        const endTimeResult = validateTime(endOpt, '--end');
+        if (!endTimeResult.ok) {
+          console.error(`Error: ${endTimeResult.error}`);
+          process.exit(1);
+        }
+
         const destination = destOpt || sm.getActiveDestination();
         console.log(`\n🕒 Setting session time range:`);
         console.log(`   Destination: ${destination}`);
-        console.log(`   Day ${dayNumber} ${session}: ${startOpt} → ${endOpt}`);
+        console.log(`   Day ${dayNumber} ${session}: ${startTimeResult.value} → ${endTimeResult.value}`);
 
         if (!dryRun) {
-          sm.setSessionTimeRange(destination, dayNumber, session as any, startOpt, endOpt);
+          sm.setSessionTimeRange(destination, dayNumber, session as any, startTimeResult.value, endTimeResult.value);
           sm.save();
           console.log('✅ Session time range updated');
         } else {
@@ -1506,11 +1557,12 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const dayNumber = parseInt(dayStr, 10);
-        if (!Number.isFinite(dayNumber) || dayNumber <= 0) {
-          console.error('Error: <day> must be a positive integer (1-indexed day number)');
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) {
+          console.error(`Error: ${dayResult.error}`);
           process.exit(1);
         }
+        const dayNumber = dayResult.value;
 
         const validSessions = ['morning', 'afternoon', 'evening'];
         if (!validSessions.includes(session)) {
@@ -1524,6 +1576,17 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
+        // Validate book-by date if provided
+        let validatedBookBy: string | undefined;
+        if (bookByOpt) {
+          const bookByResult = validateIsoDate(bookByOpt, '--book-by');
+          if (!bookByResult.ok) {
+            console.error(`Error: ${bookByResult.error}`);
+            process.exit(1);
+          }
+          validatedBookBy = bookByResult.value;
+        }
+
         const destination = destOpt || sm.getActiveDestination();
 
         console.log(`\n🎫 Setting activity booking status:`);
@@ -1531,7 +1594,7 @@ async function main(): Promise<void> {
         console.log(`   Day ${dayNumber} ${session}: "${activity}"`);
         console.log(`   Status: ${status}`);
         if (refOpt) console.log(`   Reference: ${refOpt}`);
-        if (bookByOpt) console.log(`   Book by: ${bookByOpt}`);
+        if (validatedBookBy) console.log(`   Book by: ${validatedBookBy}`);
 
         if (!dryRun) {
           sm.setActivityBookingStatus(
@@ -1541,7 +1604,7 @@ async function main(): Promise<void> {
             activity,
             status as 'not_required' | 'pending' | 'booked' | 'waitlist',
             refOpt,
-            bookByOpt
+            validatedBookBy
           );
           sm.save();
           console.log('✅ Activity booking status updated');

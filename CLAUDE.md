@@ -267,7 +267,7 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   ├── types/                 # Shared type utilities
 │   │   ├── index.ts
 │   │   └── result.ts          # Result<T,E> for error handling
-│   └── _deprecated/           # Archived legacy code (do not use)
+│   └── types/                 # Shared utilities (Result, validation)
 ├── tests/
 │   └── integration/           # Integration/regression tests
 │       └── state-manager.regression.test.ts
@@ -409,7 +409,8 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ StateManager in-memory testing support (`StateManagerOptions`)
 - ✅ Activity search helper extraction (`findActivityIndex`)
 - ✅ Result type for error handling (`src/types/result.ts`)
-- ✅ Deprecated process code archived (`src/_deprecated/`)
+- ✅ Input validation utilities (`src/types/validation.ts`)
+- ✅ CLI argument validation (dates, numbers, times)
 
 ## Storage Decision (DB)
 
