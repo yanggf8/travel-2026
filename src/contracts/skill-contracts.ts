@@ -1,5 +1,5 @@
 /**
- * Skill Contracts v1.1.0
+ * Skill Contracts v1.2.0
  *
  * Defines the interface for all CLI operations.
  * Agent can query this to discover available operations.
@@ -9,10 +9,11 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
+ * v1.2.0 - Added itinerary validation, scraper registry, and project init APIs
  * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.1.0';
+export const CONTRACT_VERSION = '1.2.0';
 
 export interface SkillContract {
   name: string;
@@ -50,7 +51,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.cascade_state',
       'state.event_log',
     ],
-    example: 'npm run update set-dates 2026-02-13 2026-02-17 "Agent offered Feb 13"',
+    example: 'npm run travel -- set-dates 2026-02-13 2026-02-17 "Agent offered Feb 13"',
   },
 
   'select-offer': {
@@ -68,7 +69,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_4_accommodation',
       'state.event_log',
     ],
-    example: 'npm run update select-offer besttour_TYO05MM260211AM 2026-02-13',
+    example: 'npm run travel -- select-offer besttour_TYO05MM260211AM 2026-02-13',
   },
 
   'mark-booked': {
@@ -86,7 +87,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'state.current_focus',
       'state.event_log',
     ],
-    example: 'npm run update mark-booked',
+    example: 'npm run travel -- mark-booked',
   },
 
   'scaffold-itinerary': {
@@ -101,7 +102,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary',
       'state.event_log',
     ],
-    example: 'npm run update -- scaffold-itinerary --force',
+    example: 'npm run travel -- scaffold-itinerary --force',
   },
 
   'populate-itinerary': {
@@ -119,7 +120,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days',
       'state.event_log',
     ],
-    example: 'npm run update -- populate-itinerary --goals "chanel_shopping,teamlab_roppongi" --pace balanced',
+    example: 'npm run travel -- populate-itinerary --goals "chanel_shopping,teamlab_roppongi" --pace balanced',
   },
 
   'status': {
@@ -130,7 +131,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'string', description: 'Formatted status output' },
     mutates: [],  // Read-only
-    example: 'npm run update:status',
+    example: 'npm run travel -- status',
   },
 
   'set-airport-transfer': {
@@ -148,7 +149,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_3_transportation.airport_transfers',
       'state.event_log',
     ],
-    example: 'npm run update -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"',
+    example: 'npm run travel -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"',
   },
 
   'set-activity-booking': {
@@ -170,7 +171,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.activities.*.book_by',
       'state.event_log',
     ],
-    example: 'npm run update -- set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"',
+    example: 'npm run travel -- set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"',
   },
 
   'set-activity-time': {
@@ -192,7 +193,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.activities.*.is_fixed_time',
       'state.event_log',
     ],
-    example: 'npm run update -- set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true',
+    example: 'npm run travel -- set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true',
   },
 
   'set-session-time-range': {
@@ -210,7 +211,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.time_range',
       'state.event_log',
     ],
-    example: 'npm run update -- set-session-time-range 5 afternoon --start 11:00 --end 14:45',
+    example: 'npm run travel -- set-session-time-range 5 afternoon --start 11:00 --end 14:45',
   },
 
   'update-offer': {
@@ -229,7 +230,51 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_3_4_packages.results.offers',
       'state.event_log',
     ],
-    example: 'npm run update update-offer besttour_TYO05MM260211AM 2026-02-13 available 27888 2 agent',
+    example: 'npm run travel -- update-offer besttour_TYO05MM260211AM 2026-02-13 available 27888 2 agent',
+  },
+
+  'validate-itinerary': {
+    name: 'validate-itinerary',
+    description: 'Validate itinerary for time conflicts, business hours, booking deadlines, and area efficiency.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+      { name: '--severity', type: 'string', required: false, description: 'Minimum severity to show (error|warning|info, default: info)' },
+      { name: '--json', type: 'boolean', required: false, description: 'Output as JSON' },
+    ],
+    output: { type: 'object', description: 'Validation result with issues array' },
+    mutates: [],  // Read-only
+    example: 'npm run travel -- validate-itinerary --severity warning',
+  },
+
+  'init-project': {
+    name: 'init-project',
+    description: 'Initialize a new travel plan with proper structure.',
+    args: [
+      { name: '--dest', type: 'string', required: true, description: 'Destination slug (e.g., tokyo_2026)' },
+      { name: '--start', type: 'string', required: true, description: 'Start date (YYYY-MM-DD)' },
+      { name: '--end', type: 'string', required: true, description: 'End date (YYYY-MM-DD)' },
+      { name: '--pax', type: 'number', required: false, description: 'Number of travelers (default: 2)' },
+      { name: '--output', type: 'string', required: false, description: 'Output directory (default: data)' },
+    ],
+    output: { type: 'object', description: '{ planPath, statePath }' },
+    mutates: ['travel-plan.json', 'state.json'],
+    example: 'npx ts-node src/templates/project-init.ts --dest osaka_2026 --start 2026-04-01 --end 2026-04-05',
+  },
+
+  'search-offers': {
+    name: 'search-offers',
+    description: 'Search for offers across all registered OTA scrapers.',
+    args: [
+      { name: '--dest', type: 'string', required: true, description: 'Destination slug' },
+      { name: '--start', type: 'string', required: false, description: 'Start date (YYYY-MM-DD). Defaults to confirmed dates in plan.' },
+      { name: '--end', type: 'string', required: false, description: 'End date (YYYY-MM-DD). Defaults to confirmed dates in plan.' },
+      { name: '--pax', type: 'number', required: false, description: 'Number of travelers (default: 2)' },
+      { name: '--types', type: 'string', required: false, description: 'Comma-separated product types (package,flight,hotel)' },
+      { name: '--source', type: 'string', required: false, description: 'Specific OTA source ID' },
+    ],
+    output: { type: 'array', description: 'Array of ScrapeResult objects' },
+    mutates: [],  // Read-only (use import-offers to write)
+    example: 'npm run travel -- search-offers --dest tokyo_2026 --start 2026-02-13 --end 2026-02-17',
   },
 };
 

@@ -742,7 +742,7 @@
                 "Dinner at Narita T2 (ramen, sushi, udon options)"
               ],
               "transit_notes": "Limousine Bus 19:40 → Takeshiba 21:25",
-              "booking_notes": "Pre-book Limousine Bus online"
+              "booking_notes": "Pre-book Limousine Bus online - https://www.limousinebus.co.jp/en/"
             },
             "evening": {
               "focus": "Hotel Check-in & Rest",
@@ -773,16 +773,16 @@
                 {
                   "id": "activity_mkyzc52c_9diw",
                   "title": "teamLab Borderless at Azabudai Hills (opens 10:00)",
-                  "area": "",
-                  "nearest_station": null,
-                  "duration_min": null,
+                  "area": "Azabudai Hills",
+                  "nearest_station": "Kamiyacho",
+                  "duration_min": 150,
                   "booking_required": true,
-                  "booking_url": null,
+                  "booking_url": "https://www.teamlab.art/e/borderless-azabudai/",
                   "booking_status": "pending",
                   "book_by": "2026-02-10",
-                  "cost_estimate": null,
-                  "tags": [],
-                  "notes": null,
+                  "cost_estimate": 3800,
+                  "tags": ["art", "digital", "immersive"],
+                  "notes": "Book early - often sells out on weekends",
                   "priority": "want"
                 },
                 "Allow 2-3 hours for full experience"
@@ -791,7 +791,7 @@
                 "Light breakfast at hotel"
               ],
               "transit_notes": "Daimon Station → Kamiyacho (Metro Hibiya Line, ¥180, 10 min). teamLab is 5 min walk from Kamiyacho exit.",
-              "booking_notes": "BOOK TICKETS IN ADVANCE - often sells out"
+              "booking_notes": "BOOK TICKETS IN ADVANCE - https://www.teamlab.art/e/borderless-azabudai/"
             },
             "afternoon": {
               "focus": "Asakusa Traditional",
@@ -962,7 +962,7 @@
                 "Light dinner at NRT T2 after check-in"
               ],
               "transit_notes": "Limousine Bus: Takeshiba 15:30 → NRT 17:30 (¥3,200)",
-              "booking_notes": "Pre-book Limousine Bus online"
+              "booking_notes": "Pre-book Limousine Bus online - https://www.limousinebus.co.jp/en/"
             }
           }
         ],

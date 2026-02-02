@@ -39,6 +39,10 @@ import {
   validateTime,
   validateDateRange,
 } from '../types/validation';
+import { defaultValidator } from '../validation/itinerary-validator';
+import type { DaySummary, IssueSeverity, ResolvedActivity } from '../validation/types';
+import { globalRegistry } from '../scrapers/registry';
+import type { OtaSearchParams, ScrapeResult } from '../scrapers/types';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -104,6 +108,15 @@ Commands:
   set-session-time-range <day> <session> --start HH:MM --end HH:MM
     Set optional time boundaries for a session.
     Example: set-session-time-range 5 afternoon --start 11:00 --end 14:45
+
+  validate-itinerary [--dest slug] [--severity error|warning|info] [--json]
+    Validate itinerary for time conflicts, business hours, booking deadlines, and area efficiency.
+    Example: validate-itinerary --severity warning
+
+  search-offers --dest slug [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--pax N] [--types package,flight,hotel] [--source id] [--json]
+    Search across registered OTA scrapers (if any are registered at runtime).
+    If --start/--end are omitted, uses the destination confirmed dates.
+    Example: search-offers --dest tokyo_2026 --pax 2 --types package --json
 
   status
     Show current plan status summary.
@@ -780,9 +793,31 @@ async function main(): Promise<void> {
   const startOpt = optionValue('--start');
   const endOpt = optionValue('--end');
   const fixedOpt = optionValue('--fixed');
+  const severityOpt = optionValue('--severity');
+  const typesOpt = optionValue('--types');
+  const sourceOpt = optionValue('--source');
+  const jsonOpt = args.includes('--json');
 
   // Filter out flags/options from args
-  const optionsWithValues = new Set(['--dest', '--pax', '--plan', '--state', '--goals', '--pace', '--assign', '--ref', '--book-by', '--selected', '--candidate', '--start', '--end', '--fixed']);
+  const optionsWithValues = new Set([
+    '--dest',
+    '--pax',
+    '--plan',
+    '--state',
+    '--goals',
+    '--pace',
+    '--assign',
+    '--ref',
+    '--book-by',
+    '--selected',
+    '--candidate',
+    '--start',
+    '--end',
+    '--fixed',
+    '--severity',
+    '--types',
+    '--source',
+  ]);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1615,6 +1650,110 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'validate-itinerary': {
+        const destination = destOpt || sm.getActiveDestination();
+        const plan = sm.getPlan();
+        const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
+        if (!destObj) {
+          console.error(`Error: Destination not found: ${destination}`);
+          process.exit(1);
+        }
+
+        const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+        const days = (p5?.days as Array<Record<string, unknown>> | undefined) ?? [];
+        if (days.length === 0) {
+          console.error('Error: No itinerary days found. Run scaffold-itinerary first.');
+          process.exit(1);
+        }
+
+        const daySummaries = buildDaySummaries(days);
+        const result = defaultValidator.validate(daySummaries, new Date());
+
+        const threshold: IssueSeverity = parseSeverity(severityOpt);
+        const filtered = {
+          ...result,
+          issues: result.issues.filter((i) => severityRank(i.severity) >= severityRank(threshold)),
+        };
+
+        if (jsonOpt) {
+          console.log(JSON.stringify(filtered, null, 2));
+        } else {
+          printValidationResult(destination, filtered, threshold);
+        }
+
+        process.exitCode = filtered.valid ? 0 : 1;
+        break;
+      }
+
+      case 'search-offers': {
+        const destination = destOpt || optionValue('--dest');
+        if (!destination) {
+          console.error('Error: search-offers requires --dest <slug>');
+          process.exit(1);
+        }
+
+        const plan = sm.getPlan();
+        const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
+        if (!destObj) {
+          console.error(`Error: Destination not found: ${destination}`);
+          process.exit(1);
+        }
+
+        const destAnchor = destObj.process_1_date_anchor as Record<string, unknown> | undefined;
+        const confirmedDates = destAnchor?.confirmed_dates as { start: string; end: string } | undefined;
+
+        const startDate = startOpt || confirmedDates?.start;
+        const endDate = endOpt || confirmedDates?.end;
+        if (!startDate || !endDate) {
+          console.error('Error: search-offers requires --start and --end (or destination confirmed dates in plan).');
+          console.error('Fix: set-dates <start> <end> first, or pass --start/--end explicitly.');
+          process.exit(1);
+        }
+
+        const rangeResult = validateDateRange(startDate, endDate);
+        if (!rangeResult.ok) {
+          console.error(`Error: ${rangeResult.error}`);
+          process.exit(1);
+        }
+
+        let pax = 2;
+        if (paxOpt) {
+          const paxResult = validatePositiveInt(paxOpt, '--pax');
+          if (!paxResult.ok) {
+            console.error(`Error: ${paxResult.error}`);
+            process.exit(1);
+          }
+          pax = paxResult.value;
+        }
+
+        const productTypes = parseProductTypes(typesOpt);
+
+        const params: OtaSearchParams = {
+          destination,
+          startDate,
+          endDate,
+          pax,
+          ...(productTypes ? { productTypes } : {}),
+        };
+
+        console.log(`\n🔎 search-offers (${destination})`);
+        console.log(`   Dates: ${formatDate(startDate)} → ${formatDate(endDate)} (${rangeResult.value.days} days)`);
+        console.log(`   Pax: ${pax}`);
+        if (productTypes) console.log(`   Types: ${productTypes.join(', ')}`);
+        if (sourceOpt) console.log(`   Source: ${sourceOpt}`);
+
+        const results = await runSearchOffers(params, sourceOpt);
+        if (jsonOpt) {
+          console.log(JSON.stringify(results, null, 2));
+        } else {
+          printSearchResults(results);
+        }
+
+        const anySuccess = results.some((r) => r.success);
+        process.exitCode = anySuccess ? 0 : 1;
+        break;
+      }
+
       default:
         console.error(`Unknown command: ${command}`);
         console.log(HELP);
@@ -1627,6 +1766,218 @@ async function main(): Promise<void> {
     }
     process.exit(1);
   }
+}
+
+function severityRank(sev: IssueSeverity): number {
+  if (sev === 'error') return 3;
+  if (sev === 'warning') return 2;
+  return 1;
+}
+
+function parseSeverity(value: string | undefined): IssueSeverity {
+  if (!value) return 'info';
+  const v = value.toLowerCase();
+  if (v === 'error' || v === 'warning' || v === 'info') return v;
+  console.error('Error: --severity must be one of: error | warning | info');
+  process.exit(1);
+}
+
+function parseProductTypes(value: string | undefined): Array<'package' | 'flight' | 'hotel'> | undefined {
+  if (!value) return undefined;
+  const parts = value
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const out: Array<'package' | 'flight' | 'hotel'> = [];
+  for (const p of parts) {
+    if (p === 'package' || p === 'flight' || p === 'hotel') out.push(p);
+    else {
+      console.error('Error: --types must be a comma-separated list of: package,flight,hotel');
+      process.exit(1);
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+function parseOperatingHoursFromNotes(notes: string | null | undefined): string | undefined {
+  if (!notes) return undefined;
+  const match = notes.match(/(?:^|\\s)Hours:\\s*([^|\\n]+)/i);
+  if (!match) return undefined;
+  const v = match[1].trim();
+  return v || undefined;
+}
+
+function inferDurationMin(activity: Record<string, unknown>): number {
+  const duration = activity.duration_min as number | null | undefined;
+  if (typeof duration === 'number' && Number.isFinite(duration) && duration > 0) return duration;
+
+  const start = activity.start_time as string | undefined;
+  const end = activity.end_time as string | undefined;
+  if (start && end) {
+    const parse = (t: string): number | null => {
+      const m = t.match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return null;
+      const hh = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+      return hh * 60 + mm;
+    };
+    const s = parse(start);
+    const e = parse(end);
+    if (s !== null && e !== null && e > s) return e - s;
+  }
+
+  return 60;
+}
+
+function buildDaySummaries(days: Array<Record<string, unknown>>): DaySummary[] {
+  const summaries: DaySummary[] = [];
+  for (const day of days) {
+    const dayNumber = day.day_number as number;
+    const date = (day.date as string) || '';
+    const theme = (day.theme as string | null) || (day.day_type as string) || '';
+
+    const activities: ResolvedActivity[] = [];
+    const areas = new Set<string>();
+    let totalDurationMin = 0;
+    let fixedTimeCount = 0;
+    let pendingBookings = 0;
+
+    for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+      const session = day[sessionName] as Record<string, unknown> | undefined;
+      const acts = (session?.activities as Array<unknown> | undefined) ?? [];
+      for (const act of acts) {
+        if (typeof act === 'string') {
+          const durationMin = 60;
+          activities.push({
+            id: `legacy_${dayNumber}_${sessionName}_${activities.length}`,
+            title: act,
+            day: dayNumber,
+            session: sessionName,
+            durationMin,
+            isFixedTime: false,
+            bookingRequired: false,
+          });
+          totalDurationMin += durationMin;
+          continue;
+        }
+
+        const a = act as Record<string, unknown>;
+        const id = (a.id as string) || `activity_${dayNumber}_${sessionName}_${activities.length}`;
+        const title = (a.title as string) || '';
+        const area = (a.area as string) || undefined;
+        if (area) areas.add(area);
+
+        const durationMin = inferDurationMin(a);
+        totalDurationMin += durationMin;
+
+        const isFixedTime = Boolean(a.is_fixed_time);
+        if (isFixedTime) fixedTimeCount++;
+
+        const bookingRequired = Boolean(a.booking_required);
+        const bookingStatus = a.booking_status as string | undefined;
+        const bookByDate = a.book_by as string | undefined;
+        if (bookingRequired && bookingStatus !== 'booked') pendingBookings++;
+
+        activities.push({
+          id,
+          title,
+          day: dayNumber,
+          session: sessionName,
+          startTime: a.start_time as string | undefined,
+          endTime: a.end_time as string | undefined,
+          durationMin,
+          isFixedTime,
+          area,
+          bookingRequired,
+          bookingStatus,
+          bookByDate,
+          operatingHours: parseOperatingHoursFromNotes(a.notes as string | null | undefined),
+        });
+      }
+    }
+
+    summaries.push({
+      dayNumber,
+      date,
+      theme,
+      activities,
+      areas: Array.from(areas),
+      totalDurationMin,
+      fixedTimeCount,
+      pendingBookings,
+    });
+  }
+  return summaries;
+}
+
+function printValidationResult(destination: string, result: { valid: boolean; summary: any; issues: any[] }, threshold: IssueSeverity): void {
+  const status = result.valid ? '✅ VALID' : '❌ ISSUES FOUND';
+  console.log(`\n🧪 validate-itinerary (${destination})`);
+  console.log(`   Result: ${status}`);
+  console.log(`   Showing: ${threshold}+`);
+  console.log(`   Summary: ${result.summary.errors} error(s), ${result.summary.warnings} warning(s), ${result.summary.info} info`);
+
+  if (result.issues.length === 0) {
+    console.log('\n(no issues to show)\n');
+    return;
+  }
+
+  console.log('\nIssues:');
+  for (const i of result.issues) {
+    const where = [
+      typeof i.day === 'number' ? `Day ${i.day}` : null,
+      i.session ? `${i.session}` : null,
+    ].filter(Boolean).join(' ');
+    const prefix = i.severity === 'error' ? '⛔' : i.severity === 'warning' ? '⚠️' : 'ℹ️';
+    console.log(`  ${prefix} ${where ? `${where}: ` : ''}${i.message}`);
+    if (i.suggestion) console.log(`     → ${i.suggestion}`);
+  }
+  console.log('');
+}
+
+async function runSearchOffers(params: OtaSearchParams, sourceOpt: string | undefined): Promise<ScrapeResult[]> {
+  if (sourceOpt) {
+    const scraper = globalRegistry.get(sourceOpt);
+    if (!scraper) {
+      return [
+        {
+          success: false,
+          offers: [],
+          provenance: {
+            sourceId: sourceOpt,
+            scrapedAt: new Date().toISOString(),
+            offersFound: 0,
+            searchParams: params,
+            duration_ms: 0,
+          },
+          errors: [`No scraper registered for source: ${sourceOpt}`],
+          warnings: [],
+        },
+      ];
+    }
+    return [await scraper.search(params)];
+  }
+
+  return await globalRegistry.searchAll(params);
+}
+
+function printSearchResults(results: ScrapeResult[]): void {
+  console.log('\nResults:');
+  for (const r of results) {
+    const icon = r.success ? '✅' : '❌';
+    console.log(`  ${icon} ${r.provenance.sourceId}: ${r.provenance.offersFound} offer(s) in ${r.provenance.duration_ms}ms`);
+    if (r.errors.length) console.log(`     Errors: ${r.errors.slice(0, 2).join(' | ')}`);
+    if (r.warnings.length) console.log(`     Warnings: ${r.warnings.slice(0, 2).join(' | ')}`);
+    for (const o of r.offers.slice(0, 5)) {
+      const price = o.priceTotal ?? o.pricePerPerson;
+      const priceLabel = price ? `${o.currency} ${price.toLocaleString()}` : '(no price)';
+      console.log(`     - ${o.title} — ${priceLabel} — ${o.availability}`);
+    }
+    if (r.offers.length > 5) console.log(`     ... and ${r.offers.length - 5} more`);
+  }
+  console.log('');
 }
 
 function normalizeScrapeToOffer(scrape: any, pax: number, warnings: string[]): any {

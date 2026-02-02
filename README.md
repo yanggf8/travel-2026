@@ -1,6 +1,14 @@
-# Japan Travel Planning Project
+# Travel Skill Pack
 
-An automated travel planning system for a Tokyo trip in February 2026.
+A reusable skill pack for AI-assisted travel planning. Provides StateManager, OTA scrapers, and itinerary validation.
+
+## Features
+
+- **StateManager**: Unified state management with dirty flags, cascade rules, and event logging
+- **Scraper Framework**: Extensible OTA scraper with canonical offer format
+- **Itinerary Validator**: Time conflict detection, business hours, booking deadlines
+- **CLI Operations**: Rich set of commands with discoverable contracts
+- **Multi-destination**: Support for multiple destinations in one plan
 
 ## Quick Start
 
@@ -8,51 +16,49 @@ An automated travel planning system for a Tokyo trip in February 2026.
 # Install dependencies
 npm install
 
-# Run cascade checker (dry-run)
-npx ts-node src/cli/cascade.ts
+# Initialize a new trip
+npx ts-node src/templates/project-init.ts --dest tokyo_2026 --start 2026-04-01 --end 2026-04-05
 
-# Run cascade checker (apply changes)
+# View status
+npm run view:status
+
+# Validate itinerary
+npm run travel -- validate-itinerary
+
+# Run cascade checker
 npx ts-node src/cli/cascade.ts --apply
 ```
 
-## Trip Overview
+## Documentation
 
-| Field | Value |
-|-------|-------|
-| **Destination** | Tokyo, Japan |
-| **Dates** | Feb 11-15, 2026 (flexible: Feb 21-22 preferred) |
-| **Travelers** | 2 adults |
-| **Status** | Package research complete |
-
-### Current Best Option
-
-| Package | Price (2 pax) | Date | Status |
-|---------|---------------|------|--------|
-| BestTour TAVINOS Hamamatsucho | TWD 36,776 | Feb 22 | ✅ Available |
-
-> ⚠️ **Note**: Original dates (Feb 11-13) are **sold out**. Feb 21-22 are recommended alternatives.
+- [API Reference](docs/API.md) - Complete API documentation
+- [Extension Guide](docs/EXTENDING.md) - How to add destinations, OTAs, and validators
+- [CLAUDE.md](CLAUDE.md) - AI assistant context & architecture
 
 ## Project Structure
 
 ```
 ├── README.md                 # This file
 ├── CLAUDE.md                 # AI assistant context & architecture
+├── docs/
+│   ├── API.md                # API reference documentation
+│   └── EXTENDING.md          # Extension guide
 ├── data/
 │   ├── travel-plan.json      # Main travel plan (v4.2.0)
 │   ├── state.json            # Event-driven state tracking
+│   ├── destinations.json     # Destination configuration
+│   ├── ota-sources.json      # OTA source registry
 │   └── *-scrape.json         # OTA scrape results cache
 ├── src/
 │   ├── cascade/              # Cascade rule engine
-│   │   ├── runner.ts         # Core cascade logic
-│   │   ├── types.ts          # TypeScript definitions
-│   │   └── wildcard.ts       # Schema-driven path expansion
-│   ├── cli/
-│   │   └── cascade.ts        # CLI for cascade operations
+│   ├── cli/                  # CLI commands
+│   ├── config/               # Configuration loaders
+│   ├── contracts/            # Skill contracts for agent discovery
+│   ├── scrapers/             # OTA scraper framework
 │   ├── skills/               # Reusable planning skills
-│   │   ├── p3-flights.md     # Flight search skill
-│   │   └── p3p4-packages.md  # Package search skill
-│   ├── _deprecated/          # Archived legacy process code (do not use)
-│   └── status/               # Status checking utilities
+│   ├── state/                # StateManager
+│   ├── templates/            # Project & destination templates
+│   └── validation/           # Itinerary validators
 ├── scripts/
 │   ├── scrape_package.py           # Generic OTA scraper (Playwright)
 │   └── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
@@ -100,30 +106,36 @@ Changes to upstream processes automatically invalidate downstream data:
 | Tigerair (台灣虎航) | Flight | ⚠️ Limited |
 | ezTravel (易遊網) | Package | ❌ Not integrated |
 
-## Scripts
+See [Extension Guide](docs/EXTENDING.md) for adding new OTAs.
 
-### Scrape OTA Packages
+## Itinerary Validation
+
+Validate your itinerary for common issues:
 
 ```bash
-# Generic scraper
-python scripts/scrape_package.py <url> <output.json>
-
-# Lion Travel with date selection
-python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 data/output.json
-python scripts/scrape_liontravel_dated.py detail <product_id> 2026-02-11 5 data/output.json
+npm run travel -- validate-itinerary
 ```
 
-### Run Cascade
+Checks for:
+- ⏰ Time conflicts between activities
+- 🏢 Business hours compliance
+- 📅 Booking deadline warnings
+- 🗺️ Area efficiency (minimize back-and-forth)
+- 📊 Day packing (over/under scheduled)
+
+## CLI Quick Reference
 
 ```bash
-# Check for dirty processes (dry-run)
-npx ts-node src/cli/cascade.ts
+# Views (read-only)
+npm run view:status         # Booking overview
+npm run view:itinerary      # Daily plan
+npm run view:transport      # Transport summary
 
-# Apply cascade resets
-npx ts-node src/cli/cascade.ts --apply
-
-# Custom input/output files
-npx ts-node src/cli/cascade.ts -i data/travel-plan.json -o data/output.json --apply
+# Mutations
+npm run travel -- set-dates 2026-02-13 2026-02-17
+npm run travel -- select-offer <offer-id> <date>
+npm run travel -- validate-itinerary
+npm run travel -- set-activity-booking <day> <session> "<activity>" <status>
 ```
 
 ## Tests

@@ -1,0 +1,88 @@
+{
+  "$schema": "../schemas/destination-ref.schema.json",
+  "_comment": "Template for creating new destination reference files. Copy and customize.",
+  
+  "destination_id": "DESTINATION_ID",
+  "display_name": "Display Name",
+  "country": "Country",
+  "timezone": "Timezone/City",
+  "currency": "XXX",
+  "primary_airports": ["XXX"],
+
+  "areas": [
+    {
+      "id": "area_1",
+      "name": "Area Name",
+      "type": "commercial|traditional|entertainment|luxury|transit|modern|business|specialty",
+      "stations": ["Station1", "Station2"],
+      "vibe": "Short description of the area atmosphere",
+      "best_for": ["shopping", "food", "culture", "nightlife", "transit"]
+    }
+  ],
+
+  "pois": [
+    {
+      "id": "poi_example",
+      "title": "POI Name",
+      "area": "area_1",
+      "nearest_station": "Station1",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["shopping", "culture", "food"],
+      "notes": "Description and tips",
+      "hours": "HH:MM-HH:MM or null if 24h",
+      "address": "Full address"
+    }
+  ],
+
+  "clusters": [
+    {
+      "id": "cluster_example",
+      "name": "Cluster Display Name",
+      "theme": "shopping|culture|food|entertainment|nature",
+      "areas": ["area_1"],
+      "pois": ["poi_example"],
+      "half_day": true,
+      "notes": "When to visit, logistics tips"
+    }
+  ],
+
+  "transport": {
+    "airport_transfers": [
+      {
+        "from": "XXX",
+        "to": "city_center",
+        "options": [
+          {
+            "type": "train|bus|taxi|private",
+            "name": "Transfer Name",
+            "route": "XXX → City Center",
+            "duration_min": 60,
+            "price": { "amount": 1000, "currency": "XXX" },
+            "schedule": "Every 30 min",
+            "notes": "Booking tips"
+          }
+        ]
+      }
+    ],
+    "ic_cards": [
+      {
+        "name": "IC Card Name",
+        "coverage": "Regional coverage description",
+        "purchase_locations": ["Airport", "Station"]
+      }
+    ]
+  },
+
+  "practical": {
+    "best_months": ["Mar", "Apr", "Oct", "Nov"],
+    "avoid_dates": [
+      { "name": "Holiday Name", "dates": "MM-DD to MM-DD", "impact": "Very crowded" }
+    ],
+    "typical_expenses": {
+      "meal_budget": { "low": 800, "mid": 1500, "high": 5000, "currency": "XXX" },
+      "transport_daily": { "typical": 1000, "currency": "XXX" }
+    }
+  }
+}
