@@ -326,9 +326,11 @@ Hotel:   TAVINOS Hamamatsucho
 
 ### CLI Quick Reference
 ```bash
-# === REPORTING (read-only) ===
-npm run status              # Booking status + fixed-time activities
-npm run itinerary           # Daily plan with transport
+# === VIEWS (read-only) ===
+npm run view:status         # Booking overview + fixed-time activities
+npm run view:itinerary      # Daily plan with transport
+npm run view:transport      # Transport summary (airport + daily)
+npm run view:bookings       # Pending/confirmed bookings only
 
 # === MUTATIONS (write) ===
 npm run travel -- set-dates 2026-02-13 2026-02-17

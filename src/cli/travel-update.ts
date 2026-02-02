@@ -104,7 +104,12 @@ Commands:
 
   itinerary [--dest slug]
     Show daily itinerary with transport details.
-    Fast render from JSON - no processing delay.
+
+  transport [--dest slug]
+    Show transport summary (airport + daily transit).
+
+  bookings [--dest slug]
+    Show pending bookings only.
 
   help
     Show this help message.
@@ -508,6 +513,216 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
   }
 }
 
+function showTransport(sm: StateManager, destOpt?: string): void {
+  const destination = destOpt || sm.getActiveDestination();
+  const plan = sm.getPlan();
+  const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
+
+  if (!destObj) {
+    console.error(`Destination not found: ${destination}`);
+    process.exit(1);
+  }
+
+  console.log('\n╔════════════════════════════════════════════════════════════╗');
+  console.log('║                   TRANSPORT                                ║');
+  console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+  // Airport transfers
+  const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+  const transfers = p3?.airport_transfers as Record<string, unknown> | undefined;
+
+  if (transfers) {
+    console.log('✈️  AIRPORT TRANSFERS');
+    console.log('─'.repeat(50));
+
+    for (const dir of ['arrival', 'departure'] as const) {
+      const t = transfers[dir] as Record<string, unknown> | undefined;
+      if (!t) continue;
+
+      const status = t.status as string || 'planned';
+      const selected = t.selected as Record<string, unknown> | undefined;
+      const icon = status === 'booked' ? '🎫' : '📋';
+
+      console.log(`\n${dir.toUpperCase()} (${status})`);
+      if (selected) {
+        const title = selected.title as string || '';
+        const route = selected.route as string || '';
+        const duration = selected.duration_min as number | undefined;
+        const price = selected.price_yen as number | undefined;
+        const schedule = selected.schedule as string | undefined;
+
+        console.log(`  ${icon} ${title}`);
+        console.log(`     Route: ${route}`);
+        if (duration) console.log(`     Time: ~${duration} min`);
+        if (price) console.log(`     Price: ¥${price.toLocaleString()}`);
+        if (schedule) console.log(`     Schedule: ${schedule}`);
+      }
+    }
+    console.log('');
+  }
+
+  // Daily transit from itinerary
+  const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+  const transitSummary = p5?.transit_summary as Record<string, unknown> | undefined;
+
+  if (transitSummary) {
+    console.log('🚃 DAILY TRANSIT');
+    console.log('─'.repeat(50));
+
+    if (transitSummary.hotel_station) {
+      console.log(`\nHome station: ${transitSummary.hotel_station}`);
+    }
+    if (transitSummary.ic_card) {
+      console.log(`IC Card: ${transitSummary.ic_card}`);
+    }
+    if (transitSummary.daily_transit_cost) {
+      console.log(`Daily cost: ${transitSummary.daily_transit_cost}`);
+    }
+
+    const keyLines = transitSummary.key_lines as string[] | undefined;
+    if (keyLines && keyLines.length > 0) {
+      console.log('\nKey lines:');
+      for (const line of keyLines) {
+        console.log(`  • ${line}`);
+      }
+    }
+
+    const tips = transitSummary.tips as string[] | undefined;
+    if (tips && tips.length > 0) {
+      console.log('\nTips:');
+      for (const tip of tips) {
+        console.log(`  💡 ${tip}`);
+      }
+    }
+  }
+
+  // Per-day transit notes
+  const days = p5?.days as Array<Record<string, unknown>> | undefined;
+  if (days && days.length > 0) {
+    console.log('\n\n📅 BY DAY');
+    console.log('─'.repeat(50));
+
+    for (const day of days) {
+      const dayNum = day.day_number as number;
+      const date = day.date as string;
+      const theme = day.theme as string | undefined;
+
+      console.log(`\nDay ${dayNum} (${formatDate(date)})${theme ? ` - ${theme}` : ''}`);
+
+      for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+        const session = day[sessionName] as Record<string, unknown> | undefined;
+        const transitNotes = session?.transit_notes as string | undefined;
+        if (transitNotes) {
+          console.log(`  ${sessionName}: ${transitNotes}`);
+        }
+      }
+    }
+  }
+
+  console.log('\n');
+}
+
+function showBookings(sm: StateManager, destOpt?: string): void {
+  const destination = destOpt || sm.getActiveDestination();
+  const plan = sm.getPlan();
+  const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
+
+  if (!destObj) {
+    console.error(`Destination not found: ${destination}`);
+    process.exit(1);
+  }
+
+  console.log('\n╔════════════════════════════════════════════════════════════╗');
+  console.log('║                   BOOKINGS                                 ║');
+  console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+  // Package/flight/hotel status
+  const p34 = destObj.process_3_4_packages as Record<string, unknown> | undefined;
+  const packageStatus = p34?.status as string || 'pending';
+  console.log('📦 PACKAGE');
+  console.log('─'.repeat(50));
+  console.log(`  Status: ${packageStatus === 'booked' ? '🎫 Booked' : '⏳ ' + packageStatus}`);
+
+  if (packageStatus === 'booked' || packageStatus === 'selected') {
+    const offerId = p34?.selected_offer_id as string | undefined;
+    if (offerId) console.log(`  Offer: ${offerId}`);
+  }
+  console.log('');
+
+  // Airport transfers
+  const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+  const transfers = p3?.airport_transfers as Record<string, unknown> | undefined;
+
+  console.log('✈️  AIRPORT TRANSFERS');
+  console.log('─'.repeat(50));
+  for (const dir of ['arrival', 'departure'] as const) {
+    const t = transfers?.[dir] as Record<string, unknown> | undefined;
+    const status = t?.status as string || 'not set';
+    const selected = t?.selected as Record<string, unknown> | undefined;
+    const title = selected?.title as string || '(none)';
+    const icon = status === 'booked' ? '🎫' : status === 'planned' ? '📋' : '❓';
+    console.log(`  ${icon} ${dir}: ${title} (${status})`);
+  }
+  console.log('');
+
+  // Activity bookings
+  const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+  const days = p5?.days as Array<Record<string, unknown>> | undefined;
+
+  const pending: Array<{ day: number; title: string; bookBy?: string }> = [];
+  const booked: Array<{ day: number; title: string; ref?: string }> = [];
+
+  if (days) {
+    for (const day of days) {
+      const dayNum = day.day_number as number;
+      for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+        const session = day[sessionName] as Record<string, unknown> | undefined;
+        const activities = session?.activities as Array<unknown> | undefined;
+        if (!activities) continue;
+
+        for (const act of activities) {
+          if (typeof act !== 'string') {
+            const a = act as Record<string, unknown>;
+            const status = a.booking_status as string | undefined;
+            const required = a.booking_required as boolean | undefined;
+            const title = a.title as string;
+
+            if (status === 'booked') {
+              booked.push({ day: dayNum, title, ref: a.booking_ref as string | undefined });
+            } else if (status === 'pending' || (required && !status)) {
+              pending.push({ day: dayNum, title, bookBy: a.book_by as string | undefined });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  console.log('🎫 CONFIRMED');
+  console.log('─'.repeat(50));
+  if (booked.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const b of booked) {
+      const refStr = b.ref ? ` [${b.ref}]` : '';
+      console.log(`  ✅ Day ${b.day}: ${b.title}${refStr}`);
+    }
+  }
+  console.log('');
+
+  console.log('⏳ PENDING');
+  console.log('─'.repeat(50));
+  if (pending.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const p of pending) {
+      const deadline = p.bookBy ? ` (by ${p.bookBy})` : '';
+      console.log(`  ⏳ Day ${p.day}: ${p.title}${deadline}`);
+    }
+  }
+  console.log('\n');
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
@@ -583,6 +798,16 @@ async function main(): Promise<void> {
 
       case 'itinerary': {
         showItinerary(sm, destOpt);
+        break;
+      }
+
+      case 'transport': {
+        showTransport(sm, destOpt);
+        break;
+      }
+
+      case 'bookings': {
+        showBookings(sm, destOpt);
         break;
       }
 

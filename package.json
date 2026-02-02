@@ -15,8 +15,10 @@
     "status:json": "ts-node src/status/status-check.ts --json",
     "status:ascii": "ts-node src/status/status-check.ts --ascii",
     "travel": "ts-node src/cli/travel-update.ts",
-    "status": "ts-node src/cli/travel-update.ts status --full",
-    "itinerary": "ts-node src/cli/travel-update.ts itinerary"
+    "view:status": "ts-node src/cli/travel-update.ts status --full",
+    "view:itinerary": "ts-node src/cli/travel-update.ts itinerary",
+    "view:transport": "ts-node src/cli/travel-update.ts transport",
+    "view:bookings": "ts-node src/cli/travel-update.ts bookings"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
