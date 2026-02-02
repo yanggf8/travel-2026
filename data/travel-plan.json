@@ -709,7 +709,7 @@
       },
       "process_5_daily_itinerary": {
         "status": "researched",
-        "updated_at": "2026-01-29T04:54:47.828Z",
+        "updated_at": "2026-02-02T05:20:47.267Z",
         "days": [
           {
             "date": "2026-02-13",
@@ -823,9 +823,8 @@
                   "duration_min": null,
                   "booking_required": true,
                   "booking_url": null,
-                  "booking_status": "booked",
-                  "booking_ref": "TLB-2026-FEB15-1234",
-                  "book_by": "2026-02-01",
+                  "booking_status": "pending",
+                  "book_by": "2026-02-10",
                   "cost_estimate": null,
                   "tags": [],
                   "notes": null,

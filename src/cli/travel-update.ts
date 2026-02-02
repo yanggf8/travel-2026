@@ -102,6 +102,10 @@ Commands:
   status
     Show current plan status summary.
 
+  itinerary [--dest slug]
+    Show daily itinerary with transport details.
+    Fast render from JSON - no processing delay.
+
   help
     Show this help message.
 
@@ -359,6 +363,151 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
   console.log('\n');
 }
 
+function showItinerary(sm: StateManager, destOpt?: string): void {
+  const destination = destOpt || sm.getActiveDestination();
+  const plan = sm.getPlan();
+  const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
+
+  if (!destObj) {
+    console.error(`Destination not found: ${destination}`);
+    process.exit(1);
+  }
+
+  const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+  const days = p5?.days as Array<Record<string, unknown>> | undefined;
+
+  if (!days || days.length === 0) {
+    console.log('No itinerary days found. Run scaffold-itinerary first.');
+    return;
+  }
+
+  // Header
+  const p1 = destObj.process_1_date_anchor as Record<string, unknown> | undefined;
+  const confirmed = p1?.confirmed_dates as { start?: string; end?: string } | undefined;
+  const startDate = confirmed?.start || '';
+  const endDate = confirmed?.end || '';
+
+  console.log('\n╔════════════════════════════════════════════════════════════╗');
+  console.log('║                    ITINERARY                               ║');
+  console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+  if (startDate && endDate) {
+    console.log(`📅 ${formatDate(startDate)} → ${formatDate(endDate)} (${days.length} days)`);
+  }
+
+  // Hotel info
+  const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
+  const hotelName = p4?.hotel_name as string | undefined;
+  if (hotelName) {
+    console.log(`🏨 ${hotelName}`);
+  }
+
+  // Transit summary
+  const transitSummary = p5?.transit_summary as Record<string, unknown> | undefined;
+  if (transitSummary?.hotel_station) {
+    console.log(`🚉 ${transitSummary.hotel_station}`);
+  }
+
+  console.log('');
+
+  // Each day
+  for (const day of days) {
+    const dayNum = day.day_number as number;
+    const date = day.date as string;
+    const theme = day.theme as string | undefined;
+    const dayType = day.day_type as string | undefined;
+
+    const dayLabel = dayType === 'arrival' ? '✈️ ARRIVAL' :
+                     dayType === 'departure' ? '✈️ DEPARTURE' : '';
+
+    console.log('─'.repeat(60));
+    console.log(`Day ${dayNum} (${formatDate(date)}) ${dayLabel}`);
+    if (theme) console.log(`Theme: ${theme}`);
+    console.log('');
+
+    for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+      const session = day[sessionName] as Record<string, unknown> | undefined;
+      if (!session) continue;
+
+      const focus = session.focus as string | undefined;
+      const activities = session.activities as Array<unknown> | undefined;
+      const transitNotes = session.transit_notes as string | undefined;
+      const meals = session.meals as string[] | undefined;
+
+      if (!activities || activities.length === 0) continue;
+
+      const sessionLabel = sessionName.charAt(0).toUpperCase() + sessionName.slice(1);
+      console.log(`  【${sessionLabel}】${focus ? ` ${focus}` : ''}`);
+
+      for (const act of activities) {
+        if (typeof act === 'string') {
+          console.log(`    • ${act}`);
+        } else {
+          const a = act as Record<string, unknown>;
+          const title = a.title as string || '';
+          const status = a.booking_status as string | undefined;
+          const ref = a.booking_ref as string | undefined;
+          const bookBy = a.book_by as string | undefined;
+
+          const icon = status === 'booked' ? '🎫' :
+                       status === 'pending' ? '⏳' :
+                       a.booking_required ? '📋' : '•';
+
+          let suffix = '';
+          if (ref) suffix += ` [${ref}]`;
+          if (status === 'pending' && bookBy) suffix += ` (book by ${bookBy})`;
+
+          console.log(`    ${icon} ${title}${suffix}`);
+        }
+      }
+
+      if (transitNotes) {
+        console.log(`    🚃 ${transitNotes}`);
+      }
+
+      if (meals && meals.length > 0) {
+        console.log(`    🍽️  ${meals.join(', ')}`);
+      }
+
+      console.log('');
+    }
+  }
+
+  // Pending bookings summary
+  const pendingBookings: Array<{ day: number; title: string; bookBy?: string }> = [];
+  for (const day of days) {
+    const dayNum = day.day_number as number;
+    for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+      const session = day[sessionName] as Record<string, unknown> | undefined;
+      const activities = session?.activities as Array<unknown> | undefined;
+      if (!activities) continue;
+
+      for (const act of activities) {
+        if (typeof act !== 'string') {
+          const a = act as Record<string, unknown>;
+          if (a.booking_status === 'pending' || (a.booking_required && !a.booking_status)) {
+            pendingBookings.push({
+              day: dayNum,
+              title: a.title as string,
+              bookBy: a.book_by as string | undefined,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (pendingBookings.length > 0) {
+    console.log('─'.repeat(60));
+    console.log('⏳ PENDING BOOKINGS');
+    for (const pb of pendingBookings) {
+      const deadline = pb.bookBy ? ` (by ${pb.bookBy})` : '';
+      console.log(`  Day ${pb.day}: ${pb.title}${deadline}`);
+    }
+    console.log('');
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
@@ -429,6 +578,11 @@ async function main(): Promise<void> {
     switch (command) {
       case 'status': {
         showStatus(sm, { full });
+        break;
+      }
+
+      case 'itinerary': {
+        showItinerary(sm, destOpt);
         break;
       }
 
