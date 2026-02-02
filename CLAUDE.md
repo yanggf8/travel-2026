@@ -264,15 +264,15 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   ├── status/
 │   │   ├── rule-evaluator.ts
 │   │   └── status-check.ts
-│   ├── types/                 # Shared type utilities
-│   │   ├── index.ts
-│   │   └── result.ts          # Result<T,E> for error handling
 │   └── types/                 # Shared utilities (Result, validation)
+│       ├── index.ts
+│       └── result.ts          # Result<T,E> for error handling
 ├── tests/
 │   └── integration/           # Integration/regression tests
 │       └── state-manager.regression.test.ts
 ├── scripts/
 │   ├── hooks/pre-commit       # Pre-commit TypeScript check
+│   ├── migrate-state-keys.ts  # State key migration (legacy → v4.2.0)
 │   ├── scrape_package.py      # Generic Playwright OTA scraper
 │   └── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
 ├── vitest.config.ts           # Test configuration
@@ -425,6 +425,9 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Result type for error handling (`src/types/result.ts`)
 - ✅ Input validation utilities (`src/types/validation.ts`)
 - ✅ CLI argument validation (dates, numbers, times)
+- ✅ Focus tracking with event emission (`setFocus` emits `focus_changed`)
+- ✅ Session-level next actions (`setNextActions` with event logging)
+- ✅ State key migration script (`scripts/migrate-state-keys.ts`)
 
 ## Storage Decision (DB)
 

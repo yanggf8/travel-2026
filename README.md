@@ -152,6 +152,27 @@ The project uses schema version `4.2.0` with destination-scoped architecture.
 
 See `CLAUDE.md` for detailed schema documentation.
 
+## Storage Decision (DB)
+
+**Decision criteria**
+- No native DB installs required on agent machines.
+- Strong CLI story for skills (inspect/query/update).
+- JS-native integration with existing Node/ts-node tooling.
+- Keep StateManager as the single write path.
+
+**Comparison (final)**
+| Option | CLI strength | Install requirement | Fit for skills |
+|--------|--------------|---------------------|----------------|
+| DuckDB | Strong (native CLI) | Requires binary install | ❌ (install not allowed) |
+| SQLite | Strong (sqlite3 CLI) | Requires native install | ❌ (install not allowed) |
+| Postgres | Strong (psql) | Requires server install | ❌ (install not allowed) |
+| Redis/Valkey | Strong (redis-cli) | Requires server + CLI | ❌ (install not allowed) |
+| LokiJS | None built-in (provide our own) | Pure JS dependency | ✅ (build CLI wrapper) |
+
+**Decision**
+Use **LokiJS** as the future embedded DB (JS-only). Provide a small Node CLI wrapper for inspection and
+updates so skills have a strong CLI surface without native DB installs.
+
 ## License
 
 Private project - not for distribution.

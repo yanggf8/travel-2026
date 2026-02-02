@@ -1476,8 +1476,28 @@ export class StateManager {
   /**
    * Set current focus (for UI/skill coordination).
    */
-  setFocus(destination: string, process: string): void {
-    this.eventLog.current_focus = `${destination}.${process}`;
+  setFocus(destination: string, process: ProcessId): void {
+    const previous = this.eventLog.current_focus;
+    const newFocus = `${destination}.${process}`;
+    this.eventLog.current_focus = newFocus;
+    this.emitEvent({
+      event: 'focus_changed',
+      destination,
+      process,
+      data: { from: previous, to: newFocus },
+    });
+  }
+
+  /**
+   * Set session-level next actions (global; not per-destination).
+   */
+  setNextActions(actions: string[]): void {
+    const previous = this.eventLog.next_actions || [];
+    this.eventLog.next_actions = actions;
+    this.emitEvent({
+      event: 'next_actions_updated',
+      data: { from: previous, to: actions },
+    });
   }
 
   /**
