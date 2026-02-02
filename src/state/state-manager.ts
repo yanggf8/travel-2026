@@ -1501,22 +1501,6 @@ export class StateManager {
   }
 
   /**
-   * Set next actions list (for UI/skill coordination).
-   */
-  setNextActions(actions: string[]): void {
-    const previousActions = this.eventLog.next_actions || [];
-    this.eventLog.next_actions = actions;
-
-    this.emitEvent({
-      event: 'next_actions_updated',
-      data: {
-        from: previousActions,
-        to: actions,
-      },
-    });
-  }
-
-  /**
    * Get next actions list.
    */
   getNextActions(): string[] {
