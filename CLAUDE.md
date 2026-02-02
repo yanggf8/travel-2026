@@ -326,36 +326,17 @@ Hotel:   TAVINOS Hamamatsucho
 
 ### CLI Quick Reference
 ```bash
-# View full booking details (shortcut)
-npm run update:status
+# === REPORTING (read-only) ===
+npm run status              # Booking status + fixed-time activities
+npm run itinerary           # Daily plan with transport
 
-# View status
-npx ts-node src/cli/travel-update.ts status
-
-# View full booking details
-npx ts-node src/cli/travel-update.ts status --full
-
-# Update dates (triggers cascade)
-npx ts-node src/cli/travel-update.ts set-dates 2026-02-13 2026-02-17
-
-# Select an offer
-npx ts-node src/cli/travel-update.ts select-offer <offer-id> <date>
-
-# Set activity booking status
-npm run update -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
-# Example: npm run update -- set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"
-
-# Set airport transfer
-npm run update -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule" [--candidate "..."]
-# Example: npm run update -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome|85|3200|19:40"
-
-# Set activity time (for fixed constraints/deadlines)
-npm run update -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
-# Example: npm run update -- set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true
-
-# Set session time boundaries
-npm run update -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
-# Example: npm run update -- set-session-time-range 5 afternoon --start 11:00 --end 14:45
+# === MUTATIONS (write) ===
+npm run travel -- set-dates 2026-02-13 2026-02-17
+npm run travel -- select-offer <offer-id> <date>
+npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
+npm run travel -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
+npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
+npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
 ```
 
 ### Scraper Tools (Python/Playwright)
