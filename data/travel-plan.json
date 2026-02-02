@@ -709,7 +709,7 @@
       },
       "process_5_daily_itinerary": {
         "status": "researched",
-        "updated_at": "2026-02-02T05:20:47.267Z",
+        "updated_at": "2026-02-02T08:00:49.465Z",
         "days": [
           {
             "date": "2026-02-13",
@@ -764,60 +764,11 @@
             "day_number": 2,
             "day_type": "full",
             "status": "planned",
-            "theme": "Classic Tokyo: Asakusa + Shibuya/Harajuku",
+            "theme": "Classic Tokyo: Asakusa + teamLab Borderless + Shibuya/Harajuku",
             "morning": {
-              "focus": "Asakusa Traditional (Early to Beat Crowds)",
+              "focus": "teamLab Borderless (Morning Session)",
               "activities": [
-                "Early start (7:30-8:00) to beat weekend crowds",
-                "Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)",
-                "Senso-ji Temple",
-                "Nakamise Shopping Street",
-                "Kaminarimon Gate photos"
-              ],
-              "meals": [
-                "Breakfast at hotel or skip for early start"
-              ],
-              "transit_notes": "Daimon → Asakusa (Toei Asakusa Line, ¥280, 20 min direct). Exit A4 for Kaminarimon.",
-              "booking_notes": "Saturday crowds - arrive early for peaceful temple experience"
-            },
-            "afternoon": {
-              "focus": "Shibuya",
-              "activities": [
-                "Asakusa → Shibuya (Metro, 30 min)",
-                "Shibuya Crossing",
-                "Shibuya Sky observation deck (optional)",
-                "Shibuya 109 / shopping"
-              ],
-              "meals": [
-                "Lunch in Asakusa (soba, tempura) or Shibuya"
-              ],
-              "transit_notes": "Asakusa → Shibuya (Metro Ginza Line, ¥250, 30 min direct). Exit Hachiko side for crossing.",
-              "booking_notes": "Shibuya Sky needs advance booking if interested"
-            },
-            "evening": {
-              "focus": "Shibuya/Harajuku Evening",
-              "activities": [
-                "Walk to Harajuku (10 min)",
-                "Takeshita Street",
-                "Omotesando for upscale window shopping",
-                "Dinner and return"
-              ],
-              "meals": [
-                "Dinner in Harajuku/Omotesando area"
-              ],
-              "transit_notes": "Harajuku → Hamamatsucho (JR Yamanote Line, ¥200, 20 min). Or walk Harajuku → Shibuya (10 min) then Yamanote.",
-              "booking_notes": null
-            }
-          },
-          {
-            "date": "2026-02-15",
-            "day_number": 3,
-            "day_type": "full",
-            "status": "planned",
-            "theme": "teamLab Borderless + Azabudai/Roppongi",
-            "morning": {
-              "focus": "teamLab Borderless",
-              "activities": [
+                "Early start (7:30-8:00) to beat crowds",
                 "Hamamatsucho → Kamiyacho (Metro, 10 min)",
                 {
                   "id": "activity_mkyzc52c_9diw",
@@ -843,14 +794,62 @@
               "booking_notes": "BOOK TICKETS IN ADVANCE - often sells out"
             },
             "afternoon": {
-              "focus": "Azabudai Hills + Roppongi",
+              "focus": "Asakusa Traditional",
               "activities": [
-                "Explore Azabudai Hills (new complex)",
-                "Walk to Roppongi Hills",
-                "Mori Art Museum or Tokyo City View (optional)"
+                "Hamamatsucho → Asakusa (Metro/Asakusa Line, 20 min)",
+                "Senso-ji Temple",
+                "Nakamise Shopping Street",
+                "Kaminarimon Gate photos"
               ],
               "meals": [
-                "Lunch at Azabudai Hills restaurants"
+                "Lunch in Asakusa (soba, tempura)"
+              ],
+              "transit_notes": "Daimon → Asakusa (Toei Asakusa Line, ¥280, 20 min direct). Exit A4 for Kaminarimon.",
+              "booking_notes": "Saturday crowds - arrive early for peaceful temple experience"
+            },
+            "evening": {
+              "focus": "Shibuya/Harajuku Evening",
+              "activities": [
+                "Walk to Harajuku (10 min)",
+                "Takeshita Street",
+                "Omotesando for upscale window shopping",
+                "Dinner and return"
+              ],
+              "meals": [
+                "Dinner in Harajuku/Omotesando area"
+              ],
+              "transit_notes": "Harajuku → Hamamatsucho (JR Yamanote Line, ¥200, 20 min). Or walk Harajuku → Shibuya (10 min) then Yamanote.",
+              "booking_notes": null
+            }
+          },
+          {
+            "date": "2026-02-15",
+            "day_number": 3,
+            "day_type": "full",
+            "status": "planned",
+            "theme": "Azabudai Hills + Roppongi + Shibuya",
+            "morning": {
+              "focus": "Azabudai Hills Morning",
+              "activities": [
+                "Explore Azabudai Hills (new complex)",
+                "Walk around the gardens and shops"
+              ],
+              "meals": [
+                "Light breakfast at hotel"
+              ],
+              "transit_notes": "Daimon Station → Kamiyacho (Metro Hibiya Line, ¥180, 10 min). Azabudai Hills is 5 min walk from Kamiyacho exit.",
+              "booking_notes": "Optional: Tokyo City View observation deck at Roppongi Hills"
+            },
+            "afternoon": {
+              "focus": "Roppongi + Shibuya",
+              "activities": [
+                "Walk to Roppongi Hills",
+                "Mori Art Museum or Tokyo City View (optional)",
+                "Shibuya Crossing",
+                "Shibuya Sky observation deck (optional)"
+              ],
+              "meals": [
+                "Lunch in Roppongi or Azabudai Hills"
               ],
               "transit_notes": "Walking distance Azabudai → Roppongi",
               "booking_notes": null

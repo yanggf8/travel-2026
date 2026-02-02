@@ -300,13 +300,25 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 | P3+4 Packages | ✅ **booked** | ⏳ pending (archived) |
 | P3 Transportation | 🎫 booked | 🔄 researched |
 | P4 Accommodation | 🎫 booked | ⏳ pending |
-| P5 Itinerary | 🔄 researched (activities populated) | ⏳ pending |
+| P5 Itinerary | 🔄 researched (teamLab moved to Sat) | ⏳ pending |
 
 ### Airport Transfers (Tokyo)
 | Direction | Status | Selected |
 |-----------|--------|----------|
 | Arrival | planned | Limousine Bus (NRT T2 → Shiodome) - ¥3,200, ~85min |
 | Departure | planned | Limousine Bus (Shiodome → NRT T2) - ¥3,200, ~85min |
+
+### Itinerary Summary (Feb 13-17, 2026)
+
+| Day | Date | Morning | Afternoon | Evening |
+|-----|------|---------|-----------|---------|
+| 1 | Fri 13 | ✈️ TPE → NRT | Arrival + Narita dinner | Hotel check-in |
+| **2** | **Sat 14** | **teamLab Borderless** | Asakusa (Senso-ji) | Harajuku |
+| 3 | Sun 15 | Azabudai Hills | Roppongi + Shibuya | Roppongi |
+| 4 | Mon 16 | KOMEHYO (Chanel) | Isetan omiyage | Omoide Yokocho |
+| 5 | Tue 17 | Pack + Checkout | Shiodome area | ✈️ NRT → TPE |
+
+**Pending:** Book teamLab by Feb 10
 
 ### ✅ BOOKED: Tokyo Feb 13-17, 2026
 ```

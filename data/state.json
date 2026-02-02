@@ -354,6 +354,7 @@
     },
     {
       "event": "activity_booking_updated",
+      "at": "2026-02-02T05:20:47.267Z",
       "destination": "tokyo_2026",
       "process": "process_5_daily_itinerary",
       "data": {
@@ -365,8 +366,23 @@
         "to_status": "pending",
         "book_by": "2026-02-10",
         "upgraded_from_string": false
+      }
+    },
+    {
+      "event": "activity_booking_updated",
+      "destination": "tokyo_2026",
+      "process": "process_5_daily_itinerary",
+      "data": {
+        "day_number": 3,
+        "session": "morning",
+        "activity_id": "activity_mkyzc52c_9diw",
+        "title": "teamLab Borderless at Azabudai Hills (opens 10:00)",
+        "from_status": "pending",
+        "to_status": "pending",
+        "book_by": "2026-02-10",
+        "upgraded_from_string": false
       },
-      "at": "2026-02-02T05:20:47.267Z"
+      "at": "2026-02-02T08:00:49.465Z"
     }
   ],
   "global_processes": {
@@ -718,6 +734,7 @@
             },
             {
               "event": "activity_booking_updated",
+              "at": "2026-02-02T05:20:47.267Z",
               "destination": "tokyo_2026",
               "process": "process_5_daily_itinerary",
               "data": {
@@ -729,8 +746,23 @@
                 "to_status": "pending",
                 "book_by": "2026-02-10",
                 "upgraded_from_string": false
+              }
+            },
+            {
+              "event": "activity_booking_updated",
+              "destination": "tokyo_2026",
+              "process": "process_5_daily_itinerary",
+              "data": {
+                "day_number": 3,
+                "session": "morning",
+                "activity_id": "activity_mkyzc52c_9diw",
+                "title": "teamLab Borderless at Azabudai Hills (opens 10:00)",
+                "from_status": "pending",
+                "to_status": "pending",
+                "book_by": "2026-02-10",
+                "upgraded_from_string": false
               },
-              "at": "2026-02-02T05:20:47.267Z"
+              "at": "2026-02-02T08:00:49.465Z"
             }
           ]
         }
