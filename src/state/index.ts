@@ -5,6 +5,7 @@
  */
 
 export { StateManager, getStateManager, resetStateManager } from './state-manager';
+export type { StateManagerOptions } from './state-manager';
 export {
   ProcessStatus,
   ProcessId,
@@ -13,6 +14,7 @@ export {
   TravelEvent,
   EventLogState,
   TravelPlanMinimal,
+  TravelState,
   STATUS_TRANSITIONS,
   // Activity types (P5 Itinerary)
   SessionType,

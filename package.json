@@ -5,21 +5,24 @@
   "main": "src/status/status-check.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "hooks:install": "cp scripts/hooks/* .git/hooks/ && chmod +x .git/hooks/*",
     "postinstall": "npm run hooks:install",
     "status": "ts-node src/status/status-check.ts",
     "status:json": "ts-node src/status/status-check.ts --json",
     "status:ascii": "ts-node src/status/status-check.ts --ascii",
-    "transport": "ts-node src/process/transportation.ts",
-    "accom": "ts-node src/process/accommodation.ts",
-    "itinerary": "ts-node src/process/itinerary.ts",
     "update": "ts-node src/cli/travel-update.ts",
     "update:status": "ts-node src/cli/travel-update.ts status --full"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^3.0.0",
     "ts-node": "^10.9.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
   },
   "dependencies": {
     "zod": "^4.3.6"

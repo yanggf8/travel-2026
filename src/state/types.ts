@@ -82,6 +82,18 @@ export interface TravelEvent {
   data?: Record<string, unknown>;
 }
 
+/**
+ * Simplified state interface for testing and in-memory operation.
+ * Subset of EventLogState with only the fields needed for StateManager.
+ */
+export interface TravelState {
+  schema_version?: string;
+  current_phase?: string;
+  event_log: TravelEvent[];
+  next_actions?: string[];
+  dirty_flags?: Record<string, boolean>;
+}
+
 // Event log state (in state.json)
 export interface EventLogState {
   session: string;

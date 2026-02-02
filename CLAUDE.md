@@ -261,13 +261,21 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   │   └── p3p4-packages/
 │   │       ├── SKILL.md
 │   │       └── references/legacy-spec.md
-│   └── status/
-│       ├── rule-evaluator.ts
-│       └── status-check.ts
+│   ├── status/
+│   │   ├── rule-evaluator.ts
+│   │   └── status-check.ts
+│   ├── types/                 # Shared type utilities
+│   │   ├── index.ts
+│   │   └── result.ts          # Result<T,E> for error handling
+│   └── _deprecated/           # Archived legacy code (do not use)
+├── tests/
+│   └── integration/           # Integration/regression tests
+│       └── state-manager.regression.test.ts
 ├── scripts/
 │   ├── hooks/pre-commit       # Pre-commit TypeScript check
 │   ├── scrape_package.py      # Generic Playwright OTA scraper
 │   └── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
+├── vitest.config.ts           # Test configuration
 └── tsconfig.json
 ```
 
@@ -401,6 +409,11 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Time-aware scheduling (start_time, end_time, is_fixed_time on Activity)
 - ✅ Session time boundaries (time_range on DaySession)
 - ✅ Fixed-time activities in `status --full` (reservations/deadlines at a glance)
+- ✅ Integration test framework (Vitest, `tests/integration/`)
+- ✅ StateManager in-memory testing support (`StateManagerOptions`)
+- ✅ Activity search helper extraction (`findActivityIndex`)
+- ✅ Result type for error handling (`src/types/result.ts`)
+- ✅ Deprecated process code archived (`src/_deprecated/`)
 
 ## Storage Decision (DB)
 

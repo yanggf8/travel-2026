@@ -21,6 +21,7 @@ import {
   TravelEvent,
   EventLogState,
   TravelPlanMinimal,
+  TravelState,
   STATUS_TRANSITIONS,
   TransportOption,
   TransportSegment,
@@ -37,20 +38,73 @@ import { DEFAULTS } from '../config/constants';
 const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
 const DEFAULT_STATE_PATH = process.env.TRAVEL_STATE_PATH || 'data/state.json';
 
+/**
+ * Options for StateManager constructor.
+ * Supports both file-based and in-memory operation (for testing).
+ */
+export interface StateManagerOptions {
+  /** Path to travel-plan.json (default: data/travel-plan.json) */
+  planPath?: string;
+  /** Path to state.json (default: data/state.json) */
+  statePath?: string;
+  /** In-memory plan data (bypasses file loading) */
+  plan?: TravelPlanMinimal;
+  /** In-memory state data (bypasses file loading) */
+  state?: TravelState;
+  /** Skip save operations (useful for tests) */
+  skipSave?: boolean;
+}
+
 export class StateManager {
   private planPath: string;
   private statePath: string;
   private plan: TravelPlanMinimal;
   private eventLog: EventLogState;
   private timestamp: string;
+  private skipSave: boolean;
 
-  constructor(planPath?: string, statePath?: string) {
-    this.planPath = planPath || DEFAULT_PLAN_PATH;
-    this.statePath = statePath || DEFAULT_STATE_PATH;
-    this.timestamp = this.freshTimestamp();
-    this.plan = this.loadPlan();
-    this.normalizePlan();
-    this.eventLog = this.loadEventLog();
+  constructor(options?: StateManagerOptions | string, statePath?: string) {
+    // Support legacy (planPath, statePath) signature
+    if (typeof options === 'string' || options === undefined) {
+      this.planPath = options || DEFAULT_PLAN_PATH;
+      this.statePath = statePath || DEFAULT_STATE_PATH;
+      this.skipSave = false;
+      this.timestamp = this.freshTimestamp();
+      this.plan = this.loadPlan();
+      this.normalizePlan();
+      this.eventLog = this.loadEventLog();
+    } else {
+      // New options-based signature
+      this.planPath = options.planPath || DEFAULT_PLAN_PATH;
+      this.statePath = options.statePath || DEFAULT_STATE_PATH;
+      this.skipSave = options.skipSave || false;
+      this.timestamp = this.freshTimestamp();
+
+      if (options.plan) {
+        this.plan = options.plan;
+        this.normalizePlan();
+      } else {
+        this.plan = this.loadPlan();
+        this.normalizePlan();
+      }
+
+      if (options.state) {
+        // Create full EventLogState from minimal TravelState
+        this.eventLog = {
+          session: new Date().toISOString().split('T')[0],
+          project: DEFAULTS.project,
+          version: '3.0',
+          active_destination: this.plan?.active_destination || '',
+          current_focus: '',
+          event_log: options.state.event_log || [],
+          next_actions: options.state.next_actions || [],
+          global_processes: {},
+          destinations: {},
+        };
+      } else {
+        this.eventLog = this.loadEventLog();
+      }
+    }
   }
 
   // ============================================================================
@@ -907,15 +961,7 @@ export class StateManager {
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    const searchLower = activityId.toLowerCase();
-    let idx = sessionObj.activities.findIndex(a => typeof a !== 'string' && a.id === activityId);
-    if (idx === -1) {
-      idx = sessionObj.activities.findIndex(a => {
-        if (typeof a === 'string') return a.toLowerCase().includes(searchLower);
-        const title = a.title as string | undefined;
-        return Boolean(title && title.toLowerCase().includes(searchLower));
-      });
-    }
+    const idx = this.findActivityIndex(sessionObj.activities, activityId);
     if (idx === -1) {
       throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
     }
@@ -957,15 +1003,7 @@ export class StateManager {
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    const searchLower = activityIdOrTitle.toLowerCase();
-    let idx = sessionObj.activities.findIndex(a => typeof a !== 'string' && a.id === activityIdOrTitle);
-    if (idx === -1) {
-      idx = sessionObj.activities.findIndex(a => {
-        if (typeof a === 'string') return a.toLowerCase().includes(searchLower);
-        const title = a.title as string | undefined;
-        return Boolean(title && title.toLowerCase().includes(searchLower));
-      });
-    }
+    const idx = this.findActivityIndex(sessionObj.activities, activityIdOrTitle);
     if (idx === -1) {
       throw new Error(`Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`);
     }
@@ -1056,11 +1094,7 @@ export class StateManager {
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    const searchLower = activityId.toLowerCase();
-    const idx = sessionObj.activities.findIndex(a => {
-      if (typeof a === 'string') return a.toLowerCase().includes(searchLower);
-      return a.id === activityId;
-    });
+    const idx = this.findActivityIndex(sessionObj.activities, activityId);
     if (idx === -1) {
       throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
     }
@@ -1116,41 +1150,16 @@ export class StateManager {
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    // Find activity by ID, title, or substring match (for string activities)
-    const searchLower = activityIdOrTitle.toLowerCase();
-    let activityIdx = -1;
-    let activity: string | Record<string, unknown> | undefined;
-
-    for (let i = 0; i < sessionObj.activities.length; i++) {
-      const a = sessionObj.activities[i];
-      if (typeof a === 'string') {
-        // String activity: match by substring (case-insensitive)
-        if (a.toLowerCase().includes(searchLower)) {
-          activityIdx = i;
-          activity = a;
-          break;
-        }
-      } else {
-        // Object activity: match by ID or title
-        const id = a.id as string | undefined;
-        const title = a.title as string | undefined;
-        if (id === activityIdOrTitle ||
-            (title && title.toLowerCase().includes(searchLower))) {
-          activityIdx = i;
-          activity = a;
-          break;
-        }
-      }
-    }
-
-    if (activityIdx === -1 || activity === undefined) {
+    const activityIdx = this.findActivityIndex(sessionObj.activities, activityIdOrTitle);
+    if (activityIdx === -1) {
       throw new Error(
         `Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`
       );
     }
 
+    const activity = sessionObj.activities[activityIdx];
     const wasUpgraded = typeof activity === 'string';
-    const activityObj = typeof activity === 'string'
+    const activityObj = wasUpgraded
       ? this.upgradeStringActivity(activity, { booking_required: true })
       : activity;
     if (wasUpgraded) {
@@ -1373,6 +1382,33 @@ export class StateManager {
   }
 
   /**
+   * Find activity index by ID (exact match) or title (case-insensitive substring).
+   * Returns -1 if not found.
+   *
+   * @internal Shared helper to reduce duplication in activity methods.
+   */
+  private findActivityIndex(
+    activities: Array<string | Record<string, unknown>>,
+    idOrTitle: string
+  ): number {
+    // First try exact ID match
+    const idx = activities.findIndex(
+      a => typeof a !== 'string' && a.id === idOrTitle
+    );
+    if (idx !== -1) return idx;
+
+    // Fall back to title substring (case-insensitive)
+    const searchLower = idOrTitle.toLowerCase();
+    return activities.findIndex(a => {
+      if (typeof a === 'string') {
+        return a.toLowerCase().includes(searchLower);
+      }
+      const title = a.title as string | undefined;
+      return Boolean(title && title.toLowerCase().includes(searchLower));
+    });
+  }
+
+  /**
    * Force-set a process status without transition validation.
    * Use sparingly for recovery/override paths (e.g. re-scaffolding).
    */
@@ -1520,6 +1556,9 @@ export class StateManager {
     // Validate before saving (catch bugs before writing corrupt data)
     validateTravelPlan(this.plan);
     validateEventLogState(this.eventLog);
+
+    // Skip file writes in test mode
+    if (this.skipSave) return;
 
     // Save travel plan
     writeFileSync(

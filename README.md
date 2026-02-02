@@ -51,7 +51,7 @@ npx ts-node src/cli/cascade.ts --apply
 │   ├── skills/               # Reusable planning skills
 │   │   ├── p3-flights.md     # Flight search skill
 │   │   └── p3p4-packages.md  # Package search skill
-│   ├── process/              # Process handlers
+│   ├── _deprecated/          # Archived legacy process code (do not use)
 │   └── status/               # Status checking utilities
 ├── scripts/
 │   ├── scrape_package.py           # Generic OTA scraper (Playwright)
@@ -124,6 +124,14 @@ npx ts-node src/cli/cascade.ts --apply
 
 # Custom input/output files
 npx ts-node src/cli/cascade.ts -i data/travel-plan.json -o data/output.json --apply
+```
+
+## Tests
+
+This repo uses cost-effective integration/regression tests (no unit test suite).
+
+```bash
+npm test
 ```
 
 ## Data Schema
