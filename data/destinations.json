@@ -34,6 +34,17 @@
       "markets": ["TW", "JP"],
       "primary_airports": ["KIX", "ITM"],
       "language": "ja"
+    },
+    "osaka_kyoto_2026": {
+      "slug": "osaka_kyoto_2026",
+      "display_name": "Osaka + Kyoto",
+      "ref_id": "osaka_kyoto",
+      "ref_path": "src/skills/travel-shared/references/destinations/osaka_kyoto.json",
+      "timezone": "Asia/Tokyo",
+      "currency": "JPY",
+      "markets": ["TW", "JP"],
+      "primary_airports": ["KIX", "ITM"],
+      "language": "ja"
     }
   },
   "default_destination": "tokyo_2026"

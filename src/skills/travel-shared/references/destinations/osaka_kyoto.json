@@ -1,0 +1,342 @@
+{
+  "destination_id": "osaka_kyoto",
+  "display_name": "Osaka + Kyoto",
+  "country": "Japan",
+  "timezone": "Asia/Tokyo",
+  "currency": "JPY",
+  "primary_airports": ["KIX", "ITM"],
+  "inter_city_transit": {
+    "osaka_to_kyoto": { "minutes": 15, "line": "JR Tokaido Shinkansen", "station_from": "Osaka", "station_to": "Kyoto" },
+    "kyoto_to_osaka": { "minutes": 15, "line": "JR Tokaido Shinkansen", "station_from": "Kyoto", "station_to": "Osaka" }
+  },
+
+  "areas": [
+    {
+      "id": "namba",
+      "name": "Namba",
+      "type": "commercial",
+      "stations": ["Namba", "Osaka Namba", "Nippombashi"],
+      "vibe": "Vibrant nightlife, shopping, food paradise",
+      "best_for": ["food", "nightlife", "shopping", "entertainment"]
+    },
+    {
+      "id": "shinsaibashi",
+      "name": "Shinsaibashi",
+      "type": "commercial",
+      "stations": ["Shinsaibashi", "Osaka Namba"],
+      "vibe": "Upscale shopping arcades, boutique stores",
+      "best_for": ["shopping", "fashion", "dining"]
+    },
+    {
+      "id": "dotonbori",
+      "name": "Dotonbori",
+      "type": "food",
+      "stations": ["Namba", "Osaka Namba"],
+      "vibe": "Iconic food street, neon signs, street food heaven",
+      "best_for": ["food", "nightlife", "sightseeing", "photo"]
+    },
+    {
+      "id": "umeda",
+      "name": "Umeda",
+      "type": "commercial",
+      "stations": ["Umeda", "Osaka", "Higashi-Umeda"],
+      "vibe": "Major transit hub, department stores, modern",
+      "best_for": ["shopping", "transit", "dining", "architecture"]
+    },
+    {
+      "id": "osaka_castle",
+      "name": "Osaka Castle Area",
+      "type": "historical",
+      "stations": ["Osaka-johi", "Morinomiya", "Tanimachi-yonchome"],
+      "vibe": "Historic castle, cherry blossoms, samurai history",
+      "best_for": ["history", "sightseeing", "nature", "photo"]
+    },
+    {
+      "id": "shinsekai",
+      "name": "Shinsekai",
+      "type": "traditional",
+      "stations": ["Shinsekai", "Spa World"],
+      "vibe": "Retro Osaka, kushiage, traditional atmosphere",
+      "best_for": ["food", "traditional", "photo"]
+    },
+    {
+      "id": "kyoto_station",
+      "name": "Kyoto Station",
+      "type": "transit",
+      "stations": ["Kyoto"],
+      "vibe": "Modern architecture, transit hub, shopping complex",
+      "best_for": ["transit", "shopping", "dining"]
+    },
+    {
+      "id": "higashiyama",
+      "name": "Higashiyama",
+      "type": "traditional",
+      "stations": ["Gion-Shijo", "Kawaramachi", "Higashiyama"],
+      "vibe": "Traditional Kyoto, geisha district, old town",
+      "best_for": ["traditional", "culture", "temples", "walking"]
+    },
+    {
+      "id": "arashiyama",
+      "name": "Arashiyama",
+      "type": "nature",
+      "stations": ["Arashiyama", "Saga-Arashiyama"],
+      "vibe": "Bamboo grove, scenic mountains, temples",
+      "best_for": ["nature", "temples", "hiking", "photo"]
+    },
+    {
+      "id": "fushimi",
+      "name": "Fushimi Inari",
+      "type": "temple",
+      "stations": ["Inari"],
+      "vibe": "Famous torii gates, spiritual, hiking",
+      "best_for": ["temples", "hiking", "iconic", "photography"]
+    },
+    {
+      "id": "kinkakuji",
+      "name": "Kinkaku-ji",
+      "type": "temple",
+      "stations": ["Kinkaji-mae", "Kita-Oji"],
+      "vibe": "Golden pavilion, zen garden, must-see",
+      "best_for": ["temples", "gardens", "iconic", "sightseeing"]
+    },
+    {
+      "id": "gion",
+      "name": "Gion",
+      "type": "traditional",
+      "stations": ["Gion-Shijo"],
+      "vibe": "Geisha district, historic machiya, tea houses",
+      "best_for": ["culture", "traditional", "geisha", "walking"]
+    }
+  ],
+
+  "pois": [
+    {
+      "id": "dotonbori",
+      "title": "Dotonbori Canal",
+      "area": "dotonbori",
+      "nearest_station": "Namba",
+      "duration_min": 90,
+      "booking_required": false,
+      "cost_estimate": 2000,
+      "tags": ["food", "nightlife", "sightseeing", "photo"],
+      "notes": "Iconic Glico running man sign. Try takoyaki, okonomiyaki, kushikatsu. Best at night.",
+      "hours": "24/7 (shops vary)"
+    },
+    {
+      "id": "kuromon_market",
+      "title": "Kuromon Ichiba Market",
+      "area": "namba",
+      "nearest_station": "Nippombashi",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 3000,
+      "tags": ["food", "market", "seafood", "omiyage"],
+      "notes": "Fresh seafood, crab, strawberries, dried goods. Similar to Tokyo's Tsukiji.",
+      "hours": "09:00-18:00"
+    },
+    {
+      "id": "shinsaibashi_shopping",
+      "title": "Shinsaibashi Shopping Arcade",
+      "area": "shinsaibashi",
+      "nearest_station": "Shinsaibashi",
+      "duration_min": 90,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["shopping", "arcade", "fashion"],
+      "notes": "600m covered arcade. American Village nearby for youth fashion.",
+      "hours": "10:00-20:00"
+    },
+    {
+      "id": "osaka_castle",
+      "title": "Osaka Castle",
+      "area": "osaka_castle",
+      "nearest_station": "Osaka-johi",
+      "duration_min": 120,
+      "booking_required": false,
+      "cost_estimate": 600,
+      "tags": ["history", "castle", "museum", "garden"],
+      "notes": "Original fortress built 1597. Excellent views from top floor. Cherry blossoms in spring.",
+      "hours": "09:00-17:00"
+    },
+    {
+      "id": "tenjinbashi",
+      "title": "Tenjinbashisuji Shopping Street",
+      "area": "umeda",
+      "nearest_station": "Umeda",
+      "duration_min": 45,
+      "booking_required": false,
+      "cost_estimate": 1000,
+      "tags": ["shopping", "traditional", "local"],
+      "notes": "Longest shopping street in Japan (2.6km). Local shops, some foreign goods.",
+      "hours": "Shops 10:00-18:00"
+    },
+    {
+      "id": "fushimi_inari",
+      "title": "Fushimi Inari Taisha",
+      "area": "fushimi",
+      "nearest_station": "Inari",
+      "duration_min": 180,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["temple", "hiking", "iconic", "free"],
+      "notes": "10,000+ torii gates. Hike to top takes 2-3 hours. Go early (6am) to avoid crowds.",
+      "hours": "24/7"
+    },
+    {
+      "id": "bamboo_grove",
+      "title": "Arashiyama Bamboo Grove",
+      "area": "arashiyama",
+      "nearest_station": "Arashiyama",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["nature", "iconic", "walking", "photography"],
+      "notes": "Arashiyama Bamboo Forest. Best at dawn or dusk. Combine with Tenryu-ji temple.",
+      "hours": "24/7 (free), Tenryu-ji 08:00-17:00"
+    },
+    {
+      "id": "tenryuji",
+      "title": "Tenryu-ji Temple",
+      "area": "arashiyama",
+      "nearest_station": "Arashiyama",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 500,
+      "tags": ["temple", "garden", "zen", "unesco"],
+      "notes": "UNESCO World Heritage. Stunning Zen garden. Less crowded than bamboo grove.",
+      "hours": "08:00-17:00"
+    },
+    {
+      "id": "kinkakuji",
+      "title": "Kinkaku-ji (Golden Pavilion)",
+      "area": "kinkakuji",
+      "nearest_station": "Kinkaji-mae",
+      "duration_min": 45,
+      "booking_required": false,
+      "cost_estimate": 500,
+      "tags": ["temple", "iconic", "gardens", "unesco"],
+      "notes": "Gold-leaf covered pavilion reflected in pond. Very popular, go early.",
+      "hours": "09:00-17:00"
+    },
+    {
+      "id": "kiyomizudera",
+      "title": "Kiyomizu-dera Temple",
+      "area": "higashiyama",
+      "nearest_station": "Kiyomizu-Gojo",
+      "duration_min": 90,
+      "booking_required": false,
+      "cost_estimate": 500,
+      "tags": ["temple", "iconic", "views", "unesco"],
+      "notes": "Wooden stage with panoramic Kyoto views. UNESCO site. Jishu shrine nearby for love luck.",
+      "hours": "06:00-18:00"
+    },
+    {
+      "id": "gion_walk",
+      "title": "Gion District Walk",
+      "area": "gion",
+      "nearest_station": "Gion-Shijo",
+      "duration_min": 90,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["walking", "traditional", "culture", "geisha"],
+      "notes": "Historic merchant district. Look for maiko (apprentice geisha) in evening. Yasaka Pagoda nearby.",
+      "hours": "Any time, evening for atmosphere"
+    },
+    {
+      "id": "nishiki_market",
+      "title": "Nishiki Market",
+      "area": "kyoto_station",
+      "nearest_station": "Shijo",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 2000,
+      "tags": ["food", "market", "traditional", "ingredients"],
+      "notes": "Kitchen of Kyoto. 400+ years of food stalls. Try yuba (tofu skin), tsukemono, sweets.",
+      "hours": "09:00-17:00"
+    },
+    {
+      "id": "philosopher_path",
+      "title": "Philosopher's Path",
+      "area": "higashiyama",
+      "nearest_station": "Kita-Oji",
+      "duration_min": 60,
+      "booking_required": false,
+      "cost_estimate": 0,
+      "tags": ["walking", "nature", "cherry_blossoms", "quiet"],
+      "notes": "2km stone path along canal. Cherry blossoms in early April. Connects to Ginkaku-ji.",
+      "hours": "24/7"
+    },
+    {
+      "id": "universal_studios",
+      "title": "Universal Studios Japan",
+      "area": "namba",
+      "nearest_station": "Universal City",
+      "duration_min": 300,
+      "booking_required": true,
+      "booking_url": "https://www.usj.co.jp/",
+      "cost_estimate": 9400,
+      "tags": ["theme_park", "rides", "entertainment", "Nintendo"],
+      "notes": "Super Nintendo World, Harry Potter, Jurassic Park. Express Pass recommended for busy days.",
+      "hours": "09:00-21:00 (varies by season)"
+    }
+  ],
+
+  "clusters": {
+    "osaka_food_hell": {
+      "name": "Osaka Food Heaven",
+      "description": "Best of Osaka's street food scene",
+      "pois": ["dotonbori", "kuromon_market", "shinsaibashi_shopping"],
+      "duration_min": 240,
+      "best_area": "namba"
+    },
+    "kyoto_temple_run": {
+      "name": "Essential Kyoto Temples",
+      "description": "Classic Kyoto temple visits",
+      "pois": ["kinkakuji", "kiyomizudera", "fushimi_inari"],
+      "duration_min": 360,
+      "best_area": "higashiyama"
+    },
+    "arashiyama_day": {
+      "name": "Arashiyama Nature Day",
+      "description": "Bamboo, temples, and mountains",
+      "pois": ["bamboo_grove", "tenryuji", "philosopher_path"],
+      "duration_min": 240,
+      "best_area": "arashiyama"
+    },
+    "kyoto_traditional": {
+      "name": "Traditional Kyoto Walk",
+      "description": "Gion, Higashiyama old town",
+      "pois": ["gion_walk", "kiyomizudera", "nishiki_market"],
+      "duration_min": 300,
+      "best_area": "gion"
+    },
+    "osaka_history": {
+      "name": "Osaka Castle & History",
+      "description": "Samurai history and castle grounds",
+      "pois": ["osaka_castle", "tenjinbashi"],
+      "duration_min": 180,
+      "best_area": "osaka_castle"
+    }
+  },
+
+  "transit_estimates": {
+    "kix_to_namba": { "minutes": 45, "line": "Nankai Airport Express" },
+    "kix_to_kyoto": { "minutes": 90, "line": "JR Haruka" },
+    "namba_to_kyoto": { "minutes": 45, "line": "JR Kyoto Line" },
+    "namba_to_osaka_castle": { "minutes": 15, "line": "Osaka Metro" },
+    "kyoto_station_to_gion": { "minutes": 15, "line": "Keihan Line" },
+    "kyoto_station_to_arashiyama": { "minutes": 15, "line": "JR Sagano Line" },
+    "kyoto_station_to_fushimi_inari": { "minutes": 5, "line": "JR Nara Line" },
+    "umeda_to_namba": { "minutes": 10, "line": "Osaka Metro" }
+  },
+
+  "tips": [
+    "Get ICOCA card at KIX for all JR/bus/subway travel",
+    "Kyoto bus pass (500 yen/day) covers most attractions",
+    "Fushimi Inari opens 24/7 - go at sunrise (6am) to avoid crowds",
+    "Osaka food is cheaper than Tokyo - eat generously at Kuromon Market",
+    "Day-trip from Osaka to Kyoto is easy (15 min by shinkansen, 45 min by regular JR)",
+    "Universal Studios Japan requires advance booking on weekends",
+    "Gion most atmospheric at dusk - watch for maiko leaving teahouses"
+  ]
+}

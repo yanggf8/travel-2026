@@ -1,0 +1,149 @@
+{
+  "schema_version": "4.2.0",
+  "project": "Japan Travel 2026 - Osaka Kyoto",
+  "default_timezone": "Asia/Tokyo",
+  "active_destination": "osaka_kyoto_2026",
+  "budget": {
+    "total_cap": null,
+    "flight_cap": null,
+    "accommodation_cap": null,
+    "daily_cap": null,
+    "pax": 2
+  },
+  "process_1_date_anchor": {
+    "status": "pending",
+    "updated_at": "2026-02-03T12:00:00+08:00",
+    "set_out_date": "2026-02-25",
+    "duration_days": 5,
+    "return_date": "2026-03-01",
+    "flexibility": {
+      "date_flexible": true,
+      "preferred_dates": [
+        "2026-02-25",
+        "2026-02-26"
+      ],
+      "avoid_dates": [],
+      "reason": "Start date flexible between Feb 25 (Wed) and Feb 26 (Thu)"
+    }
+  },
+  "destinations": {
+    "osaka_kyoto_2026": {
+      "slug": "osaka_kyoto_2026",
+      "display_name": "Osaka + Kyoto",
+      "status": "active",
+      "created_at": "2026-02-03T12:00:00+08:00",
+      "updated_at": "2026-02-03T12:00:00+08:00",
+      "process_1_date_anchor": {
+        "status": "pending",
+        "updated_at": "2026-02-03T12:00:00+08:00",
+        "days": 5
+      },
+      "process_2_destination": {
+        "status": "confirmed",
+        "updated_at": "2026-02-03T12:00:00+08:00",
+        "origin_city": "Taipei",
+        "origin_country": "Taiwan",
+        "destination_country": "Japan",
+        "region": "Kansai",
+        "primary_airport": "KIX",
+        "cities": [
+          {
+            "slug": "osaka",
+            "display_name": "Osaka",
+            "role": "primary",
+            "nights": 0,
+            "attractions": [
+              "Dotonbori",
+              "Shinsekai",
+              "Osaka Castle",
+              "Namba",
+              "Umeda",
+              "Kuromon Market",
+              "Universal Studios Japan"
+            ]
+          },
+          {
+            "slug": "kyoto",
+            "display_name": "Kyoto",
+            "role": "primary",
+            "nights": 0,
+            "attractions": [
+              "Fushimi Inari",
+              "Kinkaku-ji",
+              "Arashiyama",
+              "Kiyomizu-dera",
+              "Gion",
+              "Nishiki Market",
+              "Nijo Castle"
+            ]
+          }
+        ]
+      },
+      "process_3_4_packages": {
+        "status": "pending",
+        "updated_at": "2026-02-03T12:00:00+08:00",
+        "selected_offer_id": null,
+        "results": {
+          "offers": [],
+          "provenance": [],
+          "warnings": []
+        }
+      },
+      "process_3_transportation": {
+        "status": "pending",
+        "updated_at": "2026-02-03T12:00:00+08:00",
+        "source": null
+      },
+      "process_4_accommodation": {
+        "status": "pending",
+        "updated_at": "2026-02-03T12:00:00+08:00",
+        "source": null
+      },
+      "process_5_daily_itinerary": {
+        "status": "pending",
+        "updated_at": "2026-02-03T12:00:00+08:00",
+        "days": [],
+        "notes": "5-day Osaka+Kyoto trip. Split between two cities TBD based on hotel location and day-trip logistics."
+      }
+    }
+  },
+  "cascade_rules": {
+    "active_destination_change": {
+      "resets": ["process_5_*"],
+      "scope": "new_destination"
+    },
+    "process_1_date_anchor_change": {
+      "resets": ["process_3_*", "process_4_*", "process_5_*"],
+      "scope": "all_destinations"
+    },
+    "process_2_destination_change": {
+      "resets": ["process_3_*", "process_4_*", "process_5_*"],
+      "scope": "current_destination"
+    },
+    "process_3_4_packages_selected": {
+      "action": "populate_p3_p4_from_offer",
+      "scope": "current_destination"
+    }
+  },
+  "cascade_state": {
+    "last_cascade_run": "2026-02-03T12:00:00+08:00",
+    "global": {
+      "process_1_date_anchor": {
+        "dirty": false,
+        "last_changed": null
+      },
+      "active_destination_last": "osaka_kyoto_2026"
+    },
+    "destinations": {
+      "osaka_kyoto_2026": {
+        "process_2_destination": { "dirty": false, "last_changed": "2026-02-03T12:00:00+08:00" },
+        "process_3_4_packages": { "dirty": false, "last_changed": null },
+        "process_3_transportation": { "dirty": false, "last_changed": null },
+        "process_4_accommodation": { "dirty": false, "last_changed": null },
+        "process_5_daily_itinerary": { "dirty": false, "last_changed": null }
+      }
+    }
+  },
+  "ota_sources": {},
+  "comparison": {}
+}
