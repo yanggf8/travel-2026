@@ -8,4 +8,5 @@ export {
   listSkills,
   validateStateManagerInterface,
   type SkillContract,
+  type DataFreshness,
 } from './skill-contracts';

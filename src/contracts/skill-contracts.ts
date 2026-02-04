@@ -1,5 +1,5 @@
 /**
- * Skill Contracts v1.2.0
+ * Skill Contracts v1.4.0
  *
  * Defines the interface for all CLI operations.
  * Agent can query this to discover available operations.
@@ -9,12 +9,27 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
+ * v1.4.0 - Added data_freshness tier to SkillContract for staleness awareness
  * v1.3.0 - Added view operations (status, itinerary, transport, bookings)
  * v1.2.0 - Added itinerary validation, scraper registry, and project init APIs
  * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.3.0';
+export const CONTRACT_VERSION = '1.4.0';
+
+/**
+ * Data freshness tiers.
+ *
+ * Tells the agent what kind of data an operation produces or consumes,
+ * so it can decide whether to re-scrape or trust cached results.
+ *
+ * - live:   Real-time fetch (scraper / API call). Always current.
+ * - cached: Reads from previously-scraped files (data/*.json).
+ *           May be stale — agent should check scraped_at timestamp.
+ * - static: Plan state, config, or reference data. Doesn't go stale
+ *           (changes only when the user mutates it).
+ */
+export type DataFreshness = 'live' | 'cached' | 'static';
 
 export interface SkillContract {
   name: string;
@@ -30,6 +45,7 @@ export interface SkillContract {
     description: string;
   };
   mutates: string[];  // State keys this operation may change
+  data_freshness: DataFreshness;  // What tier of data this operation works with
   example: string;
 }
 
@@ -52,6 +68,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.cascade_state',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- set-dates 2026-02-13 2026-02-17 "Agent offered Feb 13"',
   },
 
@@ -70,6 +87,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_4_accommodation',
       'state.event_log',
     ],
+    data_freshness: 'cached',
     example: 'npm run travel -- select-offer besttour_TYO05MM260211AM 2026-02-13',
   },
 
@@ -88,6 +106,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'state.current_focus',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- mark-booked',
   },
 
@@ -103,6 +122,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- scaffold-itinerary --force',
   },
 
@@ -121,6 +141,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- populate-itinerary --goals "chanel_shopping,teamlab_roppongi" --pace balanced',
   },
 
@@ -132,6 +153,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'string', description: 'Formatted status output' },
     mutates: [],  // Read-only
+    data_freshness: 'static',
     example: 'npm run travel -- status',
   },
 
@@ -150,6 +172,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_3_transportation.airport_transfers',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"',
   },
 
@@ -172,6 +195,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.activities.*.book_by',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"',
   },
 
@@ -194,6 +218,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.activities.*.is_fixed_time',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true',
   },
 
@@ -212,6 +237,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_5_daily_itinerary.days.*.{session}.time_range',
       'state.event_log',
     ],
+    data_freshness: 'static',
     example: 'npm run travel -- set-session-time-range 5 afternoon --start 11:00 --end 14:45',
   },
 
@@ -231,6 +257,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'travel-plan.destinations.*.process_3_4_packages.results.offers',
       'state.event_log',
     ],
+    data_freshness: 'cached',
     example: 'npm run travel -- update-offer besttour_TYO05MM260211AM 2026-02-13 available 27888 2 agent',
   },
 
@@ -244,6 +271,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'object', description: 'Validation result with issues array' },
     mutates: [],  // Read-only
+    data_freshness: 'static',
     example: 'npm run travel -- validate-itinerary --severity warning',
   },
 
@@ -259,6 +287,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'object', description: '{ planPath, statePath }' },
     mutates: ['travel-plan.json', 'state.json'],
+    data_freshness: 'static',
     example: 'npx ts-node src/templates/project-init.ts --dest osaka_2026 --start 2026-04-01 --end 2026-04-05',
   },
 
@@ -275,6 +304,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'array', description: 'Array of ScrapeResult objects' },
     mutates: [],  // Read-only (use import-offers to write)
+    data_freshness: 'live',
     example: 'npm run travel -- search-offers --dest tokyo_2026 --start 2026-02-13 --end 2026-02-17',
   },
 
@@ -288,6 +318,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'string', description: 'Formatted status overview' },
     mutates: [],
+    data_freshness: 'static',
     example: 'npm run view:status',
   },
 
@@ -300,6 +331,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'string', description: 'Formatted daily itinerary' },
     mutates: [],
+    data_freshness: 'static',
     example: 'npm run view:itinerary',
   },
 
@@ -311,6 +343,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'string', description: 'Formatted transport summary' },
     mutates: [],
+    data_freshness: 'static',
     example: 'npm run view:transport',
   },
 
@@ -323,6 +356,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'string', description: 'Formatted bookings list' },
     mutates: [],
+    data_freshness: 'static',
     example: 'npm run view:bookings',
   },
 };
