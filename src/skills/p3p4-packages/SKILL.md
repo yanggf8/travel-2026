@@ -16,23 +16,18 @@ Read these first unless the request is extremely narrow:
 - `../travel-shared/references/state-manager.md`
 - `../travel-shared/references/cascade-triggers.md`
 
-## Scraper Tools
+## Data Acquisition
 
-Use Python/Playwright scrapers to fetch package data:
-
-```bash
-# Scrape BestTour package
-python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/<CODE>" data/besttour-<CODE>.json
-
-# Scrape Lion Travel
-python scripts/scrape_liontravel_dated.py --start YYYY-MM-DD --end YYYY-MM-DD data/liontravel.json
-```
+Use `/scrape-ota` skill for all OTA scraping. See `../scrape-ota/SKILL.md` for:
+- Supported OTAs and URL patterns
+- Scraper commands per OTA
+- Output schema
 
 After scraping, normalize to `CanonicalOffer` and update `travel-plan.json`.
 
 ## Selection workflow
 
-1. Scrape offers → normalize to `CanonicalOffer`
+1. Scrape offers via `/scrape-ota` → normalize to `CanonicalOffer`
 2. Write to `process_3_4_packages.results.offers`
 3. Agent recommends the best offer/date (based on constraints + availability)
 4. Apply selection via `sm.selectOffer(offerId, date)` (or CLI `select-offer`)

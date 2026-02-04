@@ -57,6 +57,24 @@
       },
       "notes": "Limited - no date-specific pricing via scraper"
     },
+    "lifetour": {
+      "source_id": "lifetour",
+      "display_name": "五福旅遊",
+      "display_name_en": "Lifetour",
+      "types": ["package", "flight", "hotel"],
+      "base_url": "https://tour.lifetour.com.tw",
+      "markets": ["TW"],
+      "currency": "TWD",
+      "supported": true,
+      "scraper_script": "scripts/scrape_package.py",
+      "url_patterns": [
+        "tour.lifetour.com.tw/detail*"
+      ],
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
+      "notes": "Uses generic scraper with Lifetour-specific parsing"
+    },
     "eztravel": {
       "source_id": "eztravel",
       "display_name": "易遊網",

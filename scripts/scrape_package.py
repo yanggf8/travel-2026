@@ -161,6 +161,15 @@ async def scrape_package(url: str) -> dict:
             )
             result["extracted"]["inclusions"] = parse_besttour_inclusions(result["raw_text"])
 
+        # Lifetour specific parsing
+        if "lifetour.com.tw" in url:
+            result["extracted"]["flight"] = parse_lifetour_flights(result["raw_text"])
+            result["extracted"]["hotel"] = parse_lifetour_hotel(result["raw_text"])
+            result["extracted"]["price"] = parse_lifetour_price(result["raw_text"])
+            result["extracted"]["dates"] = parse_lifetour_dates(result["raw_text"])
+            result["extracted"]["itinerary"] = parse_lifetour_itinerary(result["raw_text"])
+            result["extracted"]["inclusions"] = parse_lifetour_inclusions(result["raw_text"])
+
         await browser.close()
 
         return result
@@ -340,6 +349,226 @@ def parse_besttour_date_pricing(raw_text: str, year_month: Optional[Tuple[int, i
         }
 
     return pricing
+
+
+def parse_lifetour_flights(raw_text: str) -> dict:
+    """Parse Lifetour flight details from raw page text."""
+    import re
+
+    flight_info = {"outbound": {}, "return": {}}
+    lines = raw_text.split('\n')
+
+    # Pattern: MM/DD(Day) HH:MM followed by airport info
+    # Example: 02/27(五) 15:40 → 台北市 TPE ... → 02/27(五) 19:20 大阪 OSA
+    for i, line in enumerate(lines):
+        line = line.strip()
+
+        # Look for flight number pattern like "亞洲航空D7378"
+        flight_match = re.search(r'(亞洲航空|華航|長榮|星宇|虎航|樂桃|酷航|捷星)([A-Z]{1,2}\d{2,4})', line)
+        if flight_match and i >= 5:
+            # Found a flight, look backwards for time/route info
+            airline = flight_match.group(1)
+            flight_num = flight_match.group(2)
+
+            # Check previous lines for departure/arrival info
+            prev_lines = lines[max(0, i-8):i+1]
+            times = re.findall(r'(\d{2}/\d{2})\([一二三四五六日]\)\s*(\d{1,2}:\d{2})', '\n'.join(prev_lines))
+            airports = re.findall(r'(TPE|NRT|HND|KIX|OSA|NGO|CTS|FUK|OKA)', '\n'.join(prev_lines))
+
+            if len(times) >= 2 and len(airports) >= 2:
+                if not flight_info["outbound"].get("flight_number"):
+                    flight_info["outbound"] = {
+                        "date": times[0][0],
+                        "departure_time": times[0][1],
+                        "arrival_time": times[1][1],
+                        "airline": airline,
+                        "flight_number": flight_num,
+                        "departure_code": airports[0],
+                        "arrival_code": airports[1],
+                    }
+                elif not flight_info["return"].get("flight_number"):
+                    flight_info["return"] = {
+                        "date": times[0][0],
+                        "departure_time": times[0][1],
+                        "arrival_time": times[1][1],
+                        "airline": airline,
+                        "flight_number": flight_num,
+                        "departure_code": airports[0],
+                        "arrival_code": airports[1],
+                    }
+
+    return flight_info
+
+
+def parse_lifetour_hotel(raw_text: str) -> dict:
+    """Parse Lifetour hotel details from raw page text."""
+    import re
+
+    hotel = {"names": [], "room_type": None, "area": None}
+
+    # Look for hotel names after "住宿" section
+    lines = raw_text.split('\n')
+    in_hotel_section = False
+
+    for line in lines:
+        line = line.strip()
+
+        if line == "住宿":
+            in_hotel_section = True
+            continue
+
+        if in_hotel_section and line:
+            # Extract hotel names - usually contains "或" (or) separator
+            if "或" in line and ("酒店" in line or "飯店" in line or "Hotel" in line or "Inn" in line or "GRAND" in line):
+                # Split by "或" and clean up
+                names = re.split(r'或\s*', line)
+                for name in names:
+                    name = name.strip()
+                    # Remove room type info in parentheses for name extraction
+                    clean_name = re.sub(r'\s*\([^)]*\)', '', name).strip()
+                    if clean_name and len(clean_name) > 2 and "同級" not in clean_name:
+                        hotel["names"].append(clean_name)
+
+                # Extract room type
+                room_match = re.search(r'(SEMI DOUBLE|TWN|TWIN|DBL|DOUBLE|單人房|雙人房)', line, re.IGNORECASE)
+                if room_match:
+                    hotel["room_type"] = room_match.group(1)
+
+                # Extract bed width
+                bed_match = re.search(r'床寬(\d+)CM', line, re.IGNORECASE)
+                if bed_match:
+                    hotel["bed_width_cm"] = int(bed_match.group(1))
+
+                break
+
+            if line in ("餐食", "收合景點", "Day"):
+                in_hotel_section = False
+
+    return hotel
+
+
+def parse_lifetour_price(raw_text: str) -> dict:
+    """Parse Lifetour price details from raw page text."""
+    import re
+
+    price = {}
+
+    # Look for price pattern: NT$XX,XXX or $XX,XXX
+    price_matches = re.findall(r'NT?\$\s*([\d,]+)\s*元?', raw_text)
+    if price_matches:
+        # Filter out deposit (usually 10,000)
+        prices = [int(p.replace(',', '')) for p in price_matches]
+        prices = [p for p in prices if p > 15000]  # Filter out deposits
+        if prices:
+            price["per_person"] = min(prices)
+            price["currency"] = "TWD"
+
+    # Look for deposit
+    deposit_match = re.search(r'訂金\s*NT?\$\s*([\d,]+)', raw_text)
+    if deposit_match:
+        price["deposit"] = int(deposit_match.group(1).replace(',', ''))
+
+    # Look for availability
+    avail_match = re.search(r'可售\s*(\d+)\s*人', raw_text)
+    if avail_match:
+        price["seats_available"] = int(avail_match.group(1))
+
+    min_match = re.search(r'成行\s*(\d+)\s*人', raw_text)
+    if min_match:
+        price["min_travelers"] = int(min_match.group(1))
+
+    return price
+
+
+def parse_lifetour_dates(raw_text: str) -> dict:
+    """Parse Lifetour travel dates from raw page text."""
+    import re
+
+    dates = {}
+
+    # Look for duration: 5天4夜
+    duration_match = re.search(r'(\d+)\s*天\s*(\d+)\s*夜', raw_text)
+    if duration_match:
+        dates["duration_days"] = int(duration_match.group(1))
+        dates["duration_nights"] = int(duration_match.group(2))
+
+    # Look for departure date: 出發日期 02月27日 or 2/27
+    depart_match = re.search(r'出發日期\s*(\d{1,2})月(\d{1,2})日', raw_text)
+    if depart_match:
+        dates["departure_month"] = int(depart_match.group(1))
+        dates["departure_day"] = int(depart_match.group(2))
+
+    # Look for year in calendar section
+    year_match = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月', raw_text)
+    if year_match:
+        dates["year"] = int(year_match.group(1))
+
+    return dates
+
+
+def parse_lifetour_itinerary(raw_text: str) -> list:
+    """Parse Lifetour daily itinerary from raw page text."""
+    import re
+
+    itinerary = []
+    lines = raw_text.split('\n')
+
+    current_day = None
+    current_content = []
+
+    for line in lines:
+        line = line.strip()
+
+        # Match day headers: Day 1, Day 2, etc.
+        day_match = re.match(r'^Day\s*(\d+)$', line)
+        if day_match:
+            # Save previous day if exists
+            if current_day is not None:
+                content_text = ' '.join(current_content)
+                itinerary.append({
+                    "day": current_day,
+                    "content": content_text[:500],  # First 500 chars
+                    "is_free": any(kw in content_text for kw in ["自由活動", "全日自由"]),
+                    "is_guided": any(kw in content_text for kw in ["奈良", "京都", "嵐山", "伏見"]),
+                })
+
+            current_day = int(day_match.group(1))
+            current_content = []
+            continue
+
+        if current_day is not None:
+            # Stop at next Day header or end markers
+            if line.startswith("出團備註") or line.startswith("看完整資訊"):
+                break
+            current_content.append(line)
+
+    # Don't forget last day
+    if current_day is not None and current_content:
+        content_text = ' '.join(current_content)
+        itinerary.append({
+            "day": current_day,
+            "content": content_text[:500],
+            "is_free": any(kw in content_text for kw in ["自由活動", "全日自由"]),
+            "is_guided": any(kw in content_text for kw in ["奈良", "京都", "嵐山", "伏見"]),
+        })
+
+    return itinerary
+
+
+def parse_lifetour_inclusions(raw_text: str) -> list:
+    """Parse Lifetour inclusions from raw page text."""
+    inclusions = []
+
+    text = raw_text.replace(" ", "")
+
+    if "含團險" in text:
+        inclusions.append("travel_insurance")
+    if "含國內外機場稅" in text or "含機場稅" in text:
+        inclusions.append("airport_tax")
+    if "早餐" in text and ("飯店內用" in text or "含早餐" in text):
+        inclusions.append("breakfast")
+
+    return inclusions
 
 
 def save_result(result: dict, output_path: str):

@@ -102,6 +102,21 @@ Default mode for this repo is **agent-first**:
 - Treat schema as canonical and migrate/normalize legacy shapes on load where needed; avoid duplicating path strings in multiple places.
 - Every agent output should include: current status, what changed, and the single best "next action".
 
+### URL Routing Rules
+
+When user provides a URL, **do not use WebFetch for OTA sites** (they require JavaScript). Instead:
+
+| URL Contains | Action |
+|-------------|--------|
+| `besttour.com.tw` | `python scripts/scrape_package.py "<url>" data/besttour-<code>.json` |
+| `liontravel.com` | `python scripts/scrape_liontravel_dated.py` or `scrape_package.py` |
+| `lifetour.com.tw` | `python scripts/scrape_package.py "<url>" data/lifetour-<code>.json` |
+| Other travel OTA | Try `scrape_package.py` first (generic Playwright scraper) |
+| Non-OTA URL | Use WebFetch as normal |
+
+The scraper outputs structured JSON with `extracted.flight`, `extracted.hotel`, `extracted.price`, `extracted.itinerary`.
+Full skill reference: `src/skills/scrape-ota/SKILL.md`
+
 ### Skill Contracts (Agent Discovery)
 
 Before invoking CLI operations, agent should check `src/contracts/skill-contracts.ts`:
@@ -179,8 +194,12 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 | Skill | Path | Purpose |
 |-------|------|---------|
 | `travel-shared` | `src/skills/travel-shared/SKILL.md` | Shared references used by all travel skills |
+| `/p1-dates` | `src/skills/p1-dates/SKILL.md` | Set trip dates and flexibility |
+| `/p2-destination` | `src/skills/p2-destination/SKILL.md` | Set destination cities and night allocation |
 | `/p3-flights` | `src/skills/p3-flights/SKILL.md` | Search flights separately |
 | `/p3p4-packages` | `src/skills/p3p4-packages/SKILL.md` | Search OTA packages (flight+hotel) |
+| `/p5-itinerary` | `src/skills/p5-itinerary/SKILL.md` | Build and validate daily itinerary |
+| `/scrape-ota` | `src/skills/scrape-ota/SKILL.md` | Scrape OTA sites with Playwright (JS rendering) |
 
 ### Skill IO Contract
 ```typescript
@@ -208,6 +227,7 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 |-----------|------|------|-----------|---------|
 | `besttour` | 喜鴻假期 | package | ✅ | ✅ |
 | `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ | ✅ |
+| `lifetour` | 五福旅遊 | package, flight, hotel | ✅ | ✅ |
 | `tigerair` | 台灣虎航 | flight | ✅ | ❌ |
 | `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ |
 

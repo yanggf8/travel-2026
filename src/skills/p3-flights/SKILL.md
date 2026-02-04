@@ -18,9 +18,16 @@ description: Search and compare flight-only options (standalone), writing candid
 - Use `StateManager` (status + dirty flags + event log) rather than direct JSON edits.
 - End every run with one clear “next action” (select a flight candidate, or proceed to P4/P5).
 
+## Data Acquisition
+
+Use `/scrape-ota` skill for OTA scraping. See `../scrape-ota/SKILL.md` for:
+- Supported OTAs and URL patterns
+- Scraper commands per OTA
+- Output schema
+
 ## Workflow
 
-1. Search flights → normalize candidates
+1. Search flights via `/scrape-ota` → normalize candidates
 2. Write into `process_3_transportation.flight.candidates`
 3. Update `process_3_transportation.status` + `updated_at`
 4. If user selects, record selection in P3 and move toward `selected` / `booked`
