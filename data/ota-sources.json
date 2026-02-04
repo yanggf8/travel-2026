@@ -75,6 +75,25 @@
       },
       "notes": "Uses generic scraper with Lifetour-specific parsing"
     },
+    "settour": {
+      "source_id": "settour",
+      "display_name": "東南旅遊",
+      "display_name_en": "Southeast Travel",
+      "types": ["package", "flight", "hotel"],
+      "base_url": "https://www.settour.com.tw",
+      "markets": ["TW"],
+      "currency": "TWD",
+      "supported": true,
+      "scraper_script": "scripts/scrape_package.py",
+      "url_patterns": [
+        "tour.settour.com.tw/product/*",
+        "fit.settour.com.tw/tour/product/*"
+      ],
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
+      "notes": "Tour pages at tour.settour.com.tw, FIT pages at fit.settour.com.tw"
+    },
     "eztravel": {
       "source_id": "eztravel",
       "display_name": "易遊網",

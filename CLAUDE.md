@@ -198,7 +198,7 @@ const missing = validateStateManagerInterface(stateManager);
 if (missing.length > 0) throw new Error(`Missing methods: ${missing}`);
 ```
 
-Contract version: `1.1.0` (semver: breaking/feature/fix)
+Contract version: `1.4.0` (semver: breaking/feature/fix)
 
 ### Build Gate
 
@@ -286,13 +286,28 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 
 ## OTA Sources (Plugin Registry)
 
-| Source ID | Name | Type | Supported | Scraper |
-|-----------|------|------|-----------|---------|
-| `besttour` | 喜鴻假期 | package | ✅ | ✅ |
-| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ | ✅ |
-| `lifetour` | 五福旅遊 | package, flight, hotel | ✅ | ✅ |
-| `tigerair` | 台灣虎航 | flight | ✅ | ❌ |
-| `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ |
+| Source ID | Name | Type | Supported | Scraper | Search URL |
+|-----------|------|------|-----------|---------|------------|
+| `besttour` | 喜鴻假期 | package | ✅ | ✅ | `besttour.com.tw/e_web/activity?v=japan_kansai` |
+| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ | ✅ | `vacation.liontravel.com/search?Destination=JP_OSA_5&...` |
+| `lifetour` | 五福旅遊 | package, flight, hotel | ✅ | ✅ | `tour.lifetour.com.tw/searchlist/tpe/0001-0003` |
+| `settour` | 東南旅遊 | package, flight, hotel | ✅ | ✅ | `tour.settour.com.tw/search?destinationCode=JX_3` |
+| `tigerair` | 台灣虎航 | flight | ✅ | ❌ | — |
+| `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ | — |
+
+### OTA Search URL Patterns
+- **BestTour**: Uses activity pages (`/e_web/activity?v=japan_kansai`), NOT `/e_web/DOM/` (404)
+- **LionTravel FIT**: `vacation.liontravel.com/search?Destination={code}&FromDate={YYYYMMDD}&ToDate={YYYYMMDD}&Days={n}&roomlist={adults}-0-0`
+- **LionTravel Group**: URL unknown (group tour search returns 404 on `travel.liontravel.com`)
+- **Lifetour**: `tour.lifetour.com.tw/searchlist/tpe/{region-code}` (Kansai = `0001-0003`)
+- **Settour**: `tour.settour.com.tw/search?destinationCode={code}` (Kansai = `JX_3`)
+
+### Lion Travel Destination Codes
+| Code | Destination |
+|------|-------------|
+| `JP_TYO_5` | Tokyo 5 days |
+| `JP_TYO_6` | Tokyo 6 days |
+| `JP_OSA_5` | Osaka 5 days |
 
 ### Lion Travel Promo
 - Code: `FITPKG` - TWD 400 off on Thursdays (min TWD 20,000)
@@ -376,14 +391,14 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 
 ## Current Status
 
-| Process | Tokyo | Nagoya |
-|---------|-------|--------|
-| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed |
-| P2 Destination | ✅ confirmed | ✅ confirmed |
-| P3+4 Packages | ✅ **booked** | ⏳ pending (archived) |
-| P3 Transportation | 🎫 booked | 🔄 researched |
-| P4 Accommodation | 🎫 booked | ⏳ pending |
-| P5 Itinerary | 🔄 researched (teamLab moved to Sat) | ⏳ pending |
+| Process | Tokyo | Nagoya | Osaka+Kyoto |
+|---------|-------|--------|-------------|
+| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed | ⏳ pending (Feb 26 or 27) |
+| P2 Destination | ✅ confirmed | ✅ confirmed | ✅ confirmed |
+| P3+4 Packages | ✅ **booked** | ⏳ pending (archived) | 🔄 researched (4 OTAs scraped) |
+| P3 Transportation | 🎫 booked | 🔄 researched | ⏳ pending |
+| P4 Accommodation | 🎫 booked | ⏳ pending | ⏳ pending |
+| P5 Itinerary | 🔄 researched (teamLab moved to Sat) | ⏳ pending | ⏳ pending |
 
 ### Airport Transfers (Tokyo)
 | Direction | Status | Selected |
@@ -420,6 +435,31 @@ Hotel:   TAVINOS Hamamatsucho
          Access: JR Hamamatsucho 8min, Yurikamome Takeshiba 1min
          Includes: Light breakfast
 ```
+
+### 🔄 RESEARCHED: Osaka+Kyoto Feb 26–Mar 2, 2026
+
+**Plan file**: `data/trips/osaka-kyoto-2026/travel-plan.json`
+**Dates**: Feb 26 (Thu) or Feb 27 (Fri) → Mar 2 (Mon), 5 days
+**Pax**: 2, **Airport**: KIX
+
+#### Package Comparison (Feb 26–27 only, Taipei departure)
+
+| Rank | OTA | Package | TWD/person | After Promo | Type | Date | Status |
+|------|-----|---------|-----------|-------------|------|------|--------|
+| 1 | LionTravel | 自由配 FIT (Eva Air + Hankyu Respire) | 32,142 | 32,142 | FIT | 02/26 | — |
+| 2 | Settour | 漫步京阪奈半自由行 5日 | 33,900 | 32,900 | 半自由 | 02/27 | 餘27席 |
+| 3 | Settour | 溫泉átoa和牛龍蝦螃蟹三都 5日 | 35,900 | 34,900 | 跟團 | 02/26 | 已成團, 餘8席 |
+| 4 | Settour | 螃蟹吃到飽átoa四都 5日 | 37,900 | 36,400 | 跟團 | 02/27 | 即將成團 |
+| 5 | Settour | 京阪神奈琵琶湖天橋立 6日 | 38,900 | 37,900 | 跟團 | 02/27 | 已成團, 餘2席 |
+| 6 | Lifetour | 關西五都影城戲雪 6日 | 38,999 | 38,999 | 跟團 | 02/27 | 可售18人 |
+| 7 | Lifetour | 海之京都丹後天橋立 5日 | 39,999 | 39,999 | 跟團 | 02/26 | 已成團, 餘3席 |
+| 8 | Settour | 環球周邊天橋立美山町伊根 5日 | 40,900 | ~39,400 | 跟團 | 02/27 | 餘20席 |
+
+**Notes:**
+- BestTour has no Feb 26/27 departures for Kansai from Taipei
+- LionTravel FIT return departs from Kobe UKB (not KIX) — extra transit needed
+- Settour dominates with 7 options vs Lifetour's 2
+- Scraped data in: `data/liontravel-osaka-feb26.json`, `data/lifetour-osaka-kansai.json`, `data/settour-osaka-kansai.json`, `data/besttour-kansai-refresh.json`
 
 ### CLI Quick Reference
 ```bash
@@ -511,6 +551,10 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Focus tracking with event emission (`setFocus` emits `focus_changed`)
 - ✅ Session-level next actions (`setNextActions` with event logging)
 - ✅ State key migration script (`scripts/migrate-state-keys.ts`)
+- ✅ Skill contracts v1.4.0 — `data_freshness` tier (live/cached/static)
+- ✅ Settour OTA integration (scraper URL: `tour.settour.com.tw/search?destinationCode=JX_3`)
+- ✅ Lifetour search URL discovery (`tour.lifetour.com.tw/searchlist/tpe/{region}`)
+- ✅ Osaka+Kyoto OTA package comparison (4 OTAs, Feb 26-27, 8 options found)
 
 ## Storage Decision (DB)
 
@@ -534,7 +578,14 @@ Use **LokiJS** as the future embedded DB (JS-only). Provide a small Node CLI wra
 updates so skills have a strong CLI surface without native DB installs.
 
 ## Next Steps
+
+### Tokyo (Feb 13-17)
 1. **Book teamLab Borderless** - Feb 15, 2026 (most time-sensitive, can sell out)
 2. **Book Limousine Bus** - Low-risk, can buy day-of
 3. **Restaurant reservations** - Based on area/cuisine preferences
-4. **Build comparison tool** - Derive rankings from destinations/*
+
+### Osaka+Kyoto (Feb 26 – Mar 2)
+1. **Select package** - Choose from 8 scraped options (see comparison above)
+2. **Confirm departure date** - Feb 26 or Feb 27
+3. **Scrape individual package pages** - Get flight/hotel details for shortlisted options
+4. **Build P5 itinerary** - After package selection

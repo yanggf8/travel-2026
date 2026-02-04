@@ -8,6 +8,8 @@ Supports JavaScript-rendered pages and extracts raw text + structured elements.
 Supported OTAs:
 - BestTour (besttour.com.tw) - Full calendar pricing
 - Lion Travel (liontravel.com) - Package search results
+- Lifetour (tour.lifetour.com.tw) - Package with itinerary
+- Settour (tour.settour.com.tw) - Package with itinerary
 - ezTravel (eztravel.com.tw) - Limited support
 - Any URL with standard page structure
 
@@ -64,6 +66,28 @@ async def scrape_package(url: str) -> dict:
         # Scroll to bottom again
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await page.wait_for_timeout(2000)
+
+        # Settour specific: click tabs to load details
+        if "settour.com.tw" in url:
+            print("Settour detected: clicking tabs to load details...")
+            try:
+                tab_selectors = [
+                    "text=航班資訊",
+                    "text=飯店安排",
+                    "text=每日行程",
+                    "text=出發日期",
+                ]
+                for selector in tab_selectors:
+                    try:
+                        tab = await page.query_selector(selector)
+                        if tab:
+                            await tab.click()
+                            print(f"  Clicked tab: {selector}")
+                            await page.wait_for_timeout(1500)
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"  Could not click Settour tabs: {e}")
 
         # BestTour specific: click 交通方式 tab to load flight details
         if "besttour.com.tw" in url:
@@ -160,6 +184,15 @@ async def scrape_package(url: str) -> dict:
                 result["raw_text"], year_month=ym
             )
             result["extracted"]["inclusions"] = parse_besttour_inclusions(result["raw_text"])
+
+        # Settour specific parsing
+        if "settour.com.tw" in url:
+            result["extracted"]["flight"] = parse_settour_flights(result["raw_text"])
+            result["extracted"]["hotel"] = parse_settour_hotel(result["raw_text"])
+            result["extracted"]["price"] = parse_settour_price(result["raw_text"])
+            result["extracted"]["dates"] = parse_settour_dates(result["raw_text"])
+            result["extracted"]["itinerary"] = parse_settour_itinerary(result["raw_text"])
+            result["extracted"]["inclusions"] = parse_settour_inclusions(result["raw_text"])
 
         # Lifetour specific parsing
         if "lifetour.com.tw" in url:
@@ -566,6 +599,234 @@ def parse_lifetour_inclusions(raw_text: str) -> list:
     if "含國內外機場稅" in text or "含機場稅" in text:
         inclusions.append("airport_tax")
     if "早餐" in text and ("飯店內用" in text or "含早餐" in text):
+        inclusions.append("breakfast")
+
+    return inclusions
+
+
+def parse_settour_flights(raw_text: str) -> dict:
+    """Parse Settour flight details from raw page text."""
+    import re
+
+    flight_info = {"outbound": {}, "return": {}}
+    lines = raw_text.split('\n')
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+
+        # Match 去程 / 回程 markers
+        if line == '去程' and i + 8 < len(lines):
+            flight_info["outbound"] = _parse_settour_flight_block(lines, i)
+        elif line == '回程' and i + 8 < len(lines):
+            flight_info["return"] = _parse_settour_flight_block(lines, i)
+            break
+
+    # Fallback: scan for flight number patterns
+    if not flight_info["outbound"]:
+        for i, line in enumerate(lines):
+            line = line.strip()
+            flight_match = re.search(r'([A-Z]{2})\s*(\d{2,4})', line)
+            if flight_match and re.search(r'TPE|NRT|HND|KIX|OSA|NGO', '\n'.join(lines[max(0,i-5):i+5])):
+                airports = re.findall(r'(TPE|NRT|HND|KIX|OSA|NGO|CTS|FUK|OKA)', '\n'.join(lines[max(0,i-5):i+5]))
+                times = re.findall(r'(\d{2}:\d{2})', '\n'.join(lines[max(0,i-5):i+5]))
+                if airports and times:
+                    target = flight_info["outbound"] if not flight_info["outbound"] else flight_info["return"]
+                    target.update({
+                        "flight_number": flight_match.group(1) + flight_match.group(2),
+                        "departure_code": airports[0] if airports else None,
+                        "arrival_code": airports[1] if len(airports) > 1 else None,
+                        "departure_time": times[0] if times else None,
+                        "arrival_time": times[1] if len(times) > 1 else None,
+                    })
+                    if flight_info["outbound"] and flight_info["return"]:
+                        break
+
+    return flight_info
+
+
+def _parse_settour_flight_block(lines: list, start: int) -> dict:
+    """Parse a single flight block (去程 or 回程) from Settour text."""
+    import re
+
+    block = {}
+    nearby = lines[start:min(start + 12, len(lines))]
+    text = '\n'.join(nearby)
+
+    # Extract date
+    date_match = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', text)
+    if date_match:
+        block["date"] = f"{date_match.group(1)}/{date_match.group(2).zfill(2)}/{date_match.group(3).zfill(2)}"
+
+    # Extract flight number
+    flight_match = re.search(r'([A-Z]{2})\s*(\d{2,4})', text)
+    if flight_match:
+        block["flight_number"] = flight_match.group(1) + flight_match.group(2)
+
+    # Extract airports
+    airports = re.findall(r'(TPE|NRT|HND|KIX|OSA|NGO|CTS|FUK|OKA)', text)
+    if len(airports) >= 2:
+        block["departure_code"] = airports[0]
+        block["arrival_code"] = airports[1]
+
+    # Extract times
+    times = re.findall(r'(\d{2}:\d{2})', text)
+    if len(times) >= 2:
+        block["departure_time"] = times[0]
+        block["arrival_time"] = times[1]
+
+    # Extract airline name
+    airline_match = re.search(r'(中華航空|長榮航空|星宇航空|台灣虎航|樂桃航空|酷航|捷星|亞洲航空)', text)
+    if airline_match:
+        block["airline"] = airline_match.group(1)
+
+    return block
+
+
+def parse_settour_hotel(raw_text: str) -> dict:
+    """Parse Settour hotel details from raw page text."""
+    import re
+
+    hotel = {"names": [], "area": None, "access": []}
+    lines = raw_text.split('\n')
+    in_hotel_section = False
+
+    for line in lines:
+        line = line.strip()
+
+        if line in ("飯店安排", "住宿安排", "住宿"):
+            in_hotel_section = True
+            continue
+
+        if in_hotel_section and line:
+            # Stop at next section
+            if line in ("每日行程", "航班資訊", "出發日期", "費用說明", "注意事項"):
+                break
+
+            # Look for hotel names (often contain Hotel, 飯店, 酒店)
+            if re.search(r'(Hotel|飯店|酒店|旅館|Inn|Resort|HOTEL)', line, re.IGNORECASE):
+                names = re.split(r'或\s*同級|或\s*', line)
+                for name in names:
+                    name = re.sub(r'\s*\([^)]*\)', '', name).strip()
+                    name = re.sub(r'(或同級|同級)', '', name).strip()
+                    if name and len(name) > 2:
+                        hotel["names"].append(name)
+
+    # Extract area
+    for line in lines:
+        m = re.search(r'(地區|區域)[:：]\s*(.+)$', line)
+        if m:
+            hotel["area"] = m.group(2).strip()
+            break
+
+    return hotel
+
+
+def parse_settour_price(raw_text: str) -> dict:
+    """Parse Settour price details from raw page text."""
+    import re
+
+    price = {}
+
+    # Pattern: 售價 NT$XX,XXX or $XX,XXX
+    price_matches = re.findall(r'(?:售價|團費|價格)\s*(?:NT)?\$\s*([\d,]+)', raw_text)
+    if price_matches:
+        prices = [int(p.replace(',', '')) for p in price_matches]
+        prices = [p for p in prices if p > 10000]
+        if prices:
+            price["per_person"] = min(prices)
+            price["currency"] = "TWD"
+
+    # Fallback: any NT$ amount > 15000
+    if not price.get("per_person"):
+        all_prices = re.findall(r'NT?\$\s*([\d,]+)', raw_text)
+        prices = sorted(set(int(p.replace(',', '')) for p in all_prices if int(p.replace(',', '')) > 15000))
+        if prices:
+            price["per_person"] = prices[0]
+            price["currency"] = "TWD"
+
+    # Deposit
+    deposit_match = re.search(r'訂金\s*(?:NT)?\$\s*([\d,]+)', raw_text)
+    if deposit_match:
+        price["deposit"] = int(deposit_match.group(1).replace(',', ''))
+
+    return price
+
+
+def parse_settour_dates(raw_text: str) -> dict:
+    """Parse Settour travel dates from raw page text."""
+    import re
+
+    dates = {}
+
+    duration_match = re.search(r'(\d+)\s*天\s*(\d+)\s*夜', raw_text)
+    if duration_match:
+        dates["duration_days"] = int(duration_match.group(1))
+        dates["duration_nights"] = int(duration_match.group(2))
+
+    depart_match = re.search(r'出發日期\s*[:：]?\s*(\d{4})[/-](\d{1,2})[/-](\d{1,2})', raw_text)
+    if depart_match:
+        dates["year"] = int(depart_match.group(1))
+        dates["departure_month"] = int(depart_match.group(2))
+        dates["departure_day"] = int(depart_match.group(3))
+
+    return dates
+
+
+def parse_settour_itinerary(raw_text: str) -> list:
+    """Parse Settour daily itinerary from raw page text."""
+    import re
+
+    itinerary = []
+    lines = raw_text.split('\n')
+
+    current_day = None
+    current_content = []
+
+    for line in lines:
+        line = line.strip()
+
+        # Match day headers: Day 1, DAY1, 第1天, etc.
+        day_match = re.match(r'^(?:Day|DAY|第)\s*(\d+)\s*(?:天)?$', line)
+        if day_match:
+            if current_day is not None:
+                content_text = ' '.join(current_content)
+                itinerary.append({
+                    "day": current_day,
+                    "content": content_text[:500],
+                    "is_free": any(kw in content_text for kw in ["自由活動", "全日自由", "自由前往"]),
+                    "is_guided": any(kw in content_text for kw in ["奈良", "京都", "嵐山", "伏見", "清水寺"]),
+                })
+            current_day = int(day_match.group(1))
+            current_content = []
+            continue
+
+        if current_day is not None:
+            if line.startswith("注意事項") or line.startswith("出團備註"):
+                break
+            current_content.append(line)
+
+    if current_day is not None and current_content:
+        content_text = ' '.join(current_content)
+        itinerary.append({
+            "day": current_day,
+            "content": content_text[:500],
+            "is_free": any(kw in content_text for kw in ["自由活動", "全日自由", "自由前往"]),
+            "is_guided": any(kw in content_text for kw in ["奈良", "京都", "嵐山", "伏見", "清水寺"]),
+        })
+
+    return itinerary
+
+
+def parse_settour_inclusions(raw_text: str) -> list:
+    """Parse Settour inclusions from raw page text."""
+    inclusions = []
+    text = raw_text.replace(" ", "")
+
+    if "含團險" in text or "旅行業責任保險" in text:
+        inclusions.append("travel_insurance")
+    if "含機場稅" in text or "含國內外機場稅" in text or "兩地機場稅" in text:
+        inclusions.append("airport_tax")
+    if "早餐" in text and ("飯店內用" in text or "含早餐" in text or "飯店早餐" in text):
         inclusions.append("breakfast")
 
     return inclusions
