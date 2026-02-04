@@ -102,6 +102,69 @@ Default mode for this repo is **agent-first**:
 - Treat schema as canonical and migrate/normalize legacy shapes on load where needed; avoid duplicating path strings in multiple places.
 - Every agent output should include: current status, what changed, and the single best "next action".
 
+### Skill Decision Tree
+
+```
+User intent                          → Skill / Action
+──────────────────────────────────────────────────────
+"plan a trip to [place]"             → Check destinations.json
+  destination exists?                   → /p1-dates (if dates not set)
+  destination missing?                  → create ref + /p2-destination
+
+"set dates" / "change dates"         → /p1-dates
+"which city" / "how many nights"     → /p2-destination
+"find packages" / "search OTA"       → /p3p4-packages (uses /scrape-ota)
+"find flights only"                  → /p3-flights (uses /scrape-ota)
+"compare offers" / "which is cheaper"→ read process_3_4_packages.results
+"book this" / "select offer"         → npm run travel -- select-offer
+"plan the days" / "itinerary"        → /p5-itinerary
+"show status" / "where are we"       → npm run view:status
+"show schedule" / "daily plan"       → npm run view:itinerary
+
+User provides OTA URL                → /scrape-ota (see URL Routing below)
+User provides booking confirmation   → npm run travel -- set-activity-booking
+```
+
+### Data Flow
+
+```
+┌──────────────────────────────────────────────────────┐
+│ 1. INPUT: User provides URL or search constraints    │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│ 2. SCRAPE: /scrape-ota → Python/Playwright           │
+│    Output: data/{ota}-{code}.json                    │
+│    Contains: raw_text + extracted (flight/hotel/etc)  │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│ 3. NORMALIZE: extracted → CanonicalOffer[]           │
+│    Map: source_id, currency, date_pricing, flight,   │
+│         hotel, inclusions                            │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│ 4. WRITE: StateManager.importPackageOffers()         │
+│    Updates: process_3_4_packages.results.offers      │
+│    Emits: event_log entry                            │
+│    Marks: cascade_state dirty                        │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│ 5. SELECT: StateManager.selectOffer(id, date)        │
+│    Writes: chosen_offer                              │
+│    Triggers: cascade (populate P3 + P4 from offer)   │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│ 6. CASCADE: runner auto-populates downstream         │
+│    P3 transport ← offer.flight                       │
+│    P4 accommodation ← offer.hotel                    │
+│    Clears dirty flags                                │
+└──────────────────────────────────────────────────────┘
+```
+
 ### URL Routing Rules
 
 When user provides a URL, **do not use WebFetch for OTA sites** (they require JavaScript). Instead:

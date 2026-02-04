@@ -1,0 +1,16 @@
+{
+  "url": "https://vacation.liontravel.com/search?Destination=JP_TYO_6&FromDate=20260226&ToDate=20260303&Days=6&roomlist=2-0-0",
+  "scraped_at": "2026-02-04T09:29:40.910971",
+  "search_params": {
+    "departure_date": "2026-02-26",
+    "return_date": "2026-03-03",
+    "destination": "JP_TYO_6",
+    "days": 6,
+    "adults": 2
+  },
+  "packages": [],
+  "raw_prices": [],
+  "errors": [
+    "Page load error: Page.goto: Timeout 90000ms exceeded.\nCall log:\n  - navigating to \"https://vacation.liontravel.com/search?Destination=JP_TYO_6&FromDate=20260226&ToDate=20260303&Days=6&roomlist=2-0-0\", waiting until \"domcontentloaded\"\n"
+  ]
+}

@@ -1,6 +1,10 @@
 ---
 name: p3p4-packages
 description: Search and compare OTA flight+hotel packages, write normalized offers to travel-plan.json, and trigger cascade population on selection.
+version: 1.0.0
+requires_skills: [travel-shared, scrape-ota]
+requires_processes: [process_1_date_anchor, process_2_destination]
+provides_processes: [process_3_transportation, process_4_accommodation]
 ---
 
 # /p3p4-packages

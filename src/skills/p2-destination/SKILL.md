@@ -1,6 +1,10 @@
 ---
 name: p2-destination
 description: Set up destination details including cities, nights allocation, and attraction priorities for the active destination.
+version: 1.0.0
+requires_skills: [travel-shared]
+requires_processes: [process_1_date_anchor]
+provides_processes: [process_2_destination]
 ---
 
 # /p2-destination

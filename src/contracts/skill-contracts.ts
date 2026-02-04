@@ -9,11 +9,12 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
+ * v1.3.0 - Added view operations (status, itinerary, transport, bookings)
  * v1.2.0 - Added itinerary validation, scraper registry, and project init APIs
  * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.2.0';
+export const CONTRACT_VERSION = '1.3.0';
 
 export interface SkillContract {
   name: string;
@@ -275,6 +276,54 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     output: { type: 'array', description: 'Array of ScrapeResult objects' },
     mutates: [],  // Read-only (use import-offers to write)
     example: 'npm run travel -- search-offers --dest tokyo_2026 --start 2026-02-13 --end 2026-02-17',
+  },
+
+  // === View Operations (read-only) ===
+
+  'view-status': {
+    name: 'view-status',
+    description: 'Booking overview with fixed-time activities and deadlines.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'string', description: 'Formatted status overview' },
+    mutates: [],
+    example: 'npm run view:status',
+  },
+
+  'view-itinerary': {
+    name: 'view-itinerary',
+    description: 'Daily plan with activities, meals, and transport notes per session.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+      { name: '--day', type: 'number', required: false, description: 'Show specific day only' },
+    ],
+    output: { type: 'string', description: 'Formatted daily itinerary' },
+    mutates: [],
+    example: 'npm run view:itinerary',
+  },
+
+  'view-transport': {
+    name: 'view-transport',
+    description: 'Transport summary including airport transfers and daily transit.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'string', description: 'Formatted transport summary' },
+    mutates: [],
+    example: 'npm run view:transport',
+  },
+
+  'view-bookings': {
+    name: 'view-bookings',
+    description: 'Pending and confirmed bookings with deadlines and references.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+      { name: '--status', type: 'string', required: false, description: 'Filter by status (pending|booked|all, default: all)' },
+    ],
+    output: { type: 'string', description: 'Formatted bookings list' },
+    mutates: [],
+    example: 'npm run view:bookings',
   },
 };
 

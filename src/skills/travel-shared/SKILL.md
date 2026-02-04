@@ -1,6 +1,10 @@
 ---
 name: travel-shared
 description: Shared references for travel planning skills (IO contracts, canonical offer schema, OTA registry, state/dirty flags, cascade triggers).
+version: 1.0.0
+requires_skills: []
+requires_processes: []
+provides_processes: []
 ---
 
 # Travel Shared

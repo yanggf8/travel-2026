@@ -12,18 +12,18 @@
   },
   "process_1_date_anchor": {
     "status": "pending",
-    "updated_at": "2026-02-03T12:00:00+08:00",
-    "set_out_date": "2026-02-25",
+    "updated_at": "2026-02-04T09:30:00+08:00",
+    "set_out_date": "2026-02-26",
     "duration_days": 5,
-    "return_date": "2026-03-01",
+    "return_date": "2026-03-02",
     "flexibility": {
       "date_flexible": true,
       "preferred_dates": [
-        "2026-02-25",
-        "2026-02-26"
+        "2026-02-26",
+        "2026-02-27"
       ],
       "avoid_dates": [],
-      "reason": "Start date flexible between Feb 25 (Wed) and Feb 26 (Thu)"
+      "reason": "Start date flexible between Feb 26 (Thu) and Feb 27 (Fri); Feb 27 aligns with Lifetour package"
     }
   },
   "destinations": {

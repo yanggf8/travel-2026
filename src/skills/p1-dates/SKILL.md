@@ -1,6 +1,10 @@
 ---
 name: p1-dates
 description: Set trip dates including duration, flexibility preferences, and date anchor for the travel plan.
+version: 1.0.0
+requires_skills: [travel-shared]
+requires_processes: []
+provides_processes: [process_1_date_anchor]
 ---
 
 # /p1-dates

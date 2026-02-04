@@ -1,6 +1,10 @@
 ---
 name: p3-flights
 description: Search and compare flight-only options (standalone), writing candidates into the P3 transportation process for the active destination.
+version: 1.0.0
+requires_skills: [travel-shared, scrape-ota]
+requires_processes: [process_1_date_anchor, process_2_destination]
+provides_processes: [process_3_transportation]
 ---
 
 # /p3-flights

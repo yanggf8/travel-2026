@@ -1,6 +1,10 @@
 ---
 name: scrape-ota
 description: Scrape travel package details from OTA websites using Playwright. Auto-detects OTA from URL and runs appropriate scraper.
+version: 1.0.0
+requires_skills: [travel-shared]
+requires_processes: []
+provides_processes: []
 ---
 
 # /scrape-ota

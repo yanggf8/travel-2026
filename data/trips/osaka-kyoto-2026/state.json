@@ -6,7 +6,7 @@
   "active_destination": "osaka_kyoto_2026",
   "current_focus": "osaka_kyoto_2026.process_1_date_anchor",
   "next_actions": [
-    "confirm_start_date_feb25_or_feb26",
+    "confirm_start_date_feb26_or_feb27",
     "search_ota_packages_kansai",
     "research_osaka_kyoto_split"
   ],
@@ -39,10 +39,10 @@
           "to": "pending",
           "data": {
             "options": [
-              "2026-02-25 to 2026-03-01 (Wed-Sun)",
-              "2026-02-26 to 2026-03-02 (Thu-Mon)"
+              "2026-02-26 to 2026-03-02 (Thu-Mon)",
+              "2026-02-27 to 2026-03-03 (Fri-Tue)"
             ],
-            "reason": "User flexible on start date"
+            "reason": "User shifted to Feb 26-27; Feb 27 aligns with Lifetour package"
           }
         }
       ]
