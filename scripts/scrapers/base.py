@@ -244,7 +244,19 @@ class BaseScraper(ABC):
         Full scrape: navigate, prepare, extract, parse.
 
         Uses navigate_with_retry for reliable page loading.
+        Supports caching via use_cache kwarg.
         """
+        from .cache import get_cache
+        
+        use_cache = kwargs.pop("use_cache", True)
+        cache = get_cache()
+        
+        # Try cache first
+        if use_cache:
+            cached = cache.get(self.source_id, url, **kwargs)
+            if cached:
+                return cached
+        
         result = ScrapeResult(
             source_id=self.source_id,
             url=url,
@@ -290,5 +302,9 @@ class BaseScraper(ABC):
         result.inclusions = parsed.inclusions
         result.date_pricing = parsed.date_pricing
         result.itinerary = parsed.itinerary
+        
+        # Cache the result
+        if use_cache:
+            cache.set(result, **kwargs)
 
         return result

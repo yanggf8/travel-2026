@@ -56,6 +56,9 @@ class BestTourParser(BaseScraper):
             result.flight.outbound.date
         )
         result.date_pricing = _parse_date_pricing(raw_text, year_month=ym)
+        
+        # Package type classification
+        result.package_type = _classify_package_type(raw_text, url)
 
         return result
 
@@ -97,15 +100,20 @@ def _parse_flight_block(lines: list[str], start: int) -> FlightSegment:
       [start+7] arrival_airport(CODE)
       [start+8] arrival_time
     """
-    segment = FlightSegment(
-        date=lines[start + 1].strip(),
-        flight_number=lines[start + 2].strip(),
-        airline=lines[start + 3].strip(),
-        departure_airport=lines[start + 4].strip(),
-        departure_time=lines[start + 5].strip(),
-        arrival_airport=lines[start + 7].strip(),  # skip → at start+6
-        arrival_time=lines[start + 8].strip(),
-    )
+    try:
+        segment = FlightSegment(
+            date=lines[start + 1].strip() if start + 1 < len(lines) else "",
+            flight_number=lines[start + 2].strip() if start + 2 < len(lines) else "",
+            airline=lines[start + 3].strip() if start + 3 < len(lines) else "",
+            departure_airport=lines[start + 4].strip() if start + 4 < len(lines) else "",
+            departure_time=lines[start + 5].strip() if start + 5 < len(lines) else "",
+            arrival_airport=lines[start + 7].strip() if start + 7 < len(lines) else "",
+            arrival_time=lines[start + 8].strip() if start + 8 < len(lines) else "",
+        )
+    except IndexError as e:
+        import warnings
+        warnings.warn(f"BestTour flight block parse error at line {start}: {e}")
+        return FlightSegment()
 
     # Extract airport codes from e.g. "桃園(TPE)"
     dep_match = re.search(r"\(([A-Z]{3})\)", segment.departure_airport)
@@ -126,6 +134,27 @@ def _infer_year_month_from_flight_date(date_str: str) -> Optional[Tuple[int, int
     if not m:
         return None
     return int(m.group(1)), int(m.group(2))
+
+
+def _classify_package_type(raw_text: str, url: str) -> str:
+    """Classify BestTour package type based on content."""
+    # FIT indicators
+    if any(kw in raw_text for kw in ["機加酒", "自由行", "機+酒"]):
+        return "fit"
+    
+    # Group tour indicators
+    if any(kw in raw_text for kw in ["團體", "跟團", "領隊", "導遊"]):
+        return "group"
+    
+    # Flight only
+    if "flight" in url or "機票" in raw_text:
+        return "flight"
+    
+    # Hotel only
+    if "hotel" in url or ("飯店" in raw_text and "機" not in raw_text):
+        return "hotel"
+    
+    return "unknown"
 
 
 def _parse_hotel(raw_text: str) -> HotelInfo:

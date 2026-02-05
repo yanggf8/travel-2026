@@ -39,3 +39,8 @@ def lifetour_data():
 @pytest.fixture
 def settour_data():
     return _load_fixture("settour-osaka-kansai.json")
+
+
+@pytest.fixture
+def liontravel_data():
+    return _load_fixture("liontravel-osaka-search.json")

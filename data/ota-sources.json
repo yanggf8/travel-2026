@@ -155,9 +155,9 @@
       "base_url": "https://www.eztravel.com.tw",
       "markets": ["TW"],
       "currency": "TWD",
-      "supported": false,
-      "scraper_script": null,
-      "notes": "Scraper not yet implemented"
+      "supported": true,
+      "scraper_script": "scripts/scrape_package.py",
+      "notes": "Flight search parser implemented"
     },
     "jalan": {
       "source_id": "jalan",
@@ -191,7 +191,7 @@
       "base_url": "https://www.trip.com",
       "markets": ["TW", "JP", "INTL"],
       "currency": "USD",
-      "supported": false,
+      "supported": true,
       "scraper_script": "scripts/scrape_package.py",
       "search_url_templates": {
         "flight_roundtrip": "https://www.trip.com/flights/{origin}-to-{dest}/tickets-{origin_code}-{dest_code}?dcity={origin_code}&acity={dest_code}&ddate={depart_date}&rdate={return_date}&flighttype=rt&class=y&quantity={pax}",

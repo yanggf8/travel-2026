@@ -61,7 +61,11 @@ npx ts-node src/cli/cascade.ts --apply
 │   └── validation/           # Itinerary validators
 ├── scripts/
 │   ├── scrape_package.py           # Generic OTA scraper (Playwright)
-│   └── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
+│   ├── scrape_listings.py          # Listing page scraper (fast metadata)
+│   ├── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
+│   ├── scrape_date_range.py        # Multi-date flight comparison
+│   ├── scrape_tigerair.py          # Tigerair form-based scraper
+│   └── filter_packages.py          # Filter scraped packages by criteria
 └── tsconfig.json
 ```
 
@@ -104,7 +108,7 @@ Changes to upstream processes automatically invalidate downstream data:
 | BestTour (喜鴻假期) | Package | ✅ Full calendar pricing |
 | Lion Travel (雄獅旅遊) | Package | ✅ Base pricing |
 | Tigerair (台灣虎航) | Flight | ⚠️ Limited |
-| ezTravel (易遊網) | Package | ❌ Not integrated |
+| ezTravel (易遊網) | Flight | ✅ Flight search parser |
 
 See [Extension Guide](docs/EXTENDING.md) for adding new OTAs.
 
@@ -136,6 +140,11 @@ npm run travel -- set-dates 2026-02-13 2026-02-17
 npm run travel -- select-offer <offer-id> <date>
 npm run travel -- validate-itinerary
 npm run travel -- set-activity-booking <day> <session> "<activity>" <status>
+
+# Scraping (Python)
+python scripts/scrape_listings.py --source besttour --dest kansai
+python scripts/scrape_package.py <url> [--refresh]
+python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
 ```
 
 ## Tests

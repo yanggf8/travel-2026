@@ -14,11 +14,15 @@ Supported OTAs:
 - Any URL with standard page structure
 
 Usage:
-    python scrape_package.py <url> [output.json]
+    python scrape_package.py <url> [output.json] [--refresh] [--quiet]
+
+Options:
+    --refresh   Bypass cache and force fresh scrape
+    --quiet     Suppress output
 
 Examples:
     python scrape_package.py "https://www.besttour.com.tw/itinerary/TYO05MM260211AM" data/besttour.json
-    python scrape_package.py "https://vacation.liontravel.com/search?Destination=JP_TYO_6" data/liontravel.json
+    python scrape_package.py "https://vacation.liontravel.com/search?Destination=JP_TYO_6" --refresh
 
 Requirements:
     pip install playwright
@@ -44,7 +48,7 @@ from scrapers.base import (
 from scrapers.schema import ScrapeResult, validate_result
 
 
-async def scrape_package(url: str) -> dict:
+async def scrape_package(url: str, use_cache: bool = True) -> dict:
     """Scrape package details from the given URL."""
     source_id = detect_ota(url)
 
@@ -55,7 +59,7 @@ async def scrape_package(url: str) -> dict:
             if source_id:
                 # Use the dedicated parser
                 parser = get_parser(source_id)
-                result = await parser.scrape(page, url)
+                result = await parser.scrape(page, url, use_cache=use_cache)
             else:
                 # Generic scrape for unknown URLs
                 result = await _generic_scrape(page, url)
@@ -109,12 +113,16 @@ def save_result(result: dict, output_path: str):
 
 async def main():
     quiet = "--quiet" in sys.argv
-    argv = [a for a in sys.argv[1:] if a != "--quiet"]
+    refresh = "--refresh" in sys.argv
+    argv = [a for a in sys.argv[1:] if a not in ("--quiet", "--refresh")]
 
     url = argv[0] if len(argv) > 0 else "https://www.besttour.com.tw/itinerary/TYO05MM260211AM"
     output = argv[1] if len(argv) > 1 else "data/package-scrape-result.json"
 
-    result = await scrape_package(url)
+    if refresh:
+        print("🔄 Refresh mode: bypassing cache")
+    
+    result = await scrape_package(url, use_cache=not refresh)
 
     if not quiet:
         print("\n" + "=" * 60)

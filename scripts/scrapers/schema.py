@@ -111,11 +111,16 @@ class DatesInfo:
 
     duration_days: Optional[int] = None
     duration_nights: Optional[int] = None
-    departure_date: str = ""
-    return_date: str = ""
+    departure_date: str = ""  # ISO format: YYYY-MM-DD
+    return_date: str = ""     # ISO format: YYYY-MM-DD
     year: Optional[int] = None
     departure_month: Optional[int] = None
     departure_day: Optional[int] = None
+    
+    @property
+    def is_populated(self) -> bool:
+        """True if at least departure_date is set."""
+        return bool(self.departure_date)
 
 
 @dataclass
@@ -142,6 +147,9 @@ class ScrapeResult:
     url: str = ""
     scraped_at: str = ""
     title: str = ""
+    
+    # Classification
+    package_type: str = "unknown"  # "fit" | "group" | "flight" | "hotel" | "unknown"
 
     # Structured data
     flight: FlightInfo = field(default_factory=FlightInfo)
@@ -188,9 +196,10 @@ class ScrapeResult:
 
     @classmethod
     def from_dict(cls, data: dict) -> ScrapeResult:
-        """Deserialize from dict (e.g., from existing scraped JSON)."""
+        """Deserialize from dict (supports both to_dict() and to_legacy_dict() formats)."""
         result = cls()
         result.source_id = data.get("source_id", data.get("source", ""))
+        result.package_type = data.get("package_type", "unknown")  # NEW: Restore package_type
         result.url = data.get("url", "")
         result.scraped_at = data.get("scraped_at", "")
         result.title = data.get("title", "")
@@ -201,68 +210,83 @@ class ScrapeResult:
         result.warnings = data.get("warnings", [])
         result.success = data.get("success", True)
 
+        # Check if data is in new format (direct fields) or legacy format (extracted wrapper)
         extracted = data.get("extracted", {})
-        if extracted:
-            flight_data = extracted.get("flight", {})
-            if flight_data:
-                result.flight = FlightInfo.from_dict(flight_data)
+        use_legacy = bool(extracted)
+        
+        # Flight data
+        flight_data = extracted.get("flight", {}) if use_legacy else data.get("flight", {})
+        if flight_data:
+            result.flight = FlightInfo.from_dict(flight_data)
 
-            hotel_data = extracted.get("hotel", {})
-            if hotel_data:
-                result.hotel = HotelInfo(
-                    name=hotel_data.get("name", ""),
-                    names=hotel_data.get("names", []),
-                    area=hotel_data.get("area", ""),
-                    access=hotel_data.get("access", []),
-                    room_type=hotel_data.get("room_type", ""),
-                    bed_width_cm=hotel_data.get("bed_width_cm"),
+        # Hotel data
+        hotel_data = extracted.get("hotel", {}) if use_legacy else data.get("hotel", {})
+        if hotel_data:
+            result.hotel = HotelInfo(
+                name=hotel_data.get("name", ""),
+                names=hotel_data.get("names", []),
+                area=hotel_data.get("area", ""),
+                star_rating=hotel_data.get("star_rating"),
+                access=hotel_data.get("access", []),
+                amenities=hotel_data.get("amenities", []),
+                room_type=hotel_data.get("room_type", ""),
+                bed_width_cm=hotel_data.get("bed_width_cm"),
+            )
+
+        # Price data
+        price_data = extracted.get("price", {}) if use_legacy else data.get("price", {})
+        if price_data:
+            result.price = PriceInfo(
+                per_person=price_data.get("per_person"),
+                total=price_data.get("total"),
+                currency=price_data.get("currency", "TWD"),
+                deposit=price_data.get("deposit"),
+                seats_available=price_data.get("seats_available"),
+                min_travelers=price_data.get("min_travelers"),
+            )
+
+        # Dates data
+        dates_data = extracted.get("dates", {}) if use_legacy else data.get("dates", {})
+        if dates_data:
+            result.dates = DatesInfo(
+                duration_days=dates_data.get("duration_days"),
+                duration_nights=dates_data.get("duration_nights"),
+                departure_date=dates_data.get("departure_date", ""),
+                return_date=dates_data.get("return_date", ""),
+                year=dates_data.get("year"),
+                departure_month=dates_data.get("departure_month"),
+                departure_day=dates_data.get("departure_day"),
+            )
+
+        # Inclusions
+        result.inclusions = extracted.get("inclusions", []) if use_legacy else data.get("inclusions", [])
+
+        # Date pricing
+        dp_data = extracted.get("date_pricing", {}) if use_legacy else data.get("date_pricing", {})
+        if dp_data:
+            result.date_pricing = {
+                k: DatePricing(
+                    date=k,
+                    price=v.get("price"),
+                    availability=v.get("availability", "unknown"),
+                    seats_remaining=v.get("seats_remaining"),
+                    notes=v.get("notes", ""),
                 )
+                for k, v in dp_data.items()
+            }
 
-            price_data = extracted.get("price", {})
-            if price_data:
-                result.price = PriceInfo(
-                    per_person=price_data.get("per_person"),
-                    currency=price_data.get("currency", "TWD"),
-                    deposit=price_data.get("deposit"),
-                    seats_available=price_data.get("seats_available"),
-                    min_travelers=price_data.get("min_travelers"),
+        # Itinerary
+        itin_data = extracted.get("itinerary", []) if use_legacy else data.get("itinerary", [])
+        if itin_data:
+            result.itinerary = [
+                ItineraryDay(
+                    day=d.get("day", 0),
+                    content=d.get("content", ""),
+                    is_free=d.get("is_free", False),
+                    is_guided=d.get("is_guided", False),
                 )
-
-            dates_data = extracted.get("dates", {})
-            if dates_data:
-                result.dates = DatesInfo(
-                    duration_days=dates_data.get("duration_days"),
-                    duration_nights=dates_data.get("duration_nights"),
-                    year=dates_data.get("year"),
-                    departure_month=dates_data.get("departure_month"),
-                    departure_day=dates_data.get("departure_day"),
-                )
-
-            result.inclusions = extracted.get("inclusions", [])
-
-            dp_data = extracted.get("date_pricing", {})
-            if dp_data:
-                result.date_pricing = {
-                    k: DatePricing(
-                        date=k,
-                        price=v.get("price"),
-                        availability=v.get("availability", "unknown"),
-                        seats_remaining=v.get("seats_remaining"),
-                    )
-                    for k, v in dp_data.items()
-                }
-
-            itin_data = extracted.get("itinerary", [])
-            if itin_data:
-                result.itinerary = [
-                    ItineraryDay(
-                        day=d.get("day", 0),
-                        content=d.get("content", ""),
-                        is_free=d.get("is_free", False),
-                        is_guided=d.get("is_guided", False),
-                    )
-                    for d in itin_data
-                ]
+                for d in itin_data
+            ]
 
         return result
 
@@ -286,6 +310,8 @@ class ScrapeResult:
             extracted["itinerary"] = [asdict(d) for d in self.itinerary]
 
         result = {
+            "source_id": self.source_id,  # NEW: Include source_id
+            "package_type": self.package_type,  # NEW: Include package_type
             "url": self.url,
             "scraped_at": self.scraped_at,
             "title": self.title,

@@ -82,13 +82,16 @@ def _create_parser(source_id: str) -> BaseScraper:
     elif source_id == "agoda":
         from .parsers.agoda import AgodaParser
         return AgodaParser()
+    elif source_id == "eztravel":
+        from .parsers.eztravel import EzTravelParser
+        return EzTravelParser()
     else:
         raise ValueError(
             f"No parser registered for source_id '{source_id}'. "
-            f"Available: besttour, liontravel, lifetour, settour, tigerair, trip, google_flights, agoda"
+            f"Available: besttour, liontravel, lifetour, settour, tigerair, trip, google_flights, agoda, eztravel"
         )
 
 
 def get_available_parsers() -> list[str]:
     """Return list of all available parser source IDs."""
-    return ["besttour", "liontravel", "lifetour", "settour", "tigerair", "trip", "google_flights", "agoda"]
+    return ["besttour", "liontravel", "lifetour", "settour", "tigerair", "trip", "google_flights", "agoda", "eztravel"]

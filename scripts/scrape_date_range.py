@@ -9,7 +9,7 @@ Thin wrapper around scrapers.parsers.trip_com.
 
 Usage:
     python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \\
-        --origin tpe --dest kix --duration 5 --pax 2 [--output data/date-range-prices.json]
+        --origin tpe --dest kix --duration 5 --pax 2 --exchange-rate 32 [--output data/date-range-prices.json]
 
 Requirements:
     pip install playwright
@@ -95,6 +95,7 @@ async def scrape_date_range(
     dest: str,
     duration: int,
     pax: int,
+    args,
 ) -> list[dict]:
     """Scrape outbound + return prices for each departure date."""
     async with async_playwright() as p:
@@ -124,7 +125,7 @@ async def scrape_date_range(
             if out_price and in_price:
                 combined = out_price + in_price
                 entry["combined_cheapest_usd"] = combined
-                entry["combined_cheapest_twd"] = round(combined * 32)
+                entry["combined_cheapest_twd"] = round(combined * args.exchange_rate)
 
             results.append(entry)
 
@@ -177,12 +178,14 @@ def main():
     parser.add_argument("--dest", required=True, help="Destination airport code (e.g., kix)")
     parser.add_argument("--duration", type=int, required=True, help="Trip duration in days")
     parser.add_argument("--pax", type=int, default=2, help="Number of passengers (default: 2)")
+    parser.add_argument("--exchange-rate", type=float, default=32.0, help="USD to TWD exchange rate (default: 32)")
     parser.add_argument("--output", "-o", help="Output JSON file path")
     args = parser.parse_args()
 
     depart_dates = date_range(args.depart_start, args.depart_end)
     print(f"Scraping {len(depart_dates)} departure dates: {', '.join(depart_dates)}")
     print(f"Route: {args.origin.upper()} → {args.dest.upper()}, {args.duration} days, {args.pax} pax")
+    print(f"Exchange rate: USD 1 = TWD {args.exchange_rate}")
 
     results = asyncio.run(scrape_date_range(
         depart_dates=depart_dates,
@@ -190,6 +193,7 @@ def main():
         dest=args.dest.lower(),
         duration=args.duration,
         pax=args.pax,
+        args=args,
     ))
 
     if args.output:

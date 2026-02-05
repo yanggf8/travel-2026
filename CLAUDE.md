@@ -302,7 +302,7 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 | `agoda` | Agoda | hotel | ✅ | ✅ | Direct hotel URLs work reliably; search may fail for far-future dates |
 | `skyscanner` | Skyscanner | flight | ❌ | ❌ | Hard captcha redirect (captcha-v2) blocks all requests |
 | `google_flights` | Google Flights | flight | ✅ | ✅ | Natural-language query URL (`?q=Flights to DEST from ORIGIN`) |
-| `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ | — |
+| `eztravel` | 易遊網 | flight | ✅ | ✅ | Flight search results parser |
 | `jalan` | じゃらん | hotel | ❌ | ❌ | Japan domestic OTA, for local hotel bookings |
 | `rakuten_travel` | 楽天トラベル | hotel, package | ❌ | ❌ | Japan domestic OTA |
 
@@ -452,7 +452,7 @@ npx ts-node src/cli/cascade.ts -i data/travel-plan.json --apply -o data/output.j
 
 | Process | Tokyo | Nagoya | Osaka+Kyoto |
 |---------|-------|--------|-------------|
-| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed | ⏳ pending (Feb 26 or 27) |
+| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed | ⏳ pending (Feb 24-28, 3 leave days) |
 | P2 Destination | ✅ confirmed | ✅ confirmed | ✅ confirmed |
 | P3+4 Packages | ✅ **booked** | ⏳ pending (archived) | 🔄 researched (4 OTAs scraped) |
 | P3 Transportation | 🎫 booked | 🔄 researched | ⏳ pending |
@@ -495,30 +495,39 @@ Hotel:   TAVINOS Hamamatsucho
          Includes: Light breakfast
 ```
 
-### 🔄 RESEARCHED: Osaka+Kyoto Feb 26–Mar 2, 2026
+### 🔄 RESEARCHED: Osaka+Kyoto Feb 24–28, 2026
 
 **Plan file**: `data/trips/osaka-kyoto-2026/travel-plan.json`
-**Dates**: Feb 26 (Thu) or Feb 27 (Fri) → Mar 2 (Mon), 5 days
+**Dates**: Feb 24 (Tue) → Feb 28 (Sat), 5 days
+**Leave days**: 3 (Tue + Wed + Thu) — leverages 228 holiday weekend
 **Pax**: 2, **Airport**: KIX
 
-#### Package Comparison (Feb 26–27 only, Taipei departure)
+#### FIT vs Separate Booking Comparison (Feb 24-28)
 
-| Rank | OTA | Package | TWD/person | After Promo | Type | Date | Status |
-|------|-----|---------|-----------|-------------|------|------|--------|
-| 1 | LionTravel | 自由配 FIT (Eva Air + Hankyu Respire) | 32,142 | 32,142 | FIT | 02/26 | — |
-| 2 | Settour | 漫步京阪奈半自由行 5日 | 33,900 | 32,900 | 半自由 | 02/27 | 餘27席 |
-| 3 | Settour | 溫泉átoa和牛龍蝦螃蟹三都 5日 | 35,900 | 34,900 | 跟團 | 02/26 | 已成團, 餘8席 |
-| 4 | Settour | 螃蟹吃到飽átoa四都 5日 | 37,900 | 36,400 | 跟團 | 02/27 | 即將成團 |
-| 5 | Settour | 京阪神奈琵琶湖天橋立 6日 | 38,900 | 37,900 | 跟團 | 02/27 | 已成團, 餘2席 |
-| 6 | Lifetour | 關西五都影城戲雪 6日 | 38,999 | 38,999 | 跟團 | 02/27 | 可售18人 |
-| 7 | Lifetour | 海之京都丹後天橋立 5日 | 39,999 | 39,999 | 跟團 | 02/26 | 已成團, 餘3席 |
-| 8 | Settour | 環球周邊天橋立美山町伊根 5日 | 40,900 | ~39,400 | 跟團 | 02/27 | 餘20席 |
+| Option | Type | Total (2 pax) | Per Person | $/Leave |
+|--------|------|---------------|------------|---------|
+| **Separate** | 分開訂 | TWD 38,946 | 19,473 | 12,982 |
+| LionTravel FIT | 套餐 | TWD 40,740 | 20,370 | 13,580 |
+
+**Separate booking saves TWD 1,794** vs FIT package.
+
+#### Separate Booking Breakdown
+```
+Flights: AirAsia (out) + Thai Vietjet (return)
+         US$213 + US$390 = US$603 × 32.8 = TWD 19,778
+         + Baggage: TWD 7,000 (2×2 bags × TWD 1,750)
+         = TWD 26,778
+
+Hotel:   Onyado Nono Namba
+         TWD 3,042/night × 4 nights = TWD 12,168
+
+Total:   TWD 38,946
+```
 
 **Notes:**
-- BestTour has no Feb 26/27 departures for Kansai from Taipei
-- LionTravel FIT return departs from Kobe UKB (not KIX) — extra transit needed
-- Settour dominates with 7 options vs Lifetour's 2
-- Scraped data in: `data/liontravel-osaka-feb26.json`, `data/lifetour-osaka-kansai.json`, `data/settour-osaka-kansai.json`, `data/besttour-kansai-refresh.json`
+- Comparison data from: `data/osaka-trip-comparison.json`
+- LionTravel FIT returns from Kobe UKB (not KIX) — extra transit needed
+- Separate booking uses LCC (AirAsia/Thai Vietjet) — baggage fee included in total
 
 ### CLI Quick Reference
 ```bash
@@ -583,7 +592,9 @@ To ensure visibility, agent must output content as direct text:
 
 | Script | Purpose | OTA |
 |--------|---------|-----|
-| `scripts/scrape_package.py` | Generic package scraper | BestTour, any OTA |
+| `scripts/scrape_package.py` | Generic package scraper (detail) | BestTour, LionTravel, Lifetour, Settour |
+| `scripts/scrape_listings.py` | Fast listing scraper (metadata) | BestTour, LionTravel, Lifetour, Settour |
+| `scripts/filter_packages.py` | Filter scraped packages by criteria | All |
 | `scripts/scrape_liontravel_dated.py` | Date-specific pricing | Lion Travel |
 | `scripts/scrape_tigerair.py` | Flight price scraper (form-based) | Tigerair |
 | `scripts/scrape_date_range.py` | Multi-date flight comparison | Trip.com |
@@ -596,12 +607,31 @@ playwright install chromium
 
 **Usage:**
 ```bash
-# Scrape BestTour package
+# Fast listing scrape (metadata only)
+python scripts/scrape_listings.py --source besttour --dest kansai -o listings.json
+
+# Filter packages by criteria
+python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
+
+# Detail scrape (full package info)
 python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/<CODE>" data/besttour-<CODE>.json
 
 # Scrape Lion Travel with dates
 python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 data/liontravel-search.json
 ```
+
+**Scraper Features:**
+- **Package Type Classification**: FIT vs Group detection (3/9 OTAs: besttour, lifetour, liontravel)
+- **Date Extraction**: Structured departure_date in ISO format (lifetour, liontravel)
+- **Two-Stage Workflow**: Fast listing scrape → filter → detail scrape selected packages
+- **Cache Management**: File-based cache with TTL, `--refresh` flag to bypass
+- **Staleness Detection**: Warns when cached data >24h old
+
+**Classification Keywords** (listing scraper, heuristic):
+- **Group**: 團體, 跟團, 精緻團, 品質團, 領隊, 導遊, 自由活動, 自由時間
+- **FIT**: 自由行, 機加酒, 自助, 半自由, 伴自由, 自由配, fit
+
+**Accuracy**: Detail scrape (parser logic) > Listing scrape (title keywords, heuristic)
 
 **Usage (date range flight scraper):**
 ```bash
@@ -651,11 +681,12 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ Skill contracts v1.4.0 — `data_freshness` tier (live/cached/static)
 - ✅ Settour OTA integration (scraper URL: `tour.settour.com.tw/search?destinationCode=JX_3`)
 - ✅ Lifetour search URL discovery (`tour.lifetour.com.tw/searchlist/tpe/{region}`)
-- ✅ Osaka+Kyoto OTA package comparison (4 OTAs, Feb 26-27, 8 options found)
+- ✅ Osaka+Kyoto FIT vs Separate comparison (Feb 24-28, 3 leave days)
 - ✅ OTA search URL templates in `data/ota-sources.json` for all 4 supported OTAs
 - ✅ `compare-offers` CLI command (`npm run travel -- compare-offers --region osaka`)
 - ✅ Package link extraction in scraper for listing pages
 - ✅ Staleness warning for offers older than 24 hours
+- ✅ Scraper enhancements: package_type classification (FIT/group), departure_date extraction, listing scraper, filter CLI
 - ✅ Holiday calculator (`src/utilities/holiday-calculator.ts`) — cached calendar loading, isHoliday/isWorkday/isMakeupWorkday queries, calculateLeave convenience wrapper, config-driven via destinations.json
 - ✅ Leave day calculator CLI (`src/utils/leave-calculator.ts`)
 - ✅ Multi-date flight scraper (`scripts/scrape_date_range.py`)
@@ -705,8 +736,8 @@ updates so skills have a strong CLI surface without native DB installs.
 2. **Book Limousine Bus** - Low-risk, can buy day-of
 3. **Restaurant reservations** - Based on area/cuisine preferences
 
-### Osaka+Kyoto (Feb 26 – Mar 2)
-1. **Select package** - Choose from 8 scraped options (see comparison above)
-2. **Confirm departure date** - Feb 26 or Feb 27
-3. **Scrape individual package pages** - Get flight/hotel details for shortlisted options
-4. **Build P5 itinerary** - After package selection
+### Osaka+Kyoto (Feb 24 – 28)
+1. **Verify flight prices** - Re-scrape Feb 24 outbound + Feb 28 return (prices may have changed)
+2. **Confirm hotel availability** - Onyado Nono Namba for 4 nights
+3. **Decide FIT vs Separate** - Separate saves TWD 1,808 but uses LCC
+4. **Build P5 itinerary** - After booking decision

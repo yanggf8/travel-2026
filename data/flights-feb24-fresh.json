@@ -1,0 +1,195 @@
+{
+  "scraped_at": "2026-02-06T03:19:09.091433",
+  "params": {
+    "depart_start": "2026-02-24",
+    "depart_end": "2026-02-24",
+    "origin": "tpe",
+    "dest": "kix",
+    "duration": 5,
+    "pax": 2
+  },
+  "results": [
+    {
+      "depart_date": "2026-02-24",
+      "return_date": "2026-02-28",
+      "depart_day": "Tue",
+      "return_day": "Sat",
+      "outbound": {
+        "date": "2026-02-24",
+        "day": "Tue",
+        "direction": "TPE→KIX",
+        "url": "https://www.trip.com/flights/taipei-to-osaka/tickets-tpe-kix?dcity=tpe&acity=kix&ddate=2026-02-24&flighttype=ow&class=y&quantity=2",
+        "cheapest_price_usd": 107,
+        "cheapest_airline": null,
+        "cheapest_time": null,
+        "nonstop_cheapest_usd": 213,
+        "nonstop_cheapest_airline": "AirAsia X Berhad",
+        "nonstop_cheapest_time": "15:40→19:20",
+        "flights": [
+          {
+            "airline": "AirAsia X Berhad",
+            "depart": "15:40",
+            "arrive": "19:20",
+            "duration": "2h 40m",
+            "nonstop": true,
+            "price_per_person_usd": 107,
+            "total_usd": 213
+          },
+          {
+            "airline": "Peach",
+            "depart": "18:50",
+            "arrive": "22:15",
+            "duration": "2h 25m",
+            "nonstop": true,
+            "price_per_person_usd": 134,
+            "total_usd": 267
+          },
+          {
+            "airline": "Thai Vietjet Air",
+            "depart": "07:30",
+            "arrive": "11:00",
+            "duration": "2h 30m",
+            "nonstop": true,
+            "price_per_person_usd": 143,
+            "total_usd": 285
+          },
+          {
+            "airline": "Peach",
+            "depart": "01:45",
+            "arrive": "05:10",
+            "duration": "2h 25m",
+            "nonstop": true,
+            "price_per_person_usd": 153,
+            "total_usd": 306
+          },
+          {
+            "airline": "Jetstar Japan",
+            "depart": "18:10",
+            "arrive": "21:40",
+            "duration": "2h 30m",
+            "nonstop": true,
+            "price_per_person_usd": 154,
+            "total_usd": 308
+          },
+          {
+            "airline": "Tigerair Taiwan",
+            "depart": "14:40",
+            "arrive": "17:55",
+            "duration": "2h 15m",
+            "nonstop": true,
+            "price_per_person_usd": 168,
+            "total_usd": 336
+          },
+          {
+            "airline": "Peach",
+            "depart": "09:40",
+            "arrive": "13:10",
+            "duration": "2h 30m",
+            "nonstop": true,
+            "price_per_person_usd": 173,
+            "total_usd": 346
+          },
+          {
+            "airline": "Peach",
+            "depart": "13:40",
+            "arrive": "17:05",
+            "duration": "2h 25m",
+            "nonstop": true,
+            "price_per_person_usd": 173,
+            "total_usd": 346
+          }
+        ],
+        "error": null
+      },
+      "inbound": {
+        "date": "2026-02-28",
+        "day": "Sat",
+        "direction": "KIX→TPE",
+        "url": "https://www.trip.com/flights/osaka-to-taipei/tickets-kix-tpe?dcity=kix&acity=tpe&ddate=2026-02-28&flighttype=ow&class=y&quantity=2",
+        "cheapest_price_usd": 191,
+        "cheapest_airline": null,
+        "cheapest_time": null,
+        "nonstop_cheapest_usd": 382,
+        "nonstop_cheapest_airline": "Thai Vietjet Air",
+        "nonstop_cheapest_time": "12:00→14:15",
+        "flights": [
+          {
+            "airline": "Thai Vietjet Air",
+            "depart": "12:00",
+            "arrive": "14:15",
+            "duration": "3h 15m",
+            "nonstop": true,
+            "price_per_person_usd": 191,
+            "total_usd": 382
+          },
+          {
+            "airline": "Thai Lion Air",
+            "depart": "13:30",
+            "arrive": "15:40",
+            "duration": "3h 10m",
+            "nonstop": true,
+            "price_per_person_usd": 225,
+            "total_usd": 449
+          },
+          {
+            "airline": "Tigerair Taiwan",
+            "depart": "11:30",
+            "arrive": "13:50",
+            "duration": "3h 20m",
+            "nonstop": true,
+            "price_per_person_usd": 231,
+            "total_usd": 461
+          },
+          {
+            "airline": "Peach",
+            "depart": "07:15",
+            "arrive": "09:45",
+            "duration": "3h 30m",
+            "nonstop": true,
+            "price_per_person_usd": 260,
+            "total_usd": 519
+          },
+          {
+            "airline": "Peach",
+            "depart": "10:10",
+            "arrive": "12:45",
+            "duration": "3h 35m",
+            "nonstop": true,
+            "price_per_person_usd": 283,
+            "total_usd": 565
+          },
+          {
+            "airline": "Tigerair Taiwan",
+            "depart": "19:55",
+            "arrive": "22:30",
+            "duration": "3h 35m",
+            "nonstop": true,
+            "price_per_person_usd": 302,
+            "total_usd": 603
+          },
+          {
+            "airline": "Peach",
+            "depart": "22:00",
+            "arrive": "00:30",
+            "duration": "3h 30m",
+            "nonstop": true,
+            "price_per_person_usd": 302,
+            "total_usd": 603
+          },
+          {
+            "airline": "Jetstar Japan",
+            "depart": "23:10",
+            "arrive": "01:30",
+            "duration": "3h 20m",
+            "nonstop": true,
+            "price_per_person_usd": 322,
+            "total_usd": 643
+          }
+        ],
+        "error": null
+      },
+      "combined_cheapest_usd": 595,
+      "combined_cheapest_twd": 19516
+    }
+  ]
+}

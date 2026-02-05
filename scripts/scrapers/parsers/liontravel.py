@@ -37,6 +37,7 @@ class LionTravelParser(BaseScraper):
 
         result.price = _parse_search_prices(raw_text)
         result.dates = _parse_dates_from_url(url)
+        result.package_type = "fit"  # LionTravel vacation.liontravel.com is FIT only
 
         return result
 

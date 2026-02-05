@@ -29,6 +29,7 @@ class LifetourParser(BaseScraper):
         result.dates = _parse_dates(raw_text)
         result.itinerary = _parse_itinerary(raw_text)
         result.inclusions = _parse_inclusions(raw_text)
+        result.package_type = _classify_package_type(raw_text, url)
 
         return result
 
@@ -176,18 +177,39 @@ def _parse_dates(raw_text: str) -> DatesInfo:
         dates.duration_days = int(duration_match.group(1))
         dates.duration_nights = int(duration_match.group(2))
 
-    # Departure date: 出發日期 02月27日
-    depart_match = re.search(r"出發日期\s*(\d{1,2})月(\d{1,2})日", raw_text)
-    if depart_match:
-        dates.departure_month = int(depart_match.group(1))
-        dates.departure_day = int(depart_match.group(2))
-
     # Year from calendar section
     year_match = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月", raw_text)
     if year_match:
         dates.year = int(year_match.group(1))
 
+    # Departure date: 出發日期 02月27日 or 2/27
+    depart_match = re.search(r"出發日期\s*(\d{1,2})月(\d{1,2})日", raw_text)
+    if depart_match:
+        dates.departure_month = int(depart_match.group(1))
+        dates.departure_day = int(depart_match.group(2))
+        
+        # Build ISO date if we have year
+        if dates.year:
+            dates.departure_date = f"{dates.year:04d}-{dates.departure_month:02d}-{dates.departure_day:02d}"
+
     return dates
+
+
+def _classify_package_type(raw_text: str, url: str) -> str:
+    """Classify Lifetour package type."""
+    # Semi-FIT indicators (伴自由 = semi-guided with free time) - treat as FIT
+    if any(kw in raw_text for kw in ["伴自由", "半自由", "半自助"]):
+        return "fit"  # Treat semi-guided as FIT for filtering purposes
+    
+    # FIT indicators
+    if any(kw in raw_text for kw in ["自由行", "機加酒", "自由配"]):
+        return "fit"
+    
+    # Group tour indicators
+    if any(kw in raw_text for kw in ["團體", "跟團", "領隊", "導遊", "迷你小團"]):
+        return "group"
+    
+    return "unknown"
 
 
 def _parse_itinerary(raw_text: str) -> list[ItineraryDay]:
