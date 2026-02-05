@@ -2036,7 +2036,13 @@ function normalizeScrapeToOffer(scrape: any, pax: number, warnings: string[]): a
   const id = `${sourceId}_${productCode}`;
 
   // Get currency from OTA source config instead of hardcoding
-  const currency = getOtaSourceCurrency(sourceId);
+  // (but don't crash compare/import flows if the URL is unknown)
+  let currency = 'TWD';
+  try {
+    currency = getOtaSourceCurrency(sourceId);
+  } catch {
+    warnings.push(`Unknown OTA source for URL; defaulting currency to ${currency}: ${url}`);
+  }
 
   const extracted = scrape?.extracted || {};
   const flight = extracted.flight || {};
@@ -2167,7 +2173,7 @@ function loadScrapedOffers(region: string, filterDate: string | undefined, pax: 
       const filePath = path.join(dataDir, file);
       const content = fs.readFileSync(filePath, 'utf-8');
       const data = JSON.parse(content);
-      const offer = parseScrapedFile(file, data, pax);
+      const offer = parseScrapedFile(file, data, pax, filterDate);
       if (offer) offers.push(offer);
     } catch {
       // Skip files that can't be parsed
@@ -2185,13 +2191,22 @@ function loadScrapedOffers(region: string, filterDate: string | undefined, pax: 
   return offers;
 }
 
-function parseScrapedFile(file: string, data: any, pax: number): CompareOffer | null {
+function parseScrapedFile(file: string, data: any, pax: number, filterDate?: string): CompareOffer | null {
   if (!data || typeof data !== 'object') return null;
 
   const url = data.url || '';
   const scrapedAt = data.scraped_at || '';
-  const sourceId = inferSourceIdFromUrl(url) || inferSourceIdFromFilename(file);
-  const currency = getOtaSourceCurrency(sourceId);
+  const urlSourceId = inferSourceIdFromUrl(url);
+  const fileSourceId = inferSourceIdFromFilename(file);
+  const sourceId = urlSourceId !== 'unknown' ? urlSourceId : fileSourceId;
+  if (sourceId === 'unknown') return null;
+
+  let currency = 'TWD';
+  try {
+    currency = getOtaSourceCurrency(sourceId);
+  } catch {
+    // Keep going with a sensible default; compare-offers should be resilient to odd files.
+  }
 
   // Source display names
   const sourceNames: Record<string, string> = {
@@ -2217,8 +2232,31 @@ function parseScrapedFile(file: string, data: any, pax: number): CompareOffer | 
 
   // Check extracted.date_pricing first (BestTour calendar)
   const extracted = data.extracted || {};
-  if (extracted.date_pricing && Object.keys(extracted.date_pricing).length > 0) {
-    const best = computeBestValue(extracted.date_pricing, pax);
+  const datePricing = extracted.date_pricing && typeof extracted.date_pricing === 'object' ? extracted.date_pricing : null;
+  const hasDatePricing = Boolean(datePricing && Object.keys(datePricing).length > 0);
+
+  if (filterDate) {
+    const ymd = filterDate.replace(/-/g, '/');
+    const compact = filterDate.replace(/-/g, '');
+
+    if (datePricing) {
+      const entry = (datePricing as Record<string, any>)[filterDate];
+      if (!entry) return null; // user asked for a specific date and this calendar doesn't include it
+      if (typeof entry.price === 'number') {
+        pricePerPerson = entry.price;
+        priceTotal = entry.price * pax;
+      } else {
+        return null;
+      }
+    } else {
+      // If we don't have a calendar, only keep offers that clearly match the date.
+      const rawText = String(data.raw_text || '');
+      const matchesUrl = typeof url === 'string' && url.includes(`FromDate=${compact}`);
+      const matchesText = rawText.includes(ymd) || rawText.includes(filterDate);
+      if (!matchesUrl && !matchesText) return null;
+    }
+  } else if (hasDatePricing) {
+    const best = computeBestValue(datePricing, pax);
     if (best) {
       pricePerPerson = best.price_per_person;
       priceTotal = best.price_total;
@@ -2374,7 +2412,8 @@ function printOfferComparison(offers: CompareOffer[], region: string, filterDate
 
   // Print table header
   console.log('┌─────────────────┬─────────────────┬─────────────────┬────────────────────────────────┐');
-  console.log('│ OTA             │ Price/person    │ Total (2pax)    │ Details                        │');
+  const totalHeader = `Total (${pax}pax)`.padEnd(15).slice(0, 15);
+  console.log(`│ OTA             │ Price/person    │ ${totalHeader} │ Details                        │`);
   console.log('├─────────────────┼─────────────────┼─────────────────┼────────────────────────────────┤');
 
   for (const o of offers) {
@@ -2438,6 +2477,8 @@ function resolveDestinationRefPath(destinationSlug: string): string | null {
 function inferSourceIdFromUrl(url: string): string {
   if (url.includes('besttour.com.tw')) return 'besttour';
   if (url.includes('liontravel.com')) return 'liontravel';
+  if (url.includes('lifetour.com.tw')) return 'lifetour';
+  if (url.includes('settour.com.tw')) return 'settour';
   if (url.includes('tigerairtw.com')) return 'tigerair';
   if (url.includes('eztravel.com.tw')) return 'eztravel';
   if (url.includes('jalan.net')) return 'jalan';

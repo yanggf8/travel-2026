@@ -39,7 +39,7 @@
       "supported": true,
       "scraper_script": "scripts/scrape_liontravel_dated.py",
       "search_url_templates": {
-        "fit": "vacation.liontravel.com/search?Destination={dest_code}&FromDate={from_yyyymmdd}&ToDate={to_yyyymmdd}&Days={days}&roomlist={adults}-0-0",
+        "fit": "https://vacation.liontravel.com/search?Destination={dest_code}&FromDate={from_yyyymmdd}&ToDate={to_yyyymmdd}&Days={days}&roomlist={adults}-0-0",
         "group": null
       },
       "destination_codes": {
@@ -91,8 +91,8 @@
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
       "search_url_templates": {
-        "group_tour": "tour.lifetour.com.tw/searchlist/{departure}/{region_code}",
-        "product": "tour.lifetour.com.tw/detail*"
+        "group_tour": "https://tour.lifetour.com.tw/searchlist/{departure}/{region_code}",
+        "product": "https://tour.lifetour.com.tw/detail*"
       },
       "departures": {
         "taipei": "tpe",
@@ -122,9 +122,9 @@
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
       "search_url_templates": {
-        "group_tour": "tour.settour.com.tw/search?destinationCode={dest_code}",
-        "fit": "fit.settour.com.tw/tour/product/*",
-        "product": "tour.settour.com.tw/product/*"
+        "group_tour": "https://tour.settour.com.tw/search?destinationCode={dest_code}",
+        "fit": "https://fit.settour.com.tw/tour/product/*",
+        "product": "https://tour.settour.com.tw/product/*"
       },
       "destination_codes": {
         "tokyo": "JX_1",
