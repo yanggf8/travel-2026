@@ -116,6 +116,8 @@ User intent                          → Skill / Action
 "find packages" / "search OTA"       → /p3p4-packages (uses /scrape-ota)
 "find flights only"                  → /p3-flights (uses /scrape-ota)
 "compare offers" / "which is cheaper"→ read process_3_4_packages.results
+"book separately" / "split booking"  → /separate-bookings
+"how many leave days"                → npx ts-node src/cli/calculate-leave.ts
 "book this" / "select offer"         → npm run travel -- select-offer
 "plan the days" / "itinerary"        → /p5-itinerary
 "show status" / "where are we"       → npm run view:status
@@ -263,6 +265,7 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 | `/p3p4-packages` | `src/skills/p3p4-packages/SKILL.md` | Search OTA packages (flight+hotel) |
 | `/p5-itinerary` | `src/skills/p5-itinerary/SKILL.md` | Build and validate daily itinerary |
 | `/scrape-ota` | `src/skills/scrape-ota/SKILL.md` | Scrape OTA sites with Playwright (JS rendering) |
+| `/separate-bookings` | `src/skills/separate-bookings/SKILL.md` | Compare package vs split flight+hotel booking |
 
 ### Skill IO Contract
 ```typescript
@@ -292,8 +295,26 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 | `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ | ✅ | `vacation.liontravel.com/search?Destination=JP_OSA_5&...` |
 | `lifetour` | 五福旅遊 | package, flight, hotel | ✅ | ✅ | `tour.lifetour.com.tw/searchlist/tpe/0001-0003` |
 | `settour` | 東南旅遊 | package, flight, hotel | ✅ | ✅ | `tour.settour.com.tw/search?destinationCode=JX_3` |
+| `trip` | Trip.com | flight | ⚠️ scrape-only | ✅ | See URL templates below |
+| `booking` | Booking.com | hotel | ⚠️ scrape-only | ✅ | See URL templates below |
 | `tigerair` | 台灣虎航 | flight | ✅ | ❌ | — |
+| `agoda` | Agoda | hotel | ❌ | ❌ | Redirects incorrectly, not reliable |
+| `skyscanner` | Skyscanner | flight | ❌ | ❌ | Bot detection blocks scraping |
+| `google_flights` | Google Flights | flight | ❌ | ❌ | Dynamic rendering, not scrapable |
 | `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ | — |
+
+### Individual Booking OTA Notes
+
+**Trip.com** (flights):
+- Roundtrip search only shows outbound — always scrape return as separate one-way (`flighttype=ow`)
+- Prices in USD, convert to TWD (×32)
+- URL: `trip.com/flights/{origin_city}-to-{dest_city}/tickets-{origin}-{dest}?dcity={origin}&acity={dest}&ddate={YYYY-MM-DD}&flighttype=ow&class=y&quantity={pax}`
+
+**Booking.com** (hotels):
+- Use `zh-tw` locale, `selected_currency=TWD`
+- Requires `dest_id` (not city name): Osaka=-240905, Tokyo=-246227, Kyoto=-235402
+- URL: `booking.com/searchresults.zh-tw.html?dest_id={id}&dest_type=city&checkin={YYYY-MM-DD}&checkout={YYYY-MM-DD}&group_adults={n}&no_rooms=1&selected_currency=TWD`
+- First search may fail → retry or add `&nflt=class%3D3` filter
 
 ### OTA Search URL Patterns
 - **BestTour**: Uses activity pages (`/e_web/activity?v=japan_kansai`), NOT `/e_web/DOM/` (404)
@@ -319,12 +340,15 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 ├── data/
 │   ├── travel-plan.json       # Main travel plan (v4.2.0)
 │   ├── state.json             # Event-driven state tracking
-│   ├── destinations.json      # Destination configuration (multi-destination)
-│   ├── ota-sources.json       # OTA source registry (multi-OTA)
+│   ├── destinations.json      # Destination + origin config (v1.1.0)
+│   ├── ota-sources.json       # OTA registry with limitations/price_factors
+│   ├── holidays/              # Holiday calendars by country/year
+│   │   └── taiwan-2026.json   # Taiwan 2026 holidays + makeup workdays
+│   ├── osaka-trip-comparison.json  # Sample trip comparison input
 │   ├── besttour-*.json        # BestTour scrape results (date-specific pricing)
 │   ├── liontravel-*.json      # Lion Travel scrape results
-│   ├── eztravel-*.json        # ezTravel scrape results
-│   ├── tigerair-*.json        # Tigerair scrape results
+│   ├── trip-*.json            # Trip.com flight scrape results
+│   ├── booking-*.json         # Booking.com hotel scrape results
 │   └── flights-cache.json     # Legacy flight cache (Nagoya research)
 ├── src/
 │   ├── config/                # Skill pack configuration
@@ -339,8 +363,12 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   │   ├── runner.ts          # Core cascade logic
 │   │   ├── types.ts           # TypeScript definitions
 │   │   └── wildcard.ts        # Schema-driven path expansion
+│   ├── utils/                 # Shared utility modules
+│   │   ├── index.ts           # Module exports
+│   │   └── leave-calculator.ts    # Leave day calculator with holiday support
 │   ├── cli/
 │   │   ├── cascade.ts         # Cascade CLI
+│   │   ├── compare-trips.ts   # Trip comparison CLI (package vs separate)
 │   │   ├── p3p4-test.ts       # Package skill test CLI
 │   │   └── travel-update.ts   # Travel plan update CLI
 │   ├── state/                 # State management
@@ -356,9 +384,11 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   │   ├── p3-flights/
 │   │   │   ├── SKILL.md
 │   │   │   └── references/legacy-spec.md
-│   │   └── p3p4-packages/
-│   │       ├── SKILL.md
-│   │       └── references/legacy-spec.md
+│   │   ├── p3p4-packages/
+│   │   │   ├── SKILL.md
+│   │   │   └── references/legacy-spec.md
+│   │   └── separate-bookings/
+│   │       └── SKILL.md       # Compare package vs split booking
 │   ├── status/
 │   │   ├── rule-evaluator.ts
 │   │   └── status-check.ts
@@ -371,8 +401,10 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 ├── scripts/
 │   ├── hooks/pre-commit       # Pre-commit TypeScript check
 │   ├── migrate-state-keys.ts  # State key migration (legacy → v4.2.0)
+│   ├── validate-data.ts       # Data consistency validator
 │   ├── scrape_package.py      # Generic Playwright OTA scraper
-│   └── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
+│   ├── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
+│   └── scrape_date_range.py   # Multi-date flight price comparison (Trip.com)
 ├── vitest.config.ts           # Test configuration
 └── tsconfig.json
 ```
@@ -468,10 +500,26 @@ npm run view:status         # Booking overview + fixed-time activities
 npm run view:itinerary      # Daily plan with transport
 npm run view:transport      # Transport summary (airport + daily)
 npm run view:bookings       # Pending/confirmed bookings only
+npm run view:prices -- --flights data/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
 
 # === COMPARISON ===
 npm run travel -- compare-offers --region osaka   # Compare scraped offers by region
 npm run travel -- compare-offers --region kansai --json  # JSON output
+
+# === LEAVE CALCULATOR ===
+npm run leave-calc 2026-02-24 2026-02-28       # Calculate leave days for date range
+npm run leave-calc 2026-02-27 2026-03-03       # Uses data/holidays/taiwan-2026.json
+
+# === TRIP COMPARISON ===
+npm run compare-trips -- --input data/osaka-trip-comparison.json
+npm run compare-trips -- --input data/osaka-trip-comparison.json --detailed
+
+# === DATA VALIDATION ===
+npm run validate:data                          # Check CLAUDE.md ↔ ota-sources.json consistency
+
+# === FLIGHT DATE RANGE SCRAPER ===
+python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
+  --origin tpe --dest kix --duration 5 --pax 2 -o data/date-range-prices.json
 
 # === MUTATIONS (write) ===
 npm run travel -- set-dates 2026-02-13 2026-02-17
@@ -501,6 +549,7 @@ To ensure visibility, agent must output content as direct text:
 |--------|---------|-----|
 | `scripts/scrape_package.py` | Generic package scraper | BestTour, any OTA |
 | `scripts/scrape_liontravel_dated.py` | Date-specific pricing | Lion Travel |
+| `scripts/scrape_date_range.py` | Multi-date flight comparison | Trip.com |
 
 **Requirements:**
 ```bash
@@ -515,6 +564,13 @@ python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/<CODE>" 
 
 # Scrape Lion Travel with dates
 python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 data/liontravel-search.json
+```
+
+**Usage (date range flight scraper):**
+```bash
+# Compare 4 departure dates, outbound + return one-way prices
+python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
+  --origin tpe --dest kix --duration 5 --pax 2 -o data/date-range-prices.json
 ```
 
 **Output:** Raw text + extracted elements saved to JSON. Manual parsing may be needed for:
@@ -563,6 +619,18 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ `compare-offers` CLI command (`npm run travel -- compare-offers --region osaka`)
 - ✅ Package link extraction in scraper for listing pages
 - ✅ Staleness warning for offers older than 24 hours
+- ✅ Taiwan/Japan holiday calculator (`src/utilities/holiday-calculator.ts`)
+- ✅ Leave day calculator CLI (`src/cli/calculate-leave.ts`)
+- ✅ Multi-date flight scraper (`scripts/scrape_date_range.py`)
+- ✅ `/separate-bookings` skill — compare package vs split flight+hotel
+- ✅ Trip.com, Booking.com, Agoda, Skyscanner, Google Flights in OTA registry
+- ✅ `view-prices` CLI command — package vs separate booking comparison matrix
+- ✅ Taiwan 2026 holiday calendar (`data/holidays/taiwan-2026.json`)
+- ✅ Leave day calculator with holiday awareness (`src/utils/leave-calculator.ts`)
+- ✅ Trip comparison CLI (`src/cli/compare-trips.ts`) — package vs separate with leave day analysis
+- ✅ Data consistency validator (`scripts/validate-data.ts`) — CLAUDE.md ↔ ota-sources.json
+- ✅ OTA limitations and price_factors in `ota-sources.json` (Trip.com, Booking.com, LionTravel)
+- ✅ Origin config with holiday calendar reference in `data/destinations.json` (v1.1.0)
 
 ## Storage Decision (DB)
 

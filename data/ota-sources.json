@@ -53,6 +53,15 @@
       "rate_limit": {
         "requests_per_minute": 5
       },
+      "limitations": [
+        "fit_only_no_group_tour",
+        "requires_specific_dest_code"
+      ],
+      "price_factors": [
+        "holiday_departure_premium",
+        "weekday_vs_weekend_pricing",
+        "date_specific_pricing_varies_dramatically"
+      ],
       "promo_codes": [
         {
           "code": "FITPKG",
@@ -173,6 +182,104 @@
       "supported": false,
       "scraper_script": null,
       "notes": "Japan domestic OTA"
+    },
+    "trip": {
+      "source_id": "trip",
+      "display_name": "Trip.com",
+      "display_name_en": "Trip.com",
+      "types": ["flight"],
+      "base_url": "https://www.trip.com",
+      "markets": ["TW", "JP", "INTL"],
+      "currency": "USD",
+      "supported": false,
+      "scraper_script": "scripts/scrape_package.py",
+      "search_url_templates": {
+        "flight_roundtrip": "https://www.trip.com/flights/{origin}-to-{dest}/tickets-{origin_code}-{dest_code}?dcity={origin_code}&acity={dest_code}&ddate={depart_date}&rdate={return_date}&flighttype=rt&class=y&quantity={pax}",
+        "flight_oneway": "https://www.trip.com/flights/{origin}-to-{dest}/tickets-{origin_code}-{dest_code}?dcity={origin_code}&acity={dest_code}&ddate={depart_date}&flighttype=ow&class=y&quantity={pax}",
+        "hotel": "https://www.trip.com/hotels/{city}-hotel-detail-{hotel_id}/?checkIn={checkin}&checkOut={checkout}&adult={adults}"
+      },
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
+      "limitations": [
+        "no_flight_numbers_in_search",
+        "hotel_requires_login",
+        "roundtrip_shows_outbound_only"
+      ],
+      "price_factors": [
+        "return_day_affects_price",
+        "lcc_baggage_not_included"
+      ],
+      "notes": "Flight search works via Playwright. Hotel details require login. Roundtrip search only shows outbound - scrape return as separate one-way. Prices in USD, convert to TWD (~32)."
+    },
+    "booking": {
+      "source_id": "booking",
+      "display_name": "Booking.com",
+      "display_name_en": "Booking.com",
+      "types": ["hotel"],
+      "base_url": "https://www.booking.com",
+      "markets": ["TW", "JP", "INTL"],
+      "currency": "TWD",
+      "supported": false,
+      "scraper_script": "scripts/scrape_package.py",
+      "search_url_templates": {
+        "search": "https://www.booking.com/searchresults.{lang}.html?dest_id={dest_id}&dest_type=city&checkin={checkin}&checkout={checkout}&group_adults={adults}&no_rooms={rooms}&selected_currency={currency}",
+        "hotel": "https://www.booking.com/hotel/{country}/{hotel_slug}.{lang}.html?checkin={checkin}&checkout={checkout}"
+      },
+      "destination_ids": {
+        "osaka": "-240905",
+        "tokyo": "-246227",
+        "kyoto": "-235402"
+      },
+      "rate_limit": {
+        "requests_per_minute": 3
+      },
+      "limitations": [
+        "cloudflare_protection",
+        "search_may_need_retry",
+        "requires_dest_id_parameter"
+      ],
+      "price_factors": [
+        "price_per_night_not_total",
+        "taxes_may_be_separate"
+      ],
+      "notes": "Cloudflare bot protection. Use lang=zh-tw for Traditional Chinese. Initial search may not load results - retry or use direct hotel URL. Prices shown per night."
+    },
+    "agoda": {
+      "source_id": "agoda",
+      "display_name": "Agoda",
+      "display_name_en": "Agoda",
+      "types": ["hotel"],
+      "base_url": "https://www.agoda.com",
+      "markets": ["TW", "JP", "INTL"],
+      "currency": "TWD",
+      "supported": false,
+      "scraper_script": null,
+      "notes": "Bot detection - search often redirects to wrong location. Not recommended for scraping."
+    },
+    "skyscanner": {
+      "source_id": "skyscanner",
+      "display_name": "Skyscanner",
+      "display_name_en": "Skyscanner",
+      "types": ["flight"],
+      "base_url": "https://www.skyscanner.com.tw",
+      "markets": ["TW", "INTL"],
+      "currency": "TWD",
+      "supported": false,
+      "scraper_script": null,
+      "notes": "Strong bot detection - returns 'Are you a robot?' page. Not scrapable."
+    },
+    "google_flights": {
+      "source_id": "google_flights",
+      "display_name": "Google Flights",
+      "display_name_en": "Google Flights",
+      "types": ["flight"],
+      "base_url": "https://www.google.com/travel/flights",
+      "markets": ["INTL"],
+      "currency": "TWD",
+      "supported": false,
+      "scraper_script": null,
+      "notes": "Heavy JS rendering - search results don't load via Playwright. Use for manual price verification only."
     }
   }
 }

@@ -1,0 +1,124 @@
+{
+  "country": "taiwan",
+  "year": 2026,
+  "description": "Taiwan public holidays and makeup workdays for 2026",
+  "holidays": {
+    "01-01": {
+      "name": "元旦",
+      "name_en": "New Year's Day",
+      "type": "national"
+    },
+    "01-02": {
+      "name": "元旦彈性放假",
+      "name_en": "New Year Holiday",
+      "type": "substitute"
+    },
+    "02-14": {
+      "name": "春節假期",
+      "name_en": "Lunar New Year Holiday",
+      "type": "substitute"
+    },
+    "02-15": {
+      "name": "除夕",
+      "name_en": "Lunar New Year Eve",
+      "type": "national"
+    },
+    "02-16": {
+      "name": "春節初一",
+      "name_en": "Lunar New Year Day 1",
+      "type": "national"
+    },
+    "02-17": {
+      "name": "春節初二",
+      "name_en": "Lunar New Year Day 2",
+      "type": "national"
+    },
+    "02-18": {
+      "name": "春節初三",
+      "name_en": "Lunar New Year Day 3",
+      "type": "national"
+    },
+    "02-19": {
+      "name": "春節初四",
+      "name_en": "Lunar New Year Day 4",
+      "type": "national"
+    },
+    "02-20": {
+      "name": "春節初五",
+      "name_en": "Lunar New Year Day 5",
+      "type": "national"
+    },
+    "02-27": {
+      "name": "228彈性放假",
+      "name_en": "228 Peace Memorial Day (Substitute)",
+      "type": "substitute"
+    },
+    "02-28": {
+      "name": "228和平紀念日",
+      "name_en": "228 Peace Memorial Day",
+      "type": "national"
+    },
+    "04-03": {
+      "name": "兒童節彈性放假",
+      "name_en": "Children's Day (Substitute)",
+      "type": "substitute"
+    },
+    "04-04": {
+      "name": "兒童節",
+      "name_en": "Children's Day",
+      "type": "national"
+    },
+    "04-05": {
+      "name": "清明節",
+      "name_en": "Tomb Sweeping Day",
+      "type": "national"
+    },
+    "05-31": {
+      "name": "端午節",
+      "name_en": "Dragon Boat Festival",
+      "type": "national"
+    },
+    "06-01": {
+      "name": "端午節彈性放假",
+      "name_en": "Dragon Boat Festival (Substitute)",
+      "type": "substitute"
+    },
+    "10-04": {
+      "name": "中秋節",
+      "name_en": "Mid-Autumn Festival",
+      "type": "national"
+    },
+    "10-05": {
+      "name": "中秋節彈性放假",
+      "name_en": "Mid-Autumn Festival (Substitute)",
+      "type": "substitute"
+    },
+    "10-10": {
+      "name": "國慶日",
+      "name_en": "National Day",
+      "type": "national"
+    },
+    "10-11": {
+      "name": "國慶日彈性放假",
+      "name_en": "National Day (Substitute)",
+      "type": "substitute"
+    }
+  },
+  "makeup_workdays": {
+    "02-07": {
+      "name": "春節補班",
+      "name_en": "Lunar New Year Makeup",
+      "for_holiday": "02-14"
+    },
+    "02-21": {
+      "name": "春節補班",
+      "name_en": "Lunar New Year Makeup",
+      "for_holiday": "02-20"
+    },
+    "06-06": {
+      "name": "端午節補班",
+      "name_en": "Dragon Boat Makeup",
+      "for_holiday": "06-01"
+    }
+  }
+}

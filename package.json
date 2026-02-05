@@ -18,7 +18,11 @@
     "view:status": "ts-node src/cli/travel-update.ts status --full",
     "view:itinerary": "ts-node src/cli/travel-update.ts itinerary",
     "view:transport": "ts-node src/cli/travel-update.ts transport",
-    "view:bookings": "ts-node src/cli/travel-update.ts bookings"
+    "view:bookings": "ts-node src/cli/travel-update.ts bookings",
+    "view:prices": "ts-node src/cli/travel-update.ts view-prices",
+    "validate:data": "ts-node scripts/validate-data.ts",
+    "compare-trips": "ts-node src/cli/compare-trips.ts",
+    "leave-calc": "ts-node src/utils/leave-calculator.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -1,0 +1,120 @@
+{
+  "calendarPath": "data/holidays/taiwan-2026.json",
+  "defaultBaggageFee": 1750,
+  "trips": [
+    {
+      "id": "2/24-LionTravel",
+      "type": "package",
+      "startDate": "2026-02-24",
+      "endDate": "2026-02-28",
+      "pax": 2,
+      "packagePrice": 40740,
+      "currency": "TWD",
+      "notes": "LionTravel FIT package"
+    },
+    {
+      "id": "2/25-LionTravel",
+      "type": "package",
+      "startDate": "2026-02-25",
+      "endDate": "2026-03-01",
+      "pax": 2,
+      "packagePrice": 54380,
+      "currency": "TWD",
+      "notes": "LionTravel FIT package"
+    },
+    {
+      "id": "2/27-LionTravel",
+      "type": "package",
+      "startDate": "2026-02-27",
+      "endDate": "2026-03-03",
+      "pax": 2,
+      "packagePrice": 59171,
+      "currency": "TWD",
+      "notes": "LionTravel FIT package"
+    },
+    {
+      "id": "2/24-Separate",
+      "type": "separate",
+      "startDate": "2026-02-24",
+      "endDate": "2026-02-28",
+      "pax": 2,
+      "outboundFlight": {
+        "airline": "AirAsia",
+        "departure": "TPE",
+        "arrival": "KIX",
+        "isLCC": true
+      },
+      "returnFlight": {
+        "airline": "Thai Vietjet",
+        "departure": "KIX",
+        "arrival": "TPE",
+        "isLCC": true
+      },
+      "flightPriceTotal": 19764,
+      "hotel": {
+        "name": "Onyado Nono Namba",
+        "pricePerNight": 3042,
+        "nights": 4
+      },
+      "hotelPriceTotal": 12168,
+      "currency": "TWD",
+      "notes": "AirAsia US$213 + Thai Vietjet US$390 (rate: 32.8)"
+    },
+    {
+      "id": "2/25-Separate",
+      "type": "separate",
+      "startDate": "2026-02-25",
+      "endDate": "2026-03-01",
+      "pax": 2,
+      "outboundFlight": {
+        "airline": "AirAsia",
+        "departure": "TPE",
+        "arrival": "KIX",
+        "isLCC": true
+      },
+      "returnFlight": {
+        "airline": "Peach",
+        "departure": "KIX",
+        "arrival": "TPE",
+        "isLCC": true
+      },
+      "flightPriceTotal": 26602,
+      "hotel": {
+        "name": "Onyado Nono Namba",
+        "pricePerNight": 3042,
+        "nights": 4
+      },
+      "hotelPriceTotal": 12168,
+      "currency": "TWD",
+      "notes": "AirAsia US$289 + Peach US$522 (rate: 32.8)"
+    },
+    {
+      "id": "2/27-Separate",
+      "type": "separate",
+      "startDate": "2026-02-27",
+      "endDate": "2026-03-03",
+      "pax": 2,
+      "outboundFlight": {
+        "airline": "AirAsia",
+        "departure": "TPE",
+        "arrival": "KIX",
+        "isLCC": true
+      },
+      "returnFlight": {
+        "airline": "Thai Lion",
+        "departure": "KIX",
+        "arrival": "TPE",
+        "isLCC": true
+      },
+      "flightPriceTotal": 26765,
+      "hotel": {
+        "name": "Onyado Nono Namba",
+        "pricePerNight": 3042,
+        "nights": 4
+      },
+      "hotelPriceTotal": 12168,
+      "currency": "TWD",
+      "notes": "AirAsia US$365 + Thai Lion US$451 (rate: 32.8)"
+    }
+  ]
+}

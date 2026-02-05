@@ -1,6 +1,15 @@
 {
   "$schema": "./schemas/destinations.schema.json",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "origins": {
+    "taiwan": {
+      "country_code": "TW",
+      "currency": "TWD",
+      "timezone": "Asia/Taipei",
+      "holiday_calendar": "data/holidays/taiwan-2026.json",
+      "primary_airports": ["TPE", "TSA", "RMQ", "KHH"]
+    }
+  },
   "destinations": {
     "tokyo_2026": {
       "slug": "tokyo_2026",
@@ -11,7 +20,8 @@
       "currency": "JPY",
       "markets": ["TW", "JP"],
       "primary_airports": ["NRT", "HND"],
-      "language": "ja"
+      "language": "ja",
+      "origin": "taiwan"
     },
     "nagoya_2026": {
       "slug": "nagoya_2026",
@@ -22,7 +32,8 @@
       "currency": "JPY",
       "markets": ["TW", "JP"],
       "primary_airports": ["NGO"],
-      "language": "ja"
+      "language": "ja",
+      "origin": "taiwan"
     },
     "osaka_2026": {
       "slug": "osaka_2026",
@@ -33,7 +44,8 @@
       "currency": "JPY",
       "markets": ["TW", "JP"],
       "primary_airports": ["KIX", "ITM"],
-      "language": "ja"
+      "language": "ja",
+      "origin": "taiwan"
     },
     "osaka_kyoto_2026": {
       "slug": "osaka_kyoto_2026",
@@ -44,8 +56,10 @@
       "currency": "JPY",
       "markets": ["TW", "JP"],
       "primary_airports": ["KIX", "ITM"],
-      "language": "ja"
+      "language": "ja",
+      "origin": "taiwan"
     }
   },
-  "default_destination": "tokyo_2026"
+  "default_destination": "tokyo_2026",
+  "default_origin": "taiwan"
 }
