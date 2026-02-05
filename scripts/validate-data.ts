@@ -4,6 +4,9 @@
  *
  * Validates consistency between:
  * - CLAUDE.md OTA table and data/ota-sources.json
+ * - CLAUDE.md completed items vs actual files on disk
+ * - Skill SKILL.md file existence
+ * - node_modules readiness
  * - Currency settings in JSON files
  * - Hardcoded values in scripts (pax, prices)
  * - Scraper script file existence
@@ -11,6 +14,7 @@
  * Usage:
  *   npm run validate:data
  *   npx ts-node scripts/validate-data.ts
+ *   npx ts-node scripts/validate-data.ts --doctor   # Full health check
  */
 
 import * as fs from 'fs';
@@ -311,12 +315,136 @@ function validateHolidayCalendars(): void {
 }
 
 /**
+ * Validate CLAUDE.md completed items: extract file paths and check they exist.
+ *
+ * Matches patterns like:
+ *   - ✅ Some description (`src/foo/bar.ts`)
+ *   - ✅ Some description (`src/foo/bar.ts`, `src/baz.ts`)
+ */
+function validateCompletedItems(): void {
+  const claudeMd = readFile('CLAUDE.md');
+  if (!claudeMd) return;
+
+  const completedLineRe = /^- ✅ .+$/gm;
+  const filePathRe = /`((?:src|scripts|data|tests)\/[^`]+\.[a-z]+)`/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = completedLineRe.exec(claudeMd)) !== null) {
+    const line = match[0];
+    const lineNum = claudeMd.substring(0, match.index).split('\n').length;
+
+    let pathMatch: RegExpExecArray | null;
+    filePathRe.lastIndex = 0;
+    while ((pathMatch = filePathRe.exec(line)) !== null) {
+      const filePath = pathMatch[1];
+      if (!fileExists(filePath)) {
+        addResult(
+          'completed-items',
+          'error',
+          `Completed item references missing file: ${filePath}`,
+          'CLAUDE.md',
+          lineNum
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Validate that all declared skills have SKILL.md files.
+ * Parses the skill table from CLAUDE.md and checks each path.
+ */
+function validateSkillFiles(): void {
+  const claudeMd = readFile('CLAUDE.md');
+  if (!claudeMd) return;
+
+  // Match skill table rows: | `skill-name` | `src/skills/foo/SKILL.md` | ...
+  const skillPathRe = /`(src\/skills\/[^`]+\/SKILL\.md)`/g;
+  let match: RegExpExecArray | null;
+  const checked = new Set<string>();
+
+  while ((match = skillPathRe.exec(claudeMd)) !== null) {
+    const skillPath = match[1];
+    if (checked.has(skillPath)) continue;
+    checked.add(skillPath);
+
+    if (!fileExists(skillPath)) {
+      addResult('skill-files', 'error', `Skill file not found: ${skillPath}`, 'CLAUDE.md');
+    }
+  }
+
+  // Also scan the src/skills directory for any SKILL.md not listed in CLAUDE.md
+  const skillsDir = path.join(PROJECT_ROOT, 'src/skills');
+  if (fs.existsSync(skillsDir)) {
+    for (const dir of fs.readdirSync(skillsDir)) {
+      const skillMd = path.join('src/skills', dir, 'SKILL.md');
+      if (fileExists(skillMd) && !checked.has(skillMd)) {
+        addResult('skill-files', 'warning', `Skill exists but not listed in CLAUDE.md: ${skillMd}`);
+      }
+    }
+  }
+}
+
+/**
+ * Validate node_modules readiness.
+ * Checks that node_modules exists and key binaries are available.
+ */
+function validateDependencies(): void {
+  const nodeModules = path.join(PROJECT_ROOT, 'node_modules');
+  if (!fs.existsSync(nodeModules)) {
+    addResult('dependencies', 'error', 'node_modules not found — run "npm install"');
+    return;
+  }
+
+  // Check key binaries
+  const requiredBins = ['ts-node', 'tsc', 'vitest'];
+  for (const bin of requiredBins) {
+    const binPath = path.join(nodeModules, '.bin', bin);
+    if (!fs.existsSync(binPath)) {
+      addResult('dependencies', 'error', `Missing binary: node_modules/.bin/${bin} — run "npm install"`);
+    }
+  }
+
+  // Check pre-commit hook is installed
+  const hookPath = path.join(PROJECT_ROOT, '.git/hooks/pre-commit');
+  if (!fs.existsSync(hookPath)) {
+    addResult('dependencies', 'warning', 'Pre-commit hook not installed — run "npm run hooks:install"');
+  }
+}
+
+/**
+ * Validate that CLI scripts referenced in package.json exist.
+ */
+function validateCliScripts(): void {
+  const pkg = loadJson<Record<string, unknown>>('package.json');
+  if (!pkg) return;
+
+  const scripts = pkg.scripts as Record<string, string> | undefined;
+  if (!scripts) return;
+
+  // Extract ts-node source paths from script commands
+  const tsNodeRe = /ts-node\s+(src\/[^\s]+\.ts|scripts\/[^\s]+\.ts)/;
+
+  for (const [name, cmd] of Object.entries(scripts)) {
+    const match = tsNodeRe.exec(cmd);
+    if (match) {
+      const scriptPath = match[1];
+      if (!fileExists(scriptPath)) {
+        addResult('cli-scripts', 'error', `npm script "${name}" references missing file: ${scriptPath}`, 'package.json');
+      }
+    }
+  }
+}
+
+/**
  * Main validation runner
  */
 function main(): void {
-  console.log('Running data consistency validation...\n');
+  const isDoctor = process.argv.includes('--doctor');
+  const label = isDoctor ? 'Project health check (doctor)' : 'Data consistency validation';
+  console.log(`Running ${label}...\n`);
 
-  // Run all validations
+  // Always run: data consistency checks
   const sources = validateOtaSources();
   if (sources) {
     validateClaudeMdConsistency(sources);
@@ -324,6 +452,16 @@ function main(): void {
   validatePythonScripts();
   validateDestinations();
   validateHolidayCalendars();
+
+  // Always run: documentation ↔ code drift checks
+  validateCompletedItems();
+  validateSkillFiles();
+  validateCliScripts();
+
+  // Doctor mode: also check environment readiness
+  if (isDoctor) {
+    validateDependencies();
+  }
 
   // Group results by severity
   const errors = results.filter(r => r.severity === 'error');

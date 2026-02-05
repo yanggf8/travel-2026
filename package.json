@@ -21,6 +21,7 @@
     "view:bookings": "ts-node src/cli/travel-update.ts bookings",
     "view:prices": "ts-node src/cli/travel-update.ts view-prices",
     "validate:data": "ts-node scripts/validate-data.ts",
+    "doctor": "ts-node scripts/validate-data.ts --doctor",
     "compare-trips": "ts-node src/cli/compare-trips.ts",
     "compare-dates": "ts-node src/cli/compare-dates.ts",
     "normalize-flights": "ts-node src/utils/flight-normalizer.ts",

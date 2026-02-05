@@ -117,7 +117,7 @@ User intent                          → Skill / Action
 "find flights only"                  → /p3-flights (uses /scrape-ota)
 "compare offers" / "which is cheaper"→ read process_3_4_packages.results
 "book separately" / "split booking"  → /separate-bookings
-"how many leave days"                → npx ts-node src/cli/calculate-leave.ts
+"how many leave days"                → npm run leave-calc
 "book this" / "select offer"         → npm run travel -- select-offer
 "plan the days" / "itinerary"        → /p5-itinerary
 "show status" / "where are we"       → npm run view:status
@@ -536,8 +536,9 @@ npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4 --hotel-
 npm run normalize-flights -- data/trip-feb24-out.json --top 5
 npm run normalize-flights -- --scan                   # Scan all flight data
 
-# === DATA VALIDATION ===
-npm run validate:data                          # Check CLAUDE.md ↔ ota-sources.json consistency
+# === DATA VALIDATION & HEALTH CHECK ===
+npm run validate:data                          # Check CLAUDE.md ↔ code consistency
+npm run doctor                                 # Full health check (includes dependency + env checks)
 
 # === FLIGHT DATE RANGE SCRAPER ===
 python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
@@ -642,7 +643,7 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ Package link extraction in scraper for listing pages
 - ✅ Staleness warning for offers older than 24 hours
 - ✅ Holiday calculator (`src/utilities/holiday-calculator.ts`) — cached calendar loading, isHoliday/isWorkday/isMakeupWorkday queries, calculateLeave convenience wrapper, config-driven via destinations.json
-- ✅ Leave day calculator CLI (`src/cli/calculate-leave.ts`)
+- ✅ Leave day calculator CLI (`src/utils/leave-calculator.ts`)
 - ✅ Multi-date flight scraper (`scripts/scrape_date_range.py`)
 - ✅ `/separate-bookings` skill — compare package vs split flight+hotel
 - ✅ Trip.com, Booking.com, Agoda, Skyscanner, Google Flights in OTA registry
@@ -657,6 +658,10 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ OTA domain knowledge reference (`src/skills/travel-shared/references/ota-knowledge.json`)
 - ✅ Flight data normalizer (`src/utils/flight-normalizer.ts`) — Trip.com → structured flights
 - ✅ Compare-dates CLI (`src/cli/compare-dates.ts`) — FIT vs separate across date range with leave days
+- ✅ `npm run doctor` health check — validates completed items exist, skill files exist, CLI scripts resolve, node_modules ready
+- ✅ Pre-commit hook enhanced — runs both typecheck and validate:data
+- ✅ Destination reference stubs for nagoya and osaka (`src/skills/travel-shared/references/destinations/`)
+- ✅ `/separate-bookings` skill SKILL.md created (`src/skills/separate-bookings/SKILL.md`)
 
 ## Storage Decision (DB)
 

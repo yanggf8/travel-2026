@@ -1,0 +1,38 @@
+{
+  "destination_id": "osaka",
+  "display_name": "Osaka",
+  "country": "Japan",
+  "timezone": "Asia/Tokyo",
+  "currency": "JPY",
+  "primary_airports": ["KIX", "ITM"],
+
+  "areas": [
+    {
+      "id": "namba",
+      "name": "Namba",
+      "type": "commercial",
+      "stations": ["Namba", "Shinsaibashi"],
+      "vibe": "Street food, nightlife, Dotonbori",
+      "best_for": ["food", "nightlife", "shopping"]
+    },
+    {
+      "id": "umeda",
+      "name": "Umeda / Osaka Station",
+      "type": "commercial",
+      "stations": ["Osaka", "Umeda", "Nishi-Umeda"],
+      "vibe": "Major transit hub, department stores, observation decks",
+      "best_for": ["transit", "shopping", "views"]
+    },
+    {
+      "id": "shinsekai",
+      "name": "Shinsekai",
+      "type": "traditional",
+      "stations": ["Dobutsuen-mae", "Shin-Imamiya"],
+      "vibe": "Retro district, kushikatsu, Tsutenkaku Tower",
+      "best_for": ["food", "culture", "sightseeing"]
+    }
+  ],
+
+  "clusters": [],
+  "pois": []
+}

@@ -1,0 +1,31 @@
+{
+  "destination_id": "nagoya",
+  "display_name": "Nagoya",
+  "country": "Japan",
+  "timezone": "Asia/Tokyo",
+  "currency": "JPY",
+  "primary_airports": ["NGO"],
+  "status": "archived",
+
+  "areas": [
+    {
+      "id": "nagoya_station",
+      "name": "Nagoya Station",
+      "type": "commercial",
+      "stations": ["Nagoya"],
+      "vibe": "Major transit hub, shopping complexes",
+      "best_for": ["transit", "shopping", "food"]
+    },
+    {
+      "id": "sakae",
+      "name": "Sakae",
+      "type": "commercial",
+      "stations": ["Sakae", "Yaba-cho"],
+      "vibe": "Downtown entertainment and shopping district",
+      "best_for": ["shopping", "nightlife", "food"]
+    }
+  ],
+
+  "clusters": [],
+  "pois": []
+}

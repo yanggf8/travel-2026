@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-commit hook: typecheck before commit
+# Pre-commit hook: typecheck + data validation before commit
 # Install: npm run hooks:install
 
 echo "Running typecheck..."
@@ -11,3 +11,14 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "✅ Typecheck passed"
+
+echo ""
+echo "Running data validation..."
+npm run validate:data
+
+if [ $? -ne 0 ]; then
+  echo "❌ Data validation failed. Fix errors before committing."
+  exit 1
+fi
+
+echo "✅ Data validation passed"
