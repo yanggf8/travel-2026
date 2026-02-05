@@ -118,6 +118,12 @@ Commands:
     If --start/--end are omitted, uses the destination confirmed dates.
     Example: search-offers --dest tokyo_2026 --pax 2 --types package --json
 
+  compare-offers --region <name> [--date YYYY-MM-DD] [--pax N] [--json]
+    Compare scraped offers from data/*.json files by region.
+    Reads existing scraped data files (no new scraping).
+    region: osaka, kansai, tokyo, etc. (matches filenames like *-osaka-*.json)
+    Example: compare-offers --region osaka --date 2026-02-26 --pax 2
+
   status
     Show current plan status summary.
 
@@ -1754,6 +1760,48 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'compare-offers': {
+        const region = optionValue('--region');
+        if (!region) {
+          console.error('Error: compare-offers requires --region <name>');
+          console.error('Example: compare-offers --region osaka');
+          process.exit(1);
+        }
+
+        const filterDate = optionValue('--date');
+        if (filterDate) {
+          const dateResult = validateIsoDate(filterDate);
+          if (!dateResult.ok) {
+            console.error(`Error: --date: ${dateResult.error}`);
+            process.exit(1);
+          }
+        }
+
+        let pax = 2;
+        if (paxOpt) {
+          const paxResult = validatePositiveInt(paxOpt, '--pax');
+          if (!paxResult.ok) {
+            console.error(`Error: ${paxResult.error}`);
+            process.exit(1);
+          }
+          pax = paxResult.value;
+        }
+
+        const offers = loadScrapedOffers(region, filterDate, pax);
+        if (offers.length === 0) {
+          console.log(`\nNo scraped offers found for region "${region}".`);
+          console.log(`Make sure you have data/*${region}*.json files from previous scrapes.`);
+          process.exit(1);
+        }
+
+        if (jsonOpt) {
+          console.log(JSON.stringify(offers, null, 2));
+        } else {
+          printOfferComparison(offers, region, filterDate, pax);
+        }
+        break;
+      }
+
       default:
         console.error(`Unknown command: ${command}`);
         console.log(HELP);
@@ -2080,6 +2128,298 @@ function computeBestValue(datePricing: any, pax: number): { date: string; price_
     if (!best || candidate.price_per_person < best.price_per_person) best = candidate;
   }
   return best;
+}
+
+interface CompareOffer {
+  file: string;
+  source_id: string;
+  source_name: string;
+  scraped_at: string;
+  url: string;
+  price_per_person: number | null;
+  price_total: number | null;
+  currency: string;
+  airline: string;
+  flight_outbound: string;
+  flight_return: string;
+  hotel: string;
+  type: 'package' | 'group_tour' | 'fit';
+  dates: string;
+}
+
+function loadScrapedOffers(region: string, filterDate: string | undefined, pax: number): CompareOffer[] {
+  const dataDir = path.join(process.cwd(), 'data');
+  if (!fs.existsSync(dataDir)) return [];
+
+  const files = fs.readdirSync(dataDir).filter(f =>
+    f.endsWith('.json') &&
+    f.toLowerCase().includes(region.toLowerCase()) &&
+    !f.includes('schema') &&
+    !f.includes('travel-plan') &&
+    !f.includes('destinations') &&
+    !f.includes('ota-sources')
+  );
+
+  const offers: CompareOffer[] = [];
+
+  for (const file of files) {
+    try {
+      const filePath = path.join(dataDir, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const data = JSON.parse(content);
+      const offer = parseScrapedFile(file, data, pax);
+      if (offer) offers.push(offer);
+    } catch {
+      // Skip files that can't be parsed
+    }
+  }
+
+  // Sort by price (lowest first)
+  offers.sort((a, b) => {
+    if (a.price_per_person === null && b.price_per_person === null) return 0;
+    if (a.price_per_person === null) return 1;
+    if (b.price_per_person === null) return -1;
+    return a.price_per_person - b.price_per_person;
+  });
+
+  return offers;
+}
+
+function parseScrapedFile(file: string, data: any, pax: number): CompareOffer | null {
+  if (!data || typeof data !== 'object') return null;
+
+  const url = data.url || '';
+  const scrapedAt = data.scraped_at || '';
+  const sourceId = inferSourceIdFromUrl(url) || inferSourceIdFromFilename(file);
+  const currency = getOtaSourceCurrency(sourceId);
+
+  // Source display names
+  const sourceNames: Record<string, string> = {
+    besttour: '喜鴻假期',
+    liontravel: '雄獅旅遊',
+    lifetour: '五福旅遊',
+    settour: '東南旅遊',
+    eztravel: '易遊網',
+    tigerair: '台灣虎航',
+  };
+
+  // Determine type from URL or content
+  let type: 'package' | 'group_tour' | 'fit' = 'package';
+  if (url.includes('vacation.liontravel.com') || url.includes('自由配')) {
+    type = 'fit';
+  } else if (url.includes('tour.') || url.includes('searchlist')) {
+    type = 'group_tour';
+  }
+
+  // Try to extract price from various locations
+  let pricePerPerson: number | null = null;
+  let priceTotal: number | null = null;
+
+  // Check extracted.date_pricing first (BestTour calendar)
+  const extracted = data.extracted || {};
+  if (extracted.date_pricing && Object.keys(extracted.date_pricing).length > 0) {
+    const best = computeBestValue(extracted.date_pricing, pax);
+    if (best) {
+      pricePerPerson = best.price_per_person;
+      priceTotal = best.price_total;
+    }
+  }
+
+  // Fallback 1: Check extracted.price.per_person (Lifetour/Settour parsers)
+  if (pricePerPerson === null && extracted.price?.per_person) {
+    const pp = extracted.price.per_person as number;
+    pricePerPerson = pp;
+    priceTotal = pp * pax;
+  }
+
+  // Fallback 2: Parse from extracted_elements.price_element
+  if (pricePerPerson === null) {
+    const priceElements = data.extracted_elements?.price_element || [];
+    for (const pe of priceElements) {
+      const match = String(pe).match(/(\d{1,3}(?:,\d{3})*)/);
+      if (match) {
+        const num = parseInt(match[1].replace(/,/g, ''), 10);
+        if (num > 10000 && num < 200000) {
+          pricePerPerson = num;
+          priceTotal = num * pax;
+          break;
+        }
+      }
+    }
+  }
+
+  // Fallback 3: Parse from raw_text patterns (NT$XX,XXX or TWD XX,XXX)
+  if (pricePerPerson === null && data.raw_text) {
+    const pricePatterns = [
+      /NT\$\s*([\d,]+)/g,
+      /TWD\s*([\d,]+)/g,
+      /售價[：:]\s*([\d,]+)/g,
+      /團費[：:]\s*([\d,]+)/g,
+      /(\d{2,3},\d{3})\s*元?\/人/g,
+    ];
+    for (const pattern of pricePatterns) {
+      const matches = [...String(data.raw_text).matchAll(pattern)];
+      for (const m of matches) {
+        const num = parseInt(m[1].replace(/,/g, ''), 10);
+        if (num > 15000 && num < 150000) {
+          pricePerPerson = num;
+          priceTotal = num * pax;
+          break;
+        }
+      }
+      if (pricePerPerson !== null) break;
+    }
+  }
+
+  // Extract flight info - prefer structured extracted.flight data
+  let airline = '';
+  let flightOutbound = '';
+  let flightReturn = '';
+
+  // Check extracted.flight first (structured parser output)
+  if (extracted.flight?.outbound?.airline) {
+    airline = extracted.flight.outbound.airline;
+  }
+  if (extracted.flight?.outbound?.departure_time && extracted.flight?.outbound?.arrival_time) {
+    flightOutbound = `${extracted.flight.outbound.departure_time} → ${extracted.flight.outbound.arrival_time}`;
+  }
+  if (extracted.flight?.return?.departure_time && extracted.flight?.return?.arrival_time) {
+    flightReturn = `${extracted.flight.return.departure_time} → ${extracted.flight.return.arrival_time}`;
+  }
+
+  // Fallback: parse from extracted_elements.flight_element
+  if (!airline || !flightOutbound) {
+    const flightElements = data.extracted_elements?.flight_element || [];
+    for (const fe of flightElements) {
+      const text = String(fe);
+      if (text.includes('去程') && !flightOutbound) {
+        const airlineMatch = text.match(/(長榮航空|華航|中華航空|虎航|樂桃|捷星|酷航|星宇|亞洲航空|Scoot|Peach|EVA|China Airlines|BR\d+|IT\d+|TR\d+|CI\d+|D7\d+)/i);
+        if (airlineMatch && !airline) airline = airlineMatch[1];
+        const timeMatch = text.match(/(\d{2}:\d{2}).*?(\d{2}:\d{2})/);
+        if (timeMatch && !flightOutbound) flightOutbound = `${timeMatch[1]} → ${timeMatch[2]}`;
+      }
+      if (text.includes('回程') && !flightReturn) {
+        const timeMatch = text.match(/(\d{2}:\d{2}).*?(\d{2}:\d{2})/);
+        if (timeMatch) flightReturn = `${timeMatch[1]} → ${timeMatch[2]}`;
+      }
+    }
+  }
+
+  // Extract hotel info - prefer structured extracted.hotel data
+  let hotel = '';
+  if (extracted.hotel?.name) {
+    hotel = extracted.hotel.name;
+  } else if (Array.isArray(extracted.hotel?.names) && extracted.hotel.names.length > 0) {
+    hotel = extracted.hotel.names[0];
+  }
+
+  // Fallback: parse from extracted_elements.hotel_element
+  if (!hotel) {
+    const hotelElements = data.extracted_elements?.hotel_element || [];
+    if (hotelElements.length > 0) {
+      hotel = String(hotelElements[0]).split('\n')[0].trim();
+    }
+  }
+
+  // Extract dates from raw_text or URL
+  let dates = '';
+  const rawText = data.raw_text || '';
+  const dateMatch = rawText.match(/(\d{4}\/\d{1,2}\/\d{1,2}).*?~.*?(\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}\/\d{1,2})/);
+  if (dateMatch) {
+    dates = `${dateMatch[1]} ~ ${dateMatch[2]}`;
+  } else {
+    const urlDateMatch = url.match(/FromDate=(\d{8})/);
+    if (urlDateMatch) {
+      const d = urlDateMatch[1];
+      dates = `${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6,8)}`;
+    }
+  }
+
+  return {
+    file,
+    source_id: sourceId,
+    source_name: sourceNames[sourceId] || sourceId,
+    scraped_at: scrapedAt,
+    url,
+    price_per_person: pricePerPerson,
+    price_total: priceTotal,
+    currency,
+    airline,
+    flight_outbound: flightOutbound,
+    flight_return: flightReturn,
+    hotel,
+    type,
+    dates,
+  };
+}
+
+function inferSourceIdFromFilename(filename: string): string {
+  if (filename.includes('besttour')) return 'besttour';
+  if (filename.includes('liontravel')) return 'liontravel';
+  if (filename.includes('lifetour')) return 'lifetour';
+  if (filename.includes('settour')) return 'settour';
+  if (filename.includes('eztravel')) return 'eztravel';
+  if (filename.includes('tigerair')) return 'tigerair';
+  return 'unknown';
+}
+
+function printOfferComparison(offers: CompareOffer[], region: string, filterDate: string | undefined, pax: number): void {
+  console.log(`\n╔════════════════════════════════════════════════════════════════════════╗`);
+  console.log(`║  PACKAGE COMPARISON: ${region.toUpperCase().padEnd(48)}║`);
+  console.log(`╚════════════════════════════════════════════════════════════════════════╝`);
+  console.log(`  Pax: ${pax} | Filter date: ${filterDate || '(all)'}`);
+  console.log(`  Found ${offers.length} scraped file(s)\n`);
+
+  if (offers.length === 0) return;
+
+  // Print table header
+  console.log('┌─────────────────┬─────────────────┬─────────────────┬────────────────────────────────┐');
+  console.log('│ OTA             │ Price/person    │ Total (2pax)    │ Details                        │');
+  console.log('├─────────────────┼─────────────────┼─────────────────┼────────────────────────────────┤');
+
+  for (const o of offers) {
+    const priceStr = o.price_per_person !== null
+      ? `${o.currency} ${o.price_per_person.toLocaleString()}`
+      : '(no price)';
+    const totalStr = o.price_total !== null
+      ? `${o.currency} ${o.price_total.toLocaleString()}`
+      : '-';
+
+    const details: string[] = [];
+    if (o.airline) details.push(o.airline);
+    if (o.hotel) details.push(o.hotel.slice(0, 20));
+    if (o.type === 'fit') details.push('FIT');
+    if (o.type === 'group_tour') details.push('Group');
+
+    const detailStr = details.join(' | ').slice(0, 30) || '-';
+
+    console.log(`│ ${o.source_name.padEnd(15)} │ ${priceStr.padEnd(15)} │ ${totalStr.padEnd(15)} │ ${detailStr.padEnd(30)} │`);
+  }
+
+  console.log('└─────────────────┴─────────────────┴─────────────────┴────────────────────────────────┘');
+
+  // Print staleness warning for old data
+  const now = Date.now();
+  const staleThresholdMs = 24 * 60 * 60 * 1000; // 24 hours
+  const staleOffers = offers.filter(o => {
+    if (!o.scraped_at) return false;
+    const scrapedTime = new Date(o.scraped_at).getTime();
+    return now - scrapedTime > staleThresholdMs;
+  });
+
+  if (staleOffers.length > 0) {
+    console.log(`\n⚠️  ${staleOffers.length} offer(s) have stale data (>24h old). Consider re-scraping.`);
+  }
+
+  // Print best value recommendation
+  const bestOffer = offers[0];
+  if (bestOffer && bestOffer.price_per_person !== null) {
+    console.log(`\n💡 Best value: ${bestOffer.source_name} at ${bestOffer.currency} ${bestOffer.price_per_person.toLocaleString()}/person`);
+    if (bestOffer.hotel) console.log(`   Hotel: ${bestOffer.hotel}`);
+    if (bestOffer.airline) console.log(`   Airline: ${bestOffer.airline}`);
+  }
+
+  console.log('');
 }
 
 main();

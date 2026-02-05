@@ -172,6 +172,11 @@ async def scrape_package(url: str) -> dict:
 
         result["extracted_elements"] = extracted_elements
 
+        # Extract package links from listing pages
+        package_links = await extract_package_links(page, url)
+        if package_links:
+            result["package_links"] = package_links
+
         # BestTour specific parsing
         if "besttour.com.tw" in url:
             flights = parse_besttour_flights(result["raw_text"])
@@ -206,6 +211,98 @@ async def scrape_package(url: str) -> dict:
         await browser.close()
 
         return result
+
+
+async def extract_package_links(page, base_url: str) -> list:
+    """Extract package detail links from listing pages.
+
+    Supports:
+    - BestTour: /itinerary/CODE links
+    - LionTravel: vacation.liontravel.com/product/* links
+    - Lifetour: tour.lifetour.com.tw/detail* links
+    - Settour: tour.settour.com.tw/product/* links
+    """
+    import re
+    from urllib.parse import urljoin
+
+    links = []
+
+    try:
+        # Get all anchor elements
+        anchors = await page.query_selector_all('a[href]')
+        seen = set()
+
+        for anchor in anchors[:100]:  # Limit to first 100 links
+            try:
+                href = await anchor.get_attribute('href')
+                if not href:
+                    continue
+
+                # Get link text for context
+                text = await anchor.inner_text()
+                text = text.strip()[:100] if text else ''
+
+                # Resolve relative URLs
+                full_url = urljoin(base_url, href)
+
+                # Skip if already seen
+                if full_url in seen:
+                    continue
+
+                # BestTour package links
+                if 'besttour.com.tw' in base_url:
+                    if '/itinerary/' in href and href not in seen:
+                        seen.add(full_url)
+                        # Extract product code
+                        code_match = re.search(r'/itinerary/([A-Z0-9]+)', href)
+                        code = code_match.group(1) if code_match else ''
+                        links.append({
+                            'url': full_url,
+                            'code': code,
+                            'title': text,
+                        })
+
+                # LionTravel package links
+                elif 'liontravel.com' in base_url:
+                    if '/product/' in href or '/detail/' in href:
+                        seen.add(full_url)
+                        code_match = re.search(r'/(?:product|detail)/(\d+)', href)
+                        code = code_match.group(1) if code_match else ''
+                        links.append({
+                            'url': full_url,
+                            'code': code,
+                            'title': text,
+                        })
+
+                # Lifetour package links
+                elif 'lifetour.com.tw' in base_url:
+                    if '/detail' in href:
+                        seen.add(full_url)
+                        links.append({
+                            'url': full_url,
+                            'code': '',
+                            'title': text,
+                        })
+
+                # Settour package links
+                elif 'settour.com.tw' in base_url:
+                    if '/product/' in href:
+                        seen.add(full_url)
+                        code_match = re.search(r'/product/([A-Z0-9]+)', href, re.IGNORECASE)
+                        code = code_match.group(1) if code_match else ''
+                        links.append({
+                            'url': full_url,
+                            'code': code,
+                            'title': text,
+                        })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"  Error extracting package links: {e}")
+
+    return links
 
 
 def parse_besttour_flights(raw_text: str) -> dict:

@@ -12,10 +12,21 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
+      "search_url_templates": {
+        "listing": "/e_web/activity?v={region_slug}",
+        "product": "/itinerary/{product_code}"
+      },
+      "region_slugs": {
+        "tokyo": "japan_tokyo",
+        "kansai": "japan_kansai",
+        "hokkaido": "japan_hokkaido",
+        "kyushu": "japan_kyushu",
+        "okinawa": "japan_okinawa"
+      },
       "rate_limit": {
         "requests_per_minute": 10
       },
-      "notes": "Full date-specific pricing available via scraper"
+      "notes": "Use listing URL for search, NOT /e_web/DOM/ (returns 404)"
     },
     "liontravel": {
       "source_id": "liontravel",
@@ -27,6 +38,18 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_liontravel_dated.py",
+      "search_url_templates": {
+        "fit": "vacation.liontravel.com/search?Destination={dest_code}&FromDate={from_yyyymmdd}&ToDate={to_yyyymmdd}&Days={days}&roomlist={adults}-0-0",
+        "group": null
+      },
+      "destination_codes": {
+        "tokyo_5d": "JP_TYO_5",
+        "tokyo_6d": "JP_TYO_6",
+        "osaka_5d": "JP_OSA_5",
+        "osaka_6d": "JP_OSA_6",
+        "hokkaido_5d": "JP_CTS_5",
+        "okinawa_4d": "JP_OKA_4"
+      },
       "rate_limit": {
         "requests_per_minute": 5
       },
@@ -40,7 +63,7 @@
           "expires": null
         }
       ],
-      "notes": "Date-specific scraper available"
+      "notes": "FIT search via vacation.liontravel.com, group tour URL unknown"
     },
     "tigerair": {
       "source_id": "tigerair",
@@ -67,13 +90,26 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
-      "url_patterns": [
-        "tour.lifetour.com.tw/detail*"
-      ],
+      "search_url_templates": {
+        "group_tour": "tour.lifetour.com.tw/searchlist/{departure}/{region_code}",
+        "product": "tour.lifetour.com.tw/detail*"
+      },
+      "departures": {
+        "taipei": "tpe",
+        "taichung": "txg",
+        "kaohsiung": "khh"
+      },
+      "region_codes": {
+        "tokyo": "0001-0001",
+        "kansai": "0001-0003",
+        "hokkaido": "0001-0002",
+        "kyushu": "0001-0004",
+        "okinawa": "0001-0005"
+      },
       "rate_limit": {
         "requests_per_minute": 5
       },
-      "notes": "Uses generic scraper with Lifetour-specific parsing"
+      "notes": "Group tour listing at tour.lifetour.com.tw/searchlist/{departure}/{region}"
     },
     "settour": {
       "source_id": "settour",
@@ -85,14 +121,22 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
-      "url_patterns": [
-        "tour.settour.com.tw/product/*",
-        "fit.settour.com.tw/tour/product/*"
-      ],
+      "search_url_templates": {
+        "group_tour": "tour.settour.com.tw/search?destinationCode={dest_code}",
+        "fit": "fit.settour.com.tw/tour/product/*",
+        "product": "tour.settour.com.tw/product/*"
+      },
+      "destination_codes": {
+        "tokyo": "JX_1",
+        "kansai": "JX_3",
+        "hokkaido": "JX_2",
+        "kyushu": "JX_4",
+        "okinawa": "JX_5"
+      },
       "rate_limit": {
         "requests_per_minute": 5
       },
-      "notes": "Tour pages at tour.settour.com.tw, FIT pages at fit.settour.com.tw"
+      "notes": "Group tour search at tour.settour.com.tw/search?destinationCode={code}"
     },
     "eztravel": {
       "source_id": "eztravel",
