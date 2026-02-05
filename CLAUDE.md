@@ -469,6 +469,10 @@ npm run view:itinerary      # Daily plan with transport
 npm run view:transport      # Transport summary (airport + daily)
 npm run view:bookings       # Pending/confirmed bookings only
 
+# === COMPARISON ===
+npm run travel -- compare-offers --region osaka   # Compare scraped offers by region
+npm run travel -- compare-offers --region kansai --json  # JSON output
+
 # === MUTATIONS (write) ===
 npm run travel -- set-dates 2026-02-13 2026-02-17
 npm run travel -- select-offer <offer-id> <date>
@@ -555,6 +559,10 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 - ✅ Settour OTA integration (scraper URL: `tour.settour.com.tw/search?destinationCode=JX_3`)
 - ✅ Lifetour search URL discovery (`tour.lifetour.com.tw/searchlist/tpe/{region}`)
 - ✅ Osaka+Kyoto OTA package comparison (4 OTAs, Feb 26-27, 8 options found)
+- ✅ OTA search URL templates in `data/ota-sources.json` for all 4 supported OTAs
+- ✅ `compare-offers` CLI command (`npm run travel -- compare-offers --region osaka`)
+- ✅ Package link extraction in scraper for listing pages
+- ✅ Staleness warning for offers older than 24 hours
 
 ## Storage Decision (DB)
 
