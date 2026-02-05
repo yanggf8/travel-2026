@@ -298,11 +298,13 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 | `settour` | 東南旅遊 | package, flight, hotel | ✅ | ✅ | `tour.settour.com.tw/search?destinationCode=JX_3` |
 | `trip` | Trip.com | flight | ⚠️ scrape-only | ✅ | See URL templates below |
 | `booking` | Booking.com | hotel | ⚠️ scrape-only | ✅ | See URL templates below |
-| `tigerair` | 台灣虎航 | flight | ✅ | ❌ | — |
+| `tigerair` | 台灣虎航 | flight | ✅ | ✅ | Form-based scraper (no URL deep-linking) |
 | `agoda` | Agoda | hotel | ❌ | ❌ | Redirects incorrectly, not reliable |
 | `skyscanner` | Skyscanner | flight | ❌ | ❌ | Bot detection blocks scraping |
 | `google_flights` | Google Flights | flight | ❌ | ❌ | Dynamic rendering, not scrapable |
 | `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ | — |
+| `jalan` | じゃらん | hotel | ❌ | ❌ | Japan domestic OTA, for local hotel bookings |
+| `rakuten_travel` | 楽天トラベル | hotel, package | ❌ | ❌ | Japan domestic OTA |
 
 ### Individual Booking OTA Notes
 
@@ -572,6 +574,7 @@ To ensure visibility, agent must output content as direct text:
 |--------|---------|-----|
 | `scripts/scrape_package.py` | Generic package scraper | BestTour, any OTA |
 | `scripts/scrape_liontravel_dated.py` | Date-specific pricing | Lion Travel |
+| `scripts/scrape_tigerair.py` | Flight price scraper (form-based) | Tigerair |
 | `scripts/scrape_date_range.py` | Multi-date flight comparison | Trip.com |
 
 **Requirements:**
@@ -604,7 +607,7 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 ## Completed
 - ✅ Cascade runner (TypeScript library + CLI)
 - ✅ Lion Travel OTA integration
-- ✅ Tigerair OTA integration (limited - no date-specific pricing)
+- ✅ Tigerair OTA integration (`scripts/scrape_tigerair.py`) — form-based Playwright scraper
 - ✅ Canonical offer schema normalization
 - ✅ BestTour date-specific pricing scraper (full Feb 2026 calendar)
 - ✅ Lion Travel dated search scraper (`scripts/scrape_liontravel_dated.py`)

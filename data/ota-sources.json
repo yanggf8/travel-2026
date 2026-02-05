@@ -83,11 +83,11 @@
       "markets": ["TW"],
       "currency": "TWD",
       "supported": true,
-      "scraper_script": null,
+      "scraper_script": "scripts/scrape_tigerair.py",
       "rate_limit": {
         "requests_per_minute": 10
       },
-      "notes": "Limited - no date-specific pricing via scraper"
+      "notes": "Form-based scraper (no URL deep-linking), requires Playwright form interaction"
     },
     "lifetour": {
       "source_id": "lifetour",

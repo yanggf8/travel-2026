@@ -112,7 +112,7 @@ async def scrape_liontravel_packages(
                     for i, el in enumerate(elements[:10]):  # Limit to 10
                         try:
                             item_text = await el.inner_text()
-                            if "TWD" in item_text or "自由行" in item_text:
+                            if "TWD" in item_text or "自由行" in item_text:  # currency match in scraped DOM text
                                 # Extract price from this item
                                 item_prices = re.findall(price_pattern, item_text)
                                 
