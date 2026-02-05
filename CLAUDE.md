@@ -392,6 +392,17 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   │   │   └── references/legacy-spec.md
 │   │   └── separate-bookings/
 │   │       └── SKILL.md       # Compare package vs split booking
+│   ├── utilities/             # Canonical utility modules
+│   │   └── holiday-calculator.ts  # Holiday-aware date ops (cached, config-driven)
+│   ├── scrapers/              # OTA scraper registry and base classes
+│   │   ├── index.ts           # Module exports
+│   │   ├── base-scraper.ts    # Base scraper class
+│   │   ├── registry.ts        # Global scraper registry
+│   │   └── types.ts           # Scraper type definitions
+│   ├── validation/            # Itinerary and data validation
+│   │   ├── index.ts           # Module exports
+│   │   ├── itinerary-validator.ts  # Itinerary constraint checker
+│   │   └── types.ts           # Validation type definitions
 │   ├── status/
 │   │   ├── rule-evaluator.ts
 │   │   └── status-check.ts
@@ -630,7 +641,7 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ `compare-offers` CLI command (`npm run travel -- compare-offers --region osaka`)
 - ✅ Package link extraction in scraper for listing pages
 - ✅ Staleness warning for offers older than 24 hours
-- ✅ Taiwan/Japan holiday calculator (`src/utilities/holiday-calculator.ts`)
+- ✅ Holiday calculator (`src/utilities/holiday-calculator.ts`) — cached calendar loading, isHoliday/isWorkday/isMakeupWorkday queries, calculateLeave convenience wrapper, config-driven via destinations.json
 - ✅ Leave day calculator CLI (`src/cli/calculate-leave.ts`)
 - ✅ Multi-date flight scraper (`scripts/scrape_date_range.py`)
 - ✅ `/separate-bookings` skill — compare package vs split flight+hotel
