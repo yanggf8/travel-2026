@@ -253,9 +253,29 @@
       "base_url": "https://www.agoda.com",
       "markets": ["TW", "JP", "INTL"],
       "currency": "TWD",
-      "supported": false,
-      "scraper_script": null,
-      "notes": "Bot detection - search often redirects to wrong location. Not recommended for scraping."
+      "supported": true,
+      "scraper_script": "scripts/scrape_package.py",
+      "search_url_templates": {
+        "hotel_page": "https://www.agoda.com/{hotel_slug}/hotel/{city_slug}-{country}.html?checkIn={checkin}&los={nights}&adults={adults}&rooms={rooms}&currency={currency}",
+        "search": "https://www.agoda.com/search?city={city_id}&checkIn={checkin}&checkOut={checkout}&rooms={rooms}&adults={adults}&currency={currency}"
+      },
+      "city_ids": {
+        "osaka": 14811,
+        "tokyo": 5765,
+        "kyoto": 5814,
+        "nagoya": 17285,
+        "sapporo": 10570,
+        "fukuoka": 5788,
+        "okinawa": 17074
+      },
+      "rate_limit": {
+        "requests_per_minute": 3
+      },
+      "limitations": [
+        "search_may_return_empty_for_far_future_dates",
+        "direct_hotel_urls_most_reliable"
+      ],
+      "notes": "Direct hotel page URLs work reliably — full pricing, reviews, amenities. Search pages may return 0 results for dates >6 months out. Use hotel_page URL template for best results."
     },
     "skyscanner": {
       "source_id": "skyscanner",
@@ -267,7 +287,9 @@
       "currency": "TWD",
       "supported": false,
       "scraper_script": null,
-      "notes": "Strong bot detection - returns 'Are you a robot?' page. Not scrapable."
+      "last_tested": "2026-02-06",
+      "blocked_reason": "Hard captcha redirect (captcha-v2) triggered on all requests, even with stealth browser flags. Not bypassable with Playwright alone.",
+      "notes": "Strong bot detection - returns 'Are you a robot?' captcha page. Redirects to /sttc/px/captcha-v2/. Stealth measures (disabling webdriver flag, custom UA) do not help. Use Google Flights instead for multi-airline price comparison."
     },
     "google_flights": {
       "source_id": "google_flights",
@@ -277,9 +299,16 @@
       "base_url": "https://www.google.com/travel/flights",
       "markets": ["INTL"],
       "currency": "TWD",
-      "supported": false,
-      "scraper_script": null,
-      "notes": "Heavy JS rendering - search results don't load via Playwright. Use for manual price verification only."
+      "supported": true,
+      "scraper_script": "scripts/scrape_package.py",
+      "search_url_templates": {
+        "roundtrip": "https://www.google.com/travel/flights?q=Flights+to+{dest}+from+{origin}+on+{depart_date}+through+{return_date}&curr={currency}&hl=zh-TW",
+        "oneway": "https://www.google.com/travel/flights?q=Flights+to+{dest}+from+{origin}+on+{depart_date}+one+way&curr={currency}&hl=zh-TW"
+      },
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
+      "notes": "Uses natural-language query URL format (?q=Flights to DEST from ORIGIN on DATE). Returns all-inclusive TWD prices with airline, times, duration, nonstop flags, and CO2 data. No form interaction needed."
     }
   }
 }

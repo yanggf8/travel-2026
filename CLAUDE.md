@@ -299,9 +299,9 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 | `trip` | Trip.com | flight | ⚠️ scrape-only | ✅ | See URL templates below |
 | `booking` | Booking.com | hotel | ⚠️ scrape-only | ✅ | See URL templates below |
 | `tigerair` | 台灣虎航 | flight | ✅ | ✅ | Form-based scraper (no URL deep-linking) |
-| `agoda` | Agoda | hotel | ❌ | ❌ | Redirects incorrectly, not reliable |
-| `skyscanner` | Skyscanner | flight | ❌ | ❌ | Bot detection blocks scraping |
-| `google_flights` | Google Flights | flight | ❌ | ❌ | Dynamic rendering, not scrapable |
+| `agoda` | Agoda | hotel | ✅ | ✅ | Direct hotel URLs work reliably; search may fail for far-future dates |
+| `skyscanner` | Skyscanner | flight | ❌ | ❌ | Hard captcha redirect (captcha-v2) blocks all requests |
+| `google_flights` | Google Flights | flight | ✅ | ✅ | Natural-language query URL (`?q=Flights to DEST from ORIGIN`) |
 | `eztravel` | 易遊網 | package, flight, hotel | ❌ | ❌ | — |
 | `jalan` | じゃらん | hotel | ❌ | ❌ | Japan domestic OTA, for local hotel bookings |
 | `rakuten_travel` | 楽天トラベル | hotel, package | ❌ | ❌ | Japan domestic OTA |
@@ -318,6 +318,17 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 - Requires `dest_id` (not city name): Osaka=-240905, Tokyo=-246227, Kyoto=-235402
 - URL: `booking.com/searchresults.zh-tw.html?dest_id={id}&dest_type=city&checkin={YYYY-MM-DD}&checkout={YYYY-MM-DD}&group_adults={n}&no_rooms=1&selected_currency=TWD`
 - First search may fail → retry or add `&nflt=class%3D3` filter
+
+**Agoda** (hotels):
+- Direct hotel URLs most reliable (search pages may return empty for far-future dates)
+- Known city_ids: Osaka=14811, Tokyo=5765, Kyoto=5814, Nagoya=17285, Sapporo=10570, Fukuoka=5788, Okinawa=17074
+- URL: `agoda.com/{hotel_slug}/hotel/{city}-jp.html?checkIn={YYYY-MM-DD}&los={nights}&adults={n}&rooms=1&currency=TWD`
+
+**Google Flights** (flights):
+- Uses natural-language query URL — no form interaction needed
+- URL: `google.com/travel/flights?q=Flights+to+{DEST}+from+{ORIGIN}+on+{YYYY-MM-DD}+through+{YYYY-MM-DD}&curr=TWD&hl=zh-TW`
+- Returns all-inclusive TWD prices with airline, times, duration, nonstop flags
+- Parser normalizes 16 Chinese airline names to IATA codes
 
 ### OTA Search URL Patterns
 - **BestTour**: Uses activity pages (`/e_web/activity?v=japan_kansai`), NOT `/e_web/DOM/` (404)
