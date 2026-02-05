@@ -16,3 +16,16 @@ export type {
   TripOption,
   TripComparison,
 } from './leave-calculator';
+
+export {
+  normalizeFlightData,
+  scanFlightFiles,
+  formatFlight,
+  LCC_AIRLINES,
+  FULL_SERVICE_AIRLINES,
+} from './flight-normalizer';
+
+export type {
+  NormalizedFlight,
+  FlightSearchResult,
+} from './flight-normalizer';

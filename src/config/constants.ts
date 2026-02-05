@@ -77,6 +77,31 @@ export const CURRENCIES = {
 export type CurrencyCode = keyof typeof CURRENCIES;
 
 /**
+ * Exchange rates to TWD (base currency).
+ * Updated: 2026-02-05
+ */
+export const EXCHANGE_RATES: Record<string, number> = {
+  USD_TWD: 32,
+  JPY_TWD: 0.21,
+  TWD_TWD: 1,
+};
+
+/**
+ * Convert amount from source currency to TWD.
+ */
+export function convertToTWD(amount: number, fromCurrency: CurrencyCode): number {
+  const key = `${fromCurrency}_TWD`;
+  const rate = EXCHANGE_RATES[key];
+  if (!rate) throw new Error(`No exchange rate for ${fromCurrency} → TWD`);
+  return Math.round(amount * rate);
+}
+
+/**
+ * Default LCC baggage fee per person per direction (TWD).
+ */
+export const DEFAULT_LCC_BAGGAGE_FEE = 1750;
+
+/**
  * Activity ID generation prefix.
  */
 export const ACTIVITY_ID_PREFIX = 'activity_';

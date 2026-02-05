@@ -1,0 +1,93 @@
+{
+  "$schema": "../../../../data/schemas/ota-knowledge.schema.json",
+  "version": "1.0.0",
+  "description": "Domain knowledge about OTA booking patterns and pricing behaviors",
+  "booking_types": {
+    "fit_package": {
+      "name_zh": "FIT 自由配",
+      "description": "Travel agency bundled flight + hotel, traveler plans own itinerary",
+      "rules": [
+        "Checked baggage (typically 20kg) is ALWAYS included, even for LCC flights",
+        "Price is per person unless explicitly stated otherwise",
+        "Travel agency provides after-sales support (rebooking, cancellation)",
+        "Package may include airport transfers or other extras"
+      ]
+    },
+    "group_tour": {
+      "name_zh": "團體旅遊",
+      "description": "Fully guided group tour with fixed itinerary",
+      "rules": [
+        "All-inclusive: flight, hotel, meals, transport, guide",
+        "Fixed departure dates with minimum group size",
+        "Price is per person"
+      ]
+    },
+    "separate_booking": {
+      "name_zh": "分開訂",
+      "description": "Book flight and hotel independently",
+      "rules": [
+        "LCC flights typically do NOT include checked baggage",
+        "Full-service airlines (EVA, China Airlines, Cathay, JAL, ANA) include checked baggage",
+        "Hotel prices may be per room per night, not per person",
+        "No single point of contact for support"
+      ]
+    }
+  },
+  "platform_behaviors": {
+    "trip_com": {
+      "currency": "USD",
+      "price_display": "per person for flights, total shown separately",
+      "baggage_labels": {
+        "Included": "Checked baggage included in fare",
+        "Carry-on baggage included": "Only carry-on, NO checked baggage - must purchase separately"
+      },
+      "quirks": [
+        "Hotel detail pages require login",
+        "Roundtrip search only shows outbound flights",
+        "Scrape return as separate one-way search",
+        "Prices in USD - convert using EXCHANGE_RATES.USD_TWD"
+      ]
+    },
+    "booking_com": {
+      "currency": "TWD",
+      "price_display": "per room per night",
+      "quirks": [
+        "Cloudflare bot protection - may need retry",
+        "Prices shown are 'starting from' and may not reflect actual dates",
+        "Taxes and service fees may be separate",
+        "Use lang=zh-tw for Traditional Chinese"
+      ]
+    },
+    "liontravel": {
+      "currency": "TWD",
+      "price_display": "per person for FIT, total shown in search results",
+      "quirks": [
+        "FIT search via vacation.liontravel.com",
+        "Group tour URL format unknown",
+        "Thursday FITPKG promo: TWD 400 off (min TWD 20,000)",
+        "Date-specific pricing varies dramatically"
+      ]
+    }
+  },
+  "airline_classification": {
+    "full_service": {
+      "airlines": ["EVA Air", "China Airlines", "Cathay Pacific", "STARLUX Airlines", "Japan Airlines", "ANA"],
+      "baggage": "Included (typically 23-30kg)",
+      "meal": "Included"
+    },
+    "lcc": {
+      "airlines": ["Peach", "Tigerair Taiwan", "Jetstar Japan", "AirAsia X Berhad", "Thai Vietjet Air", "Thai Lion Air", "HK Express"],
+      "baggage": "NOT included (purchase 20kg: ~TWD 1,500-2,500/direction/person)",
+      "meal": "NOT included",
+      "note": "When booked through travel agency FIT, 20kg baggage IS included"
+    }
+  },
+  "comparison_rules": [
+    "Always compare same date range across FIT and separate booking",
+    "For LCC separate booking: add baggage fee (2 pax × 2 directions × ~TWD 1,750)",
+    "For FIT with LCC: baggage is included, do NOT add extra fee",
+    "Use leave-calculator with holiday calendar for fair leave day comparison",
+    "Convert all prices to TWD before comparing",
+    "Hotel comparison: match similar class (e.g. Just Sleep ≈ mid-range business hotel)"
+  ]
+}

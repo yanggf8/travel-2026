@@ -231,7 +231,8 @@ const tokyoRef = resolveDestinationRefPath('tokyo_2026');  // Absolute path to t
 Configuration files:
 - `data/destinations.json` - Destination mapping (slug → reference path, currency, airports)
 - `data/ota-sources.json` - OTA registry (source_id → URL, currency, scraper script)
-- `src/config/constants.ts` - Default values (pax, pace, project name)
+- `src/config/constants.ts` - Default values (pax, pace, project name, exchange rates)
+- `src/skills/travel-shared/references/ota-knowledge.json` - OTA domain knowledge (baggage rules, platform behaviors)
 
 Notes:
 - `ref_path` / `scraper_script` must be **repo-relative** paths (no absolute paths); they’re resolved from the project root so commands work from any CWD.
@@ -365,9 +366,11 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   │   └── wildcard.ts        # Schema-driven path expansion
 │   ├── utils/                 # Shared utility modules
 │   │   ├── index.ts           # Module exports
+│   │   ├── flight-normalizer.ts   # Trip.com flight data → structured flights
 │   │   └── leave-calculator.ts    # Leave day calculator with holiday support
 │   ├── cli/
 │   │   ├── cascade.ts         # Cascade CLI
+│   │   ├── compare-dates.ts   # Multi-date FIT vs separate comparison
 │   │   ├── compare-trips.ts   # Trip comparison CLI (package vs separate)
 │   │   ├── p3p4-test.ts       # Package skill test CLI
 │   │   └── travel-update.ts   # Travel plan update CLI
@@ -514,6 +517,14 @@ npm run leave-calc 2026-02-27 2026-03-03       # Uses data/holidays/taiwan-2026.
 npm run compare-trips -- --input data/osaka-trip-comparison.json
 npm run compare-trips -- --input data/osaka-trip-comparison.json --detailed
 
+# === DATE COMPARISON (FIT vs Separate) ===
+npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4
+npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4 --hotel-per-night 3500
+
+# === FLIGHT NORMALIZER ===
+npm run normalize-flights -- data/trip-feb24-out.json --top 5
+npm run normalize-flights -- --scan                   # Scan all flight data
+
 # === DATA VALIDATION ===
 npm run validate:data                          # Check CLAUDE.md ↔ ota-sources.json consistency
 
@@ -631,6 +642,10 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ Data consistency validator (`scripts/validate-data.ts`) — CLAUDE.md ↔ ota-sources.json
 - ✅ OTA limitations and price_factors in `ota-sources.json` (Trip.com, Booking.com, LionTravel)
 - ✅ Origin config with holiday calendar reference in `data/destinations.json` (v1.1.0)
+- ✅ Exchange rates and currency conversion in `src/config/constants.ts` (USD_TWD, JPY_TWD)
+- ✅ OTA domain knowledge reference (`src/skills/travel-shared/references/ota-knowledge.json`)
+- ✅ Flight data normalizer (`src/utils/flight-normalizer.ts`) — Trip.com → structured flights
+- ✅ Compare-dates CLI (`src/cli/compare-dates.ts`) — FIT vs separate across date range with leave days
 
 ## Storage Decision (DB)
 
