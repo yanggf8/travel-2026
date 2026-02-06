@@ -175,6 +175,7 @@ See `CLAUDE.md` for detailed schema documentation.
 ```bash
 ./scripts/turso-query.sh "SELECT COUNT(*) FROM offers"
 npm run db:import:turso -- --dir data
+npm run db:query:turso -- --region kansai --start 2026-02-24 --end 2026-02-28
 npm run db:status:turso
 ```
 

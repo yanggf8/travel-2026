@@ -757,20 +757,20 @@ Creds:    .env (gitignored)
 # Interactive shell
 turso db shell travel-2026
 
-# Query helper script
-./scripts/turso-query.sh "SELECT * FROM offers WHERE price_per_person < 35000"
+# Query offers for your trip (first-class CLI)
+npm run db:query:turso -- --region kansai --start 2026-02-24 --end 2026-02-28
+npm run db:query:turso -- --max-price 30000 --sources besttour,liontravel
+npm run db:query:turso -- --fresh-hours 24 --json
 
-# Import scraped JSON (query layer only; JSON files remain source-of-truth)
+# Import scraped JSON (with trip-aware date filtering)
 npm run db:import:turso -- --dir data
+npm run db:import:turso -- --dir data --start 2026-02-24 --end 2026-02-28
 
 # Sanity-check counts / last import timestamps
 npm run db:status:turso
 
-# Direct curl (source .env first)
-source .env && curl -s -X POST "https://travel-2026-yanggf8.aws-ap-northeast-1.turso.io/v2/pipeline" \
-  -H "Authorization: Bearer $TURSO_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"requests": [{"type": "execute", "stmt": {"sql": "SELECT * FROM destinations"}}]}' | jq .
+# Raw SQL query helper
+./scripts/turso-query.sh "SELECT * FROM offers WHERE price_per_person < 35000"
 ```
 
 **Schema:**

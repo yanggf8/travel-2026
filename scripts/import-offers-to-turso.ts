@@ -28,6 +28,7 @@ function usage(): string {
     '',
     'Usage:',
     '  npm run db:import:turso -- --dir data --destination tokyo_2026 --region tokyo',
+    '  npm run db:import:turso -- --dir data --start 2026-02-24 --end 2026-02-28',
     '  npm run db:import:turso -- --files data/besttour-kansai-feb24.json,data/liontravel-osaka-group.json',
     '',
     'Options:',
@@ -35,6 +36,9 @@ function usage(): string {
     '  --files <csv>            Comma-separated JSON file paths (overrides --dir)',
     '  --destination <slug>     Destination slug (e.g. tokyo_2026, osaka_kyoto_2026). If omitted, inferred from filename.',
     '  --region <name>          Region label (e.g. kansai, tokyo). If omitted, inferred from filename.',
+    '  --start <YYYY-MM-DD>     Only import offers with departure_date >= start (trip-aware filtering)',
+    '  --end <YYYY-MM-DD>       Only import offers with departure_date <= end (trip-aware filtering)',
+    '  --include-undated        When filtering by date, also include offers without departure_date',
     '  --dry-run                Parse/normalize only; do not write to Turso',
     '  --events                 Also append audit rows into Turso events table',
     '  --endpoint <url>         Override Turso pipeline endpoint (or set TURSO_HTTP_ENDPOINT)',
@@ -43,6 +47,32 @@ function usage(): string {
     '  TURSO_TOKEN must be set (or in .env).',
     '',
   ].join('\n');
+}
+
+/**
+ * Check if an offer's departure date falls within the trip window.
+ * Returns true if:
+ * - No date filter specified (--start/--end not provided)
+ * - Offer has no departure_date and includeUndated=true
+ * - Offer departure_date is within [start, end] range
+ */
+function isWithinDateRange(
+  departureDate: string | null,
+  startFilter: string | null,
+  endFilter: string | null,
+  includeUndated: boolean
+): boolean {
+  // No filter = include all
+  if (!startFilter && !endFilter) return true;
+  
+  // No departure date on offer = include only if explicitly allowed
+  if (!departureDate) return includeUndated;
+  
+  // Check range
+  if (startFilter && departureDate < startFilter) return false;
+  if (endFilter && departureDate > endFilter) return false;
+  
+  return true;
 }
 
 function optionValue(argv: string[], name: string): string | undefined {
@@ -277,6 +307,15 @@ function parseScraperOfferAsOfferRow(
     (typeof offer.scrapedAt === 'string' && offer.scrapedAt) ||
     null;
 
+  // If this is a normalized offer, try to lift a representative date into departure_date for filtering.
+  const bestValueDate =
+    (offer.best_value && typeof offer.best_value === 'object' && typeof (offer.best_value as any).date === 'string')
+      ? String((offer.best_value as any).date)
+      : (offer.bestValue && typeof offer.bestValue === 'object' && typeof (offer.bestValue as any).date === 'string')
+        ? String((offer.bestValue as any).date)
+        : null;
+  const departureDate = normalizeIsoDate(bestValueDate);
+
   const hotelName =
     (offer.hotel && typeof offer.hotel === 'object' && typeof (offer.hotel as any).name === 'string')
       ? String((offer.hotel as any).name)
@@ -299,7 +338,7 @@ function parseScraperOfferAsOfferRow(
     currency,
     region,
     destination,
-    departure_date: null,
+    departure_date: departureDate,
     return_date: null,
     nights: null,
     availability: (typeof offer.availability === 'string' ? offer.availability : null),
@@ -367,9 +406,26 @@ async function main(): Promise<void> {
   const filesCsv = optionValue(argv, '--files');
   const destinationOverride = optionValue(argv, '--destination') || null;
   const regionOverride = optionValue(argv, '--region') || null;
+  const startFilter = optionValue(argv, '--start') || null;
+  const endFilter = optionValue(argv, '--end') || null;
+  const includeUndated = hasFlag(argv, '--include-undated');
   const dryRun = hasFlag(argv, '--dry-run');
   const emitEvents = hasFlag(argv, '--events');
   const endpoint = optionValue(argv, '--endpoint');
+
+  // Validate date filters
+  if (startFilter && !/^\d{4}-\d{2}-\d{2}$/.test(startFilter)) {
+    console.error(`Invalid --start date format: ${startFilter} (expected YYYY-MM-DD)`);
+    process.exit(1);
+  }
+  if (endFilter && !/^\d{4}-\d{2}-\d{2}$/.test(endFilter)) {
+    console.error(`Invalid --end date format: ${endFilter} (expected YYYY-MM-DD)`);
+    process.exit(1);
+  }
+  if (startFilter && endFilter && startFilter > endFilter) {
+    console.error(`Invalid date range: --start ${startFilter} is after --end ${endFilter}`);
+    process.exit(1);
+  }
 
   const client = new TursoPipelineClient({ ...(endpoint ? { endpoint } : {}) });
   client.loadEnv();
@@ -392,6 +448,7 @@ async function main(): Promise<void> {
   }
 
   let parsedOffers = 0;
+  let filteredOut = 0;
   let skipped = 0;
   const sqlStatements: string[] = [];
 
@@ -427,8 +484,15 @@ async function main(): Promise<void> {
       continue;
     }
 
-    parsedOffers += offers.length;
-    for (const row of offers) {
+    // Apply date filter
+    const filteredOffers = offers.filter((row) => {
+      const inRange = isWithinDateRange(row.departure_date, startFilter, endFilter, includeUndated);
+      if (!inRange) filteredOut++;
+      return inRange;
+    });
+
+    parsedOffers += filteredOffers.length;
+    for (const row of filteredOffers) {
       sqlStatements.push(toUpsertSql(row));
       if (emitEvents) {
         const eventData = {
@@ -449,6 +513,10 @@ async function main(): Promise<void> {
 
   console.log(`Files scanned: ${files.length}`);
   console.log(`Offers parsed: ${parsedOffers}`);
+  if (startFilter || endFilter) {
+    console.log(`Date filter: ${startFilter || '*'} to ${endFilter || '*'}`);
+    console.log(`Filtered out: ${filteredOut}`);
+  }
   console.log(`Files skipped: ${skipped}`);
   console.log(`SQL statements: ${sqlStatements.length}`);
 
