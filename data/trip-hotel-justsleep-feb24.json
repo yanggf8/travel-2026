@@ -1,0 +1,15 @@
+{
+  "url": "https://www.trip.com/hotels/osaka-hotel-detail-8606330/just-sleep-osaka-shinsaibashi/?checkIn=2026-02-24&checkOut=2026-02-28&adult=2&children=0&ages=&crn=1&travelpurpose=0",
+  "scraped_at": "2026-02-05T10:24:38.921853",
+  "title": "Sign in to Trip.com",
+  "raw_text": "Hotels & Homes\nFlights\nTrains\nCar services\nApp\nUSD\nCustomer support\nFind bookings\nSign in / Register\nSign in / Register\nMembership rewards\nManage bookings with ease\nContinue with Email\nor\nContinue with Google\nContinue with Apple\nContinue with Facebook\nContinue with WeChat\nBy signing in or registering, you are deemed to have agreed to the Trip.com Terms and Conditions and Privacy Statement.\nUse the Trip.com app to sign in with a QR code\n1\nOpen the Trip.com app\n2\nGo to\nAccount\n3\nTap\nin the top-right corner\nor go to\n(Settings) > Scan QR code\nContact us\nCustomer support\nService guarantee\nMore service info\nAbout\nAbout Trip.com\nNews\nCareers\nTerms & Conditions\nPrivacy Statement\nAccessibility statement\nAbout Trip.com Group\nOther services\nInvestor relations\nTrip.com Rewards\nAffiliate program\nList your property\nAll hotels\nBecome a Supplier\nSecurity\nPayment methods\nOur partners\nContact Center\nof the year 2025\nCopyright © 2025 Trip.com Travel Singapore Pte. Ltd. All rights reserved\nSite Operator: Trip.com Travel Singapore Pte. Ltd.",
+  "extracted": {
+    "flight": {},
+    "hotel": {},
+    "price": {},
+    "dates": {},
+    "inclusions": [],
+    "date_pricing": {}
+  },
+  "extracted_elements": {}
+}

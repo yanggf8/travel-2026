@@ -41,7 +41,7 @@ import {
 } from '../types/validation';
 import { defaultValidator } from '../validation/itinerary-validator';
 import type { DaySummary, IssueSeverity, ResolvedActivity } from '../validation/types';
-import { calculateLeave } from '../utilities/holiday-calculator';
+import { calculateLeave } from '../utils/holiday-calculator';
 import { globalRegistry } from '../scrapers/registry';
 import type { OtaSearchParams, ScrapeResult } from '../scrapers/types';
 import { execFileSync } from 'child_process';

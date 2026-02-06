@@ -1,0 +1,23 @@
+{
+  "url": "https://tour.lifetour.com.tw/tour/japan/osaka",
+  "scraped_at": "2026-02-04T16:56:27.392846",
+  "title": "",
+  "raw_text": "call\n網路電話\nlocation_on\n門市據點\n\n4066-9888\n全台市話直撥，手機加(02)\n\nB\n旅遊攻略\ncontract\n訂單查詢\nlocation_city\n企業專區\ngroup\n同業網\naccount_circle\n會員登入\nflight_takeoff\n台北出發\nexpand_more\nflight_takeoff\n高雄出發\nexpand_more\nflight_takeoff\n台中出發\nexpand_more\nClubMed\n自由行\nexpand_more\n迷你小團\nMini Tour\nexpand_more\n機票\nexpand_more\n訂房/票券\nexpand_more\n台灣旅遊\nexpand_more\n基隆/高雄港\n郵輪\nexpand_more\n護照/簽證\n\nHi\n\nIris\n\n福幣點數\n0\n折扣碼\n0\n訂單查詢\n商品收藏\n折扣碼\n會員基本資料\n社群帳號綁定或解除\n常用旅客名單\n聯絡客服\n登出\n公告\nclose\n系統發生錯誤，請稍後再試\n關於五福\n投資人專區\n永續五福\n人才招募\n隱私權政策\n網站導覽\n\n台灣高雄市807三民區博愛一路28號2樓、3樓\n代表人：許順富\n發言人：錢緯銘\n統一編號：22835878\n交觀綜 2023 號\n品保高字 0059 號\n\n\ncall\n網路電話\nlocation_on\n門市據點\n國內外旅遊\n台北 (02) 2547-1155\n桃園 (03) 336-8811\n台中 (04) 2326-6111\n台南 (06) 238-9111\n高雄 (07) 323-1166\n4066-9888\n\n全台市話直撥，手機加(02)\n\n機票、訂房、票券\n台北 (02) 2718-8500\n桃園 (03) 336-8811\n台中 (04) 2322-4535\n台南 (06) 238-9111\n高雄 (07) 323-1166\n企業服務、員工旅遊\n台北 (02) 2718-8001\n台中 (04) 2326-7666\n高雄 (07) 321-2292\n國內客製包團\n全台 (02) 6609-7100\n旅客服務\n護照簽證\n匯款資訊\n卡友優惠\n電子報\n傳真刷卡單\n聯絡我們\n客服信箱\n\n客服聯絡人：林珊宇\n(02)6609-7119\n\n服務時間：週一到週五\n08:40-12:40、14:00-18:00\n\n1988-2026 © Lifetour All Rights Reserved.\n我們將使用 Cookie 收集數據傳送至第三方分析使用者情形，並用於廣告或行銷。如繼續使用我們的網站，表示您接受我們使用 Cookie，或點擊「不同意」。 如您想了解更多，請詳閱隱私權政策\n我瞭解了",
+  "extracted": {
+    "flight": {
+      "outbound": {},
+      "return": {}
+    },
+    "hotel": {
+      "names": [],
+      "room_type": null,
+      "area": null
+    },
+    "price": {},
+    "dates": {},
+    "inclusions": [],
+    "date_pricing": {},
+    "itinerary": []
+  },
+  "extracted_elements": {}
+}

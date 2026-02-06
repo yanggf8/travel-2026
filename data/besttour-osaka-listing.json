@@ -1,0 +1,30 @@
+{
+  "url": "https://www.besttour.com.tw/e_web/DOM/default.asp?Category=A01&Area=JP&SubArea=OSA",
+  "scraped_at": "2026-02-04T16:56:15.145823",
+  "title": "IIS 10.0 詳細錯誤 - 404.0 - Not Found",
+  "raw_text": "HTTP 錯誤 404.0 - Not Found\n您尋找的資源已移除、名稱已變更，或暫時無法使用。\n最有可能的原因:\n網頁伺服器上不存在指定的目錄或檔案。\nURL 包含拼字錯誤。\n自訂篩選器或模組 (例如 URLScan) 限制存取此檔案。\n解決方法:\n在網頁伺服器上建立內容。\n檢閱瀏覽器 URL。\n建立追蹤規則以追蹤此 HTTP 狀態碼的失敗要求，並查看哪一個模組正在呼叫 SetStatus。如需有關建立失敗要求之追蹤規則的詳細資訊，請按一下這裡。\n詳細錯誤資訊:\n模組\t   IIS Web Core\n通知\t   MapRequestHandler\n處理常式\t   ASPClassic\n錯誤碼\t   0x80070002\n要求的 URL\t   https://www.besttour.com.tw:443/e_web/DOM/default.asp?Category=A01&Area=JP&SubArea=OSA\n實體路徑\t   C:\\IIS\\Hsihung_web_real\\e_web\\DOM\\default.asp\n登入方法\t   匿名\n登入使用者\t   匿名\n詳細資訊:\n此錯誤表示伺服器上不存在此檔案或目錄。請建立檔案或目錄，然後再次嘗試要求。\n\n檢視詳細資訊 »",
+  "extracted": {
+    "flight": {
+      "outbound": {},
+      "return": {}
+    },
+    "hotel": {
+      "name": null,
+      "area": null,
+      "access": []
+    },
+    "price": {},
+    "dates": {},
+    "inclusions": [],
+    "date_pricing": {}
+  },
+  "extracted_elements": {
+    "tables": [
+      "模組\t   IIS Web Core\n通知\t   MapRequestHandler\n處理常式\t   ASPClassic\n錯誤碼\t   0x80070002",
+      "要求的 URL\t   https://www.besttour.com.tw:443/e_web/DOM/default.asp?Category=A01&Area=JP&SubArea=OSA\n實體路徑\t   C:\\IIS\\Hsihung_web_real\\e_web\\DOM\\default.asp\n登入方法\t   匿名\n登入使用者\t   匿名"
+    ],
+    "content_id": [
+      "HTTP 錯誤 404.0 - Not Found\n您尋找的資源已移除、名稱已變更，或暫時無法使用。\n最有可能的原因:\n網頁伺服器上不存在指定的目錄或檔案。\nURL 包含拼字錯誤。\n自訂篩選器或模組 (例如 URLScan) 限制存取此檔案。\n解決方法:\n在網頁伺服器上建立內容。\n檢閱瀏覽器 URL。\n建立追蹤規則以追蹤此 HTTP 狀態碼的失敗要求，並查看哪一個模組正在呼叫 SetStatus。如需有關建立失敗要求之追蹤規則的詳細資訊，請按一下這裡。\n詳細錯誤資訊:\n模組\t   IIS Web Core\n通知\t   MapRequestHandler\n處理常式\t   ASPClassic\n錯誤碼\t   0x80070002\n要求的 URL\t   https://www.besttour.com.tw:443/e_web/DOM/default.asp?Category=A01&Area=JP&SubArea=OSA\n實體路徑\t   C:\\IIS\\Hsihung_web_real\\e_web\\DOM\\default.asp\n登入方法\t   匿名\n登入使用者\t   匿名\n詳細資訊:\n此錯誤表示伺服器上不存在此檔案或目錄。請建立檔案或目錄，然後再次嘗試要求。\n\n檢視詳細資訊 »"
+    ]
+  }
+}

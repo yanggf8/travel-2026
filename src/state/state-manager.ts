@@ -33,6 +33,10 @@ import {
   EventLogState as ZodEventLogState,
 } from './schemas';
 import { DEFAULTS } from '../config/constants';
+import { OfferManager } from './offer-manager';
+import { TransportManager } from './transport-manager';
+import { ItineraryManager } from './itinerary-manager';
+import { EventQuery } from './event-query';
 
 // Default paths
 const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
@@ -58,6 +62,12 @@ export interface StateManagerOptions {
 export class StateManager {
   private planPath: string;
   private statePath: string;
+  
+  // Domain managers
+  private offerMgr: OfferManager;
+  private transportMgr: TransportManager;
+  private itineraryMgr: ItineraryManager;
+  public events: EventQuery;
   private plan: TravelPlanMinimal;
   private eventLog: EventLogState;
   private timestamp: string;
@@ -105,6 +115,29 @@ export class StateManager {
         this.eventLog = this.loadEventLog();
       }
     }
+
+    // Initialize domain managers
+    this.offerMgr = new OfferManager(
+      this.plan,
+      () => this.timestamp,
+      (e) => this.emitEvent(e),
+      (d, p, s) => this.setProcessStatus(d, p, s),
+      (d, p) => this.clearDirty(d, p)
+    );
+    this.transportMgr = new TransportManager(
+      this.plan,
+      () => this.timestamp,
+      (e) => this.emitEvent(e)
+    );
+    this.itineraryMgr = new ItineraryManager(
+      this.plan,
+      () => this.timestamp,
+      (e) => this.emitEvent(e),
+      (d, p, s) => this.setProcessStatus(d, p, s),
+      (d, p, s, data) => this.forceSetProcessStatus(d, p, s, data),
+      (d, p) => this.clearDirty(d, p)
+    );
+    this.events = new EventQuery(() => this.eventLog.event_log);
   }
 
   // ============================================================================
@@ -438,13 +471,13 @@ export class StateManager {
   }
 
   // ============================================================================
-  // Offer Management
+  // Offer Management (delegated to OfferManager)
   // ============================================================================
 
   /**
    * Update availability for a specific offer/date combination.
    * Use this when agent provides new info (e.g., "Feb 13 is now available").
-   * 
+   *
    * @param offerId - The offer ID (e.g., "besttour_TYO05MM260211AM")
    * @param date - The date to update (ISO-8601: YYYY-MM-DD)
    * @param availability - New availability status

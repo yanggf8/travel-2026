@@ -1,0 +1,19 @@
+{
+  "url": "https://www.booking.com/searchresults.html?ss=Osaka&checkin=2026-02-24&checkout=2026-02-28&group_adults=2&no_rooms=1&group_children=0&selected_currency=TWD",
+  "scraped_at": "2026-02-05T10:25:27.521790",
+  "title": "Booking.com: Search results. Book your hotel now!",
+  "raw_text": "Skip to main content\nUSD\nList your property\nRegister\nSign in\nStays\nFlights\nFlight + Hotel\nCar rental\nCruises\nAttractions\nAirport taxis\nThu, Feb 5\n—\nFri, Feb 6\n2 adults · 0 children · 1 room\nSearch\nCountries\nRegions\nCities\nDistricts\nAirports\nHotels\nPlaces of interest\nVacation Homes\nApartments\nResorts\nVillas\nHostels\nB&Bs\nGuest Houses\nUnique places to stay\nDiscover monthly stays\nSupport\nManage your trips\nContact Customer Service\nSafety Resource Center\nDiscover\nGenius loyalty program\nSeasonal and holiday deals\nTravel articles\nBooking.com for Business\nTraveller Review Awards\nCar rental\nFlight finder\nRestaurant reservations\nBooking.com for Travel Agents\nTerms and settings\nPrivacy Notice\nTerms of Service\nAccessibility Statement\nDispute resolution\nDon't sell or share my personal information\nModern Slavery Statement\nHuman Rights Statement\nPartners\nExtranet login\nPartner help\nList your property\nBecome an affiliate\nAbout\nAbout Booking.com\nHow We Work\nSustainability\nPress center\nCareers\nInvestor relations\nCorporate contact\nContent guidelines and reporting\nUSD\nBooking.com is part of Booking Holdings Inc., the world leader in online travel and related services.\nCopyright © 1996–2026 Booking.com™. All rights reserved.",
+  "extracted": {
+    "flight": {},
+    "hotel": {},
+    "price": {},
+    "dates": {},
+    "inclusions": [],
+    "date_pricing": {}
+  },
+  "extracted_elements": {
+    "tables": [
+      "Su\nMo\nTu\nWe\nTh\nFr\nSa"
+    ]
+  }
+}

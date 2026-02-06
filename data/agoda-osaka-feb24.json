@@ -1,0 +1,23 @@
+{
+  "url": "https://www.agoda.com/search?city=70984&checkIn=2026-02-24&checkOut=2026-02-28&rooms=1&adults=2&children=0&locale=zh-tw&currency=TWD&sort=priceLowToHigh",
+  "scraped_at": "2026-02-05T10:24:59.930203",
+  "title": "Agoda | Hotels in Radewege | Best Price Guarantee!",
+  "raw_text": "                                                                                                                                                                                                                                                                                                                                                   \n                                                                                                                                                                                                                                                                                                                                                   \nBundle and save!\nFlight + HotelHotels & Homes\nNew!\nTransport\nNT$\nSelect your currency\nSign in\nCreate account\n0 choices\n24 Feb 2026\nTuesday\n28 Feb 2026\nSaturday\n2 adults\n1 room\nSEARCH\nLooking for instant coupons?\nCheck out our Coupons & Deals page for today's discounts\nSee all coupons\nSEARCH ON MAP\n0 results found\n\nSkip to main content\nMaking a selection within this region will cause content on this page to change. Product listings will update as each option is selected.\nPopular filters\nGuest rating: 8+ Excellent\nGuest rating\n\n9+\n\nExceptional\n\n8+\n\nExcellent\n\n7+\n\nVery good\n\n6+\n\nGood\nLocation rating\n\n9+\n\nExceptional\n\n8+\n\nExcellent\n\n7+\n\nVery good\nDistance to center\nInside city center\n<2 km to center\n2-5 km to center\n5-10 km to center\n>10 km to center\nPopular with families\nKids stay for free\nCongratulations! You get an extra 5% OFF today.\n\nJust activate your coupon now to unlock this offer.\n\nActivate coupon\n\nSort by\n\nBest match\nTop reviewed\nLowest price first\n\nWe couldn't find any results that match your search criteria. Please modify your search and try again.\n\nSearch results updated. 0 properties found.\nPage 1 of 1\nHome\nWorld(5,991,084)\nGermany(241,900)\nBrandenburg State(0)\nRadewege(3)\nHelp\n\nHelp center\n\nFAQs\n\nPrivacy policy\n\nCookie policy\n\nTerms of use\n\nDigital Services Act (EU)\n\nContent guidelines & reporting\n\nModern Slavery Statement\n\nCompany\n\nAbout us\n\nCareers\n\nPress\n\nBlog\n\nPointsMAX\n\nDestinations\n\nCountries/Territories\n\nAll Flight Routes\n\nPartner with us\n\nYCS partner portal\n\nPartner Hub\n\nAdvertise on Agoda\n\nAffiliates\n\nAgoda API Documentation\n\nGet the app\n\niOS app\n\nAndroid app\n\nAll material herein © 2005–2026 Agoda Company Pte. Ltd. All Rights Reserved.\n\nAgoda is part of Booking Holdings Inc., the world leader in online travel & related services.",
+  "extracted": {
+    "flight": {},
+    "hotel": {},
+    "price": {},
+    "dates": {},
+    "inclusions": [],
+    "date_pricing": {}
+  },
+  "extracted_elements": {
+    "hotel_class": [
+      "We couldn't find any results that match your search criteria. Please modify your search and try again.",
+      "Home\nWorld(5,991,084)\nGermany(241,900)\nBrandenburg State(0)\nRadewege(3)",
+      "Home",
+      "World(5,991,084)",
+      "Germany(241,900)"
+    ]
+  }
+}

@@ -711,23 +711,86 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 ## Storage Decision (DB)
 
 **Decision criteria**
-- No native DB installs required on agent machines.
-- Strong CLI story for skills (inspect/query/update).
-- JS-native integration with existing Node/ts-node tooling.
-- Keep StateManager as the single write path.
+- Strong CLI story for skills (inspect/query/update) — top priority.
+- Always warm (no cold-start, no daemon babysitting).
+- Native JSON output for curl responses.
+- Claude Code agent ergonomics — curl is Claude Code's strongest tool.
+- Cross-machine access (plan from laptop, phone, work).
+- Keep StateManager as the single write path for mutations.
 
 **Comparison (final)**
-| Option | CLI strength | Install requirement | Fit for skills |
-|--------|--------------|---------------------|----------------|
-| DuckDB | Strong (native CLI) | Requires binary install | ❌ (install not allowed) |
-| SQLite | Strong (sqlite3 CLI) | Requires native install | ❌ (install not allowed) |
-| Postgres | Strong (psql) | Requires server install | ❌ (install not allowed) |
-| Redis/Valkey | Strong (redis-cli) | Requires server + CLI | ❌ (install not allowed) |
-| LokiJS | None built-in (provide our own) | Pure JS dependency | ✅ (build CLI wrapper) |
+| Option | CLI | Always Warm | JSON | Indexes | Setup |
+|--------|-----|-------------|------|---------|-------|
+| Turso | curl (HTTP) | ✅ Cloud | ✅ | ✅ SQLite B-tree | CLI + signup |
+| SurrealDB | curl (HTTP) | ❌ Local daemon | ✅ | ✅ Native | Single binary |
+| CouchDB | curl (HTTP) | ❌ Local daemon | ✅ | ✅ Mango/Views | Heavy install |
+| PostgreSQL | psql | ❌ Local daemon | JSONB | ✅ | Server install |
+| SQLite | sqlite3 | ❌ Cold start | Via JSON1 | ✅ | None |
+| PocketBase | curl (HTTP) | ❌ Local daemon | ✅ | ✅ SQLite | Single binary |
 
 **Decision**
-Use **LokiJS** as the future embedded DB (JS-only). Provide a small Node CLI wrapper for inspection and
-updates so skills have a strong CLI surface without native DB installs.
+Use **Turso** as the skill pack database.
+
+**Why Turso:**
+- **curl as CLI** — HTTP API; Claude Code drives curl fluently
+- **Always warm** — cloud-hosted, no daemon to start/stop
+- **SQLite-compatible** — proven indexes, standard SQL (Claude excels at SQL)
+- **Cross-machine** — access travel plans from any device
+- **Free tier** — 500 databases, 9GB storage, 1B reads/month
+- **Built-in backup** — no manual export needed
+
+**Setup (one-time):**
+```bash
+# Install CLI
+brew install tursodatabase/tap/turso
+
+# Authenticate (GitHub OAuth)
+turso auth signup
+
+# Create database
+turso db create travel-2026
+
+# Get credentials
+export TURSO_URL=$(turso db show travel-2026 --url)
+export TURSO_TOKEN=$(turso db tokens create travel-2026)
+```
+
+**Usage patterns for skills:**
+```bash
+# Query offers
+curl -s -X POST "$TURSO_URL" \
+  -H "Authorization: Bearer $TURSO_TOKEN" \
+  -d '{"statements": ["SELECT * FROM offers WHERE price_per_person < 35000"]}'
+
+# Insert offer
+curl -s -X POST "$TURSO_URL" \
+  -H "Authorization: Bearer $TURSO_TOKEN" \
+  -d '{"statements": ["INSERT INTO offers (id, source_id, price) VALUES ('\''besttour_001'\'', '\''besttour'\'', 32000)"]}'
+
+# With jq for clean output
+curl -s -X POST "$TURSO_URL" \
+  -H "Authorization: Bearer $TURSO_TOKEN" \
+  -d '{"statements": ["SELECT source_id, price_per_person FROM offers"]}' \
+  | jq '.results[0].rows'
+```
+
+**Schema example:**
+```sql
+CREATE TABLE offers (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    type TEXT CHECK(type IN ('package', 'flight', 'hotel')),
+    price_per_person INTEGER,
+    currency TEXT DEFAULT 'TWD',
+    region TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_offers_region ON offers(region);
+CREATE INDEX idx_offers_price ON offers(price_per_person);
+```
+
+**Alternative (local-first):** SurrealDB — single binary, no signup, works offline. Use if cloud dependency is a concern.
 
 ## Next Steps
 

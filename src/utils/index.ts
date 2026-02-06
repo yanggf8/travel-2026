@@ -1,3 +1,4 @@
+// Leave calculator (legacy)
 export {
   loadHolidayCalendar,
   getHolidayCalendarForYear,
@@ -8,15 +9,34 @@ export {
 } from './leave-calculator';
 
 export type {
-  HolidayEntry,
-  MakeupWorkday,
-  HolidayCalendar,
-  DayDetail,
-  LeaveDayResult,
   TripOption,
   TripComparison,
 } from './leave-calculator';
 
+// Holiday calculator (new)
+export {
+  calculateLeave,
+  getHolidaysInRange,
+  getDateRange,
+  isHoliday,
+  isWeekend,
+  isWorkday,
+  requiresLeave,
+  getCalendar,
+  clearCalendarCache,
+} from './holiday-calculator';
+
+export type {
+  LeaveResult,
+  DateInfo,
+  HolidayCalendar,
+  HolidayEntry,
+  MakeupWorkday,
+  DayDetail,
+  LeaveDayResult,
+} from './holiday-calculator';
+
+// Flight normalizer
 export {
   normalizeFlightData,
   scanFlightFiles,

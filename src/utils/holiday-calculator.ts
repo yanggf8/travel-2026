@@ -5,7 +5,7 @@
  * Caches loaded calendars in memory so repeated queries don't re-read disk.
  *
  * Usage:
- *   import { isHoliday, isWorkday, calculateLeave } from '../utilities/holiday-calculator';
+ *   import { isHoliday, isWorkday, calculateLeave } from '../utils/holiday-calculator';
  *
  *   isHoliday('2026-02-15', 'tw');       // true  (除夕)
  *   isWorkday('2026-02-07', 'tw');        // true  (春節補班, Saturday)
