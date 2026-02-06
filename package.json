@@ -25,7 +25,9 @@
     "compare-trips": "ts-node src/cli/compare-trips.ts",
     "compare-dates": "ts-node src/cli/compare-dates.ts",
     "normalize-flights": "ts-node src/utils/flight-normalizer.ts",
-    "leave-calc": "ts-node src/utils/leave-calculator.ts"
+    "leave-calc": "ts-node src/utils/leave-calculator.ts",
+    "db:import:turso": "ts-node scripts/import-offers-to-turso.ts",
+    "db:status:turso": "ts-node scripts/turso-status.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

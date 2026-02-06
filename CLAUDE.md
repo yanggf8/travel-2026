@@ -760,6 +760,12 @@ turso db shell travel-2026
 # Query helper script
 ./scripts/turso-query.sh "SELECT * FROM offers WHERE price_per_person < 35000"
 
+# Import scraped JSON (query layer only; JSON files remain source-of-truth)
+npm run db:import:turso -- --dir data
+
+# Sanity-check counts / last import timestamps
+npm run db:status:turso
+
 # Direct curl (source .env first)
 source .env && curl -s -X POST "https://travel-2026-yanggf8.aws-ap-northeast-1.turso.io/v2/pipeline" \
   -H "Authorization: Bearer $TURSO_TOKEN" \
