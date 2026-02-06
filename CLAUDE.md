@@ -739,55 +739,75 @@ Use **Turso** as the skill pack database.
 - **Free tier** — 500 databases, 9GB storage, 1B reads/month
 - **Built-in backup** — no manual export needed
 
-**Setup (one-time):**
-```bash
-# Install CLI
-brew install tursodatabase/tap/turso
-
-# Authenticate (GitHub OAuth)
-turso auth signup
-
-# Create database
-turso db create travel-2026
-
-# Get credentials
-export TURSO_URL=$(turso db show travel-2026 --url)
-export TURSO_TOKEN=$(turso db tokens create travel-2026)
+**Setup: ✅ COMPLETED (2026-02-06)**
+```
+Database: travel-2026
+Region:   aws-ap-northeast-1 (Tokyo)
+URL:      libsql://travel-2026-yanggf8.aws-ap-northeast-1.turso.io
+Creds:    .env (gitignored)
 ```
 
-**Usage patterns for skills:**
+**Tables:**
+- `offers` - Package/flight/hotel offers with pricing
+- `destinations` - Tokyo, Osaka configured
+- `events` - Audit trail
+
+**Usage:**
 ```bash
-# Query offers
-curl -s -X POST "$TURSO_URL" \
-  -H "Authorization: Bearer $TURSO_TOKEN" \
-  -d '{"statements": ["SELECT * FROM offers WHERE price_per_person < 35000"]}'
+# Interactive shell
+turso db shell travel-2026
 
-# Insert offer
-curl -s -X POST "$TURSO_URL" \
-  -H "Authorization: Bearer $TURSO_TOKEN" \
-  -d '{"statements": ["INSERT INTO offers (id, source_id, price) VALUES ('\''besttour_001'\'', '\''besttour'\'', 32000)"]}'
+# Query helper script
+./scripts/turso-query.sh "SELECT * FROM offers WHERE price_per_person < 35000"
 
-# With jq for clean output
-curl -s -X POST "$TURSO_URL" \
+# Direct curl (source .env first)
+source .env && curl -s -X POST "https://travel-2026-yanggf8.aws-ap-northeast-1.turso.io/v2/pipeline" \
   -H "Authorization: Bearer $TURSO_TOKEN" \
-  -d '{"statements": ["SELECT source_id, price_per_person FROM offers"]}' \
-  | jq '.results[0].rows'
+  -H "Content-Type: application/json" \
+  -d '{"requests": [{"type": "execute", "stmt": {"sql": "SELECT * FROM destinations"}}]}' | jq .
 ```
 
-**Schema example:**
+**Schema:**
 ```sql
+-- Offers (packages, flights, hotels)
 CREATE TABLE offers (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
     type TEXT CHECK(type IN ('package', 'flight', 'hotel')),
+    name TEXT,
     price_per_person INTEGER,
     currency TEXT DEFAULT 'TWD',
     region TEXT,
+    destination TEXT,
+    departure_date TEXT,
+    return_date TEXT,
+    nights INTEGER,
+    availability TEXT,
+    hotel_name TEXT,
+    airline TEXT,
+    raw_data TEXT,
+    scraped_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_offers_region ON offers(region);
-CREATE INDEX idx_offers_price ON offers(price_per_person);
+-- Destinations
+CREATE TABLE destinations (
+    slug TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    currency TEXT DEFAULT 'JPY',
+    timezone TEXT,
+    primary_airports TEXT
+);
+
+-- Events (audit)
+CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    destination TEXT,
+    process TEXT,
+    data TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 **Alternative (local-first):** SurrealDB — single binary, no signup, works offline. Use if cloud dependency is a concern.
