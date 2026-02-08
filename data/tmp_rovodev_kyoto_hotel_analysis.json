@@ -1,0 +1,272 @@
+{
+  "package_info": {
+    "source": "liontravel",
+    "product_sn": "190620015",
+    "destination": "Kyoto",
+    "total_hotels": 26,
+    "currently_selected": "APA HOTEL KYOTO EKIMAE"
+  },
+  "hotels": [
+    {
+      "id": 1,
+      "name": "APA HOTEL KYOTO EKIMAE",
+      "name_en": "APA HOTEL KYOTO EKIMAE",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "excellent",
+      "notes": "Currently selected - Right at Kyoto Station, very convenient for transportation",
+      "pros": ["Direct station access", "Budget-friendly APA chain", "Great transport hub"],
+      "cons": ["Smaller rooms typical of APA", "Basic amenities"],
+      "best_for": "Budget travelers, first-time visitors, lots of day trips"
+    },
+    {
+      "id": 2,
+      "name": "VESSEL HOTEL CAMPANA KYOTO GOJO",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "very_good",
+      "notes": "Family-friendly hotel with good amenities",
+      "pros": ["Kids under 18 free", "Good breakfast", "Comfortable rooms", "Free welcome drinks"],
+      "cons": ["10-15 min walk to station"],
+      "best_for": "Families with children, comfort seekers"
+    },
+    {
+      "id": 3,
+      "name": "KEIO PRELIA HOTEL KYOTO KARASUMA GOJO",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "very_good",
+      "notes": "Modern business hotel near subway",
+      "pros": ["Near Gojo subway", "Modern facilities", "Good breakfast"],
+      "cons": ["Slightly away from main station"],
+      "best_for": "Business travelers, modern amenities seekers"
+    },
+    {
+      "id": 4,
+      "name": "SOTETSU FRESA INN KYOTO SHIJOKARASUMA",
+      "area": "Kyoto Station / Shimogyo - Shijo area",
+      "location_score": "excellent",
+      "notes": "Great location near shopping and dining at Shijo",
+      "pros": ["Near Shijo shopping district", "Good value", "Central location"],
+      "cons": ["Standard business hotel amenities"],
+      "best_for": "Shopping enthusiasts, nightlife, dining"
+    },
+    {
+      "id": 5,
+      "name": "HOTEL HOKKE CLUB KYOTO",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "very_good",
+      "notes": "Traditional Japanese hospitality",
+      "pros": ["Public bath/onsen", "Japanese-style service", "Good location"],
+      "cons": ["Older property"],
+      "best_for": "Onsen lovers, traditional experience"
+    },
+    {
+      "id": 6,
+      "name": "HOTEL M S EST SHIJO KARASUMA",
+      "area": "Kyoto Station / Shimogyo - Shijo area",
+      "location_score": "very_good",
+      "notes": "Women-friendly hotel in shopping area",
+      "pros": ["Ladies floor available", "Shijo location", "Amenities"],
+      "cons": ["Smaller property"],
+      "best_for": "Female travelers, shopping"
+    },
+    {
+      "id": 7,
+      "name": "HOTEL NEW HANKYU KYOTO",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "excellent",
+      "notes": "Directly connected to Kyoto Station",
+      "pros": ["Station direct access", "Multiple restaurants", "Reliable chain", "Large property"],
+      "cons": ["Can be busy", "Standard business hotel"],
+      "best_for": "Convenience, easy access, reliable choice"
+    },
+    {
+      "id": 8,
+      "name": "HOTEL MYSTAYS KYOTO SHIJO",
+      "area": "Kyoto Station / Shimogyo - Shijo area",
+      "location_score": "very_good",
+      "notes": "Budget-friendly near Shijo",
+      "pros": ["Good value", "Shijo area", "Decent size rooms for price"],
+      "cons": ["Basic amenities"],
+      "best_for": "Budget travelers wanting Shijo location"
+    },
+    {
+      "id": 9,
+      "name": "HOTEL KEIHAN KYOTO HACHIJOGUCHI",
+      "area": "Kyoto Station / Shimogyo - Hachijo exit",
+      "location_score": "excellent",
+      "notes": "Right at station's south exit",
+      "pros": ["Station direct access", "Public bath", "Good breakfast", "Modern"],
+      "cons": ["South side less bustling than north"],
+      "best_for": "Station convenience with better amenities than APA"
+    },
+    {
+      "id": 10,
+      "name": "MITSUI GARDEN HOTEL KYOTO SHIJO",
+      "area": "Kyoto Station / Shimogyo - Shijo area",
+      "location_score": "excellent",
+      "notes": "Premium chain with excellent facilities",
+      "pros": ["Public bath", "Great breakfast", "Quality service", "Shijo location"],
+      "cons": ["Higher price point"],
+      "best_for": "Comfort seekers, willing to pay more for quality"
+    },
+    {
+      "id": 11,
+      "name": "SOTETSU FRESA INN KYOTO HACHIJOGUCHI",
+      "area": "Kyoto Station / Shimogyo - Hachijo exit",
+      "location_score": "excellent",
+      "notes": "Budget business hotel at station",
+      "pros": ["Station proximity", "Good value", "Reliable chain"],
+      "cons": ["Basic business hotel"],
+      "best_for": "Budget-conscious, station access"
+    },
+    {
+      "id": 12,
+      "name": "MIYAKO HOTEL KYOTO HACHIJO",
+      "area": "Kyoto Station / Shimogyo - Hachijo exit",
+      "location_score": "excellent",
+      "notes": "Upper-mid range with traditional elements",
+      "pros": ["Near station", "Spacious rooms", "Quality service", "Japanese garden"],
+      "cons": ["Higher price"],
+      "best_for": "Comfort with Japanese atmosphere"
+    },
+    {
+      "id": 13,
+      "name": "RIHGA ROYAL HOTEL KYOTO",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "very_good",
+      "notes": "Large luxury hotel",
+      "pros": ["Luxury amenities", "Multiple restaurants", "Pool", "Spacious rooms"],
+      "cons": ["Higher price", "15 min walk to station", "Large/impersonal"],
+      "best_for": "Luxury seekers, special occasions"
+    },
+    {
+      "id": 14,
+      "name": "HOTEL KEIHAN KYOTO GRANDE",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "excellent",
+      "notes": "Premium version of Keihan chain",
+      "pros": ["Station direct", "Upscale amenities", "Public bath", "Excellent breakfast"],
+      "cons": ["Higher price than regular Keihan"],
+      "best_for": "Convenient luxury"
+    },
+    {
+      "id": 15,
+      "name": "DAIWA ROYNET HOTEL KYOTO SHIJO KARASUMA",
+      "area": "Kyoto Station / Shimogyo - Shijo area",
+      "location_score": "excellent",
+      "notes": "Reliable business hotel chain in prime location",
+      "pros": ["Shijo location", "Consistent quality", "Good sized rooms", "Reliable"],
+      "cons": ["Business hotel feel"],
+      "best_for": "Reliable choice in shopping area"
+    },
+    {
+      "id": 16,
+      "name": "IBIS STYLES KYOTO STATION",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "excellent",
+      "notes": "International chain with modern design",
+      "pros": ["Station proximity", "Modern design", "Breakfast included", "Good value"],
+      "cons": ["Smaller rooms", "Chain hotel feel"],
+      "best_for": "Budget travelers wanting international standards"
+    },
+    {
+      "id": 17,
+      "name": "MIMARU KYOTO STATION",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "excellent",
+      "notes": "Apartment-style hotel",
+      "pros": ["Full kitchen", "Washer/dryer", "Spacious for groups", "Living area", "Near station"],
+      "cons": ["Higher price for solo", "More apartment than hotel service"],
+      "best_for": "Families, groups, longer stays"
+    },
+    {
+      "id": 18,
+      "name": "HOTEL GRANVIA KYOTO",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "perfect",
+      "notes": "Premium hotel INSIDE Kyoto Station building",
+      "pros": ["Literally IN the station", "Luxury amenities", "Multiple restaurants", "Top floor views", "JR operated"],
+      "cons": ["Premium pricing", "Can be expensive"],
+      "best_for": "Ultimate convenience, luxury, train enthusiasts"
+    },
+    {
+      "id": 19,
+      "name": "KYOTO TOWER HOTEL",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "perfect",
+      "notes": "At base of Kyoto Tower landmark",
+      "pros": ["Kyoto Tower access", "Station directly across street", "Iconic location", "Public bath"],
+      "cons": ["Aging property", "Rooms can be dated"],
+      "best_for": "Landmark location, tower access"
+    },
+    {
+      "id": 20,
+      "name": "KYOTO CENTURY HOTEL",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "excellent",
+      "notes": "Upscale hotel near station",
+      "pros": ["Near station", "Spacious rooms", "Quality service", "Good restaurants"],
+      "cons": ["Higher price", "Aging but well-maintained"],
+      "best_for": "Comfort near station"
+    },
+    {
+      "id": 21,
+      "name": "HOTEL GRACERY KYOTO SANJO",
+      "area": "Rakuchu (Central Kyoto)",
+      "location_score": "very_good",
+      "notes": "Downtown location near Sanjo shopping",
+      "pros": ["Downtown Sanjo area", "Near Kamo River", "Modern", "Shopping access"],
+      "cons": ["Further from station", "Need subway/bus"],
+      "best_for": "Downtown atmosphere, different area from station"
+    },
+    {
+      "id": 22,
+      "name": "DAIWA ROYNET HOTEL KYOTO HACHIJOGUCHI",
+      "area": "Kyoto Station / Shimogyo - Hachijo exit",
+      "location_score": "excellent",
+      "notes": "Reliable Daiwa chain at station",
+      "pros": ["Station proximity", "Consistent quality", "Good value", "Reliable"],
+      "cons": ["Standard business hotel"],
+      "best_for": "Reliable quality at station"
+    },
+    {
+      "id": 23,
+      "name": "DAIWA ROYNET HOTEL KYOTO EKIMAE PREMIER",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "excellent",
+      "notes": "Premium Daiwa line near station",
+      "pros": ["Near station", "Upgraded amenities", "Larger rooms", "Premium Daiwa quality"],
+      "cons": ["Higher price than regular Daiwa"],
+      "best_for": "Step-up comfort near station"
+    },
+    {
+      "id": 24,
+      "name": "APA HOTEL KYOTO GION EXCELLENT",
+      "area": "Rakuto / Higashiyama (Eastern Kyoto - Gion)",
+      "location_score": "good",
+      "notes": "In traditional Gion geisha district",
+      "pros": ["Gion location", "Traditional atmosphere", "Near temples", "Budget APA pricing"],
+      "cons": ["Further from station", "Smaller APA rooms", "Need bus/taxi"],
+      "best_for": "Gion atmosphere, temple access, budget"
+    },
+    {
+      "id": 25,
+      "name": "KYOTO TOKYU HOTEL",
+      "area": "Kyoto Station / Shimogyo",
+      "location_score": "very_good",
+      "notes": "Upscale hotel near Kyoto Station",
+      "pros": ["Near station", "Quality Tokyu chain", "Good amenities", "Spacious"],
+      "cons": ["Higher price", "10 min walk to station"],
+      "best_for": "Upscale comfort near station"
+    },
+    {
+      "id": 26,
+      "name": "ANA CROWNE PLAZA KYOTO",
+      "area": "Rakuchu (Central Kyoto)",
+      "location_score": "good",
+      "notes": "International luxury brand, central location",
+      "pros": ["IHG loyalty points", "Luxury amenities", "Near Nijo Castle", "International standards"],
+      "cons": ["Away from station", "Premium pricing", "Need subway"],
+      "best_for": "Luxury, IHG members, central Kyoto stay"
+    }
+  ]
+}

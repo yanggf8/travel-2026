@@ -125,6 +125,7 @@ export const HotelSchema = z.object({
   name: z.string(),
   slug: z.string().optional(),
   area: z.string(),
+  area_type: z.enum(['central', 'airport', 'suburb', 'unknown']).optional(),
   star_rating: z.number().nullable().optional(),
   access: z.array(z.string()).optional(),
   check_in: z.string().optional(),
@@ -142,6 +143,9 @@ export const DatePricingEntrySchema = z.object({
   note: z.string().optional(),
 }).passthrough();
 
+// Package subtype for FIT vs group tour distinction
+export const PackageSubtypeSchema = z.enum(['fit', 'group', 'semi_fit', 'unknown']);
+
 export const OfferSchema = z.object({
   id: z.string(),
   source_id: z.string(),
@@ -149,12 +153,19 @@ export const OfferSchema = z.object({
   url: z.string().optional(),
   scraped_at: z.string().optional(),
   type: z.enum(['package', 'flight', 'hotel', 'activity']),
+  // FIT vs Group distinction (for packages)
+  package_subtype: PackageSubtypeSchema.optional(),
+  guided: z.boolean().optional(), // Has tour guide/leader
+  meals_included: z.number().optional(), // Number of meals included
   duration_days: z.number().optional(),
   currency: z.string(),
   price_per_person: z.number(),
   price_total: z.number().optional(),
   availability: AvailabilitySchema,
   seats_remaining: z.number().nullable().optional(),
+  // Baggage
+  baggage_included: z.boolean().nullable().optional(),
+  baggage_kg: z.number().nullable().optional(),
   flight: FlightSchema.optional(),
   hotel: HotelSchema.optional(),
   includes: z.array(z.string()).optional(),
