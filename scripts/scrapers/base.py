@@ -7,13 +7,118 @@ Shared browser helpers, retry logic, and abstract base class for OTA parsers.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urljoin
 
 from .schema import ScrapeResult
+
+
+# ---------------------------------------------------------------------------
+# OTA Config Loader
+# ---------------------------------------------------------------------------
+
+_ota_config_cache: dict | None = None
+
+
+def load_ota_config() -> dict:
+    """Load OTA configuration from ota-sources.json."""
+    global _ota_config_cache
+    if _ota_config_cache is not None:
+        return _ota_config_cache
+
+    config_path = Path(__file__).parent.parent.parent / "data" / "ota-sources.json"
+    if config_path.exists():
+        with open(config_path, encoding="utf-8") as f:
+            _ota_config_cache = json.load(f).get("sources", {})
+    else:
+        _ota_config_cache = {}
+    return _ota_config_cache
+
+
+def get_listing_selectors(source_id: str) -> dict | None:
+    """Get listing selectors for an OTA from config."""
+    config = load_ota_config()
+    source = config.get(source_id, {})
+    return source.get("listing_selectors")
+
+
+# ---------------------------------------------------------------------------
+# Baggage Extraction (P6)
+# ---------------------------------------------------------------------------
+
+BAGGAGE_PATTERNS = {
+    "included": [
+        r"託運行李\s*(\d+)\s*公斤",
+        r"含\s*(\d+)\s*kg\s*行李",
+        r"checked baggage.*?(\d+)\s*kg",
+        r"免費託運.*?(\d+)\s*kg",
+        r"行李\s*(\d+)\s*kg",
+    ],
+    "not_included": [
+        r"不含行李",
+        r"無免費託運",
+        r"行李.*另購",
+        r"baggage not included",
+        r"手提行李\s*\d+\s*kg\s*$",
+    ],
+}
+
+
+def extract_baggage_info(raw_text: str) -> dict:
+    """Extract baggage info from raw text. Returns {"included": bool|None, "kg": int|None}."""
+    text = raw_text.lower() if raw_text else ""
+    for pattern in BAGGAGE_PATTERNS["included"]:
+        m = re.search(pattern, raw_text, re.IGNORECASE)
+        if m:
+            return {"included": True, "kg": int(m.group(1))}
+    for pattern in BAGGAGE_PATTERNS["not_included"]:
+        if re.search(pattern, raw_text, re.IGNORECASE):
+            return {"included": False, "kg": None}
+    return {"included": None, "kg": None}
+
+
+# ---------------------------------------------------------------------------
+# Hotel Area Detection (P7)
+# ---------------------------------------------------------------------------
+
+_hotel_areas_cache: dict | None = None
+
+
+def _load_hotel_areas() -> dict:
+    global _hotel_areas_cache
+    if _hotel_areas_cache is not None:
+        return _hotel_areas_cache
+    path = Path(__file__).parent.parent.parent / "data" / "hotel-areas.json"
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            _hotel_areas_cache = json.load(f)
+    else:
+        _hotel_areas_cache = {}
+    return _hotel_areas_cache
+
+
+def detect_hotel_area(hotel_name: str, region: str) -> str:
+    """Detect hotel area type from name. Returns 'central', 'airport', 'suburb', etc."""
+    areas = _load_hotel_areas().get(region, {})
+    for area_type, keywords in areas.items():
+        for kw in keywords:
+            if kw in hotel_name:
+                return area_type
+    return "unknown"
+
+
+def _infer_region(url: str) -> str:
+    """Best-effort region inference from URL keywords."""
+    u = url.lower()
+    for region in ("kansai", "osaka", "kyoto", "tokyo", "nagoya"):
+        if region in u:
+            return "kansai" if region in ("osaka", "kyoto") else region
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -130,14 +235,86 @@ async def extract_generic_elements(page) -> dict[str, list[str]]:
     return extracted
 
 
+async def _extract_container_based(page, selectors: dict, base_url: str) -> list[dict]:
+    """Extract packages using container-based selectors from config."""
+    links = []
+    container_sel = selectors.get("container", ".product-item")
+    title_sel = selectors.get("title", "h3, h4, .title")
+    price_sel = selectors.get("price", ".price")
+    code_regex = selectors.get("code_regex", r"([A-Z0-9]+)")
+    url_template = selectors.get("url_template", "")
+
+    try:
+        items = await page.query_selector_all(container_sel)
+        for item in items:
+            try:
+                # Get title
+                title_el = await item.query_selector(title_sel)
+                title = ""
+                if title_el:
+                    title = await title_el.inner_text()
+                    title = title.strip()[:100]
+
+                # Get price
+                price_el = await item.query_selector(price_sel)
+                price_text = ""
+                if price_el:
+                    price_text = await price_el.inner_text()
+
+                # Get product code from container HTML
+                item_html = await item.inner_html()
+                code_match = re.search(code_regex, item_html)
+                code = code_match.group(1) if code_match else ""
+
+                if code and url_template:
+                    # Construct product URL from template
+                    product_url = url_template.replace("{code}", code)
+                    links.append({
+                        "url": product_url,
+                        "code": code,
+                        "title": f"{title} {price_text}".strip(),
+                    })
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"  Error extracting with container selectors: {e}")
+
+    return links
+
+
 async def extract_package_links(page, base_url: str) -> list[dict]:
     """
     Extract package detail links from listing pages.
 
+    Uses config from ota-sources.json when available, falls back to hardcoded selectors.
     Supports BestTour, LionTravel, Lifetour, Settour.
     """
     links = []
 
+    # Try to get selectors from config
+    source_id = None
+    for ota_id in ["besttour", "lifetour", "settour", "liontravel"]:
+        if ota_id in base_url or f"{ota_id}.com" in base_url:
+            source_id = ota_id
+            break
+
+    if source_id:
+        selectors = get_listing_selectors(source_id)
+        if selectors and selectors.get("method") == "container":
+            return await _extract_container_based(page, selectors, base_url)
+
+    # Fallback: Special handling for Settour - uses .product-item containers
+    if "settour.com.tw" in base_url:
+        selectors = {
+            "container": ".product-item",
+            "title": ".product-title, h3, h4, .title",
+            "price": ".ori-price-offer, .price",
+            "code_regex": r"slider-flightInfo_([A-Z0-9]+)",
+            "url_template": "https://tour.settour.com.tw/product/{code}",
+        }
+        return await _extract_container_based(page, selectors, base_url)
+
+    # Standard anchor-based extraction for other OTAs
     try:
         anchors = await page.query_selector_all("a[href]")
         seen: set[str] = set()
@@ -302,6 +479,21 @@ class BaseScraper(ABC):
         result.inclusions = parsed.inclusions
         result.date_pricing = parsed.date_pricing
         result.itinerary = parsed.itinerary
+
+        # Auto-extract baggage info if not already set
+        if result.baggage_included is None and result.raw_text:
+            bag = extract_baggage_info(result.raw_text)
+            result.baggage_included = bag["included"]
+            result.baggage_kg = bag["kg"]
+
+        # Auto-detect hotel area type if hotel is populated
+        if result.hotel.is_populated and not result.hotel.area_type:
+            region = _infer_region(url)
+            if region:
+                result.hotel.area_type = detect_hotel_area(
+                    result.hotel.name or (result.hotel.names[0] if result.hotel.names else ""),
+                    region,
+                )
         
         # Cache the result
         if use_cache:

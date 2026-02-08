@@ -9,7 +9,7 @@ Usage:
     python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
 
 Options:
-    --type fit|group|flight|hotel    Filter by package type
+    --type fit|group|semi_fit|flight|hotel    Filter by package type (semi_fit = group with free days)
     --date YYYY-MM-DD                Filter by departure date
     --min-price N                    Minimum price (TWD)
     --max-price N                    Maximum price (TWD)
@@ -35,26 +35,45 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
-def _classify_package_type_from_title(title: str) -> str:
-    """Lightweight package type classification from title keywords."""
+def _classify_package_subtype(title: str) -> str:
+    """
+    Classify package as FIT, group, or semi_fit from title keywords.
+
+    Returns: 'fit' | 'group' | 'semi_fit' | 'unknown'
+    """
     title_lower = title.lower()
 
     # Group indicators (check first to avoid false FIT positives)
     group_keywords = ["團體", "跟團", "精緻團", "品質團", "領隊", "導遊"]
     if any(kw in title_lower for kw in group_keywords):
+        # Check for semi-FIT within group tours
+        semi_fit_keywords = ["半自由", "伴自由", "自由時間"]
+        if any(kw in title_lower for kw in semi_fit_keywords):
+            return "semi_fit"
         return "group"
 
-    # Phrases common in group tours that mention free time
-    group_free_time_phrases = ["自由活動", "自由時間", "自由選購", "自由行程"]
+    # Phrases common in group tours that mention free time (but not semi-FIT)
+    group_free_time_phrases = ["自由活動", "自由選購", "自由行程"]
     if any(kw in title_lower for kw in group_free_time_phrases):
         return "group"
 
-    # FIT indicators
-    fit_keywords = ["自由行", "機加酒", "自助", "半自由", "伴自由", "自由配", "fit"]
+    # Pure FIT indicators
+    fit_keywords = ["自由行", "機加酒", "自助", "自由配", "fit"]
     if any(kw in title_lower for kw in fit_keywords):
         return "fit"
 
+    # Semi-FIT (if not already caught in group context)
+    semi_fit_keywords = ["半自由", "伴自由"]
+    if any(kw in title_lower for kw in semi_fit_keywords):
+        return "semi_fit"
+
     return "unknown"
+
+
+# Alias for backwards compatibility
+def _classify_package_type_from_title(title: str) -> str:
+    """Deprecated: Use _classify_package_subtype instead."""
+    return _classify_package_subtype(title)
 
 
 def load_scrape_result(file_path: str) -> dict | list[dict]:
@@ -70,9 +89,12 @@ def load_scrape_result(file_path: str) -> dict | list[dict]:
         for listing in listings:
             if "scraped_at" not in listing:
                 listing["scraped_at"] = scraped_at
-            # Add lightweight package_type classification if missing
-            if "package_type" not in listing or not listing["package_type"]:
-                listing["package_type"] = _classify_package_type_from_title(listing.get("title", ""))
+            # Add package_subtype classification if missing
+            if "package_subtype" not in listing or not listing["package_subtype"]:
+                listing["package_subtype"] = _classify_package_subtype(listing.get("title", ""))
+            # Keep package_type for backwards compatibility
+            if "package_type" not in listing:
+                listing["package_type"] = listing["package_subtype"]
         return listings
     
     # Regular scrape result
@@ -176,7 +198,7 @@ def matches_filters(pkg: dict, args: argparse.Namespace) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Filter scraped packages")
     parser.add_argument("files", nargs="+", help="Scrape result JSON files")
-    parser.add_argument("--type", choices=["fit", "group", "flight", "hotel"], help="Package type")
+    parser.add_argument("--type", choices=["fit", "group", "semi_fit", "flight", "hotel"], help="Package type (semi_fit = group tour with free days)")
     parser.add_argument("--date", help="Departure date YYYY-MM-DD")
     parser.add_argument("--min-price", type=int, help="Minimum price (TWD)")
     parser.add_argument("--max-price", type=int, help="Maximum price (TWD)")

@@ -89,5 +89,73 @@
     "Use leave-calculator with holiday calendar for fair leave day comparison",
     "Convert all prices to TWD before comparing",
     "Hotel comparison: match similar class (e.g. Just Sleep ≈ mid-range business hotel)"
-  ]
+  ],
+  "airlines": {
+    "peach": {
+      "code": "MM",
+      "type": "LCC",
+      "hand_baggage_kg": 7,
+      "checked_bag_included": false,
+      "checked_bag_cost_twd": 550,
+      "checked_bag_cost_jpy": 2500,
+      "checked_bag_kg": 20
+    },
+    "thai_lion": {
+      "code": "SL",
+      "type": "LCC",
+      "hand_baggage_kg": 7,
+      "checked_bag_included": false,
+      "checked_bag_cost_twd": 650,
+      "checked_bag_cost_jpy": 3000,
+      "checked_bag_kg": 20
+    },
+    "tigerair": {
+      "code": "IT",
+      "type": "LCC",
+      "hand_baggage_kg": 10,
+      "checked_bag_included": false,
+      "checked_bag_cost_twd": 600,
+      "checked_bag_cost_jpy": 2700,
+      "checked_bag_kg": 20
+    },
+    "jetstar": {
+      "code": "GK",
+      "type": "LCC",
+      "hand_baggage_kg": 7,
+      "checked_bag_included": false,
+      "checked_bag_cost_twd": 580,
+      "checked_bag_cost_jpy": 2600,
+      "checked_bag_kg": 20
+    },
+    "eva": {
+      "code": "BR",
+      "type": "FSC",
+      "hand_baggage_kg": 7,
+      "checked_bag_included": true,
+      "checked_bag_kg": 23
+    },
+    "china_airlines": {
+      "code": "CI",
+      "type": "FSC",
+      "hand_baggage_kg": 7,
+      "checked_bag_included": true,
+      "checked_bag_kg": 23
+    },
+    "starlux": {
+      "code": "JX",
+      "type": "FSC",
+      "hand_baggage_kg": 7,
+      "checked_bag_included": true,
+      "checked_bag_kg": 23
+    },
+    "thai_vietjet": {
+      "code": "VZ",
+      "type": "LCC",
+      "hand_baggage_kg": 7,
+      "checked_bag_included": false,
+      "checked_bag_cost_twd": 700,
+      "checked_bag_cost_jpy": 3200,
+      "checked_bag_kg": 20
+    }
+  }
 }

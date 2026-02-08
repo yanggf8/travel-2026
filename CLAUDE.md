@@ -385,6 +385,7 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   │   ├── cascade.ts         # Cascade CLI
 │   │   ├── compare-dates.ts   # Multi-date FIT vs separate comparison
 │   │   ├── compare-trips.ts   # Trip comparison CLI (package vs separate)
+│   │   ├── compare-true-cost.ts # True cost comparison (pkg + baggage + transport)
 │   │   ├── p3p4-test.ts       # Package skill test CLI
 │   │   └── travel-update.ts   # Travel plan update CLI
 │   ├── state/                 # State management
@@ -554,6 +555,10 @@ npm run compare-trips -- --input data/osaka-trip-comparison.json --detailed
 npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4
 npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4 --hotel-per-night 3500
 
+# === TRUE COST COMPARISON ===
+npm run compare-true-cost -- --region kansai --pax 2 --date 2026-02-24
+npm run compare-true-cost -- --region kansai --pax 2 --itinerary "kyoto:2,osaka:2"
+
 # === FLIGHT NORMALIZER ===
 npm run normalize-flights -- data/trip-feb24-out.json --top 5
 npm run normalize-flights -- --scan                   # Scan all flight data
@@ -561,6 +566,13 @@ npm run normalize-flights -- --scan                   # Scan all flight data
 # === DATA VALIDATION & HEALTH CHECK ===
 npm run validate:data                          # Check CLAUDE.md ↔ code consistency
 npm run doctor                                 # Full health check (includes dependency + env checks)
+npm run scraper:doctor                         # Test all OTA scrapers are working
+npm run scraper:setup                          # Install Playwright if missing
+
+# === BATCH SCRAPER ===
+npm run scraper:batch -- --dest kansai                     # Scrape all OTAs for Kansai
+npm run scraper:batch -- --dest osaka --sources besttour,settour  # Specific OTAs
+npm run scraper:batch -- --dest tokyo --date 2026-02-24 --type fit  # FIT only with date
 
 # === FLIGHT DATE RANGE SCRAPER ===
 python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
@@ -594,6 +606,7 @@ To ensure visibility, agent must output content as direct text:
 |--------|---------|-----|
 | `scripts/scrape_package.py` | Generic package scraper (detail) | BestTour, LionTravel, Lifetour, Settour |
 | `scripts/scrape_listings.py` | Fast listing scraper (metadata) | BestTour, LionTravel, Lifetour, Settour |
+| `scripts/scrape_eztravel.py` | EzTravel FIT scraper | EzTravel |
 | `scripts/filter_packages.py` | Filter scraped packages by criteria | All |
 | `scripts/scrape_liontravel_dated.py` | Date-specific pricing | Lion Travel |
 | `scripts/scrape_tigerair.py` | Flight price scraper (form-based) | Tigerair |
@@ -707,6 +720,20 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ Pre-commit hook enhanced — runs both typecheck and validate:data
 - ✅ Destination reference stubs for nagoya and osaka (`src/skills/travel-shared/references/destinations/`)
 - ✅ `/separate-bookings` skill SKILL.md created (`src/skills/separate-bookings/SKILL.md`)
+- ✅ Scraper doctor health check (`npm run scraper:doctor`) — tests all OTAs, verifies Playwright
+- ✅ Batch scraper (`npm run scraper:batch -- --dest kansai`) — scrape multiple OTAs in one command
+- ✅ Package subtype schema (`package_subtype: 'fit' | 'group' | 'semi_fit'`) — FIT vs group distinction
+- ✅ OTA product_lines config — separate FIT vs group URL handling in `ota-sources.json`
+- ✅ Config-based listing selectors — move CSS selectors to `ota-sources.json` for easier maintenance
+- ✅ Playwright install check (`npm run scraper:setup`) — auto-install with postinstall hook
+- ✅ Settour scraper fix — uses `.product-item` containers with slider ID extraction
+- ✅ EzTravel FIT scraper (`scripts/scrape_eztravel.py`) — packages.eztravel.com.tw with baggage detection
+- ✅ Lifetour FIT search URL (`package.lifetour.com.tw/searchlist/all/{region}`) — separate from group tours
+- ✅ True cost comparison CLI (`src/cli/compare-true-cost.ts`) — package + baggage + transport costs
+- ✅ Region aliases in compare-true-cost — kansai matches osaka/kyoto/kobe/kix filenames
+- ✅ Thai Vietjet airline added to ota-knowledge.json (code: VZ, baggage: TWD 700/direction)
+- ✅ Baggage calculation respects explicit `baggage_included: false` (EzTravel FIT case)
+- ✅ Offers array priority in compare-true-cost — preserves individual hotel names from Lifetour FIT
 
 ## Storage Decision (DB)
 

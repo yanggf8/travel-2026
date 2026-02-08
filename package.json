@@ -10,7 +10,8 @@
     "test:watch": "vitest --config vitest.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "hooks:install": "cp scripts/hooks/* .git/hooks/ && chmod +x .git/hooks/*",
-    "postinstall": "npm run hooks:install",
+    "postinstall": "npm run hooks:install && python scripts/check_playwright.py -q || echo '⚠️ Playwright not installed. Run: npm run scraper:setup'",
+    "scraper:setup": "python scripts/check_playwright.py --install",
     "status": "ts-node src/status/status-check.ts",
     "status:json": "ts-node src/status/status-check.ts --json",
     "status:ascii": "ts-node src/status/status-check.ts --ascii",
@@ -24,11 +25,14 @@
     "doctor": "ts-node scripts/validate-data.ts --doctor",
     "compare-trips": "ts-node src/cli/compare-trips.ts",
     "compare-dates": "ts-node src/cli/compare-dates.ts",
+    "compare-true-cost": "ts-node src/cli/compare-true-cost.ts",
     "normalize-flights": "ts-node src/utils/flight-normalizer.ts",
     "leave-calc": "ts-node src/utils/leave-calculator.ts",
     "db:import:turso": "ts-node scripts/import-offers-to-turso.ts",
     "db:status:turso": "ts-node scripts/turso-status.ts",
-    "db:query:turso": "ts-node scripts/turso-query-offers.ts"
+    "db:query:turso": "ts-node scripts/turso-query-offers.ts",
+    "scraper:doctor": "python scripts/scraper_doctor.py",
+    "scraper:batch": "python scripts/scrape_batch.py"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

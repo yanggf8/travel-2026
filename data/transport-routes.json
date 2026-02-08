@@ -1,0 +1,90 @@
+{
+  "kansai": {
+    "routes": {
+      "kix_airport-shinsaibashi": {
+        "time_min": 50, "cost_jpy": 1290, "method": "南海特急+Metro"
+      },
+      "kix_airport-namba": {
+        "time_min": 45, "cost_jpy": 930, "method": "南海空港急行"
+      },
+      "kix_airport-kobe_sannomiya": {
+        "time_min": 75, "cost_jpy": 1800, "method": "JR関空快速+新快速"
+      },
+      "kix_airport-kyoto": {
+        "time_min": 75, "cost_jpy": 2850, "method": "JR Haruka"
+      },
+      "shinsaibashi-namba": {
+        "time_min": 5, "cost_jpy": 190, "method": "御堂筋線"
+      },
+      "shinsaibashi-kyoto": {
+        "time_min": 55, "cost_jpy": 850, "method": "Metro+JR"
+      },
+      "shinsaibashi-kobe_sannomiya": {
+        "time_min": 30, "cost_jpy": 420, "method": "JR+Metro"
+      },
+      "shinsaibashi-umeda": {
+        "time_min": 10, "cost_jpy": 190, "method": "御堂筋線"
+      },
+      "shinsaibashi-nagai": {
+        "time_min": 15, "cost_jpy": 280, "method": "御堂筋線直通"
+      },
+      "namba-kyoto": {
+        "time_min": 45, "cost_jpy": 800, "method": "JR京都線"
+      },
+      "namba-kobe_sannomiya": {
+        "time_min": 40, "cost_jpy": 420, "method": "阪神なんば線"
+      },
+      "kobe_sannomiya-kyoto": {
+        "time_min": 50, "cost_jpy": 1110, "method": "JR新快速"
+      },
+      "umeda-kyoto": {
+        "time_min": 30, "cost_jpy": 580, "method": "JR新快速"
+      },
+      "umeda-kobe_sannomiya": {
+        "time_min": 25, "cost_jpy": 420, "method": "JR新快速"
+      }
+    },
+    "hubs": {
+      "shinsaibashi": { "type": "central", "area": "osaka" },
+      "namba": { "type": "central", "area": "osaka" },
+      "umeda": { "type": "central", "area": "osaka" },
+      "kobe_sannomiya": { "type": "suburb", "area": "kobe" },
+      "kyoto": { "type": "suburb", "area": "kyoto" },
+      "kix_airport": { "type": "airport", "area": "izumisano" },
+      "nagai": { "type": "suburb", "area": "osaka" }
+    }
+  },
+  "tokyo": {
+    "routes": {
+      "nrt_airport-shinjuku": {
+        "time_min": 80, "cost_jpy": 3250, "method": "成田エクスプレス"
+      },
+      "nrt_airport-tokyo_station": {
+        "time_min": 60, "cost_jpy": 1070, "method": "京成アクセス特急"
+      },
+      "hnd_airport-shinjuku": {
+        "time_min": 40, "cost_jpy": 630, "method": "京急+JR"
+      },
+      "hnd_airport-shibuya": {
+        "time_min": 35, "cost_jpy": 510, "method": "京急+東急"
+      },
+      "shinjuku-shibuya": {
+        "time_min": 5, "cost_jpy": 160, "method": "JR山手線"
+      },
+      "shinjuku-asakusa": {
+        "time_min": 30, "cost_jpy": 280, "method": "Metro"
+      },
+      "shibuya-asakusa": {
+        "time_min": 35, "cost_jpy": 280, "method": "Metro銀座線"
+      }
+    },
+    "hubs": {
+      "shinjuku": { "type": "central", "area": "shinjuku" },
+      "shibuya": { "type": "central", "area": "shibuya" },
+      "asakusa": { "type": "central", "area": "taito" },
+      "tokyo_station": { "type": "central", "area": "chiyoda" },
+      "nrt_airport": { "type": "airport", "area": "narita" },
+      "hnd_airport": { "type": "airport", "area": "ota" }
+    }
+  }
+}

@@ -12,6 +12,15 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
+      "supports_listing": true,
+      "listing_selectors": {
+        "method": "anchor",
+        "pattern": "/itinerary/([A-Z0-9]+)",
+        "url_template": "/itinerary/{code}"
+      },
+      "product_lines": {
+        "group": { "supported": true, "default": true }
+      },
       "search_url_templates": {
         "listing": "/e_web/activity?v={region_slug}",
         "product": "/itinerary/{product_code}"
@@ -26,7 +35,7 @@
       "rate_limit": {
         "requests_per_minute": 10
       },
-      "notes": "Use listing URL for search, NOT /e_web/DOM/ (returns 404)"
+      "notes": "Use listing URL for search, NOT /e_web/DOM/ (returns 404). Primarily group tours."
     },
     "liontravel": {
       "source_id": "liontravel",
@@ -38,6 +47,24 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_liontravel_dated.py",
+      "supports_listing": true,
+      "listing_selectors": {
+        "method": "fit_configurator",
+        "notes": "FIT uses dynamic configurator, not traditional listing"
+      },
+      "product_lines": {
+        "fit": {
+          "supported": true,
+          "default": true,
+          "base_url": "https://vacation.liontravel.com",
+          "url_template": "/search?Destination={dest_code}&FromDate={from_yyyymmdd}&ToDate={to_yyyymmdd}&Days={days}&roomlist={adults}-0-0"
+        },
+        "group": {
+          "supported": false,
+          "base_url": "https://travel.liontravel.com",
+          "notes": "Group tour URL pattern unknown"
+        }
+      },
       "search_url_templates": {
         "fit": "https://vacation.liontravel.com/search?Destination={dest_code}&FromDate={from_yyyymmdd}&ToDate={to_yyyymmdd}&Days={days}&roomlist={adults}-0-0",
         "group": null
@@ -84,10 +111,12 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_tigerair.py",
+      "supports_listing": false,
+      "listing_selectors": null,
       "rate_limit": {
         "requests_per_minute": 10
       },
-      "notes": "Form-based scraper (no URL deep-linking), requires Playwright form interaction"
+      "notes": "Form-based scraper (no URL deep-linking), requires Playwright form interaction. No listing page."
     },
     "lifetour": {
       "source_id": "lifetour",
@@ -99,9 +128,35 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
+      "supports_listing": true,
+      "listing_selectors": {
+        "method": "anchor",
+        "pattern": "/detail\\?",
+        "url_template": null
+      },
+      "product_lines": {
+        "group": { "supported": true, "default": true },
+        "semi_fit": {
+          "supported": true,
+          "keywords": ["伴自由", "半自由", "自由活動"],
+          "notes": "Group tour with 1-2 free days built in. Search by keyword in listing."
+        },
+        "fit": {
+          "supported": true,
+          "base_url": "https://package.lifetour.com.tw",
+          "notes": "FIT packages at package.lifetour.com.tw. Uses Peach/LCC - verify baggage."
+        }
+      },
       "search_url_templates": {
         "group_tour": "https://tour.lifetour.com.tw/searchlist/{departure}/{region_code}",
+        "fit": "https://package.lifetour.com.tw/searchlist/all/{region_code}?datefrom={depart_date}&dateto={return_date}&order=1&standby=1",
         "product": "https://tour.lifetour.com.tw/detail*"
+      },
+      "fit_region_codes": {
+        "kansai": "0019-0002",
+        "tokyo": "0019-0001",
+        "okinawa": "0019-0003",
+        "hokkaido": "0019-0004"
       },
       "departures": {
         "taipei": "tpe",
@@ -118,7 +173,7 @@
       "rate_limit": {
         "requests_per_minute": 5
       },
-      "notes": "Group tour listing at tour.lifetour.com.tw/searchlist/{departure}/{region}"
+      "notes": "Group tour listing at tour.lifetour.com.tw/searchlist/{departure}/{region}. Some packages include 伴自由 (semi-FIT) days."
     },
     "settour": {
       "source_id": "settour",
@@ -130,9 +185,27 @@
       "currency": "TWD",
       "supported": true,
       "scraper_script": "scripts/scrape_package.py",
+      "supports_listing": true,
+      "listing_selectors": {
+        "method": "container",
+        "container": ".product-item",
+        "title": ".product-title, h3, h4, .title",
+        "price": ".ori-price-offer, .price",
+        "code_regex": "slider-flightInfo_([A-Z0-9]+)",
+        "url_template": "https://tour.settour.com.tw/product/{code}"
+      },
+      "product_lines": {
+        "group": { "supported": true, "default": true },
+        "fit": {
+          "supported": true,
+          "base_url": "https://fit.settour.com.tw",
+          "notes": "FIT configurator - requires hotel regionId from search"
+        }
+      },
       "search_url_templates": {
         "group_tour": "https://tour.settour.com.tw/search?destinationCode={dest_code}",
-        "fit": "https://fit.settour.com.tw/tour/product/*",
+        "fit": "https://fit.settour.com.tw/product/v2?adtCount={pax}&chdCount=0&directFlightOnly=true&depAirportCode={origin}&arrAirportCode={dest}&depDate={depart_yyyymmdd},{return_yyyymmdd}&roomQty=1&hotelCheckInDate={depart_yyyymmdd}&hotelCheckOutDate={return_yyyymmdd}&tripType=RT",
+        "fit_search": "https://fit.settour.com.tw/search?adtCount={pax}&chdCount=0&depAirportCode={origin}&arrAirportCode={dest}&depDate={depart_yyyymmdd},{return_yyyymmdd}&tripType=RT",
         "product": "https://tour.settour.com.tw/product/*"
       },
       "destination_codes": {
@@ -145,7 +218,7 @@
       "rate_limit": {
         "requests_per_minute": 5
       },
-      "notes": "Group tour search at tour.settour.com.tw/search?destinationCode={code}"
+      "notes": "Group tour uses .product-item containers with code in slider-flightInfo_* IDs. FIT available at fit.settour.com.tw."
     },
     "eztravel": {
       "source_id": "eztravel",
@@ -156,8 +229,45 @@
       "markets": ["TW"],
       "currency": "TWD",
       "supported": true,
-      "scraper_script": "scripts/scrape_package.py",
-      "notes": "Flight search parser implemented"
+      "scraper_script": "scripts/scrape_eztravel.py",
+      "supports_listing": true,
+      "listing_selectors": {
+        "method": "card",
+        "container": "[class*='hotel']",
+        "price_regex": "TWD\\s*([\\d,]+)"
+      },
+      "product_lines": {
+        "fit": {
+          "supported": true,
+          "default": true,
+          "base_url": "https://packages.eztravel.com.tw"
+        },
+        "group": {
+          "supported": true,
+          "base_url": "https://vacation.eztravel.com.tw"
+        }
+      },
+      "search_url_templates": {
+        "fit": "https://packages.eztravel.com.tw/roundtrip-TPE-{dest_code}?checkin={depart_date}&checkout={return_date}&adult={pax}&child=0",
+        "group": "https://vacation.eztravel.com.tw/pkgfrn/introduction/{product_code}"
+      },
+      "destination_codes": {
+        "osaka": "OSA",
+        "tokyo": "TYO",
+        "kansai": "KIX",
+        "nagoya": "NGO",
+        "okinawa": "OKA",
+        "sapporo": "CTS",
+        "fukuoka": "FUK"
+      },
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
+      "limitations": [
+        "baggage_not_included_in_fit",
+        "dates_may_adjust_to_nearest_available"
+      ],
+      "notes": "FIT at packages.eztravel.com.tw. Hotels shown may be in different city than destination (e.g., Kobe for Osaka). Check baggage - typically NOT included with LCC flights."
     },
     "jalan": {
       "source_id": "jalan",

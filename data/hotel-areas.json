@@ -1,0 +1,16 @@
+{
+  "kansai": {
+    "central": ["心齋橋", "難波", "梅田", "道頓堀", "本町", "天王寺", "なんば", "Namba", "Shinsaibashi"],
+    "kyoto": ["京都駅", "四条", "河原町", "祇園", "烏丸", "Kyoto Station"],
+    "kobe": ["三宮", "神戸", "神戶", "元町", "Sannomiya"],
+    "airport": ["關西機場", "KIX", "臨空", "泉佐野", "OMO關西機場", "関西空港", "Rinku"]
+  },
+  "tokyo": {
+    "central": ["新宿", "渋谷", "池袋", "銀座", "東京駅", "秋葉原", "上野", "浅草", "Shinjuku", "Shibuya", "Ginza"],
+    "airport": ["成田", "羽田", "Narita", "Haneda"]
+  },
+  "nagoya": {
+    "central": ["名古屋駅", "栄", "Nagoya Station", "Sakae"],
+    "airport": ["中部國際", "セントレア", "Centrair"]
+  }
+}

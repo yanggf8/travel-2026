@@ -67,6 +67,7 @@ class HotelInfo:
     name: str = ""
     names: list[str] = field(default_factory=list)
     area: str = ""
+    area_type: str = ""  # "central" | "airport" | "suburb" | "unknown"
     star_rating: Optional[int] = None
     access: list[str] = field(default_factory=list)
     amenities: list[str] = field(default_factory=list)
@@ -151,6 +152,10 @@ class ScrapeResult:
     # Classification
     package_type: str = "unknown"  # "fit" | "group" | "flight" | "hotel" | "unknown"
 
+    # Baggage
+    baggage_included: Optional[bool] = None
+    baggage_kg: Optional[int] = None
+
     # Structured data
     flight: FlightInfo = field(default_factory=FlightInfo)
     hotel: HotelInfo = field(default_factory=HotelInfo)
@@ -200,6 +205,8 @@ class ScrapeResult:
         result = cls()
         result.source_id = data.get("source_id", data.get("source", ""))
         result.package_type = data.get("package_type", "unknown")  # NEW: Restore package_type
+        result.baggage_included = data.get("baggage_included")
+        result.baggage_kg = data.get("baggage_kg")
         result.url = data.get("url", "")
         result.scraped_at = data.get("scraped_at", "")
         result.title = data.get("title", "")
@@ -226,6 +233,7 @@ class ScrapeResult:
                 name=hotel_data.get("name", ""),
                 names=hotel_data.get("names", []),
                 area=hotel_data.get("area", ""),
+                area_type=hotel_data.get("area_type", ""),
                 star_rating=hotel_data.get("star_rating"),
                 access=hotel_data.get("access", []),
                 amenities=hotel_data.get("amenities", []),

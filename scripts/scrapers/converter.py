@@ -65,6 +65,7 @@ def convert_to_canonical_offer(result: ScrapeResult, offer_id: str = "") -> dict
             "name": hotel_dict.get("name", ""),
             "slug": hotel_dict.get("slug"),
             "area": hotel_dict.get("area", ""),
+            "areaType": hotel_dict.get("area_type", ""),
             "starRating": hotel_dict.get("star_rating"),
             "access": hotel_dict.get("access", []),
             "amenities": hotel_dict.get("amenities", []),
@@ -110,6 +111,10 @@ def convert_to_canonical_offer(result: ScrapeResult, offer_id: str = "") -> dict
     }
     
     # Add optional fields
+    if result.baggage_included is not None:
+        canonical["baggageIncluded"] = result.baggage_included
+    if result.baggage_kg is not None:
+        canonical["baggageKg"] = result.baggage_kg
     if flight_data:
         canonical["flight"] = flight_data
     if hotel_data:
