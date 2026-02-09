@@ -6,6 +6,7 @@ Uses Playwright to interact with the booking calendar.
 Thin wrapper around scrapers.parsers.liontravel.LionTravelParser.
 """
 
+import argparse
 import asyncio
 import json
 import sys
@@ -28,36 +29,67 @@ def save_result(result: dict, output_path: str):
     print(f"Saved to: {output_path}")
 
 
+def parse_args():
+    """Parse CLI arguments with argparse for proper --dest support."""
+    parser = argparse.ArgumentParser(description="Scrape Lion Travel packages with date selection")
+    subparsers = parser.add_subparsers(dest="mode", help="Scrape mode")
+
+    # Search mode
+    search_parser = subparsers.add_parser("search", help="Search for packages by date range")
+    search_parser.add_argument("dep_date", nargs="?", default="2026-02-11", help="Departure date (YYYY-MM-DD)")
+    search_parser.add_argument("ret_date", nargs="?", default="2026-02-15", help="Return date (YYYY-MM-DD)")
+    search_parser.add_argument("-o", "--output", default=None, help="Output file path")
+    search_parser.add_argument("--dest", default="JP_TYO_6",
+                               help="LionTravel destination code (e.g. JP_TYO_6, JP_OSA_5)")
+
+    # Detail mode
+    detail_parser = subparsers.add_parser("detail", help="Scrape a specific product detail page")
+    detail_parser.add_argument("product_id", nargs="?", default="170525001", help="Product ID")
+    detail_parser.add_argument("dep_date", nargs="?", default="2026-02-11", help="Departure date (YYYY-MM-DD)")
+    detail_parser.add_argument("days", nargs="?", type=int, default=5, help="Trip duration in days")
+    detail_parser.add_argument("-o", "--output", default=None, help="Output file path")
+
+    args = parser.parse_args()
+
+    # Default to search mode if no subcommand given
+    if args.mode is None:
+        args.mode = "search"
+        args.dep_date = "2026-02-11"
+        args.ret_date = "2026-02-15"
+        args.output = None
+        args.dest = "JP_TYO_6"
+
+    return args
+
+
 async def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else "search"
+    args = parse_args()
     parser = LionTravelParser()
 
     async with async_playwright() as p:
         browser, context, page = await create_browser(p)
 
         try:
-            if mode == "search":
-                dep_date = sys.argv[2] if len(sys.argv) > 2 else "2026-02-11"
-                ret_date = sys.argv[3] if len(sys.argv) > 3 else "2026-02-15"
-                output = sys.argv[4] if len(sys.argv) > 4 else f"scrapes/liontravel-search-{dep_date}.json"
+            if args.mode == "search":
+                dep_date = args.dep_date
+                ret_date = args.ret_date
+                output = args.output or f"scrapes/liontravel-search-{dep_date}.json"
+                dest = args.dest
 
-                print(f"Searching Lion Travel packages: {dep_date} to {ret_date}")
-                result = await parser.scrape_search(page, dep_date, ret_date)
+                print(f"Searching Lion Travel packages: {dep_date} to {ret_date} (dest={dest})")
+                result = await parser.scrape_search(page, dep_date, ret_date, destination=dest)
 
-            elif mode == "detail":
-                product_id = sys.argv[2] if len(sys.argv) > 2 else "170525001"
-                dep_date = sys.argv[3] if len(sys.argv) > 3 else "2026-02-11"
-                days = int(sys.argv[4]) if len(sys.argv) > 4 else 5
-                output = sys.argv[5] if len(sys.argv) > 5 else f"scrapes/liontravel-detail-{product_id}-{dep_date}.json"
+            elif args.mode == "detail":
+                product_id = args.product_id
+                dep_date = args.dep_date
+                days = args.days
+                output = args.output or f"scrapes/liontravel-detail-{product_id}-{dep_date}.json"
 
                 print(f"Fetching Lion Travel product detail: {product_id} for {dep_date} ({days} days)")
                 result = await parser.scrape_detail(page, product_id, dep_date, days)
 
             else:
-                print(f"Unknown mode: {mode}")
-                print("Usage:")
-                print("  python scrape_liontravel_dated.py search [dep_date] [ret_date] [output]")
-                print("  python scrape_liontravel_dated.py detail [product_id] [dep_date] [days] [output]")
+                print(f"Unknown mode: {args.mode}")
                 sys.exit(1)
 
         finally:

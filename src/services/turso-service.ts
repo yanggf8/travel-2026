@@ -349,6 +349,18 @@ export async function checkFreshness(
   }
 
   const newestMs = new Date(newest + (newest.includes('Z') ? '' : 'Z')).getTime();
+
+  // Guard against malformed scraped_at producing NaN
+  if (isNaN(newestMs)) {
+    return {
+      hasFreshData: false,
+      ageHours: null,
+      offerCount: count,
+      recommendation: 'rescrape',
+      region: opts?.region,
+    };
+  }
+
   const ageMs = Date.now() - newestMs;
   const ageHours = ageMs / (1000 * 60 * 60);
 
