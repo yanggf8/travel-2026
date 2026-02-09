@@ -34,6 +34,9 @@ async function main(): Promise<void> {
     { label: 'offers_count', sql: 'SELECT COUNT(*) AS n FROM offers' },
     { label: 'events_count', sql: 'SELECT COUNT(*) AS n FROM events' },
     { label: 'destinations_count', sql: 'SELECT COUNT(*) AS n FROM destinations' },
+    { label: 'bookings_count', sql: 'SELECT COUNT(*) AS n FROM bookings_current' },
+    { label: 'booking_events_count', sql: 'SELECT COUNT(*) AS n FROM bookings_events' },
+    { label: 'snapshots_count', sql: 'SELECT COUNT(*) AS n FROM plan_snapshots' },
     { label: 'offers_last_scraped_at', sql: 'SELECT MAX(scraped_at) AS v FROM offers' },
     { label: 'events_last_created_at', sql: 'SELECT MAX(created_at) AS v FROM events' },
   ];

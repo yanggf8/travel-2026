@@ -479,6 +479,7 @@ class BaseScraper(ABC):
         result.inclusions = parsed.inclusions
         result.date_pricing = parsed.date_pricing
         result.itinerary = parsed.itinerary
+        result.package_type = parsed.package_type
 
         # Auto-extract baggage info if not already set
         if result.baggage_included is None and result.raw_text:

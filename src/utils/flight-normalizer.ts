@@ -5,8 +5,8 @@
  * Handles both outbound (TPE→KIX) and return (KIX→TPE) data.
  *
  * Usage:
- *   npx ts-node src/utils/flight-normalizer.ts data/trip-feb24-out.json
- *   npx ts-node src/utils/flight-normalizer.ts data/trip-feb28-return.json --top 5
+ *   npx ts-node src/utils/flight-normalizer.ts scrapes/trip-feb24-out.json
+ *   npx ts-node src/utils/flight-normalizer.ts scrapes/trip-feb28-return.json --top 5
  *   npx ts-node src/utils/flight-normalizer.ts --scan 2026-02-24 2026-02-28
  */
 
@@ -215,7 +215,7 @@ export function normalizeFlightData(filePath: string): Result<FlightSearchResult
 }
 
 /**
- * Scan data/ directory for flight data files matching a date range.
+ * Scan scrapes/ directory for flight data files matching a date range.
  */
 export function scanFlightFiles(
   dataDir: string,
@@ -283,14 +283,14 @@ Usage:
 Options:
   <file.json>    Parse a single Trip.com flight JSON file
   --top N        Show only top N cheapest flights (default: all)
-  --scan         Scan data/ for all flight files and summarize
+  --scan         Scan scrapes/ for all flight files and summarize
 `);
     process.exit(0);
   }
 
   if (args[0] === '--scan') {
     const [, startDate, endDate] = args;
-    const { outbound, return_ } = scanFlightFiles('data', startDate, endDate);
+    const { outbound, return_ } = scanFlightFiles('scrapes', startDate, endDate);
 
     console.log('=== Outbound Flights (TPE→KIX) ===');
     for (const [date, file] of [...outbound.entries()].sort()) {

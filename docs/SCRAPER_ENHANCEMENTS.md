@@ -76,7 +76,7 @@ Enhanced the OTA scraper framework with package type classification, structured 
 
 **Usage**:
 ```bash
-python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
+python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24 --max-price 25000
 ```
 
 ### 5. Cache Management

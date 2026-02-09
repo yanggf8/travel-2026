@@ -18,6 +18,7 @@ _URL_PATTERNS: list[tuple[str, str]] = [
     (r"liontravel\.com", "liontravel"),
     (r"lifetour\.com\.tw", "lifetour"),
     (r"settour\.com\.tw", "settour"),
+    (r"travel4u\.com\.tw", "travel4u"),
     (r"tigerairtw\.com", "tigerair"),
     (r"trip\.com", "trip"),
     (r"google\.com/travel/flights", "google_flights"),
@@ -70,6 +71,9 @@ def _create_parser(source_id: str) -> BaseScraper:
     elif source_id == "settour":
         from .parsers.settour import SettourParser
         return SettourParser()
+    elif source_id == "travel4u":
+        from .parsers.travel4u import Travel4UParser
+        return Travel4UParser()
     elif source_id == "tigerair":
         from .parsers.tigerair import TigerairParser
         return TigerairParser()
@@ -88,10 +92,10 @@ def _create_parser(source_id: str) -> BaseScraper:
     else:
         raise ValueError(
             f"No parser registered for source_id '{source_id}'. "
-            f"Available: besttour, liontravel, lifetour, settour, tigerair, trip, google_flights, agoda, eztravel"
+            f"Available: besttour, liontravel, lifetour, settour, travel4u, tigerair, trip, google_flights, agoda, eztravel"
         )
 
 
 def get_available_parsers() -> list[str]:
     """Return list of all available parser source IDs."""
-    return ["besttour", "liontravel", "lifetour", "settour", "tigerair", "trip", "google_flights", "agoda", "eztravel"]
+    return ["besttour", "liontravel", "lifetour", "settour", "travel4u", "tigerair", "trip", "google_flights", "agoda", "eztravel"]

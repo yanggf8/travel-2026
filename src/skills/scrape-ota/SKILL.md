@@ -96,10 +96,10 @@ result = parser.parse_raw_text(raw_text)  # Pure parsing, no browser
 
 ```bash
 # Generic scraper (auto-detects OTA from URL)
-python scripts/scrape_package.py "<url>" data/<ota>-<code>.json
+python scripts/scrape_package.py "<url>" scrapes/<ota>-<code>.json
 
 # Lion Travel dated search
-python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 data/liontravel-search.json
+python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 scrapes/liontravel-search.json
 
 # Tigerair flight search
 python scripts/scrape_tigerair.py --origin TPE --dest NRT --date 2026-02-13 --pax 2
@@ -109,16 +109,16 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
     --origin tpe --dest kix --duration 5 --pax 2
 
 # Google Flights (auto-detected from URL)
-python scripts/scrape_package.py "https://www.google.com/travel/flights?q=Flights+to+KIX+from+TPE+on+2026-02-26+through+2026-03-02&curr=TWD&hl=zh-TW" data/gf-tpe-kix.json
+python scripts/scrape_package.py "https://www.google.com/travel/flights?q=Flights+to+KIX+from+TPE+on+2026-02-26+through+2026-03-02&curr=TWD&hl=zh-TW" scrapes/gf-tpe-kix.json
 
 # Agoda hotel page (auto-detected from URL)
-python scripts/scrape_package.py "https://www.agoda.com/cross-hotel-osaka/hotel/osaka-jp.html?checkIn=2026-02-26&los=4&adults=2&rooms=1&currency=TWD" data/agoda-cross-hotel.json
+python scripts/scrape_package.py "https://www.agoda.com/cross-hotel-osaka/hotel/osaka-jp.html?checkIn=2026-02-26&los=4&adults=2&rooms=1&currency=TWD" scrapes/agoda-cross-hotel.json
 ```
 
 ### 2. Read and parse output
 
 ```bash
-cat data/<ota>-<code>.json | jq '.extracted'
+cat scrapes/<ota>-<code>.json | jq '.extracted'
 ```
 
 ### 3. Extract structured data
@@ -183,4 +183,4 @@ See `data/ota-sources.json` for full OTA configuration:
 3. Register in `scripts/scrapers/registry.py` (URL pattern + `_create_parser`)
 4. Add to `scripts/scrapers/parsers/__init__.py`
 5. Add tests in `tests/scrapers/test_parsers.py`
-6. Test with sample URL: `python scripts/scrape_package.py "<url>" data/<ota>-test.json`
+6. Test with sample URL: `python scripts/scrape_package.py "<url>" scrapes/<ota>-test.json`

@@ -20,7 +20,7 @@ from .schema import ScrapeResult
 class ScrapeCache:
     """File-based cache for scrape results with TTL."""
     
-    def __init__(self, cache_dir: str = "data/cache", default_ttl_hours: int = 24):
+    def __init__(self, cache_dir: str = "scrapes/cache", default_ttl_hours: int = 24):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.default_ttl = timedelta(hours=default_ttl_hours)

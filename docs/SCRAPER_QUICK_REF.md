@@ -21,9 +21,9 @@
 python scripts/scrape_package.py <url> [output.json]
 
 # Examples
-python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/TYO05MM260211AM" data/besttour.json
-python scripts/scrape_package.py "https://www.agoda.com/hotel/osaka" data/agoda.json
-python scripts/scrape_package.py "https://flight.eztravel.com.tw/tickets-tpe-nrt?..." data/eztravel.json
+python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/TYO05MM260211AM" scrapes/besttour.json
+python scripts/scrape_package.py "https://www.agoda.com/hotel/osaka" scrapes/agoda.json
+python scripts/scrape_package.py "https://flight.eztravel.com.tw/tickets-tpe-nrt?..." scrapes/eztravel.json
 ```
 
 ### Lion Travel (Date-Specific)
@@ -32,12 +32,12 @@ python scripts/scrape_liontravel_dated.py search [dep_date] [ret_date] [output]
 python scripts/scrape_liontravel_dated.py detail [product_id] [dep_date] [days] [output]
 
 # Example
-python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 data/liontravel-feb11.json
+python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 scrapes/liontravel-feb11.json
 ```
 
 ### Tigerair
 ```bash
-python scripts/scrape_tigerair.py --origin TPE --dest NRT --date 2026-02-13 --pax 2 -o data/tigerair.json
+python scripts/scrape_tigerair.py --origin TPE --dest NRT --date 2026-02-13 --pax 2 -o scrapes/tigerair.json
 python scripts/scrape_tigerair.py --origin TPE --dest KIX --date 2026-02-13 --return-date 2026-02-17 --pax 2
 ```
 
@@ -49,7 +49,7 @@ python scripts/scrape_date_range.py \
   --origin tpe --dest kix \
   --duration 5 --pax 2 \
   --exchange-rate 32.0 \
-  -o data/date-range-prices.json
+  -o scrapes/date-range-prices.json
 ```
 
 ## Python API
@@ -97,8 +97,8 @@ canonical = convert_to_canonical_offer(result, offer_id="besttour_001")
 
 # File conversion
 convert_scrape_result_file(
-    "data/besttour-scrape.json",
-    "data/besttour-canonical.json",
+    "scrapes/besttour-scrape.json",
+    "scrapes/besttour-canonical.json",
     "besttour_tyo_feb13"
 )
 ```
@@ -117,7 +117,7 @@ result = parser.parse_raw_text(raw_text, url=url)
 
 ### Cache Location
 ```
-data/cache/
+scrapes/cache/
   ├── a1b2c3d4e5f6g7h8.json  # SHA256 hash of source_id + url + params
   └── ...
 ```
@@ -143,7 +143,7 @@ cache.clear()
 
 ### Cache TTL
 - Default: 24 hours
-- Configurable: `ScrapeCache(cache_dir="data/cache", default_ttl_hours=48)`
+- Configurable: `ScrapeCache(cache_dir="scrapes/cache", default_ttl_hours=48)`
 - Age shown in warnings: "Loaded from cache (age: 2h)"
 
 ## Schema Mapping
@@ -219,7 +219,7 @@ def test_my_parser(my_ota_data):
 3. Check for bot detection (Cloudflare, captcha)
 
 ### Cache Not Working
-1. Check `data/cache/` directory exists and is writable
+1. Check `scrapes/cache/` directory exists and is writable
 2. Verify cache key params match (case-sensitive)
 3. Check TTL hasn't expired
 

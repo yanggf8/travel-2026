@@ -328,6 +328,7 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 | `skyscanner` | Skyscanner | flight | ❌ | ❌ | Hard captcha redirect (captcha-v2) blocks all requests |
 | `google_flights` | Google Flights | flight | ✅ | ✅ | Natural-language query URL (`?q=Flights to DEST from ORIGIN`) |
 | `eztravel` | 易遊網 | flight | ✅ | ✅ | Flight search results parser |
+| `travel4u` | 山富旅遊 | package | ✅ | ✅ | `travel4u.com.tw/group/area/{area_code}/japan/` |
 | `jalan` | じゃらん | hotel | ❌ | ❌ | Japan domestic OTA, for local hotel bookings |
 | `rakuten_travel` | 楽天トラベル | hotel, package | ❌ | ❌ | Japan domestic OTA |
 
@@ -531,14 +532,23 @@ Hotel:   TAVINOS Hamamatsucho
 **Leave days**: 3 (Tue + Wed + Thu) — leverages 228 holiday weekend
 **Pax**: 2, **Airport**: KIX
 
+#### FIT Offers (scraped 2026-02-09)
+
+| Source | Hotel | Price/person | Airline | Flight |
+|--------|-------|-------------|---------|--------|
+| LionTravel | Just Sleep Osaka Shinsaibashi | TWD 20,792 | Thai Lion Air SL396/397 | 09:00-12:30 / 13:30-15:40 |
+| LionTravel | APA Hotel Kyoto Ekimae | TWD 21,796 | Thai Lion Air | 09:00-12:30 / 13:30-15:40 |
+| Lifetour | Hotel Tavinos Kyoto | TWD 25,990 | Peach MM024/027 | 09:30-13:20 / 15:35-17:50 |
+
 #### FIT vs Separate Booking Comparison (Feb 24-28)
 
 | Option | Type | Total (2 pax) | Per Person | $/Leave |
 |--------|------|---------------|------------|---------|
 | **Separate** | 分開訂 | TWD 38,946 | 19,473 | 12,982 |
-| LionTravel FIT | 套餐 | TWD 40,740 | 20,370 | 13,580 |
+| LionTravel FIT (Shinsaibashi) | 套餐 | TWD 41,584 | 20,792 | 13,861 |
+| LionTravel FIT (APA Kyoto) | 套餐 | TWD 43,592 | 21,796 | 14,531 |
 
-**Separate booking saves TWD 1,794** vs FIT package.
+**Separate booking saves TWD 2,638** vs cheapest FIT (Shinsaibashi).
 
 #### Separate Booking Breakdown
 ```
@@ -650,8 +660,8 @@ To ensure visibility, agent must output content as direct text:
 
 | Script | Purpose | OTA |
 |--------|---------|-----|
-| `scripts/scrape_package.py` | Generic package scraper (detail) | BestTour, LionTravel, Lifetour, Settour |
-| `scripts/scrape_listings.py` | Fast listing scraper (metadata) | BestTour, LionTravel, Lifetour, Settour |
+| `scripts/scrape_package.py` | Generic package scraper (detail) | BestTour, LionTravel, Lifetour, Settour, Travel4U |
+| `scripts/scrape_listings.py` | Fast listing scraper (metadata) | BestTour, LionTravel, Lifetour, Settour, Travel4U |
 | `scripts/scrape_eztravel.py` | EzTravel FIT scraper | EzTravel |
 | `scripts/filter_packages.py` | Filter scraped packages by criteria | All |
 | `scripts/scrape_liontravel_dated.py` | Date-specific pricing | Lion Travel |
@@ -791,6 +801,11 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ Plan snapshots table for versioned plan archival
 - ✅ Bookings events audit trail (bookings_events table)
 - ✅ Skill contracts v1.6.0 — booking sync/query operations
+- ✅ Travel4U (山富旅遊) OTA integration — group tour scraper + parser + ota-sources.json
+- ✅ turso-status.ts enhanced — monitors bookings_current, bookings_events, plan_snapshots
+- ✅ Turso sync scripts — turso-sync-destinations.ts, turso-sync-events.ts
+- ✅ Scrape data cleanup — moved from data/ to scrapes/ (gitignored), added scrapes/ to .gitignore
+- ✅ LionTravel Osaka rescrape (Feb 09) — Just Sleep Shinsaibashi TWD 20,792/person
 
 ## Storage Decision (DB)
 

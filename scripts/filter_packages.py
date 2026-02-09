@@ -6,7 +6,7 @@ Reads scraped package data and filters by criteria.
 
 Usage:
     python scripts/filter_packages.py <input.json> [options]
-    python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
+    python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24 --max-price 25000
 
 Options:
     --type fit|group|semi_fit|flight|hotel    Filter by package type (semi_fit = group with free days)
@@ -19,13 +19,13 @@ Options:
 
 Examples:
     # Find FIT packages under 25k
-    python scripts/filter_packages.py data/*-scrape.json --type fit --max-price 25000
+    python scripts/filter_packages.py scrapes/*-scrape.json --type fit --max-price 25000
     
     # Find packages departing Feb 24
-    python scripts/filter_packages.py data/*-scrape.json --date 2026-02-24
+    python scripts/filter_packages.py scrapes/*-scrape.json --date 2026-02-24
     
     # Combined filters
-    python scripts/filter_packages.py data/*-scrape.json --type fit --date 2026-02-24 --max-price 25000
+    python scripts/filter_packages.py scrapes/*-scrape.json --type fit --date 2026-02-24 --max-price 25000
 """
 
 import argparse

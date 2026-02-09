@@ -211,35 +211,90 @@ const results = await globalRegistry.searchAll({
 
 ### Canonical Offer Format
 
-All offers are normalized to this format:
+All offers are normalized to this format (source of truth: `src/state/schemas.ts` → `OfferSchema`):
 
 ```typescript
+type Availability = 'available' | 'sold_out' | 'limited' | 'unknown';
+type PackageSubtype = 'fit' | 'group' | 'semi_fit' | 'unknown';
+
 interface CanonicalOffer {
+  // ── Identity ──
   id: string;                    // {source_id}_{product_code}
-  sourceId: string;
-  type: 'package' | 'flight' | 'hotel';
-  title: string;
-  url: string;
-  currency: string;
-  pricePerPerson: number;
-  availability: 'available' | 'sold_out' | 'limited' | 'unknown';
+  source_id: string;
+  product_code?: string;
+  url?: string;
+  scraped_at?: string;           // ISO-8601
 
+  // ── Classification ──
+  type: 'package' | 'flight' | 'hotel' | 'activity';
+  package_subtype?: PackageSubtype; // FIT vs group distinction
+  guided?: boolean;                 // Has tour guide/leader
+  meals_included?: number;          // Number of meals included
+  duration_days?: number;
+
+  // ── Pricing ──
+  currency: string;              // default TWD for TW-market OTAs
+  price_per_person: number;
+  price_total?: number;
+
+  // ── Availability ──
+  availability: Availability;
+  seats_remaining?: number | null;
+
+  // ── Baggage ──
+  baggage_included?: boolean | null;
+  baggage_kg?: number | null;
+
+  // ── Components ──
   flight?: {
-    outbound: FlightSegment;
-    return: FlightSegment;
+    airline: string;
+    airline_code?: string;
+    outbound: FlightLeg;
+    return?: FlightLeg;
   };
 
-  hotel?: HotelInfo;
+  hotel?: {
+    name: string;
+    area: string;
+    area_type?: 'central' | 'airport' | 'suburb' | 'unknown';
+    star_rating?: number;
+    access?: string[];
+  };
 
-  datePricing?: DatePricing[];
+  includes?: string[];
 
-  bestValue?: {
+  date_pricing?: Record<string, DatePricingEntry> | null;
+
+  best_value?: {
     date: string;
-    pricePerPerson: number;
-    priceTotal: number;
+    price_per_person: number;
+    price_total: number;
   };
+
+  // ── Evaluation ──
+  pros?: string[];
+  cons?: string[];
+  note?: string;
 }
 ```
+
+#### Package Subtype Classification
+
+| Subtype | Description | Keywords |
+|---------|-------------|----------|
+| `fit` | Free Independent Travel (機加酒) | 自由行, 機加酒, 自助 |
+| `group` | Guided group tour (跟團) | 團體, 跟團, 領隊, 導遊 |
+| `semi_fit` | Hybrid with free days (伴自由) | 半自由, 伴自由, 自由時間 |
+| `unknown` | Cannot determine | — |
+
+#### Hotel Area Type
+
+| Value | Description |
+|-------|-------------|
+| `central` | City centre / main station area |
+| `airport` | Airport-adjacent hotel |
+| `suburb` | Suburban or outlying area |
+| `unknown` | Cannot determine |
 
 ---
 
@@ -451,6 +506,7 @@ cp src/templates/destination-template.json \
 
 | Version | Changes |
 |---------|---------|
+| 1.3.0 | Updated CanonicalOffer format: added `package_subtype`, `guided`, `meals_included`, `baggage_included`, `baggage_kg`, `hotel.area_type`; added `activity` offer type; aligned field names with Zod schema |
 | 1.2.0 | Added itinerary validation and scraper registry |
 | 1.1.0 | Added configuration discovery APIs |
 | 1.0.0 | Initial release with StateManager, CLI, basic scrapers |

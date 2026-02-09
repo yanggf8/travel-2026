@@ -105,10 +105,10 @@ python scripts/scrape_listings.py --source besttour --dest kansai -o listings.js
 cat listings.json | jq -r '.listings[] | select(.price < 30000) | .url' > urls.txt
 
 # 3. Scrape details (selective)
-cat urls.txt | xargs -I {} python scripts/scrape_package.py {} data/details/
+cat urls.txt | xargs -I {} python scripts/scrape_package.py {} scrapes/details/
 
 # 4. Filter by type and date
-python scripts/filter_packages.py data/details/*.json \
+python scripts/filter_packages.py scrapes/details/*.json \
   --type fit \
   --date 2026-02-24 \
   --max-price 25000
@@ -122,13 +122,13 @@ for ota in besttour liontravel lifetour; do
 done
 
 # Find cheapest FIT package across all
-python scripts/filter_packages.py data/*.json --type fit --max-price 30000
+python scripts/filter_packages.py scrapes/*.json --type fit --max-price 30000
 ```
 
 ### Freshness Management
 ```bash
 # Check for stale data
-python scripts/filter_packages.py data/*.json --refresh-stale > refresh.sh
+python scripts/filter_packages.py scrapes/*.json --refresh-stale > refresh.sh
 
 # Execute refresh commands
 bash refresh.sh
@@ -201,7 +201,7 @@ README.md                           # New commands
 python scripts/scrape_listings.py --source besttour --dest kansai --max 10
 
 # Test filter CLI
-python scripts/filter_packages.py data/*.json --type fit --max-price 25000
+python scripts/filter_packages.py scrapes/*.json --type fit --max-price 25000
 
 # Test refresh flag
 python scripts/scrape_package.py <url> --refresh
@@ -296,12 +296,12 @@ python scripts/scrape_package.py <url> [--refresh]
 
 ### Filter Packages
 ```bash
-python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
+python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24 --max-price 25000
 ```
 
 ### Check Freshness
 ```bash
-python scripts/filter_packages.py data/*.json --refresh-stale
+python scripts/filter_packages.py scrapes/*.json --refresh-stale
 ```
 
 ---

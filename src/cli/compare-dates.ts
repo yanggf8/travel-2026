@@ -465,7 +465,7 @@ function parseArgs(args: string[]): CompareOptions & { help: boolean } {
     nights: 4,
     hotelPerNight: 3200,
     calendarPath: 'data/holidays/taiwan-2026.json',
-    dataDir: 'data',
+    dataDir: 'scrapes',
     pax: DEFAULTS.pax as number,
     baggageFeePerPersonPerDir: DEFAULT_LCC_BAGGAGE_FEE,
     help: false,
@@ -510,9 +510,9 @@ Options:
   --help, -h           Show this help
 
 Data sources:
-  FIT packages:    data/liontravel-feb*-fresh.json
-  Outbound flights: data/trip-feb*-out.json, data/trip-flights-feb*-out*.json
-  Return flights:   data/trip-feb*-return.json, data/trip-flights-mar*-return*.json, data/trip-mar*-return.json
+  FIT packages:    scrapes/liontravel-feb*-fresh.json
+  Outbound flights: scrapes/trip-feb*-out.json, scrapes/trip-flights-feb*-out*.json
+  Return flights:   scrapes/trip-feb*-return.json, scrapes/trip-flights-mar*-return*.json, scrapes/trip-mar*-return.json
 `);
     process.exit(args.help ? 0 : 1);
   }

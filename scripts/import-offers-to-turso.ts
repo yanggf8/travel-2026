@@ -3,8 +3,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { TursoPipelineClient } from './turso-pipeline';
 
-type OfferRow = {
+export type OfferRow = {
   id: string;
+  source_file: string | null;
   source_id: string;
   type: 'package' | 'flight' | 'hotel';
   name: string | null;
@@ -27,12 +28,12 @@ function usage(): string {
     'Import scraped JSON files into Turso offers table (query layer only).',
     '',
     'Usage:',
-    '  npm run db:import:turso -- --dir data --destination tokyo_2026 --region tokyo',
-    '  npm run db:import:turso -- --dir data --start 2026-02-24 --end 2026-02-28',
-    '  npm run db:import:turso -- --files data/besttour-kansai-feb24.json,data/liontravel-osaka-group.json',
+    '  npm run db:import:turso -- --dir scrapes --destination tokyo_2026 --region tokyo',
+    '  npm run db:import:turso -- --dir scrapes --start 2026-02-24 --end 2026-02-28',
+    '  npm run db:import:turso -- --files scrapes/besttour-kansai-feb24.json,scrapes/liontravel-osaka-group.json',
     '',
     'Options:',
-    '  --dir <path>             Directory to scan (default: data)',
+    '  --dir <path>             Directory to scan (default: scrapes)',
     '  --files <csv>            Comma-separated JSON file paths (overrides --dir)',
     '  --destination <slug>     Destination slug (e.g. tokyo_2026, osaka_kyoto_2026). If omitted, inferred from filename.',
     '  --region <name>          Region label (e.g. kansai, tokyo). If omitted, inferred from filename.',
@@ -56,7 +57,7 @@ function usage(): string {
  * - Offer has no departure_date and includeUndated=true
  * - Offer departure_date is within [start, end] range
  */
-function isWithinDateRange(
+export function isWithinDateRange(
   departureDate: string | null,
   startFilter: string | null,
   endFilter: string | null,
@@ -125,6 +126,7 @@ function inferSourceIdFromUrl(url: string): string {
   if (u.includes('liontravel.com')) return 'liontravel';
   if (u.includes('lifetour.com.tw')) return 'lifetour';
   if (u.includes('settour.com.tw')) return 'settour';
+  if (u.includes('travel4u.com.tw')) return 'travel4u';
   if (u.includes('eztravel')) return 'eztravel';
   if (u.includes('tigerair')) return 'tigerair';
   if (u.includes('agoda')) return 'agoda';
@@ -138,6 +140,7 @@ function inferSourceIdFromFilename(filename: string): string {
   if (f.includes('liontravel')) return 'liontravel';
   if (f.includes('lifetour')) return 'lifetour';
   if (f.includes('settour')) return 'settour';
+  if (f.includes('travel4u')) return 'travel4u';
   if (f.includes('eztravel')) return 'eztravel';
   if (f.includes('tigerair')) return 'tigerair';
   if (f.includes('agoda')) return 'agoda';
@@ -185,7 +188,7 @@ function offerId(sourceId: string, url: string, explicitProductCode?: string): s
   return `${sourceId}_${productCode}`;
 }
 
-function parseRawScrapeAsOfferRow(
+export function parseRawScrapeAsOfferRow(
   fileName: string,
   data: Record<string, unknown>,
   destinationOverride: string | null,
@@ -245,6 +248,7 @@ function parseRawScrapeAsOfferRow(
 
   return {
     id,
+    source_file: null,
     source_id: sourceId,
     type,
     name: title,
@@ -263,7 +267,7 @@ function parseRawScrapeAsOfferRow(
   };
 }
 
-function parseScraperOfferAsOfferRow(
+export function parseScraperOfferAsOfferRow(
   fileName: string,
   offer: Record<string, unknown>,
   destinationOverride: string | null,
@@ -331,6 +335,7 @@ function parseScraperOfferAsOfferRow(
 
   return {
     id,
+    source_file: null,
     source_id: sourceId,
     type,
     name,
@@ -349,9 +354,11 @@ function parseScraperOfferAsOfferRow(
   };
 }
 
-function toUpsertSql(row: OfferRow): string {
+export function toInsertSql(row: OfferRow): string {
+  // Columns match Turso DB schema (includes source_file for tracking)
   const cols = [
     'id',
+    'source_file',
     'source_id',
     'type',
     'name',
@@ -370,6 +377,7 @@ function toUpsertSql(row: OfferRow): string {
   ];
   const values = [
     sqlText(row.id),
+    sqlText(row.source_file),
     sqlText(row.source_id),
     sqlText(row.type),
     sqlText(row.name),
@@ -387,12 +395,8 @@ function toUpsertSql(row: OfferRow): string {
     sqlText(row.scraped_at),
   ];
 
-  const updates = cols
-    .filter((c) => c !== 'id')
-    .map((c) => `${c}=excluded.${c}`)
-    .join(', ');
-
-  return `INSERT INTO offers (${cols.join(',')}) VALUES (${values.join(',')}) ON CONFLICT(id) DO UPDATE SET ${updates};`;
+  // Use ON CONFLICT on the dedup index (id, scraped_at) for append-only ingestion
+  return `INSERT INTO offers (${cols.join(',')}) VALUES (${values.join(',')}) ON CONFLICT(id, scraped_at) DO NOTHING;`;
 }
 
 async function main(): Promise<void> {
@@ -402,7 +406,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const dir = optionValue(argv, '--dir') || 'data';
+  const dir = optionValue(argv, '--dir') || 'scrapes';
   const filesCsv = optionValue(argv, '--files');
   const destinationOverride = optionValue(argv, '--destination') || null;
   const regionOverride = optionValue(argv, '--region') || null;
@@ -493,7 +497,8 @@ async function main(): Promise<void> {
 
     parsedOffers += filteredOffers.length;
     for (const row of filteredOffers) {
-      sqlStatements.push(toUpsertSql(row));
+      row.source_file = fileName;
+      sqlStatements.push(toInsertSql(row));
       if (emitEvents) {
         const eventData = {
           file: fileName,

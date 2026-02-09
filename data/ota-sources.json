@@ -220,6 +220,49 @@
       },
       "notes": "Group tour uses .product-item containers with code in slider-flightInfo_* IDs. FIT available at fit.settour.com.tw."
     },
+    "travel4u": {
+      "source_id": "travel4u",
+      "display_name": "山富旅遊",
+      "display_name_en": "Travel4U",
+      "types": ["package"],
+      "base_url": "https://www.travel4u.com.tw",
+      "markets": ["TW"],
+      "currency": "TWD",
+      "supported": true,
+      "scraper_script": "scripts/scrape_package.py",
+      "supports_listing": true,
+      "listing_selectors": {
+        "method": "link",
+        "pattern": "/group/product/([A-Z0-9]+)/",
+        "url_template": "https://www.travel4u.com.tw/group/product/{code}/"
+      },
+      "product_lines": {
+        "group": { "supported": true, "default": true },
+        "fit": {
+          "supported": false,
+          "notes": "Travel4U primarily offers group tours"
+        }
+      },
+      "search_url_templates": {
+        "listing": "https://www.travel4u.com.tw/group/area/{area_code}/japan/",
+        "product": "https://www.travel4u.com.tw/group/product/{product_code}/"
+      },
+      "area_codes": {
+        "hokkaido": "39",
+        "kansai": "40",
+        "osaka": "40",
+        "tokyo": "41",
+        "kanto": "41",
+        "kyushu": "42",
+        "okinawa": "43",
+        "nagoya": "49",
+        "chubu": "49"
+      },
+      "rate_limit": {
+        "requests_per_minute": 5
+      },
+      "notes": "山富旅遊 - Taiwan OTA with group tours. Area codes map to Japan regions."
+    },
     "eztravel": {
       "source_id": "eztravel",
       "display_name": "易遊網",

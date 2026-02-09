@@ -15,7 +15,7 @@ Options:
 
 Examples:
     # BestTour Kansai packages
-    python scripts/scrape_listings.py --source besttour --dest kansai -o data/besttour-kansai-listings.json
+    python scripts/scrape_listings.py --source besttour --dest kansai -o scrapes/besttour-kansai-listings.json
     
     # LionTravel FIT packages for specific dates
     python scripts/scrape_listings.py --source liontravel --dest osaka --date 2026-02-24 --days 5
@@ -113,6 +113,22 @@ def build_listing_url(source_id: str, destination: str, depart_date: str = "", d
         }
         dest_code = dest_map.get(destination.lower(), "JX_3")
         return f"https://tour.settour.com.tw/search?destinationCode={dest_code}"
+    
+    elif source_id == "travel4u":
+        # Travel4U group tour listing by area code
+        area_map = {
+            "hokkaido": "39",
+            "kansai": "40",
+            "osaka": "40",
+            "tokyo": "41",
+            "kanto": "41",
+            "kyushu": "42",
+            "okinawa": "43",
+            "nagoya": "49",
+            "chubu": "49",
+        }
+        area_code = area_map.get(destination.lower(), "40")
+        return f"https://www.travel4u.com.tw/group/area/{area_code}/japan/"
     
     else:
         raise ValueError(f"Listing URL builder not implemented for {source_id}")
@@ -285,7 +301,7 @@ async def main():
             print()
     
     # Save to file
-    output = args.output or f"data/{source_id}-listings-{datetime.now().strftime('%Y%m%d')}.json"
+    output = args.output or f"scrapes/{source_id}-listings-{datetime.now().strftime('%Y%m%d')}.json"
     save_listings(listings, output)
     
     # Print cheapest

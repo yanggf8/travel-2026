@@ -14,7 +14,7 @@ Options:
     --date          Departure date for FIT searches (YYYY-MM-DD)
     --days          Trip duration (default: 5)
     --type          Package type filter: fit, group, or all (default: all)
-    --output-dir    Output directory (default: data/)
+    --output-dir    Output directory (default: scrapes/)
     --parallel      Run scrapers in parallel (default: sequential)
 """
 
@@ -200,7 +200,7 @@ def main():
     parser.add_argument("--date", help="Departure date YYYY-MM-DD (required for FIT)")
     parser.add_argument("--days", type=int, default=5, help="Trip duration (default: 5)")
     parser.add_argument("--type", choices=["fit", "group", "all"], default="all", help="Package type")
-    parser.add_argument("--output-dir", default="data", help="Output directory")
+    parser.add_argument("--output-dir", default="scrapes", help="Output directory")
     parser.add_argument("--parallel", action="store_true", help="Run in parallel")
     args = parser.parse_args()
 

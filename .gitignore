@@ -32,3 +32,13 @@ Thumbs.db
 *.tmp
 .temp/
 .claude/
+
+# Python
+__pycache__/
+*.pyc
+
+# Scrape outputs (regenerable)
+scrapes/
+
+# Temp analysis/debug files in data/
+data/tmp_*

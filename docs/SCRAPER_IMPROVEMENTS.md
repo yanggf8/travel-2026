@@ -45,7 +45,7 @@
 
 **Usage**:
 ```bash
-python -m scrapers.converter data/besttour-scrape.json data/besttour-canonical.json
+python -m scrapers.converter scrapes/besttour-scrape.json scrapes/besttour-canonical.json
 ```
 
 **Transformations**:
@@ -66,7 +66,7 @@ python -m scrapers.converter data/besttour-scrape.json data/besttour-canonical.j
 **Features**:
 - SHA256-based cache keys from `source_id + url + params`
 - Default 24-hour TTL
-- Cache directory: `data/cache/`
+- Cache directory: `scrapes/cache/`
 - Automatic staleness detection
 - Human-readable age strings (e.g., "2h", "3d")
 
@@ -120,7 +120,7 @@ Airline Name       ← airline
 
 **Testing**:
 ```bash
-python scripts/scrape_package.py "https://flight.eztravel.com.tw/tickets-tpe-nrt?..." data/eztravel-test.json
+python scripts/scrape_package.py "https://flight.eztravel.com.tw/tickets-tpe-nrt?..." scrapes/eztravel-test.json
 ```
 
 ---
@@ -180,8 +180,8 @@ print(get_available_parsers())
 ### Convert Python scrape to TypeScript format
 ```bash
 python -m scrapers.converter \
-  data/besttour-TYO06MM260213AM2.json \
-  data/besttour-canonical.json \
+  scrapes/besttour-TYO06MM260213AM2.json \
+  scrapes/besttour-canonical.json \
   besttour_tyo_feb13
 ```
 

@@ -30,10 +30,10 @@ Python/Playwright scrapers for fetching OTA data:
 **Usage:**
 ```bash
 # Generic package scraper
-python scripts/scrape_package.py "<url>" data/<output>.json
+python scripts/scrape_package.py "<url>" scrapes/<output>.json
 
 # Lion Travel with date range
-python scripts/scrape_liontravel_dated.py --start YYYY-MM-DD --end YYYY-MM-DD data/<output>.json
+python scripts/scrape_liontravel_dated.py --start YYYY-MM-DD --end YYYY-MM-DD scrapes/<output>.json
 ```
 
 **BestTour page structure:**

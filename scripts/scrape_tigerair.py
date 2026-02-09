@@ -6,7 +6,7 @@ Scrape flight prices from booking.tigerairtw.com using Playwright.
 Thin wrapper around scrapers.parsers.tigerair.
 
 Usage:
-    python scripts/scrape_tigerair.py --origin TPE --dest NRT --date 2026-02-13 --pax 2 -o data/tigerair-tpe-nrt.json
+    python scripts/scrape_tigerair.py --origin TPE --dest NRT --date 2026-02-13 --pax 2 -o scrapes/tigerair-tpe-nrt.json
     python scripts/scrape_tigerair.py --origin TPE --dest KIX --date 2026-02-13 --return-date 2026-02-17 --pax 2
 
 Requirements:
@@ -151,7 +151,7 @@ async def main():
 
     result = await scrape_tigerair(args)
 
-    output_path = args.output or f"data/tigerair-{args.origin.lower()}-{args.dest.lower()}-{args.date}.json"
+    output_path = args.output or f"scrapes/tigerair-{args.origin.lower()}-{args.dest.lower()}-{args.date}.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 

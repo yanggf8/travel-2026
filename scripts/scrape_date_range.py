@@ -9,7 +9,7 @@ Thin wrapper around scrapers.parsers.trip_com.
 
 Usage:
     python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \\
-        --origin tpe --dest kix --duration 5 --pax 2 --exchange-rate 32 [--output data/date-range-prices.json]
+        --origin tpe --dest kix --duration 5 --pax 2 --exchange-rate 32 [--output scrapes/date-range-prices.json]
 
 Requirements:
     pip install playwright

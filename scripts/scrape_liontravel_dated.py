@@ -39,7 +39,7 @@ async def main():
             if mode == "search":
                 dep_date = sys.argv[2] if len(sys.argv) > 2 else "2026-02-11"
                 ret_date = sys.argv[3] if len(sys.argv) > 3 else "2026-02-15"
-                output = sys.argv[4] if len(sys.argv) > 4 else f"data/liontravel-search-{dep_date}.json"
+                output = sys.argv[4] if len(sys.argv) > 4 else f"scrapes/liontravel-search-{dep_date}.json"
 
                 print(f"Searching Lion Travel packages: {dep_date} to {ret_date}")
                 result = await parser.scrape_search(page, dep_date, ret_date)
@@ -48,7 +48,7 @@ async def main():
                 product_id = sys.argv[2] if len(sys.argv) > 2 else "170525001"
                 dep_date = sys.argv[3] if len(sys.argv) > 3 else "2026-02-11"
                 days = int(sys.argv[4]) if len(sys.argv) > 4 else 5
-                output = sys.argv[5] if len(sys.argv) > 5 else f"data/liontravel-detail-{product_id}-{dep_date}.json"
+                output = sys.argv[5] if len(sys.argv) > 5 else f"scrapes/liontravel-detail-{product_id}-{dep_date}.json"
 
                 print(f"Fetching Lion Travel product detail: {product_id} for {dep_date} ({days} days)")
                 result = await parser.scrape_detail(page, product_id, dep_date, days)

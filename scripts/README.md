@@ -25,12 +25,12 @@ python scripts/scrape_package.py <url> [output.json]
 # BestTour package page (best for date-specific pricing)
 python scripts/scrape_package.py \
   "https://www.besttour.com.tw/itinerary/TYO05MM260211AM" \
-  data/besttour-tokyo.json
+  scrapes/besttour-tokyo.json
 
 # Lion Travel search results
 python scripts/scrape_package.py \
   "https://vacation.liontravel.com/search?Destination=JP_TYO_6&roomlist=2-0-0" \
-  data/liontravel-search.json
+  scrapes/liontravel-search.json
 ```
 
 **Output format:**
@@ -77,10 +77,10 @@ python scripts/scrape_liontravel_dated.py detail <product_id> <dep_date> <days> 
 **Examples:**
 ```bash
 # Search Tokyo packages for Feb 11-15
-python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 data/liontravel-feb11.json
+python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 scrapes/liontravel-feb11.json
 
 # Get detail for specific product
-python scripts/scrape_liontravel_dated.py detail 170525001 2026-02-11 5 data/liontravel-detail.json
+python scripts/scrape_liontravel_dated.py detail 170525001 2026-02-11 5 scrapes/liontravel-detail.json
 ```
 
 **Search output format:**

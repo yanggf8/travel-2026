@@ -5,8 +5,8 @@ EzTravel FIT Package Scraper
 Scrapes FIT (機加酒) packages from packages.eztravel.com.tw.
 
 Usage:
-    python scripts/scrape_eztravel.py --dest OSA --checkin 2026-02-24 --checkout 2026-02-28 --pax 2 -o data/eztravel-osaka.json
-    python scripts/scrape_eztravel.py --url "https://packages.eztravel.com.tw/roundtrip-TPE-OSA" -o data/eztravel.json
+    python scripts/scrape_eztravel.py --dest OSA --checkin 2026-02-24 --checkout 2026-02-28 --pax 2 -o scrapes/eztravel-osaka.json
+    python scripts/scrape_eztravel.py --url "https://packages.eztravel.com.tw/roundtrip-TPE-OSA" -o scrapes/eztravel.json
 """
 
 import argparse

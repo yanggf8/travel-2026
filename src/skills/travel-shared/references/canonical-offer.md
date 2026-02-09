@@ -26,7 +26,7 @@ interface CanonicalOffer {
 
   availability: Availability;
 
-  // Package-specific (v4.3.0+)
+  // Package-specific (optional additive fields)
   package_subtype?: PackageSubtype; // FIT vs group distinction
   guided?: boolean;                  // Has tour guide/leader
   meals_included?: number;           // Number of meals included
@@ -49,5 +49,4 @@ interface CanonicalOffer {
 - `hotel`
 - `includes`
 - `date_pricing` and `best_value`
-- `package_subtype`, `guided`, `meals_included` (v4.3.0+)
-
+- `package_subtype`, `guided`, `meals_included` (optional additive fields)
