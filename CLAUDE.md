@@ -113,13 +113,18 @@ User intent                          → Skill / Action
 
 "set dates" / "change dates"         → /p1-dates
 "which city" / "how many nights"     → /p2-destination
-"find packages" / "search OTA"       → /p3p4-packages (uses /scrape-ota)
+"find packages" / "search OTA"       → check-freshness first
+  fresh data in Turso?                  → query-offers (show existing)
+  stale/no data?                        → /p3p4-packages (scrape + auto-import)
 "find flights only"                  → /p3-flights (uses /scrape-ota)
 "compare offers" / "which is cheaper"→ read process_3_4_packages.results
+"query offers" / "what do we have"   → npm run travel -- query-offers --region <r>
+"is data fresh" / "when last scraped"→ npm run travel -- check-freshness --source <s>
 "book separately" / "split booking"  → /separate-bookings
 "how many leave days"                → npm run leave-calc
 "book this" / "select offer"         → npm run travel -- select-offer
 "plan the days" / "itinerary"        → /p5-itinerary
+"show bookings" / "booking status"   → npm run travel -- query-bookings (from DB, not JSON)
 "show status" / "where are we"       → npm run view:status
 "show schedule" / "daily plan"       → npm run view:itinerary
 
@@ -136,7 +141,7 @@ User provides booking confirmation   → npm run travel -- set-activity-booking
                     ▼
 ┌──────────────────────────────────────────────────────┐
 │ 2. SCRAPE: /scrape-ota → Python/Playwright           │
-│    Output: data/{ota}-{code}.json                    │
+│    Output: scrapes/{ota}-{code}.json                  │
 │    Contains: raw_text + extracted (flight/hotel/etc)  │
 └───────────────────┬──────────────────────────────────┘
                     ▼
@@ -154,9 +159,21 @@ User provides booking confirmation   → npm run travel -- set-activity-booking
 └───────────────────┬──────────────────────────────────┘
                     ▼
 ┌──────────────────────────────────────────────────────┐
+│ 4.5 TURSO: auto-import to Turso offers table         │
+│    turso-service.importOffersFromFiles()              │
+│    Enables: cross-device query, freshness checks     │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
 │ 5. SELECT: StateManager.selectOffer(id, date)        │
 │    Writes: chosen_offer                              │
 │    Triggers: cascade (populate P3 + P4 from offer)   │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│ 5.5 TURSO: sync booking to bookings table            │
+│    turso-service.syncBooking()                        │
+│    Tracks: selected → booked → confirmed             │
 └───────────────────┬──────────────────────────────────┘
                     ▼
 ┌──────────────────────────────────────────────────────┐
@@ -164,6 +181,14 @@ User provides booking confirmation   → npm run travel -- set-activity-booking
 │    P3 transport ← offer.flight                       │
 │    P4 accommodation ← offer.hotel                    │
 │    Clears dirty flags                                │
+└───────────────────┬──────────────────────────────────┘
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│ 7. SAVE: StateManager.save() → JSON + DB             │
+│    Writes: travel-plan.json + state.json              │
+│    Auto-syncs: bookings_current via fire-and-forget   │
+│    Extracts: package + transfer + activity bookings   │
+│    Query: npm run travel -- query-bookings            │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -173,9 +198,9 @@ When user provides a URL, **do not use WebFetch for OTA sites** (they require Ja
 
 | URL Contains | Action |
 |-------------|--------|
-| `besttour.com.tw` | `python scripts/scrape_package.py "<url>" data/besttour-<code>.json` |
+| `besttour.com.tw` | `python scripts/scrape_package.py "<url>" scrapes/besttour-<code>.json` |
 | `liontravel.com` | `python scripts/scrape_liontravel_dated.py` or `scrape_package.py` |
-| `lifetour.com.tw` | `python scripts/scrape_package.py "<url>" data/lifetour-<code>.json` |
+| `lifetour.com.tw` | `python scripts/scrape_package.py "<url>" scrapes/lifetour-<code>.json` |
 | Other travel OTA | Try `scrape_package.py` first (generic Playwright scraper) |
 | Non-OTA URL | Use WebFetch as normal |
 
@@ -200,7 +225,7 @@ const missing = validateStateManagerInterface(stateManager);
 if (missing.length > 0) throw new Error(`Missing methods: ${missing}`);
 ```
 
-Contract version: `1.4.0` (semver: breaking/feature/fix)
+Contract version: `1.6.0` (semver: breaking/feature/fix)
 
 ### Build Gate
 
@@ -351,7 +376,7 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 ```
 /
 ├── CLAUDE.md                  # AI assistant context (this file)
-├── data/
+├── data/                          # Persistent config + state only
 │   ├── travel-plan.json       # Main travel plan (v4.2.0)
 │   ├── state.json             # Event-driven state tracking
 │   ├── destinations.json      # Destination + origin config (v1.1.0)
@@ -359,11 +384,14 @@ npx ts-node src/cli/travel-update.ts status --plan data/trips/japan-2026-2/trave
 │   ├── holidays/              # Holiday calendars by country/year
 │   │   └── taiwan-2026.json   # Taiwan 2026 holidays + makeup workdays
 │   ├── osaka-trip-comparison.json  # Sample trip comparison input
-│   ├── besttour-*.json        # BestTour scrape results (date-specific pricing)
+│   └── trips/                 # Multi-plan trip data
+│       └── osaka-kyoto-2026/
+├── scrapes/                       # Ephemeral scraper outputs (gitignored)
+│   ├── cache/                 # Scraper result cache (TTL-based)
+│   ├── besttour-*.json        # BestTour scrape results
 │   ├── liontravel-*.json      # Lion Travel scrape results
 │   ├── trip-*.json            # Trip.com flight scrape results
-│   ├── booking-*.json         # Booking.com hotel scrape results
-│   └── flights-cache.json     # Legacy flight cache (Nagoya research)
+│   └── booking-*.json         # Booking.com hotel scrape results
 ├── src/
 │   ├── config/                # Skill pack configuration
 │   │   ├── index.ts           # Module exports
@@ -537,7 +565,7 @@ npm run view:status         # Booking overview + fixed-time activities
 npm run view:itinerary      # Daily plan with transport
 npm run view:transport      # Transport summary (airport + daily)
 npm run view:bookings       # Pending/confirmed bookings only
-npm run view:prices -- --flights data/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
+npm run view:prices -- --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
 
 # === COMPARISON ===
 npm run travel -- compare-offers --region osaka   # Compare scraped offers by region
@@ -560,7 +588,7 @@ npm run compare-true-cost -- --region kansai --pax 2 --date 2026-02-24
 npm run compare-true-cost -- --region kansai --pax 2 --itinerary "kyoto:2,osaka:2"
 
 # === FLIGHT NORMALIZER ===
-npm run normalize-flights -- data/trip-feb24-out.json --top 5
+npm run normalize-flights -- scrapes/trip-feb24-out.json --top 5
 npm run normalize-flights -- --scan                   # Scan all flight data
 
 # === DATA VALIDATION & HEALTH CHECK ===
@@ -576,7 +604,25 @@ npm run scraper:batch -- --dest tokyo --date 2026-02-24 --type fit  # FIT only w
 
 # === FLIGHT DATE RANGE SCRAPER ===
 python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
-  --origin tpe --dest kix --duration 5 --pax 2 -o data/date-range-prices.json
+  --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
+
+# === TURSO DB ===
+npm run travel -- query-offers --region kansai --start 2026-02-24 --end 2026-02-28
+npm run travel -- query-offers --sources besttour,liontravel --max-price 30000 --json
+npm run travel -- check-freshness --source besttour --region kansai
+npm run db:import:turso -- --dir scrapes
+npm run db:status:turso
+npm run db:migrate:turso
+
+# === BOOKINGS DB ===
+npm run travel -- sync-bookings                                    # Plan JSON → Turso bookings_current
+npm run travel -- sync-bookings --dry-run                          # Preview without writing
+npm run travel -- query-bookings --dest tokyo_2026                 # All bookings for Tokyo
+npm run travel -- query-bookings --category activity --status pending  # Pending activities
+npm run travel -- snapshot-plan --trip-id japan-2026                # Archive plan+state
+npm run travel -- check-booking-integrity                          # Plan vs DB drift check
+npm run db:sync:bookings                                           # Shortcut for sync-bookings
+npm run db:query:bookings                                          # Shortcut for query-bookings
 
 # === MUTATIONS (write) ===
 npm run travel -- set-dates 2026-02-13 2026-02-17
@@ -624,13 +670,13 @@ playwright install chromium
 python scripts/scrape_listings.py --source besttour --dest kansai -o listings.json
 
 # Filter packages by criteria
-python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
+python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24 --max-price 25000
 
 # Detail scrape (full package info)
-python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/<CODE>" data/besttour-<CODE>.json
+python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/<CODE>" scrapes/besttour-<CODE>.json
 
 # Scrape Lion Travel with dates
-python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 data/liontravel-search.json
+python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 scrapes/liontravel-search.json
 ```
 
 **Scraper Features:**
@@ -650,7 +696,7 @@ python scripts/scrape_liontravel_dated.py --start 2026-02-13 --end 2026-02-17 da
 ```bash
 # Compare 4 departure dates, outbound + return one-way prices
 python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
-  --origin tpe --dest kix --duration 5 --pax 2 -o data/date-range-prices.json
+  --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
 ```
 
 **Output:** Raw text + extracted elements saved to JSON. Manual parsing may be needed for:
@@ -700,7 +746,7 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ Package link extraction in scraper for listing pages
 - ✅ Staleness warning for offers older than 24 hours
 - ✅ Scraper enhancements: package_type classification (FIT/group), departure_date extraction, listing scraper, filter CLI
-- ✅ Holiday calculator (`src/utilities/holiday-calculator.ts`) — cached calendar loading, isHoliday/isWorkday/isMakeupWorkday queries, calculateLeave convenience wrapper, config-driven via destinations.json
+- ✅ Holiday calculator (`src/utils/holiday-calculator.ts`) — cached calendar loading, isHoliday/isWorkday/isMakeupWorkday queries, calculateLeave convenience wrapper, config-driven via destinations.json
 - ✅ Leave day calculator CLI (`src/utils/leave-calculator.ts`)
 - ✅ Multi-date flight scraper (`scripts/scrape_date_range.py`)
 - ✅ `/separate-bookings` skill — compare package vs split flight+hotel
@@ -734,6 +780,17 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
 - ✅ Thai Vietjet airline added to ota-knowledge.json (code: VZ, baggage: TWD 700/direction)
 - ✅ Baggage calculation respects explicit `baggage_included: false` (EzTravel FIT case)
 - ✅ Offers array priority in compare-true-cost — preserves individual hotel names from Lifetour FIT
+- ✅ Turso full integration: query-offers, check-freshness, auto-import after scrape, booking sync
+- ✅ Bookings table for cross-device booking decision tracking
+- ✅ Freshness check before scraping (skip if <24h old, bypass with --force)
+- ✅ Skill contracts v1.5.0 — Turso DB operations
+- ✅ DB-primary bookings — flat bookings_current table replaces nested JSON reads
+- ✅ Booking extractor (`scripts/extract-bookings.ts`) — package + transfer + activity extraction
+- ✅ StateManager.save() auto-syncs bookings to Turso (fire-and-forget)
+- ✅ CLI: sync-bookings, query-bookings, snapshot-plan, check-booking-integrity
+- ✅ Plan snapshots table for versioned plan archival
+- ✅ Bookings events audit trail (bookings_events table)
+- ✅ Skill contracts v1.6.0 — booking sync/query operations
 
 ## Storage Decision (DB)
 
@@ -778,6 +835,10 @@ Creds:    .env (gitignored)
 - `offers` - Package/flight/hotel offers with pricing
 - `destinations` - Tokyo, Osaka configured
 - `events` - Audit trail
+- `bookings` - Legacy booking decision sync (package-level)
+- `bookings_current` - Flat queryable booking rows (package + transfer + activity)
+- `bookings_events` - Audit trail for booking status changes
+- `plan_snapshots` - Versioned archive of full plan+state JSON
 
 **Usage:**
 ```bash
@@ -790,8 +851,8 @@ npm run db:query:turso -- --max-price 30000 --sources besttour,liontravel
 npm run db:query:turso -- --fresh-hours 24 --json
 
 # Import scraped JSON (with trip-aware date filtering)
-npm run db:import:turso -- --dir data
-npm run db:import:turso -- --dir data --start 2026-02-24 --end 2026-02-28
+npm run db:import:turso -- --dir scrapes
+npm run db:import:turso -- --dir scrapes --start 2026-02-24 --end 2026-02-28
 
 # Sanity-check counts / last import timestamps
 npm run db:status:turso
@@ -802,9 +863,10 @@ npm run db:status:turso
 
 **Schema:**
 ```sql
--- Offers (packages, flights, hotels)
+-- Offers (append-only snapshots)
 CREATE TABLE offers (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,              -- offer_key: {source_id}_{product_code}
+    source_file TEXT,              -- input filename for import tracking
     source_id TEXT NOT NULL,
     type TEXT CHECK(type IN ('package', 'flight', 'hotel')),
     name TEXT,
@@ -822,6 +884,7 @@ CREATE TABLE offers (
     scraped_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX idx_offers_dedup ON offers(id, scraped_at);
 
 -- Destinations
 CREATE TABLE destinations (
@@ -835,11 +898,78 @@ CREATE TABLE destinations (
 -- Events (audit)
 CREATE TABLE events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT UNIQUE, -- Stable hash for idempotency
     event_type TEXT NOT NULL,
     destination TEXT,
     process TEXT,
     data TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Bookings (decision sync)
+CREATE TABLE bookings (
+    destination TEXT NOT NULL,
+    offer_id TEXT NOT NULL,
+    selected_date TEXT NOT NULL,
+    price_per_person INTEGER,
+    price_total INTEGER,
+    currency TEXT DEFAULT 'TWD',
+    status TEXT CHECK(status IN ('selected', 'booked', 'confirmed')),
+    source_id TEXT,
+    hotel_name TEXT,
+    airline TEXT,
+    flight_out TEXT,
+    flight_return TEXT,
+    selected_at DATETIME,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (destination, offer_id)
+);
+
+-- Plan snapshots (versioned archive)
+CREATE TABLE IF NOT EXISTS plan_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    trip_id TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    state_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Bookings current (flat queryable rows — replaces nested JSON reads)
+CREATE TABLE IF NOT EXISTS bookings_current (
+    booking_key TEXT PRIMARY KEY,
+    trip_id TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('package','transfer','activity')),
+    subtype TEXT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','planned','booked','confirmed','waitlist','skipped','cancelled')),
+    reference TEXT,
+    book_by TEXT,
+    booked_at TEXT,
+    source_id TEXT,
+    offer_id TEXT,
+    selected_date TEXT,
+    price_amount INTEGER,
+    price_currency TEXT DEFAULT 'TWD',
+    origin_path TEXT,
+    payload_json TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Bookings events (audit trail)
+CREATE TABLE IF NOT EXISTS bookings_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    previous_status TEXT,
+    new_status TEXT,
+    reference TEXT,
+    book_by TEXT,
+    amount INTEGER,
+    currency TEXT,
+    event_data TEXT,
+    event_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
 

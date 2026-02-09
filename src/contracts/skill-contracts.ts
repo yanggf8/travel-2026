@@ -9,13 +9,15 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
+ * v1.6.0 - Added booking sync/query operations (sync-bookings, query-bookings, snapshot-plan, check-booking-integrity)
+ * v1.5.0 - Added Turso DB operations (query-offers, check-freshness, import-offers)
  * v1.4.0 - Added data_freshness tier to SkillContract for staleness awareness
  * v1.3.0 - Added view operations (status, itinerary, transport, bookings)
  * v1.2.0 - Added itinerary validation, scraper registry, and project init APIs
  * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.4.0';
+export const CONTRACT_VERSION = '1.6.0';
 
 /**
  * Data freshness tiers.
@@ -24,7 +26,7 @@ export const CONTRACT_VERSION = '1.4.0';
  * so it can decide whether to re-scrape or trust cached results.
  *
  * - live:   Real-time fetch (scraper / API call). Always current.
- * - cached: Reads from previously-scraped files (data/*.json).
+ * - cached: Reads from previously-scraped files (scrapes/*.json).
  *           May be stale — agent should check scraped_at timestamp.
  * - static: Plan state, config, or reference data. Doesn't go stale
  *           (changes only when the user mutates it).
@@ -358,6 +360,111 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     mutates: [],
     data_freshness: 'static',
     example: 'npm run view:bookings',
+  },
+
+  // === Turso DB Operations ===
+
+  'query-offers': {
+    name: 'query-offers',
+    description: 'Query offers from Turso cloud database with filters.',
+    args: [
+      { name: '--region', type: 'string', required: false, description: 'Region (kansai, tokyo)' },
+      { name: '--start', type: 'string', required: false, description: 'Departure date >=' },
+      { name: '--end', type: 'string', required: false, description: 'Departure date <=' },
+      { name: '--sources', type: 'string', required: false, description: 'OTA source IDs (csv)' },
+      { name: '--max-price', type: 'number', required: false, description: 'Max price per person' },
+      { name: '--fresh-hours', type: 'number', required: false, description: 'Only offers scraped within N hours' },
+      { name: '--max', type: 'number', required: false, description: 'Max results to return' },
+      { name: '--json', type: 'boolean', required: false, description: 'JSON output' },
+    ],
+    output: { type: 'array', description: 'Offer records from Turso' },
+    mutates: [],
+    data_freshness: 'cached',
+    example: 'npm run travel -- query-offers --region kansai --start 2026-02-24 --end 2026-02-28',
+  },
+
+  'check-freshness': {
+    name: 'check-freshness',
+    description: 'Check if Turso has fresh data for a source/region. Returns skip/rescrape/no_data.',
+    args: [
+      { name: '--source', type: 'string', required: true, description: 'OTA source ID' },
+      { name: '--region', type: 'string', required: false, description: 'Region filter' },
+      { name: '--max-age', type: 'number', required: false, description: 'Max age hours (default: 24)' },
+    ],
+    output: { type: 'object', description: '{ hasFreshData, ageHours, offerCount, recommendation }' },
+    mutates: [],
+    data_freshness: 'cached',
+    example: 'npm run travel -- check-freshness --source besttour --region kansai',
+  },
+
+  'import-offers': {
+    name: 'import-offers',
+    description: 'Import scraped files into Turso. Auto-triggered by scrape-package.',
+    args: [
+      { name: '--dir', type: 'string', required: false, description: 'Directory (default: scrapes)' },
+      { name: '--files', type: 'string', required: false, description: 'Comma-separated file paths' },
+    ],
+    output: { type: 'object', description: '{ imported, skipped, filtered }' },
+    mutates: ['turso.offers'],
+    data_freshness: 'live',
+    example: 'npm run db:import:turso -- --dir scrapes',
+  },
+
+  // === Booking Operations ===
+
+  'sync-bookings': {
+    name: 'sync-bookings',
+    description: 'Extract bookings from travel-plan.json and sync to Turso bookings_current. Idempotent.',
+    args: [
+      { name: '--plan', type: 'string', required: false, description: 'Plan file path' },
+      { name: '--state', type: 'string', required: false, description: 'State file path' },
+      { name: '--trip-id', type: 'string', required: false, description: 'Trip ID (default: inferred from path)' },
+      { name: '--dry-run', type: 'boolean', required: false, description: 'Show what would sync without writing' },
+    ],
+    output: { type: 'object', description: '{ synced: number, warnings: string[] }' },
+    mutates: ['turso.bookings_current', 'turso.bookings_events'],
+    data_freshness: 'static',
+    example: 'npm run travel -- sync-bookings',
+  },
+
+  'query-bookings': {
+    name: 'query-bookings',
+    description: 'Query bookings from Turso DB with filters.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug' },
+      { name: '--category', type: 'string', required: false, description: 'package|transfer|activity' },
+      { name: '--status', type: 'string', required: false, description: 'Booking status filter' },
+      { name: '--trip-id', type: 'string', required: false, description: 'Trip ID filter' },
+      { name: '--json', type: 'boolean', required: false, description: 'JSON output' },
+    ],
+    output: { type: 'array', description: 'BookingCurrentRow[] from Turso' },
+    mutates: [],
+    data_freshness: 'cached',
+    example: 'npm run travel -- query-bookings --dest tokyo_2026 --status pending',
+  },
+
+  'snapshot-plan': {
+    name: 'snapshot-plan',
+    description: 'Archive current plan+state to Turso plan_snapshots.',
+    args: [
+      { name: '--trip-id', type: 'string', required: false, description: 'Trip ID (default: japan-2026)' },
+    ],
+    output: { type: 'object', description: '{ snapshot_id: string, trip_id: string }' },
+    mutates: ['turso.plan_snapshots'],
+    data_freshness: 'static',
+    example: 'npm run travel -- snapshot-plan --trip-id japan-2026',
+  },
+
+  'check-booking-integrity': {
+    name: 'check-booking-integrity',
+    description: 'Compare bookings in plan JSON vs Turso DB. Reports matches, mismatches, plan-only, DB-only.',
+    args: [
+      { name: '--trip-id', type: 'string', required: false, description: 'Trip ID filter' },
+    ],
+    output: { type: 'object', description: '{ matches, mismatches, dbOnly, planOnly }' },
+    mutates: [],
+    data_freshness: 'cached',
+    example: 'npm run travel -- check-booking-integrity',
   },
 };
 

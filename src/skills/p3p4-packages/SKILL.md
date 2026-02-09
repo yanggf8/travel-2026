@@ -96,7 +96,7 @@ npm run view:transport
 npm run travel -- search-packages --max-price 20000 --type fit
 
 # Filter scraped results
-python scripts/filter_packages.py data/*-scrape.json --max-price 20000 --type fit
+python scripts/filter_packages.py scrapes/*-scrape.json --max-price 20000 --type fit
 ```
 
 ## Error Handling
@@ -148,7 +148,7 @@ python scripts/scrape_package.py <url>
 python scripts/scrape_listings.py --source besttour --dest kansai
 
 # Filter results
-python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24
+python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24
 ```
 
 ## Shared References
@@ -157,6 +157,14 @@ python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24
 - `../travel-shared/references/state-manager.md`
 - `../travel-shared/references/cascade-triggers.md`
 - `../scrape-ota/SKILL.md` - OTA scraping details
+
+## DB Integration
+
+After package selection, bookings are automatically synced to Turso:
+- `StateManager.save()` writes to both JSON and DB
+- Query bookings: `npm run travel -- query-bookings --category package`
+- The agent should use `query-bookings` to check status, not read JSON paths
+- Manual sync: `npm run travel -- sync-bookings`
 
 ## Notes
 

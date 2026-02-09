@@ -1610,6 +1610,25 @@ export class StateManager {
       JSON.stringify(this.eventLog, null, 2),
       'utf-8'
     );
+
+    // Sync bookings to Turso (fire-and-forget async)
+    this.syncBookingsToDb();
+  }
+
+  /**
+   * Fire-and-forget sync of booking data to Turso DB.
+   * Runs async after JSON writes — the JSON write is the immediate confirmation.
+   * @internal
+   */
+  private syncBookingsToDb(): void {
+    try {
+      const { syncBookingsFromPlan } = require('../services/turso-service');
+      syncBookingsFromPlan(this.planPath).catch((e: Error) => {
+        console.warn(`  [turso] booking sync failed: ${e.message} — run 'npm run travel -- sync-bookings' to retry`);
+      });
+    } catch {
+      // turso-service not available — should not happen (no offline mode)
+    }
   }
 
   /**

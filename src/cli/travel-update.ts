@@ -120,7 +120,7 @@ Commands:
     Example: search-offers --dest tokyo_2026 --pax 2 --types package --json
 
   compare-offers --region <name> [--date YYYY-MM-DD] [--pax N] [--json]
-    Compare scraped offers from data/*.json files by region.
+    Compare scraped offers from scrapes/*.json files by region.
     Reads existing scraped data files (no new scraping).
     region: osaka, kansai, tokyo, etc. (matches filenames like *-osaka-*.json)
     Example: compare-offers --region osaka --date 2026-02-26 --pax 2
@@ -129,10 +129,34 @@ Commands:
     Compare package vs separate booking (flight+hotel) across departure dates.
     Reads date-range flight data from scrape_date_range.py output.
     --flights: Path to date-range JSON file (required)
-    --hotel-per-night: Hotel cost per night in TWD (default: auto-detect from data/booking-*.json)
+    --hotel-per-night: Hotel cost per night in TWD (default: auto-detect from scrapes/booking-*.json)
     --nights: Number of hotel nights (default: duration - 1 from flight data)
     --package: Package price for all pax in TWD (for comparison column)
-    Example: view-prices --flights data/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
+    Example: view-prices --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
+
+  query-offers [--region name] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--sources csv] [--max-price N] [--fresh-hours N] [--max N] [--json]
+    Query offers from Turso cloud database with filters.
+    Example: query-offers --region kansai --start 2026-02-24 --end 2026-02-28
+
+  check-freshness --source <id> [--region name] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--max-age N]
+    Check if Turso has fresh data for a source/region. Returns skip/rescrape/no_data.
+    Example: check-freshness --source besttour --region kansai
+
+  sync-bookings [--plan path] [--state path] [--trip-id id] [--dry-run]
+    Extract bookings from travel-plan.json and sync to Turso. Idempotent.
+    Example: sync-bookings
+
+  query-bookings [--dest slug] [--category package|transfer|activity] [--status pending|booked] [--trip-id id] [--json]
+    Query bookings from Turso DB.
+    Example: query-bookings --dest tokyo_2026 --status pending
+
+  snapshot-plan [--trip-id id]
+    Archive current plan+state to Turso plan_snapshots.
+    Example: snapshot-plan --trip-id japan-2026
+
+  check-booking-integrity [--trip-id id]
+    Compare bookings in plan JSON vs Turso DB.
+    Example: check-booking-integrity
 
   status
     Show current plan status summary.
@@ -817,6 +841,13 @@ async function main(): Promise<void> {
   const nightsOpt = optionValue('--nights');
   const packageOpt = optionValue('--package');
   const jsonOpt = args.includes('--json');
+  const maxPriceOpt = optionValue('--max-price');
+  const freshHoursOpt = optionValue('--fresh-hours');
+  const maxOpt = optionValue('--max');
+  const maxAgeOpt = optionValue('--max-age');
+  const tripIdOpt = optionValue('--trip-id');
+  const categoryOpt = optionValue('--category');
+  const statusFilterOpt = optionValue('--status');
 
   // Filter out flags/options from args
   const optionsWithValues = new Set([
@@ -841,6 +872,13 @@ async function main(): Promise<void> {
     '--hotel-per-night',
     '--nights',
     '--package',
+    '--max-price',
+    '--fresh-hours',
+    '--max',
+    '--max-age',
+    '--trip-id',
+    '--category',
+    '--status',
   ]);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -895,6 +933,26 @@ async function main(): Promise<void> {
           pax = paxResult.value;
         }
 
+        // Freshness check — skip scraping if Turso has recent data
+        if (!dryRun && !args.includes('--force')) {
+          try {
+            const { checkFreshness } = await import('../services/turso-service');
+            const sourceId = inferSourceIdFromUrl(url);
+            const region = inferRegionFromDestination(destination);
+            const freshness = await checkFreshness(sourceId, { region });
+            if (freshness.recommendation === 'skip') {
+              console.log(`\nTurso has fresh data for ${sourceId} (${freshness.ageHours?.toFixed(1)}h old, ${freshness.offerCount} offers).`);
+              console.log('Use --force to scrape anyway, or query-offers to view existing data.');
+              break;
+            }
+            if (freshness.recommendation === 'rescrape') {
+              console.log(`\nTurso data for ${sourceId} is ${freshness.ageHours?.toFixed(1)}h old. Re-scraping...`);
+            }
+          } catch {
+            // Turso not configured — proceed with scrape
+          }
+        }
+
         const tmpOut = path.join(os.tmpdir(), `package-scrape-${Date.now()}.json`);
         console.log(`\n🕷️  Scraping package URL: ${url}`);
         console.log(`   Destination: ${destination}`);
@@ -907,9 +965,6 @@ async function main(): Promise<void> {
         }
 
         const scrape = dryRun ? null : JSON.parse(fs.readFileSync(tmpOut, 'utf-8')) as any;
-        if (!dryRun) {
-          fs.unlinkSync(tmpOut);
-        }
 
         const warnings: string[] = [];
         const offers: any[] = [];
@@ -930,12 +985,30 @@ async function main(): Promise<void> {
           sm.save();
           console.log('✅ Imported offers into process_3_4_packages.results.offers');
 
+          // Auto-import to Turso (file still exists)
+          try {
+            const { importOffersFromFiles } = await import('../services/turso-service');
+            const tursoResult = await importOffersFromFiles([tmpOut], {
+              destination,
+              region: inferRegionFromDestination(destination),
+            });
+            console.log(`  Turso: imported ${tursoResult.imported} offer(s)`);
+          } catch (e) {
+            console.warn(`  Turso auto-import skipped: ${(e as Error).message}`);
+          }
+
+          // Clean up temp file after both imports
+          fs.unlinkSync(tmpOut);
+
           const best = offers[0]?.best_value?.date;
           if (best) {
             console.log(`\nNext action: npx ts-node src/cli/travel-update.ts select-offer ${offers[0].id} ${best}`);
           } else {
             console.log('\nNext action: review offers then run select-offer <offer-id> <date>');
           }
+        } else {
+          // Dry run — clean up temp file
+          if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
         }
 
         break;
@@ -1030,12 +1103,15 @@ async function main(): Promise<void> {
         console.log(`   Populate P3/P4: ${!noPopulate}`);
 
         if (!dryRun) {
+          const destination = destOpt || sm.getActiveDestination();
           sm.selectOffer(offerId, date, !noPopulate);
           sm.save();
           console.log('✅ Offer selected');
           if (!noPopulate) {
             console.log('✅ P3 (transportation) and P4 (accommodation) populated from package');
           }
+
+          // Turso booking sync handled automatically by save() → syncBookingsToDb()
         } else {
           console.log('🔸 DRY RUN - no changes saved');
         }
@@ -1216,6 +1292,8 @@ async function main(): Promise<void> {
 
           sm.save();
           console.log('\n✅ Booking marked as confirmed');
+          // Turso booking sync handled automatically by save() → syncBookingsToDb()
+
           console.log('\nNext action: Plan daily itinerary with scaffold-itinerary or /p5-itinerary');
         } else {
           console.log('\n🔸 DRY RUN - no changes saved');
@@ -1808,7 +1886,7 @@ async function main(): Promise<void> {
         const offers = loadScrapedOffers(region, filterDate, pax);
         if (offers.length === 0) {
           console.log(`\nNo scraped offers found for region "${region}".`);
-          console.log(`Make sure you have data/*${region}*.json files from previous scrapes.`);
+          console.log(`Make sure you have scrapes/*${region}*.json files from previous scrapes.`);
           process.exit(1);
         }
 
@@ -1823,7 +1901,7 @@ async function main(): Promise<void> {
       case 'view-prices': {
         if (!flightsOpt) {
           console.error('Error: view-prices requires --flights <file>');
-          console.error('Example: view-prices --flights data/date-range-prices.json --hotel-per-night 3000 --nights 4');
+          console.error('Example: view-prices --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4');
           process.exit(1);
         }
 
@@ -1842,6 +1920,118 @@ async function main(): Promise<void> {
         const packagePrice = packageOpt ? parseInt(packageOpt, 10) : undefined;
 
         showPriceComparison(flightsOpt, { hotelPerNight, nights, packagePrice, pax, json: jsonOpt });
+        break;
+      }
+
+      case 'query-offers': {
+        const { queryOffers, printTursoOfferTable } = await import('../services/turso-service');
+        const results = await queryOffers({
+          destination: destOpt,
+          region: optionValue('--region'),
+          start: startOpt,
+          end: endOpt,
+          sources: sourceOpt?.split(','),
+          type: typesOpt as 'package' | 'flight' | 'hotel' | undefined,
+          maxPrice: maxPriceOpt ? parseInt(maxPriceOpt, 10) : undefined,
+          freshHours: freshHoursOpt ? parseInt(freshHoursOpt, 10) : undefined,
+          limit: maxOpt ? parseInt(maxOpt, 10) : undefined,
+        });
+        if (jsonOpt) {
+          console.log(JSON.stringify(results, null, 2));
+        } else {
+          printTursoOfferTable(results);
+        }
+        break;
+      }
+
+      case 'check-freshness': {
+        const source = sourceOpt || optionValue('--source');
+        if (!source) {
+          console.error('Error: check-freshness requires --source <id>');
+          console.error('Example: check-freshness --source besttour --region kansai');
+          process.exit(1);
+        }
+        const { checkFreshness } = await import('../services/turso-service');
+        const result = await checkFreshness(source, {
+          region: optionValue('--region'),
+          start: startOpt,
+          end: endOpt,
+          maxAgeHours: maxAgeOpt ? parseInt(maxAgeOpt, 10) : 24,
+        });
+        console.log(`Source:  ${source}`);
+        if (result.region) console.log(`Region:  ${result.region}`);
+        console.log(`Result:  ${result.recommendation}`);
+        if (result.ageHours !== null) console.log(`  Age:     ${result.ageHours.toFixed(1)}h`);
+        console.log(`  Offers:  ${result.offerCount}`);
+        break;
+      }
+
+      case 'sync-bookings': {
+        const { syncBookingsFromPlan } = await import('../services/turso-service');
+        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
+        console.log(`Syncing bookings from ${planFile}...`);
+        const syncResult = await syncBookingsFromPlan(planFile, {
+          tripId: tripIdOpt,
+          dryRun: dryRun,
+        });
+        if (syncResult.warnings.length > 0) {
+          console.warn('Warnings:');
+          for (const w of syncResult.warnings) console.warn(`  - ${w}`);
+        }
+        console.log(`${dryRun ? 'Would sync' : 'Synced'} ${syncResult.synced} bookings to Turso.`);
+        break;
+      }
+
+      case 'query-bookings': {
+        const { queryBookings, printBookingsTable } = await import('../services/turso-service');
+        const results = await queryBookings({
+          tripId: tripIdOpt,
+          destination: destOpt,
+          category: categoryOpt as 'package' | 'transfer' | 'activity' | undefined,
+          status: statusFilterOpt,
+          limit: maxOpt ? parseInt(maxOpt, 10) : undefined,
+        });
+        if (jsonOpt) {
+          console.log(JSON.stringify(results, null, 2));
+        } else {
+          printBookingsTable(results);
+        }
+        break;
+      }
+
+      case 'snapshot-plan': {
+        const { createPlanSnapshot } = await import('../services/turso-service');
+        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
+        const stateFile = stateOpt || process.env.TRAVEL_STATE_PATH || 'data/state.json';
+        const effectiveTripId = tripIdOpt || 'japan-2026';
+        console.log(`Creating plan snapshot for trip "${effectiveTripId}"...`);
+        const snapshot = await createPlanSnapshot(planFile, stateFile, effectiveTripId);
+        console.log(`Snapshot created: ${snapshot.snapshot_id}`);
+        break;
+      }
+
+      case 'check-booking-integrity': {
+        const { checkBookingIntegrity } = await import('../services/turso-service');
+        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
+        console.log('Checking booking integrity (plan JSON vs Turso DB)...');
+        const integrity = await checkBookingIntegrity(planFile, tripIdOpt);
+        console.log(`\nResults:`);
+        console.log(`  Matches:    ${integrity.matches}`);
+        console.log(`  Mismatches: ${integrity.mismatches.length}`);
+        console.log(`  Plan-only:  ${integrity.planOnly.length}`);
+        console.log(`  DB-only:    ${integrity.dbOnly.length}`);
+        if (integrity.mismatches.length > 0) {
+          console.log('\nMismatches:');
+          for (const m of integrity.mismatches) console.log(`  - ${m}`);
+        }
+        if (integrity.planOnly.length > 0) {
+          console.log('\nPlan-only (not in DB):');
+          for (const p of integrity.planOnly) console.log(`  - ${p}`);
+        }
+        if (integrity.dbOnly.length > 0) {
+          console.log('\nDB-only (not in plan):');
+          for (const d of integrity.dbOnly) console.log(`  - ${d}`);
+        }
         break;
       }
 
@@ -2803,6 +2993,16 @@ function inferSourceIdFromUrl(url: string): string {
   if (url.includes('jalan.net')) return 'jalan';
   if (url.includes('travel.rakuten.co.jp')) return 'rakuten_travel';
   return 'unknown';
+}
+
+function inferRegionFromDestination(destination: string): string | undefined {
+  const d = destination.toLowerCase();
+  if (d.includes('tokyo') || d.includes('tyo')) return 'tokyo';
+  if (d.includes('osaka') || d.includes('kansai') || d.includes('kyoto')) return 'kansai';
+  if (d.includes('nagoya')) return 'nagoya';
+  if (d.includes('hokkaido') || d.includes('sapporo')) return 'hokkaido';
+  if (d.includes('okinawa')) return 'okinawa';
+  return undefined;
 }
 
 function allocateClustersToDays(
