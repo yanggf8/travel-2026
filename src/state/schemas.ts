@@ -217,12 +217,23 @@ export const DaySessionSchema = z.object({
   }).optional(),
 }).passthrough();
 
+export const DayWeatherSchema = z.object({
+  temp_high_c: z.number(),
+  temp_low_c: z.number(),
+  precipitation_pct: z.number().min(0).max(100),
+  weather_code: z.number(),
+  weather_label: z.string(),
+  source_id: z.string(),
+  sourced_at: z.string(),
+});
+
 export const ItineraryDaySchema = z.object({
   date: z.string(),
   day_number: z.number(),
   day_type: DayTypeSchema,
   status: z.enum(['draft', 'planned', 'confirmed']).optional(),
   theme: z.string().nullable().optional(),
+  weather: DayWeatherSchema.optional(),
   morning: DaySessionSchema.optional(),
   afternoon: DaySessionSchema.optional(),
   evening: DaySessionSchema.optional(),

@@ -32,9 +32,9 @@ travel-plan.json
 ### Data Flow
 `URL → scrape (Playwright) → normalize (CanonicalOffer[]) → StateManager.importPackageOffers() → Turso auto-import → selectOffer() → cascade (populate P3+P4) → save() (DB write → derived sync)`
 
-Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v1.7.0).
+Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v1.8.0).
 
-### DB-Primary Architecture (v1.7.0)
+### DB-Primary Architecture (v1.8.0)
 ```
 WRITE:  mutate → await save() → write DB (blocking) → sync derived tables (fire-and-forget)
 READ:   await StateManager.create() → read DB → memory
@@ -77,6 +77,7 @@ User intent                          → Skill / Action
 "show bookings"                      → npm run travel -- query-bookings (from DB)
 "show status"                        → npm run view:status
 "show schedule"                      → npm run view:itinerary
+"weather" / "forecast"               → npm run travel -- fetch-weather [--dest slug]
 User provides OTA URL                → /scrape-ota (see URL Routing)
 User provides booking confirmation   → npm run travel -- set-activity-booking
 ```
@@ -95,12 +96,7 @@ User provides booking confirmation   → npm run travel -- set-activity-booking
 Full skill reference: `src/skills/scrape-ota/SKILL.md`
 
 ### Agent Output Pattern
-When user asks "show me X", capture to file and paste in response (CLI collapses long output):
-```
-1. Bash: npm run view:* > /tmp/view.txt
-2. Read: /tmp/view.txt
-3. Text: paste content in response
-```
+Run CLI commands directly via Bash and show the output. No need to redirect to temp files.
 
 ## Available Skills
 | Skill | Path | Purpose |
@@ -243,6 +239,7 @@ npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--
 npm run travel -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
 npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
 npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
+npm run travel -- fetch-weather [--dest slug]
 ```
 
 ## Project Structure

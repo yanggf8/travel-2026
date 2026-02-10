@@ -114,6 +114,11 @@ Commands:
     Validate itinerary for time conflicts, business hours, booking deadlines, and area efficiency.
     Example: validate-itinerary --severity warning
 
+  fetch-weather [--dest slug]
+    Fetch weather forecast from Open-Meteo and store on itinerary days.
+    Requires itinerary to be scaffolded first. Dates must be within 16-day forecast window.
+    Example: fetch-weather
+
   search-offers --dest slug [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--pax N] [--types package,flight,hotel] [--source id] [--json]
     Search across registered OTA scrapers (if any are registered at runtime).
     If --start/--end are omitted, uses the destination confirmed dates.
@@ -459,17 +464,47 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
     console.log(`📅 ${formatDate(startDate)} → ${formatDate(endDate)} (${days.length} days)`);
   }
 
-  // Hotel info
-  const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
-  const hotelName = p4?.hotel_name as string | undefined;
-  if (hotelName) {
-    console.log(`🏨 ${hotelName}`);
+  // Flight info
+  const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+  const flight = p3?.flight as Record<string, unknown> | undefined;
+  if (flight) {
+    const airline = flight.airline as string | undefined;
+    const airlineCode = flight.airline_code as string | undefined;
+    const outbound = flight.outbound as Record<string, unknown> | undefined;
+    const inbound = flight.return as Record<string, unknown> | undefined;
+    if (outbound) {
+      const label = [airlineCode, outbound.flight_number].filter(Boolean).join(' ');
+      const dep = `${outbound.departure_airport_code ?? ''} ${outbound.departure_time ?? ''}`;
+      const arr = `${outbound.arrival_airport_code ?? ''} ${outbound.arrival_time ?? ''}`;
+      let line = `✈️  ${label}${airline ? ` (${airline})` : ''}: ${dep} → ${arr}`;
+      if (inbound) {
+        const rLabel = inbound.flight_number as string || '';
+        line += ` / ${rLabel} ${inbound.departure_airport_code ?? ''} ${inbound.departure_time ?? ''} → ${inbound.arrival_airport_code ?? ''} ${inbound.arrival_time ?? ''}`;
+      }
+      console.log(line);
+    }
   }
 
-  // Transit summary
-  const transitSummary = p5?.transit_summary as Record<string, unknown> | undefined;
-  if (transitSummary?.hotel_station) {
-    console.log(`🚉 ${transitSummary.hotel_station}`);
+  // Hotel info
+  const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
+  const hotel = p4?.hotel as Record<string, unknown> | undefined;
+  if (hotel?.name) {
+    const area = hotel.area as string | undefined;
+    const access = hotel.access as string[] | undefined;
+    let line = `🏨 ${hotel.name}`;
+    if (area) line += ` (${area})`;
+    console.log(line);
+    if (Array.isArray(access) && access.length > 0) {
+      console.log(`🚉 ${access.join(', ')}`);
+    }
+  }
+
+  // Transit summary (fallback if no hotel access)
+  if (!hotel?.name) {
+    const transitSummary = p5?.transit_summary as Record<string, unknown> | undefined;
+    if (transitSummary?.hotel_station) {
+      console.log(`🚉 ${transitSummary.hotel_station}`);
+    }
   }
 
   console.log('');
@@ -487,6 +522,16 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
     console.log('─'.repeat(60));
     console.log(`Day ${dayNum} (${formatDate(date)}) ${dayLabel}`);
     if (theme) console.log(`Theme: ${theme}`);
+
+    const weather = day.weather as { temp_high_c?: number; temp_low_c?: number; precipitation_pct?: number; weather_label?: string; weather_code?: number; source_id?: string; sourced_at?: string } | undefined;
+    if (weather && weather.weather_label) {
+      const icon = (weather.weather_code ?? 0) >= 71 && (weather.weather_code ?? 0) <= 77 ? '\u2744\uFE0F' :
+                   (weather.precipitation_pct ?? 0) > 50 ? '\uD83C\uDF27\uFE0F' :
+                   (weather.weather_code ?? 0) >= 2 ? '\u26C5' : '\u2600\uFE0F';
+      const srcDate = weather.sourced_at ? weather.sourced_at.split('T')[0] : '';
+      console.log(`${icon} ${weather.weather_label} | ${weather.temp_low_c}\u2013${weather.temp_high_c}\u00B0C | Rain: ${weather.precipitation_pct}%  (${weather.source_id || 'unknown'}, ${srcDate})`);
+    }
+
     console.log('');
 
     for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
@@ -2031,6 +2076,48 @@ async function main(): Promise<void> {
         if (integrity.dbOnly.length > 0) {
           console.log('\nDB-only (not in plan):');
           for (const d of integrity.dbOnly) console.log(`  - ${d}`);
+        }
+        break;
+      }
+
+      case 'fetch-weather': {
+        const dest = destOpt || sm.getActiveDestination();
+        const plan = sm.getPlan();
+        const destObj = plan.destinations[dest] as Record<string, unknown> | undefined;
+        if (!destObj) {
+          console.error(`Destination not found: ${dest}`);
+          process.exit(1);
+        }
+
+        const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+        const days = p5?.days as Array<Record<string, unknown>> | undefined;
+        if (!days || days.length === 0) {
+          console.error('No itinerary days found. Run scaffold-itinerary first.');
+          process.exit(1);
+        }
+
+        const firstDate = days[0].date as string;
+        const lastDate = days[days.length - 1].date as string;
+
+        const { fetchWeather } = require('../services/weather-service');
+        const forecasts = await fetchWeather(firstDate, lastDate, dest);
+
+        if (forecasts.length === 0) {
+          console.log('No forecast data available (dates may be outside 16-day window).');
+          break;
+        }
+
+        for (let i = 0; i < days.length && i < forecasts.length; i++) {
+          const dayNum = days[i].day_number as number;
+          sm.setDayWeather(dest, dayNum, forecasts[i]);
+        }
+
+        await sm.save();
+
+        console.log(`Weather updated for ${forecasts.length} day(s) in ${dest}:`);
+        for (let i = 0; i < forecasts.length; i++) {
+          const f = forecasts[i];
+          console.log(`  Day ${days[i].day_number}: ${f.weather_label} ${f.temp_low_c}–${f.temp_high_c}°C, Rain: ${f.precipitation_pct}%`);
         }
         break;
       }

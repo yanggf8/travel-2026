@@ -18,6 +18,7 @@ export interface DestinationConfig {
   markets: string[];
   primary_airports: string[];
   language: string;
+  coordinates?: { lat: number; lon: number };
 }
 
 export interface OtaSourceConfig {

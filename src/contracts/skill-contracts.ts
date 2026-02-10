@@ -1,5 +1,5 @@
 /**
- * Skill Contracts v1.7.0
+ * Skill Contracts v1.8.0
  *
  * Defines the interface for all CLI operations.
  * Agent can query this to discover available operations.
@@ -9,6 +9,7 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
+ * v1.8.0 - Added weather forecast fetch (fetch-weather)
  * v1.7.0 - DB-primary migration: writePlanToDb/readPlanFromDb, async save(), StateManager.create()
  * v1.6.0 - Added booking sync/query operations (sync-bookings, query-bookings, snapshot-plan, check-booking-integrity)
  * v1.5.0 - Added Turso DB operations (query-offers, check-freshness, import-offers)
@@ -18,7 +19,7 @@
  * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.7.0';
+export const CONTRACT_VERSION = '1.8.0';
 
 /**
  * Data freshness tiers.
@@ -467,6 +468,21 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     data_freshness: 'cached',
     example: 'npm run travel -- check-booking-integrity',
   },
+
+  'fetch-weather': {
+    name: 'fetch-weather',
+    description: 'Fetch weather forecast from Open-Meteo and store on itinerary days.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'void', description: 'Updates weather field on itinerary days' },
+    mutates: [
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.weather',
+      'state.event_log',
+    ],
+    data_freshness: 'live',
+    example: 'npm run travel -- fetch-weather',
+  },
 };
 
 /**
@@ -508,6 +524,7 @@ export const STATE_MANAGER_METHODS = {
   updateActivity: { args: ['destination', 'dayNumber', 'session', 'activityId', 'updates'], returns: 'void', description: 'Update activity' },
   removeActivity: { args: ['destination', 'dayNumber', 'session', 'activityId'], returns: 'void', description: 'Remove activity' },
   setDayTheme: { args: ['destination', 'dayNumber', 'theme'], returns: 'void', description: 'Set day theme' },
+  setDayWeather: { args: ['destination', 'dayNumber', 'weather'], returns: 'void', description: 'Set day weather forecast' },
   setSessionFocus: { args: ['destination', 'dayNumber', 'session', 'focus'], returns: 'void', description: 'Set session focus' },
   setActivityBookingStatus: { args: ['destination', 'dayNumber', 'session', 'activityIdOrTitle', 'status', 'ref?', 'bookBy?'], returns: 'void', description: 'Set activity booking status' },
   setActivityTime: { args: ['destination', 'dayNumber', 'session', 'activityIdOrTitle', 'opts'], returns: 'void', description: 'Set activity time fields (start/end/fixed)' },

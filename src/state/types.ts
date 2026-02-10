@@ -215,6 +215,19 @@ export interface DaySession {
 }
 
 /**
+ * Weather forecast for a single day.
+ */
+export interface DayWeather {
+  temp_high_c: number;
+  temp_low_c: number;
+  precipitation_pct: number;    // 0-100
+  weather_code: number;         // WMO weather code
+  weather_label: string;        // "Clear sky", "Partly cloudy", etc.
+  source_id: string;            // "open_meteo"
+  sourced_at: string;           // ISO-8601
+}
+
+/**
  * Single day in the itinerary.
  */
 export interface ItineraryDay {
@@ -223,6 +236,7 @@ export interface ItineraryDay {
   day_type: 'arrival' | 'full' | 'departure';
   status: 'draft' | 'planned' | 'confirmed';
   theme: string | null;          // Day theme
+  weather?: DayWeather;          // Optional weather forecast
   morning: DaySession;
   afternoon: DaySession;
   evening: DaySession;

@@ -21,7 +21,8 @@
       "markets": ["TW", "JP"],
       "primary_airports": ["NRT", "HND"],
       "language": "ja",
-      "origin": "taiwan"
+      "origin": "taiwan",
+      "coordinates": { "lat": 35.6762, "lon": 139.6503 }
     },
     "nagoya_2026": {
       "slug": "nagoya_2026",
@@ -33,7 +34,8 @@
       "markets": ["TW", "JP"],
       "primary_airports": ["NGO"],
       "language": "ja",
-      "origin": "taiwan"
+      "origin": "taiwan",
+      "coordinates": { "lat": 35.1815, "lon": 136.9066 }
     },
     "osaka_2026": {
       "slug": "osaka_2026",
@@ -45,7 +47,8 @@
       "markets": ["TW", "JP"],
       "primary_airports": ["KIX", "ITM"],
       "language": "ja",
-      "origin": "taiwan"
+      "origin": "taiwan",
+      "coordinates": { "lat": 34.6937, "lon": 135.5023 }
     },
     "osaka_kyoto_2026": {
       "slug": "osaka_kyoto_2026",
@@ -57,7 +60,8 @@
       "markets": ["TW", "JP"],
       "primary_airports": ["KIX", "ITM"],
       "language": "ja",
-      "origin": "taiwan"
+      "origin": "taiwan",
+      "coordinates": { "lat": 34.6937, "lon": 135.5023 }
     }
   },
   "default_destination": "tokyo_2026",

@@ -1417,6 +1417,26 @@ export class StateManager {
   }
 
   /**
+   * Set weather forecast for a specific day.
+   */
+  setDayWeather(destination: string, dayNumber: number, weather: import('./types').DayWeather): void {
+    const day = this.getDay(destination, dayNumber);
+    if (!day) {
+      throw new Error(`Day ${dayNumber} not found in ${destination}`);
+    }
+
+    (day as Record<string, unknown>).weather = weather;
+    this.touchItinerary(destination);
+
+    this.emitEvent({
+      event: 'weather_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, source_id: weather.source_id },
+    });
+  }
+
+  /**
    * Set a session's focus field.
    */
   setSessionFocus(
