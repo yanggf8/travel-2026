@@ -489,9 +489,10 @@ export function renderDashboard(
   const days = (itinerary?.days as Record<string, unknown>[]) || [];
 
   const langParam = lang === 'zh' ? 'en' : 'zh';
+  const navSuffix = plans ? '&nav=1' : '';
   const langHref = planId
-    ? `?lang=${langParam}&plan=${esc(planId)}`
-    : `?lang=${langParam}`;
+    ? `?lang=${langParam}&plan=${esc(planId)}${navSuffix}`
+    : `?lang=${langParam}${navSuffix}`;
 
   return `<!DOCTYPE html>
 <html lang="${lang === 'zh' ? 'zh-Hant' : 'en'}">

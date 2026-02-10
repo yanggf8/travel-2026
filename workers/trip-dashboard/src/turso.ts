@@ -95,6 +95,7 @@ export async function getPlan(env: Env, planId: string): Promise<PlanData | null
     `SELECT plan_json, state_json, updated_at FROM plans_current
      WHERE plan_id = '${escaped}'
         OR json_extract(plan_json, '$.active_destination') = '${destSlug}'
+     ORDER BY (plan_id = '${escaped}') DESC
      LIMIT 1`
   );
 
