@@ -313,6 +313,17 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → plans_c
 - **Secrets**: `TURSO_URL` + `TURSO_TOKEN` via `wrangler secret put` (server-side only, never sent to browser)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
 - **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=kyoto-2026`
+- **Itinerary formats**: Supports both session-based (Tokyo) and schedule-based (Kyoto) formats. See `src/skills/travel-shared/references/itinerary-formats.md`
+
+### Dashboard Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Itinerary shows blank/empty | Schedule-based format not converted | Check `render.ts` handles both formats |
+| Wrong plan content | Plan not synced to Turso | Run `npm run db:seed:plans` |
+| "Plan not found" error | Plan ID mismatch (underscore vs hyphen) | URL uses `tokyo-2026`, DB uses `tokyo_2026` |
+| ZH content not showing | `isTokyoPlan` gate | Only Tokyo has ZH overrides; add to `zh-content.ts` for other plans |
+| Weather missing | Weather not fetched | Run `npm run travel -- fetch-weather --dest <slug>` |
 
 ```bash
 cd workers/trip-dashboard

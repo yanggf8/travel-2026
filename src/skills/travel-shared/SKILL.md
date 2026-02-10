@@ -26,3 +26,4 @@ Use this bundle when creating/updating any travel planning skill under `src/skil
 - `references/ota-registry.md` — OTA source registry fields and normalization expectations
 - `references/state-manager.md` — status + dirty flag conventions
 - `references/cascade-triggers.md` — trigger names, scopes, and populate/reset behavior
+- `references/itinerary-formats.md` — session vs schedule formats, dashboard compatibility

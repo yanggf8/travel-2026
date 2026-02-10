@@ -1,7 +1,8 @@
 /**
- * Chinese (Traditional / Taiwan) content overrides for Tokyo trip.
+ * Chinese (Traditional / Taiwan) content overrides for trips.
  * Keyed by day_number → session → field.
- * Source: data/tokyo-trip-plan-zh.md
+ * Tokyo: data/tokyo-trip-plan-zh.md
+ * Kyoto: inline translations
  */
 
 interface SessionZh {
@@ -224,5 +225,195 @@ export const ZH_TRANSIT = {
     '都營淺草線 — 大門直達淺草',
     '地鐵日比谷線 — 神谷町（teamLab）',
     '都營大江戶線 — 大門直達六本木',
+  ],
+};
+
+// ============================================================================
+// KYOTO ZH CONTENT
+// ============================================================================
+
+export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
+  1: {
+    theme: '抵達 + 伏見稻荷',
+    morning: {
+      focus: '從桃園出發',
+      activities: [
+        '泰獅航 TPE 09:00 → KIX 12:30',
+      ],
+      meals: ['機上或出發前用餐'],
+      transit_notes: '泰獅航 Thai Lion Air',
+    },
+    afternoon: {
+      focus: '入境 + 前往京都',
+      activities: [
+        '關西機場入境、領行李',
+        'JR Haruka特急 → 京都車站（約75分）',
+        'APA Hotel 京都站前 check-in',
+      ],
+      meals: [],
+      transit_notes: 'Haruka特急 關西機場 → 京都車站',
+    },
+    evening: {
+      focus: '京都車站周邊探索',
+      activities: [
+        '京都車站大樓探索',
+        '京都車站 Porta 地下街 或 拉麵小路（10F）晚餐',
+      ],
+      meals: ['京都車站晚餐'],
+      transit_notes: '從飯店步行約3分',
+    },
+  },
+  2: {
+    theme: '和服日 — 東山散策',
+    morning: {
+      focus: '京都夢館和服體驗',
+      activities: [
+        '京都夢館（Yumeyakata）和服換裝',
+        '女性含髮型設計（10:00，約1.5小時）',
+      ],
+      meals: [],
+      transit_notes: '從飯店步行約10分 或 地鐵烏丸線到五條站',
+    },
+    afternoon: {
+      focus: '東山和服漫步',
+      activities: [
+        '二年坂（Ninenzaka）',
+        '三年坂（Sannenzaka）',
+        '八坂の塔（法觀寺）',
+        '祇園（Gion）漫步',
+      ],
+      meals: ['東山午餐（おばんざい家庭料理 或 抹茶咖啡廳）'],
+      transit_notes: '市巴士206/100 從五條到清水道',
+    },
+    evening: {
+      focus: '還和服 + 祇園夜景',
+      activities: [
+        '還和服到夢館（確認還衣時間）',
+        '祇園花見小路（Hanamikoji）夜間漫步',
+        '祇園晚餐',
+      ],
+      meals: ['祇園晚餐（懷石料理或居酒屋）'],
+      transit_notes: '市巴士回京都車站 或 計程車',
+    },
+  },
+  3: {
+    theme: '嵐山一日遊',
+    morning: {
+      focus: '保津川遊船',
+      activities: [
+        'JR嵯峨野線 京都 → 龜岡（約25分）',
+        '保津川遊船（Hozugawa River Boat，約2小時）',
+      ],
+      meals: ['飯店或車站輕食早餐'],
+      transit_notes: 'JR嵯峨野線 京都 → 龜岡',
+    },
+    afternoon: {
+      focus: '嵐山觀光',
+      activities: [
+        '遊船抵達嵐山',
+        '竹林小徑（Bamboo Grove）',
+        '天龍寺（Tenryuji，世界遺產）',
+      ],
+      meals: ['嵐山午餐（湯豆腐或豆腐料理）'],
+      transit_notes: '嵐山區域內步行',
+    },
+    evening: {
+      focus: '渡月橋夕陽 + 返程',
+      activities: [
+        '渡月橋（Togetsukyo Bridge）夕陽',
+        '嵐山花燈路（キモノフォレスト，晚間點燈）',
+        '返回京都車站',
+      ],
+      meals: ['京都車站周邊晚餐'],
+      transit_notes: 'JR嵯峨野線 嵯峨嵐山 → 京都',
+    },
+  },
+  4: {
+    theme: '伏見稻荷 + 清水寺',
+    morning: {
+      focus: '伏見稻荷大社',
+      activities: [
+        '伏見稻荷大社 — 早起人較少',
+        '千本鳥居隧道',
+        '登頂或半山腰展望台（約1.5-2小時）',
+      ],
+      meals: [],
+      transit_notes: 'JR奈良線 京都 → 稻荷（5分，1站）',
+    },
+    afternoon: {
+      focus: '清水寺 & 東山',
+      activities: [
+        '清水寺（Kiyomizudera）— 清水舞台、音羽瀑布',
+        '清水坂 街邊美食 + 購物',
+      ],
+      meals: ['清水坂街邊小吃午餐'],
+      transit_notes: 'JR稻荷 → 東福寺，步行或巴士到清水寺',
+    },
+    evening: {
+      focus: '錦市場 + 四條晚餐',
+      activities: [
+        '錦市場（Nishiki Market）買伴手禮、試吃（約17:00-18:00關門）',
+        '四條周邊晚餐',
+      ],
+      meals: ['錦市場小吃 + 四條晚餐'],
+      transit_notes: '巴士到四條 或 從清水寺步行',
+    },
+  },
+  5: {
+    theme: '購物 + 回程',
+    morning: {
+      focus: '最後購物 + 退房',
+      activities: [
+        '京都車站周邊最後購物（伊勢丹百貨、Porta地下街）',
+        '打包行李',
+        'APA Hotel 退房',
+      ],
+      meals: ['飯店早餐 或 京都車站'],
+      transit_notes: '從飯店步行約3分',
+    },
+    afternoon: {
+      focus: '前往關西機場',
+      activities: [
+        'JR Haruka特急 京都 → 關西機場（約75分）',
+        '抵達關西機場辦理登機',
+      ],
+      meals: [],
+      transit_notes: 'Haruka特急 京都 → 關西機場',
+    },
+    evening: {
+      focus: '返回台灣',
+      activities: [
+        '泰獅航 KIX 13:30 → TPE 15:40',
+      ],
+      meals: [],
+      transit_notes: '泰獅航 Thai Lion Air',
+    },
+  },
+};
+
+/** Ordered landmarks per day for Google Maps route links (Kyoto) */
+export const ZH_KYOTO_DAY_LANDMARKS: Record<number, string[]> = {
+  1: [], // arrival day
+  2: ['Kyoto Yumeyakata Kimono', 'Ninenzaka Kyoto', 'Sannenzaka Kyoto', 'Yasaka Pagoda', 'Gion Kyoto'],
+  3: ['Kameoka Station', 'Arashiyama Bamboo Grove', 'Tenryuji Temple', 'Togetsukyo Bridge'],
+  4: ['Fushimi Inari Taisha', 'Kiyomizudera Temple', 'Nishiki Market Kyoto'],
+  5: [], // departure day
+};
+
+/** Hotel name EN → ZH mapping (Kyoto) */
+export const ZH_KYOTO_HOTELS: Record<string, string> = {
+  'APA Hotel Kyoto Ekimae': 'APA京都站前',
+  'APA Hotel Kyoto Ekimae (APA京都站前)': 'APA京都站前',
+};
+
+/** ZH transit cheat sheet (Kyoto) */
+export const ZH_KYOTO_TRANSIT = {
+  hotel_station: 'JR京都車站（從APA Hotel步行3分）',
+  key_lines: [
+    'JR Haruka特急 — 關西機場 ↔ 京都車站（約75分）',
+    'JR嵯峨野線 — 京都 → 龜岡/嵯峨嵐山',
+    'JR奈良線 — 京都 → 稻荷（1站，5分）',
+    '京都市巴士 — 206/100 東山、清水寺方向',
+    '地鐵烏丸線 — 京都車站 ↔ 五條（1站）',
   ],
 };

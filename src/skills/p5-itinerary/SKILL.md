@@ -16,6 +16,7 @@ Read these first unless the request is extremely narrow:
 - `../travel-shared/references/io-contracts.md`
 - `../travel-shared/references/state-manager.md`
 - `../travel-shared/references/cascade-triggers.md`
+- `../travel-shared/references/itinerary-formats.md` — **Session vs Schedule formats, dashboard compatibility**
 - `../travel-shared/references/destinations/{destination}.json` — POI, areas, clusters
 
 ## Agent-First Defaults
@@ -50,6 +51,8 @@ Before running this skill, ensure:
 ## Session Structure
 
 Each day has 3 sessions: `morning`, `afternoon`, `evening`.
+
+> **Format Note**: Use session-based format (documented here) for new itineraries. A legacy schedule-based format exists but is deprecated. See `../travel-shared/references/itinerary-formats.md` for details and migration guide.
 
 ```json
 {
