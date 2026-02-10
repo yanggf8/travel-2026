@@ -29,7 +29,7 @@ interface CliArgs {
 
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
-    input: 'data/travel-plan.json',
+    input: 'data/trips/tokyo-2026/travel-plan.json',
     output: undefined,
     apply: false,
     format: 'text',
@@ -99,7 +99,7 @@ USAGE:
   node dist/cli/cascade.js [OPTIONS]
 
 OPTIONS:
-  -i, --input <path>   Input file (default: data/travel-plan.json)
+  -i, --input <path>   Input file (default: data/trips/tokyo-2026/travel-plan.json)
   -o, --output <path>  Output file (only with --apply, default: same as input)
   --apply              Apply changes (default: dry-run only)
   -f, --format <fmt>   Output format: text (default) or json

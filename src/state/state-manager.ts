@@ -41,8 +41,8 @@ import { ItineraryManager } from './itinerary-manager';
 import { EventQuery } from './event-query';
 
 // Default paths
-const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/travel-plan.json';
-const DEFAULT_STATE_PATH = process.env.TRAVEL_STATE_PATH || 'data/state.json';
+const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/trips/tokyo-2026/travel-plan.json';
+const DEFAULT_STATE_PATH = process.env.TRAVEL_STATE_PATH || 'data/trips/tokyo-2026/state.json';
 
 /**
  * Options for StateManager constructor.
@@ -156,7 +156,6 @@ export class StateManager {
 
   /**
    * Derive a plan ID from the file path.
-   * data/travel-plan.json → "default"
    * data/trips/<id>/travel-plan.json → "<id>"
    * Other paths → "path:<sha1-prefix>" to avoid cross-plan collision
    */
@@ -176,9 +175,6 @@ export class StateManager {
 
     const tripsMatch = relFromRoot.match(/^data\/trips\/([^/]+)\//);
     if (tripsMatch) return tripsMatch[1];
-    if (relFromRoot === 'data/travel-plan.json') {
-      return 'default';
-    }
 
     const hash = crypto.createHash('sha1').update(canonicalPath).digest('hex').slice(0, 12);
     return `path:${hash}`;

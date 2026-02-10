@@ -10,7 +10,7 @@
  * Usage:
  *   npx ts-node src/cli/p3p4-test.ts
  *   npx ts-node src/cli/p3p4-test.ts --offer-id besttour_TYO05MM260211AM
- *   npx ts-node src/cli/p3p4-test.ts --input data/travel-plan.json --output data/travel-plan.p3p4-test.json
+ *   npx ts-node src/cli/p3p4-test.ts --input data/trips/tokyo-2026/travel-plan.json --output data/travel-plan.p3p4-test.json
  */
 
 import { writeFileSync } from 'fs';
@@ -25,7 +25,7 @@ type Args = {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    input: 'data/travel-plan.json',
+    input: 'data/trips/tokyo-2026/travel-plan.json',
     output: 'data/travel-plan.p3p4-test.json',
     offerId: undefined,
     dryRun: false,
@@ -54,7 +54,7 @@ function parseArgs(argv: string[]): Args {
 /p3p4-packages E2E test (offline)
 
 OPTIONS:
-  -i, --input <path>     Input travel-plan.json (default: data/travel-plan.json)
+  -i, --input <path>     Input travel-plan.json (default: data/trips/tokyo-2026/travel-plan.json)
   -o, --output <path>    Output file (default: data/travel-plan.p3p4-test.json)
   --offer-id <id>        Offer id to select (default: cheapest offer)
   --dry-run              Print cascade plan only; do not write output

@@ -422,7 +422,6 @@ export function printTursoOfferTable(results: TursoOfferResult[]): void {
 
 /**
  * Derive a plan ID from the file path.
- * data/travel-plan.json → "default"
  * data/trips/<id>/travel-plan.json → "<id>"
  * Other paths → "path:<sha1-prefix>" (hash of canonical absolute path)
  */
@@ -442,9 +441,6 @@ export function derivePlanId(planPath: string): string {
 
   const tripsMatch = relFromRoot.match(/^data\/trips\/([^/]+)\//);
   if (tripsMatch) return tripsMatch[1];
-  if (relFromRoot === 'data/travel-plan.json') {
-    return 'default';
-  }
 
   const hash = crypto.createHash('sha1').update(canonicalPath).digest('hex').slice(0, 12);
   return `path:${hash}`;

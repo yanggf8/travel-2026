@@ -44,7 +44,7 @@ CASCADE: loadPlanAsync() → DB → computePlan → savePlanAsync() → DB
 - **Turso cloud is sole source of truth** — no JSON file reads/writes in runtime path
 - `StateManager.save()` is async — DB write must succeed or command fails
 - `StateManager.create()` is async factory — reads plan+state from DB
-- Plan ID: `"default"` | `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path)
+- Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `osaka-kyoto-2026`)
 - Tests use `skipSave: true` — DB calls skipped entirely
 - DB info messages use `console.error` (stderr) to avoid polluting JSON output
 
@@ -246,12 +246,12 @@ npm run travel -- fetch-weather [--dest slug]
 ```
 /
 ├── data/
-│   ├── travel-plan.json           # Main plan (v4.2.0)
-│   ├── state.json                 # Event-driven state
 │   ├── destinations.json          # Destination config (v1.1.0)
 │   ├── ota-sources.json           # OTA registry
 │   ├── holidays/taiwan-2026.json  # Holiday calendar
-│   └── trips/osaka-kyoto-2026/    # Separate trip data
+│   └── trips/
+│       ├── tokyo-2026/            # Tokyo trip (plan_id: tokyo-2026)
+│       └── osaka-kyoto-2026/      # Osaka+Kyoto trip (plan_id: osaka-kyoto-2026)
 ├── scrapes/                       # Ephemeral scraper outputs (gitignored)
 ├── scripts/                       # Python scrapers + migration tools
 │   └── hooks/pre-commit           # Runs typecheck + validate:data
@@ -290,9 +290,10 @@ Tables: `plans_current` (DB-primary plan+state, PK=plan_id), `offers`, `destinat
 Schema/migration: `npm run db:migrate:turso`
 Seed from JSON: `npm run db:seed:plans` (one-time, populates `plans_current` from existing JSON files)
 
-## Multi-Plan (Separate Trips)
-Separate trip files: `data/trips/<trip-id>/travel-plan.json` + `state.json`
-CLI: `--plan <path> --state <path>` or env vars `$TRAVEL_PLAN_PATH` / `$TRAVEL_STATE_PATH`
+## Multi-Plan
+All trips live under `data/trips/<trip-id>/` with `travel-plan.json` + `state.json`.
+Plan ID is derived from directory name (e.g., `tokyo-2026`, `osaka-kyoto-2026`).
+CLI defaults to `data/trips/tokyo-2026/`; use `--plan <path> --state <path>` or env vars for others.
 
 ## Trip Dashboard (Cloudflare Worker)
 

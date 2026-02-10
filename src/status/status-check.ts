@@ -276,7 +276,7 @@ function printUsage(): void {
   console.error('       ts-node src/status/status-check.ts [options]');
   console.error('');
   console.error('Options:');
-  console.error('  --file <path>   Path to travel-plan.json (default: data/travel-plan.json)');
+  console.error('  --file <path>   Path to travel-plan.json (default: data/trips/tokyo-2026/travel-plan.json)');
   console.error('  --json          Output as JSON');
   console.error('  --ascii         Use ASCII-safe characters');
 }
@@ -315,8 +315,8 @@ function resolveDataPath(fileArg: string | null): string {
       ? fileArg
       : path.resolve(process.cwd(), fileArg);
   }
-  // Default: look for data/travel-plan.json in cwd
-  return path.resolve(process.cwd(), 'data/travel-plan.json');
+  // Default: look for data/trips/tokyo-2026/travel-plan.json in cwd
+  return path.resolve(process.cwd(), 'data/trips/tokyo-2026/travel-plan.json');
 }
 
 // Main execution
