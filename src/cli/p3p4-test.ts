@@ -15,6 +15,7 @@
 
 import { writeFileSync } from 'fs';
 import { computePlan, applyPlan, loadPlan } from '../cascade/runner';
+import { PATHS } from '../config/constants';
 
 type Args = {
   input: string;
@@ -25,7 +26,7 @@ type Args = {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    input: 'data/trips/tokyo-2026/travel-plan.json',
+    input: PATHS.defaultPlan,
     output: 'data/travel-plan.p3p4-test.json',
     offerId: undefined,
     dryRun: false,
@@ -54,7 +55,7 @@ function parseArgs(argv: string[]): Args {
 /p3p4-packages E2E test (offline)
 
 OPTIONS:
-  -i, --input <path>     Input travel-plan.json (default: data/trips/tokyo-2026/travel-plan.json)
+  -i, --input <path>     Input travel-plan.json (default: ${PATHS.defaultPlan})
   -o, --output <path>    Output file (default: data/travel-plan.p3p4-test.json)
   --offer-id <id>        Offer id to select (default: cheapest offer)
   --dry-run              Print cascade plan only; do not write output

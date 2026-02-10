@@ -13,6 +13,7 @@
 
 import { run, runAsync, RunOptions } from '../cascade/runner';
 import { CascadePlan, CascadeResult } from '../cascade/types';
+import { PATHS } from '../config/constants';
 
 // ============================================================================
 // CLI Argument Parsing
@@ -29,7 +30,7 @@ interface CliArgs {
 
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
-    input: 'data/trips/tokyo-2026/travel-plan.json',
+    input: PATHS.defaultPlan,
     output: undefined,
     apply: false,
     format: 'text',
@@ -99,7 +100,7 @@ USAGE:
   node dist/cli/cascade.js [OPTIONS]
 
 OPTIONS:
-  -i, --input <path>   Input file (default: data/trips/tokyo-2026/travel-plan.json)
+  -i, --input <path>   Input file (default: ${PATHS.defaultPlan})
   -o, --output <path>  Output file (only with --apply, default: same as input)
   --apply              Apply changes (default: dry-run only)
   -f, --format <fmt>   Output format: text (default) or json

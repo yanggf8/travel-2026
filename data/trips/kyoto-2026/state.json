@@ -3,8 +3,8 @@
   "project": "japan-travel",
   "version": "3.0",
   "architecture": "destination-scoped",
-  "active_destination": "osaka_kyoto_2026",
-  "current_focus": "osaka_kyoto_2026.process_1_date_anchor",
+  "active_destination": "kyoto_2026",
+  "current_focus": "kyoto_2026.process_1_date_anchor",
   "next_actions": [
     "confirm_start_date_feb26_or_feb27",
     "search_ota_packages_kansai",
@@ -49,7 +49,7 @@
     }
   },
   "destinations": {
-    "osaka_kyoto_2026": {
+    "kyoto_2026": {
       "status": "active",
       "processes": {
         "p2_destination": {

@@ -44,7 +44,7 @@ CASCADE: loadPlanAsync() → DB → computePlan → savePlanAsync() → DB
 - **Turso cloud is sole source of truth** — no JSON file reads/writes in runtime path
 - `StateManager.save()` is async — DB write must succeed or command fails
 - `StateManager.create()` is async factory — reads plan+state from DB
-- Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `osaka-kyoto-2026`)
+- Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `kyoto-2026`)
 - Tests use `skipSave: true` — DB calls skipped entirely
 - DB info messages use `console.error` (stderr) to avoid polluting JSON output
 
@@ -156,7 +156,7 @@ Requires: `pip install playwright && playwright install chromium`
 
 ## Current Status
 
-| Process | Tokyo | Nagoya | Osaka+Kyoto |
+| Process | Tokyo | Nagoya | Kyoto |
 |---------|-------|--------|-------------|
 | P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed | ✅ confirmed (Feb 24-28, 3 leave days) |
 | P2 Destination | ✅ confirmed | ✅ confirmed | ✅ confirmed |
@@ -186,7 +186,7 @@ Airport transfers: Limousine Bus ¥3,200 each way (NRT T2 ↔ Shiodome, ~85min),
 **Book by Feb 10**: teamLab Borderless (https://www.teamlab.art/e/borderless-azabudai/)
 **Limousine Bus**: https://www.limousinebus.co.jp/en/
 
-### BOOKED: Osaka+Kyoto Feb 24-28
+### BOOKED: Kyoto Feb 24-28
 ```
 Package: liontravel_190620015 — TWD 23,348/person (46,696 for 2 pax)
 Order:   2026-1311130
@@ -251,7 +251,7 @@ npm run travel -- fetch-weather [--dest slug]
 │   ├── holidays/taiwan-2026.json  # Holiday calendar
 │   └── trips/
 │       ├── tokyo-2026/            # Tokyo trip (plan_id: tokyo-2026)
-│       └── osaka-kyoto-2026/      # Osaka+Kyoto trip (plan_id: osaka-kyoto-2026)
+│       └── kyoto-2026/            # Kyoto trip (plan_id: kyoto-2026)
 ├── scrapes/                       # Ephemeral scraper outputs (gitignored)
 ├── scripts/                       # Python scrapers + migration tools
 │   └── hooks/pre-commit           # Runs typecheck + validate:data
@@ -292,7 +292,7 @@ Seed from JSON: `npm run db:seed:plans` (one-time, populates `plans_current` fro
 
 ## Multi-Plan
 All trips live under `data/trips/<trip-id>/` with `travel-plan.json` + `state.json`.
-Plan ID is derived from directory name (e.g., `tokyo-2026`, `osaka-kyoto-2026`).
+Plan ID is derived from directory name (e.g., `tokyo-2026`, `kyoto-2026`).
 CLI defaults to `data/trips/tokyo-2026/`; use `--plan <path> --state <path>` or env vars for others.
 
 ## Trip Dashboard (Cloudflare Worker)
@@ -307,19 +307,19 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → plans_c
 - **Mobile-first** — phone-optimized day cards with weather, transit, meals
 - **Default ZH** — Traditional Chinese by default; `?lang=en` for English
 - **ZH content** — `src/zh-content.ts` provides Tokyo-specific Chinese content, gated on `active_destination === 'tokyo_2026'`
-- **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `osaka-kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
+- **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
 - **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
 - **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
 - **Secrets**: `TURSO_URL` + `TURSO_TOKEN` via `wrangler secret put` (server-side only, never sent to browser)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
-- **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=osaka-kyoto-2026`
+- **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=kyoto-2026`
 
 ```bash
 cd workers/trip-dashboard
 
 # Local dev
 unset CLOUDFLARE_API_TOKEN && npx wrangler dev
-# → http://localhost:8787/?plan=tokyo-2026 | http://localhost:8787/?plan=osaka-kyoto-2026
+# → http://localhost:8787/?plan=tokyo-2026 | http://localhost:8787/?plan=kyoto-2026
 
 # Deploy
 unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
@@ -339,7 +339,7 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 2. Book Limousine Bus — low-risk, can buy day-of
 3. Restaurant reservations
 
-### Osaka+Kyoto (Feb 24-28)
-1. Build P5 itinerary (sessions, activities, transit details)
+### Kyoto (Feb 24-28)
+1. Book Hozugawa River Boat Ride (Day 3)
 2. Restaurant reservations
-3. Day trip planning (Kyoto temples, Osaka food)
+3. Confirm weather closer to date

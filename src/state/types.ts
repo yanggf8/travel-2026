@@ -21,6 +21,13 @@ export const PROCESS_STATUSES = [
 // Process status values
 export type ProcessStatus = (typeof PROCESS_STATUSES)[number];
 
+const PROCESS_STATUS_SET: ReadonlySet<string> = new Set(PROCESS_STATUSES);
+
+/** Runtime guard: returns true if the value is a valid ProcessStatus. */
+export function isValidProcessStatus(value: unknown): value is ProcessStatus {
+  return typeof value === 'string' && PROCESS_STATUS_SET.has(value);
+}
+
 // Valid status transitions
 export const STATUS_TRANSITIONS: Record<ProcessStatus, ProcessStatus[]> = {
   pending: ['researching', 'populated', 'confirmed', 'skipped'],

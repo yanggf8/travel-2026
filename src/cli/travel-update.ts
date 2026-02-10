@@ -33,6 +33,7 @@ import {
   getAvailableDestinations,
   getOtaSourceCurrency,
 } from '../config/loader';
+import { PATHS } from '../config/constants';
 import {
   validateIsoDate,
   validatePositiveInt,
@@ -179,8 +180,8 @@ Commands:
     Show this help message.
 
 Options:
-  --plan <path>  Travel plan path (default: data/trips/tokyo-2026/travel-plan.json or $TRAVEL_PLAN_PATH)
-  --state <path> State log path (default: data/trips/tokyo-2026/state.json or $TRAVEL_STATE_PATH)
+  --plan <path>  Travel plan path (default: ${PATHS.defaultPlan} or $TRAVEL_PLAN_PATH)
+  --state <path> State log path (default: ${PATHS.defaultState} or $TRAVEL_STATE_PATH)
   --dry-run    Show what would be changed without saving
   --verbose    Show detailed output
   --full       Show booked offer/flight/hotel details (status only)
@@ -2013,7 +2014,7 @@ async function main(): Promise<void> {
 
       case 'sync-bookings': {
         const { syncBookingsFromPlan } = await import('../services/turso-service');
-        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || 'data/trips/tokyo-2026/travel-plan.json';
+        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
         console.log(`Syncing bookings from ${planFile}...`);
         const syncResult = await syncBookingsFromPlan(planFile, {
           tripId: tripIdOpt,
@@ -2046,8 +2047,8 @@ async function main(): Promise<void> {
 
       case 'snapshot-plan': {
         const { createPlanSnapshot } = await import('../services/turso-service');
-        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || 'data/trips/tokyo-2026/travel-plan.json';
-        const stateFile = stateOpt || process.env.TRAVEL_STATE_PATH || 'data/trips/tokyo-2026/state.json';
+        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
+        const stateFile = stateOpt || process.env.TRAVEL_STATE_PATH || PATHS.defaultState;
         const effectiveTripId = tripIdOpt || 'japan-2026';
         console.log(`Creating plan snapshot for trip "${effectiveTripId}"...`);
         const snapshot = await createPlanSnapshot(planFile, stateFile, effectiveTripId);
@@ -2057,7 +2058,7 @@ async function main(): Promise<void> {
 
       case 'check-booking-integrity': {
         const { checkBookingIntegrity } = await import('../services/turso-service');
-        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || 'data/trips/tokyo-2026/travel-plan.json';
+        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
         console.log('Checking booking integrity (plan JSON vs Turso DB)...');
         const integrity = await checkBookingIntegrity(planFile, tripIdOpt);
         console.log(`\nResults:`);

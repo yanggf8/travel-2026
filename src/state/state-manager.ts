@@ -27,6 +27,7 @@ import {
   STATUS_TRANSITIONS,
   TransportOption,
   TransportSegment,
+  isValidProcessStatus,
 } from './types';
 import {
   validateTravelPlan,
@@ -34,15 +35,15 @@ import {
   TravelPlan,
   EventLogState as ZodEventLogState,
 } from './schemas';
-import { DEFAULTS } from '../config/constants';
+import { DEFAULTS, PATHS } from '../config/constants';
 import { OfferManager } from './offer-manager';
 import { TransportManager } from './transport-manager';
 import { ItineraryManager } from './itinerary-manager';
 import { EventQuery } from './event-query';
 
 // Default paths
-const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || 'data/trips/tokyo-2026/travel-plan.json';
-const DEFAULT_STATE_PATH = process.env.TRAVEL_STATE_PATH || 'data/trips/tokyo-2026/state.json';
+const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
+const DEFAULT_STATE_PATH = process.env.TRAVEL_STATE_PATH || PATHS.defaultState;
 
 /**
  * Options for StateManager constructor.
@@ -432,7 +433,14 @@ export class StateManager {
     const dest = this.plan.destinations[destination];
     if (!dest || !dest[process]) return null;
     const processObj = dest[process] as Record<string, unknown>;
-    return (processObj['status'] as ProcessStatus) || null;
+    const raw = processObj['status'];
+    if (!raw) return null;
+    if (!isValidProcessStatus(raw)) {
+      throw new Error(
+        `Invalid status "${raw}" in ${destination}.${process}. Valid: pending, researching, researched, selecting, selected, populated, booking, booked, confirmed, skipped`
+      );
+    }
+    return raw;
   }
 
   /**

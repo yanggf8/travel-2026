@@ -109,6 +109,15 @@ export const ACTIVITY_ID_PREFIX = 'activity_';
 /**
  * Schema versions for compatibility tracking.
  */
+/**
+ * Default file paths for plan and state.
+ * All CLI entry points should reference these instead of hardcoding.
+ */
+export const PATHS = {
+  defaultPlan: 'data/trips/tokyo-2026/travel-plan.json',
+  defaultState: 'data/trips/tokyo-2026/state.json',
+} as const;
+
 export const SCHEMA_VERSIONS = {
   travelPlan: '4.2.0',
   activity: '1.0.0',
