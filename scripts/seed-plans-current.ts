@@ -1,8 +1,8 @@
 /**
  * Seed plans_current table from existing JSON files.
  *
- * Reads data/travel-plan.json (→ "default") and data/trips/*/travel-plan.json
- * (→ "<trip-id>") and upserts them into Turso plans_current.
+ * Reads data/travel-plan.json (-> "default") and data/trips/<id>/travel-plan.json
+ * (-> "<trip-id>") and upserts them into Turso plans_current.
  *
  * Usage:
  *   npm run db:seed:plans
