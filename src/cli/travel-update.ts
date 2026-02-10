@@ -890,7 +890,7 @@ async function main(): Promise<void> {
     cleanArgs.push(a);
   }
 
-  const sm = new StateManager(planOpt, stateOpt);
+  const sm = await StateManager.create(planOpt, stateOpt);
 
   try {
     switch (command) {
@@ -982,7 +982,7 @@ async function main(): Promise<void> {
             `Imported from scrape-package CLI (${offers.length} offer)`,
             warnings
           );
-          sm.save();
+          await sm.save();
           console.log('✅ Imported offers into process_3_4_packages.results.offers');
 
           // Auto-import to Turso (file still exists)
@@ -1036,7 +1036,7 @@ async function main(): Promise<void> {
 
         if (!dryRun) {
           sm.setDateAnchor(startDate, endDate, reason);
-          sm.save();
+          await sm.save();
           console.log('✅ Dates updated and cascade triggered');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1079,7 +1079,7 @@ async function main(): Promise<void> {
             seats,
             source || 'cli'
           );
-          sm.save();
+          await sm.save();
           console.log('✅ Offer availability updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1105,7 +1105,7 @@ async function main(): Promise<void> {
         if (!dryRun) {
           const destination = destOpt || sm.getActiveDestination();
           sm.selectOffer(offerId, date, !noPopulate);
-          sm.save();
+          await sm.save();
           console.log('✅ Offer selected');
           if (!noPopulate) {
             console.log('✅ P3 (transportation) and P4 (accommodation) populated from package');
@@ -1213,7 +1213,7 @@ async function main(): Promise<void> {
 
         if (!dryRun) {
           sm.scaffoldItinerary(destination, days, force);
-          sm.save();
+          await sm.save();
           console.log('\n✅ Itinerary scaffolded');
           console.log('\nNext action: Review day structure, then populate activities with /p5-itinerary');
         } else {
@@ -1290,7 +1290,7 @@ async function main(): Promise<void> {
           // Update focus to itinerary
           sm.setFocus(destination, 'process_5_daily_itinerary');
 
-          sm.save();
+          await sm.save();
           console.log('\n✅ Booking marked as confirmed');
           // Turso booking sync handled automatically by save() → syncBookingsToDb()
 
@@ -1482,7 +1482,7 @@ async function main(): Promise<void> {
         if (plannedAdds.length > 20) console.log(`  ... and ${plannedAdds.length - 20} more`);
 
         if (!dryRun) {
-          sm.save();
+          await sm.save();
           console.log('\n✅ Itinerary populated (incremental adds)');
           console.log('\nNext action: run status --full, then adjust with updateActivity/removeActivity as needed');
         } else {
@@ -1533,7 +1533,7 @@ async function main(): Promise<void> {
             selected,
             candidates,
           });
-          sm.save();
+          await sm.save();
           console.log('✅ Airport transfer updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1620,7 +1620,7 @@ async function main(): Promise<void> {
             end_time: validatedEnd,
             is_fixed_time: isFixed,
           });
-          sm.save();
+          await sm.save();
           console.log('✅ Activity time updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1675,7 +1675,7 @@ async function main(): Promise<void> {
 
         if (!dryRun) {
           sm.setSessionTimeRange(destination, dayNumber, session as any, startTimeResult.value, endTimeResult.value);
-          sm.save();
+          await sm.save();
           console.log('✅ Session time range updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1743,7 +1743,7 @@ async function main(): Promise<void> {
             refOpt,
             validatedBookBy
           );
-          sm.save();
+          await sm.save();
           console.log('✅ Activity booking status updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');

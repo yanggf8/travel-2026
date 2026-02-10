@@ -1,5 +1,5 @@
 /**
- * Skill Contracts v1.4.0
+ * Skill Contracts v1.7.0
  *
  * Defines the interface for all CLI operations.
  * Agent can query this to discover available operations.
@@ -9,6 +9,7 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
+ * v1.7.0 - DB-primary migration: writePlanToDb/readPlanFromDb, async save(), StateManager.create()
  * v1.6.0 - Added booking sync/query operations (sync-bookings, query-bookings, snapshot-plan, check-booking-integrity)
  * v1.5.0 - Added Turso DB operations (query-offers, check-freshness, import-offers)
  * v1.4.0 - Added data_freshness tier to SkillContract for staleness awareness
@@ -17,7 +18,7 @@
  * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.6.0';
+export const CONTRACT_VERSION = '1.7.0';
 
 /**
  * Data freshness tiers.
@@ -526,8 +527,26 @@ export const STATE_MANAGER_METHODS = {
   getNextActions: { args: [], returns: 'string[]', description: 'Get next actions list' },
 
   // I/O
-  save: { args: [], returns: 'void', description: 'Save both plan and state files' },
+  save: { args: [], returns: 'Promise<void>', description: 'Save plan+state to DB (blocking), then sync derived tables' },
   getPlan: { args: [], returns: 'TravelPlanMinimal', description: 'Get current plan object' },
+} as const;
+
+/**
+ * Turso DB-primary service contracts (v1.7.0).
+ */
+export const TURSO_SERVICE_CONTRACTS = {
+  derivePlanId: { args: ['planPath'], returns: 'string', description: 'Derive plan ID from file path' },
+  writePlanToDb: { args: ['planId', 'planJson', 'stateJson', 'schemaVersion'], returns: 'Promise<void>', description: 'Upsert plan+state to plans_current' },
+  readPlanFromDb: { args: ['planId'], returns: 'Promise<{plan_json, state_json, updated_at} | null>', description: 'Read plan+state from plans_current' },
+  syncEventsToDb: { args: ['events'], returns: 'Promise<{synced, skipped}>', description: 'Idempotent event sync via SHA1 external_id' },
+} as const;
+
+/**
+ * StateManager static factory (v1.7.0).
+ */
+export const STATE_MANAGER_FACTORY = {
+  create: { args: ['planPathOrOpts?', 'statePath?'], returns: 'Promise<StateManager>', description: 'DB-only factory: load plan+state from Turso plans_current' },
+  derivePlanId: { args: ['planPath'], returns: 'string', description: 'Derive plan ID from file path' },
 } as const;
 
 /**

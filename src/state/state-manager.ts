@@ -12,7 +12,9 @@
  *   sm.save();
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, realpathSync } from 'fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import {
   ProcessStatus,
   ProcessId,
@@ -55,6 +57,8 @@ export interface StateManagerOptions {
   plan?: TravelPlanMinimal;
   /** In-memory state data (bypasses file loading) */
   state?: TravelState;
+  /** Full EventLogState from DB (bypasses reconstruction from TravelState) */
+  eventLog?: EventLogState;
   /** Skip save operations (useful for tests) */
   skipSave?: boolean;
 }
@@ -62,7 +66,8 @@ export interface StateManagerOptions {
 export class StateManager {
   private planPath: string;
   private statePath: string;
-  
+  private planId: string;
+
   // Domain managers
   private offerMgr: OfferManager;
   private transportMgr: TransportManager;
@@ -78,6 +83,7 @@ export class StateManager {
     if (typeof options === 'string' || options === undefined) {
       this.planPath = options || DEFAULT_PLAN_PATH;
       this.statePath = statePath || DEFAULT_STATE_PATH;
+      this.planId = StateManager.derivePlanId(this.planPath);
       this.skipSave = false;
       this.timestamp = this.freshTimestamp();
       this.plan = this.loadPlan();
@@ -87,6 +93,7 @@ export class StateManager {
       // New options-based signature
       this.planPath = options.planPath || DEFAULT_PLAN_PATH;
       this.statePath = options.statePath || DEFAULT_STATE_PATH;
+      this.planId = StateManager.derivePlanId(this.planPath);
       this.skipSave = options.skipSave || false;
       this.timestamp = this.freshTimestamp();
 
@@ -98,8 +105,11 @@ export class StateManager {
         this.normalizePlan();
       }
 
-      if (options.state) {
-        // Create full EventLogState from minimal TravelState
+      if (options.eventLog) {
+        // Full EventLogState from DB — use directly, no reconstruction needed
+        this.eventLog = options.eventLog;
+      } else if (options.state) {
+        // Create full EventLogState from minimal TravelState (tests)
         this.eventLog = {
           session: new Date().toISOString().split('T')[0],
           project: DEFAULTS.project,
@@ -138,6 +148,98 @@ export class StateManager {
       (d, p) => this.clearDirty(d, p)
     );
     this.events = new EventQuery(() => this.eventLog.event_log);
+  }
+
+  // ============================================================================
+  // Factory (DB-primary)
+  // ============================================================================
+
+  /**
+   * Derive a plan ID from the file path.
+   * data/travel-plan.json → "default"
+   * data/trips/<id>/travel-plan.json → "<id>"
+   * Other paths → "path:<sha1-prefix>" to avoid cross-plan collision
+   */
+  static derivePlanId(planPath: string): string {
+    const normalize = (p: string): string => p.replace(/\\/g, '/');
+    const canonicalAbs = (p: string): string => {
+      const resolved = path.resolve(p);
+      try {
+        return normalize(realpathSync(resolved));
+      } catch {
+        return normalize(resolved);
+      }
+    };
+
+    const canonicalPath = canonicalAbs(planPath);
+    const relFromRoot = normalize(path.relative(canonicalAbs(process.cwd()), canonicalPath));
+
+    const tripsMatch = relFromRoot.match(/^data\/trips\/([^/]+)\//);
+    if (tripsMatch) return tripsMatch[1];
+    if (relFromRoot === 'data/travel-plan.json') {
+      return 'default';
+    }
+
+    const hash = crypto.createHash('sha1').update(canonicalPath).digest('hex').slice(0, 12);
+    return `path:${hash}`;
+  }
+
+  /**
+   * DB-only factory: read plan+state from Turso.
+   */
+  static async create(
+    planPathOrOpts?: string | StateManagerOptions,
+    statePath?: string
+  ): Promise<StateManager> {
+    const planPath = typeof planPathOrOpts === 'string'
+      ? planPathOrOpts
+      : planPathOrOpts?.planPath || DEFAULT_PLAN_PATH;
+    const stPath = typeof planPathOrOpts === 'string'
+      ? (statePath || DEFAULT_STATE_PATH)
+      : planPathOrOpts?.statePath || DEFAULT_STATE_PATH;
+    const skipSave = typeof planPathOrOpts === 'object' ? planPathOrOpts?.skipSave || false : false;
+
+    // If skipSave (test mode), skip DB entirely
+    if (skipSave) {
+      return new StateManager(
+        typeof planPathOrOpts === 'object' ? planPathOrOpts : planPath,
+        typeof planPathOrOpts === 'string' ? statePath : undefined
+      );
+    }
+
+    const planId = StateManager.derivePlanId(planPath);
+
+    const { readPlanFromDb } = require('../services/turso-service');
+
+    let dbRow: { plan_json: string; state_json: string | null; updated_at: string } | null;
+    try {
+      dbRow = await readPlanFromDb(planId);
+    } catch (e: any) {
+      throw new Error(`[turso] DB read failed for plan "${planId}": ${e.message}`);
+    }
+
+    if (!dbRow) {
+      throw new Error(`[turso] Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
+    }
+
+    let plan: TravelPlanMinimal;
+    let fullEventLog: EventLogState | undefined;
+    try {
+      plan = JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
+      fullEventLog = dbRow.state_json ? JSON.parse(dbRow.state_json) as EventLogState : undefined;
+    } catch (e: any) {
+      throw new Error(`[turso] Invalid JSON in plans_current for plan "${planId}": ${e.message}`);
+    }
+
+    console.error(`  [turso] Loaded plan "${planId}" from DB (updated: ${dbRow.updated_at})`);
+
+    return new StateManager({
+      planPath: planPath,
+      statePath: stPath,
+      plan,
+      eventLog: fullEventLog,
+      skipSave: false,
+    });
   }
 
   // ============================================================================
@@ -1585,49 +1687,50 @@ export class StateManager {
   }
 
   /**
-   * Save both travel plan and event log atomically.
+   * Save plan + state to DB, then sync derived tables.
    * Validates before saving to prevent corrupt data.
    * Note: Does NOT update last_cascade_run - that is cascade-runner-owned.
    */
-  save(): void {
+  async save(): Promise<void> {
     // Validate before saving (catch bugs before writing corrupt data)
     validateTravelPlan(this.plan);
     validateEventLogState(this.eventLog);
 
-    // Skip file writes in test mode
+    // Skip all writes in test mode
     if (this.skipSave) return;
 
-    // Save travel plan
-    writeFileSync(
-      this.planPath,
-      JSON.stringify(this.plan, null, 2),
-      'utf-8'
-    );
+    const planJson = JSON.stringify(this.plan, null, 2);
+    const stateJson = JSON.stringify(this.eventLog, null, 2);
+    const schemaVersion = this.plan.schema_version || 'unknown';
 
-    // Save event log
-    writeFileSync(
-      this.statePath,
-      JSON.stringify(this.eventLog, null, 2),
-      'utf-8'
-    );
+    // 1. Write to DB (blocking)
+    try {
+      const { writePlanToDb } = require('../services/turso-service');
+      await writePlanToDb(this.planId, planJson, stateJson, schemaVersion);
+    } catch (e: any) {
+      throw new Error(`DB write failed — save aborted: ${e.message}`);
+    }
 
-    // Sync bookings to Turso (fire-and-forget async)
-    this.syncBookingsToDb();
+    // 2. Fire-and-forget derived table sync (bookings + events)
+    this.syncDerivedData();
   }
 
   /**
-   * Fire-and-forget sync of booking data to Turso DB.
-   * Runs async after JSON writes — the JSON write is the immediate confirmation.
+   * Fire-and-forget sync of derived data to Turso (bookings + events).
+   * Primary plan data is already safe in DB; these are secondary tables.
    * @internal
    */
-  private syncBookingsToDb(): void {
+  private syncDerivedData(): void {
     try {
-      const { syncBookingsFromPlan } = require('../services/turso-service');
+      const { syncBookingsFromPlan, syncEventsToDb } = require('../services/turso-service');
       syncBookingsFromPlan(this.planPath).catch((e: Error) => {
         console.warn(`  [turso] booking sync failed: ${e.message} — run 'npm run travel -- sync-bookings' to retry`);
       });
+      syncEventsToDb(this.eventLog.event_log).catch((e: Error) => {
+        console.warn(`  [turso] event sync failed: ${e.message}`);
+      });
     } catch {
-      // turso-service not available — should not happen (no offline mode)
+      // turso-service not available
     }
   }
 

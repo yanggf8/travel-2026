@@ -11,7 +11,7 @@
  *   node dist/cli/cascade.js [options]
  */
 
-import { run, RunOptions } from '../cascade/runner';
+import { run, runAsync, RunOptions } from '../cascade/runner';
 import { CascadePlan, CascadeResult } from '../cascade/types';
 
 // ============================================================================
@@ -229,7 +229,7 @@ function formatResultText(result: CascadeResult, verbose: boolean): string {
 // Main
 // ============================================================================
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv);
 
   if (args.help) {
@@ -243,7 +243,7 @@ function main(): void {
     apply: args.apply,
   };
 
-  const result = run(options);
+  const result = await runAsync(options);
 
   if (args.format === 'json') {
     console.log(JSON.stringify(result, null, 2));
@@ -254,4 +254,7 @@ function main(): void {
   process.exit(result.success ? 0 : 1);
 }
 
-main();
+main().catch((e) => {
+  console.error(`Cascade error: ${e.message}`);
+  process.exit(1);
+});

@@ -168,6 +168,25 @@ async function main() {
     }
   }
 
+  // 9. Create plans_current table (DB-primary plan storage)
+  try {
+    console.log('Creating plans_current table...');
+    await client.execute(`CREATE TABLE IF NOT EXISTS plans_current (
+  plan_id TEXT PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  plan_json TEXT NOT NULL,
+  state_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`);
+    console.log('✅ Created plans_current table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) {
+      console.log('ℹ️  plans_current table already exists.');
+    } else {
+      console.warn('⚠️  Could not create plans_current table:', e.message);
+    }
+  }
+
   console.log('Done.');
 }
 

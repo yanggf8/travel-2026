@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import * as path from 'node:path';
 import { StateManager } from '../../src/state/state-manager';
 import type { TravelPlanMinimal, TravelState } from '../../src/state/types';
 
@@ -362,5 +363,26 @@ describe('Activity search consistency across methods', () => {
     // Both should have modified the same activity
     expect(activity.start_time).toBe('19:55');
     expect(activity.booking_ref).toBe('ABC123');
+  });
+});
+
+describe('StateManager.derivePlanId', () => {
+  it('is stable for relative and absolute custom paths', () => {
+    const rel = 'data/custom/travel-plan.json';
+    const abs = path.resolve(rel);
+
+    const relId = StateManager.derivePlanId(rel);
+    const absId = StateManager.derivePlanId(abs);
+
+    expect(relId).toBe(absId);
+    expect(relId.startsWith('path:')).toBe(true);
+  });
+
+  it('keeps default and trip mapping semantics', () => {
+    expect(StateManager.derivePlanId('data/travel-plan.json')).toBe('default');
+    expect(StateManager.derivePlanId(path.resolve('data/travel-plan.json'))).toBe('default');
+
+    expect(StateManager.derivePlanId('data/trips/osaka-2026/travel-plan.json')).toBe('osaka-2026');
+    expect(StateManager.derivePlanId(path.resolve('data/trips/osaka-2026/travel-plan.json'))).toBe('osaka-2026');
   });
 });

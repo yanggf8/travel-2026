@@ -37,6 +37,7 @@
     "db:query:bookings": "ts-node src/cli/travel-update.ts query-bookings",
     "db:sync:destinations": "ts-node scripts/turso-sync-destinations.ts",
     "db:sync:events": "ts-node scripts/turso-sync-events.ts",
+    "db:seed:plans": "ts-node scripts/seed-plans-current.ts",
     "scraper:doctor": "python scripts/scraper_doctor.py",
     "scraper:batch": "python scripts/scrape_batch.py"
   },

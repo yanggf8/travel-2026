@@ -464,6 +464,51 @@ export function savePlan(plan: TravelPlanMinimal, outputPath: string): void {
 }
 
 // ============================================================================
+// Async File I/O (DB-primary)
+// ============================================================================
+
+/**
+ * Load travel plan from DB only.
+ */
+export async function loadPlanAsync(inputPath: string): Promise<TravelPlanMinimal> {
+  const { readPlanFromDb, derivePlanId } = require('../services/turso-service');
+  const planId = derivePlanId(inputPath);
+
+  let dbRow: { plan_json: string } | null;
+  try {
+    dbRow = await readPlanFromDb(planId);
+  } catch (e: any) {
+    throw new Error(`[turso] DB read failed for plan "${planId}": ${e.message}`);
+  }
+
+  if (!dbRow) {
+    throw new Error(`[turso] Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
+  }
+
+  try {
+    console.error(`  [turso] Cascade loaded plan "${planId}" from DB`);
+    return JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
+  } catch (e: any) {
+    throw new Error(`[turso] Invalid plan_json in DB for plan "${planId}": ${e.message}`);
+  }
+}
+
+/**
+ * Save travel plan to DB only.
+ */
+export async function savePlanAsync(plan: TravelPlanMinimal, outputPath: string): Promise<void> {
+  const content = JSON.stringify(plan, null, 2);
+
+  try {
+    const { writePlanToDb, derivePlanId } = require('../services/turso-service');
+    const planId = derivePlanId(outputPath);
+    await writePlanToDb(planId, content, null, plan.schema_version);
+  } catch (e: any) {
+    throw new Error(`DB write failed in cascade — save aborted: ${e.message}`);
+  }
+}
+
+// ============================================================================
 // Main Runner
 // ============================================================================
 
@@ -474,7 +519,8 @@ export interface RunOptions {
 }
 
 /**
- * Run the cascade processor.
+ * Run the cascade processor (sync — reads/writes JSON files only).
+ * Kept for backward compatibility and tests.
  */
 export function run(options: RunOptions): CascadeResult {
   const errors: string[] = [];
@@ -519,6 +565,72 @@ export function run(options: RunOptions): CascadeResult {
   const outputPath = options.outputPath || options.inputPath;
   try {
     savePlan(updatedPlan, outputPath);
+  } catch (e) {
+    errors.push(`Failed to write plan: ${e}`);
+    return {
+      success: false,
+      plan: cascadePlan,
+      applied: false,
+      output_path: null,
+      errors,
+    };
+  }
+
+  return {
+    success: errors.length === 0,
+    plan: cascadePlan,
+    applied: true,
+    output_path: outputPath,
+    errors,
+  };
+}
+
+/**
+ * Run the cascade processor (async — DB-only read/write).
+ */
+export async function runAsync(options: RunOptions): Promise<CascadeResult> {
+  const errors: string[] = [];
+
+  // Load plan from DB
+  let plan: TravelPlanMinimal;
+  try {
+    plan = await loadPlanAsync(options.inputPath);
+  } catch (e) {
+    return {
+      success: false,
+      plan: { computed_at: new Date().toISOString(), triggers_evaluated: [], actions: [], warnings: [] },
+      applied: false,
+      output_path: null,
+      errors: [`Failed to load plan: ${e}`],
+    };
+  }
+
+  // Validate schema version
+  if (!plan.schema_version.startsWith('4.')) {
+    errors.push(`Schema version ${plan.schema_version} not supported. Requires ^4.2.0`);
+  }
+
+  // Compute plan
+  const cascadePlan = computePlan(plan);
+
+  // If dry-run, return plan without applying
+  if (!options.apply) {
+    return {
+      success: errors.length === 0,
+      plan: cascadePlan,
+      applied: false,
+      output_path: null,
+      errors,
+    };
+  }
+
+  // Apply plan
+  const updatedPlan = applyPlan(plan, cascadePlan);
+
+  // Write output to DB
+  const outputPath = options.outputPath || options.inputPath;
+  try {
+    await savePlanAsync(updatedPlan, outputPath);
   } catch (e) {
     errors.push(`Failed to write plan: ${e}`);
     return {

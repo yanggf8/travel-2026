@@ -5,7 +5,10 @@
  *   importOffersFromFiles  — bulk import scrape JSON → Turso offers table
  *   queryOffers            — filtered reads from Turso
  *   checkFreshness         — staleness check for source/region
- *   syncBooking            — upsert booking decision to Turso bookings table
+ *   writePlanToDb          — upsert plan+state to plans_current (DB-primary)
+ *   readPlanFromDb         — read plan+state from plans_current
+ *   syncEventsToDb         — idempotent event sync via SHA1 external_id
+ *   syncBookingsFromPlan   — extract + upsert bookings from plan JSON
  *
  * Turso is required infrastructure. If TURSO_TOKEN is missing the service
  * throws with a clear error — no silent skipping.
@@ -13,6 +16,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 // Scripts live outside src/ (rootDir), so we use dynamic require resolved
 // from the project root to avoid TS6059 errors.
@@ -26,6 +30,9 @@ function requirePipeline(): { TursoPipelineClient: new (opts?: any) => any } {
 
 function requireExtractor(): {
   extractAllBookings: (planPath: string, tripId?: string) => { bookings: any[]; warnings: string[] };
+  extractPackageBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
+  extractTransferBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
+  extractActivityBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
   toUpsertSql: (row: any) => string;
   toEventSql: (bookingKey: string, eventType: string, row: any) => string;
   BookingRow: any;
@@ -89,20 +96,6 @@ export interface FreshnessResult {
   offerCount: number;
   recommendation: 'skip' | 'rescrape' | 'no_data';
   region?: string;
-}
-
-export interface BookingRecord {
-  destination: string;
-  offer_id: string;
-  selected_date: string;
-  price_per_person: number;
-  price_total: number;
-  status: 'selected' | 'booked' | 'confirmed';
-  source_id: string;
-  hotel_name?: string;
-  airline?: string;
-  flight_out?: string;
-  flight_return?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,18 +369,6 @@ export async function checkFreshness(
 }
 
 // ---------------------------------------------------------------------------
-// Booking sync
-// ---------------------------------------------------------------------------
-
-export async function syncBooking(booking: BookingRecord): Promise<void> {
-  const client = getClient();
-
-  const sql = `INSERT INTO bookings (destination, offer_id, selected_date, price_per_person, price_total, currency, status, source_id, hotel_name, airline, flight_out, flight_return, selected_at, updated_at) VALUES (${sqlText(booking.destination)}, ${sqlText(booking.offer_id)}, ${sqlText(booking.selected_date)}, ${sqlInt(booking.price_per_person)}, ${sqlInt(booking.price_total)}, 'TWD', ${sqlText(booking.status)}, ${sqlText(booking.source_id)}, ${sqlText(booking.hotel_name)}, ${sqlText(booking.airline)}, ${sqlText(booking.flight_out)}, ${sqlText(booking.flight_return)}, datetime('now'), datetime('now')) ON CONFLICT(destination, offer_id) DO UPDATE SET status = ${sqlText(booking.status)}, price_per_person = ${sqlInt(booking.price_per_person)}, price_total = ${sqlInt(booking.price_total)}, updated_at = datetime('now');`;
-
-  await client.execute(sql);
-}
-
-// ---------------------------------------------------------------------------
 // Formatting helper (for CLI table output)
 // ---------------------------------------------------------------------------
 
@@ -436,6 +417,130 @@ export function printTursoOfferTable(results: TursoOfferResult[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Plan DB-Primary (plans_current)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a plan ID from the file path.
+ * data/travel-plan.json → "default"
+ * data/trips/<id>/travel-plan.json → "<id>"
+ * Other paths → "path:<sha1-prefix>" (hash of canonical absolute path)
+ */
+export function derivePlanId(planPath: string): string {
+  const normalize = (p: string): string => p.replace(/\\/g, '/');
+  const canonicalAbs = (p: string): string => {
+    const resolved = path.resolve(p);
+    try {
+      return normalize(fs.realpathSync(resolved));
+    } catch {
+      return normalize(resolved);
+    }
+  };
+
+  const canonicalPath = canonicalAbs(planPath);
+  const relFromRoot = normalize(path.relative(canonicalAbs(process.cwd()), canonicalPath));
+
+  const tripsMatch = relFromRoot.match(/^data\/trips\/([^/]+)\//);
+  if (tripsMatch) return tripsMatch[1];
+  if (relFromRoot === 'data/travel-plan.json') {
+    return 'default';
+  }
+
+  const hash = crypto.createHash('sha1').update(canonicalPath).digest('hex').slice(0, 12);
+  return `path:${hash}`;
+}
+
+/**
+ * Write plan + state JSON to Turso plans_current (upsert).
+ * This is the blocking DB write used by StateManager.save().
+ *
+ * When stateJson is null, the existing state_json in DB is preserved
+ * (COALESCE prevents cascade-only writes from erasing state).
+ */
+export async function writePlanToDb(
+  planId: string,
+  planJson: string,
+  stateJson: string | null,
+  schemaVersion: string
+): Promise<void> {
+  const client = getClient();
+  const sql = `INSERT INTO plans_current (plan_id, schema_version, plan_json, state_json, updated_at)
+VALUES (${sqlText(planId)}, ${sqlText(schemaVersion)}, ${sqlText(planJson)}, ${sqlText(stateJson)}, datetime('now'))
+ON CONFLICT(plan_id) DO UPDATE SET
+  schema_version = ${sqlText(schemaVersion)},
+  plan_json = ${sqlText(planJson)},
+  state_json = COALESCE(excluded.state_json, plans_current.state_json),
+  updated_at = datetime('now');`;
+  await client.execute(sql);
+}
+
+/**
+ * Read plan + state from Turso plans_current.
+ * Returns null if no row found for planId.
+ */
+export async function readPlanFromDb(
+  planId: string
+): Promise<{ plan_json: string; state_json: string | null; updated_at: string } | null> {
+  const client = getClient();
+  const sql = `SELECT plan_json, state_json, updated_at FROM plans_current WHERE plan_id = ${sqlText(planId)} LIMIT 1;`;
+  const response = await client.execute(sql);
+  const rows = rowsToObjects(response);
+  if (rows.length === 0) return null;
+  return {
+    plan_json: rows[0].plan_json as string,
+    state_json: rows[0].state_json as string | null,
+    updated_at: rows[0].updated_at as string,
+  };
+}
+
+/**
+ * Sync events to Turso events table with SHA1-based idempotency.
+ * Same pattern as turso-sync-events.ts — hash event content → external_id.
+ */
+export async function syncEventsToDb(
+  events: Array<{
+    at: string;
+    event: string;
+    destination?: string;
+    process?: string;
+    data?: unknown;
+  }>
+): Promise<{ synced: number; skipped: number }> {
+  if (events.length === 0) return { synced: 0, skipped: 0 };
+
+  const client = getClient();
+  const sqlStatements: string[] = [];
+
+  for (const ev of events) {
+    const payload = JSON.stringify({
+      at: ev.at,
+      event: ev.event,
+      destination: ev.destination,
+      process: ev.process,
+      data: ev.data,
+    });
+    const eid = crypto.createHash('sha1').update(payload).digest('hex');
+
+    const cols = ['external_id', 'event_type', 'destination', 'process', 'data', 'created_at'];
+    const values = [
+      sqlText(eid),
+      sqlText(ev.event),
+      sqlText(ev.destination || null),
+      sqlText(ev.process || null),
+      sqlText(ev.data ? JSON.stringify(ev.data) : null),
+      sqlText(ev.at),
+    ];
+
+    sqlStatements.push(
+      `INSERT INTO events (${cols.join(',')}) VALUES (${values.join(',')}) ON CONFLICT(external_id) DO NOTHING;`
+    );
+  }
+
+  await client.executeMany(sqlStatements, 50);
+  return { synced: sqlStatements.length, skipped: 0 };
+}
+
+// ---------------------------------------------------------------------------
 // Booking Current Types
 // ---------------------------------------------------------------------------
 
@@ -461,18 +566,80 @@ export interface BookingCurrentRow {
 }
 
 // ---------------------------------------------------------------------------
-// Booking Sync (plan JSON → DB)
+// Booking Sync (plan in DB → bookings_current)
 // ---------------------------------------------------------------------------
+
+function inferTripIdFromPlanPath(planPath: string): string {
+  const normalized = planPath.replace(/\\/g, '/');
+  const m = normalized.match(/\/?data\/trips\/([^/]+)\//);
+  if (m) return m[1];
+  return 'japan-2026';
+}
+
+function extractBookingsFromPlanObject(
+  plan: Record<string, unknown>,
+  tripId: string,
+  extractor: {
+    extractPackageBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
+    extractTransferBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
+    extractActivityBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
+  }
+): { bookings: any[]; warnings: string[] } {
+  const warnings: string[] = [];
+  const destinations = plan.destinations as Record<string, Record<string, unknown>> | undefined;
+  if (!destinations) {
+    return { bookings: [], warnings: ['No destinations found in plan'] };
+  }
+
+  const bookings: any[] = [];
+  for (const dest of Object.keys(destinations)) {
+    try {
+      bookings.push(...extractor.extractPackageBookings(plan, tripId, dest));
+    } catch (e) {
+      warnings.push(`Package extraction failed for ${dest}: ${(e as Error).message}`);
+    }
+    try {
+      bookings.push(...extractor.extractTransferBookings(plan, tripId, dest));
+    } catch (e) {
+      warnings.push(`Transfer extraction failed for ${dest}: ${(e as Error).message}`);
+    }
+    try {
+      bookings.push(...extractor.extractActivityBookings(plan, tripId, dest));
+    } catch (e) {
+      warnings.push(`Activity extraction failed for ${dest}: ${(e as Error).message}`);
+    }
+  }
+
+  return { bookings, warnings };
+}
 
 export async function syncBookingsFromPlan(
   planPath: string,
   opts?: { tripId?: string; dryRun?: boolean }
 ): Promise<{ synced: number; warnings: string[] }> {
   const extractor = requireExtractor();
-  const { bookings, warnings } = extractor.extractAllBookings(
-    planPath,
-    opts?.tripId
-  );
+  const planId = derivePlanId(planPath);
+
+  const dbRow = await readPlanFromDb(planId);
+  if (!dbRow) {
+    return {
+      synced: 0,
+      warnings: [`Plan not found in DB for plan_id="${planId}". Run 'npm run db:seed:plans' first.`],
+    };
+  }
+
+  let plan: Record<string, unknown>;
+  try {
+    plan = JSON.parse(dbRow.plan_json) as Record<string, unknown>;
+  } catch (e) {
+    return {
+      synced: 0,
+      warnings: [`Failed to parse plan_json in DB for plan_id="${planId}": ${(e as Error).message}`],
+    };
+  }
+
+  const effectiveTripId = opts?.tripId || inferTripIdFromPlanPath(planPath);
+  const { bookings, warnings } = extractBookingsFromPlanObject(plan, effectiveTripId, extractor);
 
   if (bookings.length === 0) {
     return { synced: 0, warnings };
@@ -576,14 +743,17 @@ export async function queryBookings(filters: {
 
 export async function createPlanSnapshot(
   planPath: string,
-  statePath: string,
+  _statePath: string,
   tripId: string
 ): Promise<{ snapshot_id: string; trip_id: string }> {
-  const planJson = fs.readFileSync(planPath, 'utf-8');
-  const stateJson = fs.existsSync(statePath)
-    ? fs.readFileSync(statePath, 'utf-8')
-    : null;
+  const planId = derivePlanId(planPath);
+  const dbRow = await readPlanFromDb(planId);
+  if (!dbRow) {
+    throw new Error(`Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
+  }
 
+  const planJson = dbRow.plan_json;
+  const stateJson = dbRow.state_json;
   const plan = JSON.parse(planJson);
   const schemaVersion = (plan.schema_version as string) || 'unknown';
   const snapshotId = `${tripId}_${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -605,10 +775,24 @@ export async function checkBookingIntegrity(
   tripId?: string
 ): Promise<{ matches: number; mismatches: string[]; dbOnly: string[]; planOnly: string[] }> {
   const extractor = requireExtractor();
-  const { bookings: planBookings } = extractor.extractAllBookings(planPath, tripId);
+  const planId = derivePlanId(planPath);
+  const dbRow = await readPlanFromDb(planId);
+  if (!dbRow) {
+    throw new Error(`Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
+  }
+
+  let plan: Record<string, unknown>;
+  try {
+    plan = JSON.parse(dbRow.plan_json) as Record<string, unknown>;
+  } catch (e) {
+    throw new Error(`Failed to parse plan_json in DB for "${planId}": ${(e as Error).message}`);
+  }
+
+  const effectiveTripId = tripId || inferTripIdFromPlanPath(planPath);
+  const { bookings: planBookings, warnings } = extractBookingsFromPlanObject(plan, effectiveTripId, extractor);
 
   const dbBookings = await queryBookings({
-    tripId: tripId || undefined,
+    tripId: effectiveTripId || undefined,
   });
 
   const planKeys = new Map<string, any>();
@@ -651,6 +835,10 @@ export async function checkBookingIntegrity(
     if (!planKeys.has(key)) {
       dbOnly.push(`${key} (${dbRow.category}: ${dbRow.title})`);
     }
+  }
+
+  for (const w of warnings) {
+    mismatches.push(`extractor warning: ${w}`);
   }
 
   return { matches, mismatches, dbOnly, planOnly };
