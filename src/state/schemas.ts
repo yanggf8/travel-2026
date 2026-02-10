@@ -352,6 +352,172 @@ export const ItineraryProcessSchema = ProcessNodeBaseSchema.extend({
 }).passthrough();
 
 // ============================================================================
+// Destination Section Schema Map
+// ============================================================================
+
+/**
+ * Map of destination-level section IDs to their Zod schemas.
+ * Used for per-section validation without validating the entire plan.
+ */
+export const DestinationSectionSchemas = {
+  process_1_date_anchor: DateAnchorSchema,
+  process_2_destination: DestinationProcessSchema,
+  process_3_4_packages: PackagesProcessSchema,
+  process_3_transportation: TransportationProcessSchema,
+  process_4_accommodation: AccommodationProcessSchema,
+  process_5_daily_itinerary: ItineraryProcessSchema,
+} as const;
+
+export type DestinationSectionId = keyof typeof DestinationSectionSchemas;
+
+export const DESTINATION_SECTION_IDS: DestinationSectionId[] = [
+  'process_1_date_anchor',
+  'process_2_destination',
+  'process_3_4_packages',
+  'process_3_transportation',
+  'process_4_accommodation',
+  'process_5_daily_itinerary',
+];
+
+// ============================================================================
+// Section Validation
+// ============================================================================
+
+export interface SectionValidationError {
+  path: string;
+  message: string;
+}
+
+export interface SectionValidationResult {
+  valid: boolean;
+  sectionId: DestinationSectionId;
+  present: boolean;
+  errors?: SectionValidationError[];
+}
+
+export interface DestinationValidationResult {
+  valid: boolean;
+  destinationSlug: string;
+  sections: Map<DestinationSectionId, SectionValidationResult>;
+  /** Sections that failed validation */
+  invalidSections: DestinationSectionId[];
+  /** Sections that are missing (not present in destination) */
+  missingSections: DestinationSectionId[];
+}
+
+/**
+ * Validate a single section of a destination.
+ * 
+ * @param sectionId - The section to validate (e.g., 'process_5_daily_itinerary')
+ * @param data - The section data to validate
+ * @returns Validation result with errors if invalid
+ */
+export function validateDestinationSection(
+  sectionId: DestinationSectionId,
+  data: unknown
+): SectionValidationResult {
+  if (data === undefined || data === null) {
+    return {
+      valid: true, // Missing sections are valid by default (optional)
+      sectionId,
+      present: false,
+    };
+  }
+
+  const schema = DestinationSectionSchemas[sectionId];
+  const result = schema.safeParse(data);
+
+  if (result.success) {
+    return { valid: true, sectionId, present: true };
+  }
+
+  return {
+    valid: false,
+    sectionId,
+    present: true,
+    errors: result.error.issues.map((e: z.ZodIssue) => ({
+      path: e.path.join('.'),
+      message: e.message,
+    })),
+  };
+}
+
+/**
+ * Validate all sections of a destination independently.
+ * Returns per-section results so you can identify exactly which sections are valid/invalid.
+ * 
+ * @param destinationSlug - Slug for error reporting
+ * @param destination - The destination object to validate
+ * @param opts - Options: requirePresent forces all sections to be present
+ * @returns Aggregated validation result with per-section details
+ */
+export function validateDestinationSections(
+  destinationSlug: string,
+  destination: Record<string, unknown>,
+  opts?: { requirePresent?: boolean }
+): DestinationValidationResult {
+  const sections = new Map<DestinationSectionId, SectionValidationResult>();
+  const invalidSections: DestinationSectionId[] = [];
+  const missingSections: DestinationSectionId[] = [];
+
+  for (const sectionId of DESTINATION_SECTION_IDS) {
+    const data = destination[sectionId];
+    const result = validateDestinationSection(sectionId, data);
+    sections.set(sectionId, result);
+
+    if (!result.present) {
+      missingSections.push(sectionId);
+      // If requirePresent is true, missing is treated as invalid
+      if (opts?.requirePresent) {
+        invalidSections.push(sectionId);
+      }
+    } else if (!result.valid) {
+      invalidSections.push(sectionId);
+    }
+  }
+
+  return {
+    valid: invalidSections.length === 0,
+    destinationSlug,
+    sections,
+    invalidSections,
+    missingSections,
+  };
+}
+
+/**
+ * Format section validation errors for display.
+ * Returns a human-readable string describing validation failures.
+ */
+export function formatSectionValidationErrors(
+  result: DestinationValidationResult
+): string {
+  if (result.valid) {
+    return `Destination "${result.destinationSlug}": all sections valid`;
+  }
+
+  const lines: string[] = [
+    `Destination "${result.destinationSlug}" validation failed:`,
+  ];
+
+  for (const sectionId of result.invalidSections) {
+    const sectionResult = result.sections.get(sectionId);
+    if (!sectionResult) continue;
+
+    if (!sectionResult.present) {
+      lines.push(`  - ${sectionId}: MISSING (required)`);
+    } else if (sectionResult.errors) {
+      lines.push(`  - ${sectionId}:`);
+      for (const err of sectionResult.errors) {
+        lines.push(`      ${err.path || '(root)'}: ${err.message}`);
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
 // Destination
 // ============================================================================
 

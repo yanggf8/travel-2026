@@ -32,6 +32,8 @@ import {
 import {
   validateTravelPlan,
   validateEventLogState,
+  validateDestinationSections,
+  formatSectionValidationErrors,
   TravelPlan,
   EventLogState as ZodEventLogState,
 } from './schemas';
@@ -237,6 +239,54 @@ export class StateManager {
       eventLog: fullEventLog,
       skipSave: false,
     });
+  }
+
+  /**
+   * DB-only factory by explicit plan ID.
+   * Useful for CLI usage where users want to target a specific DB plan directly.
+   */
+  static async createFromPlanId(planId: string, skipSave = false): Promise<StateManager> {
+    if (!planId || typeof planId !== 'string') {
+      throw new Error('planId is required');
+    }
+
+    const { readPlanFromDb } = require('../services/turso-service');
+
+    let dbRow: { plan_json: string; state_json: string | null; updated_at: string } | null;
+    try {
+      dbRow = await readPlanFromDb(planId);
+    } catch (e: any) {
+      throw new Error(`[turso] DB read failed for plan "${planId}": ${e.message}`);
+    }
+
+    if (!dbRow) {
+      throw new Error(`[turso] Plan "${planId}" not found in DB.`);
+    }
+
+    let plan: TravelPlanMinimal;
+    let fullEventLog: EventLogState | undefined;
+    try {
+      plan = JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
+      fullEventLog = dbRow.state_json ? JSON.parse(dbRow.state_json) as EventLogState : undefined;
+    } catch (e: any) {
+      throw new Error(`[turso] Invalid JSON in plans_current for plan "${planId}": ${e.message}`);
+    }
+
+    // Keep a canonical path shape so downstream path-derived utilities stay stable.
+    const planPath = path.join('data', 'trips', planId, 'travel-plan.json');
+    const stPath = path.join('data', 'trips', planId, 'state.json');
+    const sm = new StateManager({
+      planPath,
+      statePath: stPath,
+      plan,
+      eventLog: fullEventLog,
+      skipSave,
+    });
+
+    // Force plan ID to the explicit caller-provided DB key.
+    sm.planId = planId;
+    console.error(`  [turso] Loaded plan "${planId}" from DB (updated: ${dbRow.updated_at})`);
+    return sm;
   }
 
   // ============================================================================
@@ -1717,6 +1767,19 @@ export class StateManager {
    */
   async save(): Promise<void> {
     // Validate before saving (catch bugs before writing corrupt data)
+    // First do per-section validation for clearer error messages
+    const sectionErrors: string[] = [];
+    for (const [destSlug, destObj] of Object.entries(this.plan.destinations || {})) {
+      const result = validateDestinationSections(destSlug, destObj as Record<string, unknown>);
+      if (!result.valid) {
+        sectionErrors.push(formatSectionValidationErrors(result));
+      }
+    }
+    if (sectionErrors.length > 0) {
+      throw new Error(`Section validation failed:\n${sectionErrors.join('\n')}`);
+    }
+
+    // Full plan validation (catches root-level issues)
     validateTravelPlan(this.plan);
     validateEventLogState(this.eventLog);
 
@@ -1727,7 +1790,7 @@ export class StateManager {
     const stateJson = JSON.stringify(this.eventLog, null, 2);
     const schemaVersion = this.plan.schema_version || 'unknown';
 
-    // 1. Write to DB (blocking)
+    // 1. Write to DB (blocking, atomic)
     try {
       const { writePlanToDb } = require('../services/turso-service');
       await writePlanToDb(this.planId, planJson, stateJson, schemaVersion);
@@ -1735,19 +1798,22 @@ export class StateManager {
       throw new Error(`DB write failed — save aborted: ${e.message}`);
     }
 
-    // 2. Fire-and-forget derived table sync (bookings + events)
+    // 2. Fire-and-forget derived table sync (bookings + events) using in-memory plan
     this.syncDerivedData();
   }
 
   /**
    * Fire-and-forget sync of derived data to Turso (bookings + events).
    * Primary plan data is already safe in DB; these are secondary tables.
+   * Uses in-memory plan JSON (not file paths) for pure DB operation.
    * @internal
    */
   private syncDerivedData(): void {
     try {
-      const { syncBookingsFromPlan, syncEventsToDb } = require('../services/turso-service');
-      syncBookingsFromPlan(this.planPath).catch((e: Error) => {
+      const { syncBookingsFromPlanJson, syncEventsToDb } = require('../services/turso-service');
+      
+      // Use planId as tripId for booking sync (consistent with DB-primary model)
+      syncBookingsFromPlanJson(this.plan as unknown as Record<string, unknown>, this.planId).catch((e: Error) => {
         console.warn(`  [turso] booking sync failed: ${e.message} — run 'npm run travel -- sync-bookings' to retry`);
       });
       syncEventsToDb(this.eventLog.event_log).catch((e: Error) => {

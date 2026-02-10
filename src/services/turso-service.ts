@@ -609,6 +609,85 @@ function extractBookingsFromPlanObject(
   return { bookings, warnings };
 }
 
+/**
+ * Sync bookings from in-memory plan JSON to bookings_current table.
+ * This is the DB-native API that does not read from filesystem.
+ * 
+ * @param plan - The plan object (in-memory, already parsed)
+ * @param tripId - The trip ID for booking keys
+ * @param opts - Options: dryRun to skip actual DB writes
+ */
+export async function syncBookingsFromPlanJson(
+  plan: Record<string, unknown>,
+  tripId: string,
+  opts?: { dryRun?: boolean }
+): Promise<{ synced: number; warnings: string[] }> {
+  const extractor = requireExtractor();
+  const { bookings, warnings } = extractBookingsFromPlanObject(plan, tripId, extractor);
+
+  if (bookings.length === 0) {
+    return { synced: 0, warnings };
+  }
+
+  if (opts?.dryRun) {
+    return { synced: bookings.length, warnings };
+  }
+
+  const client = getClient();
+
+  // Collect trip IDs for DELETE scope
+  const tripIds = [...new Set(bookings.map(b => b.trip_id))];
+
+  // Fetch existing rows for diff-based event emission
+  const existingMap = new Map<string, BookingCurrentRow>();
+  for (const tid of tripIds) {
+    const existing = await queryBookings({ tripId: tid });
+    for (const row of existing) {
+      existingMap.set(row.booking_key, row);
+    }
+  }
+
+  const sqlStatements: string[] = [];
+
+  // Transaction: DELETE stale rows, then upsert current bookings
+  sqlStatements.push('BEGIN;');
+
+  // Delete all rows for these trip IDs (prevents stale ghost rows)
+  for (const tid of tripIds) {
+    sqlStatements.push(`DELETE FROM bookings_current WHERE trip_id = '${sqlEscape(tid)}';`);
+  }
+
+  // Upsert current bookings + diff-based events
+  for (const row of bookings) {
+    sqlStatements.push(extractor.toUpsertSql(row));
+
+    // Only emit event if something actually changed
+    const prev = existingMap.get(row.booking_key);
+    if (!prev) {
+      sqlStatements.push(extractor.toEventSql(row.booking_key, 'created', row));
+    } else if (
+      prev.status !== row.status ||
+      prev.reference !== row.reference ||
+      prev.book_by !== row.book_by ||
+      prev.price_amount !== row.price_amount ||
+      prev.title !== row.title
+    ) {
+      sqlStatements.push(extractor.toEventSql(row.booking_key, 'updated', row));
+    }
+    // No event if nothing changed
+  }
+
+  sqlStatements.push('COMMIT;');
+
+  await client.executeMany(sqlStatements, 50);
+
+  return { synced: bookings.length, warnings };
+}
+
+/**
+ * @deprecated Use syncBookingsFromPlanJson instead. This path-based API
+ * will be removed in a future version.
+ */
 export async function syncBookingsFromPlan(
   planPath: string,
   opts?: { tripId?: string; dryRun?: boolean }
@@ -737,12 +816,17 @@ export async function queryBookings(filters: {
 // Plan Snapshot
 // ---------------------------------------------------------------------------
 
-export async function createPlanSnapshot(
-  planPath: string,
-  _statePath: string,
+/**
+ * Create a snapshot of plan+state by planId (DB-native).
+ * This is the preferred API - does not require file paths.
+ * 
+ * @param planId - The plan ID in plans_current
+ * @param tripId - The trip ID for the snapshot
+ */
+export async function createPlanSnapshotByPlanId(
+  planId: string,
   tripId: string
 ): Promise<{ snapshot_id: string; trip_id: string }> {
-  const planId = derivePlanId(planPath);
   const dbRow = await readPlanFromDb(planId);
   if (!dbRow) {
     throw new Error(`Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
@@ -760,6 +844,19 @@ export async function createPlanSnapshot(
   await client.execute(sql);
 
   return { snapshot_id: snapshotId, trip_id: tripId };
+}
+
+/**
+ * @deprecated Use createPlanSnapshotByPlanId instead. This path-based API
+ * will be removed in a future version.
+ */
+export async function createPlanSnapshot(
+  planPath: string,
+  _statePath: string,
+  tripId: string
+): Promise<{ snapshot_id: string; trip_id: string }> {
+  const planId = derivePlanId(planPath);
+  return createPlanSnapshotByPlanId(planId, tripId);
 }
 
 // ---------------------------------------------------------------------------

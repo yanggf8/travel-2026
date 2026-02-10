@@ -180,7 +180,8 @@ Commands:
     Show this help message.
 
 Options:
-  --plan <path>  Travel plan path (default: ${PATHS.defaultPlan} or $TRAVEL_PLAN_PATH)
+  --plan-id <id> Plan ID (preferred, e.g., 'kyoto-2026' or $TRAVEL_PLAN_ID)
+  --plan <path>  Travel plan path (deprecated, use --plan-id instead)
   --state <path> State log path (default: ${PATHS.defaultState} or $TRAVEL_STATE_PATH)
   --dry-run    Show what would be changed without saving
   --verbose    Show detailed output
@@ -867,8 +868,14 @@ async function main(): Promise<void> {
 
   const destOpt = optionValue('--dest');
   const paxOpt = optionValue('--pax');
+  const planIdOpt = optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID;
   const planOpt = optionValue('--plan');
   const stateOpt = optionValue('--state');
+  
+  // Deprecation warning for --plan (prefer --plan-id)
+  if (planOpt && !planIdOpt) {
+    console.warn('⚠️  --plan is deprecated. Use --plan-id or set TRAVEL_PLAN_ID env var instead.');
+  }
   const goalsOpt = optionValue('--goals');
   const paceOpt = optionValue('--pace');
   const assignOpt = optionValue('--assign');
@@ -899,6 +906,7 @@ async function main(): Promise<void> {
   const optionsWithValues = new Set([
     '--dest',
     '--pax',
+    '--plan-id',
     '--plan',
     '--state',
     '--goals',
@@ -936,7 +944,14 @@ async function main(): Promise<void> {
     cleanArgs.push(a);
   }
 
-  const sm = await StateManager.create(planOpt, stateOpt);
+  if (planIdOpt && (planOpt || stateOpt)) {
+    console.error('Error: --plan-id cannot be combined with --plan or --state');
+    process.exit(1);
+  }
+
+  const sm = planIdOpt
+    ? await StateManager.createFromPlanId(planIdOpt)
+    : await StateManager.create(planOpt, stateOpt);
 
   try {
     switch (command) {
@@ -2014,7 +2029,10 @@ async function main(): Promise<void> {
 
       case 'sync-bookings': {
         const { syncBookingsFromPlan } = await import('../services/turso-service');
-        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
+        const planFile =
+          planOpt ||
+          process.env.TRAVEL_PLAN_PATH ||
+          (planIdOpt ? `data/trips/${planIdOpt}/travel-plan.json` : PATHS.defaultPlan);
         console.log(`Syncing bookings from ${planFile}...`);
         const syncResult = await syncBookingsFromPlan(planFile, {
           tripId: tripIdOpt,
@@ -2047,8 +2065,14 @@ async function main(): Promise<void> {
 
       case 'snapshot-plan': {
         const { createPlanSnapshot } = await import('../services/turso-service');
-        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
-        const stateFile = stateOpt || process.env.TRAVEL_STATE_PATH || PATHS.defaultState;
+        const planFile =
+          planOpt ||
+          process.env.TRAVEL_PLAN_PATH ||
+          (planIdOpt ? `data/trips/${planIdOpt}/travel-plan.json` : PATHS.defaultPlan);
+        const stateFile =
+          stateOpt ||
+          process.env.TRAVEL_STATE_PATH ||
+          (planIdOpt ? `data/trips/${planIdOpt}/state.json` : PATHS.defaultState);
         const effectiveTripId = tripIdOpt || 'japan-2026';
         console.log(`Creating plan snapshot for trip "${effectiveTripId}"...`);
         const snapshot = await createPlanSnapshot(planFile, stateFile, effectiveTripId);
@@ -2058,7 +2082,10 @@ async function main(): Promise<void> {
 
       case 'check-booking-integrity': {
         const { checkBookingIntegrity } = await import('../services/turso-service');
-        const planFile = planOpt || process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
+        const planFile =
+          planOpt ||
+          process.env.TRAVEL_PLAN_PATH ||
+          (planIdOpt ? `data/trips/${planIdOpt}/travel-plan.json` : PATHS.defaultPlan);
         console.log('Checking booking integrity (plan JSON vs Turso DB)...');
         const integrity = await checkBookingIntegrity(planFile, tripIdOpt);
         console.log(`\nResults:`);

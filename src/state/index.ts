@@ -47,6 +47,16 @@ export {
   validateEventLogState,
   safeParseTravelPlan,
   safeParseEventLogState,
+  // Per-section validation
+  DestinationSectionSchemas,
+  DESTINATION_SECTION_IDS,
+  validateDestinationSection,
+  validateDestinationSections,
+  formatSectionValidationErrors,
+  type DestinationSectionId,
+  type SectionValidationError,
+  type SectionValidationResult,
+  type DestinationValidationResult,
 } from './schemas';
 
 // Destination reference schema
