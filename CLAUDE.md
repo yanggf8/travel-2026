@@ -158,12 +158,12 @@ Requires: `pip install playwright && playwright install chromium`
 
 | Process | Tokyo | Nagoya | Osaka+Kyoto |
 |---------|-------|--------|-------------|
-| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed | ⏳ pending (Feb 24-28, 3 leave days) |
+| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed | ✅ confirmed (Feb 24-28, 3 leave days) |
 | P2 Destination | ✅ confirmed | ✅ confirmed | ✅ confirmed |
-| P3+4 Packages | ✅ **booked** | ⏳ pending (archived) | 🔄 researched (4 OTAs scraped) |
-| P3 Transportation | 🎫 booked | 🔄 researched | ⏳ pending |
-| P4 Accommodation | 🎫 booked | ⏳ pending | ⏳ pending |
-| P5 Itinerary | 🔄 researched | ⏳ pending | ⏳ pending |
+| P3+4 Packages | ✅ **booked** | ⏳ pending (archived) | ✅ **booked** (LionTravel FIT) |
+| P3 Transportation | 🎫 booked | 🔄 researched | 🎫 booked |
+| P4 Accommodation | 🎫 booked | ⏳ pending | 🎫 booked |
+| P5 Itinerary | 🔄 researched | ⏳ pending | 🔄 researched |
 
 ### BOOKED: Tokyo Feb 13-17
 ```
@@ -186,17 +186,16 @@ Airport transfers: Limousine Bus ¥3,200 each way (NRT T2 ↔ Shiodome, ~85min),
 **Book by Feb 10**: teamLab Borderless (https://www.teamlab.art/e/borderless-azabudai/)
 **Limousine Bus**: https://www.limousinebus.co.jp/en/
 
-### RESEARCHED: Osaka+Kyoto Feb 24-28
-Plan: `data/trips/osaka-kyoto-2026/travel-plan.json` | Pax: 2 | Airport: KIX | Leave: 3 days
+### BOOKED: Osaka+Kyoto Feb 24-28
+```
+Package: liontravel_190620015 — TWD 23,348/person (46,696 for 2 pax)
+Order:   2026-1311130
+Flight:  Thai Lion Air TPE→KIX / KIX→TPE
+Hotel:   APA Hotel Kyoto Ekimae (APA京都站前, JR Kyoto Station 3min)
+Includes: Kyoto Yumeyakata Kimono Experience, eSIM data
+```
 
-| Option | Total (2 pax) | Per Person |
-|--------|---------------|------------|
-| **Separate** (AirAsia+VietJet, Onyado Nono Namba) | TWD 38,946 | 19,473 |
-| LionTravel FIT (Just Sleep Shinsaibashi) | TWD 41,584 | 20,792 |
-| LionTravel FIT (APA Kyoto) | TWD 43,592 | 21,796 |
-
-Separate saves TWD 2,638 vs cheapest FIT. Note: LionTravel returns from Kobe UKB, not KIX.
-Comparison data: `data/osaka-trip-comparison.json`
+Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto Station, ~75min), included in package, status: booked
 
 ## CLI Quick Reference
 ```bash
@@ -340,7 +339,6 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 3. Restaurant reservations
 
 ### Osaka+Kyoto (Feb 24-28)
-1. Re-scrape flight prices (may have changed)
-2. Confirm Onyado Nono Namba availability
-3. Decide FIT vs Separate
-4. Build P5 itinerary
+1. Build P5 itinerary (sessions, activities, transit details)
+2. Restaurant reservations
+3. Day trip planning (Kyoto temples, Osaka food)
