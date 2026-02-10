@@ -258,9 +258,10 @@ npm run travel -- fetch-weather [--dest slug]
 │   └── hooks/pre-commit           # Runs typecheck + validate:data
 ├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard
 │   ├── wrangler.toml              # Worker config + secret bindings
-│   ├── src/index.ts               # Request handler + router
+│   ├── src/index.ts               # Request handler + router + favicon
 │   ├── src/turso.ts               # Turso HTTP pipeline client (fetch-based)
-│   ├── src/render.ts              # SSR HTML renderer (EN/ZH)
+│   ├── src/render.ts              # SSR HTML renderer (ZH default)
+│   ├── src/zh-content.ts          # Chinese itinerary content overrides
 │   └── src/styles.ts              # Mobile-first inline CSS
 ├── src/
 │   ├── cli/travel-update.ts       # Main CLI entry
@@ -302,24 +303,30 @@ Live web dashboard at `workers/trip-dashboard/` — reads directly from Turso DB
 Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → plans_current + bookings_current
 ```
 
-- **SSR-only** — zero client-side JS, no framework
+- **SSR-only** — zero client-side JS, no framework, no token/secret in HTML output
 - **Mobile-first** — phone-optimized day cards with weather, transit, meals
-- **EN/ZH toggle** — `?lang=zh` query parameter
-- **Routes**: `/` (dashboard), `/?plan=<id>` (specific plan), `/api/plan/<id>` (raw JSON)
-- **Secrets**: `TURSO_URL` + `TURSO_TOKEN` via `wrangler secret put` (not in code)
+- **Default ZH** — Traditional Chinese by default; `?lang=en` for English
+- **ZH content** — `src/zh-content.ts` provides Tokyo-specific Chinese content, gated on `active_destination === 'tokyo_2026'`
+- **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `osaka-kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
+- **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
+- **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
+- **Secrets**: `TURSO_URL` + `TURSO_TOKEN` via `wrangler secret put` (server-side only, never sent to browser)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
+- **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=osaka-kyoto-2026`
 
 ```bash
 cd workers/trip-dashboard
 
 # Local dev
 unset CLOUDFLARE_API_TOKEN && npx wrangler dev
-# → http://localhost:8787 (EN) | http://localhost:8787/?lang=zh (ZH)
+# → http://localhost:8787/?plan=tokyo-2026 | http://localhost:8787/?plan=osaka-kyoto-2026
 
-# Deploy (one-time secrets first)
-unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_URL
-unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_TOKEN
+# Deploy
 unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
+
+# Set secrets (one-time, or pipe from .env)
+TURSO_URL=$(grep '^TURSO_URL=' ../../.env | cut -d= -f2-) && unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_URL <<< "$TURSO_URL"
+TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ../../.env | cut -d= -f2-) && unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_TOKEN <<< "$TURSO_TOKEN"
 ```
 
 ## Build Gate

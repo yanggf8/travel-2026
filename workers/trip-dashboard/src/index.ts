@@ -1,16 +1,33 @@
 import type { Env } from './turso';
-import { getPlan, getBookings } from './turso';
+import { getPlan, getBookings, listPlans } from './turso';
 import { renderDashboard, renderError } from './render';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const lang = (url.searchParams.get('lang') === 'zh' ? 'zh' : 'en') as 'en' | 'zh';
-    const planId = url.searchParams.get('plan') || env.DEFAULT_PLAN_ID;
+    // ZH is default; switch to EN via ?lang=en
+    const langParam = url.searchParams.get('lang');
+    const lang = (langParam === 'en' ? 'en' : 'zh') as 'en' | 'zh';
+    const planId = url.searchParams.get('plan');
+    const showNav = url.searchParams.get('nav') === '1';
+
+    // Favicon — inline SVG airplane emoji
+    if (url.pathname === '/favicon.ico') {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">✈️</text></svg>';
+      return new Response(svg, {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=86400',
+        },
+      });
+    }
 
     // API route: raw JSON
     if (url.pathname.startsWith('/api/plan/')) {
-      const id = url.pathname.replace('/api/plan/', '') || planId;
+      const id = url.pathname.replace('/api/plan/', '');
+      if (!id) {
+        return Response.json({ error: 'Plan ID required' }, { status: 400 });
+      }
       try {
         const data = await getPlan(env, id);
         if (!data) {
@@ -33,8 +50,23 @@ export default {
 
     // Dashboard route
     if (url.pathname === '/' || url.pathname === '') {
+      if (!planId) {
+        return new Response(renderError(
+          lang === 'zh'
+            ? '請聯繫旅行計畫擁有者取得行程連結'
+            : 'Please contact the trip owner for a valid plan link',
+          lang
+        ), {
+          status: 403,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
       try {
-        const planData = await getPlan(env, planId);
+        const [planData, plans] = await Promise.all([
+          getPlan(env, planId),
+          showNav ? listPlans(env) : Promise.resolve(undefined),
+        ]);
         if (!planData) {
           return new Response(renderError(`Plan "${planId}" not found`, lang), {
             status: 404,
@@ -46,7 +78,7 @@ export default {
         const activeDest = plan.active_destination as string;
         const bookings = await getBookings(env, activeDest);
 
-        const html = renderDashboard(planData, bookings, lang);
+        const html = renderDashboard(planData, bookings, lang, planId, plans);
         return new Response(html, {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',

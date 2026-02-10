@@ -74,6 +74,50 @@ body {
   margin-left: 12px;
 }
 
+/* Plan nav */
+.plan-nav {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px;
+  margin: 0 -12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.plan-pill {
+  padding: 4px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--text-dim);
+  background: var(--card);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.plan-pill-active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.route-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 /* Booking summary */
 .booking-summary {
   background: var(--card);
@@ -253,6 +297,15 @@ body {
   margin-left: auto;
   color: var(--accent);
   font-weight: 500;
+}
+
+.weather-clothing {
+  padding: 6px 16px 8px;
+  font-size: 12px;
+  color: #4a5568;
+  background: linear-gradient(135deg, #fefce8 0%, #fef3c7 100%);
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
 }
 
 /* Session blocks */

@@ -1,7 +1,6 @@
 export interface Env {
   TURSO_URL: string;
   TURSO_TOKEN: string;
-  DEFAULT_PLAN_ID: string;
 }
 
 interface TursoCell {
@@ -39,6 +38,9 @@ async function queryTurso(
   env: Env,
   sql: string
 ): Promise<Record<string, string | null>[]> {
+  if (!env.TURSO_URL || !env.TURSO_TOKEN) {
+    throw new Error('TURSO_URL and TURSO_TOKEN secrets are not configured. Run: wrangler secret put TURSO_URL && wrangler secret put TURSO_TOKEN');
+  }
   const pipelineUrl = env.TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline';
 
   const body = {
@@ -81,11 +83,19 @@ export interface PlanData {
   updated_at: string;
 }
 
+function toDestSlug(s: string): string {
+  return s.replace(/-/g, '_');
+}
+
 export async function getPlan(env: Env, planId: string): Promise<PlanData | null> {
   const escaped = planId.replace(/'/g, "''");
+  const destSlug = toDestSlug(escaped);
   const rows = await queryTurso(
     env,
-    `SELECT plan_json, state_json, updated_at FROM plans_current WHERE plan_id = '${escaped}' LIMIT 1`
+    `SELECT plan_json, state_json, updated_at FROM plans_current
+     WHERE plan_id = '${escaped}'
+        OR json_extract(plan_json, '$.active_destination') = '${destSlug}'
+     LIMIT 1`
   );
 
   if (rows.length === 0) return null;
@@ -101,9 +111,38 @@ export interface BookingRow {
   trip_id: string;
   destination: string;
   category: string;
-  label: string;
+  title: string;
   status: string;
-  details_json: string | null;
+  reference: string | null;
+  book_by: string | null;
+  price_amount: string | null;
+  price_currency: string | null;
+  payload_json: string | null;
+}
+
+export interface PlanSummary {
+  slug: string;
+  display_name: string;
+  updated_at: string;
+}
+
+export async function listPlans(env: Env): Promise<PlanSummary[]> {
+  const rows = await queryTurso(
+    env,
+    `SELECT plan_id,
+      json_extract(plan_json, '$.active_destination') as active_dest,
+      json_extract(plan_json, '$.destinations.' ||
+        json_extract(plan_json, '$.active_destination') || '.display_name') as display_name,
+      updated_at FROM plans_current ORDER BY updated_at DESC`
+  );
+  return rows.map((r) => {
+    const dest = r.active_dest || r.plan_id!;
+    return {
+      slug: dest.replace(/_/g, '-'),
+      display_name: r.display_name || dest.replace(/_/g, ' '),
+      updated_at: r.updated_at!,
+    };
+  });
 }
 
 export async function getBookings(
@@ -113,7 +152,7 @@ export async function getBookings(
   const escaped = destination.replace(/'/g, "''");
   const rows = await queryTurso(
     env,
-    `SELECT booking_key, trip_id, destination, category, label, status, details_json FROM bookings_current WHERE destination = '${escaped}'`
+    `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency, payload_json FROM bookings_current WHERE destination = '${escaped}'`
   );
 
   return rows as unknown as BookingRow[];
