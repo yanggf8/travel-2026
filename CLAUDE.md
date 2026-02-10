@@ -80,6 +80,7 @@ User intent                          → Skill / Action
 "weather" / "forecast"               → npm run travel -- fetch-weather [--dest slug]
 User provides OTA URL                → /scrape-ota (see URL Routing)
 User provides booking confirmation   → npm run travel -- set-activity-booking
+"deploy dashboard" / "publish trip"  → cd workers/trip-dashboard && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
 ```
 
 ### URL Routing
@@ -255,6 +256,12 @@ npm run travel -- fetch-weather [--dest slug]
 ├── scrapes/                       # Ephemeral scraper outputs (gitignored)
 ├── scripts/                       # Python scrapers + migration tools
 │   └── hooks/pre-commit           # Runs typecheck + validate:data
+├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard
+│   ├── wrangler.toml              # Worker config + secret bindings
+│   ├── src/index.ts               # Request handler + router
+│   ├── src/turso.ts               # Turso HTTP pipeline client (fetch-based)
+│   ├── src/render.ts              # SSR HTML renderer (EN/ZH)
+│   └── src/styles.ts              # Mobile-first inline CSS
 ├── src/
 │   ├── cli/travel-update.ts       # Main CLI entry
 │   ├── state/state-manager.ts     # Core state management
@@ -286,6 +293,34 @@ Seed from JSON: `npm run db:seed:plans` (one-time, populates `plans_current` fro
 ## Multi-Plan (Separate Trips)
 Separate trip files: `data/trips/<trip-id>/travel-plan.json` + `state.json`
 CLI: `--plan <path> --state <path>` or env vars `$TRAVEL_PLAN_PATH` / `$TRAVEL_STATE_PATH`
+
+## Trip Dashboard (Cloudflare Worker)
+
+Live web dashboard at `workers/trip-dashboard/` — reads directly from Turso DB, always up-to-date.
+
+```
+Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → plans_current + bookings_current
+```
+
+- **SSR-only** — zero client-side JS, no framework
+- **Mobile-first** — phone-optimized day cards with weather, transit, meals
+- **EN/ZH toggle** — `?lang=zh` query parameter
+- **Routes**: `/` (dashboard), `/?plan=<id>` (specific plan), `/api/plan/<id>` (raw JSON)
+- **Secrets**: `TURSO_URL` + `TURSO_TOKEN` via `wrangler secret put` (not in code)
+- **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
+
+```bash
+cd workers/trip-dashboard
+
+# Local dev
+unset CLOUDFLARE_API_TOKEN && npx wrangler dev
+# → http://localhost:8787 (EN) | http://localhost:8787/?lang=zh (ZH)
+
+# Deploy (one-time secrets first)
+unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_URL
+unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_TOKEN
+unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
+```
 
 ## Build Gate
 Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
