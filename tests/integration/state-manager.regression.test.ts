@@ -378,9 +378,11 @@ describe('StateManager.derivePlanId', () => {
     expect(relId.startsWith('path:')).toBe(true);
   });
 
-  it('keeps default and trip mapping semantics', () => {
-    expect(StateManager.derivePlanId('data/travel-plan.json')).toBe('default');
-    expect(StateManager.derivePlanId(path.resolve('data/travel-plan.json'))).toBe('default');
+  it('keeps trip mapping semantics (no "default" special case)', () => {
+    // data/travel-plan.json is no longer special — falls through to path:<hash>
+    const rootId = StateManager.derivePlanId('data/travel-plan.json');
+    expect(rootId.startsWith('path:')).toBe(true);
+    expect(StateManager.derivePlanId(path.resolve('data/travel-plan.json'))).toBe(rootId);
 
     expect(StateManager.derivePlanId('data/trips/osaka-2026/travel-plan.json')).toBe('osaka-2026');
     expect(StateManager.derivePlanId(path.resolve('data/trips/osaka-2026/travel-plan.json'))).toBe('osaka-2026');
