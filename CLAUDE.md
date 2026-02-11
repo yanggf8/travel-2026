@@ -32,7 +32,7 @@ travel-plan.json
 ### Data Flow
 `URL → scrape (Playwright) → normalize (CanonicalOffer[]) → StateManager.importPackageOffers() → Turso auto-import → selectOffer() → cascade (populate P3+P4) → save() (DB write → derived sync)`
 
-Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v1.8.0).
+Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v1.9.0).
 
 ### Repository Architecture (v2.0.0)
 ```
@@ -56,6 +56,8 @@ READ:   await StateManager.create() → TursoRepository.create() → load blob +
 - **Normalized tables** for itinerary: `itinerary_days`, `itinerary_sessions`, `activities` (+ 7 supporting tables)
 - **Blob still written** for backward compat — dashboard and cascade runner read from it via reconstructed plan object
 - `StateManager.save()` is async — blob write + normalized table write must succeed or command fails
+- `StateManager.saveWithTracking(cmd, summary)` wraps `save()` with operation audit trail in `operation_runs` table; CLI commands use this instead of raw `save()`
+- **Optimistic locking**: `plans_current.version` incremented on each save; concurrent writes detected via version mismatch
 - `StateManager.create()` is async factory — reads blob + normalized tables from DB
 - `dispatch(command)` entry point — 25 command types as discriminated union
 - Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `kyoto-2026`)
@@ -254,6 +256,10 @@ npm run travel -- set-airport-transfer <arrival|departure> <planned|booked> --se
 npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
 npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
 npm run travel -- fetch-weather [--dest slug]
+
+# === OPERATION TRACKING ===
+npm run travel -- run-status [run-id]
+npm run travel -- run-list [--status completed|failed|started] [--limit N]
 ```
 
 ## Project Structure
@@ -310,10 +316,11 @@ Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 ```
 
 Tables:
-- **Blob**: `plans_current` (DB-primary plan+state, PK=plan_id)
+- **Blob**: `plans_current` (DB-primary plan+state, PK=plan_id, `version` column for optimistic locking)
 - **Normalized itinerary**: `itinerary_days`, `itinerary_sessions`, `activities` (PK composites on plan_id+destination+day_number)
 - **Normalized supporting**: `plan_metadata`, `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `airport_transfers`, `flights`, `hotels`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
+- **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
 - **Other**: `offers`, `destinations`, `events`, `bookings`, `plan_snapshots` (versioned archive)
 
 Schema/migration: `npm run db:migrate:turso` (creates all tables idempotently)

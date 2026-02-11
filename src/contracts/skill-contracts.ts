@@ -1,5 +1,5 @@
 /**
- * Skill Contracts v1.8.0
+ * Skill Contracts v1.9.0
  *
  * Defines the interface for all CLI operations.
  * Agent can query this to discover available operations.
@@ -9,6 +9,7 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
+ * v1.9.0 - Added operation tracking + optimistic locking (run-status, run-list, saveWithTracking)
  * v1.8.0 - Added weather forecast fetch (fetch-weather)
  * v1.7.0 - DB-primary migration: writePlanToDb/readPlanFromDb, async save(), StateManager.create()
  * v1.6.0 - Added booking sync/query operations (sync-bookings, query-bookings, snapshot-plan, check-booking-integrity)
@@ -19,7 +20,7 @@
  * v1.1.0 - Added configuration discovery APIs and multi-destination support
  */
 
-export const CONTRACT_VERSION = '1.8.0';
+export const CONTRACT_VERSION = '1.9.0';
 
 /**
  * Data freshness tiers.
@@ -483,6 +484,34 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     data_freshness: 'live',
     example: 'npm run travel -- fetch-weather',
   },
+
+  // === Operation Tracking (v1.9.0) ===
+
+  'run-status': {
+    name: 'run-status',
+    description: 'Show operation run details. Without args, shows the most recent run.',
+    args: [
+      { name: 'run-id', type: 'string', required: false, description: 'Specific run ID (default: most recent)' },
+    ],
+    output: { type: 'object', description: 'Operation run details including status, version, timing' },
+    mutates: [],
+    data_freshness: 'live',
+    example: 'npm run travel -- run-status',
+  },
+
+  'run-list': {
+    name: 'run-list',
+    description: 'List recent operations for the current plan.',
+    args: [
+      { name: '--status', type: 'string', required: false, description: 'Filter by status (started|completed|failed)' },
+      { name: '--limit', type: 'number', required: false, description: 'Max results (default: 20)' },
+    ],
+    output: { type: 'array', description: 'Table of recent operation runs' },
+    mutates: [],
+    data_freshness: 'live',
+    example: 'npm run travel -- run-list --status failed',
+  },
+
 };
 
 /**
@@ -545,7 +574,9 @@ export const STATE_MANAGER_METHODS = {
 
   // I/O
   save: { args: [], returns: 'Promise<void>', description: 'Save plan+state to DB (blocking), then sync derived tables' },
+  saveWithTracking: { args: ['commandType', 'commandSummary?'], returns: 'Promise<{ run_id: string; version: number }>', description: 'Save with operation audit trail and optimistic lock' },
   getPlan: { args: [], returns: 'TravelPlanMinimal', description: 'Get current plan object' },
+  getPlanId: { args: [], returns: 'string', description: 'Get the plan ID for this state manager instance' },
 } as const;
 
 /**

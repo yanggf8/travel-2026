@@ -473,12 +473,13 @@ ON CONFLICT(plan_id) DO UPDATE SET
 /**
  * Read plan + state from Turso plans_current.
  * Returns null if no row found for planId.
+ * Includes version for optimistic locking (defaults to 0 for pre-migration rows).
  */
 export async function readPlanFromDb(
   planId: string
-): Promise<{ plan_json: string; state_json: string | null; updated_at: string } | null> {
+): Promise<{ plan_json: string; state_json: string | null; updated_at: string; version: number } | null> {
   const client = getClient();
-  const sql = `SELECT plan_json, state_json, updated_at FROM plans_current WHERE plan_id = ${sqlText(planId)} LIMIT 1;`;
+  const sql = `SELECT plan_json, state_json, updated_at, COALESCE(version, 0) as version FROM plans_current WHERE plan_id = ${sqlText(planId)} LIMIT 1;`;
   const response = await client.execute(sql);
   const rows = rowsToObjects(response);
   if (rows.length === 0) return null;
@@ -486,6 +487,7 @@ export async function readPlanFromDb(
     plan_json: rows[0].plan_json as string,
     state_json: rows[0].state_json as string | null,
     updated_at: rows[0].updated_at as string,
+    version: typeof rows[0].version === 'number' ? rows[0].version : parseInt(rows[0].version || '0', 10),
   };
 }
 

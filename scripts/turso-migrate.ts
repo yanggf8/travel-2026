@@ -372,6 +372,47 @@ async function main() {
   }
   console.log('✅ Created normalized table indexes.');
 
+  // 11. Add version column to plans_current (optimistic locking)
+  try {
+    console.log('Adding version column to plans_current...');
+    await client.execute('ALTER TABLE plans_current ADD COLUMN version INTEGER NOT NULL DEFAULT 0;');
+    console.log('✅ Added version column.');
+  } catch (e: any) {
+    if (e.message?.includes('duplicate column name') || e.message?.includes('already exists')) {
+      console.log('ℹ️  version column already exists.');
+    } else {
+      console.warn('⚠️  Could not add version column:', e.message);
+    }
+  }
+
+  // 12. Create operation_runs table (operation audit trail)
+  try {
+    console.log('Creating operation_runs table...');
+    await client.execute(`CREATE TABLE IF NOT EXISTS operation_runs (
+  run_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  command_type TEXT NOT NULL,
+  command_summary TEXT,
+  status TEXT NOT NULL DEFAULT 'started'
+    CHECK(status IN ('started', 'completed', 'failed')),
+  version_before INTEGER NOT NULL,
+  version_after INTEGER,
+  error_message TEXT,
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
+  idempotency_key TEXT
+);`);
+    await client.execute('CREATE INDEX IF NOT EXISTS idx_operation_runs_plan ON operation_runs(plan_id, started_at DESC);');
+    await client.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_runs_idempotency ON operation_runs(plan_id, idempotency_key);');
+    console.log('✅ Created operation_runs table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) {
+      console.log('ℹ️  operation_runs table already exists.');
+    } else {
+      console.warn('⚠️  Could not create operation_runs table:', e.message);
+    }
+  }
+
   console.log('Done.');
 }
 

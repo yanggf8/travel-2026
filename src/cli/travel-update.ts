@@ -50,6 +50,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+/** Convert Turso pipeline response to array of plain objects. */
+function pipelineRowsToObjects(response: any): Record<string, any>[] {
+  const result = response?.results?.[0]?.response?.result;
+  if (!result?.rows || !result?.cols) return [];
+  const cols = result.cols.map((c: any) => c.name);
+  return result.rows.map((row: any[]) => {
+    const obj: Record<string, any> = {};
+    for (let i = 0; i < cols.length; i++) {
+      obj[cols[i]] = row[i]?.value ?? null;
+    }
+    return obj;
+  });
+}
+
 const HELP = `
 Travel Update CLI - Quick updates to travel plan
 
@@ -163,6 +177,16 @@ Commands:
   check-booking-integrity [--trip-id id]
     Compare bookings in plan JSON vs Turso DB.
     Example: check-booking-integrity
+
+  run-status [run-id]
+    Show details for a specific operation run, or the most recent run if no ID given.
+    Example: run-status
+    Example: run-status a1b2c3d4-...
+
+  run-list [--status completed|failed|started] [--limit N]
+    List recent operation runs for this plan.
+    Example: run-list
+    Example: run-list --status failed --limit 5
 
   status
     Show current plan status summary.
@@ -933,6 +957,7 @@ async function main(): Promise<void> {
     '--trip-id',
     '--category',
     '--status',
+    '--limit',
   ]);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -1043,7 +1068,7 @@ async function main(): Promise<void> {
             `Imported from scrape-package CLI (${offers.length} offer)`,
             warnings
           );
-          await sm.save();
+          await sm.saveWithTracking('import-offers', `${offers.length} offers from ${offers[0]?.source_id || 'unknown'}`);
           console.log('✅ Imported offers into process_3_4_packages.results.offers');
 
           // Auto-import to Turso (file still exists)
@@ -1097,7 +1122,7 @@ async function main(): Promise<void> {
 
         if (!dryRun) {
           sm.setDateAnchor(startDate, endDate, reason);
-          await sm.save();
+          await sm.saveWithTracking('set-dates', `${startDate} ${endDate}`);
           console.log('✅ Dates updated and cascade triggered');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1140,7 +1165,7 @@ async function main(): Promise<void> {
             seats,
             source || 'cli'
           );
-          await sm.save();
+          await sm.saveWithTracking('update-offer', `${offerId} ${date} ${availability}`);
           console.log('✅ Offer availability updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1166,7 +1191,7 @@ async function main(): Promise<void> {
         if (!dryRun) {
           const destination = destOpt || sm.getActiveDestination();
           sm.selectOffer(offerId, date, !noPopulate);
-          await sm.save();
+          await sm.saveWithTracking('select-offer', offerId);
           console.log('✅ Offer selected');
           if (!noPopulate) {
             console.log('✅ P3 (transportation) and P4 (accommodation) populated from package');
@@ -1274,7 +1299,7 @@ async function main(): Promise<void> {
 
         if (!dryRun) {
           sm.scaffoldItinerary(destination, days, force);
-          await sm.save();
+          await sm.saveWithTracking('scaffold-itinerary', `${destination} ${days.length} days`);
           console.log('\n✅ Itinerary scaffolded');
           console.log('\nNext action: Review day structure, then populate activities with /p5-itinerary');
         } else {
@@ -1351,7 +1376,7 @@ async function main(): Promise<void> {
           // Update focus to itinerary
           sm.setFocus(destination, 'process_5_daily_itinerary');
 
-          await sm.save();
+          await sm.saveWithTracking('mark-booked', destination);
           console.log('\n✅ Booking marked as confirmed');
           // Turso booking sync handled automatically by save() → syncBookingsToDb()
 
@@ -1543,7 +1568,7 @@ async function main(): Promise<void> {
         if (plannedAdds.length > 20) console.log(`  ... and ${plannedAdds.length - 20} more`);
 
         if (!dryRun) {
-          await sm.save();
+          await sm.saveWithTracking('populate-itinerary', `${destination} ${plannedAdds.length} activities`);
           console.log('\n✅ Itinerary populated (incremental adds)');
           console.log('\nNext action: run status --full, then adjust with updateActivity/removeActivity as needed');
         } else {
@@ -1594,7 +1619,7 @@ async function main(): Promise<void> {
             selected,
             candidates,
           });
-          await sm.save();
+          await sm.saveWithTracking('set-airport-transfer', `${destination} ${direction}`);
           console.log('✅ Airport transfer updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1681,7 +1706,7 @@ async function main(): Promise<void> {
             end_time: validatedEnd,
             is_fixed_time: isFixed,
           });
-          await sm.save();
+          await sm.saveWithTracking('set-activity-time', `D${dayNumber} ${session} ${activity}`);
           console.log('✅ Activity time updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1736,7 +1761,7 @@ async function main(): Promise<void> {
 
         if (!dryRun) {
           sm.setSessionTimeRange(destination, dayNumber, session as any, startTimeResult.value, endTimeResult.value);
-          await sm.save();
+          await sm.saveWithTracking('set-session-time-range', `D${dayNumber} ${session}`);
           console.log('✅ Session time range updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -1804,7 +1829,7 @@ async function main(): Promise<void> {
             refOpt,
             validatedBookBy
           );
-          await sm.save();
+          await sm.saveWithTracking('set-activity-booking', `D${dayNumber} ${session} ${activity}`);
           console.log('✅ Activity booking status updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
@@ -2140,13 +2165,112 @@ async function main(): Promise<void> {
           sm.setDayWeather(dest, dayNum, forecasts[i]);
         }
 
-        await sm.save();
+        await sm.saveWithTracking('fetch-weather', dest);
 
         console.log(`Weather updated for ${forecasts.length} day(s) in ${dest}:`);
         for (let i = 0; i < forecasts.length; i++) {
           const f = forecasts[i];
           console.log(`  Day ${days[i].day_number}: ${f.weather_label} ${f.temp_low_c}–${f.temp_high_c}°C, Rain: ${f.precipitation_pct}%`);
         }
+        break;
+      }
+
+      // =================================================================
+      // Operation Run Tracking Commands
+      // =================================================================
+
+      case 'run-status': {
+        const runId = cleanArgs[1];
+        const planId = sm.getPlanId();
+        const { TursoPipelineClient } = require(path.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline'));
+        const client = new TursoPipelineClient();
+
+        let sql: string;
+        if (runId) {
+          sql = `SELECT * FROM operation_runs WHERE run_id = '${runId.replace(/'/g, "''")}' AND plan_id = '${planId.replace(/'/g, "''")}' LIMIT 1`;
+        } else {
+          sql = `SELECT * FROM operation_runs WHERE plan_id = '${planId.replace(/'/g, "''")}' ORDER BY started_at DESC LIMIT 1`;
+        }
+
+        const resp = await client.execute(sql);
+        const runs = pipelineRowsToObjects(resp);
+        if (runs.length === 0) {
+          console.log(runId ? `No operation found with run_id: ${runId}` : 'No operations found for this plan.');
+          break;
+        }
+
+        const run = runs[0];
+        console.log('\n📋 Operation Run Details');
+        console.log('─'.repeat(50));
+        console.log(`  Run ID:       ${run.run_id}`);
+        console.log(`  Plan ID:      ${run.plan_id}`);
+        console.log(`  Command:      ${run.command_type}`);
+        if (run.command_summary) console.log(`  Summary:      ${run.command_summary}`);
+        console.log(`  Status:       ${run.status === 'completed' ? '✅' : run.status === 'failed' ? '❌' : '⏳'} ${run.status}`);
+        console.log(`  Version:      ${run.version_before}${run.version_after != null ? ` → ${run.version_after}` : ''}`);
+        console.log(`  Started:      ${run.started_at}`);
+        if (run.completed_at) console.log(`  Completed:    ${run.completed_at}`);
+        if (run.error_message) console.log(`  Error:        ${run.error_message}`);
+        console.log('');
+        break;
+      }
+
+      case 'run-list': {
+        const planId = sm.getPlanId();
+        const limitRaw = parseInt(optionValue('--limit') || '20', 10);
+        const limit = Math.max(1, Math.min(100, limitRaw || 20));
+        const { TursoPipelineClient } = require(path.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline'));
+        const client = new TursoPipelineClient();
+
+        const conditions: string[] = [`plan_id = '${planId.replace(/'/g, "''")}'`];
+        if (statusFilterOpt) {
+          conditions.push(`status = '${statusFilterOpt.replace(/'/g, "''")}'`);
+        }
+
+        const sql = `SELECT run_id, command_type, command_summary, status, version_before, version_after, started_at, completed_at, error_message
+          FROM operation_runs WHERE ${conditions.join(' AND ')}
+          ORDER BY started_at DESC LIMIT ${limit}`;
+
+        const resp = await client.execute(sql);
+        const runs = pipelineRowsToObjects(resp);
+
+        if (runs.length === 0) {
+          console.log('No operations found.');
+          break;
+        }
+
+        console.log(`\n📋 Recent Operations (${runs.length} results)`);
+        console.log('─'.repeat(90));
+        console.log(
+          [
+            'Status'.padEnd(5),
+            'Command'.padEnd(22),
+            'Summary'.padEnd(30),
+            'Ver'.padEnd(7),
+            'Started'.padEnd(20),
+          ].join(' │ ')
+        );
+        console.log('─'.repeat(90));
+
+        for (const run of runs) {
+          const icon = run.status === 'completed' ? '✅' : run.status === 'failed' ? '❌' : '⏳';
+          const ver = run.version_after != null
+            ? `${run.version_before}→${run.version_after}`
+            : `${run.version_before}`;
+          const started = run.started_at ? run.started_at.slice(0, 19) : '-';
+
+          console.log(
+            [
+              icon.padEnd(5),
+              (run.command_type || '-').padEnd(22),
+              (run.command_summary || '-').slice(0, 30).padEnd(30),
+              ver.padEnd(7),
+              started.padEnd(20),
+            ].join(' │ ')
+          );
+        }
+        console.log('─'.repeat(90));
+        console.log('');
         break;
       }
 

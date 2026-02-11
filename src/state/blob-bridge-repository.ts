@@ -22,6 +22,7 @@ import type {
   isValidProcessStatus,
 } from './types';
 import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
+import { OptimisticLockError } from './repository';
 import {
   validateTravelPlan,
   validateEventLogState,
@@ -30,10 +31,15 @@ import {
 } from './schemas';
 
 export class BlobBridgeRepository implements StateRepository {
+  private version: number;
+
   constructor(
     private plan: TravelPlanMinimal,
-    private eventLog: EventLogState
-  ) {}
+    private eventLog: EventLogState,
+    version: number = 0,
+  ) {
+    this.version = version;
+  }
 
   // ============================================================================
   // StateReader — Plan metadata
@@ -45,6 +51,10 @@ export class BlobBridgeRepository implements StateRepository {
 
   getSchemaVersion(): string {
     return this.plan.schema_version;
+  }
+
+  getVersion(): number {
+    return this.version;
   }
 
   // ============================================================================
@@ -842,7 +852,12 @@ export class BlobBridgeRepository implements StateRepository {
     }
 
     if (statements.length > 0) {
-      // Wrap in transaction so delete+reinsert is atomic
+      // Optimistic lock: bump version atomically with normalized table writes
+      statements.push(
+        `UPDATE plans_current SET version = ${this.version + 1} WHERE plan_id = '${escapedPlanId}' AND version = ${this.version}`
+      );
+
+      // Wrap in transaction so delete+reinsert+version bump is atomic
       statements.unshift('BEGIN');
       statements.push('COMMIT');
       try {
@@ -852,6 +867,19 @@ export class BlobBridgeRepository implements StateRepository {
         try { await client.execute('ROLLBACK'); } catch { /* best effort */ }
         throw e;
       }
+
+      // Verify version advanced (post-transaction check)
+      const verifyResp = await client.execute(
+        `SELECT COALESCE(version, 0) as version FROM plans_current WHERE plan_id = '${escapedPlanId}'`
+      );
+      const verifyRows = rowsToObjects(verifyResp);
+      const newVersion = verifyRows.length > 0
+        ? (typeof verifyRows[0].version === 'number' ? verifyRows[0].version : parseInt(verifyRows[0].version || '-1', 10))
+        : -1;
+      if (newVersion !== this.version + 1) {
+        throw new OptimisticLockError(planId, this.version, newVersion);
+      }
+      this.version = newVersion;
     }
   }
 
@@ -886,6 +914,20 @@ export class BlobBridgeRepository implements StateRepository {
 // SQL helpers for normalized table sync
 // ============================================================================
 
+function rowsToObjects(response: any): Record<string, any>[] {
+  const result = response?.results?.[0]?.response?.result;
+  if (!result?.rows || !result?.cols) return [];
+  const cols = result.cols.map((c: any) => c.name);
+  return result.rows.map((row: any[]) => {
+    const obj: Record<string, any> = {};
+    for (let i = 0; i < cols.length; i++) {
+      const cell = row[i];
+      obj[cols[i]] = cell?.value ?? null;
+    }
+    return obj;
+  });
+}
+
 function sqlText(v: string | null | undefined): string {
   if (v === null || v === undefined) return 'NULL';
   return `'${String(v).replace(/'/g, "''")}'`;
@@ -916,7 +958,7 @@ function sqlBool(v: boolean | null | undefined): string {
 export async function createBlobBridgeFromDb(planId: string): Promise<BlobBridgeRepository> {
   const { readPlanFromDb } = require('../services/turso-service');
 
-  let dbRow: { plan_json: string; state_json: string | null; updated_at: string } | null;
+  let dbRow: { plan_json: string; state_json: string | null; updated_at: string; version: number } | null;
   try {
     dbRow = await readPlanFromDb(planId);
   } catch (e: any) {
@@ -936,7 +978,8 @@ export async function createBlobBridgeFromDb(planId: string): Promise<BlobBridge
     throw new Error(`[turso] Invalid JSON in plans_current for plan "${planId}": ${e.message}`);
   }
 
-  console.error(`  [turso] Loaded plan "${planId}" from DB (updated: ${dbRow.updated_at})`);
+  const version = dbRow.version ?? 0;
+  console.error(`  [turso] Loaded plan "${planId}" from DB (updated: ${dbRow.updated_at}, version: ${version})`);
 
   if (!eventLog) {
     const { DEFAULTS } = require('../config/constants');
@@ -952,5 +995,5 @@ export async function createBlobBridgeFromDb(planId: string): Promise<BlobBridge
     };
   }
 
-  return new BlobBridgeRepository(plan, eventLog);
+  return new BlobBridgeRepository(plan, eventLog, version);
 }

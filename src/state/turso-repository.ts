@@ -271,6 +271,7 @@ export class TursoRepository implements StateRepository {
 
   getActiveDestination(): string { return this.bridge.getActiveDestination(); }
   getSchemaVersion(): string { return this.bridge.getSchemaVersion(); }
+  getVersion(): number { return this.bridge.getVersion(); }
   getProcessStatus(dest: string, process: ProcessId): ProcessStatus | null {
     return this.bridge.getProcessStatus(dest, process);
   }
