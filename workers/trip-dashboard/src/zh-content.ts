@@ -328,7 +328,7 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
     },
   },
   4: {
-    theme: '和服日 — 東山 & 清水寺',
+    theme: '和服日 — 東山散策',
     morning: {
       focus: '京都夢館和服體驗',
       activities: [
@@ -345,6 +345,7 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
         '二年坂（Ninenzaka）— 町家商店、甜點咖啡',
         '八坂の塔（法觀寺）— 東山地標',
         '清水坂散步（不入清水寺）',
+        '聖護院八ッ橋 — 買生八橋伴手禮（出發前一天最新鮮）',
         '祇園（Gion）漫步',
       ],
       meals: ['東山午餐（おばんざい家庭料理 或 抹茶咖啡廳）'],
