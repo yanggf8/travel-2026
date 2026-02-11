@@ -59,7 +59,7 @@ function esc(s: string): string {
 }
 
 function formatDate(dateStr: string, lang: Lang): string {
-  const d = new Date(dateStr + 'T00:00:00+09:00');
+  const d = new Date(dateStr + 'T00:00:00Z');
   const days = lang === 'zh'
     ? ['日', '一', '二', '三', '四', '五', '六']
     : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
