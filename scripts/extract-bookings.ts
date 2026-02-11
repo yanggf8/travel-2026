@@ -383,7 +383,7 @@ export function toEventSql(
 // ---------------------------------------------------------------------------
 
 function inferTripId(planPath: string): string {
-  // Try to extract from path like data/trips/osaka-kyoto-2026/travel-plan.json
+  // Try to extract from path like data/trips/kyoto-2026/travel-plan.json
   const parts = planPath.split(path.sep);
   const tripsIdx = parts.indexOf('trips');
   if (tripsIdx !== -1 && tripsIdx + 1 < parts.length) {

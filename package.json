@@ -28,7 +28,6 @@
     "compare-true-cost": "ts-node src/cli/compare-true-cost.ts",
     "normalize-flights": "ts-node src/utils/flight-normalizer.ts",
     "leave-calc": "ts-node src/utils/leave-calculator.ts",
-    "db:export:travel-plan": "ts-node scripts/export-travel-plan-to-scrape.ts",
     "db:import:turso": "ts-node scripts/import-offers-to-turso.ts",
     "db:migrate:turso": "ts-node scripts/turso-migrate.ts",
     "db:status:turso": "ts-node scripts/turso-status.ts",
