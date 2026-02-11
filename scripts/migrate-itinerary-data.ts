@@ -1,7 +1,7 @@
 /**
  * Migrate Itinerary Data
  *
- * Reads each plan's JSON blob from plans_current and inserts into normalized tables:
+ * Reads each plan's JSON blob from plans and inserts into normalized tables:
  * - itinerary_days, itinerary_sessions, activities
  * - plan_metadata, date_anchors, process_statuses
  * - airport_transfers, flights, hotels
@@ -45,7 +45,7 @@ async function main() {
 
   // 1. Read all plans
   const plansResponse = await client.execute(
-    'SELECT plan_id, plan_json, schema_version FROM plans_current'
+    'SELECT plan_id, plan_json, schema_version FROM plans'
   );
   const plans = rowsToObjects(plansResponse) as PlanRow[];
   console.log(`Found ${plans.length} plan(s) to migrate.\n`);

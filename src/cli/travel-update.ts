@@ -50,20 +50,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-/** Convert Turso pipeline response to array of plain objects. */
-function pipelineRowsToObjects(response: any): Record<string, any>[] {
-  const result = response?.results?.[0]?.response?.result;
-  if (!result?.rows || !result?.cols) return [];
-  const cols = result.cols.map((c: any) => c.name);
-  return result.rows.map((row: any[]) => {
-    const obj: Record<string, any> = {};
-    for (let i = 0; i < cols.length; i++) {
-      obj[cols[i]] = row[i]?.value ?? null;
-    }
-    return obj;
-  });
-}
-
 const HELP = `
 Travel Update CLI - Quick updates to travel plan
 
@@ -2182,24 +2168,13 @@ async function main(): Promise<void> {
       case 'run-status': {
         const runId = cleanArgs[1];
         const planId = sm.getPlanId();
-        const { TursoPipelineClient } = require(path.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline'));
-        const client = new TursoPipelineClient();
+        const { getOperationRun } = require('../services/turso-service');
 
-        let sql: string;
-        if (runId) {
-          sql = `SELECT * FROM operation_runs WHERE run_id = '${runId.replace(/'/g, "''")}' AND plan_id = '${planId.replace(/'/g, "''")}' LIMIT 1`;
-        } else {
-          sql = `SELECT * FROM operation_runs WHERE plan_id = '${planId.replace(/'/g, "''")}' ORDER BY started_at DESC LIMIT 1`;
-        }
-
-        const resp = await client.execute(sql);
-        const runs = pipelineRowsToObjects(resp);
-        if (runs.length === 0) {
+        const run = await getOperationRun(planId, runId || undefined);
+        if (!run) {
           console.log(runId ? `No operation found with run_id: ${runId}` : 'No operations found for this plan.');
           break;
         }
-
-        const run = runs[0];
         console.log('\n📋 Operation Run Details');
         console.log('─'.repeat(50));
         console.log(`  Run ID:       ${run.run_id}`);
@@ -2218,21 +2193,12 @@ async function main(): Promise<void> {
       case 'run-list': {
         const planId = sm.getPlanId();
         const limitRaw = parseInt(optionValue('--limit') || '20', 10);
-        const limit = Math.max(1, Math.min(100, limitRaw || 20));
-        const { TursoPipelineClient } = require(path.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline'));
-        const client = new TursoPipelineClient();
+        const { listOperationRuns } = require('../services/turso-service');
 
-        const conditions: string[] = [`plan_id = '${planId.replace(/'/g, "''")}'`];
-        if (statusFilterOpt) {
-          conditions.push(`status = '${statusFilterOpt.replace(/'/g, "''")}'`);
-        }
-
-        const sql = `SELECT run_id, command_type, command_summary, status, version_before, version_after, started_at, completed_at, error_message
-          FROM operation_runs WHERE ${conditions.join(' AND ')}
-          ORDER BY started_at DESC LIMIT ${limit}`;
-
-        const resp = await client.execute(sql);
-        const runs = pipelineRowsToObjects(resp);
+        const runs = await listOperationRuns(planId, {
+          status: statusFilterOpt || undefined,
+          limit: limitRaw || 20,
+        });
 
         if (runs.length === 0) {
           console.log('No operations found.');

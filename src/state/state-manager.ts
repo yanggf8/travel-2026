@@ -46,12 +46,6 @@ import type { Command, DispatchResult } from './commands';
 const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
 const DEFAULT_STATE_PATH = process.env.TRAVEL_STATE_PATH || PATHS.defaultState;
 
-/** SQL text literal helper — escapes single quotes, returns NULL for nullish values. */
-function sqlTextFn(v: string | null | undefined): string {
-  if (v == null) return 'NULL';
-  return `'${String(v).replace(/'/g, "''")}'`;
-}
-
 /**
  * Options for StateManager constructor.
  * Supports both file-based and in-memory operation (for testing).
@@ -1268,7 +1262,9 @@ export class StateManager {
     const versionBefore = this.repo.getVersion();
 
     // Log run start (awaited — ensures row exists before logRunComplete can UPDATE it)
-    await this.logRunStart(runId, commandType, commandSummary, versionBefore).catch(() => {});
+    await this.logRunStart(runId, commandType, commandSummary, versionBefore).catch((e) => {
+      console.error(`[op-tracking] failed to log run start: ${(e as Error).message}`);
+    });
 
     try {
       await this.repo.save(this.planId, this.repo.getSchemaVersion());
@@ -1290,47 +1286,24 @@ export class StateManager {
   }
 
   // ============================================================================
-  // Operation Run Logging (fire-and-forget helpers)
+  // Operation Run Logging (delegates to turso-service DAL)
   // ============================================================================
 
   private async logRunStart(
-    runId: string,
-    commandType: string,
-    summary: string | undefined,
-    version: number
+    runId: string, commandType: string, summary: string | undefined, version: number
   ): Promise<void> {
-    const pathMod = require('node:path');
-    const { TursoPipelineClient } = require(
-      pathMod.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline')
-    );
-    const client = new TursoPipelineClient();
-    await client.execute(
-      `INSERT INTO operation_runs (run_id, plan_id, command_type, command_summary, status, version_before, started_at)
-       VALUES (${sqlTextFn(runId)}, ${sqlTextFn(this.planId)}, ${sqlTextFn(commandType)}, ${sqlTextFn(summary ?? null)}, 'started', ${version}, datetime('now'))`
-    );
+    const { logOperationStart } = require('../services/turso-service');
+    await logOperationStart(runId, this.planId, commandType, summary ?? null, version);
   }
 
   private async logRunComplete(runId: string, versionAfter: number): Promise<void> {
-    const pathMod = require('node:path');
-    const { TursoPipelineClient } = require(
-      pathMod.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline')
-    );
-    const client = new TursoPipelineClient();
-    await client.execute(
-      `UPDATE operation_runs SET status = 'completed', version_after = ${versionAfter}, completed_at = datetime('now') WHERE run_id = ${sqlTextFn(runId)}`
-    );
+    const { logOperationComplete } = require('../services/turso-service');
+    await logOperationComplete(runId, versionAfter);
   }
 
   private async logRunFailed(runId: string, err: unknown): Promise<void> {
-    const pathMod = require('node:path');
-    const { TursoPipelineClient } = require(
-      pathMod.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline')
-    );
-    const client = new TursoPipelineClient();
-    const msg = err instanceof Error ? err.message.substring(0, 500) : 'unknown';
-    await client.execute(
-      `UPDATE operation_runs SET status = 'failed', error_message = ${sqlTextFn(msg)}, completed_at = datetime('now') WHERE run_id = ${sqlTextFn(runId)}`
-    );
+    const { logOperationFailed } = require('../services/turso-service');
+    await logOperationFailed(runId, err);
   }
 
   /** Get the plan ID (for operation tracking). */

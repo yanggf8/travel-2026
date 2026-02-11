@@ -1,7 +1,7 @@
 /**
  * Blob Bridge Repository
  *
- * Implements StateRepository over the existing JSON blob in plans_current.
+ * Implements StateRepository over the existing JSON blob in plans.
  * All `Record<string, unknown>` casts and JSON path navigation live here.
  *
  * Phase 0: wraps current readPlanFromDb/writePlanToDb.
@@ -694,11 +694,7 @@ export class BlobBridgeRepository implements StateRepository {
    * consistent before save() returns.
    */
   private async syncNormalizedTables(planId: string): Promise<void> {
-    const path = require('node:path');
-    const { TursoPipelineClient } = require(
-      path.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline')
-    );
-    const client = new TursoPipelineClient();
+    const { executePipelineTransaction, executePipelineRollback } = require('../services/turso-service');
     const statements: string[] = [];
 
     // Delete stale rows first — prevents ghost data when days/activities are removed
@@ -853,17 +849,16 @@ export class BlobBridgeRepository implements StateRepository {
     if (statements.length > 0) {
       // Bump version as monotonic counter (audit trail, no conflict detection)
       statements.push(
-        `UPDATE plans_current SET version = version + 1 WHERE plan_id = '${escapedPlanId}'`
+        `UPDATE plans SET version = version + 1 WHERE plan_id = '${escapedPlanId}'`
       );
 
-      // Wrap in transaction so delete+reinsert+version bump is atomic
+      // Wrap in transaction — single pipeline request preserves transaction scope
       statements.unshift('BEGIN');
       statements.push('COMMIT');
       try {
-        await client.executeMany(statements, 20);
+        await executePipelineTransaction(statements);
       } catch (e: any) {
-        // Attempt rollback on failure to avoid partial state
-        try { await client.execute('ROLLBACK'); } catch { /* best effort */ }
+        await executePipelineRollback();
         throw e;
       }
 
@@ -963,7 +958,7 @@ export async function createBlobBridgeFromDb(planId: string): Promise<BlobBridge
     plan = JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
     eventLog = dbRow.state_json ? JSON.parse(dbRow.state_json) as EventLogState : undefined;
   } catch (e: any) {
-    throw new Error(`[turso] Invalid JSON in plans_current for plan "${planId}": ${e.message}`);
+    throw new Error(`[turso] Invalid JSON in plans for plan "${planId}": ${e.message}`);
   }
 
   const version = dbRow.version ?? 0;

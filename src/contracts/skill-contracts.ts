@@ -584,8 +584,8 @@ export const STATE_MANAGER_METHODS = {
  */
 export const TURSO_SERVICE_CONTRACTS = {
   derivePlanId: { args: ['planPath'], returns: 'string', description: 'Derive plan ID from file path' },
-  writePlanToDb: { args: ['planId', 'planJson', 'stateJson', 'schemaVersion'], returns: 'Promise<void>', description: 'Upsert plan+state to plans_current' },
-  readPlanFromDb: { args: ['planId'], returns: 'Promise<{plan_json, state_json, updated_at} | null>', description: 'Read plan+state from plans_current' },
+  writePlanToDb: { args: ['planId', 'planJson', 'stateJson', 'schemaVersion'], returns: 'Promise<void>', description: 'Upsert plan+state to plans' },
+  readPlanFromDb: { args: ['planId'], returns: 'Promise<{plan_json, state_json, updated_at} | null>', description: 'Read plan+state from plans' },
   syncEventsToDb: { args: ['events'], returns: 'Promise<{synced, skipped}>', description: 'Idempotent event sync via SHA1 external_id' },
 } as const;
 
@@ -593,7 +593,7 @@ export const TURSO_SERVICE_CONTRACTS = {
  * StateManager static factory (v1.7.0).
  */
 export const STATE_MANAGER_FACTORY = {
-  create: { args: ['planPathOrOpts?', 'statePath?'], returns: 'Promise<StateManager>', description: 'DB-only factory: load plan+state from Turso plans_current' },
+  create: { args: ['planPathOrOpts?', 'statePath?'], returns: 'Promise<StateManager>', description: 'DB-only factory: load plan+state from Turso plans' },
   derivePlanId: { args: ['planPath'], returns: 'string', description: 'Derive plan ID from file path' },
 } as const;
 

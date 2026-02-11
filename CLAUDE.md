@@ -57,7 +57,7 @@ READ:   await StateManager.create() → TursoRepository.create() → load blob +
 - **Blob still written** for backward compat — dashboard and cascade runner read from it via reconstructed plan object
 - `StateManager.save()` is async — blob write + normalized table write must succeed or command fails
 - `StateManager.saveWithTracking(cmd, summary)` wraps `save()` with operation audit trail in `operation_runs` table; CLI commands use this instead of raw `save()`
-- `plans_current.version` is a monotonic counter bumped on each save (audit trail only, no lock)
+- `plans.version` is a monotonic counter bumped on each save (audit trail only, no lock)
 - `StateManager.create()` is async factory — reads blob + normalized tables from DB
 - `dispatch(command)` entry point — 25 command types as discriminated union
 - Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `kyoto-2026`)
@@ -268,10 +268,7 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 ├── data/
 │   ├── destinations.json          # Destination config (v1.1.0)
 │   ├── ota-sources.json           # OTA registry
-│   ├── holidays/taiwan-2026.json  # Holiday calendar
-│   └── trips/
-│       ├── tokyo-2026/            # Tokyo trip (plan_id: tokyo-2026)
-│       └── kyoto-2026/            # Kyoto trip (plan_id: kyoto-2026)
+│   └── holidays/taiwan-2026.json  # Holiday calendar
 ├── scrapes/                       # Ephemeral scraper outputs (gitignored)
 ├── scripts/                       # Python scrapers + migration tools
 │   └── hooks/pre-commit           # Runs typecheck + validate:data
@@ -298,7 +295,7 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 │   ├── config/                    # loader.ts, constants.ts
 │   ├── contracts/skill-contracts.ts
 │   ├── cascade/runner.ts          # Cascade logic
-│   ├── services/turso-service.ts  # DB wrapper
+│   ├── services/turso-service.ts  # DB access layer (all Turso queries go through here)
 │   ├── utils/                     # flight-normalizer, leave-calculator
 │   ├── skills/                    # Skill SKILL.md files + references
 │   ├── scrapers/                  # Registry + base classes
@@ -316,7 +313,7 @@ Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 ```
 
 Tables:
-- **Blob**: `plans_current` (DB-primary plan+state, PK=plan_id, `version` monotonic counter)
+- **Blob**: `plans` (DB-primary plan+state, PK=plan_id, `version` monotonic counter)
 - **Normalized itinerary**: `itinerary_days`, `itinerary_sessions`, `activities` (PK composites on plan_id+destination+day_number)
 - **Normalized supporting**: `plan_metadata`, `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `airport_transfers`, `flights`, `hotels`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
@@ -324,20 +321,19 @@ Tables:
 - **Other**: `offers`, `destinations`, `events`, `bookings`, `plan_snapshots` (versioned archive)
 
 Schema/migration: `npm run db:migrate:turso` (creates all tables idempotently)
-Seed from JSON: `npm run db:seed:plans` (one-time, populates `plans_current` from existing JSON files)
+Seed from JSON: `npm run db:seed:plans` (one-time, already run — local JSON files removed)
 Data migration: `npx ts-node scripts/migrate-itinerary-data.ts` (one-time, populates normalized tables from blob)
 
 ## Multi-Plan
-All trips live under `data/trips/<trip-id>/` with `travel-plan.json` + `state.json`.
-Plan ID is derived from directory name (e.g., `tokyo-2026`, `kyoto-2026`).
-CLI defaults to `data/trips/tokyo-2026/`; use `--plan <path> --state <path>` or env vars for others.
+All plans live in the `plans` table in Turso (no local JSON files).
+Plan ID: `tokyo-2026`, `kyoto-2026`, etc. CLI defaults to `tokyo-2026`; use `--plan-id <id>` for others.
 
 ## Trip Dashboard (Cloudflare Worker)
 
 Live web dashboard at `workers/trip-dashboard/` — reads directly from Turso DB, always up-to-date.
 
 ```
-Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normalized tables + plans_current (fallback)
+Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normalized tables + plans (fallback)
 ```
 
 - **SSR-only** — zero client-side JS, no framework, no token/secret in HTML output

@@ -1,5 +1,5 @@
 -- Normalized itinerary tables (Phase 1)
--- Replaces itinerary data currently embedded in plans_current.plan_json blob.
+-- Replaces itinerary data currently embedded in plans.plan_json blob.
 -- Run via: npm run db:migrate:turso
 
 -- ============================================================================

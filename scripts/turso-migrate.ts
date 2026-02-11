@@ -168,22 +168,29 @@ async function main() {
     }
   }
 
-  // 9. Create plans_current table (DB-primary plan storage)
+  // 9. Create plans table (DB-primary plan storage)
+  // Skip if plans_current exists — step 13 will rename it to plans
   try {
-    console.log('Creating plans_current table...');
-    await client.execute(`CREATE TABLE IF NOT EXISTS plans_current (
+    const legacyCheck = await client.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='plans_current'");
+    const legacyExists = (legacyCheck?.results?.[0]?.response?.result?.rows?.length ?? 0) > 0;
+    if (legacyExists) {
+      console.log('ℹ️  plans_current exists — step 13 will rename it to plans.');
+    } else {
+      console.log('Creating plans table...');
+      await client.execute(`CREATE TABLE IF NOT EXISTS plans (
   plan_id TEXT PRIMARY KEY,
   schema_version TEXT NOT NULL,
   plan_json TEXT NOT NULL,
   state_json TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`);
-    console.log('✅ Created plans_current table.');
+      console.log('✅ Created plans table.');
+    }
   } catch (e: any) {
     if (e.message?.includes('already exists')) {
-      console.log('ℹ️  plans_current table already exists.');
+      console.log('ℹ️  plans table already exists.');
     } else {
-      console.warn('⚠️  Could not create plans_current table:', e.message);
+      console.warn('⚠️  Could not create plans table:', e.message);
     }
   }
 
@@ -372,10 +379,12 @@ async function main() {
   }
   console.log('✅ Created normalized table indexes.');
 
-  // 11. Add version column to plans_current (optimistic locking)
+  // 11. Add version column to plans table (whichever name currently exists)
   try {
-    console.log('Adding version column to plans_current...');
-    await client.execute('ALTER TABLE plans_current ADD COLUMN version INTEGER NOT NULL DEFAULT 0;');
+    const plansCheck = await client.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('plans', 'plans_current') ORDER BY name");
+    const plansTableName = (plansCheck?.results?.[0]?.response?.result?.rows?.[0] as any)?.[0]?.value || 'plans';
+    console.log(`Adding version column to ${plansTableName}...`);
+    await client.execute(`ALTER TABLE ${plansTableName} ADD COLUMN version INTEGER NOT NULL DEFAULT 0;`);
     console.log('✅ Added version column.');
   } catch (e: any) {
     if (e.message?.includes('duplicate column name') || e.message?.includes('already exists')) {
@@ -411,6 +420,27 @@ async function main() {
     } else {
       console.warn('⚠️  Could not create operation_runs table:', e.message);
     }
+  }
+
+  // 13. Rename plans_current → plans (clearer name for multi-plan table)
+  try {
+    const oldExists = await client.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='plans_current'");
+    const oldHasRows = (oldExists?.results?.[0]?.response?.result?.rows?.length ?? 0) > 0;
+    if (oldHasRows) {
+      console.log('Renaming plans_current → plans...');
+      await client.execute('ALTER TABLE plans_current RENAME TO plans');
+      console.log('✅ Renamed plans_current → plans.');
+    } else {
+      const newExists = await client.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='plans'");
+      const newHasRows = (newExists?.results?.[0]?.response?.result?.rows?.length ?? 0) > 0;
+      if (newHasRows) {
+        console.log('ℹ️  Table already named "plans".');
+      } else {
+        console.warn('⚠️  Neither plans_current nor plans table found.');
+      }
+    }
+  } catch (e: any) {
+    console.warn('⚠️  Could not rename table:', e.message);
   }
 
   console.log('Done.');

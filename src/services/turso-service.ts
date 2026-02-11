@@ -5,8 +5,8 @@
  *   importOffersFromFiles  — bulk import scrape JSON → Turso offers table
  *   queryOffers            — filtered reads from Turso
  *   checkFreshness         — staleness check for source/region
- *   writePlanToDb          — upsert plan+state to plans_current (DB-primary)
- *   readPlanFromDb         — read plan+state from plans_current
+ *   writePlanToDb          — upsert plan+state to plans (DB-primary)
+ *   readPlanFromDb         — read plan+state from plans
  *   syncEventsToDb         — idempotent event sync via SHA1 external_id
  *   syncBookingsFromPlan   — extract + upsert bookings from plan JSON
  *
@@ -417,7 +417,7 @@ export function printTursoOfferTable(results: TursoOfferResult[]): void {
 }
 
 // ---------------------------------------------------------------------------
-// Plan DB-Primary (plans_current)
+// Plan DB-Primary (plans)
 // ---------------------------------------------------------------------------
 
 /**
@@ -447,7 +447,7 @@ export function derivePlanId(planPath: string): string {
 }
 
 /**
- * Write plan + state JSON to Turso plans_current (upsert).
+ * Write plan + state JSON to Turso plans (upsert).
  * This is the blocking DB write used by StateManager.save().
  *
  * When stateJson is null, the existing state_json in DB is preserved
@@ -460,18 +460,18 @@ export async function writePlanToDb(
   schemaVersion: string
 ): Promise<void> {
   const client = getClient();
-  const sql = `INSERT INTO plans_current (plan_id, schema_version, plan_json, state_json, updated_at)
+  const sql = `INSERT INTO plans (plan_id, schema_version, plan_json, state_json, updated_at)
 VALUES (${sqlText(planId)}, ${sqlText(schemaVersion)}, ${sqlText(planJson)}, ${sqlText(stateJson)}, datetime('now'))
 ON CONFLICT(plan_id) DO UPDATE SET
   schema_version = ${sqlText(schemaVersion)},
   plan_json = ${sqlText(planJson)},
-  state_json = COALESCE(excluded.state_json, plans_current.state_json),
+  state_json = COALESCE(excluded.state_json, plans.state_json),
   updated_at = datetime('now');`;
   await client.execute(sql);
 }
 
 /**
- * Read plan + state from Turso plans_current.
+ * Read plan + state from Turso plans.
  * Returns null if no row found for planId.
  * Includes version counter for audit trail (defaults to 0 for pre-migration rows).
  */
@@ -479,7 +479,7 @@ export async function readPlanFromDb(
   planId: string
 ): Promise<{ plan_json: string; state_json: string | null; updated_at: string; version: number } | null> {
   const client = getClient();
-  const sql = `SELECT plan_json, state_json, updated_at, COALESCE(version, 0) as version FROM plans_current WHERE plan_id = ${sqlText(planId)} LIMIT 1;`;
+  const sql = `SELECT plan_json, state_json, updated_at, COALESCE(version, 0) as version FROM plans WHERE plan_id = ${sqlText(planId)} LIMIT 1;`;
   const response = await client.execute(sql);
   const rows = rowsToObjects(response);
   if (rows.length === 0) return null;
@@ -822,7 +822,7 @@ export async function queryBookings(filters: {
  * Create a snapshot of plan+state by planId (DB-native).
  * This is the preferred API - does not require file paths.
  * 
- * @param planId - The plan ID in plans_current
+ * @param planId - The plan ID in plans
  * @param tripId - The trip ID for the snapshot
  */
 export async function createPlanSnapshotByPlanId(
@@ -981,4 +981,113 @@ export function printBookingsTable(results: BookingCurrentRow[]): void {
   }
 
   console.log('─'.repeat(95));
+}
+
+// ---------------------------------------------------------------------------
+// Normalized Table Sync (pipeline execution)
+// ---------------------------------------------------------------------------
+
+/**
+ * Execute an array of SQL statements as a single pipeline request.
+ * Used by syncNormalizedTables to keep BEGIN/COMMIT in one HTTP round-trip.
+ */
+export async function executePipelineTransaction(statements: string[]): Promise<void> {
+  const client = getClient();
+  await client.executeMany(statements, statements.length);
+}
+
+/**
+ * Execute a single SQL statement and attempt rollback. Best-effort.
+ */
+export async function executePipelineRollback(): Promise<void> {
+  const client = getClient();
+  try { await client.execute('ROLLBACK'); } catch { /* best effort */ }
+}
+
+// ---------------------------------------------------------------------------
+// Operation Run Queries
+// ---------------------------------------------------------------------------
+
+export interface OperationRun {
+  run_id: string;
+  plan_id: string;
+  command_type: string;
+  command_summary: string | null;
+  status: string;
+  version_before: number;
+  version_after: number | null;
+  started_at: string;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+/**
+ * Get a single operation run. If runId is given, returns that run (scoped to planId).
+ * Otherwise returns the most recent run for the plan.
+ */
+export async function getOperationRun(planId: string, runId?: string): Promise<OperationRun | null> {
+  const client = getClient();
+  let sql: string;
+  if (runId) {
+    sql = `SELECT * FROM operation_runs WHERE run_id = ${sqlText(runId)} AND plan_id = ${sqlText(planId)} LIMIT 1`;
+  } else {
+    sql = `SELECT * FROM operation_runs WHERE plan_id = ${sqlText(planId)} ORDER BY started_at DESC LIMIT 1`;
+  }
+  const resp = await client.execute(sql);
+  const rows = rowsToObjects(resp);
+  return rows.length > 0 ? rows[0] as unknown as OperationRun : null;
+}
+
+/**
+ * List recent operation runs for a plan.
+ */
+export async function listOperationRuns(
+  planId: string,
+  opts?: { status?: string; limit?: number }
+): Promise<OperationRun[]> {
+  const client = getClient();
+  const limit = Math.max(1, Math.min(100, opts?.limit ?? 20));
+  const conditions: string[] = [`plan_id = ${sqlText(planId)}`];
+  if (opts?.status) {
+    conditions.push(`status = ${sqlText(opts.status)}`);
+  }
+  const sql = `SELECT run_id, command_type, command_summary, status, version_before, version_after, started_at, completed_at, error_message
+    FROM operation_runs WHERE ${conditions.join(' AND ')}
+    ORDER BY started_at DESC LIMIT ${limit}`;
+  const resp = await client.execute(sql);
+  return rowsToObjects(resp) as unknown as OperationRun[];
+}
+
+/**
+ * Log an operation run start to operation_runs table.
+ */
+export async function logOperationStart(
+  runId: string, planId: string, commandType: string, summary: string | null, version: number
+): Promise<void> {
+  const client = getClient();
+  await client.execute(
+    `INSERT INTO operation_runs (run_id, plan_id, command_type, command_summary, status, version_before, started_at)
+     VALUES (${sqlText(runId)}, ${sqlText(planId)}, ${sqlText(commandType)}, ${sqlText(summary as string)}, 'started', ${version}, datetime('now'))`
+  );
+}
+
+/**
+ * Log an operation run completion.
+ */
+export async function logOperationComplete(runId: string, versionAfter: number): Promise<void> {
+  const client = getClient();
+  await client.execute(
+    `UPDATE operation_runs SET status = 'completed', version_after = ${versionAfter}, completed_at = datetime('now') WHERE run_id = ${sqlText(runId)}`
+  );
+}
+
+/**
+ * Log an operation run failure.
+ */
+export async function logOperationFailed(runId: string, err: unknown): Promise<void> {
+  const client = getClient();
+  const msg = err instanceof Error ? err.message.substring(0, 500) : 'unknown';
+  await client.execute(
+    `UPDATE operation_runs SET status = 'failed', error_message = ${sqlText(msg)}, completed_at = datetime('now') WHERE run_id = ${sqlText(runId)}`
+  );
 }

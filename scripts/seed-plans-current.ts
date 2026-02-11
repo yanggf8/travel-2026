@@ -1,8 +1,8 @@
 /**
- * Seed plans_current table from existing JSON files.
+ * Seed plans table from existing JSON files.
  *
  * Reads data/travel-plan.json (-> "default") and data/trips/<id>/travel-plan.json
- * (-> "<trip-id>") and upserts them into Turso plans_current.
+ * (-> "<trip-id>") and upserts them into Turso plans.
  *
  * Usage:
  *   npm run db:seed:plans
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
     console.log(`  - ${entry.planId} (${entry.planPath}, schema ${schemaVersion})`);
 
     sqlStatements.push(
-      `INSERT INTO plans_current (plan_id, schema_version, plan_json, state_json, updated_at)
+      `INSERT INTO plans (plan_id, schema_version, plan_json, state_json, updated_at)
 VALUES (${sqlText(entry.planId)}, ${sqlText(schemaVersion)}, ${sqlText(planJson)}, ${sqlText(stateJson)}, datetime('now'))
 ON CONFLICT(plan_id) DO UPDATE SET
   schema_version = ${sqlText(schemaVersion)},
@@ -94,7 +94,7 @@ ON CONFLICT(plan_id) DO UPDATE SET
   }
 
   await client.executeMany(sqlStatements, 5);
-  console.log(`✅ Seeded ${plans.length} plan(s) into plans_current.`);
+  console.log(`✅ Seeded ${plans.length} plan(s) into plans.`);
 }
 
 main().catch((e) => {

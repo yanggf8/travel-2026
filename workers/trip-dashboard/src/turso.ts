@@ -139,7 +139,7 @@ export async function getPlan(env: Env, planId: string): Promise<PlanData | null
   const destSlug = toDestSlug(escaped);
   const rows = await queryTurso(
     env,
-    `SELECT plan_json, state_json, updated_at FROM plans_current
+    `SELECT plan_json, state_json, updated_at FROM plans
      WHERE plan_id = '${escaped}'
         OR json_extract(plan_json, '$.active_destination') = '${destSlug}'
      ORDER BY (plan_id = '${escaped}') DESC
@@ -168,7 +168,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
   // Single pipeline: blob + 7 normalized table queries
   const results = await queryTursoPipeline(env, [
     // 0: blob (for non-normalized data: packages, transit_summary, display_name)
-    `SELECT plan_json, state_json, updated_at FROM plans_current
+    `SELECT plan_json, state_json, updated_at FROM plans
      WHERE plan_id = '${escaped}'
         OR json_extract(plan_json, '$.active_destination') = '${destSlug}'
      ORDER BY (plan_id = '${escaped}') DESC
@@ -412,7 +412,7 @@ export async function listPlans(env: Env): Promise<PlanSummary[]> {
       json_extract(plan_json, '$.active_destination') as active_dest,
       json_extract(plan_json, '$.destinations.' ||
         json_extract(plan_json, '$.active_destination') || '.display_name') as display_name,
-      updated_at FROM plans_current ORDER BY updated_at DESC`
+      updated_at FROM plans ORDER BY updated_at DESC`
   );
   return rows.map((r) => {
     const dest = r.active_dest || r.plan_id!;
