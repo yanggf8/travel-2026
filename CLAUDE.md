@@ -382,12 +382,13 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ## Next Steps
 
-### Tokyo (Feb 13-17)
-1. Book teamLab Borderless — Feb 15 (time-sensitive)
-2. Book Limousine Bus — low-risk, can buy day-of
+### Tokyo (Feb 13-17) — departs in 2 days
+1. **Book teamLab Borderless** — Feb 15 visit, OVERDUE (book-by was Feb 10)
+2. Book Limousine Bus — low-risk, can buy day-of at NRT T2
 3. Restaurant reservations
+4. Fetch weather forecast (within 16-day window now)
 
 ### Kyoto (Feb 24-28)
 1. Book Hozugawa River Boat Ride (Day 3)
 2. Restaurant reservations
-3. Confirm weather closer to date
+3. Fetch weather forecast (available ~Feb 12)
