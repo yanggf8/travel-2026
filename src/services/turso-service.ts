@@ -473,7 +473,7 @@ ON CONFLICT(plan_id) DO UPDATE SET
 /**
  * Read plan + state from Turso plans_current.
  * Returns null if no row found for planId.
- * Includes version for optimistic locking (defaults to 0 for pre-migration rows).
+ * Includes version counter for audit trail (defaults to 0 for pre-migration rows).
  */
 export async function readPlanFromDb(
   planId: string

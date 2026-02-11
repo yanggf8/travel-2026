@@ -22,7 +22,6 @@ import type {
   isValidProcessStatus,
 } from './types';
 import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
-import { OptimisticLockError } from './repository';
 import {
   validateTravelPlan,
   validateEventLogState,
@@ -852,9 +851,9 @@ export class BlobBridgeRepository implements StateRepository {
     }
 
     if (statements.length > 0) {
-      // Optimistic lock: bump version atomically with normalized table writes
+      // Bump version as monotonic counter (audit trail, no conflict detection)
       statements.push(
-        `UPDATE plans_current SET version = ${this.version + 1} WHERE plan_id = '${escapedPlanId}' AND version = ${this.version}`
+        `UPDATE plans_current SET version = version + 1 WHERE plan_id = '${escapedPlanId}'`
       );
 
       // Wrap in transaction so delete+reinsert+version bump is atomic
@@ -868,18 +867,7 @@ export class BlobBridgeRepository implements StateRepository {
         throw e;
       }
 
-      // Verify version advanced (post-transaction check)
-      const verifyResp = await client.execute(
-        `SELECT COALESCE(version, 0) as version FROM plans_current WHERE plan_id = '${escapedPlanId}'`
-      );
-      const verifyRows = rowsToObjects(verifyResp);
-      const newVersion = verifyRows.length > 0
-        ? (typeof verifyRows[0].version === 'number' ? verifyRows[0].version : parseInt(verifyRows[0].version || '-1', 10))
-        : -1;
-      if (newVersion !== this.version + 1) {
-        throw new OptimisticLockError(planId, this.version, newVersion);
-      }
-      this.version = newVersion;
+      this.version += 1;
     }
   }
 

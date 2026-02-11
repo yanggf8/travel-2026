@@ -9,7 +9,7 @@
  * - MINOR: new operations or optional args
  * - PATCH: bug fixes, no interface change
  *
- * v1.9.0 - Added operation tracking + optimistic locking (run-status, run-list, saveWithTracking)
+ * v1.9.0 - Added operation tracking (run-status, run-list, saveWithTracking, monotonic version counter)
  * v1.8.0 - Added weather forecast fetch (fetch-weather)
  * v1.7.0 - DB-primary migration: writePlanToDb/readPlanFromDb, async save(), StateManager.create()
  * v1.6.0 - Added booking sync/query operations (sync-bookings, query-bookings, snapshot-plan, check-booking-integrity)
@@ -574,7 +574,7 @@ export const STATE_MANAGER_METHODS = {
 
   // I/O
   save: { args: [], returns: 'Promise<void>', description: 'Save plan+state to DB (blocking), then sync derived tables' },
-  saveWithTracking: { args: ['commandType', 'commandSummary?'], returns: 'Promise<{ run_id: string; version: number }>', description: 'Save with operation audit trail and optimistic lock' },
+  saveWithTracking: { args: ['commandType', 'commandSummary?'], returns: 'Promise<{ run_id: string; version: number }>', description: 'Save with operation audit trail (version is monotonic counter, no lock)' },
   getPlan: { args: [], returns: 'TravelPlanMinimal', description: 'Get current plan object' },
   getPlanId: { args: [], returns: 'string', description: 'Get the plan ID for this state manager instance' },
 } as const;

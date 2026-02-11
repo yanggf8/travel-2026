@@ -23,19 +23,6 @@ import type {
 } from './types';
 
 // ============================================================================
-// Error Types
-// ============================================================================
-
-export class OptimisticLockError extends Error {
-  constructor(planId: string, expected: number, actual: number) {
-    super(
-      `Optimistic lock conflict on "${planId}": expected version ${expected}, found ${actual}. Another process modified the plan. Re-run your command.`
-    );
-    this.name = 'OptimisticLockError';
-  }
-}
-
-// ============================================================================
 // Row Types (typed views of plan sub-structures)
 // ============================================================================
 
@@ -61,7 +48,7 @@ export interface StateReader {
   getActiveDestination(): string;
   getSchemaVersion(): string;
 
-  // --- Version (optimistic locking) ---
+  // --- Version (monotonic counter for audit trail) ---
   getVersion(): number;
 
   // --- Process status ---

@@ -57,7 +57,7 @@ READ:   await StateManager.create() → TursoRepository.create() → load blob +
 - **Blob still written** for backward compat — dashboard and cascade runner read from it via reconstructed plan object
 - `StateManager.save()` is async — blob write + normalized table write must succeed or command fails
 - `StateManager.saveWithTracking(cmd, summary)` wraps `save()` with operation audit trail in `operation_runs` table; CLI commands use this instead of raw `save()`
-- **Optimistic locking**: `plans_current.version` incremented on each save; concurrent writes detected via version mismatch
+- `plans_current.version` is a monotonic counter bumped on each save (audit trail only, no lock)
 - `StateManager.create()` is async factory — reads blob + normalized tables from DB
 - `dispatch(command)` entry point — 25 command types as discriminated union
 - Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `kyoto-2026`)
@@ -316,7 +316,7 @@ Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 ```
 
 Tables:
-- **Blob**: `plans_current` (DB-primary plan+state, PK=plan_id, `version` column for optimistic locking)
+- **Blob**: `plans_current` (DB-primary plan+state, PK=plan_id, `version` monotonic counter)
 - **Normalized itinerary**: `itinerary_days`, `itinerary_sessions`, `activities` (PK composites on plan_id+destination+day_number)
 - **Normalized supporting**: `plan_metadata`, `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `airport_transfers`, `flights`, `hotels`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
