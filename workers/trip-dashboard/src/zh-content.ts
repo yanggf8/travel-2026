@@ -342,7 +342,7 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
       focus: '東山和服漫步',
       activities: [
         '三年坂（Sannenzaka）— 石疊老街，和服拍照重點',
-        '二年坂（Ninenzaka）— 町家商店、甜點咖啡',
+        '二年坂（Ninenzaka）— スターバックス京都二寧坂ヤサカ茶屋店（百年町家星巴克）',
         '八坂の塔（法觀寺）— 東山地標',
         '清水坂散步（不入清水寺）',
         '聖護院八ッ橋 — 買生八橋伴手禮（出發前一天最新鮮）',
