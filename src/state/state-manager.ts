@@ -1,15 +1,14 @@
 /**
  * State Manager
  *
- * Unified state management for travel planning skills.
- * Handles dirty flags, process status, and event logging.
+ * Event-driven state machine for travel planning.
+ * Handles validation, transitions, cascade, and event emission.
+ * Delegates all data access to StateRepository (no direct JSON navigation).
  *
  * Usage:
- *   import { StateManager } from './state-manager';
- *   const sm = new StateManager();
- *   sm.markDirty('tokyo_2026', 'process_3_transportation');
- *   sm.setProcessStatus('tokyo_2026', 'process_3_4_packages', 'selected');
- *   sm.save();
+ *   const sm = await StateManager.create();
+ *   sm.dispatch({ type: 'set_day_theme', destination: 'tokyo_2026', dayNumber: 1, theme: 'Arrival' });
+ *   await sm.save();
  */
 
 import { readFileSync, existsSync, realpathSync } from 'fs';
@@ -18,7 +17,6 @@ import crypto from 'node:crypto';
 import {
   ProcessStatus,
   ProcessId,
-  DirtyFlag,
   CascadeState,
   TravelEvent,
   EventLogState,
@@ -29,19 +27,20 @@ import {
   TransportSegment,
   isValidProcessStatus,
 } from './types';
+import type { DayWeather, SessionType } from './types';
 import {
   validateTravelPlan,
   validateEventLogState,
-  validateDestinationSections,
-  formatSectionValidationErrors,
-  TravelPlan,
-  EventLogState as ZodEventLogState,
 } from './schemas';
 import { DEFAULTS, PATHS } from '../config/constants';
 import { OfferManager } from './offer-manager';
 import { TransportManager } from './transport-manager';
 import { ItineraryManager } from './itinerary-manager';
 import { EventQuery } from './event-query';
+import type { StateRepository } from './repository';
+import { BlobBridgeRepository, createBlobBridgeFromDb } from './blob-bridge-repository';
+import { TursoRepository } from './turso-repository';
+import type { Command, DispatchResult } from './commands';
 
 // Default paths
 const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
@@ -64,6 +63,8 @@ export interface StateManagerOptions {
   eventLog?: EventLogState;
   /** Skip save operations (useful for tests) */
   skipSave?: boolean;
+  /** Pre-built repository (skips internal construction) */
+  repo?: StateRepository;
 }
 
 export class StateManager {
@@ -71,13 +72,14 @@ export class StateManager {
   private statePath: string;
   private planId: string;
 
-  // Domain managers
+  // Repository — all data access goes through here
+  private repo: StateRepository;
+
+  // Domain managers (legacy, operate on same plan object)
   private offerMgr: OfferManager;
   private transportMgr: TransportManager;
   private itineraryMgr: ItineraryManager;
   public events: EventQuery;
-  private plan: TravelPlanMinimal;
-  private eventLog: EventLogState;
   private timestamp: string;
   private skipSave: boolean;
 
@@ -89,9 +91,10 @@ export class StateManager {
       this.planId = StateManager.derivePlanId(this.planPath);
       this.skipSave = false;
       this.timestamp = this.freshTimestamp();
-      this.plan = this.loadPlan();
-      this.normalizePlan();
-      this.eventLog = this.loadEventLog();
+      const plan = this.loadPlanFromFile();
+      this.normalizePlan(plan);
+      const eventLog = this.loadEventLogFromFile(plan);
+      this.repo = new BlobBridgeRepository(plan, eventLog);
     } else {
       // New options-based signature
       this.planPath = options.planPath || DEFAULT_PLAN_PATH;
@@ -100,57 +103,66 @@ export class StateManager {
       this.skipSave = options.skipSave || false;
       this.timestamp = this.freshTimestamp();
 
-      if (options.plan) {
-        this.plan = options.plan;
-        this.normalizePlan();
+      if (options.repo) {
+        // Pre-built repository (from factory methods)
+        this.repo = options.repo;
       } else {
-        this.plan = this.loadPlan();
-        this.normalizePlan();
-      }
+        let plan: TravelPlanMinimal;
+        let eventLog: EventLogState;
 
-      if (options.eventLog) {
-        // Full EventLogState from DB — use directly, no reconstruction needed
-        this.eventLog = options.eventLog;
-      } else if (options.state) {
-        // Create full EventLogState from minimal TravelState (tests)
-        this.eventLog = {
-          session: new Date().toISOString().split('T')[0],
-          project: DEFAULTS.project,
-          version: '3.0',
-          active_destination: this.plan?.active_destination || '',
-          current_focus: '',
-          event_log: options.state.event_log || [],
-          next_actions: options.state.next_actions || [],
-          global_processes: {},
-          destinations: {},
-        };
-      } else {
-        this.eventLog = this.loadEventLog();
+        if (options.plan) {
+          plan = options.plan;
+          this.normalizePlan(plan);
+        } else {
+          plan = this.loadPlanFromFile();
+          this.normalizePlan(plan);
+        }
+
+        if (options.eventLog) {
+          eventLog = options.eventLog;
+        } else if (options.state) {
+          eventLog = {
+            session: new Date().toISOString().split('T')[0],
+            project: DEFAULTS.project,
+            version: '3.0',
+            active_destination: plan?.active_destination || '',
+            current_focus: '',
+            event_log: options.state.event_log || [],
+            next_actions: options.state.next_actions || [],
+            global_processes: {},
+            destinations: {},
+          };
+        } else {
+          eventLog = this.loadEventLogFromFile(plan);
+        }
+
+        this.repo = new BlobBridgeRepository(plan, eventLog);
       }
     }
 
-    // Initialize domain managers
+    // Initialize domain managers (legacy — operate on same plan object by reference)
+    const plan = this.repo.getPlan();
     this.offerMgr = new OfferManager(
-      this.plan,
+      plan,
       () => this.timestamp,
       (e) => this.emitEvent(e),
       (d, p, s) => this.setProcessStatus(d, p, s),
       (d, p) => this.clearDirty(d, p)
     );
     this.transportMgr = new TransportManager(
-      this.plan,
+      plan,
       () => this.timestamp,
       (e) => this.emitEvent(e)
     );
     this.itineraryMgr = new ItineraryManager(
-      this.plan,
+      plan,
       () => this.timestamp,
       (e) => this.emitEvent(e),
       (d, p, s) => this.setProcessStatus(d, p, s),
       (d, p, s, data) => this.forceSetProcessStatus(d, p, s, data),
       (d, p) => this.clearDirty(d, p)
     );
-    this.events = new EventQuery(() => this.eventLog.event_log);
+    this.events = new EventQuery(() => this.repo.getEvents());
   }
 
   // ============================================================================
@@ -184,7 +196,7 @@ export class StateManager {
   }
 
   /**
-   * DB-only factory: read plan+state from Turso.
+   * DB-only factory: read plan+state from Turso via repository.
    */
   static async create(
     planPathOrOpts?: string | StateManagerOptions,
@@ -207,110 +219,218 @@ export class StateManager {
     }
 
     const planId = StateManager.derivePlanId(planPath);
-
-    const { readPlanFromDb } = require('../services/turso-service');
-
-    let dbRow: { plan_json: string; state_json: string | null; updated_at: string } | null;
-    try {
-      dbRow = await readPlanFromDb(planId);
-    } catch (e: any) {
-      throw new Error(`[turso] DB read failed for plan "${planId}": ${e.message}`);
-    }
-
-    if (!dbRow) {
-      throw new Error(`[turso] Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
-    }
-
-    let plan: TravelPlanMinimal;
-    let fullEventLog: EventLogState | undefined;
-    try {
-      plan = JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
-      fullEventLog = dbRow.state_json ? JSON.parse(dbRow.state_json) as EventLogState : undefined;
-    } catch (e: any) {
-      throw new Error(`[turso] Invalid JSON in plans_current for plan "${planId}": ${e.message}`);
-    }
-
-    console.error(`  [turso] Loaded plan "${planId}" from DB (updated: ${dbRow.updated_at})`);
+    const repo = await TursoRepository.create(planId);
 
     return new StateManager({
       planPath: planPath,
       statePath: stPath,
-      plan,
-      eventLog: fullEventLog,
+      repo,
       skipSave: false,
     });
   }
 
   /**
    * DB-only factory by explicit plan ID.
-   * Useful for CLI usage where users want to target a specific DB plan directly.
    */
   static async createFromPlanId(planId: string, skipSave = false): Promise<StateManager> {
     if (!planId || typeof planId !== 'string') {
       throw new Error('planId is required');
     }
 
-    const { readPlanFromDb } = require('../services/turso-service');
-
-    let dbRow: { plan_json: string; state_json: string | null; updated_at: string } | null;
-    try {
-      dbRow = await readPlanFromDb(planId);
-    } catch (e: any) {
-      throw new Error(`[turso] DB read failed for plan "${planId}": ${e.message}`);
+    if (skipSave) {
+      // Fallback to file-based for test mode
+      const planPath = path.join('data', 'trips', planId, 'travel-plan.json');
+      const stPath = path.join('data', 'trips', planId, 'state.json');
+      return new StateManager({ planPath, statePath: stPath, skipSave: true });
     }
 
-    if (!dbRow) {
-      throw new Error(`[turso] Plan "${planId}" not found in DB.`);
-    }
+    const repo = await TursoRepository.create(planId);
 
-    let plan: TravelPlanMinimal;
-    let fullEventLog: EventLogState | undefined;
-    try {
-      plan = JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
-      fullEventLog = dbRow.state_json ? JSON.parse(dbRow.state_json) as EventLogState : undefined;
-    } catch (e: any) {
-      throw new Error(`[turso] Invalid JSON in plans_current for plan "${planId}": ${e.message}`);
-    }
-
-    // Keep a canonical path shape so downstream path-derived utilities stay stable.
     const planPath = path.join('data', 'trips', planId, 'travel-plan.json');
     const stPath = path.join('data', 'trips', planId, 'state.json');
     const sm = new StateManager({
       planPath,
       statePath: stPath,
-      plan,
-      eventLog: fullEventLog,
-      skipSave,
+      repo,
+      skipSave: false,
     });
 
     // Force plan ID to the explicit caller-provided DB key.
     sm.planId = planId;
-    console.error(`  [turso] Loaded plan "${planId}" from DB (updated: ${dbRow.updated_at})`);
     return sm;
+  }
+
+  // ============================================================================
+  // Repository Access
+  // ============================================================================
+
+  /** Get the underlying repository (for advanced callers). */
+  getRepository(): StateRepository {
+    return this.repo;
+  }
+
+  // ============================================================================
+  // Dispatch — command entry point
+  // ============================================================================
+
+  /**
+   * Dispatch a command to the state machine.
+   * This is the canonical entry point for state mutations.
+   * Named methods below are convenience wrappers over dispatch().
+   */
+  dispatch(command: Command): DispatchResult {
+    switch (command.type) {
+      case 'set_date_anchor':
+        this.setDateAnchor(command.startDate, command.endDate, command.reason);
+        return {};
+
+      case 'set_process_status':
+        this.setProcessStatus(command.destination, command.process, command.status);
+        return {};
+
+      case 'mark_dirty':
+        this.markDirty(command.destination, command.process);
+        return {};
+
+      case 'clear_dirty':
+        this.clearDirty(command.destination, command.process);
+        return {};
+
+      case 'mark_global_dirty':
+        this.markGlobalDirty(command.process);
+        return {};
+
+      case 'clear_global_dirty':
+        this.clearGlobalDirty(command.process);
+        return {};
+
+      case 'set_active_destination':
+        this.setActiveDestination(command.destination);
+        return {};
+
+      case 'set_focus':
+        this.setFocus(command.destination, command.process);
+        return {};
+
+      case 'set_next_actions':
+        this.setNextActions(command.actions);
+        return {};
+
+      case 'mark_cascade_run':
+        this.markCascadeRun(command.timestamp);
+        return {};
+
+      case 'update_offer_availability':
+        this.updateOfferAvailability(
+          command.offerId, command.date, command.availability,
+          command.price, command.seatsRemaining, command.source
+        );
+        return {};
+
+      case 'select_offer':
+        this.selectOffer(command.offerId, command.date, command.populateCascade);
+        return {};
+
+      case 'import_package_offers':
+        this.importPackageOffers(
+          command.destination, command.sourceId, command.offers,
+          command.note, command.warnings
+        );
+        return {};
+
+      case 'set_airport_transfer':
+        this.setAirportTransferSegment(command.destination, command.direction, command.segment);
+        return {};
+
+      case 'add_airport_transfer_candidate':
+        this.addAirportTransferCandidate(command.destination, command.direction, command.option);
+        return {};
+
+      case 'select_airport_transfer':
+        this.selectAirportTransferOption(command.destination, command.direction, command.optionId);
+        return {};
+
+      case 'scaffold_itinerary':
+        this.scaffoldItinerary(command.destination, command.days, command.force);
+        return {};
+
+      case 'add_activity': {
+        const activityId = this.addActivity(
+          command.destination, command.dayNumber, command.session, command.activity
+        );
+        return { activityId };
+      }
+
+      case 'update_activity':
+        this.updateActivity(
+          command.destination, command.dayNumber, command.session,
+          command.activityId, command.updates
+        );
+        return {};
+
+      case 'remove_activity':
+        this.removeActivity(command.destination, command.dayNumber, command.session, command.activityId);
+        return {};
+
+      case 'set_activity_booking':
+        this.setActivityBookingStatus(
+          command.destination, command.dayNumber, command.session,
+          command.activityIdOrTitle, command.status, command.ref, command.bookBy
+        );
+        return {};
+
+      case 'set_activity_time':
+        this.setActivityTime(
+          command.destination, command.dayNumber, command.session,
+          command.activityIdOrTitle,
+          {
+            start_time: command.startTime,
+            end_time: command.endTime,
+            is_fixed_time: command.isFixedTime,
+          }
+        );
+        return {};
+
+      case 'set_session_time_range':
+        this.setSessionTimeRange(
+          command.destination, command.dayNumber, command.session,
+          command.start, command.end
+        );
+        return {};
+
+      case 'set_day_theme':
+        this.setDayTheme(command.destination, command.dayNumber, command.theme);
+        return {};
+
+      case 'set_day_weather':
+        this.setDayWeather(command.destination, command.dayNumber, command.weather);
+        return {};
+
+      case 'set_session_focus':
+        this.setSessionFocus(
+          command.destination, command.dayNumber, command.session, command.focus
+        );
+        return {};
+
+      default: {
+        const _exhaustive: never = command;
+        throw new Error(`Unknown command type: ${(command as any).type}`);
+      }
+    }
   }
 
   // ============================================================================
   // Timestamp
   // ============================================================================
 
-  /**
-   * Get atomic ISO timestamp for current session.
-   * All updates in a single StateManager session use the same timestamp.
-   */
   now(): string {
     return this.timestamp;
   }
 
-  /**
-   * Generate a fresh ISO timestamp (for new sessions/batches).
-   */
   freshTimestamp(): string {
     return new Date().toISOString();
   }
 
-  /**
-   * Refresh session timestamp for new batch of operations.
-   */
   refreshTimestamp(): void {
     this.timestamp = this.freshTimestamp();
   }
@@ -319,35 +439,20 @@ export class StateManager {
   // Cascade Run Tracking
   // ============================================================================
 
-  /**
-   * Mark that a cascade run has completed.
-   * Only the cascade runner should call this.
-   * @param timestamp - Use cascade plan's computed_at for exact match
-   */
   markCascadeRun(timestamp?: string): void {
-    this.plan.cascade_state.last_cascade_run = timestamp || this.timestamp;
+    this.repo.markCascadeRun(timestamp || this.timestamp);
   }
 
-  /**
-   * Get the timestamp of the last cascade run.
-   */
   getLastCascadeRun(): string {
-    return this.plan.cascade_state.last_cascade_run;
+    return this.repo.getCascadeState().last_cascade_run;
   }
 
   // ============================================================================
   // Dirty Flags
   // ============================================================================
 
-  /**
-   * Mark a process as dirty (needs cascade re-evaluation).
-   */
   markDirty(destination: string, process: ProcessId): void {
-    this.ensureDestinationState(destination);
-    this.plan.cascade_state.destinations[destination][process] = {
-      dirty: true,
-      last_changed: this.timestamp,
-    };
+    this.repo.setDirtyFlag(destination, process, true, this.timestamp);
     this.emitEvent({
       event: 'marked_dirty',
       destination,
@@ -356,26 +461,12 @@ export class StateManager {
     });
   }
 
-  /**
-   * Clear dirty flag (after cascade processes it).
-   */
   clearDirty(destination: string, process: ProcessId): void {
-    this.ensureDestinationState(destination);
-    const current = this.plan.cascade_state.destinations[destination][process];
-    if (current) {
-      current.dirty = false;
-      current.last_changed = this.timestamp;
-    }
+    this.repo.setDirtyFlag(destination, process, false, this.timestamp);
   }
 
-  /**
-   * Mark global process as dirty.
-   */
   markGlobalDirty(process: 'process_1_date_anchor'): void {
-    this.plan.cascade_state.global[process] = {
-      dirty: true,
-      last_changed: this.timestamp,
-    };
+    this.repo.setGlobalDirtyFlag(process, true, this.timestamp);
     this.emitEvent({
       event: 'marked_global_dirty',
       process,
@@ -383,39 +474,22 @@ export class StateManager {
     });
   }
 
-  /**
-   * Clear global dirty flag.
-   */
   clearGlobalDirty(process: 'process_1_date_anchor'): void {
-    const current = this.plan.cascade_state.global[process];
-    if (current) {
-      current.dirty = false;
-      current.last_changed = this.timestamp;
-    }
+    this.repo.setGlobalDirtyFlag(process, false, this.timestamp);
   }
 
-  /**
-   * Get all dirty flags.
-   */
   getDirtyFlags(): CascadeState {
-    return this.plan.cascade_state;
+    return this.repo.getCascadeState();
   }
 
-  /**
-   * Check if a specific process is dirty.
-   */
   isDirty(destination: string, process: ProcessId): boolean {
-    const destState = this.plan.cascade_state.destinations[destination];
-    return destState?.[process]?.dirty ?? false;
+    return this.repo.isDirty(destination, process);
   }
 
   // ============================================================================
   // Process Status
   // ============================================================================
 
-  /**
-   * Set process status with transition validation.
-   */
   setProcessStatus(
     destination: string,
     process: ProcessId,
@@ -425,21 +499,7 @@ export class StateManager {
 
     // Idempotent: allow setting the same status without emitting events.
     if (currentStatus === newStatus) {
-      // Update in travel-plan.json (process object)
-      const dest = this.plan.destinations[destination];
-      if (dest && dest[process]) {
-        const processObj = dest[process] as Record<string, unknown>;
-        processObj['status'] = newStatus;
-        processObj['updated_at'] = this.timestamp;
-      }
-
-      // Update in state.json
-      this.ensureEventLogDestination(destination);
-      const destLog = this.eventLog.destinations[destination];
-      if (!destLog.processes[process]) {
-        destLog.processes[process] = { state: newStatus, events: [] };
-      }
-      destLog.processes[process].state = newStatus;
+      this.repo.setProcessStatusData(destination, process, newStatus, this.timestamp);
       return;
     }
 
@@ -450,23 +510,8 @@ export class StateManager {
       );
     }
 
-    // Update in travel-plan.json (process object)
-    const dest = this.plan.destinations[destination];
-    if (dest && dest[process]) {
-      const processObj = dest[process] as Record<string, unknown>;
-      processObj['status'] = newStatus;
-      processObj['updated_at'] = this.timestamp;
-    }
+    this.repo.setProcessStatusData(destination, process, newStatus, this.timestamp);
 
-    // Update in state.json
-    this.ensureEventLogDestination(destination);
-    const destLog = this.eventLog.destinations[destination];
-    if (!destLog.processes[process]) {
-      destLog.processes[process] = { state: newStatus, events: [] };
-    }
-    destLog.processes[process].state = newStatus;
-
-    // Emit event
     this.emitEvent({
       event: 'status_changed',
       destination,
@@ -476,15 +521,9 @@ export class StateManager {
     });
   }
 
-  /**
-   * Get current process status.
-   */
   getProcessStatus(destination: string, process: ProcessId): ProcessStatus | null {
-    const dest = this.plan.destinations[destination];
-    if (!dest || !dest[process]) return null;
-    const processObj = dest[process] as Record<string, unknown>;
-    const raw = processObj['status'];
-    if (!raw) return null;
+    const raw = this.repo.getProcessStatus(destination, process);
+    if (raw === null) return null;
     if (!isValidProcessStatus(raw)) {
       throw new Error(
         `Invalid status "${raw}" in ${destination}.${process}. Valid: pending, researching, researched, selecting, selected, populated, booking, booked, confirmed, skipped`
@@ -493,9 +532,6 @@ export class StateManager {
     return raw;
   }
 
-  /**
-   * Check if transition is valid.
-   */
   isValidTransition(from: ProcessStatus, to: ProcessStatus): boolean {
     const allowed = STATUS_TRANSITIONS[from];
     return allowed?.includes(to) ?? false;
@@ -505,142 +541,75 @@ export class StateManager {
   // Event Logging
   // ============================================================================
 
-  /**
-   * Emit an event to the audit log.
-   */
   emitEvent(event: Omit<TravelEvent, 'at'>): void {
     const fullEvent: TravelEvent = {
       ...event,
       at: this.timestamp,
     };
-
-    // Add to global event log
-    this.eventLog.event_log.push(fullEvent);
-
-    // Add to destination-specific log if applicable
-    if (event.destination && event.process) {
-      this.ensureEventLogDestination(event.destination);
-      const destLog = this.eventLog.destinations[event.destination];
-      if (!destLog.processes[event.process]) {
-        destLog.processes[event.process] = { state: 'pending', events: [] };
-      }
-      destLog.processes[event.process].events.push(fullEvent);
-    }
+    this.repo.pushEvent(fullEvent);
   }
 
-  /**
-   * Get event log.
-   */
   getEventLog(): TravelEvent[] {
-    return this.eventLog.event_log;
+    return this.repo.getEvents();
   }
 
   // ============================================================================
   // Date Anchor Management
   // ============================================================================
 
-  /**
-   * Set or update the date anchor (P1).
-   * Triggers cascade to invalidate all date-dependent processes.
-   * 
-   * @param startDate - Departure date (ISO-8601: YYYY-MM-DD)
-   * @param endDate - Return date (ISO-8601: YYYY-MM-DD)
-   * @param reason - Optional reason for the change (e.g., "Agent offered Feb 13")
-   */
   setDateAnchor(startDate: string, endDate: string, reason?: string): void {
     const dest = this.getActiveDestination();
-    const destObj = this.plan.destinations[dest];
-    
-    if (!destObj) {
-      throw new Error(`Active destination not found: ${dest}`);
-    }
 
     // Get current dates for comparison
-    const p1 = destObj.process_1_date_anchor as Record<string, unknown> | undefined;
-    const currentDates = p1?.confirmed_dates as { start: string; end: string } | undefined;
-    
-    const oldStart = currentDates?.start;
-    const oldEnd = currentDates?.end;
-    
+    const currentAnchor = this.repo.getDateAnchor(dest);
+    const oldStart = currentAnchor?.start;
+    const oldEnd = currentAnchor?.end;
+
     // Calculate days
     const start = new Date(startDate);
     const end = new Date(endDate);
     const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
-    // Update the date anchor
-    if (!destObj.process_1_date_anchor) {
-      (destObj as Record<string, unknown>).process_1_date_anchor = {};
-    }
-    const dateAnchor = destObj.process_1_date_anchor as Record<string, unknown>;
-    dateAnchor.confirmed_dates = { start: startDate, end: endDate };
-    dateAnchor.days = days;
-    dateAnchor.updated_at = this.timestamp;
-
-    // Use setProcessStatus for consistent state tracking
+    // Update via repo
+    this.repo.setDateAnchorData(dest, startDate, endDate, days, this.timestamp);
     this.setProcessStatus(dest, 'process_1_date_anchor', 'confirmed');
 
-    // Emit event
     this.emitEvent({
       event: 'date_anchor_changed',
       destination: dest,
       process: 'process_1_date_anchor',
-      data: { 
+      data: {
         from_dates: oldStart ? `${oldStart} to ${oldEnd}` : null,
         to_dates: `${startDate} to ${endDate}`,
-        start: startDate, 
-        end: endDate, 
+        start: startDate,
+        end: endDate,
         days,
-        reason: reason || 'User updated dates'
+        reason: reason || 'User updated dates',
       },
     });
 
-    // Mark global dirty and trigger cascade
     this.markGlobalDirty('process_1_date_anchor');
-    
-    // Mark all date-dependent processes as dirty
+
     const dateDependentProcesses: ProcessId[] = [
       'process_3_transportation',
       'process_3_4_packages',
       'process_4_accommodation',
       'process_5_daily_itinerary',
     ];
-    
     for (const process of dateDependentProcesses) {
       this.markDirty(dest, process);
     }
   }
 
-  /**
-   * Get current date anchor.
-   */
   getDateAnchor(): { start: string; end: string; days: number } | null {
     const dest = this.getActiveDestination();
-    const destObj = this.plan.destinations[dest];
-    if (!destObj) return null;
-    
-    const p1 = destObj.process_1_date_anchor as Record<string, unknown> | undefined;
-    const dates = p1?.confirmed_dates as { start: string; end: string } | undefined;
-    const days = p1?.days as number | undefined;
-    
-    if (!dates) return null;
-    return { start: dates.start, end: dates.end, days: days || 0 };
+    return this.repo.getDateAnchor(dest);
   }
 
   // ============================================================================
-  // Offer Management (delegated to OfferManager)
+  // Offer Management
   // ============================================================================
 
-  /**
-   * Update availability for a specific offer/date combination.
-   * Use this when agent provides new info (e.g., "Feb 13 is now available").
-   *
-   * @param offerId - The offer ID (e.g., "besttour_TYO05MM260211AM")
-   * @param date - The date to update (ISO-8601: YYYY-MM-DD)
-   * @param availability - New availability status
-   * @param price - Optional new price
-   * @param seatsRemaining - Optional seats remaining
-   * @param source - Source of info (e.g., "agent", "scrape", "user")
-   */
   updateOfferAvailability(
     offerId: string,
     date: string,
@@ -650,45 +619,14 @@ export class StateManager {
     source: string = 'user'
   ): void {
     const dest = this.getActiveDestination();
-    const destObj = this.plan.destinations[dest];
-    
-    if (!destObj) {
-      throw new Error(`Active destination not found: ${dest}`);
-    }
 
-    // Find the offer in packages
-    const packages = destObj.process_3_4_packages as Record<string, unknown> | undefined;
-    const results = packages?.results as Record<string, unknown> | undefined;
-    const offers = results?.offers as Array<Record<string, unknown>> | undefined;
-
-    if (!offers) {
-      throw new Error(`No offers found in ${dest}.process_3_4_packages.results`);
-    }
-
-    const offer = offers.find(o => o.id === offerId);
-    if (!offer) {
-      throw new Error(`Offer not found: ${offerId}`);
-    }
-
-    // Update date_pricing
-    let datePricing = offer.date_pricing as Record<string, Record<string, unknown>> | undefined;
-    if (!datePricing) {
-      datePricing = {};
-      offer.date_pricing = datePricing;
-    }
-
-    const previousEntry = datePricing[date];
-    const previousAvailability = previousEntry?.availability;
-
-    datePricing[date] = {
-      ...previousEntry,
+    const { previousAvailability } = this.repo.setOfferAvailability(dest, offerId, date, {
       availability,
       ...(price !== undefined && { price }),
       ...(seatsRemaining !== undefined && { seats_remaining: seatsRemaining }),
       note: `Updated by ${source} at ${this.timestamp}`,
-    };
+    });
 
-    // Emit event
     this.emitEvent({
       event: 'offer_availability_updated',
       destination: dest,
@@ -705,55 +643,12 @@ export class StateManager {
     });
   }
 
-  /**
-   * Select an offer for booking.
-   * This marks the package as selected and can trigger cascade populate
-   * to fill P3 (transportation) and P4 (accommodation) from the offer.
-   * 
-   * @param offerId - The offer ID to select
-   * @param date - The specific date to book
-   * @param populateCascade - If true, populate P3/P4 from offer details
-   */
   selectOffer(offerId: string, date: string, populateCascade: boolean = true): void {
     const dest = this.getActiveDestination();
-    const destObj = this.plan.destinations[dest];
-    
-    if (!destObj) {
-      throw new Error(`Active destination not found: ${dest}`);
-    }
+    const offer = this.repo.setOfferSelection(dest, offerId, date, this.timestamp);
 
-    const packages = destObj.process_3_4_packages as Record<string, unknown> | undefined;
-    const results = packages?.results as Record<string, unknown> | undefined;
-    const offers = results?.offers as Array<Record<string, unknown>> | undefined;
-
-    if (!offers) {
-      throw new Error(`No offers found in ${dest}.process_3_4_packages.results`);
-    }
-
-    const offer = offers.find(o => o.id === offerId);
-    if (!offer) {
-      throw new Error(`Offer not found: ${offerId}`);
-    }
-
-    // Mark as chosen
-    if (!packages) {
-      throw new Error('Packages process not found');
-    }
-    packages.selected_offer_id = offerId;
-    packages.chosen_offer = {
-      id: offerId,
-      selected_date: date,
-      selected_at: this.timestamp,
-    };
-    if (!packages.results || typeof packages.results !== 'object') {
-      packages.results = {};
-    }
-    (packages.results as Record<string, unknown>).chosen_offer = offer;
-
-    // Update process status
     this.setProcessStatus(dest, 'process_3_4_packages', 'selected');
 
-    // Emit event
     this.emitEvent({
       event: 'offer_selected',
       destination: dest,
@@ -761,60 +656,35 @@ export class StateManager {
       data: {
         offer_id: offerId,
         date,
-        offer_name: offer.name,
-        hotel: (offer.hotel as Record<string, unknown>)?.name,
-        price_total: (offer.date_pricing as Record<string, Record<string, unknown>>)?.[date]?.price,
+        offer_name: (offer as Record<string, unknown>).name,
+        hotel: ((offer as Record<string, unknown>).hotel as Record<string, unknown> | undefined)?.name,
+        price_total: ((offer as Record<string, unknown>).date_pricing as Record<string, Record<string, unknown>> | undefined)?.[date]?.price,
       },
     });
 
-    // Populate cascade: fill P3 and P4 from the selected offer
     if (populateCascade) {
-      this.populateFromOffer(dest, offer, date);
+      this.populateFromOffer(dest, offer as Record<string, unknown>, date);
     }
   }
 
-  /**
-   * Populate P3 (transportation) and P4 (accommodation) from selected offer.
-   * @internal
-   */
   private populateFromOffer(
     destination: string,
     offer: Record<string, unknown>,
     date: string
   ): void {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) return;
+    this.repo.populateFromOffer(destination, offer, date, this.timestamp);
 
-    // Populate P3 (transportation) from offer flight info
+    // Set statuses for populated processes
     const flight = offer.flight as Record<string, unknown> | undefined;
     if (flight) {
-      const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
-      if (p3) {
-        p3.populated_from = `package:${offer.id}`;
-        p3.flight = {
-          ...flight,
-          booked_date: date,
-          populated_at: this.timestamp,
-        };
-        this.setProcessStatus(destination, 'process_3_transportation', 'populated');
-        this.clearDirty(destination, 'process_3_transportation');
-      }
+      this.setProcessStatus(destination, 'process_3_transportation', 'populated');
+      this.clearDirty(destination, 'process_3_transportation');
     }
 
-    // Populate P4 (accommodation) from offer hotel info
     const hotel = offer.hotel as Record<string, unknown> | undefined;
     if (hotel) {
-      const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
-      if (p4) {
-        p4.populated_from = `package:${offer.id}`;
-        p4.hotel = {
-          ...hotel,
-          check_in: date,
-          populated_at: this.timestamp,
-        };
-        this.setProcessStatus(destination, 'process_4_accommodation', 'populated');
-        this.clearDirty(destination, 'process_4_accommodation');
-      }
+      this.setProcessStatus(destination, 'process_4_accommodation', 'populated');
+      this.clearDirty(destination, 'process_4_accommodation');
     }
 
     this.emitEvent({
@@ -827,10 +697,6 @@ export class StateManager {
     });
   }
 
-  /**
-   * Import normalized package offers (P3+4) into the current destination.
-   * This is typically fed by scrapers and should be used instead of direct JSON edits.
-   */
   importPackageOffers(
     destination: string,
     sourceId: string,
@@ -838,42 +704,14 @@ export class StateManager {
     note?: string,
     warnings?: string[]
   ): void {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) {
-      throw new Error(`Destination not found: ${destination}`);
-    }
-
-    if (!destObj.process_3_4_packages) {
-      (destObj as Record<string, unknown>).process_3_4_packages = {};
-    }
-
-    const p34 = destObj.process_3_4_packages as Record<string, unknown>;
-    if (!p34.results || typeof p34.results !== 'object') {
-      p34.results = {};
-    }
-    const results = p34.results as Record<string, unknown>;
-
-    results.offers = offers;
-    const provenance = (results.provenance as Array<Record<string, unknown>> | undefined) ?? [];
-    provenance.push({
-      source_id: sourceId,
-      scraped_at: this.timestamp,
-      offers_found: offers.length,
-      ...(note ? { note } : {}),
-    });
-    results.provenance = provenance;
-
-    if (warnings && warnings.length > 0) {
-      const existing = (results.warnings as string[] | undefined) ?? [];
-      results.warnings = [...existing, ...warnings];
-    }
+    this.repo.importOffers(destination, sourceId, offers, this.timestamp, note, warnings);
 
     const currentStatus = this.getProcessStatus(destination, 'process_3_4_packages');
     if (!currentStatus || currentStatus === 'pending' || currentStatus === 'researching') {
       this.setProcessStatus(destination, 'process_3_4_packages', 'researched');
     } else {
-      // still bump timestamp on the process node for visibility
-      p34.updated_at = this.timestamp;
+      // Bump updated_at on packages process (status unchanged)
+      this.repo.setProcessStatusData(destination, 'process_3_4_packages', currentStatus, this.timestamp);
     }
 
     this.emitEvent({
@@ -888,22 +726,13 @@ export class StateManager {
   // Transportation (Ground Transfers)
   // ============================================================================
 
-  /**
-   * Set airport transfer segment for arrival/departure.
-   */
   setAirportTransferSegment(
     destination: string,
     direction: 'arrival' | 'departure',
     segment: TransportSegment
   ): void {
-    const p3 = this.ensureTransportationProcess(destination);
-
-    if (!p3.airport_transfers || typeof p3.airport_transfers !== 'object') {
-      p3.airport_transfers = {};
-    }
-
-    (p3.airport_transfers as Record<string, unknown>)[direction] = segment as unknown as Record<string, unknown>;
-    this.touchTransportation(destination);
+    this.repo.setAirportTransfer(destination, direction, segment, this.timestamp);
+    this.repo.touchTransportation(destination, this.timestamp);
 
     this.emitEvent({
       event: 'airport_transfer_updated',
@@ -918,34 +747,14 @@ export class StateManager {
     });
   }
 
-  /**
-   * Add a candidate option to the airport transfer segment.
-   */
   addAirportTransferCandidate(
     destination: string,
     direction: 'arrival' | 'departure',
     option: TransportOption
   ): void {
-    const p3 = this.ensureTransportationProcess(destination);
-    if (!p3.airport_transfers || typeof p3.airport_transfers !== 'object') {
-      p3.airport_transfers = {};
-    }
+    this.repo.addAirportTransferCandidate(destination, direction, option, this.timestamp);
+    this.repo.touchTransportation(destination, this.timestamp);
 
-    const transfers = p3.airport_transfers as Record<string, unknown>;
-    const existing = (transfers[direction] as Record<string, unknown> | undefined) ?? {
-      status: 'planned',
-      selected: null,
-      candidates: [],
-    };
-
-    const candidates = (existing.candidates as TransportOption[] | undefined) ?? [];
-    if (!candidates.some(c => c.id === option.id)) {
-      candidates.push(option);
-    }
-    existing.candidates = candidates;
-    transfers[direction] = existing;
-
-    this.touchTransportation(destination);
     this.emitEvent({
       event: 'airport_transfer_candidate_added',
       destination,
@@ -954,35 +763,14 @@ export class StateManager {
     });
   }
 
-  /**
-   * Select a candidate option as the chosen airport transfer.
-   */
   selectAirportTransferOption(
     destination: string,
     direction: 'arrival' | 'departure',
     optionId: string
   ): void {
-    const p3 = this.ensureTransportationProcess(destination);
-    if (!p3.airport_transfers || typeof p3.airport_transfers !== 'object') {
-      throw new Error(`No airport transfers set for ${destination}`);
-    }
+    const selected = this.repo.selectAirportTransferOption(destination, direction, optionId, this.timestamp);
+    this.repo.touchTransportation(destination, this.timestamp);
 
-    const transfers = p3.airport_transfers as Record<string, unknown>;
-    const segment = transfers[direction] as Record<string, unknown> | undefined;
-    if (!segment) {
-      throw new Error(`No ${direction} airport transfer segment found`);
-    }
-
-    const candidates = (segment.candidates as TransportOption[] | undefined) ?? [];
-    const selected = candidates.find(c => c.id === optionId) as TransportOption | undefined;
-    if (!selected) {
-      throw new Error(`Airport transfer option not found: ${optionId}`);
-    }
-
-    segment.selected = selected;
-    transfers[direction] = segment;
-
-    this.touchTransportation(destination);
     this.emitEvent({
       event: 'airport_transfer_selected',
       destination,
@@ -995,32 +783,13 @@ export class StateManager {
   // Itinerary Management
   // ============================================================================
 
-  /**
-   * Scaffold day skeletons for P5 itinerary.
-   * Creates empty day structures based on travel dates.
-   *
-   * @param destination - Destination slug
-   * @param days - Array of day skeleton objects
-   * @param force - If true, reset P5 to pending first to allow re-scaffolding
-   */
   scaffoldItinerary(
     destination: string,
     days: Array<Record<string, unknown>>,
     force: boolean = false
   ): void {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) {
-      throw new Error(`Destination not found: ${destination}`);
-    }
-
-    if (!destObj.process_5_daily_itinerary) {
-      (destObj as Record<string, unknown>).process_5_daily_itinerary = {};
-    }
-
-    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown>;
     const currentStatus = this.getProcessStatus(destination, 'process_5_daily_itinerary');
 
-    // If force and status is beyond researching, reset to pending first
     if (force && currentStatus && !['pending', 'researching'].includes(currentStatus)) {
       this.forceSetProcessStatus(destination, 'process_5_daily_itinerary', 'pending', {
         reason: 'force re-scaffold',
@@ -1028,11 +797,7 @@ export class StateManager {
       });
     }
 
-    p5.days = days;
-    p5.updated_at = this.timestamp;
-    p5.scaffolded_at = this.timestamp;
-
-    // Set status to researching (skeleton created, content still pending)
+    this.repo.setDays(destination, days, this.timestamp);
     this.setProcessStatus(destination, 'process_5_daily_itinerary', 'researching');
     this.clearDirty(destination, 'process_5_daily_itinerary');
 
@@ -1051,18 +816,10 @@ export class StateManager {
   // Activity CRUD (P5 Itinerary)
   // ============================================================================
 
-  /**
-   * Add an activity to a day session.
-   * @param destination - Destination slug
-   * @param dayNumber - 1-indexed day number
-   * @param session - 'morning' | 'afternoon' | 'evening'
-   * @param activity - Activity object (id will be generated if not provided)
-   * @returns The generated activity ID
-   */
   addActivity(
     destination: string,
     dayNumber: number,
-    session: 'morning' | 'afternoon' | 'evening',
+    session: SessionType,
     activity: {
       title: string;
       area?: string;
@@ -1076,19 +833,13 @@ export class StateManager {
       priority?: 'must' | 'want' | 'optional';
     }
   ): string {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
+    const day = this.repo.getDay(destination, dayNumber);
+    if (!day) throw new Error(`Day ${dayNumber} not found in ${destination}`);
 
-    const sessionObj = day[session] as { activities: Array<Record<string, unknown>> };
-    if (!sessionObj || !Array.isArray(sessionObj.activities)) {
-      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
-    }
+    const activities = this.repo.getSessionActivities(destination, dayNumber, session);
+    if (!activities) throw new Error(`Session ${session} not found in Day ${dayNumber}`);
 
-    // Generate ID
     const id = `activity_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-
     const fullActivity = {
       id,
       title: activity.title,
@@ -1103,8 +854,8 @@ export class StateManager {
       priority: activity.priority || 'want',
     };
 
-    sessionObj.activities.push(fullActivity);
-    this.touchItinerary(destination);
+    this.repo.addActivityToSession(destination, dayNumber, session, fullActivity);
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'activity_added',
@@ -1116,13 +867,10 @@ export class StateManager {
     return id;
   }
 
-  /**
-   * Update an existing activity.
-   */
   updateActivity(
     destination: string,
     dayNumber: number,
-    session: 'morning' | 'afternoon' | 'evening',
+    session: SessionType,
     activityId: string,
     updates: Partial<{
       title: string;
@@ -1140,28 +888,16 @@ export class StateManager {
       priority: 'must' | 'want' | 'optional';
     }>
   ): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
+    const activities = this.repo.getSessionActivities(destination, dayNumber, session);
+    if (!activities) throw new Error(`Session ${session} not found in Day ${dayNumber}`);
 
-    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
-    if (!sessionObj?.activities) {
-      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
-    }
+    const idx = this.repo.findActivityIndex(activities, activityId);
+    if (idx === -1) throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
 
-    const idx = this.findActivityIndex(sessionObj.activities, activityId);
-    if (idx === -1) {
-      throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
-    }
-
-    const current = sessionObj.activities[idx];
-    const activityObj = typeof current === 'string'
-      ? this.upgradeStringActivity(current, { booking_required: false })
-      : current;
-    sessionObj.activities[idx] = activityObj;
-    Object.assign(activityObj, updates);
-    this.touchItinerary(destination);
+    const activityObj = this.repo.updateActivityAtIndex(
+      destination, dayNumber, session, idx, updates as Record<string, unknown>
+    );
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'activity_updated',
@@ -1171,49 +907,45 @@ export class StateManager {
     });
   }
 
-  /**
-   * Set time fields for an activity (start/end/fixed-time).
-   * Activity can be found by ID or title; legacy string activities are upgraded.
-   */
   setActivityTime(
     destination: string,
     dayNumber: number,
-    session: 'morning' | 'afternoon' | 'evening',
+    session: SessionType,
     activityIdOrTitle: string,
     opts: { start_time?: string; end_time?: string; is_fixed_time?: boolean }
   ): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
-
-    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
-    if (!sessionObj?.activities) {
+    const activities = this.repo.getSessionActivities(destination, dayNumber, session);
+    if (!activities) {
+      const day = this.repo.getDay(destination, dayNumber);
+      if (!day) throw new Error(`Day ${dayNumber} not found in ${destination}`);
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    const idx = this.findActivityIndex(sessionObj.activities, activityIdOrTitle);
+    const idx = this.repo.findActivityIndex(activities, activityIdOrTitle);
     if (idx === -1) {
       throw new Error(`Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`);
     }
 
-    const current = sessionObj.activities[idx];
-    const activityObj = typeof current === 'string'
-      ? this.upgradeStringActivity(current, { booking_required: false })
-      : current;
-    sessionObj.activities[idx] = activityObj;
-
+    // Get current values for diff
+    const current = activities[idx];
+    const currentObj = typeof current === 'string' ? {} : current as Record<string, unknown>;
     const previous = {
-      start_time: activityObj.start_time as string | undefined,
-      end_time: activityObj.end_time as string | undefined,
-      is_fixed_time: activityObj.is_fixed_time as boolean | undefined,
+      start_time: currentObj.start_time as string | undefined,
+      end_time: currentObj.end_time as string | undefined,
+      is_fixed_time: currentObj.is_fixed_time as boolean | undefined,
     };
 
-    if (opts.start_time !== undefined) activityObj.start_time = opts.start_time;
-    if (opts.end_time !== undefined) activityObj.end_time = opts.end_time;
-    if (opts.is_fixed_time !== undefined) activityObj.is_fixed_time = opts.is_fixed_time;
+    // Build update object (only set fields that were provided)
+    const updates: Record<string, unknown> = {};
+    if (opts.start_time !== undefined) updates.start_time = opts.start_time;
+    if (opts.end_time !== undefined) updates.end_time = opts.end_time;
+    if (opts.is_fixed_time !== undefined) updates.is_fixed_time = opts.is_fixed_time;
 
-    this.touchItinerary(destination);
+    const activityObj = this.repo.updateActivityAtIndex(
+      destination, dayNumber, session, idx, updates
+    );
+    this.repo.touchItinerary(destination, this.timestamp);
+
     this.emitEvent({
       event: 'activity_time_updated',
       destination,
@@ -1233,28 +965,15 @@ export class StateManager {
     });
   }
 
-  /**
-   * Set optional time range boundary for a session.
-   */
   setSessionTimeRange(
     destination: string,
     dayNumber: number,
-    session: 'morning' | 'afternoon' | 'evening',
+    session: SessionType,
     start: string,
     end: string
   ): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
-
-    const sessionObj = day[session] as Record<string, unknown> | undefined;
-    if (!sessionObj) {
-      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
-    }
-
-    sessionObj.time_range = { start, end };
-    this.touchItinerary(destination);
+    this.repo.setSessionField(destination, dayNumber, session, 'time_range', { start, end });
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'session_time_range_updated',
@@ -1264,32 +983,24 @@ export class StateManager {
     });
   }
 
-  /**
-   * Remove an activity.
-   */
   removeActivity(
     destination: string,
     dayNumber: number,
-    session: 'morning' | 'afternoon' | 'evening',
+    session: SessionType,
     activityId: string
   ): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
-
-    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
-    if (!sessionObj?.activities) {
+    const activities = this.repo.getSessionActivities(destination, dayNumber, session);
+    if (!activities) {
+      const day = this.repo.getDay(destination, dayNumber);
+      if (!day) throw new Error(`Day ${dayNumber} not found in ${destination}`);
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    const idx = this.findActivityIndex(sessionObj.activities, activityId);
-    if (idx === -1) {
-      throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
-    }
+    const idx = this.repo.findActivityIndex(activities, activityId);
+    if (idx === -1) throw new Error(`Activity ${activityId} not found in Day ${dayNumber} ${session}`);
 
-    const removed = sessionObj.activities.splice(idx, 1)[0];
-    this.touchItinerary(destination);
+    const removed = this.repo.removeActivityAtIndex(destination, dayNumber, session, idx);
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'activity_removed',
@@ -1298,80 +1009,55 @@ export class StateManager {
       data: {
         day_number: dayNumber,
         session,
-        activity_id: typeof removed === 'string' ? null : removed.id,
-        title: typeof removed === 'string' ? removed : (removed.title as string | undefined),
+        activity_id: typeof removed === 'string' ? null : (removed as Record<string, unknown>).id,
+        title: typeof removed === 'string' ? removed : ((removed as Record<string, unknown>).title as string | undefined),
       },
     });
   }
 
-  /**
-   * Set booking status for an activity.
-   * Use this to track booking progress for activities that require advance booking.
-   *
-   * Handles both legacy string activities and structured Activity objects:
-   * - String activities are upgraded to Activity objects with generated IDs
-   * - Object activities are updated in place
-   *
-   * @param destination - Destination slug
-   * @param dayNumber - 1-indexed day number
-   * @param session - 'morning' | 'afternoon' | 'evening'
-   * @param activityIdOrTitle - Activity ID or title (case-insensitive, substring match for strings)
-   * @param status - Booking status: 'not_required' | 'pending' | 'booked' | 'waitlist'
-   * @param ref - Optional booking reference/confirmation number
-   * @param bookBy - Optional deadline to book (ISO date: YYYY-MM-DD)
-   */
   setActivityBookingStatus(
     destination: string,
     dayNumber: number,
-    session: 'morning' | 'afternoon' | 'evening',
+    session: SessionType,
     activityIdOrTitle: string,
     status: 'not_required' | 'pending' | 'booked' | 'waitlist',
     ref?: string,
     bookBy?: string
   ): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
-
-    const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> };
-    if (!sessionObj?.activities) {
+    const activities = this.repo.getSessionActivities(destination, dayNumber, session);
+    if (!activities) {
+      const day = this.repo.getDay(destination, dayNumber);
+      if (!day) throw new Error(`Day ${dayNumber} not found in ${destination}`);
       throw new Error(`Session ${session} not found in Day ${dayNumber}`);
     }
 
-    const activityIdx = this.findActivityIndex(sessionObj.activities, activityIdOrTitle);
+    const activityIdx = this.repo.findActivityIndex(activities, activityIdOrTitle);
     if (activityIdx === -1) {
-      throw new Error(
-        `Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`
-      );
+      throw new Error(`Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`);
     }
 
-    const activity = sessionObj.activities[activityIdx];
+    const activity = activities[activityIdx];
     const wasUpgraded = typeof activity === 'string';
-    const activityObj = wasUpgraded
-      ? this.upgradeStringActivity(activity, { booking_required: true })
-      : activity;
-    if (wasUpgraded) {
-      sessionObj.activities[activityIdx] = activityObj;
-    }
 
-    const previousStatus = activityObj.booking_status as string | undefined;
-    activityObj.booking_status = status;
-
-    if (ref !== undefined) {
-      activityObj.booking_ref = ref;
-    }
-
-    if (bookBy !== undefined) {
-      activityObj.book_by = bookBy;
-    }
-
-    // If marking as booked, also set booking_required to true for consistency
+    // Build updates
+    const updates: Record<string, unknown> = { booking_status: status };
+    if (ref !== undefined) updates.booking_ref = ref;
+    if (bookBy !== undefined) updates.book_by = bookBy;
     if (status === 'booked' || status === 'pending' || status === 'waitlist') {
-      activityObj.booking_required = true;
+      updates.booking_required = true;
+    }
+    if (wasUpgraded) {
+      updates.booking_required = true;
     }
 
-    this.touchItinerary(destination);
+    const previousStatus = typeof activity === 'string'
+      ? undefined
+      : (activity as Record<string, unknown>).booking_status as string | undefined;
+
+    const activityObj = this.repo.updateActivityAtIndex(
+      destination, dayNumber, session, activityIdx, updates
+    );
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'activity_booking_updated',
@@ -1391,76 +1077,24 @@ export class StateManager {
     });
   }
 
-  /**
-   * Find an activity by ID or title across all days/sessions.
-   * Handles both string activities and Activity objects.
-   * Returns { dayNumber, session, activity, isString } or null if not found.
-   */
   findActivity(
     destination: string,
     idOrTitle: string
-  ): { dayNumber: number; session: 'morning' | 'afternoon' | 'evening'; activity: string | Record<string, unknown>; isString: boolean } | null {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) return null;
-
-    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
-    const days = p5?.days as Array<Record<string, unknown>> | undefined;
-    if (!days) return null;
-
-    const sessions: Array<'morning' | 'afternoon' | 'evening'> = ['morning', 'afternoon', 'evening'];
-    const searchLower = idOrTitle.toLowerCase();
-
-    for (const day of days) {
-      const dayNumber = day.day_number as number;
-      for (const session of sessions) {
-        const sessionObj = day[session] as { activities: Array<string | Record<string, unknown>> } | undefined;
-        if (!sessionObj?.activities) continue;
-
-        for (const a of sessionObj.activities) {
-          if (typeof a === 'string') {
-            if (a.toLowerCase().includes(searchLower)) {
-              return { dayNumber, session, activity: a, isString: true };
-            }
-          } else {
-            const id = a.id as string | undefined;
-            const title = a.title as string | undefined;
-            if (id === idOrTitle ||
-                (title && title.toLowerCase().includes(searchLower))) {
-              return { dayNumber, session, activity: a, isString: false };
-            }
-          }
-        }
-      }
-    }
-
-    return null;
+  ): { dayNumber: number; session: SessionType; activity: string | Record<string, unknown>; isString: boolean } | null {
+    return this.repo.findActivity(destination, idOrTitle);
   }
 
   /**
    * Get a specific day from itinerary.
+   * Public for backward compat (tests, cascade runner).
    */
-  private getDay(destination: string, dayNumber: number): Record<string, unknown> | null {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) return null;
-
-    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
-    const days = p5?.days as Array<Record<string, unknown>> | undefined;
-    if (!days) return null;
-
-    return days.find(d => d.day_number === dayNumber) || null;
+  getDay(destination: string, dayNumber: number): Record<string, unknown> | null {
+    return this.repo.getDay(destination, dayNumber);
   }
 
-  /**
-   * Set a day's theme field.
-   */
   setDayTheme(destination: string, dayNumber: number, theme: string | null): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
-
-    day.theme = theme;
-    this.touchItinerary(destination);
+    this.repo.setDayField(destination, dayNumber, 'theme', theme);
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'itinerary_day_theme_set',
@@ -1470,17 +1104,9 @@ export class StateManager {
     });
   }
 
-  /**
-   * Set weather forecast for a specific day.
-   */
-  setDayWeather(destination: string, dayNumber: number, weather: import('./types').DayWeather): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
-
-    (day as Record<string, unknown>).weather = weather;
-    this.touchItinerary(destination);
+  setDayWeather(destination: string, dayNumber: number, weather: DayWeather): void {
+    this.repo.setDayField(destination, dayNumber, 'weather', weather);
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'weather_updated',
@@ -1490,130 +1116,20 @@ export class StateManager {
     });
   }
 
-  /**
-   * Set a session's focus field.
-   */
   setSessionFocus(
     destination: string,
     dayNumber: number,
-    session: 'morning' | 'afternoon' | 'evening',
+    session: SessionType,
     focus: string | null
   ): void {
-    const day = this.getDay(destination, dayNumber);
-    if (!day) {
-      throw new Error(`Day ${dayNumber} not found in ${destination}`);
-    }
-
-    const sessionObj = day[session] as Record<string, unknown> | undefined;
-    if (!sessionObj) {
-      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
-    }
-
-    sessionObj.focus = focus;
-    this.touchItinerary(destination);
+    this.repo.setSessionField(destination, dayNumber, session, 'focus', focus);
+    this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'itinerary_session_focus_set',
       destination,
       process: 'process_5_daily_itinerary',
       data: { day_number: dayNumber, session, focus },
-    });
-  }
-
-  /**
-   * Touch itinerary timestamp.
-   */
-  private touchItinerary(destination: string): void {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) return;
-
-    const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
-    if (p5) {
-      p5.updated_at = this.timestamp;
-    }
-  }
-
-  /**
-   * Touch transportation timestamp.
-   */
-  private touchTransportation(destination: string): void {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) return;
-
-    const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
-    if (p3) {
-      p3.updated_at = this.timestamp;
-    }
-  }
-
-  private ensureTransportationProcess(destination: string): Record<string, unknown> {
-    const destObj = this.plan.destinations[destination];
-    if (!destObj) {
-      throw new Error(`Destination not found: ${destination}`);
-    }
-
-    if (!destObj.process_3_transportation) {
-      (destObj as Record<string, unknown>).process_3_transportation = {
-        status: 'pending',
-        updated_at: this.timestamp,
-      };
-    }
-
-    const p3 = destObj.process_3_transportation as Record<string, unknown>;
-    if (typeof p3.status !== 'string') {
-      p3.status = 'pending';
-    }
-    return p3;
-  }
-
-  private upgradeStringActivity(
-    title: string,
-    overrides?: Partial<Record<string, unknown>>
-  ): Record<string, unknown> {
-    const id = `activity_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-    return {
-      id,
-      title,
-      area: '',
-      nearest_station: null,
-      duration_min: null,
-      booking_required: false,
-      booking_url: null,
-      booking_status: undefined,
-      booking_ref: undefined,
-      book_by: undefined,
-      cost_estimate: null,
-      tags: [],
-      notes: null,
-      priority: 'want',
-      ...(overrides || {}),
-    };
-  }
-
-  /**
-   * Find activity index by ID (exact match) or title (case-insensitive substring).
-   * Returns -1 if not found.
-   *
-   * @internal Shared helper to reduce duplication in activity methods.
-   */
-  private findActivityIndex(
-    activities: Array<string | Record<string, unknown>>,
-    idOrTitle: string
-  ): number {
-    // First try exact ID match
-    const idx = activities.findIndex(
-      a => typeof a !== 'string' && a.id === idOrTitle
-    );
-    if (idx !== -1) return idx;
-
-    // Fall back to title substring (case-insensitive)
-    const searchLower = idOrTitle.toLowerCase();
-    return activities.findIndex(a => {
-      if (typeof a === 'string') {
-        return a.toLowerCase().includes(searchLower);
-      }
-      const title = a.title as string | undefined;
-      return Boolean(title && title.toLowerCase().includes(searchLower));
     });
   }
 
@@ -1628,22 +1144,7 @@ export class StateManager {
     data?: Record<string, unknown>
   ): void {
     const currentStatus = this.getProcessStatus(destination, process);
-
-    // Update in travel-plan.json (process object)
-    const dest = this.plan.destinations[destination];
-    if (dest && dest[process]) {
-      const processObj = dest[process] as Record<string, unknown>;
-      processObj['status'] = newStatus;
-      processObj['updated_at'] = this.timestamp;
-    }
-
-    // Update in state.json
-    this.ensureEventLogDestination(destination);
-    const destLog = this.eventLog.destinations[destination];
-    if (!destLog.processes[process]) {
-      destLog.processes[process] = { state: newStatus, events: [] };
-    }
-    destLog.processes[process].state = newStatus;
+    this.repo.setProcessStatusData(destination, process, newStatus, this.timestamp);
 
     this.emitEvent({
       event: 'status_forced',
@@ -1659,22 +1160,15 @@ export class StateManager {
   // Active Destination
   // ============================================================================
 
-  /**
-   * Get active destination slug.
-   */
   getActiveDestination(): string {
-    return this.plan.active_destination;
+    return this.repo.getActiveDestination();
   }
 
-  /**
-   * Set active destination and track change for cascade.
-   */
   setActiveDestination(destination: string): void {
-    const previous = this.plan.active_destination;
+    const previous = this.repo.getActiveDestination();
     if (previous !== destination) {
-      this.plan.cascade_state.global.active_destination_last = previous;
-      this.plan.active_destination = destination;
-      this.eventLog.active_destination = destination;
+      this.repo.setActiveDestination(destination);
+      this.repo.setEventLogActiveDestination(destination);
       this.emitEvent({
         event: 'active_destination_changed',
         data: { from: previous, to: destination },
@@ -1682,13 +1176,10 @@ export class StateManager {
     }
   }
 
-  /**
-   * Set current focus (for UI/skill coordination).
-   */
   setFocus(destination: string, process: ProcessId): void {
-    const previous = this.eventLog.current_focus;
+    const previous = this.repo.getEventLog().current_focus;
     const newFocus = `${destination}.${process}`;
-    this.eventLog.current_focus = newFocus;
+    this.repo.setEventLogFocus(newFocus);
     this.emitEvent({
       event: 'focus_changed',
       destination,
@@ -1697,193 +1188,112 @@ export class StateManager {
     });
   }
 
-  /**
-   * Set session-level next actions (global; not per-destination).
-   */
   setNextActions(actions: string[]): void {
-    const previous = this.eventLog.next_actions || [];
-    this.eventLog.next_actions = actions;
+    const previous = this.repo.getNextActions();
+    this.repo.setNextActions(actions);
     this.emitEvent({
       event: 'next_actions_updated',
       data: { from: previous, to: actions },
     });
   }
 
-  /**
-   * Get next actions list.
-   */
   getNextActions(): string[] {
-    return this.eventLog.next_actions || [];
+    return this.repo.getNextActions();
   }
 
   // ============================================================================
-  // File I/O
+  // File I/O (legacy — for non-DB constructor paths)
   // ============================================================================
 
-  /**
-   * Load travel plan from file with Zod validation.
-   */
-  loadPlan(path?: string): TravelPlanMinimal {
-    const filePath = path || this.planPath;
-    if (!existsSync(filePath)) {
-      throw new Error(`Travel plan not found: ${filePath}`);
+  private loadPlanFromFile(filePath?: string): TravelPlanMinimal {
+    const p = filePath || this.planPath;
+    if (!existsSync(p)) {
+      throw new Error(`Travel plan not found: ${p}`);
     }
-    const content = readFileSync(filePath, 'utf-8');
+    const content = readFileSync(p, 'utf-8');
     const parsed = JSON.parse(content);
-
-    // Validate with Zod
     return validateTravelPlan(parsed) as TravelPlanMinimal;
   }
 
-  /**
-   * Load event log from file with Zod validation.
-   */
-  loadEventLog(path?: string): EventLogState {
-    const filePath = path || this.statePath;
-    if (!existsSync(filePath)) {
-      // Return minimal state if file doesn't exist
+  private loadEventLogFromFile(plan?: TravelPlanMinimal, filePath?: string): EventLogState {
+    const p = filePath || this.statePath;
+    if (!existsSync(p)) {
       return {
         session: new Date().toISOString().split('T')[0],
         project: DEFAULTS.project,
         version: '3.0',
-        active_destination: this.plan?.active_destination || '',
+        active_destination: plan?.active_destination || '',
         current_focus: '',
         event_log: [],
         global_processes: {},
         destinations: {},
       };
     }
-    const content = readFileSync(filePath, 'utf-8');
+    const content = readFileSync(p, 'utf-8');
     const parsed = JSON.parse(content);
-
-    // Validate with Zod
     return validateEventLogState(parsed) as EventLogState;
   }
 
-  /**
-   * Save plan + state to DB, then sync derived tables.
-   * Validates before saving to prevent corrupt data.
-   * Note: Does NOT update last_cascade_run - that is cascade-runner-owned.
-   */
+  // ============================================================================
+  // Persistence
+  // ============================================================================
+
   async save(): Promise<void> {
-    // Validate before saving (catch bugs before writing corrupt data)
-    // First do per-section validation for clearer error messages
-    const sectionErrors: string[] = [];
-    for (const [destSlug, destObj] of Object.entries(this.plan.destinations || {})) {
-      const result = validateDestinationSections(destSlug, destObj as Record<string, unknown>);
-      if (!result.valid) {
-        sectionErrors.push(formatSectionValidationErrors(result));
-      }
-    }
-    if (sectionErrors.length > 0) {
-      throw new Error(`Section validation failed:\n${sectionErrors.join('\n')}`);
-    }
-
-    // Full plan validation (catches root-level issues)
-    validateTravelPlan(this.plan);
-    validateEventLogState(this.eventLog);
-
-    // Skip all writes in test mode
     if (this.skipSave) return;
-
-    const planJson = JSON.stringify(this.plan, null, 2);
-    const stateJson = JSON.stringify(this.eventLog, null, 2);
-    const schemaVersion = this.plan.schema_version || 'unknown';
-
-    // 1. Write to DB (blocking, atomic)
-    try {
-      const { writePlanToDb } = require('../services/turso-service');
-      await writePlanToDb(this.planId, planJson, stateJson, schemaVersion);
-    } catch (e: any) {
-      throw new Error(`DB write failed — save aborted: ${e.message}`);
-    }
-
-    // 2. Fire-and-forget derived table sync (bookings + events) using in-memory plan
-    this.syncDerivedData();
-  }
-
-  /**
-   * Fire-and-forget sync of derived data to Turso (bookings + events).
-   * Primary plan data is already safe in DB; these are secondary tables.
-   * Uses in-memory plan JSON (not file paths) for pure DB operation.
-   * @internal
-   */
-  private syncDerivedData(): void {
-    try {
-      const { syncBookingsFromPlanJson, syncEventsToDb } = require('../services/turso-service');
-      
-      // Use planId as tripId for booking sync (consistent with DB-primary model)
-      syncBookingsFromPlanJson(this.plan as unknown as Record<string, unknown>, this.planId).catch((e: Error) => {
-        console.warn(`  [turso] booking sync failed: ${e.message} — run 'npm run travel -- sync-bookings' to retry`);
-      });
-      syncEventsToDb(this.eventLog.event_log).catch((e: Error) => {
-        console.warn(`  [turso] event sync failed: ${e.message}`);
-      });
-    } catch {
-      // turso-service not available
-    }
+    await this.repo.save(this.planId, this.repo.getSchemaVersion());
   }
 
   /**
    * Get current plan (for reading).
    */
   getPlan(): TravelPlanMinimal {
-    return this.plan;
-  }
-
-  // ============================================================================
-  // Helpers
-  // ============================================================================
-
-  private ensureDestinationState(destination: string): void {
-    if (!this.plan.cascade_state.destinations[destination]) {
-      this.plan.cascade_state.destinations[destination] = {};
-    }
-  }
-
-  private ensureEventLogDestination(destination: string): void {
-    if (!this.eventLog.destinations[destination]) {
-      this.eventLog.destinations[destination] = {
-        status: 'active',
-        processes: {},
-      };
-    }
+    return this.repo.getPlan();
   }
 
   /**
-   * Normalize known schema variants to the current contract.
-   * This keeps skills/CLI resilient when older plan shapes exist on disk.
+   * Load travel plan from file with Zod validation.
+   * @deprecated Use StateManager.create() factory instead.
    */
-  private normalizePlan(): void {
-    for (const dest of Object.values(this.plan.destinations)) {
+  loadPlan(p?: string): TravelPlanMinimal {
+    return this.loadPlanFromFile(p);
+  }
+
+  /**
+   * Load event log from file with Zod validation.
+   * @deprecated Use StateManager.create() factory instead.
+   */
+  loadEventLog(p?: string): EventLogState {
+    return this.loadEventLogFromFile(undefined, p);
+  }
+
+  // ============================================================================
+  // Normalization (legacy schema migration)
+  // ============================================================================
+
+  private normalizePlan(plan: TravelPlanMinimal): void {
+    for (const dest of Object.values(plan.destinations)) {
       const p34 = (dest as Record<string, unknown>)['process_3_4_packages'] as Record<string, unknown> | undefined;
       if (!p34 || typeof p34 !== 'object') continue;
 
-      // Ensure results object exists.
       if (!p34['results'] || typeof p34['results'] !== 'object') {
         p34['results'] = {};
       }
       const results = p34['results'] as Record<string, unknown>;
 
-      // Legacy: offers at process_3_4_packages.offers
       if (Array.isArray(p34['offers']) && !Array.isArray(results['offers'])) {
         results['offers'] = p34['offers'];
         delete p34['offers'];
       }
 
-      // Legacy: chosen offer at process_3_4_packages.chosen_offer (full offer object).
-      // Current: selection metadata stored at chosen_offer, full offer stored at results.chosen_offer.
       if (p34['chosen_offer'] && results['chosen_offer'] == null) {
         const maybeMeta = p34['chosen_offer'] as Record<string, unknown>;
         if (typeof maybeMeta?.id === 'string' && typeof maybeMeta?.selected_date === 'string') {
-          // This is metadata; keep it as-is.
+          // metadata — keep
         } else {
-          // Treat as legacy full-offer object.
           results['chosen_offer'] = p34['chosen_offer'];
         }
       }
 
-      // Backfill selected_offer_id from results.chosen_offer where possible.
       if (p34['selected_offer_id'] == null && results['chosen_offer'] && typeof results['chosen_offer'] === 'object') {
         const id = (results['chosen_offer'] as Record<string, unknown>)['id'];
         if (typeof id === 'string') {

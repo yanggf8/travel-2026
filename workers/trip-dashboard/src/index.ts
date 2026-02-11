@@ -1,5 +1,5 @@
 import type { Env } from './turso';
-import { getPlan, getBookings, listPlans } from './turso';
+import { getPlan, getDashboardPlan, getBookings, listPlans } from './turso';
 import { renderDashboard, renderError } from './render';
 
 export default {
@@ -64,7 +64,7 @@ export default {
 
       try {
         const [planData, plans] = await Promise.all([
-          getPlan(env, planId),
+          getDashboardPlan(env, planId),
           showNav ? listPlans(env) : Promise.resolve(undefined),
         ]);
         if (!planData) {

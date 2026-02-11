@@ -34,16 +34,30 @@ travel-plan.json
 
 Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v1.8.0).
 
-### DB-Primary Architecture (v1.8.0)
+### Repository Architecture (v2.0.0)
 ```
-WRITE:  mutate → await save() → write DB (blocking) → sync derived tables (fire-and-forget)
-READ:   await StateManager.create() → read DB → memory
-CASCADE: loadPlanAsync() → DB → computePlan → savePlanAsync() → DB
+CLI / Skills / Dashboard
+        ↓ commands
+   StateManager          ← state machine: validate, transition, cascade
+        ↓ repository calls
+   StateRepository       ← interface (abstract)
+        ↓
+   TursoRepository       ← normalized tables (itinerary) + blob (offers/transport)
+        ↓
+   BlobBridgeRepository  ← in-memory plan + blob persistence + dual-write
+```
+
+```
+WRITE:  mutate → await save() → write blob (blocking) → write normalized tables (blocking) → sync bookings+events (fire-and-forget)
+READ:   await StateManager.create() → TursoRepository.create() → load blob + overlay itinerary from normalized tables → memory
 ```
 
 - **Turso cloud is sole source of truth** — no JSON file reads/writes in runtime path
-- `StateManager.save()` is async — DB write must succeed or command fails
-- `StateManager.create()` is async factory — reads plan+state from DB
+- **Normalized tables** for itinerary: `itinerary_days`, `itinerary_sessions`, `activities` (+ 7 supporting tables)
+- **Blob still written** for backward compat — dashboard and cascade runner read from it via reconstructed plan object
+- `StateManager.save()` is async — blob write + normalized table write must succeed or command fails
+- `StateManager.create()` is async factory — reads blob + normalized tables from DB
+- `dispatch(command)` entry point — 25 command types as discriminated union
 - Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `kyoto-2026`)
 - Tests use `skipSave: true` — DB calls skipped entirely
 - DB info messages use `console.error` (stderr) to avoid polluting JSON output
@@ -264,7 +278,17 @@ npm run travel -- fetch-weather [--dest slug]
 │   └── src/styles.ts              # Mobile-first inline CSS
 ├── src/
 │   ├── cli/travel-update.ts       # Main CLI entry
-│   ├── state/state-manager.ts     # Core state management
+│   ├── state/
+│   │   ├── state-manager.ts       # State machine: validate, transition, cascade, dispatch()
+│   │   ├── repository.ts          # StateRepository interface (StateReader + StateWriter)
+│   │   ├── turso-repository.ts    # Reads itinerary from normalized tables, delegates to BlobBridge
+│   │   ├── blob-bridge-repository.ts # JSON blob ↔ repository bridge, dual-write to tables
+│   │   ├── commands.ts            # 25-type Command discriminated union
+│   │   ├── types.ts               # Domain types, status transitions
+│   │   ├── itinerary-manager.ts   # Itinerary domain logic
+│   │   ├── offer-manager.ts       # Offer domain logic
+│   │   ├── transport-manager.ts   # Transport domain logic
+│   │   └── event-query.ts         # Event log queries
 │   ├── config/                    # loader.ts, constants.ts
 │   ├── contracts/skill-contracts.ts
 │   ├── cascade/runner.ts          # Cascade logic
@@ -285,10 +309,16 @@ Note: `ref_path`/`scraper_script` must be repo-relative paths.
 Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 ```
 
-Tables: `plans_current` (DB-primary plan+state, PK=plan_id), `offers`, `destinations`, `events`, `bookings`, `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit), `plan_snapshots` (versioned archive).
+Tables:
+- **Blob**: `plans_current` (DB-primary plan+state, PK=plan_id)
+- **Normalized itinerary**: `itinerary_days`, `itinerary_sessions`, `activities` (PK composites on plan_id+destination+day_number)
+- **Normalized supporting**: `plan_metadata`, `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `airport_transfers`, `flights`, `hotels`
+- **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
+- **Other**: `offers`, `destinations`, `events`, `bookings`, `plan_snapshots` (versioned archive)
 
-Schema/migration: `npm run db:migrate:turso`
+Schema/migration: `npm run db:migrate:turso` (creates all tables idempotently)
 Seed from JSON: `npm run db:seed:plans` (one-time, populates `plans_current` from existing JSON files)
+Data migration: `npx ts-node scripts/migrate-itinerary-data.ts` (one-time, populates normalized tables from blob)
 
 ## Multi-Plan
 All trips live under `data/trips/<trip-id>/` with `travel-plan.json` + `state.json`.
@@ -300,7 +330,7 @@ CLI defaults to `data/trips/tokyo-2026/`; use `--plan <path> --state <path>` or 
 Live web dashboard at `workers/trip-dashboard/` — reads directly from Turso DB, always up-to-date.
 
 ```
-Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → plans_current + bookings_current
+Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normalized tables + plans_current (fallback)
 ```
 
 - **SSR-only** — zero client-side JS, no framework, no token/secret in HTML output
