@@ -264,36 +264,35 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
     },
   },
   2: {
-    theme: '和服日 — 東山散策',
+    theme: '伏見稻荷 + 錦市場',
     morning: {
-      focus: '京都夢館和服體驗',
+      focus: '伏見稻荷大社',
       activities: [
-        '京都夢館（Yumeyakata）和服換裝',
-        '女性含髮型設計（10:00，約1.5小時）',
+        '伏見稻荷大社 — 早起人較少',
+        '千本鳥居隧道',
+        '登頂或半山腰展望台（約1.5-2小時）',
       ],
-      meals: [],
-      transit_notes: '從飯店步行約10分 或 地鐵烏丸線到五條站',
+      meals: ['飯店或車站輕食早餐'],
+      transit_notes: 'JR奈良線 京都 → 稻荷（5分，1站）',
     },
     afternoon: {
-      focus: '東山和服漫步',
+      focus: '錦市場 & 四條購物',
       activities: [
-        '二年坂（Ninenzaka）',
-        '三年坂（Sannenzaka）',
-        '八坂の塔（法觀寺）',
-        '祇園（Gion）漫步',
+        '錦市場（Nishiki Market）— 京都的廚房，小吃伴手禮',
+        '四條河原町周邊購物',
+        '寺町通 / 新京極商店街',
       ],
-      meals: ['東山午餐（おばんざい家庭料理 或 抹茶咖啡廳）'],
-      transit_notes: '市巴士206/100 從五條到清水道',
+      meals: ['錦市場街邊小吃午餐'],
+      transit_notes: 'JR稻荷 → 京都車站，地鐵到四條',
     },
     evening: {
-      focus: '還和服 + 祇園夜景',
+      focus: '先斗町晚餐',
       activities: [
-        '還和服到夢館（確認還衣時間）',
-        '祇園花見小路（Hanamikoji）夜間漫步',
-        '祇園晚餐',
+        '先斗町（Pontocho）小路散步',
+        '先斗町或四條周邊晚餐',
       ],
-      meals: ['祇園晚餐（懷石料理或居酒屋）'],
-      transit_notes: '市巴士回京都車站 或 計程車',
+      meals: ['先斗町晚餐（居酒屋或河畔餐廳）'],
+      transit_notes: '從四條步行，地鐵回京都車站',
     },
   },
   3: {
@@ -329,34 +328,37 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
     },
   },
   4: {
-    theme: '伏見稻荷 + 清水寺',
+    theme: '和服日 — 東山 & 清水寺',
     morning: {
-      focus: '伏見稻荷大社',
+      focus: '京都夢館和服體驗',
       activities: [
-        '伏見稻荷大社 — 早起人較少',
-        '千本鳥居隧道',
-        '登頂或半山腰展望台（約1.5-2小時）',
+        '京都夢館（Yumeyakata）和服換裝',
+        '女性含髮型設計（10:00，約1.5小時）',
       ],
       meals: [],
-      transit_notes: 'JR奈良線 京都 → 稻荷（5分，1站）',
+      transit_notes: '從飯店步行約10分 或 地鐵烏丸線到五條站',
     },
     afternoon: {
-      focus: '清水寺 & 東山',
+      focus: '東山和服漫步',
       activities: [
-        '清水寺（Kiyomizudera）— 清水舞台、音羽瀑布',
-        '清水坂 街邊美食 + 購物',
+        '三年坂（Sannenzaka）— 石疊老街，和服拍照重點',
+        '二年坂（Ninenzaka）— 町家商店、甜點咖啡',
+        '八坂の塔（法觀寺）— 東山地標',
+        '清水坂散步（不入清水寺）',
+        '祇園（Gion）漫步',
       ],
-      meals: ['清水坂街邊小吃午餐'],
-      transit_notes: 'JR稻荷 → 東福寺，步行或巴士到清水寺',
+      meals: ['東山午餐（おばんざい家庭料理 或 抹茶咖啡廳）'],
+      transit_notes: '市巴士206/100 從五條到清水道，沿東山一路走下來',
     },
     evening: {
-      focus: '錦市場 + 四條晚餐',
+      focus: '還和服 + 祇園夜景',
       activities: [
-        '錦市場（Nishiki Market）買伴手禮、試吃（約17:00-18:00關門）',
-        '四條周邊晚餐',
+        '還和服到夢館（確認還衣時間）',
+        '祇園花見小路（Hanamikoji）夜間漫步',
+        '祇園晚餐',
       ],
-      meals: ['錦市場小吃 + 四條晚餐'],
-      transit_notes: '巴士到四條 或 從清水寺步行',
+      meals: ['祇園晚餐（懷石料理或居酒屋）'],
+      transit_notes: '市巴士回京都車站 或 計程車',
     },
   },
   5: {
@@ -394,9 +396,9 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
 /** Ordered landmarks per day for Google Maps route links (Kyoto) */
 export const ZH_KYOTO_DAY_LANDMARKS: Record<number, string[]> = {
   1: [], // arrival day
-  2: ['Kyoto Yumeyakata Kimono', 'Ninenzaka Kyoto', 'Sannenzaka Kyoto', 'Yasaka Pagoda', 'Gion Kyoto'],
+  2: ['Fushimi Inari Taisha', 'Nishiki Market Kyoto', 'Pontocho Kyoto'],
   3: ['Kameoka Station', 'Arashiyama Bamboo Grove', 'Tenryuji Temple', 'Togetsukyo Bridge'],
-  4: ['Fushimi Inari Taisha', 'Kiyomizudera Temple', 'Nishiki Market Kyoto'],
+  4: ['Kyoto Yumeyakata Kimono', 'Ninenzaka Kyoto', 'Sannenzaka Kyoto', 'Yasaka Pagoda', 'Gion Kyoto'],
   5: [], // departure day
 };
 
