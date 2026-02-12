@@ -38,7 +38,8 @@
     "db:sync:events": "ts-node scripts/turso-sync-events.ts",
     "db:seed:plans": "ts-node scripts/seed-plans-current.ts",
     "scraper:doctor": "python scripts/scraper_doctor.py",
-    "scraper:batch": "python scripts/scrape_batch.py"
+    "scraper:batch": "python scripts/scrape_batch.py",
+    "scraper:pipeline": "npm run scraper:doctor && npm run scraper:batch && npm run db:import:turso && echo '✅ Pipeline complete. Run: npm run travel -- compare-offers --region <name>'"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -126,6 +126,12 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/p5-itinerary` | `src/skills/p5-itinerary/SKILL.md` | Build daily itinerary |
 | `/scrape-ota` | `src/skills/scrape-ota/SKILL.md` | Scrape OTA sites (Playwright) |
 | `/separate-bookings` | `src/skills/separate-bookings/SKILL.md` | Compare package vs split booking |
+| `/booking-confirmation` | `src/skills/booking-confirmation/SKILL.md` | Post-booking verification workflow |
+| `/post-pull-fix` | `src/skills/post-pull-fix/SKILL.md` | Health checks after git pull |
+| `/weather-update` | `src/skills/weather-update/SKILL.md` | Fetch weather with pre-checks |
+| `/deploy-dashboard` | `src/skills/deploy-dashboard/SKILL.md` | Deploy trip dashboard to CF Workers |
+| `/pre-trip-checklist` | `src/skills/pre-trip-checklist/SKILL.md` | Pre-departure verification |
+| `/new-destination` | `src/skills/new-destination/SKILL.md` | Add destination to config |
 
 ## OTA Sources
 
@@ -228,6 +234,7 @@ npm run compare-true-cost -- --region kansai --pax 2 --date 2026-02-24
 # === SCRAPING ===
 npm run scraper:batch -- --dest kansai [--sources besttour,settour] [--date 2026-02-24 --type fit]
 npm run scraper:doctor                         # Test all scrapers
+npm run scraper:pipeline                       # Doctor + batch + import (end-to-end)
 python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
   --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
 
@@ -255,6 +262,7 @@ npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--
 npm run travel -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
 npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
 npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
+npm run travel -- swap-days <dayA> <dayB> [--dest slug]
 npm run travel -- fetch-weather [--dest slug]
 
 # === OPERATION TRACKING ===
@@ -343,7 +351,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normali
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
 - **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
 - **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
-- **Embedded maps** — Google Maps Embed API per day card via `<details>/<summary>` (zero JS, lazy-load iframe). Requires `GOOGLE_MAPS_KEY` secret; gracefully hidden when absent
+- **Embedded maps** — Per-segment Google Maps Embed API (transit/walking modes) via `<details>/<summary>` (zero JS, lazy-load iframes). Route segments defined in `zh-content.ts` (`ZH_DAY_ROUTES`, `ZH_KYOTO_DAY_ROUTES`). Requires `GOOGLE_MAPS_KEY` secret; gracefully hidden when absent
 - **Secrets**: `TURSO_URL` + `TURSO_TOKEN` + `GOOGLE_MAPS_KEY` (optional) via `wrangler secret put` (server-side only, never sent to browser — except Maps key which is browser-visible by design; restrict via GCP Console referrer policy)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
 - **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=kyoto-2026`
@@ -380,12 +388,13 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ## Next Steps
 
-### Tokyo (Feb 13-17) — departs tomorrow
+### Tokyo (Feb 13-17) — departs today
 1. **Book teamLab Borderless** — Feb 15 visit, OVERDUE (book-by was Feb 10)
 2. Book Limousine Bus — low-risk, can buy day-of at NRT T2
 3. Restaurant reservations
 4. ~~Fetch weather forecast~~ ✅ Done (feels-like: 體感 -1.9–14.9°C, rain Day 4-5)
-5. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
+5. ~~Per-segment maps~~ ✅ Done (transit/walking per route segment, Tokyo+Kyoto)
+6. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
 
 ### Kyoto (Feb 24-28)
 1. Book Hozugawa River Boat Ride (Day 3)

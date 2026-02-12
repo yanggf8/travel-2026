@@ -489,6 +489,15 @@ body {
 details[open] .map-summary::after { transform: rotate(90deg); }
 .map-container { width: 100%; overflow: hidden; }
 .map-container iframe { display: block; width: 100%; min-height: 250px; max-height: 350px; }
+.map-segment-label {
+  padding: 8px 16px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 @media (max-width: 480px) { .map-container iframe { min-height: 200px; } }
 
 /* Print */

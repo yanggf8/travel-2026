@@ -92,6 +92,31 @@ result = parser.parse_raw_text(raw_text)  # Pure parsing, no browser
 
 ## Workflow
 
+### 0. Pre-flight checks (REQUIRED)
+
+Before any scraping operation, verify environment health:
+
+```bash
+# Check Playwright installation and browser availability
+python scripts/check_playwright.py
+
+# Auto-install if missing
+python scripts/check_playwright.py --install
+
+# Test all OTA scrapers (connectivity + CSS selectors)
+npm run scraper:doctor
+```
+
+**Why this matters:**
+- Playwright missing → Silent failures with cryptic errors
+- Outdated CSS selectors → Empty results or parse errors
+- OTA site changes → Scraper returns stale/wrong data
+
+**Integration with skills:**
+- `/scrape-ota` should run `scraper:doctor` before batch operations
+- Single URL scrapes can skip (faster feedback loop)
+- CI/CD should run `scraper:doctor` on schedule to detect breakage
+
 ### 1. Detect OTA and run scraper
 
 ```bash

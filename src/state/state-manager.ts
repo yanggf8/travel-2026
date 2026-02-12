@@ -983,6 +983,40 @@ export class StateManager {
     });
   }
 
+  swapDays(destination: string, dayA: number, dayB: number): void {
+    const days = this.repo.getDays(destination);
+    if (!days || days.length === 0) {
+      throw new Error(`No itinerary found for ${destination}`);
+    }
+
+    const dayAObj = days.find((d: any) => d.day_number === dayA);
+    const dayBObj = days.find((d: any) => d.day_number === dayB);
+
+    if (!dayAObj) throw new Error(`Day ${dayA} not found`);
+    if (!dayBObj) throw new Error(`Day ${dayB} not found`);
+
+    // Swap all session content (preserve day metadata like date, day_number, day_type)
+    const sessions: SessionType[] = ['morning', 'afternoon', 'evening'];
+    sessions.forEach(session => {
+      const tempSession = dayAObj[session];
+      dayAObj[session] = dayBObj[session];
+      dayBObj[session] = tempSession;
+    });
+
+    // Swap day-level fields (theme, notes)
+    [dayAObj.theme, dayBObj.theme] = [dayBObj.theme, dayAObj.theme];
+    [dayAObj.notes, dayBObj.notes] = [dayBObj.notes, dayAObj.notes];
+
+    this.repo.touchItinerary(destination, this.timestamp);
+
+    this.emitEvent({
+      event: 'days_swapped',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_a: dayA, day_b: dayB },
+    });
+  }
+
   removeActivity(
     destination: string,
     dayNumber: number,

@@ -212,6 +212,37 @@ export const ZH_DAY_LANDMARKS: Record<number, string[]> = {
   5: [], // departure day
 };
 
+export interface RouteSegment {
+  from: string;   // 'hotel' = substitute actual hotel name
+  to: string;
+  mode: 'transit' | 'walking';
+}
+
+/** Per-segment routes for Tokyo (hotel = TAVINOS Hamamatsucho) */
+export const ZH_DAY_ROUTES: Record<number, RouteSegment[]> = {
+  1: [],
+  2: [
+    { from: 'hotel', to: 'teamLab Borderless Azabudai Hills', mode: 'transit' },
+    { from: 'teamLab Borderless Azabudai Hills', to: 'Azabudai Hills', mode: 'walking' },
+    { from: 'Azabudai Hills', to: 'Roppongi Hills Tokyo', mode: 'walking' },
+    { from: 'Roppongi Hills Tokyo', to: 'hotel', mode: 'transit' },
+  ],
+  3: [
+    { from: 'hotel', to: 'Shibuya Crossing', mode: 'transit' },
+    { from: 'Shibuya Crossing', to: 'Shibuya Sky', mode: 'walking' },
+    { from: 'Shibuya Sky', to: 'Harajuku Takeshita Street', mode: 'walking' },
+    { from: 'Harajuku Takeshita Street', to: 'Senso-ji Temple Asakusa', mode: 'transit' },
+    { from: 'Senso-ji Temple Asakusa', to: 'hotel', mode: 'transit' },
+  ],
+  4: [
+    { from: 'hotel', to: 'KOMEHYO Shinjuku', mode: 'transit' },
+    { from: 'KOMEHYO Shinjuku', to: 'Isetan Shinjuku', mode: 'walking' },
+    { from: 'Isetan Shinjuku', to: 'Omoide Yokocho Shinjuku', mode: 'walking' },
+    { from: 'Omoide Yokocho Shinjuku', to: 'hotel', mode: 'transit' },
+  ],
+  5: [],
+};
+
 /** Hotel name EN → ZH mapping */
 export const ZH_HOTELS: Record<string, string> = {
   'TAVINOS HAMAMATSUCHO': 'TAVINOS 濱松町',
@@ -403,6 +434,33 @@ export const ZH_KYOTO_DAY_LANDMARKS: Record<number, string[]> = {
   3: ['Kameoka Station', 'Arashiyama Bamboo Grove', 'Tenryuji Temple', 'Togetsukyo Bridge'],
   4: ['Kyoto Yumeyakata Kimono', 'Ninenzaka Kyoto', 'Sannenzaka Kyoto', 'Yasaka Pagoda', 'Gion Kyoto'],
   5: [], // departure day
+};
+
+/** Per-segment routes for Kyoto (hotel = APA Hotel Kyoto Ekimae) */
+export const ZH_KYOTO_DAY_ROUTES: Record<number, RouteSegment[]> = {
+  1: [],
+  2: [
+    { from: 'hotel', to: 'Fushimi Inari Taisha', mode: 'transit' },
+    { from: 'Fushimi Inari Taisha', to: 'Nishiki Market Kyoto', mode: 'transit' },
+    { from: 'Nishiki Market Kyoto', to: 'Pontocho Kyoto', mode: 'walking' },
+    { from: 'Pontocho Kyoto', to: 'hotel', mode: 'transit' },
+  ],
+  3: [
+    { from: 'hotel', to: 'Kameoka Station', mode: 'transit' },
+    { from: 'Kameoka Station', to: 'Arashiyama Bamboo Grove', mode: 'transit' },
+    { from: 'Arashiyama Bamboo Grove', to: 'Tenryuji Temple', mode: 'walking' },
+    { from: 'Tenryuji Temple', to: 'Togetsukyo Bridge', mode: 'walking' },
+    { from: 'Togetsukyo Bridge', to: 'hotel', mode: 'transit' },
+  ],
+  4: [
+    { from: 'hotel', to: 'Kyoto Yumeyakata Kimono', mode: 'transit' },
+    { from: 'Kyoto Yumeyakata Kimono', to: 'Ninenzaka Kyoto', mode: 'walking' },
+    { from: 'Ninenzaka Kyoto', to: 'Sannenzaka Kyoto', mode: 'walking' },
+    { from: 'Sannenzaka Kyoto', to: 'Yasaka Pagoda', mode: 'walking' },
+    { from: 'Yasaka Pagoda', to: 'Gion Kyoto', mode: 'walking' },
+    { from: 'Gion Kyoto', to: 'hotel', mode: 'transit' },
+  ],
+  5: [],
 };
 
 /** Hotel name EN → ZH mapping (Kyoto) */

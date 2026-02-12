@@ -204,6 +204,27 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     example: 'npm run travel -- set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"',
   },
 
+  'swap-days': {
+    name: 'swap-days',
+    description: 'Swap all activities between two days (preserves sessions and day metadata).',
+    args: [
+      { name: 'dayA', type: 'number', required: true, description: 'First day number (1-indexed)' },
+      { name: 'dayB', type: 'number', required: true, description: 'Second day number (1-indexed)' },
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'void', description: 'Updates state files' },
+    mutates: [
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.morning',
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.afternoon',
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.evening',
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.theme',
+      'travel-plan.destinations.*.process_5_daily_itinerary.days.*.notes',
+      'state.event_log',
+    ],
+    data_freshness: 'static',
+    example: 'npm run travel -- swap-days 2 3',
+  },
+
   'set-activity-time': {
     name: 'set-activity-time',
     description: 'Set optional time fields for an activity (start/end/fixed).',

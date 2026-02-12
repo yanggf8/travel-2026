@@ -3,6 +3,8 @@ import type { PlanData, BookingRow, PlanSummary } from './turso';
 import {
   ZH_DAYS, ZH_TRANSIT, ZH_HOTELS, ZH_DAY_LANDMARKS,
   ZH_KYOTO_DAYS, ZH_KYOTO_TRANSIT, ZH_KYOTO_HOTELS, ZH_KYOTO_DAY_LANDMARKS,
+  ZH_DAY_ROUTES, ZH_KYOTO_DAY_ROUTES,
+  type RouteSegment,
 } from './zh-content';
 
 type Lang = 'en' | 'zh';
@@ -370,24 +372,33 @@ function renderRouteLink(dayNum: number, hotelName: string, lang: Lang, isTokyoP
 
 function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean, mapsKey?: string): string {
   if (!mapsKey || !hotelName) return '';
-  const landmarks = isTokyoPlan ? ZH_DAY_LANDMARKS[dayNum]
-    : isKyotoPlan ? ZH_KYOTO_DAY_LANDMARKS[dayNum]
+  const routes: RouteSegment[] | undefined = isTokyoPlan ? ZH_DAY_ROUTES[dayNum]
+    : isKyotoPlan ? ZH_KYOTO_DAY_ROUTES[dayNum]
     : undefined;
-  if (!landmarks || landmarks.length === 0) return '';
+  if (!routes || routes.length === 0) return '';
 
-  const origin = encodeURIComponent(hotelName);
-  const destination = encodeURIComponent(hotelName);
-  const waypoints = landmarks.map((l) => encodeURIComponent(l)).join('|');
   const mapLang = lang === 'zh' ? 'zh-TW' : 'en';
-  const embedUrl = `https://www.google.com/maps/embed/v1/directions?key=${mapsKey}&origin=${origin}&destination=${destination}&waypoints=${waypoints}&mode=transit&language=${mapLang}`;
+  const resolve = (name: string) => name === 'hotel' ? hotelName : name;
+  const modeIcon = (mode: 'transit' | 'walking') => mode === 'transit' ? '\uD83D\uDE87' : '\uD83D\uDEB6';
 
-  const label = lang === 'zh' ? '展開地圖' : 'Show map';
-  return `
-    <details class="map-details">
-      <summary class="map-summary">\uD83D\uDDFA\uFE0F ${label}</summary>
+  const segments = routes.map((seg) => {
+    const from = resolve(seg.from);
+    const to = resolve(seg.to);
+    const embedUrl = `https://www.google.com/maps/embed/v1/directions?key=${mapsKey}&origin=${encodeURIComponent(from)}&destination=${encodeURIComponent(to)}&mode=${seg.mode}&language=${mapLang}`;
+    return `
+      <div class="map-segment-label">${modeIcon(seg.mode)} ${esc(from)} → ${esc(to)}</div>
       <div class="map-container">
         <iframe src="${esc(embedUrl)}" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" style="border:0"></iframe>
-      </div>
+      </div>`;
+  }).join('');
+
+  const label = lang === 'zh'
+    ? `\uD83D\uDDFA\uFE0F 展開地圖（${routes.length} 段路線）`
+    : `\uD83D\uDDFA\uFE0F Show map (${routes.length} segments)`;
+  return `
+    <details class="map-details">
+      <summary class="map-summary">${label}</summary>
+      ${segments}
     </details>`;
 }
 

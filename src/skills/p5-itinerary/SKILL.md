@@ -235,6 +235,9 @@ npm run travel -- scaffold-itinerary [--force]
 # Populate with clusters
 npm run travel -- populate-itinerary --goals "cluster1,cluster2" --pace balanced
 
+# Reorder days
+npm run travel -- swap-days <dayA> <dayB>  # Swap all activities between two days
+
 # Set activity details
 npm run travel -- set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM [--fixed true]
 npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]

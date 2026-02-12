@@ -111,6 +111,11 @@ Commands:
     Set optional time boundaries for a session.
     Example: set-session-time-range 5 afternoon --start 11:00 --end 14:45
 
+  swap-days <dayA> <dayB> [--dest slug]
+    Swap all activities between two days (preserves sessions).
+    Useful for reordering itinerary without manual re-assignment.
+    Example: swap-days 2 3
+
   validate-itinerary [--dest slug] [--severity error|warning|info] [--json]
     Validate itinerary for time conflicts, business hours, booking deadlines, and area efficiency.
     Example: validate-itinerary --severity warning
@@ -1821,6 +1826,48 @@ async function main(): Promise<void> {
           console.log('🔸 DRY RUN - no changes saved');
         }
 
+        break;
+      }
+
+      case 'swap-days': {
+        const [, dayAStr, dayBStr] = cleanArgs;
+        if (!dayAStr || !dayBStr) {
+          console.error('Error: swap-days requires <dayA> <dayB>');
+          console.error('Example: swap-days 2 3');
+          process.exit(1);
+        }
+
+        const dayAResult = validatePositiveInt(dayAStr, '<dayA>');
+        const dayBResult = validatePositiveInt(dayBStr, '<dayB>');
+        if (!dayAResult.ok) {
+          console.error(`Error: ${dayAResult.error}`);
+          process.exit(1);
+        }
+        if (!dayBResult.ok) {
+          console.error(`Error: ${dayBResult.error}`);
+          process.exit(1);
+        }
+
+        const dayA = dayAResult.value;
+        const dayB = dayBResult.value;
+
+        if (dayA === dayB) {
+          console.error('Error: dayA and dayB must be different');
+          process.exit(1);
+        }
+
+        const destination = destOpt || sm.getActiveDestination();
+        console.log(`\n🔄 Swapping days:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Day ${dayA} ↔ Day ${dayB}`);
+
+        if (!dryRun) {
+          sm.swapDays(destination, dayA, dayB);
+          await sm.saveWithTracking('swap-days', `D${dayA} ↔ D${dayB}`);
+          console.log('✅ Days swapped successfully');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
         break;
       }
 
