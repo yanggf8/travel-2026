@@ -272,7 +272,11 @@ function renderSession(
         }).join('')}
       </ul>
       <div class="info-pills">
-        ${transit ? `<span class="pill pill-transit">\uD83D\uDE83 ${esc(transit)}</span>` : ''}
+        ${transit ? (() => {
+          const mapsQuery = encodeURIComponent(transit.replace(/[（(].*?[)）]/g, '').replace(/[。，、]/g, ' ').trim());
+          const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
+          return `<a class="pill pill-transit" href="${esc(mapsUrl)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
+        })() : ''}
         ${meals.map((m) => `<span class="pill pill-meal">\uD83C\uDF5C ${esc(m)}</span>`).join('')}
       </div>
     </div>`;
@@ -412,14 +416,7 @@ function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPl
 
   if (links.length === 0) return '';
 
-  const label = lang === 'zh'
-    ? `\uD83D\uDDFA\uFE0F 地圖（${links.length}）`
-    : `\uD83D\uDDFA\uFE0F Maps (${links.length})`;
-  return `
-    <details class="map-details">
-      <summary class="map-summary">${label}</summary>
-      <div class="map-links">${links.join('')}</div>
-    </details>`;
+  return `<div class="map-links">${links.join('')}</div>`;
 }
 
 function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: string, isTokyoPlan: boolean, isKyotoPlan: boolean, mapsKey?: string): string {

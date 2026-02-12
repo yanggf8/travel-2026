@@ -393,7 +393,8 @@ body {
   gap: 4px;
 }
 
-.pill-transit { background: #eff6ff; color: #1d4ed8; }
+.pill-transit { background: #eff6ff; color: #1d4ed8; text-decoration: none; }
+.pill-transit:active { background: #dbeafe; }
 .pill-meal { background: #fef3c7; color: #92400e; }
 
 /* Transit summary */
