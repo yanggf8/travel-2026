@@ -407,17 +407,8 @@ function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPl
 
   const links: string[] = [];
 
-  // Days with landmarks: day route link + individual place links
-  if (hasLandmarks) {
-    // Individual place links for each stop
-    for (const place of landmarks) {
-      const placeUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
-      links.push(`<a class="map-place-link" href="${esc(placeUrl)}" target="_blank" rel="noopener">\uD83D\uDCCD ${esc(place)}</a>`);
-    }
-  }
-
-  // Transit segment links for arrival/departure days
-  if (!hasLandmarks && hasRoutes) {
+  // Point-to-point direction links for every segment
+  if (hasRoutes) {
     const homeAddr = isKyotoPlan ? KYOTO_HOME_ADDRESS : HOME_ADDRESS;
     const resolve = (name: string) => name === 'hotel' ? hotelName : name === 'home' ? homeAddr : name;
     const display = (name: string) => name === 'home' ? (lang === 'zh' ? '住家' : 'Home') : name === 'hotel' ? hotelName : name;

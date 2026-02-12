@@ -41,7 +41,7 @@ export const ZH_DAYS: Record<number, DayZh> = {
         '19:40 利木津巴士（SuperCabin）出發往竹芝',
       ],
       meals: ['成田T2 晚餐（拉麵、壽司、烏龍麵）'],
-      transit_notes: '利木津巴士 19:40 → 竹芝 21:25',
+      transit_notes: '成田T2 19:40 → 竹芝 21:25（利木津巴士）',
     },
     evening: {
       focus: '飯店 Check-in & 休息',
@@ -197,7 +197,7 @@ export const ZH_DAYS: Record<number, DayZh> = {
         '19:55 TR875 成田出發 → 桃園 23:10',
       ],
       meals: ['成田T2 簡單晚餐'],
-      transit_notes: '利木津巴士：竹芝 15:30 → 成田 17:30（¥3,200）',
+      transit_notes: '竹芝 15:30 → 成田T2 17:30（利木津巴士、¥3,200）',
     },
   },
 };
@@ -225,7 +225,8 @@ export const KYOTO_HOME_ADDRESS = '關渡北方之星, Beitou District, Taipei C
 export const ZH_DAY_ROUTES: Record<number, RouteSegment[]> = {
   1: [
     { from: 'home', to: 'Taoyuan International Airport', mode: 'driving' },
-    { from: 'Narita International Airport', to: 'hotel', mode: 'transit' },
+    { from: 'Narita Airport Terminal 2', to: 'Shiodome Station Tokyo', mode: 'transit' },
+    { from: 'Shiodome Station Tokyo', to: 'hotel', mode: 'walking' },
   ],
   2: [
     { from: 'hotel', to: 'teamLab Borderless Azabudai Hills', mode: 'transit' },
@@ -247,7 +248,8 @@ export const ZH_DAY_ROUTES: Record<number, RouteSegment[]> = {
     { from: 'Omoide Yokocho Shinjuku', to: 'hotel', mode: 'transit' },
   ],
   5: [
-    { from: 'hotel', to: 'Narita International Airport', mode: 'transit' },
+    { from: 'hotel', to: 'Shiodome Station Tokyo', mode: 'walking' },
+    { from: 'Shiodome Station Tokyo', to: 'Narita Airport Terminal 2', mode: 'transit' },
     { from: 'Taoyuan International Airport', to: 'home', mode: 'driving' },
   ],
 };
@@ -291,7 +293,7 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
         'APA Hotel 京都站前 check-in',
       ],
       meals: [],
-      transit_notes: 'Haruka特急 關西機場 → 京都車站',
+      transit_notes: '關西機場 → 京都車站（Haruka特急）',
     },
     evening: {
       focus: '京都車站周邊探索',
@@ -423,7 +425,7 @@ export const ZH_KYOTO_DAYS: Record<number, DayZh> = {
         '抵達關西機場辦理登機',
       ],
       meals: [],
-      transit_notes: 'Haruka特急 京都 → 關西機場',
+      transit_notes: '京都車站 → 關西機場（Haruka特急）',
     },
     evening: {
       focus: '返回台灣',
@@ -449,7 +451,8 @@ export const ZH_KYOTO_DAY_LANDMARKS: Record<number, string[]> = {
 export const ZH_KYOTO_DAY_ROUTES: Record<number, RouteSegment[]> = {
   1: [
     { from: 'home', to: 'Taoyuan International Airport', mode: 'driving' },
-    { from: 'Kansai International Airport', to: 'hotel', mode: 'transit' },
+    { from: 'Kansai International Airport', to: 'Kyoto Station', mode: 'transit' },
+    { from: 'Kyoto Station', to: 'hotel', mode: 'walking' },
   ],
   2: [
     { from: 'hotel', to: 'Fushimi Inari Taisha', mode: 'transit' },
@@ -473,7 +476,8 @@ export const ZH_KYOTO_DAY_ROUTES: Record<number, RouteSegment[]> = {
     { from: 'Gion Kyoto', to: 'hotel', mode: 'transit' },
   ],
   5: [
-    { from: 'hotel', to: 'Kansai International Airport', mode: 'transit' },
+    { from: 'hotel', to: 'Kyoto Station', mode: 'walking' },
+    { from: 'Kyoto Station', to: 'Kansai International Airport', mode: 'transit' },
     { from: 'Taoyuan International Airport', to: 'home', mode: 'driving' },
   ],
 };

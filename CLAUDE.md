@@ -351,7 +351,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normali
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
 - **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
 - **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
-- **Embedded maps** — Per-segment Google Maps Embed API (transit/walking modes) via `<details>/<summary>` (zero JS, lazy-load iframes). Route segments defined in `zh-content.ts` (`ZH_DAY_ROUTES`, `ZH_KYOTO_DAY_ROUTES`). Requires `GOOGLE_MAPS_KEY` secret; gracefully hidden when absent
+- **Maps links** — Per-segment Google Maps direction links (transit/walking/driving) for every stop. Route segments defined in `zh-content.ts` (`ZH_DAY_ROUTES`, `ZH_KYOTO_DAY_ROUTES`). Arrival/departure days split into actual transport legs (e.g., NRT T2 → Shiodome + walk to hotel). Transit pill text must use place names, not service names (e.g., `成田T2 → 竹芝` not `利木津巴士 → 竹芝`)
 - **Secrets**: `TURSO_URL` + `TURSO_TOKEN` + `GOOGLE_MAPS_KEY` (optional) via `wrangler secret put` (server-side only, never sent to browser — except Maps key which is browser-visible by design; restrict via GCP Console referrer policy)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
 - **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=kyoto-2026`
