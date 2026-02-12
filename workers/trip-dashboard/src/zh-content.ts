@@ -213,14 +213,20 @@ export const ZH_DAY_LANDMARKS: Record<number, string[]> = {
 };
 
 export interface RouteSegment {
-  from: string;   // 'hotel' = substitute actual hotel name
+  from: string;   // 'hotel' = substitute actual hotel name, 'home' = HOME_ADDRESS
   to: string;
-  mode: 'transit' | 'walking';
+  mode: 'transit' | 'walking' | 'driving';
 }
+
+export const HOME_ADDRESS = 'No. 18, Lane 25, Section 2, Zhongzheng E Rd, Tamsui District, New Taipei City';
+export const KYOTO_HOME_ADDRESS = '關渡北方之星, Beitou District, Taipei City';
 
 /** Per-segment routes for Tokyo (hotel = TAVINOS Hamamatsucho) */
 export const ZH_DAY_ROUTES: Record<number, RouteSegment[]> = {
-  1: [],
+  1: [
+    { from: 'home', to: 'Taoyuan International Airport', mode: 'driving' },
+    { from: 'Narita International Airport', to: 'hotel', mode: 'transit' },
+  ],
   2: [
     { from: 'hotel', to: 'teamLab Borderless Azabudai Hills', mode: 'transit' },
     { from: 'teamLab Borderless Azabudai Hills', to: 'Azabudai Hills', mode: 'walking' },
@@ -240,7 +246,10 @@ export const ZH_DAY_ROUTES: Record<number, RouteSegment[]> = {
     { from: 'Isetan Shinjuku', to: 'Omoide Yokocho Shinjuku', mode: 'walking' },
     { from: 'Omoide Yokocho Shinjuku', to: 'hotel', mode: 'transit' },
   ],
-  5: [],
+  5: [
+    { from: 'hotel', to: 'Narita International Airport', mode: 'transit' },
+    { from: 'Taoyuan International Airport', to: 'home', mode: 'driving' },
+  ],
 };
 
 /** Hotel name EN → ZH mapping */
@@ -438,7 +447,10 @@ export const ZH_KYOTO_DAY_LANDMARKS: Record<number, string[]> = {
 
 /** Per-segment routes for Kyoto (hotel = APA Hotel Kyoto Ekimae) */
 export const ZH_KYOTO_DAY_ROUTES: Record<number, RouteSegment[]> = {
-  1: [],
+  1: [
+    { from: 'home', to: 'Taoyuan International Airport', mode: 'driving' },
+    { from: 'Kansai International Airport', to: 'hotel', mode: 'transit' },
+  ],
   2: [
     { from: 'hotel', to: 'Fushimi Inari Taisha', mode: 'transit' },
     { from: 'Fushimi Inari Taisha', to: 'Nishiki Market Kyoto', mode: 'transit' },
@@ -460,7 +472,10 @@ export const ZH_KYOTO_DAY_ROUTES: Record<number, RouteSegment[]> = {
     { from: 'Yasaka Pagoda', to: 'Gion Kyoto', mode: 'walking' },
     { from: 'Gion Kyoto', to: 'hotel', mode: 'transit' },
   ],
-  5: [],
+  5: [
+    { from: 'hotel', to: 'Kansai International Airport', mode: 'transit' },
+    { from: 'Taoyuan International Airport', to: 'home', mode: 'driving' },
+  ],
 };
 
 /** Hotel name EN → ZH mapping (Kyoto) */

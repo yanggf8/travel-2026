@@ -3,7 +3,7 @@ import type { PlanData, BookingRow, PlanSummary } from './turso';
 import {
   ZH_DAYS, ZH_TRANSIT, ZH_HOTELS, ZH_DAY_LANDMARKS,
   ZH_KYOTO_DAYS, ZH_KYOTO_TRANSIT, ZH_KYOTO_HOTELS, ZH_KYOTO_DAY_LANDMARKS,
-  ZH_DAY_ROUTES, ZH_KYOTO_DAY_ROUTES,
+  ZH_DAY_ROUTES, ZH_KYOTO_DAY_ROUTES, HOME_ADDRESS, KYOTO_HOME_ADDRESS,
   type RouteSegment,
 } from './zh-content';
 
@@ -378,15 +378,19 @@ function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPl
   if (!routes || routes.length === 0) return '';
 
   const mapLang = lang === 'zh' ? 'zh-TW' : 'en';
-  const resolve = (name: string) => name === 'hotel' ? hotelName : name;
-  const modeIcon = (mode: 'transit' | 'walking') => mode === 'transit' ? '\uD83D\uDE87' : '\uD83D\uDEB6';
+  const homeAddr = isKyotoPlan ? KYOTO_HOME_ADDRESS : HOME_ADDRESS;
+  const resolve = (name: string) => name === 'hotel' ? hotelName : name === 'home' ? homeAddr : name;
+  const displayName = (name: string) => name === 'home' ? (lang === 'zh' ? '住家' : 'Home') : name === 'hotel' ? hotelName : name;
+  const modeIcon = (mode: string) => mode === 'transit' ? '\uD83D\uDE87' : mode === 'driving' ? '\uD83D\uDE97' : '\uD83D\uDEB6';
 
   const segments = routes.map((seg) => {
     const from = resolve(seg.from);
     const to = resolve(seg.to);
     const embedUrl = `https://www.google.com/maps/embed/v1/directions?key=${mapsKey}&origin=${encodeURIComponent(from)}&destination=${encodeURIComponent(to)}&mode=${seg.mode}&language=${mapLang}`;
+    const fromLabel = displayName(seg.from);
+    const toLabel = displayName(seg.to);
     return `
-      <div class="map-segment-label">${modeIcon(seg.mode)} ${esc(from)} → ${esc(to)}</div>
+      <div class="map-segment-label">${modeIcon(seg.mode)} ${esc(fromLabel)} → ${esc(toLabel)}</div>
       <div class="map-container">
         <iframe src="${esc(embedUrl)}" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" style="border:0"></iframe>
       </div>`;
