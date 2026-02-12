@@ -498,6 +498,25 @@ details[open] .map-summary::after { transform: rotate(90deg); }
   align-items: center;
   gap: 4px;
 }
+.map-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+.map-place-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+}
+.map-place-link:last-child { border-bottom: none; }
+.map-place-link:active { background: var(--accent-light); }
 @media (max-width: 480px) { .map-container iframe { min-height: 200px; } }
 
 /* Print */
