@@ -2156,7 +2156,10 @@ async function main(): Promise<void> {
         console.log(`Weather updated for ${forecasts.length} day(s) in ${dest}:`);
         for (let i = 0; i < forecasts.length; i++) {
           const f = forecasts[i];
-          console.log(`  Day ${days[i].day_number}: ${f.weather_label} ${f.temp_low_c}–${f.temp_high_c}°C, Rain: ${f.precipitation_pct}%`);
+          const feelsLike = (f.feels_like_low_c != null && f.feels_like_high_c != null)
+            ? ` (體感 ${f.feels_like_low_c}–${f.feels_like_high_c}°C)`
+            : '';
+          console.log(`  Day ${days[i].day_number}: ${f.weather_label} ${f.temp_low_c}–${f.temp_high_c}°C${feelsLike}, Rain: ${f.precipitation_pct}%`);
         }
         break;
       }

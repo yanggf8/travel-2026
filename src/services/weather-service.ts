@@ -45,6 +45,8 @@ interface OpenMeteoDaily {
   time: string[];
   temperature_2m_max: number[];
   temperature_2m_min: number[];
+  apparent_temperature_max: number[];
+  apparent_temperature_min: number[];
   precipitation_probability_max: number[];
   weather_code: number[];
 }
@@ -88,7 +90,7 @@ export async function fetchWeather(
 
   const url = `https://api.open-meteo.com/v1/forecast`
     + `?latitude=${lat}&longitude=${lon}`
-    + `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code`
+    + `&daily=temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,weather_code`
     + `&timezone=${encodeURIComponent(tz)}`
     + `&start_date=${startDate}&end_date=${endDate}`;
 
@@ -113,6 +115,8 @@ export async function fetchWeather(
     results.push({
       temp_high_c: data.daily.temperature_2m_max[i],
       temp_low_c: data.daily.temperature_2m_min[i],
+      feels_like_high_c: data.daily.apparent_temperature_max[i],
+      feels_like_low_c: data.daily.apparent_temperature_min[i],
       precipitation_pct: data.daily.precipitation_probability_max[i],
       weather_code: code,
       weather_label: WMO_LABELS[code] || `WMO ${code}`,

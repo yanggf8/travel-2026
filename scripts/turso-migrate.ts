@@ -211,6 +211,8 @@ async function main() {
   temp_high_c REAL,
   precipitation_pct REAL,
   weather_code INTEGER,
+  feels_like_low_c REAL,
+  feels_like_high_c REAL,
   weather_source_id TEXT,
   weather_sourced_at TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -441,6 +443,21 @@ async function main() {
     }
   } catch (e: any) {
     console.warn('⚠️  Could not rename table:', e.message);
+  }
+
+  // 14. Add feels_like columns to itinerary_days
+  for (const col of ['feels_like_low_c', 'feels_like_high_c']) {
+    try {
+      console.log(`Adding ${col} column to itinerary_days...`);
+      await client.execute(`ALTER TABLE itinerary_days ADD COLUMN ${col} REAL;`);
+      console.log(`✅ Added ${col} column.`);
+    } catch (e: any) {
+      if (e.message?.includes('duplicate column name') || e.message?.includes('already exists')) {
+        console.log(`ℹ️  ${col} column already exists.`);
+      } else {
+        console.warn(`⚠️  Could not add ${col} column:`, e.message);
+      }
+    }
   }
 
   console.log('Done.');

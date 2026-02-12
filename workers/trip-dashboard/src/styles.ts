@@ -299,6 +299,12 @@ body {
   font-weight: 500;
 }
 
+.weather-feels {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 .weather-clothing {
   padding: 6px 16px 8px;
   font-size: 12px;
@@ -465,6 +471,26 @@ body {
   padding: 12px;
 }
 
+/* Map embed */
+.map-details { border-top: 1px solid var(--border); }
+.map-summary {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.map-summary::-webkit-details-marker { display: none; }
+.map-summary::after { content: '\u25B8'; margin-left: auto; transition: transform 0.2s; font-size: 12px; color: var(--text-dim); }
+details[open] .map-summary::after { transform: rotate(90deg); }
+.map-container { width: 100%; overflow: hidden; }
+.map-container iframe { display: block; width: 100%; min-height: 250px; max-height: 350px; }
+@media (max-width: 480px) { .map-container iframe { min-height: 200px; } }
+
 /* Print */
 @media print {
   body { max-width: none; padding: 0; }
@@ -472,5 +498,6 @@ body {
   .lang-btn { display: none; }
   .day-card { break-inside: avoid; }
   .badge-urgent { animation: none; }
+  .map-details { display: none; }
 }
 `;

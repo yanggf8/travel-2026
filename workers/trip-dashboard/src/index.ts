@@ -78,7 +78,7 @@ export default {
         const activeDest = plan.active_destination as string;
         const bookings = await getBookings(env, activeDest);
 
-        const html = renderDashboard(planData, bookings, lang, planId, plans);
+        const html = renderDashboard(planData, bookings, lang, planId, plans, env.GOOGLE_MAPS_KEY);
         return new Response(html, {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',

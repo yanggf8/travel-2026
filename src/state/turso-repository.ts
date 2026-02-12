@@ -179,7 +179,7 @@ export class TursoRepository implements StateRepository {
 
       for (const dayRow of days) {
         const day: Record<string, unknown> = {
-          day_number: dayRow.day_number,
+          day_number: Number(dayRow.day_number),
           date: dayRow.date,
           theme: dayRow.theme,
           day_type: dayRow.day_type,
@@ -192,6 +192,8 @@ export class TursoRepository implements StateRepository {
             weather_label: dayRow.weather_label,
             temp_low_c: dayRow.temp_low_c !== null ? Number(dayRow.temp_low_c) : undefined,
             temp_high_c: dayRow.temp_high_c !== null ? Number(dayRow.temp_high_c) : undefined,
+            feels_like_low_c: dayRow.feels_like_low_c != null ? Number(dayRow.feels_like_low_c) : undefined,
+            feels_like_high_c: dayRow.feels_like_high_c != null ? Number(dayRow.feels_like_high_c) : undefined,
             precipitation_pct: dayRow.precipitation_pct !== null ? Number(dayRow.precipitation_pct) : undefined,
             weather_code: dayRow.weather_code !== null ? Number(dayRow.weather_code) : undefined,
             source_id: dayRow.weather_source_id,

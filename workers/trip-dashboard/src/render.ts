@@ -321,18 +321,31 @@ function renderWeatherStrip(day: Record<string, unknown>, lang: Lang): string {
   const tMin = weather.temp_low_c ?? '';
   const tMax = weather.temp_high_c ?? '';
   const rain = weather.precipitation_pct ?? '';
+  const flMin = weather.feels_like_low_c;
+  const flMax = weather.feels_like_high_c;
 
   const tMinNum = typeof tMin === 'number' ? tMin : parseFloat(String(tMin));
   const tMaxNum = typeof tMax === 'number' ? tMax : parseFloat(String(tMax));
   const rainNum = typeof rain === 'number' ? rain : parseFloat(String(rain));
-  const tip = (!isNaN(tMinNum) && !isNaN(tMaxNum))
-    ? clothingTip(tMinNum, tMaxNum, isNaN(rainNum) ? 0 : rainNum, lang)
+  const flMinNum = flMin != null ? (typeof flMin === 'number' ? flMin : parseFloat(String(flMin))) : NaN;
+  const flMaxNum = flMax != null ? (typeof flMax === 'number' ? flMax : parseFloat(String(flMax))) : NaN;
+
+  // Use feels-like temps for clothing tips when available (more relevant for what to wear)
+  const tipLow = !isNaN(flMinNum) ? flMinNum : tMinNum;
+  const tipHigh = !isNaN(flMaxNum) ? flMaxNum : tMaxNum;
+  const tip = (!isNaN(tipLow) && !isNaN(tipHigh))
+    ? clothingTip(tipLow, tipHigh, isNaN(rainNum) ? 0 : rainNum, lang)
+    : '';
+
+  const feelsLikeHtml = (!isNaN(flMinNum) && !isNaN(flMaxNum))
+    ? `<span class="weather-feels">${lang === 'zh' ? '體感' : 'Feels'} ${Math.round(flMinNum)}\u2013${Math.round(flMaxNum)}\u00B0C</span>`
     : '';
 
   return `
     <div class="weather-strip">
       <span class="weather-icon">${weatherIcon(desc)}</span>
       <span class="weather-temp">${tMin}\u2013${tMax}\u00B0C</span>
+      ${feelsLikeHtml}
       <span style="color:var(--text-dim);font-size:12px">${esc(String(desc))}</span>
       ${rain !== '' ? `<span class="weather-rain">\uD83D\uDCA7 ${rain}%</span>` : ''}
     </div>
@@ -355,7 +368,30 @@ function renderRouteLink(dayNum: number, hotelName: string, lang: Lang, isTokyoP
   return `<a class="route-btn" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDDFA\uFE0F ${t('routeMap', lang)}</a>`;
 }
 
-function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: string, isTokyoPlan: boolean, isKyotoPlan: boolean): string {
+function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean, mapsKey?: string): string {
+  if (!mapsKey || !hotelName) return '';
+  const landmarks = isTokyoPlan ? ZH_DAY_LANDMARKS[dayNum]
+    : isKyotoPlan ? ZH_KYOTO_DAY_LANDMARKS[dayNum]
+    : undefined;
+  if (!landmarks || landmarks.length === 0) return '';
+
+  const origin = encodeURIComponent(hotelName);
+  const destination = encodeURIComponent(hotelName);
+  const waypoints = landmarks.map((l) => encodeURIComponent(l)).join('|');
+  const mapLang = lang === 'zh' ? 'zh-TW' : 'en';
+  const embedUrl = `https://www.google.com/maps/embed/v1/directions?key=${mapsKey}&origin=${origin}&destination=${destination}&waypoints=${waypoints}&mode=transit&language=${mapLang}`;
+
+  const label = lang === 'zh' ? '展開地圖' : 'Show map';
+  return `
+    <details class="map-details">
+      <summary class="map-summary">\uD83D\uDDFA\uFE0F ${label}</summary>
+      <div class="map-container">
+        <iframe src="${esc(embedUrl)}" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" style="border:0"></iframe>
+      </div>
+    </details>`;
+}
+
+function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: string, isTokyoPlan: boolean, isKyotoPlan: boolean, mapsKey?: string): string {
   // Support both formats: day_number (Tokyo) and day (Kyoto)
   const dayNum = (day.day_number as number) || (day.day as number);
   const date = day.date as string;
@@ -413,6 +449,7 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
       ${renderSession(morningSession, 'morning', lang, morningOverride)}
       ${renderSession(afternoonSession, 'afternoon', lang, afternoonOverride)}
       ${renderSession(eveningSession, 'evening', lang, eveningOverride)}
+      ${renderMapEmbed(dayNum, hotelName, lang, isTokyoPlan, isKyotoPlan, mapsKey)}
     </div>`;
 }
 
@@ -616,7 +653,8 @@ export function renderDashboard(
   _bookings: BookingRow[],
   lang: Lang,
   planId?: string,
-  plans?: PlanSummary[]
+  plans?: PlanSummary[],
+  mapsKey?: string
 ): string {
   const plan = JSON.parse(planData.plan_json);
   const activeDest = plan.active_destination as string;
@@ -670,7 +708,7 @@ export function renderDashboard(
   ${renderPendingAlerts(dest, lang)}
   ${renderBookingSummary(dest, lang, isTokyoPlan, isKyotoPlan)}
 
-  ${days.map((day) => renderDayCard(day, lang, hotelName, isTokyoPlan, isKyotoPlan)).join('')}
+  ${days.map((day) => renderDayCard(day, lang, hotelName, isTokyoPlan, isKyotoPlan, mapsKey)).join('')}
 
   ${renderTransitSummary(dest, lang, isTokyoPlan, isKyotoPlan)}
 

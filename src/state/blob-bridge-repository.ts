@@ -805,8 +805,8 @@ export class BlobBridgeRepository implements StateRepository {
           const weather = day.weather as Record<string, unknown> | undefined;
 
           statements.push(
-            `INSERT OR REPLACE INTO itinerary_days (plan_id, destination, day_number, date, theme, day_type, status, weather_label, temp_low_c, temp_high_c, precipitation_pct, weather_code, weather_source_id, weather_sourced_at, updated_at)
-             VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(day.date as string)}, ${sqlText(day.theme as string)}, ${sqlText(day.day_type as string)}, ${sqlText((day.status as string) || 'draft')}, ${sqlText(weather?.weather_label as string)}, ${sqlReal(weather?.temp_low_c as number)}, ${sqlReal(weather?.temp_high_c as number)}, ${sqlReal(weather?.precipitation_pct as number)}, ${sqlInt(weather?.weather_code as number)}, ${sqlText(weather?.source_id as string)}, ${sqlText(weather?.sourced_at as string)}, datetime('now'))`
+            `INSERT OR REPLACE INTO itinerary_days (plan_id, destination, day_number, date, theme, day_type, status, weather_label, temp_low_c, temp_high_c, feels_like_low_c, feels_like_high_c, precipitation_pct, weather_code, weather_source_id, weather_sourced_at, updated_at)
+             VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(day.date as string)}, ${sqlText(day.theme as string)}, ${sqlText(day.day_type as string)}, ${sqlText((day.status as string) || 'draft')}, ${sqlText(weather?.weather_label as string)}, ${sqlReal(weather?.temp_low_c as number)}, ${sqlReal(weather?.temp_high_c as number)}, ${sqlReal(weather?.feels_like_low_c as number)}, ${sqlReal(weather?.feels_like_high_c as number)}, ${sqlReal(weather?.precipitation_pct as number)}, ${sqlInt(weather?.weather_code as number)}, ${sqlText(weather?.source_id as string)}, ${sqlText(weather?.sourced_at as string)}, datetime('now'))`
           );
 
           for (const sessionType of ['morning', 'afternoon', 'evening'] as const) {

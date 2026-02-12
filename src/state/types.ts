@@ -227,6 +227,8 @@ export interface DaySession {
 export interface DayWeather {
   temp_high_c: number;
   temp_low_c: number;
+  feels_like_high_c?: number;   // apparent temperature max
+  feels_like_low_c?: number;    // apparent temperature min
   precipitation_pct: number;    // 0-100
   weather_code: number;         // WMO weather code
   weather_label: string;        // "Clear sky", "Partly cloudy", etc.

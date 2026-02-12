@@ -314,7 +314,7 @@ Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 
 Tables:
 - **Blob**: `plans` (DB-primary plan+state, PK=plan_id, `version` monotonic counter)
-- **Normalized itinerary**: `itinerary_days`, `itinerary_sessions`, `activities` (PK composites on plan_id+destination+day_number)
+- **Normalized itinerary**: `itinerary_days` (+ `feels_like_low_c`, `feels_like_high_c`), `itinerary_sessions`, `activities` (PK composites on plan_id+destination+day_number)
 - **Normalized supporting**: `plan_metadata`, `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `airport_transfers`, `flights`, `hotels`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
 - **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
@@ -337,13 +337,14 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normali
 ```
 
 - **SSR-only** — zero client-side JS, no framework, no token/secret in HTML output
-- **Mobile-first** — phone-optimized day cards with weather, transit, meals
+- **Mobile-first** — phone-optimized day cards with weather (including feels-like temperature), transit, meals
 - **Default ZH** — Traditional Chinese by default; `?lang=en` for English
 - **ZH content** — `src/zh-content.ts` provides Tokyo-specific Chinese content, gated on `active_destination === 'tokyo_2026'`
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
 - **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
 - **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
-- **Secrets**: `TURSO_URL` + `TURSO_TOKEN` via `wrangler secret put` (server-side only, never sent to browser)
+- **Embedded maps** — Google Maps Embed API per day card via `<details>/<summary>` (zero JS, lazy-load iframe). Requires `GOOGLE_MAPS_KEY` secret; gracefully hidden when absent
+- **Secrets**: `TURSO_URL` + `TURSO_TOKEN` + `GOOGLE_MAPS_KEY` (optional) via `wrangler secret put` (server-side only, never sent to browser — except Maps key which is browser-visible by design; restrict via GCP Console referrer policy)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
 - **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=kyoto-2026`
 - **Itinerary formats**: Supports both session-based (Tokyo) and schedule-based (Kyoto) formats. See `src/skills/travel-shared/references/itinerary-formats.md`
@@ -357,6 +358,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normali
 | "Plan not found" error | Plan ID mismatch (underscore vs hyphen) | URL uses `tokyo-2026`, DB uses `tokyo_2026` |
 | ZH content not showing | `isTokyoPlan` gate | Only Tokyo has ZH overrides; add to `zh-content.ts` for other plans |
 | Weather missing | Weather not fetched | Run `npm run travel -- fetch-weather --dest <slug>` |
+| Maps embed not showing | No `GOOGLE_MAPS_KEY` secret | `wrangler secret put GOOGLE_MAPS_KEY` (restrict key to Maps Embed API + referrer in GCP Console) |
 
 ```bash
 cd workers/trip-dashboard
@@ -378,13 +380,15 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ## Next Steps
 
-### Tokyo (Feb 13-17) — departs in 2 days
+### Tokyo (Feb 13-17) — departs tomorrow
 1. **Book teamLab Borderless** — Feb 15 visit, OVERDUE (book-by was Feb 10)
 2. Book Limousine Bus — low-risk, can buy day-of at NRT T2
 3. Restaurant reservations
-4. Fetch weather forecast (within 16-day window now)
+4. ~~Fetch weather forecast~~ ✅ Done (feels-like: 體感 -1.9–14.9°C, rain Day 4-5)
+5. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
 
 ### Kyoto (Feb 24-28)
 1. Book Hozugawa River Boat Ride (Day 3)
 2. Restaurant reservations
-3. Fetch weather forecast (available ~Feb 12)
+3. Fetch weather forecast — add `kyoto_2026` to `data/destinations.json` first
+4. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)

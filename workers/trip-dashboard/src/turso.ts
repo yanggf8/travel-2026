@@ -1,6 +1,7 @@
 export interface Env {
   TURSO_URL: string;
   TURSO_TOKEN: string;
+  GOOGLE_MAPS_KEY?: string;
 }
 
 interface TursoCell {
@@ -275,6 +276,8 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
           weather_label: dayRow.weather_label,
           temp_low_c: dayRow.temp_low_c !== null ? parseFloat(dayRow.temp_low_c) : undefined,
           temp_high_c: dayRow.temp_high_c !== null ? parseFloat(dayRow.temp_high_c) : undefined,
+          feels_like_low_c: dayRow.feels_like_low_c != null ? parseFloat(dayRow.feels_like_low_c) : undefined,
+          feels_like_high_c: dayRow.feels_like_high_c != null ? parseFloat(dayRow.feels_like_high_c) : undefined,
           precipitation_pct: dayRow.precipitation_pct !== null ? parseFloat(dayRow.precipitation_pct) : undefined,
           weather_code: dayRow.weather_code !== null ? parseInt(dayRow.weather_code, 10) : undefined,
           source_id: dayRow.weather_source_id,
