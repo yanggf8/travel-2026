@@ -234,9 +234,13 @@ function renderTransitPill(transit: string, city: string): string {
     const parts = transit.split('\u2192');
     if (parts.length >= 2) {
       const from = parts[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
-      const to = parts[1].split(/[（。，,]/)[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
+      let to = parts[1].split(/[（。，,]/)[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
+      // Remove trailing 步行 from destination name
+      to = to.replace(/\s*\u6B65\u884C\s*$/, '').trim();
       if (from && to) {
-        const travelmode = transit.includes('\u6B65\u884C') ? 'walking' : 'transit';
+        // Check travel mode only from the route description (before any period/sentence break), not trailing notes
+        const routePart = transit.split(/[。]/)[0];
+        const travelmode = (routePart.includes('\u6B65\u884C') && !routePart.includes('\u7DDA') && !routePart.includes('\u5DF4\u58EB')) ? 'walking' : 'transit';
         const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from + ' ' + city)}&destination=${encodeURIComponent(to + ' ' + city)}&travelmode=${travelmode}`;
         return `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
       }
