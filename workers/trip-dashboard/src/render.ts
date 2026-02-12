@@ -372,37 +372,72 @@ function renderRouteLink(dayNum: number, hotelName: string, lang: Lang, isTokyoP
 
 function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean, mapsKey?: string): string {
   if (!mapsKey || !hotelName) return '';
+
+  const mapLang = lang === 'zh' ? 'zh-TW' : 'en';
+  const landmarks = isTokyoPlan ? ZH_DAY_LANDMARKS[dayNum]
+    : isKyotoPlan ? ZH_KYOTO_DAY_LANDMARKS[dayNum]
+    : undefined;
   const routes: RouteSegment[] | undefined = isTokyoPlan ? ZH_DAY_ROUTES[dayNum]
     : isKyotoPlan ? ZH_KYOTO_DAY_ROUTES[dayNum]
     : undefined;
-  if (!routes || routes.length === 0) return '';
 
-  const mapLang = lang === 'zh' ? 'zh-TW' : 'en';
-  const homeAddr = isKyotoPlan ? KYOTO_HOME_ADDRESS : HOME_ADDRESS;
-  const resolve = (name: string) => name === 'hotel' ? hotelName : name === 'home' ? homeAddr : name;
-  const displayName = (name: string) => name === 'home' ? (lang === 'zh' ? '住家' : 'Home') : name === 'hotel' ? hotelName : name;
-  const modeIcon = (mode: string) => mode === 'transit' ? '\uD83D\uDE87' : mode === 'driving' ? '\uD83D\uDE97' : '\uD83D\uDEB6';
+  const hasLandmarks = landmarks && landmarks.length > 0;
+  const hasRoutes = routes && routes.length > 0;
+  if (!hasLandmarks && !hasRoutes) return '';
 
-  const segments = routes.map((seg) => {
-    const from = resolve(seg.from);
-    const to = resolve(seg.to);
-    const embedUrl = `https://www.google.com/maps/embed/v1/directions?key=${mapsKey}&origin=${encodeURIComponent(from)}&destination=${encodeURIComponent(to)}&mode=${seg.mode}&language=${mapLang}`;
-    const fromLabel = displayName(seg.from);
-    const toLabel = displayName(seg.to);
-    return `
-      <div class="map-segment-label">${modeIcon(seg.mode)} ${esc(fromLabel)} → ${esc(toLabel)}</div>
+  const parts: string[] = [];
+
+  // Day route map (combined directions with all waypoints) for days with landmarks
+  if (hasLandmarks) {
+    const origin = encodeURIComponent(hotelName);
+    const destination = encodeURIComponent(hotelName);
+    const waypoints = landmarks.map((l) => encodeURIComponent(l)).join('|');
+    const routeUrl = `https://www.google.com/maps/embed/v1/directions?key=${mapsKey}&origin=${origin}&destination=${destination}&waypoints=${waypoints}&mode=transit&language=${mapLang}`;
+    const routeLabel = lang === 'zh' ? '\uD83D\uDDFA\uFE0F 當日路線' : '\uD83D\uDDFA\uFE0F Day route';
+    parts.push(`
+      <div class="map-segment-label">${routeLabel}</div>
       <div class="map-container">
-        <iframe src="${esc(embedUrl)}" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" style="border:0"></iframe>
-      </div>`;
-  }).join('');
+        <iframe src="${esc(routeUrl)}" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" style="border:0"></iframe>
+      </div>`);
 
+    // Individual place maps for each landmark
+    for (const place of landmarks) {
+      const placeUrl = `https://www.google.com/maps/embed/v1/place?key=${mapsKey}&q=${encodeURIComponent(place)}&language=${mapLang}`;
+      parts.push(`
+      <div class="map-segment-label">\uD83D\uDCCD ${esc(place)}</div>
+      <div class="map-container">
+        <iframe src="${esc(placeUrl)}" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" style="border:0"></iframe>
+      </div>`);
+    }
+  }
+
+  // Transit segment maps for arrival/departure days (no landmarks)
+  if (!hasLandmarks && hasRoutes) {
+    const homeAddr = isKyotoPlan ? KYOTO_HOME_ADDRESS : HOME_ADDRESS;
+    const resolve = (name: string) => name === 'hotel' ? hotelName : name === 'home' ? homeAddr : name;
+    const display = (name: string) => name === 'home' ? (lang === 'zh' ? '住家' : 'Home') : name === 'hotel' ? hotelName : name;
+    const modeIcon = (mode: string) => mode === 'transit' ? '\uD83D\uDE87' : mode === 'driving' ? '\uD83D\uDE97' : '\uD83D\uDEB6';
+
+    for (const seg of routes) {
+      const from = resolve(seg.from);
+      const to = resolve(seg.to);
+      const segUrl = `https://www.google.com/maps/embed/v1/directions?key=${mapsKey}&origin=${encodeURIComponent(from)}&destination=${encodeURIComponent(to)}&mode=${seg.mode}&language=${mapLang}`;
+      parts.push(`
+      <div class="map-segment-label">${modeIcon(seg.mode)} ${esc(display(seg.from))} → ${esc(display(seg.to))}</div>
+      <div class="map-container">
+        <iframe src="${esc(segUrl)}" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" style="border:0"></iframe>
+      </div>`);
+    }
+  }
+
+  const totalMaps = hasLandmarks ? 1 + landmarks.length : (routes?.length ?? 0);
   const label = lang === 'zh'
-    ? `\uD83D\uDDFA\uFE0F 展開地圖（${routes.length} 段路線）`
-    : `\uD83D\uDDFA\uFE0F Show map (${routes.length} segments)`;
+    ? `\uD83D\uDDFA\uFE0F 展開地圖（${totalMaps} 張）`
+    : `\uD83D\uDDFA\uFE0F Show map (${totalMaps})`;
   return `
     <details class="map-details">
       <summary class="map-summary">${label}</summary>
-      ${segments}
+      ${parts.join('')}
     </details>`;
 }
 
