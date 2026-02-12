@@ -229,11 +229,28 @@ interface SessionZhOverride {
   transit_notes: string;
 }
 
+function renderTransitPill(transit: string, city: string): string {
+  if (transit.includes('\u2192')) {
+    const parts = transit.split('\u2192');
+    if (parts.length >= 2) {
+      const from = parts[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
+      const to = parts[1].split(/[（。，,]/)[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
+      if (from && to) {
+        const travelmode = transit.includes('\u6B65\u884C') ? 'walking' : 'transit';
+        const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from + ' ' + city)}&destination=${encodeURIComponent(to + ' ' + city)}&travelmode=${travelmode}`;
+        return `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
+      }
+    }
+  }
+  return `<span class="pill pill-transit">\uD83D\uDE83 ${esc(transit)}</span>`;
+}
+
 function renderSession(
   session: Record<string, unknown> | undefined,
   sessionKey: 'morning' | 'afternoon' | 'evening',
   lang: Lang,
-  zhOverride?: SessionZhOverride
+  zhOverride?: SessionZhOverride,
+  mapCity?: string
 ): string {
   if (!session) return '';
 
@@ -272,11 +289,7 @@ function renderSession(
         }).join('')}
       </ul>
       <div class="info-pills">
-        ${transit ? (() => {
-          const mapsQuery = encodeURIComponent(transit.replace(/[（(].*?[)）]/g, '').replace(/[。，、]/g, ' ').trim());
-          const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
-          return `<a class="pill pill-transit" href="${esc(mapsUrl)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
-        })() : ''}
+        ${transit ? renderTransitPill(transit, mapCity || '') : ''}
         ${meals.map((m) => `<span class="pill pill-meal">\uD83C\uDF5C ${esc(m)}</span>`).join('')}
       </div>
     </div>`;
@@ -474,9 +487,14 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
       </div>
       <div class="day-theme">${esc(theme)}</div>
       ${renderWeatherStrip(day, lang)}
-      ${renderSession(morningSession, 'morning', lang, morningOverride)}
-      ${renderSession(afternoonSession, 'afternoon', lang, afternoonOverride)}
-      ${renderSession(eveningSession, 'evening', lang, eveningOverride)}
+      ${(() => {
+        const city = isTokyoPlan ? 'Tokyo' : isKyotoPlan ? 'Kyoto' : '';
+        return [
+          renderSession(morningSession, 'morning', lang, morningOverride, city),
+          renderSession(afternoonSession, 'afternoon', lang, afternoonOverride, city),
+          renderSession(eveningSession, 'evening', lang, eveningOverride, city),
+        ].join('');
+      })()}
       ${renderMapEmbed(dayNum, hotelName, lang, isTokyoPlan, isKyotoPlan, mapsKey)}
     </div>`;
 }
