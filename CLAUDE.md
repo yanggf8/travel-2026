@@ -205,8 +205,10 @@ Flight:  Scoot TR874 TPE 13:55 → NRT T2 18:00 / TR875 NRT T1 19:55 → TPE 23:
 Hotel:   TAVINOS Hamamatsucho (light breakfast, JR Hamamatsucho 8min)
 ```
 
-Airport transfers: Limousine Bus ¥3,200 each way (NRT T1 ↔ Shiodome, ~85min), status: planned
-Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1** — Limousine Bus departs from T1 (need inter-terminal transfer on arrival)
+Airport transfers:
+- Arrival: Skyliner + JR山手線 ¥2,720 (NRT → 日暮里 36min + 日暮里 → 浜松町 20min), status: booked
+- Departure: Limousine Bus ¥3,200 (竹芝 → NRT T1, ~120min), status: planned
+Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1**
 
 ### Itinerary (Feb 13-17)
 | Day | Date | Morning | Afternoon | Evening |
@@ -218,7 +220,8 @@ Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1** — Lim
 | 5 | Tue 17 | Pack + Checkout | Shiodome area | ✈️ NRT T1→TPE |
 
 **Book by Feb 10**: teamLab Borderless (https://www.teamlab.art/e/borderless-azabudai/)
-**Limousine Bus**: https://www.limousinebus.co.jp/en/
+**Skyliner**: https://www.keisei.co.jp/keisei/tetudou/skyliner/
+**Limousine Bus** (departure only): https://www.limousinebus.co.jp/en/
 
 ### BOOKED: Kyoto Feb 24-28
 ```
@@ -294,9 +297,8 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 ├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard
 │   ├── wrangler.toml              # Worker config + secret bindings
 │   ├── src/index.ts               # Request handler + router + favicon
-│   ├── src/turso.ts               # Turso HTTP pipeline client (fetch-based)
-│   ├── src/render.ts              # SSR HTML renderer (ZH default)
-│   ├── src/zh-content.ts          # Chinese itinerary content overrides
+│   ├── src/turso.ts               # Turso HTTP pipeline client (17-query pipeline)
+│   ├── src/render.ts              # SSR HTML renderer (ZH from DB, no hardcoded content)
 │   └── src/styles.ts              # Mobile-first inline CSS
 ├── src/
 │   ├── cli/travel-update.ts       # Main CLI entry
@@ -336,9 +338,9 @@ Tables:
 - **Plan core**: `plans` (PK=plan_id, `version` monotonic counter — no JSON blobs), `plan_metadata`, `plan_destinations`, `destination_details`, `destination_cities`
 - **Dates/Status**: `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `plan_root_date_anchor`
 - **Offers**: `plan_offers`, `plan_offer_flights`, `plan_offer_hotels`, `plan_offer_date_pricing`, `plan_offer_selection`, `plan_offer_best_value`
-- **Itinerary**: `itinerary_days` (+ weather), `itinerary_sessions`, `activities`, `itinerary_metadata`, `session_meals`, `activity_tags`
+- **Itinerary**: `itinerary_days` (+ weather + `theme_zh`), `itinerary_sessions` (+ `focus_zh`, `transit_notes_zh`, `meals_zh_json`, `activities_zh_json`), `activities`, `itinerary_metadata` (+ `transit_summary_zh`), `day_route_segments`, `day_landmarks`, `session_meals`, `activity_tags`
 - **Transport**: `flight_legs` (PK: plan_id+destination+direction+leg_order), `airport_transfers`, `airport_transfer_candidates`, `transportation_extras`
-- **Accommodation**: `hotels`, `hotel_access_lines`, `accommodation_location_zone`
+- **Accommodation**: `hotels` (+ `name_zh`), `hotel_access_lines`, `accommodation_location_zone`
 - **Cascade**: `cascade_triggers`, `cascade_global_state`, `plan_schema_contract`, `plan_process_precedence`, `plan_budget`
 - **Event log**: `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`, `event_log_process_events`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
@@ -364,11 +366,11 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 - **SSR-only** — zero client-side JS, no framework, no token/secret in HTML output
 - **Mobile-first** — phone-optimized day cards with weather (including feels-like temperature), transit, meals
 - **Default ZH** — Traditional Chinese by default; `?lang=en` for English
-- **ZH content** — `src/zh-content.ts` provides Tokyo-specific Chinese content, gated on `active_destination === 'tokyo_2026'`
+- **ZH content** — All Chinese content stored in DB (`theme_zh`, `focus_zh`, `activities_zh_json`, `meals_zh_json`, `transit_notes_zh` on normalized tables). No hardcoded content in Worker code. Content updates take effect instantly without redeploy.
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
 - **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
 - **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
-- **Maps links** — Per-segment Google Maps direction links (transit/walking/driving) for every stop. Route segments defined in `zh-content.ts` (`ZH_DAY_ROUTES`, `ZH_KYOTO_DAY_ROUTES`). Arrival/departure days split into actual transport legs (e.g., NRT T1 → Shiodome + walk to hotel). Transit pill text must use place names, not service names (e.g., `成田T1 → 竹芝` not `利木津巴士 → 竹芝`)
+- **Maps links** — Per-segment Google Maps direction links (transit/walking/driving) for every stop. Route segments stored in `day_route_segments` table, landmarks in `day_landmarks` table. Transit pill text must use place names, not service names (e.g., `成田T2 → 日暮里` not `Skyliner → 日暮里`)
 - **Secrets**: `TURSO_URL` + `TURSO_TOKEN` + `GOOGLE_MAPS_KEY` (optional) via `wrangler secret put` (server-side only, never sent to browser — except Maps key which is browser-visible by design; restrict via GCP Console referrer policy)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
 - **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=kyoto-2026`
@@ -381,7 +383,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 | Itinerary shows blank/empty | Schedule-based format not converted | Check `render.ts` handles both formats |
 | Wrong plan content | Plan not synced to Turso | Run `npm run db:seed:plans` |
 | "Plan not found" error | Plan ID mismatch (underscore vs hyphen) | URL uses `tokyo-2026`, DB uses `tokyo_2026` |
-| ZH content not showing | `isTokyoPlan` gate | Only Tokyo has ZH overrides; add to `zh-content.ts` for other plans |
+| ZH content not showing | Missing `_zh` columns in DB | Check `itinerary_sessions.focus_zh` etc. are populated for the destination |
 | Weather missing | Weather not fetched | Run `npm run travel -- fetch-weather --dest <slug>` |
 | Maps embed not showing | No `GOOGLE_MAPS_KEY` secret | `wrangler secret put GOOGLE_MAPS_KEY` (restrict key to Maps Embed API + referrer in GCP Console) |
 
@@ -407,7 +409,7 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ### Tokyo (Feb 13-17) — departs today
 1. **Book teamLab Borderless** — Feb 15 visit, OVERDUE (book-by was Feb 10)
-2. Book Limousine Bus — low-risk, can buy day-of at NRT T1
+2. ~~Book Limousine Bus~~ Arrival: Skyliner + 山手線 (booked); Departure: Limousine Bus (planned)
 3. Restaurant reservations
 4. ~~Fetch weather forecast~~ ✅ Done (feels-like: 體感 -1.9–14.9°C, rain Day 4-5)
 5. ~~Per-segment maps~~ ✅ Done (transit/walking per route segment, Tokyo+Kyoto)

@@ -858,6 +858,61 @@ async function main() {
     }
   }
 
+  // ========================================
+  // ZH Content Migration: ALTER + CREATE
+  // ========================================
+
+  const zhAlters = [
+    { table: 'itinerary_days', col: 'theme_zh TEXT' },
+    { table: 'itinerary_sessions', col: 'focus_zh TEXT' },
+    { table: 'itinerary_sessions', col: 'transit_notes_zh TEXT' },
+    { table: 'itinerary_sessions', col: 'meals_zh_json TEXT' },
+    { table: 'itinerary_sessions', col: 'activities_zh_json TEXT' },
+    { table: 'hotels', col: 'name_zh TEXT' },
+    { table: 'itinerary_metadata', col: 'transit_summary_zh TEXT' },
+    { table: 'plan_destinations', col: 'home_address TEXT' },
+  ];
+  for (const { table, col } of zhAlters) {
+    try {
+      await client.execute(`ALTER TABLE ${table} ADD COLUMN ${col};`);
+      console.log(`✅ Added ${col.split(' ')[0]} to ${table}.`);
+    } catch (e: any) {
+      if (e.message?.includes('duplicate column') || e.message?.includes('already exists')) {
+        console.log(`ℹ️  ${col.split(' ')[0]} already exists on ${table}.`);
+      } else {
+        console.warn(`⚠️  Could not add ${col.split(' ')[0]} to ${table}:`, e.message);
+      }
+    }
+  }
+
+  try {
+    await client.execute(`CREATE TABLE IF NOT EXISTS day_route_segments (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
+  from_place TEXT NOT NULL, to_place TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  PRIMARY KEY (plan_id, destination, day_number, sort_order)
+)`);
+    console.log('✅ Created day_route_segments table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) console.log('ℹ️  day_route_segments already exists.');
+    else console.warn('⚠️  Could not create day_route_segments:', e.message);
+  }
+
+  try {
+    await client.execute(`CREATE TABLE IF NOT EXISTS day_landmarks (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
+  landmark TEXT NOT NULL,
+  PRIMARY KEY (plan_id, destination, day_number, sort_order)
+)`);
+    console.log('✅ Created day_landmarks table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) console.log('ℹ️  day_landmarks already exists.');
+    else console.warn('⚠️  Could not create day_landmarks:', e.message);
+  }
+
+  console.log('✅ ZH content schema migration complete.');
   console.log('Done.');
 }
 

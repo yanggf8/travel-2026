@@ -126,6 +126,8 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     /* 12 */ `SELECT * FROM itinerary_sessions WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type`,
     /* 13 */ `SELECT * FROM activities WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
     /* 14 */ `SELECT * FROM itinerary_metadata WHERE plan_id = '${escaped}'`,
+    /* 15 */ `SELECT * FROM day_route_segments WHERE plan_id = '${escaped}' ORDER BY destination, day_number, sort_order`,
+    /* 16 */ `SELECT * FROM day_landmarks WHERE plan_id = '${escaped}' ORDER BY destination, day_number, sort_order`,
   ]);
 
   const [
@@ -133,6 +135,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     offerRows, offerDatePricingRows, offerSelRows,
     flightLegRows, hotelRows, accessLineRows, transferRows,
     dayRows, sessionRows, activityRows, itinMetaRows,
+    routeSegRows, landmarkRows,
   ] = results;
 
   if (metaRows.length === 0) return null;
@@ -227,6 +230,22 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
   const itinMetaMap = new Map<string, Row>();
   for (const r of itinMetaRows) itinMetaMap.set(r.destination!, r);
 
+  // Route segments by dest:day
+  const routesByDestDay = new Map<string, Row[]>();
+  for (const r of routeSegRows) {
+    const key = `${r.destination!}:${r.day_number!}`;
+    if (!routesByDestDay.has(key)) routesByDestDay.set(key, []);
+    routesByDestDay.get(key)!.push(r);
+  }
+
+  // Landmarks by dest:day
+  const landmarksByDestDay = new Map<string, string[]>();
+  for (const r of landmarkRows) {
+    const key = `${r.destination!}:${r.day_number!}`;
+    if (!landmarksByDestDay.has(key)) landmarksByDestDay.set(key, []);
+    landmarksByDestDay.get(key)!.push(r.landmark!);
+  }
+
   // --- Collect all destination slugs ---
   const allDests = new Set<string>();
   for (const r of destRows) allDests.add(r.slug!);
@@ -306,6 +325,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
         day_number: dayNumber,
         date: dayRow.date,
         theme: dayRow.theme,
+        theme_zh: dayRow.theme_zh || null,
         day_type: dayRow.day_type,
         status: dayRow.status || 'draft',
       };
@@ -335,6 +355,10 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
           transit_notes: sRow?.transit_notes || null,
           booking_notes: sRow?.booking_notes || null,
           activities: [],
+          focus_zh: sRow?.focus_zh || null,
+          transit_notes_zh: sRow?.transit_notes_zh || null,
+          meals_zh: sRow?.meals_zh_json ? tryParseJson(sRow.meals_zh_json) : null,
+          activities_zh: sRow?.activities_zh_json ? tryParseJson(sRow.activities_zh_json) : null,
         };
 
         if (sRow?.meals_json) {
@@ -368,15 +392,31 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
         day[sessionType] = session;
       }
 
+      // Attach route segments and landmarks to day
+      const dayKey = `${dest}:${dayNumber}`;
+      const dayRoutes = routesByDestDay.get(dayKey);
+      if (dayRoutes && dayRoutes.length > 0) {
+        day.route_segments = dayRoutes.map(r => ({ from: r.from_place, to: r.to_place, mode: r.mode }));
+      }
+      const dayLandmarks = landmarksByDestDay.get(dayKey);
+      if (dayLandmarks && dayLandmarks.length > 0) {
+        day.landmarks = dayLandmarks;
+      }
+
       reconstructedDays.push(day);
     }
 
     // Transit summary from itinerary_metadata
     const itinMeta = itinMetaMap.get(dest);
     const transitSummary = itinMeta?.transit_summary ? tryParseJson(itinMeta.transit_summary) : undefined;
+    const transitSummaryZh = itinMeta?.transit_summary_zh ? tryParseJson(itinMeta.transit_summary_zh) : undefined;
+
+    // Find home_address from destRows
+    const destRow = destRows.find(r => r.slug === dest);
 
     destinations[dest] = {
       display_name: destDisplayNames.get(dest) || dest.replace(/_/g, ' '),
+      home_address: destRow?.home_address || null,
       process_1_date_anchor: dateAnchor ? {
         confirmed_dates: { start: dateAnchor.start_date, end: dateAnchor.end_date },
         days: dateAnchor.days ? parseInt(dateAnchor.days, 10) : null,
@@ -400,6 +440,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
         status: p4Status || undefined,
         hotel: hotelRow ? {
           name: hotelRow.name,
+          name_zh: hotelRow.name_zh || null,
           access: access,
           check_in: hotelRow.check_in,
           notes: hotelRow.notes,
@@ -408,6 +449,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
       process_5_daily_itinerary: {
         days: reconstructedDays,
         transit_summary: transitSummary,
+        transit_summary_zh: transitSummaryZh,
       },
     };
   }

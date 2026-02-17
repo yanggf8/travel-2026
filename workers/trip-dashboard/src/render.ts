@@ -1,11 +1,11 @@
 import { CSS } from './styles';
 import type { PlanData, BookingRow, PlanSummary } from './turso';
-import {
-  ZH_DAYS, ZH_TRANSIT, ZH_HOTELS, ZH_DAY_LANDMARKS,
-  ZH_KYOTO_DAYS, ZH_KYOTO_TRANSIT, ZH_KYOTO_HOTELS, ZH_KYOTO_DAY_LANDMARKS,
-  ZH_DAY_ROUTES, ZH_KYOTO_DAY_ROUTES, HOME_ADDRESS, KYOTO_HOME_ADDRESS,
-  type RouteSegment,
-} from './zh-content';
+
+interface RouteSegment {
+  from: string;
+  to: string;
+  mode: 'transit' | 'walking' | 'driving';
+}
 
 type Lang = 'en' | 'zh';
 
@@ -381,25 +381,20 @@ function buildGoogleMapsUrl(hotel: string, landmarks: string[]): string {
   return `https://www.google.com/maps/dir/${path}`;
 }
 
-function renderRouteLink(dayNum: number, hotelName: string, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean): string {
+function renderRouteLink(day: Record<string, unknown>, hotelName: string, lang: Lang): string {
   if (!hotelName) return '';
-  const landmarks = isTokyoPlan ? ZH_DAY_LANDMARKS[dayNum]
-    : isKyotoPlan ? ZH_KYOTO_DAY_LANDMARKS[dayNum]
-    : undefined;
+  const landmarks = day.landmarks as string[] | undefined;
   if (!landmarks || landmarks.length === 0) return '';
   const url = buildGoogleMapsUrl(hotelName, landmarks);
   return `<a class="route-btn" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDDFA\uFE0F ${t('routeMap', lang)}</a>`;
 }
 
-function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean, _mapsKey?: string): string {
+function renderMapEmbed(day: Record<string, unknown>, hotelName: string, lang: Lang, homeAddress: string | null): string {
   if (!hotelName) return '';
+  const dayNum = (day.day_number as number) || 0;
 
-  const landmarks = isTokyoPlan ? ZH_DAY_LANDMARKS[dayNum]
-    : isKyotoPlan ? ZH_KYOTO_DAY_LANDMARKS[dayNum]
-    : undefined;
-  const routes: RouteSegment[] | undefined = isTokyoPlan ? ZH_DAY_ROUTES[dayNum]
-    : isKyotoPlan ? ZH_KYOTO_DAY_ROUTES[dayNum]
-    : undefined;
+  const landmarks = day.landmarks as string[] | undefined;
+  const routes = day.route_segments as RouteSegment[] | undefined;
 
   const hasLandmarks = landmarks && landmarks.length > 0;
   const hasRoutes = routes && routes.length > 0;
@@ -407,10 +402,8 @@ function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPl
 
   const links: string[] = [];
 
-  // Point-to-point direction links for every segment
   if (hasRoutes) {
-    const homeAddr = isKyotoPlan ? KYOTO_HOME_ADDRESS : HOME_ADDRESS;
-    const resolve = (name: string) => name === 'hotel' ? hotelName : name === 'home' ? homeAddr : name;
+    const resolve = (name: string) => name === 'hotel' ? hotelName : name === 'home' ? (homeAddress || '') : name;
     const display = (name: string) => name === 'home' ? (lang === 'zh' ? '住家' : 'Home') : name === 'hotel' ? hotelName : name;
     const modeIcon = (mode: string) => mode === 'transit' ? '\uD83D\uDE87' : mode === 'driving' ? '\uD83D\uDE97' : '\uD83D\uDEB6';
 
@@ -427,17 +420,14 @@ function renderMapEmbed(dayNum: number, hotelName: string, lang: Lang, isTokyoPl
   return `<div class="map-links">${links.join('')}</div>`;
 }
 
-function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: string, isTokyoPlan: boolean, isKyotoPlan: boolean, mapsKey?: string): string {
+function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: string, homeAddress: string | null, mapsKey?: string): string {
   // Support both formats: day_number (Tokyo) and day (Kyoto)
   const dayNum = (day.day_number as number) || (day.day as number);
   const date = day.date as string;
   const dayType = inferDayType(day);
-  // Use appropriate ZH content based on destination
-  const zhDay = lang === 'zh'
-    ? (isTokyoPlan ? ZH_DAYS[dayNum] : isKyotoPlan ? ZH_KYOTO_DAYS[dayNum] : undefined)
-    : undefined;
-  // Support both: theme (Tokyo) and title (Kyoto)
-  const theme = zhDay?.theme ?? ((day.theme as string) || (day.title as string) || '');
+
+  // ZH override from DB columns on day/session objects
+  const theme = (lang === 'zh' && day.theme_zh) ? (day.theme_zh as string) : ((day.theme as string) || (day.title as string) || '');
 
   // Check if this is schedule-based format (Kyoto) or session-based (Tokyo)
   const schedule = day.schedule as ScheduleItem[] | undefined;
@@ -449,23 +439,32 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
   let eveningOverride: SessionZhOverride | undefined;
 
   if (schedule && schedule.length > 0) {
-    // Convert schedule-based format to sessions
     const converted = convertScheduleToSessions(schedule, (day.title as string) || '');
     morningSession = converted.morning as unknown as Record<string, unknown>;
     afternoonSession = converted.afternoon as unknown as Record<string, unknown>;
     eveningSession = converted.evening as unknown as Record<string, unknown>;
-    // For schedule format, the converted data IS the override (no separate ZH override)
     morningOverride = converted.morning;
     afternoonOverride = converted.afternoon;
     eveningOverride = converted.evening;
   } else {
-    // Session-based format (Tokyo)
     morningSession = day.morning as Record<string, unknown>;
     afternoonSession = day.afternoon as Record<string, unknown>;
     eveningSession = day.evening as Record<string, unknown>;
-    morningOverride = zhDay?.morning;
-    afternoonOverride = zhDay?.afternoon;
-    eveningOverride = zhDay?.evening;
+    // Build ZH overrides from DB columns on session objects
+    if (lang === 'zh') {
+      const buildZhOverride = (s: Record<string, unknown> | undefined): SessionZhOverride | undefined => {
+        if (!s || !s.focus_zh) return undefined;
+        return {
+          focus: s.focus_zh as string,
+          activities: (s.activities_zh as string[]) || [],
+          meals: (s.meals_zh as string[]) || [],
+          transit_notes: (s.transit_notes_zh as string) || '',
+        };
+      };
+      morningOverride = buildZhOverride(morningSession);
+      afternoonOverride = buildZhOverride(afternoonSession);
+      eveningOverride = buildZhOverride(eveningSession);
+    }
   }
 
   return `
@@ -477,20 +476,20 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
         </div>
         <div style="display:flex;align-items:center;gap:6px">
           ${dayTypeBadge(dayType, lang)}
-          ${renderRouteLink(dayNum, hotelName, lang, isTokyoPlan, isKyotoPlan)}
+          ${renderRouteLink(day, hotelName, lang)}
         </div>
       </div>
       <div class="day-theme">${esc(theme)}</div>
       ${renderWeatherStrip(day, lang)}
       ${(() => {
-        const city = isTokyoPlan ? 'Tokyo' : isKyotoPlan ? 'Kyoto' : '';
+        const city = '';
         return [
           renderSession(morningSession, 'morning', lang, morningOverride, city),
           renderSession(afternoonSession, 'afternoon', lang, afternoonOverride, city),
           renderSession(eveningSession, 'evening', lang, eveningOverride, city),
         ].join('');
       })()}
-      ${renderMapEmbed(dayNum, hotelName, lang, isTokyoPlan, isKyotoPlan, mapsKey)}
+      ${renderMapEmbed(day, hotelName, lang, homeAddress)}
     </div>`;
 }
 
@@ -505,7 +504,7 @@ function fmtAirport(leg: Record<string, unknown>, isArrival = false): string {
   return terminal ? `${code} ${terminal}` : code;
 }
 
-function renderBookingSummary(dest: Record<string, unknown>, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean): string {
+function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string {
   const transport = dest.process_3_transportation as Record<string, unknown> | undefined;
   const accommodation = dest.process_4_accommodation as Record<string, unknown> | undefined;
   const packages = dest.process_3_4_packages as Record<string, unknown> | undefined;
@@ -577,9 +576,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang, isTokyo
       label: t('hotel', lang),
       value: hotel ? (() => {
         const name = (hotel.name as string) || '';
-        const zhName = isTokyoPlan ? ZH_HOTELS[name]
-          : isKyotoPlan ? ZH_KYOTO_HOTELS[name]
-          : undefined;
+        const zhName = (hotel.name_zh as string) || undefined;
         return zhName ? `${esc(name)}<span style="color:var(--text-dim);font-size:12px"> / ${esc(zhName)}</span>` : esc(name);
       })() : '\u2014',
       sub: hotel?.access ? (hotel.access as string[]).join(', ') : '',
@@ -661,16 +658,19 @@ function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang): string 
   return alerts.join('');
 }
 
-function renderTransitSummary(dest: Record<string, unknown>, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean): string {
+function renderTransitSummary(dest: Record<string, unknown>, lang: Lang): string {
   const itinerary = dest.process_5_daily_itinerary as Record<string, unknown> | undefined;
   const transit = itinerary?.transit_summary as Record<string, unknown> | undefined;
   if (!transit) return '';
 
-  const keyLines = lang === 'zh'
-    ? (isTokyoPlan ? ZH_TRANSIT.key_lines : isKyotoPlan ? ZH_KYOTO_TRANSIT.key_lines : (transit.key_lines as string[]) || [])
+  const transitZh = itinerary?.transit_summary_zh as Record<string, unknown> | undefined;
+  const zhSource = (lang === 'zh' && transitZh) ? transitZh : null;
+
+  const keyLines = zhSource
+    ? (zhSource.key_lines as string[]) || []
     : (transit.key_lines as string[]) || [];
-  const hotelStation = lang === 'zh'
-    ? (isTokyoPlan ? ZH_TRANSIT.hotel_station : isKyotoPlan ? ZH_KYOTO_TRANSIT.hotel_station : (transit.hotel_station as string) || '')
+  const hotelStation = zhSource
+    ? (zhSource.hotel_station as string) || ''
     : (transit.hotel_station as string) || '';
 
   return `
@@ -710,8 +710,6 @@ export function renderDashboard(
 ): string {
   const plan = planData.plan;
   const activeDest = plan.active_destination as string;
-  const isTokyoPlan = activeDest === 'tokyo_2026';
-  const isKyotoPlan = activeDest === 'kyoto_2026';
   const destinations = plan.destinations as Record<string, Record<string, unknown>> | undefined;
   const dest = destinations?.[activeDest];
 
@@ -759,11 +757,11 @@ export function renderDashboard(
   ${plans ? renderPlanNav(plans, activeDest.replace(/_/g, '-'), lang) : ''}
 
   ${renderPendingAlerts(dest, lang)}
-  ${renderBookingSummary(dest, lang, isTokyoPlan, isKyotoPlan)}
+  ${renderBookingSummary(dest, lang)}
 
-  ${days.map((day) => renderDayCard(day, lang, hotelName, isTokyoPlan, isKyotoPlan, mapsKey)).join('')}
+  ${days.map((day) => renderDayCard(day, lang, hotelName, (dest.home_address as string) || null, mapsKey)).join('')}
 
-  ${renderTransitSummary(dest, lang, isTokyoPlan, isKyotoPlan)}
+  ${renderTransitSummary(dest, lang)}
 
   <div class="footer">
     ${t('lastUpdated', lang)}: ${esc(planData.updated_at)}<br>
