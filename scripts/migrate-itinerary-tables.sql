@@ -134,6 +134,30 @@ CREATE TABLE IF NOT EXISTS flights (
   PRIMARY KEY (plan_id, destination)
 );
 
+-- Normalized flight legs (replaces JSON blobs in flights table)
+CREATE TABLE IF NOT EXISTS flight_legs (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK(direction IN ('outbound', 'return')),
+  leg_order INTEGER NOT NULL DEFAULT 0,
+  flight_number TEXT,
+  airline TEXT,
+  airline_code TEXT,
+  departure_airport TEXT,
+  departure_code TEXT,
+  departure_terminal TEXT,
+  departure_time TEXT,
+  arrival_airport TEXT,
+  arrival_code TEXT,
+  arrival_terminal TEXT,
+  arrival_time TEXT,
+  flight_date TEXT,
+  populated_from TEXT,
+  booked_date TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, direction, leg_order)
+);
+
 CREATE TABLE IF NOT EXISTS hotels (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,

@@ -11,7 +11,8 @@
  *
  * v1.9.0 - Added operation tracking (run-status, run-list, saveWithTracking, monotonic version counter)
  * v1.8.0 - Added weather forecast fetch (fetch-weather)
- * v1.7.0 - DB-primary migration: writePlanToDb/readPlanFromDb, async save(), StateManager.create()
+ * v1.7.0 - DB-primary migration: async save(), StateManager.create()
+ * v2.0.0 - Fully normalized tables, blob eliminated
  * v1.6.0 - Added booking sync/query operations (sync-bookings, query-bookings, snapshot-plan, check-booking-integrity)
  * v1.5.0 - Added Turso DB operations (query-offers, check-freshness, import-offers)
  * v1.4.0 - Added data_freshness tier to SkillContract for staleness awareness
@@ -178,7 +179,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
       'state.event_log',
     ],
     data_freshness: 'static',
-    example: 'npm run travel -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"',
+    example: 'npm run travel -- set-airport-transfer arrival planned --selected "Limousine Bus|NRT T1 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"',
   },
 
   'set-activity-booking': {
@@ -467,18 +468,6 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     example: 'npm run travel -- query-bookings --dest tokyo_2026 --status pending',
   },
 
-  'snapshot-plan': {
-    name: 'snapshot-plan',
-    description: 'Archive current plan+state to Turso plan_snapshots.',
-    args: [
-      { name: '--trip-id', type: 'string', required: false, description: 'Trip ID (default: japan-2026)' },
-    ],
-    output: { type: 'object', description: '{ snapshot_id: string, trip_id: string }' },
-    mutates: ['turso.plan_snapshots'],
-    data_freshness: 'static',
-    example: 'npm run travel -- snapshot-plan --trip-id japan-2026',
-  },
-
   'check-booking-integrity': {
     name: 'check-booking-integrity',
     description: 'Compare bookings in plan JSON vs Turso DB. Reports matches, mismatches, plan-only, DB-only.',
@@ -601,13 +590,13 @@ export const STATE_MANAGER_METHODS = {
 } as const;
 
 /**
- * Turso DB-primary service contracts (v1.7.0).
+ * Turso service contracts (v2.0.0 — normalized tables, no blob).
  */
 export const TURSO_SERVICE_CONTRACTS = {
   derivePlanId: { args: ['planPath'], returns: 'string', description: 'Derive plan ID from file path' },
-  writePlanToDb: { args: ['planId', 'planJson', 'stateJson', 'schemaVersion'], returns: 'Promise<void>', description: 'Upsert plan+state to plans' },
-  readPlanFromDb: { args: ['planId'], returns: 'Promise<{plan_json, state_json, updated_at} | null>', description: 'Read plan+state from plans' },
   syncEventsToDb: { args: ['events'], returns: 'Promise<{synced, skipped}>', description: 'Idempotent event sync via SHA1 external_id' },
+  syncBookingsFromPlanJson: { args: ['plan', 'tripId', 'opts?'], returns: 'Promise<{synced, warnings}>', description: 'Extract + upsert bookings from plan object' },
+  checkBookingIntegrity: { args: ['planId', 'tripId?'], returns: 'Promise<{matches, mismatches, dbOnly, planOnly}>', description: 'Compare plan bookings vs DB bookings' },
 } as const;
 
 /**

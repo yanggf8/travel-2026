@@ -58,14 +58,14 @@ export class TursoPipelineClient {
 
   constructor(opts: TursoClientOptions = {}) {
     this.loadEnv();
-    const envEndpoint = process.env.TURSO_HTTP_ENDPOINT;
-    const defaultEndpoint = 'https://travel-2026-yanggf8.aws-ap-northeast-1.turso.io/v2/pipeline';
+    // Support both TURSO_HTTP_ENDPOINT (explicit) and TURSO_URL (standard, auto-derived)
+    const envEndpoint = process.env.TURSO_HTTP_ENDPOINT
+      || (process.env.TURSO_URL
+        ? process.env.TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline'
+        : undefined);
 
-    if (!opts.endpoint && !envEndpoint) {
-      console.warn('\x1b[33m%s\x1b[0m', '⚠️  Warning: TURSO_HTTP_ENDPOINT not set. Falling back to default project database.');
-    }
-
-    this.endpoint = opts.endpoint || envEndpoint || defaultEndpoint;
+    this.endpoint = opts.endpoint || envEndpoint
+      || 'https://travel-2026-yanggf8.aws-ap-northeast-1.turso.io/v2/pipeline';
     this.tokenEnv = opts.tokenEnv || 'TURSO_TOKEN';
   }
 

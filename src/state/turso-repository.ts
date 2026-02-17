@@ -1,12 +1,8 @@
 /**
  * Turso Repository
  *
- * Implements StateRepository reading itinerary data from normalized tables
- * (itinerary_days, itinerary_sessions, activities) instead of the JSON blob.
- *
- * Phase 2: reads from normalized tables, writes to both tables + blob.
- * Non-itinerary data (offers, packages, transport config) still comes from blob
- * via an internal BlobBridgeRepository delegate.
+ * Implements StateRepository by reading all data from normalized tables.
+ * Delegates in-memory mutations and write-back to PlanRepository.
  */
 
 import type {
@@ -20,7 +16,8 @@ import type {
   TransportOption,
 } from './types';
 import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
-import { BlobBridgeRepository, createBlobBridgeFromDb } from './blob-bridge-repository';
+import { PlanRepository } from './plan-repository';
+import { assemblePlan, assembleEventLog } from './plan-assembler';
 
 // ============================================================================
 // Pipeline helper — same pattern as turso-service.ts
@@ -74,201 +71,110 @@ function sqlBool(v: boolean | null | undefined): string {
 // ============================================================================
 
 export class TursoRepository implements StateRepository {
-  /**
-   * Internal BlobBridge for:
-   * - Non-normalized data (offers, packages, transport config)
-   * - Backward-compat blob writes on save()
-   * - In-memory plan state (mutated by writes, written to blob on save)
-   */
-  private bridge: BlobBridgeRepository;
+  private bridge: PlanRepository;
   private planId: string;
 
-  private constructor(planId: string, bridge: BlobBridgeRepository) {
+  private constructor(planId: string, bridge: PlanRepository) {
     this.planId = planId;
     this.bridge = bridge;
   }
 
   /**
-   * Factory: create TursoRepository from DB.
-   *
-   * 1. Loads plan blob (for non-itinerary data + backward compat)
-   * 2. Loads itinerary from normalized tables
-   * 3. Overlays normalized data onto in-memory plan (tables are source of truth)
+   * Factory: create TursoRepository from normalized tables (v5.0.0).
+   * No blob fallback — tables are the sole source of truth.
    */
   static async create(planId: string): Promise<TursoRepository> {
-    const bridge = await createBlobBridgeFromDb(planId);
+    const { TursoPipelineClient } = requirePipeline();
+    const client = new TursoPipelineClient();
+    const pid = sqlText(planId);
+
+    // Single batch: all table queries
+    const queries = [
+      `SELECT * FROM plan_metadata WHERE plan_id = ${pid}`,                                          // 0
+      `SELECT * FROM plan_destinations WHERE plan_id = ${pid}`,                                      // 1
+      `SELECT * FROM destination_details WHERE plan_id = ${pid}`,                                    // 2
+      `SELECT * FROM destination_cities WHERE plan_id = ${pid} ORDER BY destination, city_slug`,     // 3
+      `SELECT * FROM date_anchors WHERE plan_id = ${pid}`,                                           // 4
+      `SELECT * FROM process_statuses WHERE plan_id = ${pid}`,                                       // 5
+      `SELECT * FROM cascade_dirty_flags WHERE plan_id = ${pid}`,                                    // 6
+      `SELECT * FROM plan_offers WHERE plan_id = ${pid}`,                                            // 7
+      `SELECT * FROM plan_offer_flights WHERE plan_id = ${pid}`,                                     // 8
+      `SELECT * FROM plan_offer_hotels WHERE plan_id = ${pid}`,                                      // 9
+      `SELECT * FROM plan_offer_date_pricing WHERE plan_id = ${pid}`,                                // 10
+      `SELECT * FROM plan_offer_selection WHERE plan_id = ${pid}`,                                   // 11
+      `SELECT * FROM plan_budget WHERE plan_id = ${pid}`,                                            // 12
+      `SELECT * FROM cascade_triggers WHERE plan_id = ${pid}`,                                       // 13
+      `SELECT * FROM plan_schema_contract WHERE plan_id = ${pid}`,                                   // 14
+      `SELECT * FROM plan_process_precedence WHERE plan_id = ${pid}`,                                // 15
+      `SELECT * FROM cascade_global_state WHERE plan_id = ${pid}`,                                   // 16
+      `SELECT * FROM plan_root_date_anchor WHERE plan_id = ${pid}`,                                  // 17
+      `SELECT * FROM itinerary_days WHERE plan_id = ${pid} ORDER BY destination, day_number`,        // 18
+      `SELECT * FROM itinerary_sessions WHERE plan_id = ${pid} ORDER BY destination, day_number`,    // 19
+      `SELECT * FROM activities WHERE plan_id = ${pid} ORDER BY destination, day_number, session_type, sort_order`, // 20
+      `SELECT * FROM flight_legs WHERE plan_id = ${pid} ORDER BY destination, direction, leg_order`, // 21
+      `SELECT * FROM hotels WHERE plan_id = ${pid}`,                                                 // 22
+      `SELECT * FROM airport_transfers WHERE plan_id = ${pid}`,                                      // 23
+      `SELECT * FROM accommodation_location_zone WHERE plan_id = ${pid}`,                            // 24
+      `SELECT * FROM transportation_extras WHERE plan_id = ${pid}`,                                  // 25
+      `SELECT * FROM itinerary_metadata WHERE plan_id = ${pid}`,                                     // 26
+      `SELECT * FROM airport_transfer_candidates WHERE plan_id = ${pid} ORDER BY destination, direction, sort_order`, // 27
+      `SELECT * FROM hotel_access_lines WHERE plan_id = ${pid} ORDER BY destination, sort_order`,    // 28
+      `SELECT * FROM session_meals WHERE plan_id = ${pid} ORDER BY destination, day_number, session_type, sort_order`, // 29
+      `SELECT * FROM activity_tags WHERE activity_id LIKE 'activity_%'`,                             // 30
+      `SELECT * FROM event_log_state WHERE plan_id = ${pid}`,                                        // 31
+      `SELECT * FROM event_log_global_processes WHERE plan_id = ${pid}`,                             // 32
+      `SELECT * FROM event_log_destinations WHERE plan_id = ${pid}`,                                 // 33
+      `SELECT * FROM event_log_dest_processes WHERE plan_id = ${pid}`,                               // 34
+      `SELECT * FROM event_log_process_events WHERE plan_id = ${pid} ORDER BY event_at`,             // 35
+      `SELECT COALESCE(version, 0) as version FROM plans WHERE plan_id = ${pid}`,                    // 36
+      `SELECT * FROM plan_offer_best_value WHERE plan_id = ${pid}`,                                  // 37
+    ];
+
+    // Execute all queries
+    const responses: Record<string, any>[][] = [];
+    for (const q of queries) {
+      const resp = await client.execute(q);
+      responses.push(rowsToObjects(resp));
+    }
+
+    const [
+      metaRows, destRows, detailRows, cityRows, dateRows, statusRows, dirtyRows,
+      offerRows, offerFlightRows, offerHotelRows, offerDatePricingRows, offerSelRows,
+      budgetRows, triggerRows, contractRows, precedenceRows, cascadeGlobalRows, rootP1Rows,
+      dayRows, sessionRows, activityRows, flightLegRows, hotelRows, transferRows,
+      locZoneRows, transportExtraRows, itinMetaRows, transferCandRows, accessLineRows,
+      mealRows, tagRows, eventLogStateRows, eventLogGlobalRows, eventLogDestRows,
+      eventLogDestProcRows, eventLogEvtRows, versionRows, bestValueRows,
+    ] = responses;
+
+    if (metaRows.length === 0) {
+      throw new Error(`[turso] Plan "${planId}" not found in normalized tables. Run migration first.`);
+    }
+
+    // Assemble plan
+    const plan = assemblePlan(
+      planId, metaRows, destRows, detailRows, cityRows, dateRows, statusRows, dirtyRows,
+      offerRows, offerFlightRows, offerHotelRows, offerDatePricingRows, offerSelRows,
+      budgetRows, triggerRows, contractRows, precedenceRows, cascadeGlobalRows, rootP1Rows,
+      dayRows, sessionRows, activityRows, flightLegRows, hotelRows, transferRows,
+      locZoneRows, transportExtraRows, itinMetaRows, transferCandRows, accessLineRows,
+      mealRows, tagRows, bestValueRows,
+    );
+
+    const eventLog = assembleEventLog(
+      eventLogStateRows, eventLogGlobalRows, eventLogDestRows, eventLogDestProcRows, eventLogEvtRows,
+    );
+
+    const version = versionRows[0]?.version ? parseInt(versionRows[0].version, 10) : 0;
+    const bridge = new PlanRepository(plan, eventLog, version);
     const repo = new TursoRepository(planId, bridge);
 
-    // Overlay itinerary from normalized tables onto in-memory plan
-    await repo.loadNormalizedItinerary();
-
-    console.error(`  [turso] TursoRepository ready for "${planId}" (normalized table reads)`);
+    console.error(`  [turso] TursoRepository ready for "${planId}" (fully normalized, v5.0.0)`);
     return repo;
   }
 
   // ==========================================================================
-  // Normalized table loading
-  // ==========================================================================
-
-  /**
-   * Read itinerary_days, itinerary_sessions, and activities from normalized
-   * tables and overlay them onto the in-memory plan. This makes normalized
-   * tables the source of truth for itinerary data.
-   */
-  private async loadNormalizedItinerary(): Promise<void> {
-    const { TursoPipelineClient } = requirePipeline();
-    const client = new TursoPipelineClient();
-
-    // Load days, sessions, activities in parallel pipeline
-    const [daysResp, sessionsResp, activitiesResp] = await Promise.all([
-      client.execute(
-        `SELECT * FROM itinerary_days WHERE plan_id = ${sqlText(this.planId)} ORDER BY destination, day_number`
-      ),
-      client.execute(
-        `SELECT * FROM itinerary_sessions WHERE plan_id = ${sqlText(this.planId)} ORDER BY destination, day_number, session_type`
-      ),
-      client.execute(
-        `SELECT * FROM activities WHERE plan_id = ${sqlText(this.planId)} ORDER BY destination, day_number, session_type, sort_order`
-      ),
-    ]);
-
-    const dayRows = rowsToObjects(daysResp);
-    const sessionRows = rowsToObjects(sessionsResp);
-    const activityRows = rowsToObjects(activitiesResp);
-
-    // If no normalized data exists, fall back to blob (first migration hasn't run)
-    if (dayRows.length === 0) {
-      console.error(`  [turso] No normalized itinerary data for "${this.planId}", using blob`);
-      return;
-    }
-
-    // Group by destination
-    const plan = this.bridge.getPlan();
-    const destDays = new Map<string, Record<string, any>[]>();
-    for (const row of dayRows) {
-      const dest = row.destination;
-      if (!destDays.has(dest)) destDays.set(dest, []);
-      destDays.get(dest)!.push(row);
-    }
-
-    // Index sessions and activities by composite key
-    const sessionKey = (dest: string, day: number, session: string) => `${dest}:${day}:${session}`;
-    const sessionMap = new Map<string, Record<string, any>>();
-    for (const row of sessionRows) {
-      sessionMap.set(sessionKey(row.destination, row.day_number, row.session_type), row);
-    }
-
-    const activityMap = new Map<string, Record<string, any>[]>();
-    for (const row of activityRows) {
-      const key = sessionKey(row.destination, row.day_number, row.session_type);
-      if (!activityMap.has(key)) activityMap.set(key, []);
-      activityMap.get(key)!.push(row);
-    }
-
-    // Reconstruct day objects and overlay onto plan destinations
-    for (const [destSlug, days] of destDays) {
-      const destObj = plan.destinations[destSlug] as Record<string, unknown> | undefined;
-      if (!destObj) continue;
-
-      if (!destObj.process_5_daily_itinerary) {
-        (destObj as Record<string, unknown>).process_5_daily_itinerary = {};
-      }
-      const p5 = destObj.process_5_daily_itinerary as Record<string, unknown>;
-
-      const reconstructedDays: Record<string, unknown>[] = [];
-
-      for (const dayRow of days) {
-        const day: Record<string, unknown> = {
-          day_number: Number(dayRow.day_number),
-          date: dayRow.date,
-          theme: dayRow.theme,
-          day_type: dayRow.day_type,
-          status: dayRow.status || 'draft',
-        };
-
-        // Weather
-        if (dayRow.weather_label || dayRow.temp_low_c !== null) {
-          day.weather = {
-            weather_label: dayRow.weather_label,
-            temp_low_c: dayRow.temp_low_c !== null ? Number(dayRow.temp_low_c) : undefined,
-            temp_high_c: dayRow.temp_high_c !== null ? Number(dayRow.temp_high_c) : undefined,
-            feels_like_low_c: dayRow.feels_like_low_c != null ? Number(dayRow.feels_like_low_c) : undefined,
-            feels_like_high_c: dayRow.feels_like_high_c != null ? Number(dayRow.feels_like_high_c) : undefined,
-            precipitation_pct: dayRow.precipitation_pct !== null ? Number(dayRow.precipitation_pct) : undefined,
-            weather_code: dayRow.weather_code !== null ? Number(dayRow.weather_code) : undefined,
-            source_id: dayRow.weather_source_id,
-            sourced_at: dayRow.weather_sourced_at,
-          };
-        }
-
-        // Sessions
-        for (const sessionType of ['morning', 'afternoon', 'evening'] as const) {
-          const sKey = sessionKey(destSlug, dayRow.day_number, sessionType);
-          const sRow = sessionMap.get(sKey);
-
-          const session: Record<string, unknown> = {
-            focus: sRow?.focus || null,
-            transit_notes: sRow?.transit_notes || null,
-            booking_notes: sRow?.booking_notes || null,
-            activities: [],
-          };
-
-          if (sRow?.meals_json) {
-            try { session.meals = JSON.parse(sRow.meals_json); } catch { /* ignore */ }
-          }
-          if (sRow?.time_range_start || sRow?.time_range_end) {
-            session.time_range = {
-              start: sRow?.time_range_start,
-              end: sRow?.time_range_end,
-            };
-          }
-
-          // Activities
-          const acts = activityMap.get(sKey) || [];
-          const activityObjects: Record<string, unknown>[] = [];
-          for (const a of acts) {
-            const actObj: Record<string, unknown> = {
-              id: a.id,
-              title: a.title,
-              area: a.area || '',
-              nearest_station: a.nearest_station || null,
-              duration_min: a.duration_min !== null ? Number(a.duration_min) : null,
-              booking_required: a.booking_required === 1 || a.booking_required === '1',
-              booking_url: a.booking_url || null,
-              booking_status: a.booking_status || undefined,
-              booking_ref: a.booking_ref || undefined,
-              book_by: a.book_by || undefined,
-              start_time: a.start_time || undefined,
-              end_time: a.end_time || undefined,
-              is_fixed_time: a.is_fixed_time === 1 || a.is_fixed_time === '1',
-              cost_estimate: a.cost_estimate !== null ? Number(a.cost_estimate) : null,
-              notes: a.notes || null,
-              priority: a.priority || 'want',
-            };
-
-            if (a.tags_json) {
-              try { actObj.tags = JSON.parse(a.tags_json); } catch { actObj.tags = []; }
-            } else {
-              actObj.tags = [];
-            }
-
-            activityObjects.push(actObj);
-          }
-
-          session.activities = activityObjects;
-          day[sessionType] = session;
-        }
-
-        reconstructedDays.push(day);
-      }
-
-      p5.days = reconstructedDays;
-      console.error(`  [turso] Loaded ${reconstructedDays.length} days from normalized tables for ${destSlug}`);
-    }
-  }
-
-  // ==========================================================================
-  // StateReader — delegate to bridge (which now has normalized data in-memory)
+  // StateReader — delegate to bridge
   // ==========================================================================
 
   getActiveDestination(): string { return this.bridge.getActiveDestination(); }

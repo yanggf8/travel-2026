@@ -106,7 +106,9 @@ export const CascadeStateSchema = z.object({
 export const FlightLegSchema = z.object({
   flight_number: z.string().nullable().optional(),
   departure_airport_code: z.string(),
+  departure_terminal: z.string().nullable().optional(),
   arrival_airport_code: z.string(),
+  arrival_terminal: z.string().nullable().optional(),
   departure_time: z.string().nullable().optional(),
   arrival_time: z.string().nullable().optional(),
   date: z.string().optional(),

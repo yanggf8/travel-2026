@@ -6,4 +6,4 @@
 
 export * from './types';
 export * from './wildcard';
-export { run, computePlan, applyPlan, loadPlan, savePlan } from './runner';
+export { runAsync, computePlan, applyPlan, loadPlanAsync } from './runner';

@@ -191,13 +191,13 @@ export const ZH_DAYS: Record<number, DayZh> = {
         '15:00 帶行李出發',
         '15:05 步行到竹芝巴士站（3分）',
         '15:30 利木津巴士（SuperCabin）出發',
-        '17:30 抵達成田T2',
+        '17:30 抵達成田T1',
         '辦理登機、安檢',
         '免稅店購物 + 簡單晚餐',
         '19:55 TR875 成田出發 → 桃園 23:10',
       ],
-      meals: ['成田T2 簡單晚餐'],
-      transit_notes: '竹芝 15:30 → 成田T2 17:30（利木津巴士、¥3,200）',
+      meals: ['成田T1 簡單晚餐'],
+      transit_notes: '竹芝 15:30 → 成田T1 17:30（利木津巴士、¥3,200）',
     },
   },
 };
@@ -249,7 +249,7 @@ export const ZH_DAY_ROUTES: Record<number, RouteSegment[]> = {
   ],
   5: [
     { from: 'hotel', to: 'Shiodome Station Tokyo', mode: 'walking' },
-    { from: 'Shiodome Station Tokyo', to: 'Narita Airport Terminal 2', mode: 'transit' },
+    { from: 'Shiodome Station Tokyo', to: 'Narita Airport Terminal 1', mode: 'transit' },
     { from: 'Taoyuan International Airport', to: 'home', mode: 'driving' },
   ],
 };

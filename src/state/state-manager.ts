@@ -11,7 +11,7 @@
  *   await sm.save();
  */
 
-import { readFileSync, existsSync, realpathSync } from 'fs';
+import { realpathSync } from 'fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
@@ -38,7 +38,7 @@ import { TransportManager } from './transport-manager';
 import { ItineraryManager } from './itinerary-manager';
 import { EventQuery } from './event-query';
 import type { StateRepository } from './repository';
-import { BlobBridgeRepository, createBlobBridgeFromDb } from './blob-bridge-repository';
+import { PlanRepository } from './plan-repository';
 import { TursoRepository } from './turso-repository';
 import type { Command, DispatchResult } from './commands';
 
@@ -84,60 +84,54 @@ export class StateManager {
   private skipSave: boolean;
 
   constructor(options?: StateManagerOptions | string, statePath?: string) {
-    // Support legacy (planPath, statePath) signature
     if (typeof options === 'string' || options === undefined) {
-      this.planPath = options || DEFAULT_PLAN_PATH;
-      this.statePath = statePath || DEFAULT_STATE_PATH;
-      this.planId = StateManager.derivePlanId(this.planPath);
-      this.skipSave = false;
-      this.timestamp = this.freshTimestamp();
-      const plan = this.loadPlanFromFile();
+      // Legacy string-based constructor — DB is sole source of truth, use StateManager.create() instead
+      throw new Error('File-based StateManager is removed. Use StateManager.create() or StateManager.createFromPlanId() instead.');
+    }
+
+    this.planPath = options.planPath || DEFAULT_PLAN_PATH;
+    this.statePath = options.statePath || DEFAULT_STATE_PATH;
+    this.planId = StateManager.derivePlanId(this.planPath);
+    this.skipSave = options.skipSave || false;
+    this.timestamp = this.freshTimestamp();
+
+    if (options.repo) {
+      // Pre-built repository (from factory methods)
+      this.repo = options.repo;
+    } else if (options.plan) {
+      // In-memory plan (tests with skipSave: true)
+      const plan = options.plan;
       this.normalizePlan(plan);
-      const eventLog = this.loadEventLogFromFile(plan);
-      this.repo = new BlobBridgeRepository(plan, eventLog);
-    } else {
-      // New options-based signature
-      this.planPath = options.planPath || DEFAULT_PLAN_PATH;
-      this.statePath = options.statePath || DEFAULT_STATE_PATH;
-      this.planId = StateManager.derivePlanId(this.planPath);
-      this.skipSave = options.skipSave || false;
-      this.timestamp = this.freshTimestamp();
-
-      if (options.repo) {
-        // Pre-built repository (from factory methods)
-        this.repo = options.repo;
+      let eventLog: EventLogState;
+      if (options.eventLog) {
+        eventLog = options.eventLog;
+      } else if (options.state) {
+        eventLog = {
+          session: new Date().toISOString().split('T')[0],
+          project: DEFAULTS.project,
+          version: '3.0',
+          active_destination: plan?.active_destination || '',
+          current_focus: '',
+          event_log: options.state.event_log || [],
+          next_actions: options.state.next_actions || [],
+          global_processes: {},
+          destinations: {},
+        };
       } else {
-        let plan: TravelPlanMinimal;
-        let eventLog: EventLogState;
-
-        if (options.plan) {
-          plan = options.plan;
-          this.normalizePlan(plan);
-        } else {
-          plan = this.loadPlanFromFile();
-          this.normalizePlan(plan);
-        }
-
-        if (options.eventLog) {
-          eventLog = options.eventLog;
-        } else if (options.state) {
-          eventLog = {
-            session: new Date().toISOString().split('T')[0],
-            project: DEFAULTS.project,
-            version: '3.0',
-            active_destination: plan?.active_destination || '',
-            current_focus: '',
-            event_log: options.state.event_log || [],
-            next_actions: options.state.next_actions || [],
-            global_processes: {},
-            destinations: {},
-          };
-        } else {
-          eventLog = this.loadEventLogFromFile(plan);
-        }
-
-        this.repo = new BlobBridgeRepository(plan, eventLog);
+        eventLog = {
+          session: new Date().toISOString().split('T')[0],
+          project: DEFAULTS.project,
+          version: '3.0',
+          active_destination: plan?.active_destination || '',
+          current_focus: '',
+          event_log: [],
+          global_processes: {},
+          destinations: {},
+        };
       }
+      this.repo = new PlanRepository(plan, eventLog);
+    } else {
+      throw new Error('StateManager requires either options.repo or options.plan. Use StateManager.create() for DB-backed instances.');
     }
 
     // Initialize domain managers (legacy — operate on same plan object by reference)
@@ -210,12 +204,12 @@ export class StateManager {
       : planPathOrOpts?.statePath || DEFAULT_STATE_PATH;
     const skipSave = typeof planPathOrOpts === 'object' ? planPathOrOpts?.skipSave || false : false;
 
-    // If skipSave (test mode), skip DB entirely
+    // If skipSave (test mode), require plan to be passed in options
     if (skipSave) {
-      return new StateManager(
-        typeof planPathOrOpts === 'object' ? planPathOrOpts : planPath,
-        typeof planPathOrOpts === 'string' ? statePath : undefined
-      );
+      if (typeof planPathOrOpts === 'object' && planPathOrOpts.plan) {
+        return new StateManager(planPathOrOpts);
+      }
+      throw new Error('skipSave mode requires options.plan to be provided (no file I/O).');
     }
 
     const planId = StateManager.derivePlanId(planPath);
@@ -238,10 +232,7 @@ export class StateManager {
     }
 
     if (skipSave) {
-      // Fallback to file-based for test mode
-      const planPath = path.join('data', 'trips', planId, 'travel-plan.json');
-      const stPath = path.join('data', 'trips', planId, 'state.json');
-      return new StateManager({ planPath, statePath: stPath, skipSave: true });
+      throw new Error('skipSave with createFromPlanId is not supported (no file I/O). Use StateManager.create() with options.plan instead.');
     }
 
     const repo = await TursoRepository.create(planId);
@@ -1235,38 +1226,8 @@ export class StateManager {
     return this.repo.getNextActions();
   }
 
-  // ============================================================================
-  // File I/O (legacy — for non-DB constructor paths)
-  // ============================================================================
-
-  private loadPlanFromFile(filePath?: string): TravelPlanMinimal {
-    const p = filePath || this.planPath;
-    if (!existsSync(p)) {
-      throw new Error(`Travel plan not found: ${p}`);
-    }
-    const content = readFileSync(p, 'utf-8');
-    const parsed = JSON.parse(content);
-    return validateTravelPlan(parsed) as TravelPlanMinimal;
-  }
-
-  private loadEventLogFromFile(plan?: TravelPlanMinimal, filePath?: string): EventLogState {
-    const p = filePath || this.statePath;
-    if (!existsSync(p)) {
-      return {
-        session: new Date().toISOString().split('T')[0],
-        project: DEFAULTS.project,
-        version: '3.0',
-        active_destination: plan?.active_destination || '',
-        current_focus: '',
-        event_log: [],
-        global_processes: {},
-        destinations: {},
-      };
-    }
-    const content = readFileSync(p, 'utf-8');
-    const parsed = JSON.parse(content);
-    return validateEventLogState(parsed) as EventLogState;
-  }
+  // File I/O methods removed — Turso DB is sole source of truth.
+  // Use StateManager.create() or StateManager.createFromPlanId() for DB-backed instances.
 
   // ============================================================================
   // Persistence
@@ -1352,21 +1313,7 @@ export class StateManager {
     return this.repo.getPlan();
   }
 
-  /**
-   * Load travel plan from file with Zod validation.
-   * @deprecated Use StateManager.create() factory instead.
-   */
-  loadPlan(p?: string): TravelPlanMinimal {
-    return this.loadPlanFromFile(p);
-  }
-
-  /**
-   * Load event log from file with Zod validation.
-   * @deprecated Use StateManager.create() factory instead.
-   */
-  loadEventLog(p?: string): EventLogState {
-    return this.loadEventLogFromFile(undefined, p);
-  }
+  // loadPlan() and loadEventLog() removed — DB is sole source of truth.
 
   // ============================================================================
   // Normalization (legacy schema migration)
@@ -1406,16 +1353,4 @@ export class StateManager {
   }
 }
 
-// Singleton instance for convenience
-let defaultInstance: StateManager | null = null;
-
-export function getStateManager(): StateManager {
-  if (!defaultInstance) {
-    defaultInstance = new StateManager();
-  }
-  return defaultInstance;
-}
-
-export function resetStateManager(): void {
-  defaultInstance = null;
-}
+// Singleton removed — use StateManager.create() or StateManager.createFromPlanId().

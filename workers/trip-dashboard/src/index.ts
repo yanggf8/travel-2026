@@ -34,8 +34,7 @@ export default {
           return Response.json({ error: 'Plan not found' }, { status: 404 });
         }
         return Response.json({
-          plan: JSON.parse(data.plan_json),
-          state: data.state_json ? JSON.parse(data.state_json) : null,
+          plan: data.plan,
           updated_at: data.updated_at,
         }, {
           headers: { 'Cache-Control': 'public, max-age=60' },
@@ -74,8 +73,7 @@ export default {
           });
         }
 
-        const plan = JSON.parse(planData.plan_json);
-        const activeDest = plan.active_destination as string;
+        const activeDest = planData.plan.active_destination as string;
         const bookings = await getBookings(env, activeDest);
 
         const html = renderDashboard(planData, bookings, lang, planId, plans, env.GOOGLE_MAPS_KEY);

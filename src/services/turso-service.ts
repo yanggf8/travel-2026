@@ -5,10 +5,8 @@
  *   importOffersFromFiles  — bulk import scrape JSON → Turso offers table
  *   queryOffers            — filtered reads from Turso
  *   checkFreshness         — staleness check for source/region
- *   writePlanToDb          — upsert plan+state to plans (DB-primary)
- *   readPlanFromDb         — read plan+state from plans
  *   syncEventsToDb         — idempotent event sync via SHA1 external_id
- *   syncBookingsFromPlan   — extract + upsert bookings from plan JSON
+ *   syncBookingsFromPlanJson — extract + upsert bookings from plan object
  *
  * Turso is required infrastructure. If TURSO_TOKEN is missing the service
  * throws with a clear error — no silent skipping.
@@ -447,51 +445,6 @@ export function derivePlanId(planPath: string): string {
 }
 
 /**
- * Write plan + state JSON to Turso plans (upsert).
- * This is the blocking DB write used by StateManager.save().
- *
- * When stateJson is null, the existing state_json in DB is preserved
- * (COALESCE prevents cascade-only writes from erasing state).
- */
-export async function writePlanToDb(
-  planId: string,
-  planJson: string,
-  stateJson: string | null,
-  schemaVersion: string
-): Promise<void> {
-  const client = getClient();
-  const sql = `INSERT INTO plans (plan_id, schema_version, plan_json, state_json, updated_at)
-VALUES (${sqlText(planId)}, ${sqlText(schemaVersion)}, ${sqlText(planJson)}, ${sqlText(stateJson)}, datetime('now'))
-ON CONFLICT(plan_id) DO UPDATE SET
-  schema_version = ${sqlText(schemaVersion)},
-  plan_json = ${sqlText(planJson)},
-  state_json = COALESCE(excluded.state_json, plans.state_json),
-  updated_at = datetime('now');`;
-  await client.execute(sql);
-}
-
-/**
- * Read plan + state from Turso plans.
- * Returns null if no row found for planId.
- * Includes version counter for audit trail (defaults to 0 for pre-migration rows).
- */
-export async function readPlanFromDb(
-  planId: string
-): Promise<{ plan_json: string; state_json: string | null; updated_at: string; version: number } | null> {
-  const client = getClient();
-  const sql = `SELECT plan_json, state_json, updated_at, COALESCE(version, 0) as version FROM plans WHERE plan_id = ${sqlText(planId)} LIMIT 1;`;
-  const response = await client.execute(sql);
-  const rows = rowsToObjects(response);
-  if (rows.length === 0) return null;
-  return {
-    plan_json: rows[0].plan_json as string,
-    state_json: rows[0].state_json as string | null,
-    updated_at: rows[0].updated_at as string,
-    version: typeof rows[0].version === 'number' ? rows[0].version : parseInt(rows[0].version || '0', 10),
-  };
-}
-
-/**
  * Sync events to Turso events table with SHA1-based idempotency.
  * Same pattern as turso-sync-events.ts — hash event content → external_id.
  */
@@ -566,13 +519,6 @@ export interface BookingCurrentRow {
 // ---------------------------------------------------------------------------
 // Booking Sync (plan in DB → bookings_current)
 // ---------------------------------------------------------------------------
-
-function inferTripIdFromPlanPath(planPath: string): string {
-  const normalized = planPath.replace(/\\/g, '/');
-  const m = normalized.match(/\/?data\/trips\/([^/]+)\//);
-  if (m) return m[1];
-  return 'japan-2026';
-}
 
 function extractBookingsFromPlanObject(
   plan: Record<string, unknown>,
@@ -686,96 +632,6 @@ export async function syncBookingsFromPlanJson(
   return { synced: bookings.length, warnings };
 }
 
-/**
- * @deprecated Use syncBookingsFromPlanJson instead. This path-based API
- * will be removed in a future version.
- */
-export async function syncBookingsFromPlan(
-  planPath: string,
-  opts?: { tripId?: string; dryRun?: boolean }
-): Promise<{ synced: number; warnings: string[] }> {
-  const extractor = requireExtractor();
-  const planId = derivePlanId(planPath);
-
-  const dbRow = await readPlanFromDb(planId);
-  if (!dbRow) {
-    return {
-      synced: 0,
-      warnings: [`Plan not found in DB for plan_id="${planId}". Run 'npm run db:seed:plans' first.`],
-    };
-  }
-
-  let plan: Record<string, unknown>;
-  try {
-    plan = JSON.parse(dbRow.plan_json) as Record<string, unknown>;
-  } catch (e) {
-    return {
-      synced: 0,
-      warnings: [`Failed to parse plan_json in DB for plan_id="${planId}": ${(e as Error).message}`],
-    };
-  }
-
-  const effectiveTripId = opts?.tripId || inferTripIdFromPlanPath(planPath);
-  const { bookings, warnings } = extractBookingsFromPlanObject(plan, effectiveTripId, extractor);
-
-  if (bookings.length === 0) {
-    return { synced: 0, warnings };
-  }
-
-  if (opts?.dryRun) {
-    return { synced: bookings.length, warnings };
-  }
-
-  const client = getClient();
-
-  // Collect trip IDs for DELETE scope
-  const tripIds = [...new Set(bookings.map(b => b.trip_id))];
-
-  // Fetch existing rows for diff-based event emission
-  const existingMap = new Map<string, BookingCurrentRow>();
-  for (const tid of tripIds) {
-    const existing = await queryBookings({ tripId: tid });
-    for (const row of existing) {
-      existingMap.set(row.booking_key, row);
-    }
-  }
-
-  const sqlStatements: string[] = [];
-
-  // Transaction: DELETE stale rows, then upsert current bookings
-  sqlStatements.push('BEGIN;');
-
-  // Delete all rows for these trip IDs (prevents stale ghost rows)
-  for (const tid of tripIds) {
-    sqlStatements.push(`DELETE FROM bookings_current WHERE trip_id = '${sqlEscape(tid)}';`);
-  }
-
-  // Upsert current bookings + diff-based events
-  for (const row of bookings) {
-    sqlStatements.push(extractor.toUpsertSql(row));
-
-    // Only emit event if something actually changed
-    const prev = existingMap.get(row.booking_key);
-    if (!prev) {
-      sqlStatements.push(extractor.toEventSql(row.booking_key, 'created', row));
-    } else if (
-      prev.status !== row.status ||
-      prev.reference !== row.reference ||
-      prev.book_by !== row.book_by ||
-      prev.price_amount !== row.price_amount ||
-      prev.title !== row.title
-    ) {
-      sqlStatements.push(extractor.toEventSql(row.booking_key, 'updated', row));
-    }
-    // No event if nothing changed
-  }
-
-  sqlStatements.push('COMMIT;');
-
-  await client.executeMany(sqlStatements, 50);
-
-  return { synced: bookings.length, warnings };
-}
 
 // ---------------------------------------------------------------------------
 // Query Bookings
@@ -815,75 +671,22 @@ export async function queryBookings(filters: {
 }
 
 // ---------------------------------------------------------------------------
-// Plan Snapshot
-// ---------------------------------------------------------------------------
-
-/**
- * Create a snapshot of plan+state by planId (DB-native).
- * This is the preferred API - does not require file paths.
- * 
- * @param planId - The plan ID in plans
- * @param tripId - The trip ID for the snapshot
- */
-export async function createPlanSnapshotByPlanId(
-  planId: string,
-  tripId: string
-): Promise<{ snapshot_id: string; trip_id: string }> {
-  const dbRow = await readPlanFromDb(planId);
-  if (!dbRow) {
-    throw new Error(`Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
-  }
-
-  const planJson = dbRow.plan_json;
-  const stateJson = dbRow.state_json;
-  const plan = JSON.parse(planJson);
-  const schemaVersion = (plan.schema_version as string) || 'unknown';
-  const snapshotId = `${tripId}_${new Date().toISOString().replace(/[:.]/g, '-')}`;
-
-  const client = getClient();
-  const sql = `INSERT INTO plan_snapshots (snapshot_id, trip_id, schema_version, plan_json, state_json, created_at) VALUES (${sqlText(snapshotId)}, ${sqlText(tripId)}, ${sqlText(schemaVersion)}, ${sqlText(planJson)}, ${sqlText(stateJson)}, datetime('now'));`;
-
-  await client.execute(sql);
-
-  return { snapshot_id: snapshotId, trip_id: tripId };
-}
-
-/**
- * @deprecated Use createPlanSnapshotByPlanId instead. This path-based API
- * will be removed in a future version.
- */
-export async function createPlanSnapshot(
-  planPath: string,
-  _statePath: string,
-  tripId: string
-): Promise<{ snapshot_id: string; trip_id: string }> {
-  const planId = derivePlanId(planPath);
-  return createPlanSnapshotByPlanId(planId, tripId);
-}
-
-// ---------------------------------------------------------------------------
 // Booking Integrity Check
 // ---------------------------------------------------------------------------
 
 export async function checkBookingIntegrity(
-  planPath: string,
+  planId: string,
   tripId?: string
 ): Promise<{ matches: number; mismatches: string[]; dbOnly: string[]; planOnly: string[] }> {
   const extractor = requireExtractor();
-  const planId = derivePlanId(planPath);
-  const dbRow = await readPlanFromDb(planId);
-  if (!dbRow) {
-    throw new Error(`Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
-  }
 
-  let plan: Record<string, unknown>;
-  try {
-    plan = JSON.parse(dbRow.plan_json) as Record<string, unknown>;
-  } catch (e) {
-    throw new Error(`Failed to parse plan_json in DB for "${planId}": ${(e as Error).message}`);
-  }
+  // Read from normalized tables
+  const path = require('node:path');
+  const { TursoRepository } = require(path.resolve(__dirname, '..', 'state', 'turso-repository'));
+  const repo = await TursoRepository.create(planId);
+  const plan = repo.getPlan() as Record<string, unknown>;
 
-  const effectiveTripId = tripId || inferTripIdFromPlanPath(planPath);
+  const effectiveTripId = tripId || planId.replace(/-/g, '_');
   const { bookings: planBookings, warnings } = extractBookingsFromPlanObject(plan, effectiveTripId, extractor);
 
   const dbBookings = await queryBookings({

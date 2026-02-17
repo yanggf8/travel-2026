@@ -21,9 +21,11 @@ class FlightSegment:
     airline_code: str = ""
     departure_airport: str = ""
     departure_code: str = ""
+    departure_terminal: str = ""
     departure_time: str = ""
     arrival_airport: str = ""
     arrival_code: str = ""
+    arrival_terminal: str = ""
     arrival_time: str = ""
     date: str = ""
 

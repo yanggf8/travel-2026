@@ -86,25 +86,13 @@ async function main() {
     }
   }
 
-  // 6. Create plan_snapshots table
+  // 6. Drop plan_snapshots table (was blob-based archival, replaced by operation_runs audit trail)
   try {
-    console.log('Creating plan_snapshots table...');
-    await client.execute(`CREATE TABLE IF NOT EXISTS plan_snapshots (
-  snapshot_id TEXT PRIMARY KEY,
-  trip_id TEXT NOT NULL,
-  schema_version TEXT NOT NULL,
-  plan_json TEXT NOT NULL,
-  state_json TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);`);
-    await client.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_trip ON plan_snapshots(trip_id, created_at);');
-    console.log('✅ Created plan_snapshots table.');
+    console.log('Dropping plan_snapshots table (blob-based, obsolete)...');
+    await client.execute('DROP TABLE IF EXISTS plan_snapshots;');
+    console.log('✅ Dropped plan_snapshots table.');
   } catch (e: any) {
-    if (e.message?.includes('already exists')) {
-      console.log('ℹ️  plan_snapshots table already exists.');
-    } else {
-      console.warn('⚠️  Could not create plan_snapshots table:', e.message);
-    }
+    console.warn('⚠️  Could not drop plan_snapshots:', e.message);
   }
 
   // 7. Create bookings_current table (flat queryable booking rows)
@@ -456,6 +444,416 @@ async function main() {
         console.log(`ℹ️  ${col} column already exists.`);
       } else {
         console.warn(`⚠️  Could not add ${col} column:`, e.message);
+      }
+    }
+  }
+
+  // 15. Create flight_legs table (normalized — replaces JSON blobs in flights table)
+  try {
+    console.log('Creating flight_legs table...');
+    await client.execute(`CREATE TABLE IF NOT EXISTS flight_legs (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK(direction IN ('outbound', 'return')),
+  leg_order INTEGER NOT NULL DEFAULT 0,
+  flight_number TEXT,
+  airline TEXT,
+  airline_code TEXT,
+  departure_airport TEXT,
+  departure_code TEXT,
+  departure_terminal TEXT,
+  departure_time TEXT,
+  arrival_airport TEXT,
+  arrival_code TEXT,
+  arrival_terminal TEXT,
+  arrival_time TEXT,
+  flight_date TEXT,
+  populated_from TEXT,
+  booked_date TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, direction, leg_order)
+);`);
+    console.log('✅ Created flight_legs table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) {
+      console.log('ℹ️  flight_legs table already exists.');
+    } else {
+      console.warn('⚠️  Could not create flight_legs table:', e.message);
+    }
+  }
+
+  // 15b. Migrate existing flights rows → flight_legs (one-time, idempotent)
+  try {
+    console.log('Migrating flights → flight_legs...');
+    const existingLegs = await client.execute(`SELECT COUNT(*) as cnt FROM flight_legs`);
+    const legCount = parseInt((existingLegs?.results?.[0]?.response?.result?.rows?.[0] as any)?.[0]?.value || '0', 10);
+
+    if (legCount > 0) {
+      console.log(`ℹ️  flight_legs already has ${legCount} rows, skipping migration.`);
+    } else {
+      const flightRows = await client.execute(`SELECT plan_id, destination, populated_from, airline, airline_code, outbound_json, return_json, booked_date FROM flights`);
+      const result = flightRows?.results?.[0]?.response?.result as any;
+      const rawRows = result?.rows ?? [];
+      const colNames = (result?.cols ?? []).map((c: any) => c.name);
+      if (rawRows.length > 0 && colNames.length > 0) {
+        for (const row of rawRows) {
+          const obj: Record<string, string | null> = {};
+          colNames.forEach((name: string, i: number) => {
+            obj[name] = (row as any)[i]?.value ?? null;
+          });
+
+          for (const dir of ['outbound', 'return'] as const) {
+            const jsonCol = dir === 'outbound' ? 'outbound_json' : 'return_json';
+            const jsonStr = obj[jsonCol];
+            if (!jsonStr) continue;
+            try {
+              const leg = JSON.parse(jsonStr);
+              const esc = (s: string | null | undefined) => s ? `'${s.replace(/'/g, "''")}'` : 'NULL';
+              await client.execute(`INSERT OR IGNORE INTO flight_legs
+                (plan_id, destination, direction, leg_order, flight_number, airline, airline_code,
+                 departure_airport, departure_code, departure_terminal, departure_time,
+                 arrival_airport, arrival_code, arrival_terminal, arrival_time,
+                 flight_date, populated_from, booked_date, updated_at)
+                VALUES (${esc(obj.plan_id)}, ${esc(obj.destination)}, '${dir}', 0,
+                 ${esc(leg.flight_number)}, ${esc(obj.airline)}, ${esc(obj.airline_code)},
+                 ${esc(leg.departure_airport)}, ${esc(leg.departure_airport_code)}, ${esc(leg.departure_terminal)}, ${esc(leg.departure_time)},
+                 ${esc(leg.arrival_airport)}, ${esc(leg.arrival_airport_code)}, ${esc(leg.arrival_terminal)}, ${esc(leg.arrival_time)},
+                 ${esc(leg.date)}, ${esc(obj.populated_from)}, ${esc(obj.booked_date)}, datetime('now'))`);
+            } catch { /* ignore parse errors */ }
+          }
+        }
+        console.log('✅ Migrated flights → flight_legs.');
+      } else {
+        console.log('ℹ️  No flights rows to migrate.');
+      }
+    }
+  } catch (e: any) {
+    console.warn('⚠️  Could not migrate flights → flight_legs:', e.message);
+  }
+
+  // ========================================
+  // Phase 1: Full Normalization Tables (v5.0.0)
+  // ========================================
+
+  const phase1Tables: Array<{ name: string; sql: string; indexes?: string[] }> = [
+    {
+      name: 'plan_destinations',
+      sql: `CREATE TABLE IF NOT EXISTS plan_destinations (
+  plan_id TEXT NOT NULL, slug TEXT NOT NULL, display_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_at DATETIME, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, slug)
+)`,
+    },
+    {
+      name: 'destination_details',
+      sql: `CREATE TABLE IF NOT EXISTS destination_details (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  origin_city TEXT, region TEXT, primary_airport TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination)
+)`,
+    },
+    {
+      name: 'destination_cities',
+      sql: `CREATE TABLE IF NOT EXISTS destination_cities (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, city_slug TEXT NOT NULL,
+  role TEXT NOT NULL, nights INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, city_slug)
+)`,
+    },
+    {
+      name: 'plan_offers',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offers (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, id TEXT NOT NULL,
+  source_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT,
+  price_per_person INTEGER, currency TEXT DEFAULT 'TWD', availability TEXT,
+  url TEXT, scraped_at TEXT, product_code TEXT, duration_days INTEGER,
+  price_total INTEGER, seats_remaining INTEGER, includes_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, id)
+)`,
+    },
+    {
+      name: 'plan_offer_flights',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offer_flights (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK(direction IN ('outbound', 'return')),
+  flight_number TEXT, airline TEXT, airline_code TEXT,
+  departure_code TEXT, departure_time TEXT, arrival_code TEXT, arrival_time TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, offer_id, direction)
+)`,
+    },
+    {
+      name: 'plan_offer_hotels',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offer_hotels (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT NOT NULL,
+  name TEXT, slug TEXT, area TEXT, star_rating INTEGER, access_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, offer_id)
+)`,
+    },
+    {
+      name: 'plan_offer_date_pricing',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offer_date_pricing (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT NOT NULL,
+  date TEXT NOT NULL, price INTEGER NOT NULL, availability TEXT, seats_remaining INTEGER,
+  currency TEXT DEFAULT 'TWD',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, offer_id, date)
+)`,
+    },
+    {
+      name: 'plan_offer_best_value',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offer_best_value (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT NOT NULL,
+  best_date TEXT, best_price INTEGER, currency TEXT DEFAULT 'TWD',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, offer_id)
+)`,
+    },
+    {
+      name: 'plan_offer_selection',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offer_selection (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  selected_offer_id TEXT, selected_date TEXT, selected_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination)
+)`,
+    },
+    {
+      name: 'plan_offer_provenance',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offer_provenance (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  source_id TEXT NOT NULL, scraped_at TEXT NOT NULL,
+  file_path TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, source_id, scraped_at)
+)`,
+    },
+    {
+      name: 'plan_offer_warnings',
+      sql: `CREATE TABLE IF NOT EXISTS plan_offer_warnings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT,
+  warning_type TEXT NOT NULL, message TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'plan_budget',
+      sql: `CREATE TABLE IF NOT EXISTS plan_budget (
+  plan_id TEXT PRIMARY KEY,
+  total_cap INTEGER, flight_cap INTEGER, accommodation_cap INTEGER, daily_cap INTEGER,
+  pax INTEGER NOT NULL DEFAULT 1, currency TEXT DEFAULT 'TWD',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'cascade_triggers',
+      sql: `CREATE TABLE IF NOT EXISTS cascade_triggers (
+  plan_id TEXT NOT NULL, trigger_id TEXT NOT NULL,
+  event TEXT NOT NULL, reset_json TEXT NOT NULL, scope TEXT NOT NULL,
+  condition_json TEXT, action TEXT, populate_map_json TEXT, set_source TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, trigger_id)
+)`,
+    },
+    {
+      name: 'plan_schema_contract',
+      sql: `CREATE TABLE IF NOT EXISTS plan_schema_contract (
+  plan_id TEXT PRIMARY KEY,
+  id_convention TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'TWD',
+  process_nodes_json TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'plan_process_precedence',
+      sql: `CREATE TABLE IF NOT EXISTS plan_process_precedence (
+  plan_id TEXT PRIMARY KEY,
+  precedence_json TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'cascade_global_state',
+      sql: `CREATE TABLE IF NOT EXISTS cascade_global_state (
+  plan_id TEXT PRIMARY KEY,
+  last_cascade_run DATETIME, active_dest_last TEXT, p1_dirty INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'plan_root_date_anchor',
+      sql: `CREATE TABLE IF NOT EXISTS plan_root_date_anchor (
+  plan_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL, set_out_date TEXT, duration_days INTEGER, return_date TEXT,
+  flexibility_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'itinerary_metadata',
+      sql: `CREATE TABLE IF NOT EXISTS itinerary_metadata (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  scaffolded_at DATETIME, populated_at DATETIME, transit_summary TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination)
+)`,
+    },
+    {
+      name: 'accommodation_location_zone',
+      sql: `CREATE TABLE IF NOT EXISTS accommodation_location_zone (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  selected_area TEXT, source TEXT, candidates_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination)
+)`,
+    },
+    {
+      name: 'transportation_extras',
+      sql: `CREATE TABLE IF NOT EXISTS transportation_extras (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  source TEXT, populated_from TEXT, research_notes TEXT,
+  home_to_airport_json TEXT, airport_to_hotel_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination)
+)`,
+    },
+    {
+      name: 'event_log_state',
+      sql: `CREATE TABLE IF NOT EXISTS event_log_state (
+  plan_id TEXT PRIMARY KEY,
+  session TEXT NOT NULL, project TEXT NOT NULL, version TEXT NOT NULL,
+  current_focus TEXT, active_destination TEXT, next_actions_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'event_log_global_processes',
+      sql: `CREATE TABLE IF NOT EXISTS event_log_global_processes (
+  plan_id TEXT NOT NULL, process_id TEXT NOT NULL,
+  status TEXT NOT NULL, events_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, process_id)
+)`,
+    },
+    {
+      name: 'event_log_destinations',
+      sql: `CREATE TABLE IF NOT EXISTS event_log_destinations (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  status TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination)
+)`,
+    },
+    {
+      name: 'event_log_dest_processes',
+      sql: `CREATE TABLE IF NOT EXISTS event_log_dest_processes (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL, process_id TEXT NOT NULL,
+  status TEXT NOT NULL, events_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, process_id)
+)`,
+    },
+    {
+      name: 'event_log_process_events',
+      sql: `CREATE TABLE IF NOT EXISTS event_log_process_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id TEXT NOT NULL, destination TEXT, process_id TEXT NOT NULL,
+  event_type TEXT NOT NULL, event_data TEXT,
+  event_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`,
+    },
+    {
+      name: 'airport_transfer_candidates',
+      sql: `CREATE TABLE IF NOT EXISTS airport_transfer_candidates (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK(direction IN ('arrival', 'departure')),
+  candidate_id TEXT NOT NULL,
+  title TEXT NOT NULL, route TEXT, duration_min INTEGER, price_yen INTEGER,
+  schedule TEXT, booking_url TEXT, notes TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, direction, candidate_id)
+)`,
+    },
+    {
+      name: 'hotel_access_lines',
+      sql: `CREATE TABLE IF NOT EXISTS hotel_access_lines (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  sort_order INTEGER NOT NULL, line TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, sort_order)
+)`,
+    },
+    {
+      name: 'session_meals',
+      sql: `CREATE TABLE IF NOT EXISTS session_meals (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  day_number INTEGER NOT NULL, session_type TEXT NOT NULL,
+  sort_order INTEGER NOT NULL, meal TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, destination, day_number, session_type, sort_order)
+)`,
+    },
+    {
+      name: 'activity_tags',
+      sql: `CREATE TABLE IF NOT EXISTS activity_tags (
+  activity_id TEXT NOT NULL, tag TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (activity_id, tag)
+)`,
+    },
+  ];
+
+  for (const table of phase1Tables) {
+    try {
+      console.log(`Creating ${table.name} table...`);
+      await client.execute(table.sql);
+      console.log(`✅ Created ${table.name} table.`);
+    } catch (e: any) {
+      if (e.message?.includes('already exists')) {
+        console.log(`ℹ️  ${table.name} table already exists.`);
+      } else {
+        console.warn(`⚠️  Could not create ${table.name} table:`, e.message);
+      }
+    }
+  }
+
+  // Add selected_* scalar columns to airport_transfers
+  for (const col of [
+    'selected_title TEXT', 'selected_route TEXT', 'selected_duration_min INTEGER',
+    'selected_price_yen INTEGER', 'selected_schedule TEXT', 'selected_booking_url TEXT', 'selected_notes TEXT',
+  ]) {
+    try {
+      await client.execute(`ALTER TABLE airport_transfers ADD COLUMN ${col};`);
+      console.log(`✅ Added ${col.split(' ')[0]} to airport_transfers.`);
+    } catch (e: any) {
+      if (e.message?.includes('duplicate column') || e.message?.includes('already exists')) {
+        console.log(`ℹ️  ${col.split(' ')[0]} already exists.`);
+      } else {
+        console.warn(`⚠️  Could not add ${col.split(' ')[0]}:`, e.message);
+      }
+    }
+  }
+
+  console.log('✅ Phase 1 normalization tables created.');
+
+  // Phase 6: Drop blob columns (plan_json, state_json) from plans table.
+  // All data is now in normalized tables. SQLite 3.35+ / Turso supports DROP COLUMN.
+  for (const col of ['plan_json', 'state_json']) {
+    try {
+      console.log(`Dropping ${col} column from plans...`);
+      await client.execute(`ALTER TABLE plans DROP COLUMN ${col};`);
+      console.log(`✅ Dropped ${col} from plans.`);
+    } catch (e: any) {
+      if (e.message?.includes('no such column') || e.message?.includes('not found')) {
+        console.log(`ℹ️  ${col} already dropped.`);
+      } else {
+        console.warn(`⚠️  Could not drop ${col}:`, e.message);
       }
     }
   }

@@ -11,7 +11,7 @@
  *   node dist/cli/cascade.js [options]
  */
 
-import { run, runAsync, RunOptions } from '../cascade/runner';
+import { runAsync, RunOptions } from '../cascade/runner';
 import { CascadePlan, CascadeResult } from '../cascade/types';
 import { PATHS } from '../config/constants';
 

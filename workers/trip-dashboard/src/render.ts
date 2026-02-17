@@ -494,6 +494,17 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
     </div>`;
 }
 
+/** Format airport code with optional terminal (e.g., "NRT T2" or "TPE") */
+function fmtAirport(leg: Record<string, unknown>, isArrival = false): string {
+  const code = isArrival
+    ? (leg.arrival_airport_code as string) || ''
+    : (leg.departure_airport_code as string) || '';
+  const terminal = isArrival
+    ? (leg.arrival_terminal as string) || ''
+    : (leg.departure_terminal as string) || '';
+  return terminal ? `${code} ${terminal}` : code;
+}
+
 function renderBookingSummary(dest: Record<string, unknown>, lang: Lang, isTokyoPlan: boolean, isKyotoPlan: boolean): string {
   const transport = dest.process_3_transportation as Record<string, unknown> | undefined;
   const accommodation = dest.process_4_accommodation as Record<string, unknown> | undefined;
@@ -546,7 +557,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang, isTokyo
         ? `${esc(airline)} ${esc(airlineCode)}${esc((outbound.flight_number as string) || '')}`
         : '\u2014',
       sub: outbound
-        ? `${esc((outbound.departure_airport_code as string) || '')} ${esc((outbound.departure_time as string) || '')} \u2192 ${esc((outbound.arrival_airport_code as string) || '')} ${esc((outbound.arrival_time as string) || '')}`
+        ? `${esc(fmtAirport(outbound))} ${esc((outbound.departure_time as string) || '')} \u2192 ${esc(fmtAirport(outbound, true))} ${esc((outbound.arrival_time as string) || '')}`
         : '',
       badge: '',
     },
@@ -557,7 +568,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang, isTokyo
         ? `${esc(airline)} ${esc(airlineCode)}${esc((returnFl.flight_number as string) || '')}`
         : '\u2014',
       sub: returnFl
-        ? `${esc((returnFl.departure_airport_code as string) || '')} ${esc((returnFl.departure_time as string) || '')} \u2192 ${esc((returnFl.arrival_airport_code as string) || '')} ${esc((returnFl.arrival_time as string) || '')}`
+        ? `${esc(fmtAirport(returnFl))} ${esc((returnFl.departure_time as string) || '')} \u2192 ${esc(fmtAirport(returnFl, true))} ${esc((returnFl.arrival_time as string) || '')}`
         : '',
       badge: '',
     },
@@ -697,11 +708,12 @@ export function renderDashboard(
   plans?: PlanSummary[],
   mapsKey?: string
 ): string {
-  const plan = JSON.parse(planData.plan_json);
+  const plan = planData.plan;
   const activeDest = plan.active_destination as string;
   const isTokyoPlan = activeDest === 'tokyo_2026';
   const isKyotoPlan = activeDest === 'kyoto_2026';
-  const dest = plan.destinations?.[activeDest] as Record<string, unknown> | undefined;
+  const destinations = plan.destinations as Record<string, Record<string, unknown>> | undefined;
+  const dest = destinations?.[activeDest];
 
   if (!dest) {
     return renderError(`Destination "${activeDest}" not found in plan`, lang);

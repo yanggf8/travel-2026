@@ -1,15 +1,16 @@
 /**
- * Seed plans table from existing JSON files.
+ * Seed plans table (plan_id + schema_version only — no blobs).
  *
- * Reads data/travel-plan.json (-> "default") and data/trips/<id>/travel-plan.json
- * (-> "<trip-id>") and upserts them into Turso plans.
+ * This script is largely obsolete since all data lives in normalized tables.
+ * Use `npm run db:migrate:turso` to create tables, then
+ * `ts-node scripts/migrate-blob-to-tables.ts` to populate from old blob data.
+ *
+ * This script now only ensures the `plans` row exists for each plan_id.
  *
  * Usage:
  *   npm run db:seed:plans
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
 import { TursoPipelineClient } from './turso-pipeline';
 
 function sqlEscape(value: string): string {
@@ -21,80 +22,31 @@ function sqlText(value: string | null): string {
   return `'${sqlEscape(value)}'`;
 }
 
-interface PlanEntry {
-  planId: string;
-  planPath: string;
-  statePath: string;
-}
-
-function discoverPlans(): PlanEntry[] {
-  const entries: PlanEntry[] = [];
-  const root = process.cwd();
-
-  // Default plan
-  const defaultPlan = path.join(root, 'data', 'travel-plan.json');
-  if (fs.existsSync(defaultPlan)) {
-    entries.push({
-      planId: 'default',
-      planPath: defaultPlan,
-      statePath: path.join(root, 'data', 'state.json'),
-    });
-  }
-
-  // Trip-specific plans
-  const tripsDir = path.join(root, 'data', 'trips');
-  if (fs.existsSync(tripsDir)) {
-    for (const dir of fs.readdirSync(tripsDir)) {
-      const tripPlan = path.join(tripsDir, dir, 'travel-plan.json');
-      if (fs.existsSync(tripPlan)) {
-        entries.push({
-          planId: dir,
-          planPath: tripPlan,
-          statePath: path.join(tripsDir, dir, 'state.json'),
-        });
-      }
-    }
-  }
-
-  return entries;
-}
-
 async function main(): Promise<void> {
   const client = new TursoPipelineClient();
-  const plans = discoverPlans();
 
-  if (plans.length === 0) {
-    console.log('No plan files found.');
-    return;
-  }
+  // Known plans — add new plan IDs here
+  const plans = [
+    { planId: 'tokyo-2026', schemaVersion: '4.2.0' },
+    { planId: 'kyoto-2026', schemaVersion: '4.2.0' },
+  ];
 
-  console.log(`Found ${plans.length} plan(s) to seed:`);
+  console.log(`Seeding ${plans.length} plan(s) into plans table...`);
   const sqlStatements: string[] = [];
 
   for (const entry of plans) {
-    const planJson = fs.readFileSync(entry.planPath, 'utf-8');
-    const plan = JSON.parse(planJson);
-    const schemaVersion = (plan.schema_version as string) || 'unknown';
-
-    const stateJson = fs.existsSync(entry.statePath)
-      ? fs.readFileSync(entry.statePath, 'utf-8')
-      : null;
-
-    console.log(`  - ${entry.planId} (${entry.planPath}, schema ${schemaVersion})`);
-
+    console.log(`  - ${entry.planId} (schema ${entry.schemaVersion})`);
     sqlStatements.push(
-      `INSERT INTO plans (plan_id, schema_version, plan_json, state_json, updated_at)
-VALUES (${sqlText(entry.planId)}, ${sqlText(schemaVersion)}, ${sqlText(planJson)}, ${sqlText(stateJson)}, datetime('now'))
+      `INSERT INTO plans (plan_id, schema_version, updated_at)
+VALUES (${sqlText(entry.planId)}, ${sqlText(entry.schemaVersion)}, datetime('now'))
 ON CONFLICT(plan_id) DO UPDATE SET
-  schema_version = ${sqlText(schemaVersion)},
-  plan_json = ${sqlText(planJson)},
-  state_json = ${sqlText(stateJson)},
+  schema_version = ${sqlText(entry.schemaVersion)},
   updated_at = datetime('now');`
     );
   }
 
   await client.executeMany(sqlStatements, 5);
-  console.log(`✅ Seeded ${plans.length} plan(s) into plans.`);
+  console.log(`Done. Plan rows exist for: ${plans.map(p => p.planId).join(', ')}`);
 }
 
 main().catch((e) => {

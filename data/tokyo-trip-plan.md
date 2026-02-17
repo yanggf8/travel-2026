@@ -5,11 +5,11 @@
 | Item | Details | Status |
 |------|---------|--------|
 | **Package** | BestTour TYO06MM260213AM2 — TWD 27,888/person (55,776 for 2 pax) | Booked |
-| **Flight Out** | Scoot TR874 — TPE 13:55 → NRT 18:00 | Booked |
-| **Flight Back** | Scoot TR875 — NRT 19:55 → TPE 23:10 | Booked |
+| **Flight Out** | Scoot TR874 — TPE 13:55 → NRT T2 18:00 | Booked |
+| **Flight Back** | Scoot TR875 — NRT T1 19:55 → TPE 23:10 | Booked |
 | **Hotel** | TAVINOS Hamamatsucho (light breakfast) — JR Hamamatsucho 8min, Takeshiba 1min | Booked |
-| **Airport → Hotel** | Limousine Bus NRT T2 → Takeshiba — ¥3,200, ~85min, 19:40 departure | Planned |
-| **Hotel → Airport** | Limousine Bus Takeshiba → NRT T2 — ¥3,200, ~120min, 15:30 departure | Planned |
+| **Airport → Hotel** | Limousine Bus NRT T1 → Takeshiba — ¥3,200, ~85min, 19:40 departure | Planned |
+| **Hotel → Airport** | Limousine Bus Takeshiba → NRT T1 — ¥3,200, ~120min, 15:30 departure | Planned |
 | **teamLab Borderless** | Day 2 morning, Azabudai Hills (opens 10:00) | **PENDING — book by Feb 10** |
 | **IC Card** | Buy Suica/Pasmo at Narita — works on all trains/metro | Day-of |
 
@@ -38,10 +38,11 @@ Daily transit budget: ~¥600-800/person
 | Time | Activity | Transport | Notes |
 |------|----------|-----------|-------|
 | 13:55 | Depart TPE (TR874) | — | Lunch before/at airport |
-| 18:00 | Land NRT T2 | — | 4h05m flight |
+| 18:00 | Land NRT **T2** | — | 4h05m flight |
 | 18:00-18:45 | Immigration + baggage | — | |
-| 18:50-19:30 | **Dinner at Narita T2** | — | Ramen, sushi, udon options |
-| 19:40 | **Limousine Bus departs** | NRT T2 → Takeshiba | ¥3,200, SuperCabin |
+| 18:50-19:20 | Transfer NRT T2 → T1 | Terminal shuttle bus ~10min | Free inter-terminal bus |
+| 19:20-19:30 | Quick snack at T1 | — | Grab-and-go if needed |
+| 19:40 | **Limousine Bus departs** | NRT T1 → Takeshiba | ¥3,200, SuperCabin |
 | ~21:25 | Arrive Takeshiba | 3min walk to hotel | |
 | ~21:30 | **Hotel check-in** | — | TAVINOS Hamamatsucho, rest |
 
@@ -118,10 +119,10 @@ Daily transit budget: ~¥600-800/person
 | 12:30-14:00 | **Lunch** in Shiodome/Hamamatsucho | Walking distance | Caretta Shiodome or City Center |
 | 14:45 | Pick up luggage from hotel | — | |
 | 15:00 | Leave hotel with luggage | 3min walk to Takeshiba bus stop | |
-| 15:30 | **Limousine Bus departs** | Takeshiba → NRT T2, ¥3,200 | ~120min |
-| ~17:30 | Arrive NRT T2 | — | Check-in + security |
-| 17:30-19:30 | **Duty-free shopping + dinner** | — | Light dinner at NRT T2 |
-| 19:55 | **TR875 departs NRT → TPE 23:10** | — | |
+| 15:30 | **Limousine Bus departs** | Takeshiba → NRT T1, ¥3,200 | ~120min |
+| ~17:30 | Arrive NRT T1 | — | Check-in + security |
+| 17:30-19:30 | **Duty-free shopping + dinner** | — | Light dinner at NRT T1 |
+| 19:55 | **TR875 departs NRT T1 → TPE 23:10** | — | |
 
 ---
 

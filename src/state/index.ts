@@ -4,7 +4,7 @@
  * Unified state management for travel planning skills.
  */
 
-export { StateManager, getStateManager, resetStateManager } from './state-manager';
+export { StateManager } from './state-manager';
 export type { StateManagerOptions } from './state-manager';
 export {
   ProcessStatus,

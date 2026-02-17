@@ -2,8 +2,8 @@
  * State Repository Interface
  *
  * Abstracts plan data access from storage format.
- * Phase 0: BlobBridgeRepository implements this over the JSON blob.
- * Phase 2: TursoRepository implements this over normalized tables.
+ * PlanRepository: in-memory plan object (mutations + write-back).
+ * TursoRepository: reads from normalized tables, delegates to PlanRepository.
  *
  * All JSON path navigation and `Record<string, unknown>` casts
  * live in the repository implementation, not in StateManager.

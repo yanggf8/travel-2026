@@ -1,11 +1,9 @@
 /**
- * Blob Bridge Repository
+ * In-Memory Plan Repository
  *
- * Implements StateRepository over the existing JSON blob in plans.
- * All `Record<string, unknown>` casts and JSON path navigation live here.
- *
- * Phase 0: wraps current readPlanFromDb/writePlanToDb.
- * Phase 1-2: replaced by TursoRepository reading normalized tables.
+ * Implements StateRepository over an in-memory plan object.
+ * TursoRepository assembles plan from normalized tables, then wraps it
+ * in this class for mutation + write-back via syncNormalizedTables().
  */
 
 import type {
@@ -29,7 +27,7 @@ import {
   formatSectionValidationErrors,
 } from './schemas';
 
-export class BlobBridgeRepository implements StateRepository {
+export class PlanRepository implements StateRepository {
   private version: number;
 
   constructor(
@@ -652,17 +650,7 @@ export class BlobBridgeRepository implements StateRepository {
     validateTravelPlan(this.plan);
     validateEventLogState(this.eventLog);
 
-    const planJson = JSON.stringify(this.plan, null, 2);
-    const stateJson = JSON.stringify(this.eventLog, null, 2);
-
-    try {
-      const { writePlanToDb } = require('../services/turso-service');
-      await writePlanToDb(planId, planJson, stateJson, schemaVersion);
-    } catch (e: any) {
-      throw new Error(`DB write failed — save aborted: ${e.message}`);
-    }
-
-    // Blocking: sync normalized tables (TursoRepository reads from these)
+    // Write to normalized tables only (no blob)
     await this.syncNormalizedTables(planId);
 
     // Fire-and-forget: bookings + events (not on read-critical path)
@@ -688,7 +676,7 @@ export class BlobBridgeRepository implements StateRepository {
    * Phase 1 dual-write: extract itinerary data from in-memory plan and
    * write to normalized tables (itinerary_days, itinerary_sessions, activities,
    * plan_metadata, date_anchors, process_statuses, cascade_dirty_flags,
-   * airport_transfers, flights, hotels).
+   * airport_transfers, flight_legs, hotels).
    *
    * Blocking — TursoRepository reads from these tables, so they must be
    * consistent before save() returns.
@@ -706,9 +694,38 @@ export class BlobBridgeRepository implements StateRepository {
       `DELETE FROM process_statuses WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM cascade_dirty_flags WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM airport_transfers WHERE plan_id = '${escapedPlanId}'`,
-      `DELETE FROM flights WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM flight_legs WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM hotels WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM date_anchors WHERE plan_id = '${escapedPlanId}'`,
+      // Phase 4: new normalized tables
+      `DELETE FROM plan_destinations WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM destination_details WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM destination_cities WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offers WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_flights WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_hotels WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_date_pricing WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_best_value WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_selection WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_provenance WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_warnings WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_budget WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM cascade_triggers WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_schema_contract WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_process_precedence WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM cascade_global_state WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_root_date_anchor WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM itinerary_metadata WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM accommodation_location_zone WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM transportation_extras WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM event_log_state WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM event_log_global_processes WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM event_log_destinations WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM event_log_dest_processes WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM event_log_process_events WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM airport_transfer_candidates WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM hotel_access_lines WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM session_meals WHERE plan_id = '${escapedPlanId}'`,
     );
 
     // plan_metadata
@@ -716,6 +733,49 @@ export class BlobBridgeRepository implements StateRepository {
       `INSERT OR REPLACE INTO plan_metadata (plan_id, schema_version, active_destination, updated_at)
        VALUES (${sqlText(planId)}, ${sqlText(this.plan.schema_version)}, ${sqlText(this.plan.active_destination)}, datetime('now'))`
     );
+
+    // Root-level normalized tables
+    const plan = this.plan as any;
+    if (plan.budget) {
+      const b = plan.budget;
+      statements.push(`INSERT INTO plan_budget (plan_id, total_cap, flight_cap, accommodation_cap, daily_cap, pax, currency) VALUES (${sqlText(planId)}, ${sqlInt(b.total_cap)}, ${sqlInt(b.flight_cap)}, ${sqlInt(b.accommodation_cap)}, ${sqlInt(b.daily_cap)}, ${sqlInt(b.pax ?? 1)}, ${sqlText(b.currency ?? 'TWD')})`);
+    }
+    if (plan.schema_contract) {
+      const sc = plan.schema_contract;
+      statements.push(`INSERT INTO plan_schema_contract (plan_id, id_convention, currency, process_nodes_json) VALUES (${sqlText(planId)}, ${sqlText(sc.id_convention)}, ${sqlText(sc.currency ?? 'TWD')}, ${sqlText(JSON.stringify(sc.process_nodes))})`);
+    }
+    if (plan.process_precedence) {
+      statements.push(`INSERT INTO plan_process_precedence (plan_id, precedence_json) VALUES (${sqlText(planId)}, ${sqlText(JSON.stringify(plan.process_precedence))})`);
+    }
+    if (plan.cascade_rules?.triggers) {
+      for (const t of plan.cascade_rules.triggers) {
+        statements.push(`INSERT INTO cascade_triggers (plan_id, trigger_id, event, reset_json, scope, condition_json, action, populate_map_json, set_source) VALUES (${sqlText(planId)}, ${sqlText(t.id)}, ${sqlText(t.trigger)}, ${sqlText(JSON.stringify(t.reset))}, ${sqlText(t.scope)}, ${sqlText(t.condition ? JSON.stringify(t.condition) : null)}, ${sqlText(t.action)}, ${sqlText(t.populate_map ? JSON.stringify(t.populate_map) : null)}, ${sqlText(t.set_source)})`);
+      }
+    }
+    if (plan.process_1_date_anchor) {
+      const p1r = plan.process_1_date_anchor;
+      statements.push(`INSERT INTO plan_root_date_anchor (plan_id, status, set_out_date, duration_days, return_date, flexibility_json) VALUES (${sqlText(planId)}, ${sqlText(p1r.status)}, ${sqlText(p1r.set_out_date)}, ${sqlInt(p1r.duration_days)}, ${sqlText(p1r.return_date)}, ${sqlText(p1r.flexibility ? JSON.stringify(p1r.flexibility) : null)})`);
+    }
+    if (plan.cascade_state) {
+      const cs = plan.cascade_state;
+      statements.push(`INSERT INTO cascade_global_state (plan_id, last_cascade_run, active_dest_last, p1_dirty) VALUES (${sqlText(planId)}, ${sqlText(cs.last_cascade_run)}, ${sqlText(cs.global?.active_destination_last)}, ${sqlBool(cs.global?.process_1_date_anchor?.dirty)})`);
+    }
+
+    // Event log
+    const el = this.eventLog;
+    statements.push(`INSERT INTO event_log_state (plan_id, session, project, version, current_focus, active_destination, next_actions_json) VALUES (${sqlText(planId)}, ${sqlText(el.session)}, ${sqlText(el.project)}, ${sqlText(el.version)}, ${sqlText(el.current_focus)}, ${sqlText(el.active_destination)}, ${sqlText(el.next_actions ? JSON.stringify(el.next_actions) : null)})`);
+    for (const [pid, pobj] of Object.entries(el.global_processes || {})) {
+      statements.push(`INSERT INTO event_log_global_processes (plan_id, process_id, status, events_json) VALUES (${sqlText(planId)}, ${sqlText(pid)}, ${sqlText(pobj.state)}, ${sqlText(JSON.stringify(pobj.events))})`);
+    }
+    for (const [dest, dobj] of Object.entries(el.destinations || {})) {
+      statements.push(`INSERT INTO event_log_destinations (plan_id, destination, status) VALUES (${sqlText(planId)}, ${sqlText(dest)}, ${sqlText(dobj.status)})`);
+      for (const [pid, pobj] of Object.entries(dobj.processes || {})) {
+        statements.push(`INSERT INTO event_log_dest_processes (plan_id, destination, process_id, status, events_json) VALUES (${sqlText(planId)}, ${sqlText(dest)}, ${sqlText(pid)}, ${sqlText(pobj.state)}, ${sqlText(JSON.stringify(pobj.events))})`);
+      }
+    }
+    for (const evt of el.event_log || []) {
+      statements.push(`INSERT INTO event_log_process_events (plan_id, destination, process_id, event_type, event_data, event_at) VALUES (${sqlText(planId)}, ${sqlText(evt.destination)}, ${sqlText(evt.process ?? 'global')}, ${sqlText(evt.event)}, ${sqlText(evt.data ? JSON.stringify(evt.data) : null)}, ${sqlText(evt.at)})`);
+    }
 
     const destinations = this.plan.destinations;
     if (!destinations) return;
@@ -750,7 +810,7 @@ export class BlobBridgeRepository implements StateRepository {
         }
       }
 
-      // airport_transfers + flights
+      // airport_transfers + flight_legs
       const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
       if (p3?.airport_transfers && typeof p3.airport_transfers === 'object') {
         const transfers = p3.airport_transfers as Record<string, unknown>;
@@ -767,10 +827,15 @@ export class BlobBridgeRepository implements StateRepository {
 
       if (p3?.flight && typeof p3.flight === 'object') {
         const flight = p3.flight as Record<string, unknown>;
-        statements.push(
-          `INSERT OR REPLACE INTO flights (plan_id, destination, populated_from, airline, airline_code, outbound_json, return_json, booked_date, updated_at)
-           VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p3.populated_from as string)}, ${sqlText(flight.airline as string)}, ${sqlText(flight.airline_code as string)}, ${sqlText(flight.outbound ? JSON.stringify(flight.outbound) : null)}, ${sqlText(flight.return ? JSON.stringify(flight.return) : null)}, ${sqlText(flight.booked_date as string)}, datetime('now'))`
-        );
+        // Write normalized flight_legs rows (one per direction)
+        for (const dir of ['outbound', 'return'] as const) {
+          const leg = flight[dir] as Record<string, unknown> | null | undefined;
+          if (!leg) continue;
+          statements.push(
+            `INSERT OR REPLACE INTO flight_legs (plan_id, destination, direction, leg_order, flight_number, airline, airline_code, departure_airport, departure_code, departure_terminal, departure_time, arrival_airport, arrival_code, arrival_terminal, arrival_time, flight_date, populated_from, booked_date, updated_at)
+             VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(dir)}, 0, ${sqlText(leg.flight_number as string)}, ${sqlText(flight.airline as string)}, ${sqlText(flight.airline_code as string)}, ${sqlText(leg.departure_airport as string)}, ${sqlText(leg.departure_airport_code as string)}, ${sqlText(leg.departure_terminal as string)}, ${sqlText(leg.departure_time as string)}, ${sqlText(leg.arrival_airport as string)}, ${sqlText(leg.arrival_airport_code as string)}, ${sqlText(leg.arrival_terminal as string)}, ${sqlText(leg.arrival_time as string)}, ${sqlText(leg.date as string)}, ${sqlText(p3.populated_from as string)}, ${sqlText(flight.booked_date as string)}, datetime('now'))`
+          );
+        }
       }
 
       // hotels
@@ -796,8 +861,105 @@ export class BlobBridgeRepository implements StateRepository {
         }
       }
 
-      // itinerary_days + sessions + activities
+      // --- Phase 4: new per-destination tables ---
+
+      // plan_destinations
+      statements.push(`INSERT INTO plan_destinations (plan_id, slug, display_name, status, created_at, updated_at) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText((destObj as any).display_name ?? destSlug)}, ${sqlText((destObj as any).status ?? 'draft')}, ${sqlText((destObj as any).created_at)}, ${sqlText((destObj as any).updated_at)})`);
+
+      // destination_details (P2)
+      const p2 = destObj.process_2_destination as Record<string, unknown> | undefined;
+      if (p2) {
+        statements.push(`INSERT INTO destination_details (plan_id, destination, origin_city, region, primary_airport) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p2.origin_city as string)}, ${sqlText(p2.region as string)}, ${sqlText(p2.primary_airport as string)})`);
+        const cities = p2.cities as Array<Record<string, unknown>> | undefined;
+        if (cities) {
+          for (const c of cities) {
+            statements.push(`INSERT INTO destination_cities (plan_id, destination, city_slug, role, nights) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(c.slug as string)}, ${sqlText(c.role as string)}, ${sqlInt(c.nights as number)})`);
+          }
+        }
+      }
+
+      // plan_offers (P3_4)
+      const p34 = destObj.process_3_4_packages as Record<string, unknown> | undefined;
+      const results34 = p34?.results as Record<string, unknown> | undefined;
+      const offers = (results34?.offers || (p34 as any)?.offers || []) as Array<Record<string, unknown>>;
+      for (const o of offers) {
+        statements.push(`INSERT INTO plan_offers (plan_id, destination, id, source_id, type, title, price_per_person, currency, availability, url, scraped_at, product_code, duration_days, price_total, seats_remaining, includes_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(o.source_id as string)}, ${sqlText(o.type as string)}, ${sqlText(o.title as string)}, ${sqlInt(o.price_per_person as number)}, ${sqlText((o.currency as string) ?? 'TWD')}, ${sqlText(o.availability as string)}, ${sqlText(o.url as string)}, ${sqlText(o.scraped_at as string)}, ${sqlText(o.product_code as string)}, ${sqlInt(o.duration_days as number)}, ${sqlInt(o.price_total as number)}, ${sqlInt(o.seats_remaining as number)}, ${sqlText(o.includes ? JSON.stringify(o.includes) : null)})`);
+        const oflight = o.flight as Record<string, unknown> | undefined;
+        if (oflight) {
+          for (const dir of ['outbound', 'return'] as const) {
+            const leg = oflight[dir] as Record<string, unknown> | undefined;
+            if (!leg) continue;
+            statements.push(`INSERT INTO plan_offer_flights (plan_id, destination, offer_id, direction, flight_number, airline, airline_code, departure_code, departure_time, arrival_code, arrival_time) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(dir)}, ${sqlText(leg.flight_number as string)}, ${sqlText(oflight.airline as string)}, ${sqlText(oflight.airline_code as string)}, ${sqlText(leg.departure_airport_code as string)}, ${sqlText(leg.departure_time as string)}, ${sqlText(leg.arrival_airport_code as string)}, ${sqlText(leg.arrival_time as string)})`);
+          }
+        }
+        const ohotel = o.hotel as Record<string, unknown> | undefined;
+        if (ohotel) {
+          statements.push(`INSERT INTO plan_offer_hotels (plan_id, destination, offer_id, name, slug, area, star_rating, access_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(ohotel.name as string)}, ${sqlText(ohotel.slug as string)}, ${sqlText(ohotel.area as string)}, ${sqlInt(ohotel.star_rating as number)}, ${sqlText(ohotel.access ? JSON.stringify(ohotel.access) : null)})`);
+        }
+        const dp = o.date_pricing as Record<string, Record<string, unknown>> | undefined;
+        if (dp) {
+          for (const [date, d] of Object.entries(dp)) {
+            statements.push(`INSERT INTO plan_offer_date_pricing (plan_id, destination, offer_id, date, price, availability, seats_remaining) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(date)}, ${sqlInt(d.price as number)}, ${sqlText(d.availability as string)}, ${sqlInt(d.seats_remaining as number)})`);
+          }
+        }
+      }
+
+      // offer selection
+      if (p34?.selected_offer_id || results34?.selection) {
+        const sel = results34?.selection as Record<string, unknown> | undefined;
+        statements.push(`INSERT INTO plan_offer_selection (plan_id, destination, selected_offer_id, selected_date, selected_at) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText((p34?.selected_offer_id || sel?.offer_id) as string)}, ${sqlText(sel?.date as string)}, ${sqlText((sel?.selected_at || p34?.updated_at) as string)})`);
+      }
+
+      // accommodation_location_zone
+      if (p4) {
+        const lz = (p4 as any).location_zone;
+        if (lz) {
+          statements.push(`INSERT INTO accommodation_location_zone (plan_id, destination, selected_area, source, candidates_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(lz.selected_area)}, ${sqlText(lz.source)}, ${sqlText(lz.candidates ? JSON.stringify(lz.candidates) : null)})`);
+        }
+      }
+
+      // transportation_extras
+      if (p3) {
+        statements.push(`INSERT INTO transportation_extras (plan_id, destination, source, populated_from, home_to_airport_json, airport_to_hotel_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p3.source as string)}, ${sqlText(p3.populated_from as string)}, ${sqlText((p3 as any).home_to_airport ? JSON.stringify((p3 as any).home_to_airport) : null)}, ${sqlText((p3 as any).airport_to_hotel ? JSON.stringify((p3 as any).airport_to_hotel) : null)})`);
+      }
+
+      // airport_transfer_candidates + selected_* scalars
+      if (p3?.airport_transfers && typeof p3.airport_transfers === 'object') {
+        const transfers = p3.airport_transfers as Record<string, unknown>;
+        for (const dir of ['arrival', 'departure'] as const) {
+          const seg = transfers[dir] as Record<string, unknown> | undefined;
+          if (!seg) continue;
+          const sel = seg.selected as Record<string, unknown> | undefined;
+          if (sel) {
+            statements.push(`UPDATE airport_transfers SET selected_title = ${sqlText(sel.title as string)}, selected_route = ${sqlText(sel.route as string)}, selected_duration_min = ${sqlInt(sel.duration_min as number)}, selected_price_yen = ${sqlInt(sel.price_yen as number)}, selected_schedule = ${sqlText(sel.schedule as string)}, selected_booking_url = ${sqlText(sel.booking_url as string)}, selected_notes = ${sqlText(sel.notes as string)} WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText(destSlug)} AND direction = ${sqlText(dir)}`);
+          }
+          const cands = seg.candidates as Array<Record<string, unknown>> | undefined;
+          if (cands) {
+            for (let ci = 0; ci < cands.length; ci++) {
+              const c = cands[ci];
+              statements.push(`INSERT INTO airport_transfer_candidates (plan_id, destination, direction, candidate_id, title, route, duration_min, price_yen, schedule, booking_url, notes, sort_order) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(dir)}, ${sqlText(c.id as string)}, ${sqlText((c.title || c.method) as string)}, ${sqlText(c.route as string)}, ${sqlInt(c.duration_min as number)}, ${sqlInt((c.price_yen ?? c.cost_jpy) as number)}, ${sqlText(c.schedule as string)}, ${sqlText(c.booking_url as string)}, ${sqlText(c.notes as string)}, ${sqlInt(ci)})`);
+            }
+          }
+        }
+      }
+
+      // hotel_access_lines
+      if (p4?.hotel && typeof p4.hotel === 'object') {
+        const access = (p4.hotel as any).access;
+        if (Array.isArray(access)) {
+          for (let ai = 0; ai < access.length; ai++) {
+            statements.push(`INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(ai)}, ${sqlText(access[ai])})`);
+          }
+        }
+      }
+
+      // itinerary_metadata (must be after p5 declaration)
       const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
+      if (p5) {
+        statements.push(`INSERT INTO itinerary_metadata (plan_id, destination, scaffolded_at, populated_at, transit_summary) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p5.scaffolded_at as string)}, ${sqlText(p5.populated_at as string)}, ${sqlText(p5.transit_summary as string)})`);
+      }
+
+      // session_meals + activity_tags
       const days = p5?.days as Array<Record<string, unknown>> | undefined;
       if (days && Array.isArray(days)) {
         for (const day of days) {
@@ -838,7 +1000,21 @@ export class BlobBridgeRepository implements StateRepository {
                     `INSERT OR REPLACE INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title, area, nearest_station, duration_min, booking_required, booking_url, booking_status, booking_ref, book_by, start_time, end_time, is_fixed_time, cost_estimate, tags_json, notes, priority, updated_at)
                      VALUES (${sqlText(actId)}, ${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlInt(i)}, ${sqlText(act.title as string)}, ${sqlText(act.area as string)}, ${sqlText(act.nearest_station as string)}, ${sqlInt(act.duration_min as number)}, ${sqlBool(act.booking_required as boolean)}, ${sqlText(act.booking_url as string)}, ${sqlText(act.booking_status as string)}, ${sqlText(act.booking_ref as string)}, ${sqlText(act.book_by as string)}, ${sqlText(act.start_time as string)}, ${sqlText(act.end_time as string)}, ${sqlBool(act.is_fixed_time as boolean)}, ${sqlInt(act.cost_estimate as number)}, ${sqlText(act.tags ? JSON.stringify(act.tags) : null)}, ${sqlText(act.notes as string)}, ${sqlText((act.priority as string) || 'want')}, datetime('now'))`
                   );
+                  // activity_tags
+                  const tags = act.tags as string[] | undefined;
+                  if (tags && Array.isArray(tags)) {
+                    for (const tag of tags) {
+                      statements.push(`INSERT OR IGNORE INTO activity_tags (activity_id, tag) VALUES (${sqlText(actId)}, ${sqlText(tag)})`);
+                    }
+                  }
                 }
+              }
+            }
+
+            // session_meals
+            if (meals && Array.isArray(meals)) {
+              for (let mi = 0; mi < meals.length; mi++) {
+                statements.push(`INSERT INTO session_meals (plan_id, destination, day_number, session_type, sort_order, meal) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlInt(mi)}, ${sqlText(meals[mi])})`);
               }
             }
           }
@@ -931,52 +1107,3 @@ function sqlBool(v: boolean | null | undefined): string {
   return v ? '1' : '0';
 }
 
-// ============================================================================
-// Factory: create BlobBridgeRepository from DB
-// ============================================================================
-
-/**
- * Load plan + state from Turso and return a BlobBridgeRepository.
- */
-export async function createBlobBridgeFromDb(planId: string): Promise<BlobBridgeRepository> {
-  const { readPlanFromDb } = require('../services/turso-service');
-
-  let dbRow: { plan_json: string; state_json: string | null; updated_at: string; version: number } | null;
-  try {
-    dbRow = await readPlanFromDb(planId);
-  } catch (e: any) {
-    throw new Error(`[turso] DB read failed for plan "${planId}": ${e.message}`);
-  }
-
-  if (!dbRow) {
-    throw new Error(`[turso] Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
-  }
-
-  let plan: TravelPlanMinimal;
-  let eventLog: EventLogState | undefined;
-  try {
-    plan = JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
-    eventLog = dbRow.state_json ? JSON.parse(dbRow.state_json) as EventLogState : undefined;
-  } catch (e: any) {
-    throw new Error(`[turso] Invalid JSON in plans for plan "${planId}": ${e.message}`);
-  }
-
-  const version = dbRow.version ?? 0;
-  console.error(`  [turso] Loaded plan "${planId}" from DB (updated: ${dbRow.updated_at}, version: ${version})`);
-
-  if (!eventLog) {
-    const { DEFAULTS } = require('../config/constants');
-    eventLog = {
-      session: new Date().toISOString().split('T')[0],
-      project: DEFAULTS.project,
-      version: '3.0',
-      active_destination: plan.active_destination || '',
-      current_focus: '',
-      event_log: [],
-      global_processes: {},
-      destinations: {},
-    };
-  }
-
-  return new BlobBridgeRepository(plan, eventLog, version);
-}

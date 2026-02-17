@@ -50,9 +50,11 @@ export interface FlightSegment {
   airlineCode?: string;
   departureAirport: string;
   departureCode: string;
+  departureTerminal?: string;
   departureTime: string;
   arrivalAirport: string;
   arrivalCode: string;
+  arrivalTerminal?: string;
   arrivalTime: string;
   date: string;
 }

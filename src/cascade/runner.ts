@@ -7,7 +7,7 @@
  * - Transactional: plan → diff → apply → update state
  */
 
-import { readFileSync, writeFileSync } from 'fs';
+// File I/O removed — DB is sole source of truth.
 import {
   TravelPlanMinimal,
   CascadePlan,
@@ -443,25 +443,8 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
   current[parts[parts.length - 1]] = value;
 }
 
-// ============================================================================
-// File I/O
-// ============================================================================
-
-/**
- * Load travel plan from file.
- */
-export function loadPlan(inputPath: string): TravelPlanMinimal {
-  const content = readFileSync(inputPath, 'utf-8');
-  return JSON.parse(content) as TravelPlanMinimal;
-}
-
-/**
- * Save travel plan to file.
- */
-export function savePlan(plan: TravelPlanMinimal, outputPath: string): void {
-  const content = JSON.stringify(plan, null, 2);
-  writeFileSync(outputPath, content, 'utf-8');
-}
+// File I/O (loadPlan, savePlan) removed — DB is sole source of truth.
+// Use loadPlanAsync / runAsync instead.
 
 // ============================================================================
 // Async File I/O (DB-primary)
@@ -471,25 +454,16 @@ export function savePlan(plan: TravelPlanMinimal, outputPath: string): void {
  * Load travel plan from DB only.
  */
 export async function loadPlanAsync(inputPath: string): Promise<TravelPlanMinimal> {
-  const { readPlanFromDb, derivePlanId } = require('../services/turso-service');
+  const { derivePlanId } = require('../services/turso-service');
+  const { TursoRepository } = require('../state/turso-repository');
   const planId = derivePlanId(inputPath);
 
-  let dbRow: { plan_json: string } | null;
   try {
-    dbRow = await readPlanFromDb(planId);
+    const repo = await TursoRepository.create(planId);
+    console.error(`  [turso] Cascade loaded plan "${planId}" from normalized tables`);
+    return repo.getPlan();
   } catch (e: any) {
-    throw new Error(`[turso] DB read failed for plan "${planId}": ${e.message}`);
-  }
-
-  if (!dbRow) {
-    throw new Error(`[turso] Plan "${planId}" not found in DB. Run 'npm run db:seed:plans' first.`);
-  }
-
-  try {
-    console.error(`  [turso] Cascade loaded plan "${planId}" from DB`);
-    return JSON.parse(dbRow.plan_json) as TravelPlanMinimal;
-  } catch (e: any) {
-    throw new Error(`[turso] Invalid plan_json in DB for plan "${planId}": ${e.message}`);
+    throw new Error(`[turso] Failed to load plan "${planId}": ${e.message}`);
   }
 }
 
@@ -497,12 +471,16 @@ export async function loadPlanAsync(inputPath: string): Promise<TravelPlanMinima
  * Save travel plan to DB only.
  */
 export async function savePlanAsync(plan: TravelPlanMinimal, outputPath: string): Promise<void> {
-  const content = JSON.stringify(plan, null, 2);
-
   try {
-    const { writePlanToDb, derivePlanId } = require('../services/turso-service');
+    const { derivePlanId } = require('../services/turso-service');
+    const { TursoRepository } = require('../state/turso-repository');
     const planId = derivePlanId(outputPath);
-    await writePlanToDb(planId, content, null, plan.schema_version);
+    // Load existing repo to get event log, then update plan and save
+    const repo = await TursoRepository.create(planId);
+    // The cascade runner mutates the plan in-place, so we need to save via bridge
+    const { PlanRepository } = require('../state/plan-repository');
+    const bridge = new PlanRepository(plan, repo.getEventLog(), repo.getVersion());
+    await bridge.save(planId, plan.schema_version);
   } catch (e: any) {
     throw new Error(`DB write failed in cascade — save aborted: ${e.message}`);
   }
@@ -518,72 +496,7 @@ export interface RunOptions {
   apply: boolean;
 }
 
-/**
- * Run the cascade processor (sync — reads/writes JSON files only).
- * Kept for backward compatibility and tests.
- */
-export function run(options: RunOptions): CascadeResult {
-  const errors: string[] = [];
-
-  // Load plan
-  let plan: TravelPlanMinimal;
-  try {
-    plan = loadPlan(options.inputPath);
-  } catch (e) {
-    return {
-      success: false,
-      plan: { computed_at: new Date().toISOString(), triggers_evaluated: [], actions: [], warnings: [] },
-      applied: false,
-      output_path: null,
-      errors: [`Failed to load plan: ${e}`],
-    };
-  }
-
-  // Validate schema version
-  if (!plan.schema_version.startsWith('4.')) {
-    errors.push(`Schema version ${plan.schema_version} not supported. Requires ^4.2.0`);
-  }
-
-  // Compute plan
-  const cascadePlan = computePlan(plan);
-
-  // If dry-run, return plan without applying
-  if (!options.apply) {
-    return {
-      success: errors.length === 0,
-      plan: cascadePlan,
-      applied: false,
-      output_path: null,
-      errors,
-    };
-  }
-
-  // Apply plan
-  const updatedPlan = applyPlan(plan, cascadePlan);
-
-  // Write output
-  const outputPath = options.outputPath || options.inputPath;
-  try {
-    savePlan(updatedPlan, outputPath);
-  } catch (e) {
-    errors.push(`Failed to write plan: ${e}`);
-    return {
-      success: false,
-      plan: cascadePlan,
-      applied: false,
-      output_path: null,
-      errors,
-    };
-  }
-
-  return {
-    success: errors.length === 0,
-    plan: cascadePlan,
-    applied: true,
-    output_path: outputPath,
-    errors,
-  };
-}
+// Sync run() removed — use runAsync() instead (DB-only).
 
 /**
  * Run the cascade processor (async — DB-only read/write).

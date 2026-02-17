@@ -9,16 +9,27 @@
 
 ### Data Model
 ```
-travel-plan.json
-├── schema_version: "4.2.0"
-├── active_destination: "tokyo_2026"
-├── process_1_date_anchor          # Shared across destinations
-├── destinations/
-│   ├── tokyo_2026/                # ACTIVE (P2-P5)
-│   └── nagoya_2026/               # ARCHIVED
-├── cascade_rules/                 # Machine-checkable rules
-├── cascade_state/                 # Per-destination dirty flags
-└── canonical_offer_schema/        # All scrapers normalize to this
+Turso normalized tables (no JSON blobs)
+├── plan_metadata                  # plan_id, schema_version, active_destination
+├── plan_destinations              # slug, display_name per plan
+├── destination_details            # region, country, airport_code
+├── destination_cities             # city list per destination
+├── date_anchors                   # P1 confirmed dates (start, end, days)
+├── process_statuses               # per-destination process status
+├── cascade_dirty_flags            # per-destination dirty flags
+├── plan_offers                    # normalized offer records
+├── plan_offer_date_pricing        # price per date per offer
+├── plan_offer_selection           # chosen offer + date
+├── flight_legs                    # outbound/return per destination
+├── hotels                         # hotel name, access, check-in
+├── hotel_access_lines             # hotel access directions
+├── airport_transfers              # arrival/departure transfer info
+├── airport_transfer_candidates    # transfer options
+├── itinerary_days                 # day cards + weather
+├── itinerary_sessions             # morning/afternoon/evening
+├── activities                     # per-session activities + booking info
+├── itinerary_metadata             # transit_summary, timestamps
+└── (+ supporting: budget, triggers, contracts, event_log_*)
 ```
 
 ### Cascade Rules
@@ -30,38 +41,38 @@ travel-plan.json
 | `process_3_4_packages_selected` | populate P3+P4 from chosen offer | current destination |
 
 ### Data Flow
-`URL → scrape (Playwright) → normalize (CanonicalOffer[]) → StateManager.importPackageOffers() → Turso auto-import → selectOffer() → cascade (populate P3+P4) → save() (DB write → derived sync)`
+`URL → scrape (Playwright) → normalize (CanonicalOffer[]) → Turso import → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)`
 
-Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v1.9.0).
+Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v2.0.0).
 
-### Repository Architecture (v2.0.0)
+### Repository Architecture (v4.0.0)
 ```
 CLI / Skills / Dashboard
         ↓ commands
-   StateManager          ← state machine: validate, transition, cascade
+   StateManager          ← state machine: validate, transition, cascade (DB-only, no file I/O)
         ↓ repository calls
    StateRepository       ← interface (abstract)
         ↓
-   TursoRepository       ← normalized tables (itinerary) + blob (offers/transport)
+   TursoRepository       ← reads all data from normalized tables (38 queries)
         ↓
-   BlobBridgeRepository  ← in-memory plan + blob persistence + dual-write
+   PlanRepository        ← in-memory plan object + write-back via syncNormalizedTables()
 ```
 
 ```
-WRITE:  mutate → await save() → write blob (blocking) → write normalized tables (blocking) → sync bookings+events (fire-and-forget)
-READ:   await StateManager.create() → TursoRepository.create() → load blob + overlay itinerary from normalized tables → memory
+WRITE:  mutate → await save() → write normalized tables (blocking) → sync bookings+events (fire-and-forget)
+READ:   await StateManager.create() → TursoRepository.create() → assemblePlan() from normalized tables → memory
 ```
 
-- **Turso cloud is sole source of truth** — no JSON file reads/writes in runtime path
-- **Normalized tables** for itinerary: `itinerary_days`, `itinerary_sessions`, `activities` (+ 7 supporting tables)
-- **Blob still written** for backward compat — dashboard and cascade runner read from it via reconstructed plan object
-- `StateManager.save()` is async — blob write + normalized table write must succeed or command fails
-- `StateManager.saveWithTracking(cmd, summary)` wraps `save()` with operation audit trail in `operation_runs` table; CLI commands use this instead of raw `save()`
-- `plans.version` is a monotonic counter bumped on each save (audit trail only, no lock)
-- `StateManager.create()` is async factory — reads blob + normalized tables from DB
+- **Turso cloud is sole source of truth** — fully normalized, no JSON blobs
+- **No file-based state** — `StateManager` constructor throws without `repo` or `plan`; all legacy file I/O removed
+- **28+ normalized tables** — see Data Model above
+- **`flight_legs` table** — fully normalized flight data with `departure_terminal`/`arrival_terminal` columns
+- `StateManager.create()` is async factory — reads from normalized tables via `TursoRepository.create()`
+- `StateManager.saveWithTracking(cmd, summary)` wraps `save()` with operation audit trail in `operation_runs` table
+- `plans.version` is a monotonic counter bumped on each save (audit trail only)
 - `dispatch(command)` entry point — 25 command types as discriminated union
-- Plan ID: `"<trip-id>"` | `"path:<sha1-12>"` (derived from file path, e.g., `tokyo-2026`, `kyoto-2026`)
-- Tests use `skipSave: true` — DB calls skipped entirely
+- Plan ID: `"<trip-id>"` (e.g., `tokyo-2026`, `kyoto-2026`)
+- Tests use `skipSave: true` with `options.plan` passed in — DB calls skipped entirely
 - DB info messages use `console.error` (stderr) to avoid polluting JSON output
 
 ## Agent-First Workflow
@@ -190,20 +201,21 @@ Requires: `pip install playwright && playwright install chromium`
 ### BOOKED: Tokyo Feb 13-17
 ```
 Package: besttour_TYO06MM260213AM2 — TWD 27,888/person (55,776 for 2 pax)
-Flight:  Scoot TR874 TPE 13:55→NRT 18:00 / TR875 NRT 19:55→TPE 23:10
+Flight:  Scoot TR874 TPE 13:55 → NRT T2 18:00 / TR875 NRT T1 19:55 → TPE 23:10
 Hotel:   TAVINOS Hamamatsucho (light breakfast, JR Hamamatsucho 8min)
 ```
 
-Airport transfers: Limousine Bus ¥3,200 each way (NRT T2 ↔ Shiodome, ~85min), status: planned
+Airport transfers: Limousine Bus ¥3,200 each way (NRT T1 ↔ Shiodome, ~85min), status: planned
+Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1** — Limousine Bus departs from T1 (need inter-terminal transfer on arrival)
 
 ### Itinerary (Feb 13-17)
 | Day | Date | Morning | Afternoon | Evening |
 |-----|------|---------|-----------|---------|
-| 1 | Fri 13 | ✈️ TPE→NRT | Arrival + Narita dinner | Hotel check-in |
+| 1 | Fri 13 | ✈️ TPE→NRT T2 | Arrival + Narita dinner | Hotel check-in |
 | 2 | Sat 14 | **teamLab Borderless** | Asakusa (Senso-ji) | Harajuku |
 | 3 | Sun 15 | Azabudai Hills | Roppongi + Shibuya | Roppongi |
 | 4 | Mon 16 | KOMEHYO (Chanel) | Isetan omiyage | Omoide Yokocho |
-| 5 | Tue 17 | Pack + Checkout | Shiodome area | ✈️ NRT→TPE |
+| 5 | Tue 17 | Pack + Checkout | Shiodome area | ✈️ NRT T1→TPE |
 
 **Book by Feb 10**: teamLab Borderless (https://www.teamlab.art/e/borderless-azabudai/)
 **Limousine Bus**: https://www.limousinebus.co.jp/en/
@@ -247,7 +259,6 @@ npm run db:status:turso | db:migrate:turso | db:seed:plans
 # === BOOKINGS ===
 npm run travel -- sync-bookings [--dry-run]
 npm run travel -- query-bookings --dest tokyo_2026 [--category activity --status pending]
-npm run travel -- snapshot-plan --trip-id japan-2026
 npm run travel -- check-booking-integrity
 
 # === UTILITIES ===
@@ -290,10 +301,11 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 ├── src/
 │   ├── cli/travel-update.ts       # Main CLI entry
 │   ├── state/
-│   │   ├── state-manager.ts       # State machine: validate, transition, cascade, dispatch()
+│   │   ├── state-manager.ts       # State machine: validate, transition, cascade, dispatch() (DB-only)
 │   │   ├── repository.ts          # StateRepository interface (StateReader + StateWriter)
-│   │   ├── turso-repository.ts    # Reads itinerary from normalized tables, delegates to BlobBridge
-│   │   ├── blob-bridge-repository.ts # JSON blob ↔ repository bridge, dual-write to tables
+│   │   ├── turso-repository.ts    # Reads all data from normalized tables
+│   │   ├── plan-repository.ts    # In-memory plan + write-back via syncNormalizedTables()
+│   │   ├── plan-assembler.ts     # Assembles plan object from table row arrays
 │   │   ├── commands.ts            # 25-type Command discriminated union
 │   │   ├── types.ts               # Domain types, status transitions
 │   │   ├── itinerary-manager.ts   # Itinerary domain logic
@@ -302,7 +314,7 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 │   │   └── event-query.ts         # Event log queries
 │   ├── config/                    # loader.ts, constants.ts
 │   ├── contracts/skill-contracts.ts
-│   ├── cascade/runner.ts          # Cascade logic
+│   ├── cascade/runner.ts          # Cascade logic (DB-only via runAsync)
 │   ├── services/turso-service.ts  # DB access layer (all Turso queries go through here)
 │   ├── utils/                     # flight-normalizer, leave-calculator
 │   ├── skills/                    # Skill SKILL.md files + references
@@ -321,16 +333,21 @@ Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 ```
 
 Tables:
-- **Blob**: `plans` (DB-primary plan+state, PK=plan_id, `version` monotonic counter)
-- **Normalized itinerary**: `itinerary_days` (+ `feels_like_low_c`, `feels_like_high_c`), `itinerary_sessions`, `activities` (PK composites on plan_id+destination+day_number)
-- **Normalized supporting**: `plan_metadata`, `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `airport_transfers`, `flights`, `hotels`
+- **Plan core**: `plans` (PK=plan_id, `version` monotonic counter — no JSON blobs), `plan_metadata`, `plan_destinations`, `destination_details`, `destination_cities`
+- **Dates/Status**: `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `plan_root_date_anchor`
+- **Offers**: `plan_offers`, `plan_offer_flights`, `plan_offer_hotels`, `plan_offer_date_pricing`, `plan_offer_selection`, `plan_offer_best_value`
+- **Itinerary**: `itinerary_days` (+ weather), `itinerary_sessions`, `activities`, `itinerary_metadata`, `session_meals`, `activity_tags`
+- **Transport**: `flight_legs` (PK: plan_id+destination+direction+leg_order), `airport_transfers`, `airport_transfer_candidates`, `transportation_extras`
+- **Accommodation**: `hotels`, `hotel_access_lines`, `accommodation_location_zone`
+- **Cascade**: `cascade_triggers`, `cascade_global_state`, `plan_schema_contract`, `plan_process_precedence`, `plan_budget`
+- **Event log**: `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`, `event_log_process_events`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
 - **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
-- **Other**: `offers`, `destinations`, `events`, `bookings`, `plan_snapshots` (versioned archive)
+- **Other**: `offers`, `destinations`, `events`, `bookings`
+- **Dead**: `flights` (old JSON blob table — no writes, kept for reference only)
 
 Schema/migration: `npm run db:migrate:turso` (creates all tables idempotently)
-Seed from JSON: `npm run db:seed:plans` (one-time, already run — local JSON files removed)
-Data migration: `npx ts-node scripts/migrate-itinerary-data.ts` (one-time, populates normalized tables from blob)
+Seed: `npm run db:seed:plans` (one-time, already run)
 
 ## Multi-Plan
 All plans live in the `plans` table in Turso (no local JSON files).
@@ -341,7 +358,7 @@ Plan ID: `tokyo-2026`, `kyoto-2026`, etc. CLI defaults to `tokyo-2026`; use `--p
 Live web dashboard at `workers/trip-dashboard/` — reads directly from Turso DB, always up-to-date.
 
 ```
-Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normalized tables + plans (fallback)
+Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 normalized tables → assemble plan object → render
 ```
 
 - **SSR-only** — zero client-side JS, no framework, no token/secret in HTML output
@@ -351,7 +368,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normali
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
 - **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
 - **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
-- **Maps links** — Per-segment Google Maps direction links (transit/walking/driving) for every stop. Route segments defined in `zh-content.ts` (`ZH_DAY_ROUTES`, `ZH_KYOTO_DAY_ROUTES`). Arrival/departure days split into actual transport legs (e.g., NRT T2 → Shiodome + walk to hotel). Transit pill text must use place names, not service names (e.g., `成田T2 → 竹芝` not `利木津巴士 → 竹芝`)
+- **Maps links** — Per-segment Google Maps direction links (transit/walking/driving) for every stop. Route segments defined in `zh-content.ts` (`ZH_DAY_ROUTES`, `ZH_KYOTO_DAY_ROUTES`). Arrival/departure days split into actual transport legs (e.g., NRT T1 → Shiodome + walk to hotel). Transit pill text must use place names, not service names (e.g., `成田T1 → 竹芝` not `利木津巴士 → 竹芝`)
 - **Secrets**: `TURSO_URL` + `TURSO_TOKEN` + `GOOGLE_MAPS_KEY` (optional) via `wrangler secret put` (server-side only, never sent to browser — except Maps key which is browser-visible by design; restrict via GCP Console referrer policy)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
 - **Live URLs**: `https://trip-dashboard.yanggf.workers.dev/?plan=tokyo-2026` | `/?plan=kyoto-2026`
@@ -390,7 +407,7 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ### Tokyo (Feb 13-17) — departs today
 1. **Book teamLab Borderless** — Feb 15 visit, OVERDUE (book-by was Feb 10)
-2. Book Limousine Bus — low-risk, can buy day-of at NRT T2
+2. Book Limousine Bus — low-risk, can buy day-of at NRT T1
 3. Restaurant reservations
 4. ~~Fetch weather forecast~~ ✅ Done (feels-like: 體感 -1.9–14.9°C, rain Day 4-5)
 5. ~~Per-segment maps~~ ✅ Done (transit/walking per route segment, Tokyo+Kyoto)

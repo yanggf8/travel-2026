@@ -24,58 +24,17 @@ interface TursoPipelineResponse {
   }>;
 }
 
-function rowsToObjects(result: TursoResult): Record<string, string | null>[] {
+type Row = Record<string, string | null>;
+
+function rowsToObjects(result: TursoResult): Row[] {
   const colNames = result.cols.map((c) => c.name);
   return result.rows.map((row) => {
-    const obj: Record<string, string | null> = {};
+    const obj: Row = {};
     colNames.forEach((name, i) => {
       obj[name] = row[i]?.value ?? null;
     });
     return obj;
   });
-}
-
-async function queryTurso(
-  env: Env,
-  sql: string
-): Promise<Record<string, string | null>[]> {
-  if (!env.TURSO_URL || !env.TURSO_TOKEN) {
-    throw new Error('TURSO_URL and TURSO_TOKEN secrets are not configured. Run: wrangler secret put TURSO_URL && wrangler secret put TURSO_TOKEN');
-  }
-  const pipelineUrl = env.TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline';
-
-  const body = {
-    requests: [
-      { type: 'execute', stmt: { sql } },
-      { type: 'close' },
-    ],
-  };
-
-  const res = await fetch(pipelineUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.TURSO_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Turso HTTP ${res.status}: ${text || res.statusText}`);
-  }
-
-  const json = (await res.json()) as TursoPipelineResponse;
-  const first = json.results?.[0];
-
-  if (first?.response?.error) {
-    throw new Error(`Turso query error: ${JSON.stringify(first.response.error)}`);
-  }
-
-  const result = first?.response?.result;
-  if (!result) return [];
-
-  return rowsToObjects(result);
 }
 
 /**
@@ -85,7 +44,7 @@ async function queryTurso(
 async function queryTursoPipeline(
   env: Env,
   sqls: string[]
-): Promise<Record<string, string | null>[][]> {
+): Promise<Row[][]> {
   if (!env.TURSO_URL || !env.TURSO_TOKEN) {
     throw new Error('TURSO_URL and TURSO_TOKEN secrets are not configured.');
   }
@@ -126,8 +85,7 @@ async function queryTursoPipeline(
 }
 
 export interface PlanData {
-  plan_json: string;
-  state_json: string | null;
+  plan: Record<string, unknown>;
   updated_at: string;
 }
 
@@ -135,129 +93,213 @@ function toDestSlug(s: string): string {
   return s.replace(/-/g, '_');
 }
 
-export async function getPlan(env: Env, planId: string): Promise<PlanData | null> {
-  const escaped = planId.replace(/'/g, "''");
-  const destSlug = toDestSlug(escaped);
-  const rows = await queryTurso(
-    env,
-    `SELECT plan_json, state_json, updated_at FROM plans
-     WHERE plan_id = '${escaped}'
-        OR json_extract(plan_json, '$.active_destination') = '${destSlug}'
-     ORDER BY (plan_id = '${escaped}') DESC
-     LIMIT 1`
-  );
-
-  if (rows.length === 0) return null;
-  return {
-    plan_json: rows[0].plan_json!,
-    state_json: rows[0].state_json ?? null,
-    updated_at: rows[0].updated_at!,
-  };
+function tryParseJson(s: string | null): unknown {
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { return null; }
 }
 
-/**
- * Dashboard data from normalized tables.
- *
- * Queries 8 tables in a single pipeline request, then overlays
- * itinerary data from tables onto the blob-loaded plan.
- * Render.ts receives the same PlanData shape — zero render changes.
- */
+export async function getPlan(env: Env, planId: string): Promise<PlanData | null> {
+  return getDashboardPlan(env, planId);
+}
+
+// ============================================================================
+// getDashboardPlan — 100% normalized tables, zero blob
+// ============================================================================
+
 export async function getDashboardPlan(env: Env, planId: string): Promise<PlanData | null> {
   const escaped = planId.replace(/'/g, "''");
   const destSlug = toDestSlug(escaped);
 
-  // Single pipeline: blob + 7 normalized table queries
   const results = await queryTursoPipeline(env, [
-    // 0: blob (for non-normalized data: packages, transit_summary, display_name)
-    `SELECT plan_json, state_json, updated_at FROM plans
-     WHERE plan_id = '${escaped}'
-        OR json_extract(plan_json, '$.active_destination') = '${destSlug}'
-     ORDER BY (plan_id = '${escaped}') DESC
-     LIMIT 1`,
-    // 1: itinerary_days
-    `SELECT * FROM itinerary_days WHERE plan_id = '${escaped}' ORDER BY destination, day_number`,
-    // 2: itinerary_sessions
-    `SELECT * FROM itinerary_sessions WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type`,
-    // 3: activities
-    `SELECT * FROM activities WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
-    // 4: flights
-    `SELECT * FROM flights WHERE plan_id = '${escaped}'`,
-    // 5: hotels
-    `SELECT * FROM hotels WHERE plan_id = '${escaped}'`,
-    // 6: airport_transfers
-    `SELECT * FROM airport_transfers WHERE plan_id = '${escaped}'`,
-    // 7: process_statuses
-    `SELECT * FROM process_statuses WHERE plan_id = '${escaped}'`,
+    /*  0 */ `SELECT * FROM plan_metadata WHERE plan_id = '${escaped}'`,
+    /*  1 */ `SELECT * FROM plan_destinations WHERE plan_id = '${escaped}'`,
+    /*  2 */ `SELECT * FROM date_anchors WHERE plan_id = '${escaped}'`,
+    /*  3 */ `SELECT * FROM process_statuses WHERE plan_id = '${escaped}'`,
+    /*  4 */ `SELECT * FROM plan_offers WHERE plan_id = '${escaped}'`,
+    /*  5 */ `SELECT * FROM plan_offer_date_pricing WHERE plan_id = '${escaped}'`,
+    /*  6 */ `SELECT * FROM plan_offer_selection WHERE plan_id = '${escaped}'`,
+    /*  7 */ `SELECT * FROM flight_legs WHERE plan_id = '${escaped}' ORDER BY destination, direction, leg_order`,
+    /*  8 */ `SELECT * FROM hotels WHERE plan_id = '${escaped}'`,
+    /*  9 */ `SELECT * FROM hotel_access_lines WHERE plan_id = '${escaped}' ORDER BY destination, sort_order`,
+    /* 10 */ `SELECT * FROM airport_transfers WHERE plan_id = '${escaped}'`,
+    /* 11 */ `SELECT * FROM itinerary_days WHERE plan_id = '${escaped}' ORDER BY destination, day_number`,
+    /* 12 */ `SELECT * FROM itinerary_sessions WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type`,
+    /* 13 */ `SELECT * FROM activities WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
+    /* 14 */ `SELECT * FROM itinerary_metadata WHERE plan_id = '${escaped}'`,
   ]);
 
-  const [blobRows, dayRows, sessionRows, activityRows, flightRows, hotelRows, transferRows, _statusRows] = results;
+  const [
+    metaRows, destRows, dateRows, statusRows,
+    offerRows, offerDatePricingRows, offerSelRows,
+    flightLegRows, hotelRows, accessLineRows, transferRows,
+    dayRows, sessionRows, activityRows, itinMetaRows,
+  ] = results;
 
-  if (blobRows.length === 0) return null;
+  if (metaRows.length === 0) return null;
 
-  const planJson = blobRows[0].plan_json;
-  if (!planJson) return null;
+  const meta = metaRows[0];
+  const activeDest = meta.active_destination || destSlug;
 
-  // If no normalized data, return blob as-is
-  if (dayRows.length === 0) {
-    return {
-      plan_json: planJson,
-      state_json: blobRows[0].state_json ?? null,
-      updated_at: blobRows[0].updated_at!,
-    };
+  // --- Index rows by destination ---
+
+  const destDisplayNames = new Map<string, string>();
+  for (const r of destRows) destDisplayNames.set(r.slug!, r.display_name || r.slug!);
+
+  const dateAnchorMap = new Map<string, Row>();
+  for (const r of dateRows) dateAnchorMap.set(r.destination!, r);
+
+  // Process statuses indexed by dest:process_id
+  const statusMap = new Map<string, Row>();
+  for (const r of statusRows) statusMap.set(`${r.destination}:${r.process_id}`, r);
+
+  // Offers indexed by dest
+  const offersByDest = new Map<string, Row[]>();
+  for (const r of offerRows) {
+    const d = r.destination!;
+    if (!offersByDest.has(d)) offersByDest.set(d, []);
+    offersByDest.get(d)!.push(r);
   }
 
-  // Parse blob and overlay normalized itinerary
-  const plan = JSON.parse(planJson);
+  // Date pricing indexed by offer_id
+  const datePricingByOffer = new Map<string, Row[]>();
+  for (const r of offerDatePricingRows) {
+    const oid = r.offer_id!;
+    if (!datePricingByOffer.has(oid)) datePricingByOffer.set(oid, []);
+    datePricingByOffer.get(oid)!.push(r);
+  }
 
-  // Index sessions and activities
+  // Offer selection by dest
+  const offerSelByDest = new Map<string, Row>();
+  for (const r of offerSelRows) offerSelByDest.set(r.destination!, r);
+
+  // Flight legs by dest:direction
+  const flightLegMap = new Map<string, Row[]>();
+  const flightDests = new Set<string>();
+  for (const r of flightLegRows) {
+    const key = `${r.destination!}:${r.direction!}`;
+    if (!flightLegMap.has(key)) flightLegMap.set(key, []);
+    flightLegMap.get(key)!.push(r);
+    flightDests.add(r.destination!);
+  }
+
+  // Hotels by dest
+  const hotelMap = new Map<string, Row>();
+  for (const r of hotelRows) hotelMap.set(r.destination!, r);
+
+  // Access lines by dest
+  const accessByDest = new Map<string, string[]>();
+  for (const r of accessLineRows) {
+    const d = r.destination!;
+    if (!accessByDest.has(d)) accessByDest.set(d, []);
+    accessByDest.get(d)!.push(r.line!);
+  }
+
+  // Transfers by dest
+  const transferByDest = new Map<string, Row[]>();
+  for (const r of transferRows) {
+    const d = r.destination!;
+    if (!transferByDest.has(d)) transferByDest.set(d, []);
+    transferByDest.get(d)!.push(r);
+  }
+
+  // Days by dest
+  const daysByDest = new Map<string, Row[]>();
+  for (const r of dayRows) {
+    const d = r.destination!;
+    if (!daysByDest.has(d)) daysByDest.set(d, []);
+    daysByDest.get(d)!.push(r);
+  }
+
+  // Sessions by dest:day:session
   const sKey = (dest: string, day: string, session: string) => `${dest}:${day}:${session}`;
-  const sessionMap = new Map<string, Record<string, string | null>>();
-  for (const row of sessionRows) {
-    sessionMap.set(sKey(row.destination!, row.day_number!, row.session_type!), row);
-  }
+  const sessionMap = new Map<string, Row>();
+  for (const r of sessionRows) sessionMap.set(sKey(r.destination!, r.day_number!, r.session_type!), r);
 
-  const activityMap = new Map<string, Record<string, string | null>[]>();
-  for (const row of activityRows) {
-    const key = sKey(row.destination!, row.day_number!, row.session_type!);
+  // Activities by dest:day:session
+  const activityMap = new Map<string, Row[]>();
+  for (const r of activityRows) {
+    const key = sKey(r.destination!, r.day_number!, r.session_type!);
     if (!activityMap.has(key)) activityMap.set(key, []);
-    activityMap.get(key)!.push(row);
+    activityMap.get(key)!.push(r);
   }
 
-  // Index flights, hotels, transfers by destination
-  const flightMap = new Map<string, Record<string, string | null>>();
-  for (const row of flightRows) flightMap.set(row.destination!, row);
+  // Itinerary metadata by dest
+  const itinMetaMap = new Map<string, Row>();
+  for (const r of itinMetaRows) itinMetaMap.set(r.destination!, r);
 
-  const hotelMap = new Map<string, Record<string, string | null>>();
-  for (const row of hotelRows) hotelMap.set(row.destination!, row);
+  // --- Collect all destination slugs ---
+  const allDests = new Set<string>();
+  for (const r of destRows) allDests.add(r.slug!);
+  // Ensure active dest is included even if plan_destinations is sparse
+  allDests.add(activeDest);
 
-  const transferMap = new Map<string, Record<string, string | null>[]>();
-  for (const row of transferRows) {
-    const dest = row.destination!;
-    if (!transferMap.has(dest)) transferMap.set(dest, []);
-    transferMap.get(dest)!.push(row);
-  }
+  // --- Assemble plan ---
+  const destinations: Record<string, unknown> = {};
 
-  // Group days by destination
-  const destDays = new Map<string, Record<string, string | null>[]>();
-  for (const row of dayRows) {
-    const dest = row.destination!;
-    if (!destDays.has(dest)) destDays.set(dest, []);
-    destDays.get(dest)!.push(row);
-  }
+  for (const dest of allDests) {
+    const dateAnchor = dateAnchorMap.get(dest);
+    const p34Status = statusMap.get(`${dest}:process_3_4_packages`)?.status;
+    const p4Status = statusMap.get(`${dest}:process_4_accommodation`)?.status;
 
-  // Overlay normalized data onto plan
-  for (const [dest, days] of destDays) {
-    const destObj = plan.destinations?.[dest];
-    if (!destObj) continue;
+    // Offers
+    const offers = (offersByDest.get(dest) || []).map((o) => {
+      const dp: Record<string, { price: number; availability?: string; seats_remaining?: number }> = {};
+      for (const pr of datePricingByOffer.get(o.id!) || []) {
+        dp[pr.date!] = {
+          price: pr.price ? parseInt(pr.price, 10) : 0,
+          availability: pr.availability || undefined,
+          seats_remaining: pr.seats_remaining ? parseInt(pr.seats_remaining, 10) : undefined,
+        };
+      }
+      return {
+        id: o.id,
+        source_id: o.source_id,
+        product_code: o.product_code,
+        price_per_person: o.price_per_person ? parseInt(o.price_per_person, 10) : null,
+        date_pricing: Object.keys(dp).length > 0 ? dp : undefined,
+      };
+    });
 
-    // Reconstruct itinerary from tables
-    if (!destObj.process_5_daily_itinerary) {
-      destObj.process_5_daily_itinerary = {};
+    const sel = offerSelByDest.get(dest);
+    const chosenOffer = sel ? { id: sel.selected_offer_id, selected_date: sel.selected_date } : undefined;
+
+    // Flight
+    const buildLeg = (rows: Row[] | undefined) => {
+      if (!rows || rows.length === 0) return null;
+      const r = rows[0];
+      return {
+        flight_number: r.flight_number,
+        departure_airport_code: r.departure_code,
+        departure_terminal: r.departure_terminal,
+        departure_time: r.departure_time,
+        arrival_airport_code: r.arrival_code,
+        arrival_terminal: r.arrival_terminal,
+        arrival_time: r.arrival_time,
+        date: r.flight_date,
+      };
+    };
+    const outboundLegs = flightLegMap.get(`${dest}:outbound`);
+    const returnLegs = flightLegMap.get(`${dest}:return`);
+    const firstLeg = outboundLegs?.[0] ?? returnLegs?.[0];
+
+    // Hotel
+    const hotelRow = hotelMap.get(dest);
+    const access = accessByDest.get(dest) || (hotelRow?.access_json ? tryParseJson(hotelRow.access_json) as string[] : null);
+
+    // Airport transfers
+    const transfers = transferByDest.get(dest) || [];
+    const airportTransfers: Record<string, unknown> = {};
+    for (const tr of transfers) {
+      airportTransfers[tr.direction!] = {
+        status: tr.status || 'planned',
+        selected: tryParseJson(tr.selected_json),
+        candidates: tryParseJson(tr.candidates_json) || [],
+      };
     }
-    const p5 = destObj.process_5_daily_itinerary;
 
+    // Itinerary days
+    const days = daysByDest.get(dest) || [];
     const reconstructedDays: Record<string, unknown>[] = [];
-
     for (const dayRow of days) {
       const dayNumber = parseInt(dayRow.day_number!, 10);
       const day: Record<string, unknown> = {
@@ -268,24 +310,22 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
         status: dayRow.status || 'draft',
       };
 
-      // Weather (use !== null to preserve valid zero values including 0)
       const hasWeather = dayRow.weather_label !== null || dayRow.temp_low_c !== null
         || dayRow.temp_high_c !== null || dayRow.precipitation_pct !== null || dayRow.weather_code !== null;
       if (hasWeather) {
         day.weather = {
           weather_label: dayRow.weather_label,
-          temp_low_c: dayRow.temp_low_c !== null ? parseFloat(dayRow.temp_low_c) : undefined,
-          temp_high_c: dayRow.temp_high_c !== null ? parseFloat(dayRow.temp_high_c) : undefined,
-          feels_like_low_c: dayRow.feels_like_low_c != null ? parseFloat(dayRow.feels_like_low_c) : undefined,
-          feels_like_high_c: dayRow.feels_like_high_c != null ? parseFloat(dayRow.feels_like_high_c) : undefined,
-          precipitation_pct: dayRow.precipitation_pct !== null ? parseFloat(dayRow.precipitation_pct) : undefined,
-          weather_code: dayRow.weather_code !== null ? parseInt(dayRow.weather_code, 10) : undefined,
+          temp_low_c: dayRow.temp_low_c !== null ? parseFloat(dayRow.temp_low_c!) : undefined,
+          temp_high_c: dayRow.temp_high_c !== null ? parseFloat(dayRow.temp_high_c!) : undefined,
+          feels_like_low_c: dayRow.feels_like_low_c != null ? parseFloat(dayRow.feels_like_low_c!) : undefined,
+          feels_like_high_c: dayRow.feels_like_high_c != null ? parseFloat(dayRow.feels_like_high_c!) : undefined,
+          precipitation_pct: dayRow.precipitation_pct !== null ? parseFloat(dayRow.precipitation_pct!) : undefined,
+          weather_code: dayRow.weather_code !== null ? parseInt(dayRow.weather_code!, 10) : undefined,
           source_id: dayRow.weather_source_id,
           sourced_at: dayRow.weather_sourced_at,
         };
       }
 
-      // Sessions
       for (const sessionType of ['morning', 'afternoon', 'evening']) {
         const key = sKey(dest, String(dayNumber), sessionType);
         const sRow = sessionMap.get(key);
@@ -304,89 +344,117 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
           session.time_range = { start: sRow?.time_range_start, end: sRow?.time_range_end };
         }
 
-        // Activities
         const acts = activityMap.get(key) || [];
-        const activityObjects: Record<string, unknown>[] = [];
-        for (const a of acts) {
-          activityObjects.push({
-            id: a.id,
-            title: a.title,
-            area: a.area || '',
-            nearest_station: a.nearest_station || null,
-            duration_min: a.duration_min ? parseInt(a.duration_min, 10) : null,
-            booking_required: a.booking_required === '1',
-            booking_url: a.booking_url || null,
-            booking_status: a.booking_status || undefined,
-            booking_ref: a.booking_ref || undefined,
-            book_by: a.book_by || undefined,
-            start_time: a.start_time || undefined,
-            end_time: a.end_time || undefined,
-            is_fixed_time: a.is_fixed_time === '1',
-            cost_estimate: a.cost_estimate ? parseInt(a.cost_estimate, 10) : null,
-            tags: a.tags_json ? (() => { try { return JSON.parse(a.tags_json); } catch { return []; } })() : [],
-            notes: a.notes || null,
-            priority: a.priority || 'want',
-          });
-        }
+        session.activities = acts.map((a) => ({
+          id: a.id,
+          title: a.title,
+          area: a.area || '',
+          nearest_station: a.nearest_station || null,
+          duration_min: a.duration_min ? parseInt(a.duration_min, 10) : null,
+          booking_required: a.booking_required === '1',
+          booking_url: a.booking_url || null,
+          booking_status: a.booking_status || undefined,
+          booking_ref: a.booking_ref || undefined,
+          book_by: a.book_by || undefined,
+          start_time: a.start_time || undefined,
+          end_time: a.end_time || undefined,
+          is_fixed_time: a.is_fixed_time === '1',
+          cost_estimate: a.cost_estimate ? parseInt(a.cost_estimate, 10) : null,
+          tags: a.tags_json ? (() => { try { return JSON.parse(a.tags_json); } catch { return []; } })() : [],
+          notes: a.notes || null,
+          priority: a.priority || 'want',
+        }));
 
-        session.activities = activityObjects;
         day[sessionType] = session;
       }
 
       reconstructedDays.push(day);
     }
 
-    p5.days = reconstructedDays;
+    // Transit summary from itinerary_metadata
+    const itinMeta = itinMetaMap.get(dest);
+    const transitSummary = itinMeta?.transit_summary ? tryParseJson(itinMeta.transit_summary) : undefined;
 
-    // Overlay flight from table
-    const flightRow = flightMap.get(dest);
-    if (flightRow && destObj.process_3_transportation) {
-      const p3 = destObj.process_3_transportation;
-      if (flightRow.populated_from) p3.populated_from = flightRow.populated_from;
-      p3.flight = {
-        airline: flightRow.airline,
-        airline_code: flightRow.airline_code,
-        outbound: flightRow.outbound_json ? JSON.parse(flightRow.outbound_json) : null,
-        return: flightRow.return_json ? JSON.parse(flightRow.return_json) : null,
-        booked_date: flightRow.booked_date,
-      };
-    }
-
-    // Overlay hotel from table
-    const hotelRow = hotelMap.get(dest);
-    if (hotelRow && destObj.process_4_accommodation) {
-      const p4 = destObj.process_4_accommodation;
-      if (hotelRow.populated_from) p4.populated_from = hotelRow.populated_from;
-      p4.hotel = {
-        name: hotelRow.name,
-        access: hotelRow.access_json ? JSON.parse(hotelRow.access_json) : null,
-        check_in: hotelRow.check_in,
-        notes: hotelRow.notes,
-      };
-    }
-
-    // Overlay airport transfers from table
-    const transfers = transferMap.get(dest);
-    if (transfers && destObj.process_3_transportation) {
-      const p3 = destObj.process_3_transportation;
-      if (!p3.airport_transfers) p3.airport_transfers = {};
-      for (const tr of transfers) {
-        const dir = tr.direction!;
-        p3.airport_transfers[dir] = {
-          status: tr.status || 'planned',
-          selected: tr.selected_json ? JSON.parse(tr.selected_json) : null,
-          candidates: tr.candidates_json ? JSON.parse(tr.candidates_json) : [],
-        };
-      }
-    }
+    destinations[dest] = {
+      display_name: destDisplayNames.get(dest) || dest.replace(/_/g, ' '),
+      process_1_date_anchor: dateAnchor ? {
+        confirmed_dates: { start: dateAnchor.start_date, end: dateAnchor.end_date },
+        days: dateAnchor.days ? parseInt(dateAnchor.days, 10) : null,
+      } : undefined,
+      process_3_4_packages: {
+        status: p34Status || undefined,
+        chosen_offer: chosenOffer,
+        results: { offers },
+      },
+      process_3_transportation: {
+        flight: flightDests.has(dest) ? {
+          airline: firstLeg?.airline ?? null,
+          airline_code: firstLeg?.airline_code ?? null,
+          outbound: buildLeg(outboundLegs),
+          return: buildLeg(returnLegs),
+          booked_date: firstLeg?.booked_date ?? null,
+        } : undefined,
+        airport_transfers: Object.keys(airportTransfers).length > 0 ? airportTransfers : undefined,
+      },
+      process_4_accommodation: {
+        status: p4Status || undefined,
+        hotel: hotelRow ? {
+          name: hotelRow.name,
+          access: access,
+          check_in: hotelRow.check_in,
+          notes: hotelRow.notes,
+        } : undefined,
+      },
+      process_5_daily_itinerary: {
+        days: reconstructedDays,
+        transit_summary: transitSummary,
+      },
+    };
   }
 
+  const plan = {
+    active_destination: activeDest,
+    schema_version: meta.schema_version || '4.2.0',
+    destinations,
+  };
+
   return {
-    plan_json: JSON.stringify(plan),
-    state_json: blobRows[0].state_json ?? null,
-    updated_at: blobRows[0].updated_at!,
+    plan: plan as Record<string, unknown>,
+    updated_at: meta.updated_at || new Date().toISOString(),
   };
 }
+
+// ============================================================================
+// listPlans — from plan_metadata + plan_destinations (no blob)
+// ============================================================================
+
+export interface PlanSummary {
+  slug: string;
+  display_name: string;
+  updated_at: string;
+}
+
+export async function listPlans(env: Env): Promise<PlanSummary[]> {
+  const results = await queryTursoPipeline(env, [
+    `SELECT m.plan_id, m.active_destination, d.display_name, m.updated_at
+     FROM plan_metadata m
+     LEFT JOIN plan_destinations d ON m.plan_id = d.plan_id AND m.active_destination = d.slug
+     ORDER BY m.updated_at DESC`,
+  ]);
+  const rows = results[0];
+  return rows.map((r) => {
+    const dest = r.active_destination || r.plan_id!;
+    return {
+      slug: dest.replace(/_/g, '-'),
+      display_name: r.display_name || dest.replace(/_/g, ' '),
+      updated_at: r.updated_at!,
+    };
+  });
+}
+
+// ============================================================================
+// Bookings
+// ============================================================================
 
 export interface BookingRow {
   booking_key: string;
@@ -402,40 +470,13 @@ export interface BookingRow {
   payload_json: string | null;
 }
 
-export interface PlanSummary {
-  slug: string;
-  display_name: string;
-  updated_at: string;
-}
-
-export async function listPlans(env: Env): Promise<PlanSummary[]> {
-  const rows = await queryTurso(
-    env,
-    `SELECT plan_id,
-      json_extract(plan_json, '$.active_destination') as active_dest,
-      json_extract(plan_json, '$.destinations.' ||
-        json_extract(plan_json, '$.active_destination') || '.display_name') as display_name,
-      updated_at FROM plans ORDER BY updated_at DESC`
-  );
-  return rows.map((r) => {
-    const dest = r.active_dest || r.plan_id!;
-    return {
-      slug: dest.replace(/_/g, '-'),
-      display_name: r.display_name || dest.replace(/_/g, ' '),
-      updated_at: r.updated_at!,
-    };
-  });
-}
-
 export async function getBookings(
   env: Env,
   destination: string
 ): Promise<BookingRow[]> {
   const escaped = destination.replace(/'/g, "''");
-  const rows = await queryTurso(
-    env,
-    `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency, payload_json FROM bookings_current WHERE destination = '${escaped}'`
-  );
-
-  return rows as unknown as BookingRow[];
+  const results = await queryTursoPipeline(env, [
+    `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency, payload_json FROM bookings_current WHERE destination = '${escaped}'`,
+  ]);
+  return results[0] as unknown as BookingRow[];
 }

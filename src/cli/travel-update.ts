@@ -92,7 +92,7 @@ Commands:
   set-airport-transfer <arrival|departure> <planned|booked> --selected "<title|route|duration_min?|price_yen?|schedule?>" [--candidate "<...>"]...
     Set airport transfer plan (selected + candidates) for arrival/departure.
     Spec fields are pipe-delimited. Only title and route are required.
-    Example: set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"
+    Example: set-airport-transfer arrival planned --selected "Limousine Bus|NRT T1 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"
 
   set-activity-booking <day> <session> <activity> <status> [--ref <ref>] [--book-by <date>]
     Set booking status for an activity.
@@ -160,10 +160,6 @@ Commands:
   query-bookings [--dest slug] [--category package|transfer|activity] [--status pending|booked] [--trip-id id] [--json]
     Query bookings from Turso DB.
     Example: query-bookings --dest tokyo_2026 --status pending
-
-  snapshot-plan [--trip-id id]
-    Archive current plan+state to Turso plan_snapshots.
-    Example: snapshot-plan --trip-id japan-2026
 
   check-booking-integrity [--trip-id id]
     Compare bookings in plan JSON vs Turso DB.
@@ -295,11 +291,16 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
       const airlineCode = flight?.airline_code as string | undefined;
       const num = outbound.flight_number as string | undefined;
       console.log(`  ${[airlineCode, num].filter(Boolean).join(' ')}${airline ? ` (${airline})` : ''}`);
-      console.log(`  ${outbound.departure_airport_code ?? ''} ${outbound.departure_time ?? ''} → ${outbound.arrival_airport_code ?? ''} ${outbound.arrival_time ?? ''}`);
+      const fmtAp = (leg: Record<string, unknown>, side: 'dep' | 'arr') => {
+        const code = side === 'dep' ? (leg.departure_airport_code as string ?? '') : (leg.arrival_airport_code as string ?? '');
+        const term = side === 'dep' ? (leg.departure_terminal as string ?? '') : (leg.arrival_terminal as string ?? '');
+        return term ? `${code} ${term}` : code;
+      };
+      console.log(`  ${fmtAp(outbound, 'dep')} ${outbound.departure_time ?? ''} → ${fmtAp(outbound, 'arr')} ${outbound.arrival_time ?? ''}`);
       if (inbound && (inbound.flight_number || inbound.departure_airport_code)) {
         const rnum = inbound.flight_number as string | undefined;
         console.log(`  Return: ${rnum ?? ''}`);
-        console.log(`  ${inbound.departure_airport_code ?? ''} ${inbound.departure_time ?? ''} → ${inbound.arrival_airport_code ?? ''} ${inbound.arrival_time ?? ''}`);
+        console.log(`  ${fmtAp(inbound, 'dep')} ${inbound.departure_time ?? ''} → ${fmtAp(inbound, 'arr')} ${inbound.arrival_time ?? ''}`);
       }
     }
 
@@ -490,13 +491,18 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
     const outbound = flight.outbound as Record<string, unknown> | undefined;
     const inbound = flight.return as Record<string, unknown> | undefined;
     if (outbound) {
+      const fmtAp = (leg: Record<string, unknown>, side: 'dep' | 'arr') => {
+        const code = side === 'dep' ? (leg.departure_airport_code as string ?? '') : (leg.arrival_airport_code as string ?? '');
+        const term = side === 'dep' ? (leg.departure_terminal as string ?? '') : (leg.arrival_terminal as string ?? '');
+        return term ? `${code} ${term}` : code;
+      };
       const label = [airlineCode, outbound.flight_number].filter(Boolean).join(' ');
-      const dep = `${outbound.departure_airport_code ?? ''} ${outbound.departure_time ?? ''}`;
-      const arr = `${outbound.arrival_airport_code ?? ''} ${outbound.arrival_time ?? ''}`;
+      const dep = `${fmtAp(outbound, 'dep')} ${outbound.departure_time ?? ''}`;
+      const arr = `${fmtAp(outbound, 'arr')} ${outbound.arrival_time ?? ''}`;
       let line = `✈️  ${label}${airline ? ` (${airline})` : ''}: ${dep} → ${arr}`;
       if (inbound) {
         const rLabel = inbound.flight_number as string || '';
-        line += ` / ${rLabel} ${inbound.departure_airport_code ?? ''} ${inbound.departure_time ?? ''} → ${inbound.arrival_airport_code ?? ''} ${inbound.arrival_time ?? ''}`;
+        line += ` / ${rLabel} ${fmtAp(inbound, 'dep')} ${inbound.departure_time ?? ''} → ${fmtAp(inbound, 'arr')} ${inbound.arrival_time ?? ''}`;
       }
       console.log(line);
     }
@@ -1574,7 +1580,7 @@ async function main(): Promise<void> {
 
         if (!direction || !status) {
           console.error('Error: set-airport-transfer requires <arrival|departure> <planned|booked>');
-          console.error('Example: set-airport-transfer arrival planned --selected "Limousine Bus|NRT T2 → Shiodome|85|3200|19:40 → ~21:05"');
+          console.error('Example: set-airport-transfer arrival planned --selected "Limousine Bus|NRT T1 → Shiodome|85|3200|19:40 → ~21:05"');
           process.exit(1);
         }
 
@@ -2086,14 +2092,14 @@ async function main(): Promise<void> {
       }
 
       case 'sync-bookings': {
-        const { syncBookingsFromPlan } = await import('../services/turso-service');
-        const planFile =
-          planOpt ||
-          process.env.TRAVEL_PLAN_PATH ||
-          (planIdOpt ? `data/trips/${planIdOpt}/travel-plan.json` : PATHS.defaultPlan);
-        console.log(`Syncing bookings from ${planFile}...`);
-        const syncResult = await syncBookingsFromPlan(planFile, {
-          tripId: tripIdOpt,
+        const { syncBookingsFromPlanJson } = await import('../services/turso-service');
+        const { TursoRepository } = await import('../state/turso-repository');
+        const effectivePlanId = planIdOpt || 'tokyo-2026';
+        console.log(`Syncing bookings from plan "${effectivePlanId}"...`);
+        const repo = await TursoRepository.create(effectivePlanId);
+        const plan = repo.getPlan() as unknown as Record<string, unknown>;
+        const effectiveTripId = tripIdOpt || effectivePlanId.replace(/-/g, '_');
+        const syncResult = await syncBookingsFromPlanJson(plan, effectiveTripId, {
           dryRun: dryRun,
         });
         if (syncResult.warnings.length > 0) {
@@ -2121,31 +2127,11 @@ async function main(): Promise<void> {
         break;
       }
 
-      case 'snapshot-plan': {
-        const { createPlanSnapshot } = await import('../services/turso-service');
-        const planFile =
-          planOpt ||
-          process.env.TRAVEL_PLAN_PATH ||
-          (planIdOpt ? `data/trips/${planIdOpt}/travel-plan.json` : PATHS.defaultPlan);
-        const stateFile =
-          stateOpt ||
-          process.env.TRAVEL_STATE_PATH ||
-          (planIdOpt ? `data/trips/${planIdOpt}/state.json` : PATHS.defaultState);
-        const effectiveTripId = tripIdOpt || 'japan-2026';
-        console.log(`Creating plan snapshot for trip "${effectiveTripId}"...`);
-        const snapshot = await createPlanSnapshot(planFile, stateFile, effectiveTripId);
-        console.log(`Snapshot created: ${snapshot.snapshot_id}`);
-        break;
-      }
-
       case 'check-booking-integrity': {
         const { checkBookingIntegrity } = await import('../services/turso-service');
-        const planFile =
-          planOpt ||
-          process.env.TRAVEL_PLAN_PATH ||
-          (planIdOpt ? `data/trips/${planIdOpt}/travel-plan.json` : PATHS.defaultPlan);
-        console.log('Checking booking integrity (plan JSON vs Turso DB)...');
-        const integrity = await checkBookingIntegrity(planFile, tripIdOpt);
+        const effectivePlanId = planIdOpt || 'tokyo-2026';
+        console.log(`Checking booking integrity (plan "${effectivePlanId}" vs Turso DB)...`);
+        const integrity = await checkBookingIntegrity(effectivePlanId, tripIdOpt);
         console.log(`\nResults:`);
         console.log(`  Matches:    ${integrity.matches}`);
         console.log(`  Mismatches: ${integrity.mismatches.length}`);
