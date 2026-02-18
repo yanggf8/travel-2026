@@ -554,6 +554,91 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     example: 'npm run travel -- set-hotel --dest kyoto_2026 --name "APA Hotel Kyoto Ekimae" --check-in 2026-02-24 --access "JR Kyoto Station 3min"',
   },
 
+  // === Read-Only / View Commands (v2.2.0) ===
+
+  'compare-offers': {
+    name: 'compare-offers',
+    description: 'Compare scraped offers from local JSON files by region. Read-only — does not write to DB.',
+    args: [
+      { name: '--region', type: 'string', required: true, description: 'Region name matching scrape filenames (e.g. osaka, tokyo)' },
+      { name: '--date', type: 'string', required: false, description: 'Filter by departure date (YYYY-MM-DD)' },
+      { name: '--pax', type: 'number', required: false, description: 'Number of passengers (default: 2)' },
+      { name: '--json', type: 'boolean', required: false, description: 'Output raw JSON' },
+    ],
+    output: { type: 'array', description: 'Sorted offer comparison table from scrapes/*.json' },
+    mutates: [],
+    data_freshness: 'cached',
+    example: 'npm run travel -- compare-offers --region osaka --date 2026-02-24',
+  },
+
+  'view-prices': {
+    name: 'view-prices',
+    description: 'Compare flight + hotel vs package total cost from a date-range scrape file. Read-only.',
+    args: [
+      { name: '--flights', type: 'string', required: true, description: 'Path to date-range prices JSON (from scrape_date_range.py)' },
+      { name: '--hotel-per-night', type: 'number', required: false, description: 'Hotel cost per night (TWD)' },
+      { name: '--nights', type: 'number', required: false, description: 'Number of nights' },
+      { name: '--package', type: 'number', required: false, description: 'Package price to compare against (TWD)' },
+      { name: '--pax', type: 'number', required: false, description: 'Number of passengers (default: 2)' },
+      { name: '--json', type: 'boolean', required: false, description: 'Output raw JSON' },
+    ],
+    output: { type: 'array', description: 'Price comparison table: separate booking vs package' },
+    mutates: [],
+    data_freshness: 'cached',
+    example: 'npm run travel -- view-prices --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740',
+  },
+
+  'scrape-package': {
+    name: 'scrape-package',
+    description: 'Scrape a single OTA package URL via Playwright and save to JSON. Thin wrapper around scrape_package.py.',
+    args: [
+      { name: 'url', type: 'string', required: true, description: 'OTA product URL (besttour, liontravel, lifetour, settour, travel4u)' },
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+      { name: '--pax', type: 'number', required: false, description: 'Number of passengers (default: 2)' },
+      { name: '--dry-run', type: 'boolean', required: false, description: 'Print result without saving' },
+    ],
+    output: { type: 'object', description: 'Scraped offer JSON saved to scrapes/' },
+    mutates: [],
+    data_freshness: 'live',
+    example: 'npm run travel -- scrape-package "https://www.besttour.com.tw/..." --pax 2',
+  },
+
+  'itinerary': {
+    name: 'itinerary',
+    description: 'Alias for view-itinerary. Show daily itinerary for a destination.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'string', description: 'Formatted day-by-day itinerary' },
+    mutates: [],
+    data_freshness: 'static',
+    example: 'npm run travel -- itinerary --dest kyoto_2026',
+  },
+
+  'transport': {
+    name: 'transport',
+    description: 'Alias for view-transport. Show transportation details for a destination.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'string', description: 'Formatted transport summary (flights, transfers, hotel access)' },
+    mutates: [],
+    data_freshness: 'static',
+    example: 'npm run travel -- transport --dest kyoto_2026',
+  },
+
+  'bookings': {
+    name: 'bookings',
+    description: 'Alias for query-bookings. Show bookings for a destination.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+    ],
+    output: { type: 'array', description: 'Formatted bookings list' },
+    mutates: [],
+    data_freshness: 'live',
+    example: 'npm run travel -- bookings --dest kyoto_2026',
+  },
+
   // === Operation Tracking (v1.9.0) ===
 
   'run-status': {
