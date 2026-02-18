@@ -27,7 +27,7 @@ import {
   TransportSegment,
   isValidProcessStatus,
 } from './types';
-import type { DayWeather, SessionType } from './types';
+import type { DayWeather, SessionType, FlightInfo, HotelInfo, AirportTransfers } from './types';
 import {
   validateTravelPlan,
   validateEventLogState,
@@ -1182,11 +1182,34 @@ export class StateManager {
   }
 
   // ============================================================================
+  // Flight / Hotel / Transport (Typed Read API)
+  // ============================================================================
+
+  getFlightInfo(destination?: string): FlightInfo | null {
+    return this.repo.getFlightInfo(this.resolveDestination(destination));
+  }
+
+  getHotelInfo(destination?: string): HotelInfo | null {
+    return this.repo.getHotelInfo(this.resolveDestination(destination));
+  }
+
+  getAirportTransfers(destination?: string): AirportTransfers | null {
+    return this.repo.getAirportTransfers(this.resolveDestination(destination));
+  }
+
+  // ============================================================================
   // Active Destination
   // ============================================================================
 
   getActiveDestination(): string {
     return this.repo.getActiveDestination();
+  }
+
+  /**
+   * Resolve destination: use the provided value or fall back to active destination.
+   */
+  resolveDestination(destination?: string): string {
+    return destination || this.getActiveDestination();
   }
 
   setActiveDestination(destination: string): void {

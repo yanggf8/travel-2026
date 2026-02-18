@@ -20,6 +20,9 @@ import type {
   EventLogState,
   TransportOption,
   TransportSegment,
+  FlightInfo,
+  HotelInfo,
+  AirportTransfers,
 } from './types';
 
 // ============================================================================
@@ -67,6 +70,11 @@ export interface StateReader {
   getSessionActivities(dest: string, dayNumber: number, session: SessionType): Array<string | Record<string, unknown>> | null;
   findActivityIndex(activities: Array<string | Record<string, unknown>>, idOrTitle: string): number;
   findActivity(dest: string, idOrTitle: string): ActivitySearchResult | null;
+
+  // --- Flight / Hotel / Transport ---
+  getFlightInfo(dest: string): FlightInfo | null;
+  getHotelInfo(dest: string): HotelInfo | null;
+  getAirportTransfers(dest: string): AirportTransfers | null;
 
   // --- Offers ---
   getOffers(dest: string): Array<Record<string, unknown>> | null;

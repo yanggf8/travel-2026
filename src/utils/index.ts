@@ -36,6 +36,12 @@ export type {
   LeaveDayResult,
 } from './holiday-calculator';
 
+// Date utilities
+export { addDays, getDayOfWeek, calculateNights } from './date-utils';
+
+// Plan ID / Destination Slug converters
+export { toPlanId, toDestSlug } from './plan-id';
+
 // Flight normalizer
 export {
   normalizeFlightData,

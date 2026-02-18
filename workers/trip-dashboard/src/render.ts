@@ -468,7 +468,7 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
   }
 
   return `
-    <div class="day-card">
+    <div class="day-card day-card-${dayType}">
       <div class="day-header">
         <div>
           <div class="day-number">${t('day', lang)}${dayNum}${t('dayUnit', lang)}</div>
@@ -502,6 +502,13 @@ function fmtAirport(leg: Record<string, unknown>, isArrival = false): string {
     ? (leg.arrival_terminal as string) || ''
     : (leg.departure_terminal as string) || '';
   return terminal ? `${code} ${terminal}` : code;
+}
+
+/** Wrap flight display text in a Google search link (opens new tab). */
+function flightLink(displayText: string, flightNumber: string | null | undefined): string {
+  if (!flightNumber) return esc(displayText);
+  const query = encodeURIComponent(flightNumber.trim());
+  return `<a href="https://www.google.com/search?q=${query}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${esc(displayText)}</a>`;
 }
 
 function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string {
@@ -553,7 +560,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       icon: '\u2708\uFE0F',
       label: t('flightOut', lang),
       value: outbound
-        ? `${esc(airline)} ${esc(airlineCode)}${esc((outbound.flight_number as string) || '')}`
+        ? flightLink(`${airline} ${airlineCode}${(outbound.flight_number as string) || ''}`.trim(), outbound.flight_number as string)
         : '\u2014',
       sub: outbound
         ? `${esc(fmtAirport(outbound))} ${esc((outbound.departure_time as string) || '')} \u2192 ${esc(fmtAirport(outbound, true))} ${esc((outbound.arrival_time as string) || '')}`
@@ -564,7 +571,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       icon: '\u2708\uFE0F',
       label: t('flightBack', lang),
       value: returnFl
-        ? `${esc(airline)} ${esc(airlineCode)}${esc((returnFl.flight_number as string) || '')}`
+        ? flightLink(`${airline} ${airlineCode}${(returnFl.flight_number as string) || ''}`.trim(), returnFl.flight_number as string)
         : '\u2014',
       sub: returnFl
         ? `${esc(fmtAirport(returnFl))} ${esc((returnFl.departure_time as string) || '')} \u2192 ${esc(fmtAirport(returnFl, true))} ${esc((returnFl.arrival_time as string) || '')}`
@@ -692,7 +699,7 @@ function renderPlanNav(plans: PlanSummary[], currentSlug: string, lang: Lang): s
   if (plans.length <= 1) return '';
   const pills = plans.map((p) => {
     const isCurrent = p.slug === currentSlug;
-    const href = `/?plan=${esc(p.slug)}&lang=${lang}&nav=1`;
+    const href = `/?plan=${esc(p.slug)}&lang=${lang}`;
     return isCurrent
       ? `<span class="plan-pill plan-pill-active">${esc(p.display_name)}</span>`
       : `<a class="plan-pill" href="${href}">${esc(p.display_name)}</a>`;
@@ -732,10 +739,9 @@ export function renderDashboard(
   const days = (itinerary?.days as Record<string, unknown>[]) || [];
 
   const langParam = lang === 'zh' ? 'en' : 'zh';
-  const navSuffix = plans ? '&nav=1' : '';
   const langHref = planId
-    ? `?lang=${langParam}&plan=${esc(planId)}${navSuffix}`
-    : `?lang=${langParam}${navSuffix}`;
+    ? `?lang=${langParam}&plan=${esc(planId)}`
+    : `?lang=${langParam}`;
 
   return `<!DOCTYPE html>
 <html lang="${lang === 'zh' ? 'zh-Hant' : 'en'}">
@@ -767,6 +773,51 @@ export function renderDashboard(
     ${t('lastUpdated', lang)}: ${esc(planData.updated_at)}<br>
     Powered by Turso + Cloudflare Workers
   </div>
+</body>
+</html>`;
+}
+
+export function renderPlanIndex(plans: PlanSummary[], lang: Lang): string {
+  const title = lang === 'zh' ? '旅行計畫' : 'Trip Plans';
+  const langParam = lang === 'zh' ? 'en' : 'zh';
+
+  const planCards = plans.map((p) => {
+    const href = `/?plan=${esc(p.slug)}&lang=${lang}`;
+    const dateRange = p.start_date && p.end_date
+      ? `${formatDate(p.start_date, lang)} \u2192 ${formatDate(p.end_date, lang)}`
+      : '';
+    const daysLabel = p.days
+      ? `${p.days} ${lang === 'zh' ? '\u5929' : 'days'}`
+      : '';
+    return `
+      <a href="${href}" class="plan-card">
+        <div class="plan-card-name">${esc(p.display_name)}</div>
+        ${dateRange ? `<div class="plan-card-dates">${dateRange}</div>` : ''}
+        ${daysLabel ? `<div class="plan-card-days">${daysLabel}</div>` : ''}
+      </a>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="${lang === 'zh' ? 'zh-Hant' : 'en'}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>${CSS}</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>\u2708\uFE0F ${title}</h1>
+    </div>
+    <a class="lang-btn" href="?lang=${langParam}">${t('langSwitch', lang)}</a>
+  </div>
+
+  <div class="plan-index">
+    ${plans.length > 0 ? planCards : `<p style="text-align:center;color:var(--text-dim);padding:32px 0">${lang === 'zh' ? '\u5C1A\u7121\u65C5\u884C\u8A08\u756B' : 'No plans yet'}</p>`}
+  </div>
+
+  <div class="footer">Powered by Turso + Cloudflare Workers</div>
 </body>
 </html>`;
 }

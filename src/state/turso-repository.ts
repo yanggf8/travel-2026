@@ -14,6 +14,9 @@ import type {
   TravelPlanMinimal,
   EventLogState,
   TransportOption,
+  FlightInfo,
+  HotelInfo,
+  AirportTransfers,
 } from './types';
 import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
 import { PlanRepository } from './plan-repository';
@@ -199,6 +202,9 @@ export class TursoRepository implements StateRepository {
   findActivity(dest: string, idOrTitle: string): ActivitySearchResult | null {
     return this.bridge.findActivity(dest, idOrTitle);
   }
+  getFlightInfo(dest: string): FlightInfo | null { return this.bridge.getFlightInfo(dest); }
+  getHotelInfo(dest: string): HotelInfo | null { return this.bridge.getHotelInfo(dest); }
+  getAirportTransfers(dest: string): AirportTransfers | null { return this.bridge.getAirportTransfers(dest); }
   getOffers(dest: string): Array<Record<string, unknown>> | null { return this.bridge.getOffers(dest); }
   getOffer(dest: string, offerId: string): Record<string, unknown> | null { return this.bridge.getOffer(dest, offerId); }
   getEvents(): TravelEvent[] { return this.bridge.getEvents(); }

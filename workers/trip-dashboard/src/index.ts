@@ -1,6 +1,6 @@
 import type { Env } from './turso';
 import { getPlan, getDashboardPlan, getBookings, listPlans } from './turso';
-import { renderDashboard, renderError } from './render';
+import { renderDashboard, renderError, renderPlanIndex } from './render';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -49,16 +49,24 @@ export default {
 
     // Dashboard route
     if (url.pathname === '/' || url.pathname === '') {
+      // No plan specified → show plan index
       if (!planId) {
-        return new Response(renderError(
-          lang === 'zh'
-            ? '請聯繫旅行計畫擁有者取得行程連結'
-            : 'Please contact the trip owner for a valid plan link',
-          lang
-        ), {
-          status: 403,
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
+        try {
+          const plans = await listPlans(env);
+          const html = renderPlanIndex(plans, lang);
+          return new Response(html, {
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'public, max-age=60',
+            },
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          return new Response(renderError(`Database error: ${msg}`, lang), {
+            status: 502,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          });
+        }
       }
 
       try {

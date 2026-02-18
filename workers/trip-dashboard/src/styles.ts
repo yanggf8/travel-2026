@@ -13,9 +13,9 @@ export const CSS = `
   --amber-bg: #fef3c7;
   --red: #dc2626;
   --red-bg: #fee2e2;
-  --morning: #fef9c3;
-  --afternoon: #fce7f3;
-  --evening: #e0e7ff;
+  --morning: #fde68a;
+  --afternoon: #fbcfe8;
+  --evening: #c7d2fe;
   --radius: 12px;
   --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
   --shadow-lg: 0 4px 12px rgba(0,0,0,0.1);
@@ -86,7 +86,7 @@ body {
 }
 
 .plan-pill {
-  padding: 4px 14px;
+  padding: 6px 16px;
   border-radius: 20px;
   font-size: 13px;
   font-weight: 500;
@@ -95,6 +95,14 @@ body {
   background: var(--card);
   border: 1px solid var(--border);
   white-space: nowrap;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.plan-pill:active {
+  background: var(--accent-light);
+  transform: scale(0.97);
 }
 
 .plan-pill-active {
@@ -110,12 +118,18 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 20px;
-  padding: 2px 10px;
+  padding: 4px 12px;
   font-size: 12px;
   font-weight: 500;
   text-decoration: none;
   color: var(--accent);
   white-space: nowrap;
+  min-height: 28px;
+}
+
+.route-btn:active {
+  background: var(--accent-light);
+  transform: scale(0.97);
 }
 
 /* Booking summary */
@@ -238,10 +252,15 @@ body {
   box-shadow: var(--shadow);
   margin-top: 16px;
   overflow: hidden;
+  border-left: 4px solid var(--accent);
 }
 
+.day-card-arrival { border-left-color: var(--accent); }
+.day-card-departure { border-left-color: var(--amber); }
+.day-card-full { border-left-color: var(--green); }
+
 .day-header {
-  padding: 14px 16px 10px;
+  padding: 16px 16px 10px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -261,9 +280,9 @@ body {
 }
 
 .day-theme {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
-  padding: 0 16px 6px;
+  padding: 0 16px 8px;
 }
 
 .day-type-badge {
@@ -393,8 +412,8 @@ body {
   gap: 4px;
 }
 
-.pill-transit { background: #eff6ff; color: #1d4ed8; text-decoration: none; }
-.pill-transit:active { background: #dbeafe; }
+.pill-transit { background: #eff6ff; color: #1d4ed8; text-decoration: none; border: 1px solid #bfdbfe; }
+.pill-transit:active { background: #dbeafe; transform: scale(0.97); }
 .pill-meal { background: #fef3c7; color: #92400e; }
 
 /* Transit summary */
@@ -509,16 +528,62 @@ details[open] .map-summary::after { transform: rotate(90deg); }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px;
+  padding: 10px 16px;
   font-size: 13px;
   font-weight: 500;
   color: var(--accent);
   text-decoration: none;
   border-bottom: 1px solid var(--border);
+  min-height: 44px;
 }
 .map-place-link:last-child { border-bottom: none; }
 .map-place-link:active { background: var(--accent-light); }
 @media (max-width: 480px) { .map-container iframe { min-height: 200px; } }
+
+/* Plan index */
+.plan-index {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.plan-card {
+  display: block;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  text-decoration: none;
+  color: var(--text);
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+
+.plan-card:active {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
+}
+
+.plan-card-name {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.plan-card-dates {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.plan-card-days {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent-light);
+  color: var(--accent);
+  padding: 2px 10px;
+  border-radius: 10px;
+}
 
 /* Print */
 @media print {

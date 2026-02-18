@@ -93,6 +93,10 @@ function toDestSlug(s: string): string {
   return s.replace(/-/g, '_');
 }
 
+function toPlanId(s: string): string {
+  return s.replace(/_/g, '-');
+}
+
 function tryParseJson(s: string | null): unknown {
   if (!s) return null;
   try { return JSON.parse(s); } catch { return null; }
@@ -474,22 +478,30 @@ export interface PlanSummary {
   slug: string;
   display_name: string;
   updated_at: string;
+  start_date: string | null;
+  end_date: string | null;
+  days: number | null;
 }
 
 export async function listPlans(env: Env): Promise<PlanSummary[]> {
   const results = await queryTursoPipeline(env, [
-    `SELECT m.plan_id, m.active_destination, d.display_name, m.updated_at
+    `SELECT m.plan_id, m.active_destination, d.display_name, m.updated_at,
+            da.start_date, da.end_date, da.days
      FROM plan_metadata m
      LEFT JOIN plan_destinations d ON m.plan_id = d.plan_id AND m.active_destination = d.slug
-     ORDER BY m.updated_at DESC`,
+     LEFT JOIN date_anchors da ON m.plan_id = da.plan_id AND m.active_destination = da.destination
+     ORDER BY da.start_date ASC, m.updated_at DESC`,
   ]);
   const rows = results[0];
   return rows.map((r) => {
     const dest = r.active_destination || r.plan_id!;
     return {
-      slug: dest.replace(/_/g, '-'),
+      slug: toPlanId(dest),
       display_name: r.display_name || dest.replace(/_/g, ' '),
       updated_at: r.updated_at!,
+      start_date: r.start_date || null,
+      end_date: r.end_date || null,
+      days: r.days ? parseInt(r.days, 10) : null,
     };
   });
 }

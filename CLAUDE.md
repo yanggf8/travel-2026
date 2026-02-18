@@ -207,7 +207,7 @@ Hotel:   TAVINOS Hamamatsucho (light breakfast, JR Hamamatsucho 8min)
 
 Airport transfers:
 - Arrival: Skyliner + JR山手線 ¥2,720 (NRT → 日暮里 36min + 日暮里 → 浜松町 20min), status: booked
-- Departure: Limousine Bus ¥3,200 (竹芝 → NRT T1, ~120min), status: planned
+- Departure: 海鷗線+淺草線 ¥1,520 (竹芝 → 新橋 → 成田空港, ~100min), status: booked
 Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1**
 
 ### Itinerary (Feb 13-17)
@@ -221,7 +221,7 @@ Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1**
 
 **Book by Feb 10**: teamLab Borderless (https://www.teamlab.art/e/borderless-azabudai/)
 **Skyliner**: https://www.keisei.co.jp/keisei/tetudou/skyliner/
-**Limousine Bus** (departure only): https://www.limousinebus.co.jp/en/
+**Limousine Bus**: https://www.limousinebus.co.jp/en/ (not used — took 海鷗線+淺草線 instead)
 
 ### BOOKED: Kyoto Feb 24-28
 ```
@@ -348,12 +348,14 @@ Tables:
 - **Other**: `offers`, `destinations`, `events`, `bookings`
 - **Dead**: `flights` (old JSON blob table — no writes, kept for reference only)
 
+Schema reference: `scripts/schema.sql` (read-only DDL reference, extracted from migration script)
 Schema/migration: `npm run db:migrate:turso` (creates all tables idempotently)
 Seed: `npm run db:seed:plans` (one-time, already run)
 
 ## Multi-Plan
 All plans live in the `plans` table in Turso (no local JSON files).
-Plan ID: `tokyo-2026`, `kyoto-2026`, etc. CLI defaults to `tokyo-2026`; use `--plan-id <id>` for others.
+`plan_id` uses hyphens (`tokyo-2026`), `destination` uses underscores (`tokyo_2026`). Converters: `toPlanId()` / `toDestSlug()` in `src/utils/plan-id.ts`.
+CLI defaults to `tokyo-2026`; use `--plan-id <id>` for others.
 
 ## Trip Dashboard (Cloudflare Worker)
 
@@ -367,9 +369,11 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 - **Mobile-first** — phone-optimized day cards with weather (including feels-like temperature), transit, meals
 - **Default ZH** — Traditional Chinese by default; `?lang=en` for English
 - **ZH content** — All Chinese content stored in DB (`theme_zh`, `focus_zh`, `activities_zh_json`, `meals_zh_json`, `transit_notes_zh` on normalized tables). No hardcoded content in Worker code. Content updates take effect instantly without redeploy.
-- **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows contact message, not a default plan.
-- **Plan nav** — hidden by default; add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
-- **Routes**: `/?plan=<slug>` (dashboard), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON), `/` (contact page)
+- **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows plan index page listing all plans.
+- **Plan nav** — hidden by default for privacy (shareable links show single plan only); add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
+- **Flight links** — Flight numbers in booking summary are clickable Google search links (opens new tab)
+- **Day card accents** — colored left border by day type: blue (arrival), green (full day), amber (departure)
+- **Routes**: `/` (plan index), `/?plan=<slug>` (single plan, shareable), `/?plan=<slug>&nav=1` (with plan switcher), `/?plan=<slug>&lang=en` (EN), `/api/plan/<id>` (raw JSON)
 - **Maps links** — Per-segment Google Maps direction links (transit/walking/driving) for every stop. Route segments stored in `day_route_segments` table, landmarks in `day_landmarks` table. Transit pill text must use place names, not service names (e.g., `成田T2 → 日暮里` not `Skyliner → 日暮里`)
 - **Secrets**: `TURSO_URL` + `TURSO_TOKEN` + `GOOGLE_MAPS_KEY` (optional) via `wrangler secret put` (server-side only, never sent to browser — except Maps key which is browser-visible by design; restrict via GCP Console referrer policy)
 - **Self-contained** — no dependency on `src/` code, own `package.json` + `tsconfig.json`
@@ -409,7 +413,7 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ### Tokyo (Feb 13-17) — departs today
 1. **Book teamLab Borderless** — Feb 15 visit, OVERDUE (book-by was Feb 10)
-2. ~~Book Limousine Bus~~ Arrival: Skyliner + 山手線 (booked); Departure: Limousine Bus (planned)
+2. ~~Book Limousine Bus~~ Arrival: Skyliner + 山手線 (booked); Departure: 海鷗線 + 淺草線 (booked)
 3. Restaurant reservations
 4. ~~Fetch weather forecast~~ ✅ Done (feels-like: 體感 -1.9–14.9°C, rain Day 4-5)
 5. ~~Per-segment maps~~ ✅ Done (transit/walking per route segment, Tokyo+Kyoto)

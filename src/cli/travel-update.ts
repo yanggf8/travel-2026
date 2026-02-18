@@ -22,7 +22,7 @@
  */
 
 import { StateManager } from '../state/state-manager';
-import type { ProcessId, TransportOption } from '../state/types';
+import type { ProcessId, TransportOption, FlightInfo, HotelInfo, AirportTransfers } from '../state/types';
 import {
   validateDestinationRef,
   validateDestinationRefConsistency,
@@ -32,8 +32,10 @@ import {
   resolveDestinationRefPath as configResolveDestinationRefPath,
   getAvailableDestinations,
   getOtaSourceCurrency,
+  inferSourceIdFromUrl,
+  inferRegionFromDestination,
 } from '../config/loader';
-import { PATHS } from '../config/constants';
+import { PATHS, FRESHNESS } from '../config/constants';
 import {
   validateIsoDate,
   validatePositiveInt,
@@ -275,82 +277,66 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
     }
   }
 
-  if (full && destObj) {
-    const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
-    const flight = p3?.flight as Record<string, unknown> | undefined;
-    const outbound = flight?.outbound as Record<string, unknown> | undefined;
-    const inbound = flight?.return as Record<string, unknown> | undefined;
+  if (full) {
+    const flight = sm.getFlightInfo();
+    const hotel = sm.getHotelInfo();
+    const transfers = sm.getAirportTransfers();
 
-    const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
-    const hotel = p4?.hotel as Record<string, unknown> | undefined;
-
-    if (outbound && (outbound.flight_number || outbound.departure_airport_code)) {
+    if (flight?.outbound && (flight.outbound.flight_number || flight.outbound.departure_airport_code)) {
       console.log('\nFlight Details:');
       console.log('─'.repeat(50));
-      const airline = flight?.airline as string | undefined;
-      const airlineCode = flight?.airline_code as string | undefined;
-      const num = outbound.flight_number as string | undefined;
-      console.log(`  ${[airlineCode, num].filter(Boolean).join(' ')}${airline ? ` (${airline})` : ''}`);
-      const fmtAp = (leg: Record<string, unknown>, side: 'dep' | 'arr') => {
-        const code = side === 'dep' ? (leg.departure_airport_code as string ?? '') : (leg.arrival_airport_code as string ?? '');
-        const term = side === 'dep' ? (leg.departure_terminal as string ?? '') : (leg.arrival_terminal as string ?? '');
+      const { airline, airline_code } = flight;
+      const outbound = flight.outbound;
+      console.log(`  ${[airline_code, outbound.flight_number].filter(Boolean).join(' ')}${airline ? ` (${airline})` : ''}`);
+      const fmtAp = (leg: { departure_airport_code: string | null; departure_terminal: string | null; arrival_airport_code: string | null; arrival_terminal: string | null }, side: 'dep' | 'arr') => {
+        const code = side === 'dep' ? (leg.departure_airport_code ?? '') : (leg.arrival_airport_code ?? '');
+        const term = side === 'dep' ? (leg.departure_terminal ?? '') : (leg.arrival_terminal ?? '');
         return term ? `${code} ${term}` : code;
       };
       console.log(`  ${fmtAp(outbound, 'dep')} ${outbound.departure_time ?? ''} → ${fmtAp(outbound, 'arr')} ${outbound.arrival_time ?? ''}`);
+      const inbound = flight.return;
       if (inbound && (inbound.flight_number || inbound.departure_airport_code)) {
-        const rnum = inbound.flight_number as string | undefined;
-        console.log(`  Return: ${rnum ?? ''}`);
+        console.log(`  Return: ${inbound.flight_number ?? ''}`);
         console.log(`  ${fmtAp(inbound, 'dep')} ${inbound.departure_time ?? ''} → ${fmtAp(inbound, 'arr')} ${inbound.arrival_time ?? ''}`);
       }
     }
 
-    const transfers = (p3?.airport_transfers as Record<string, unknown> | undefined) ?? undefined;
-    if (transfers && (transfers['arrival'] || transfers['departure'])) {
+    if (transfers && (transfers.arrival || transfers.departure)) {
       console.log('\nAirport Transfers:');
       console.log('─'.repeat(50));
 
       for (const dir of ['arrival', 'departure'] as const) {
-        const seg = transfers[dir] as Record<string, unknown> | undefined;
+        const seg = transfers[dir];
         if (!seg) continue;
 
         const label = dir === 'arrival' ? 'Arrival' : 'Departure';
-        const segStatus = (seg.status as string | undefined) ?? 'planned';
+        const segStatus = seg.status ?? 'planned';
         console.log(`\n  ${label} (${segStatus})`);
 
-        const selected = seg.selected as Record<string, unknown> | undefined | null;
+        const selected = seg.selected;
         if (selected) {
-          const title = selected.title as string | undefined;
-          const route = selected.route as string | undefined;
-          const duration = selected.duration_min as number | undefined;
-          const price = selected.price_yen as number | undefined;
-          const schedule = selected.schedule as string | undefined;
-          console.log(`   ✓ ${title ?? ''}${price ? ` (¥${price.toLocaleString()})` : ''}${duration ? ` ~${duration} min` : ''}`);
-          if (route) console.log(`     ${route}`);
-          if (schedule) console.log(`     Schedule: ${schedule}`);
+          console.log(`   ✓ ${selected.title ?? ''}${selected.price_yen ? ` (¥${selected.price_yen.toLocaleString()})` : ''}${selected.duration_min ? ` ~${selected.duration_min} min` : ''}`);
+          if (selected.route) console.log(`     ${selected.route}`);
+          if (selected.schedule) console.log(`     Schedule: ${selected.schedule}`);
         }
 
-        const candidates = seg.candidates as Array<Record<string, unknown>> | undefined;
+        const candidates = seg.candidates;
         if (Array.isArray(candidates) && candidates.length > 0) {
           console.log('   Candidates:');
           for (const c of candidates.slice(0, 5)) {
-            const title = c.title as string | undefined;
-            const route = c.route as string | undefined;
-            const duration = c.duration_min as number | undefined;
-            const price = c.price_yen as number | undefined;
-            console.log(`    - ${title ?? ''}${price ? ` (¥${price.toLocaleString()})` : ''}${duration ? ` ~${duration} min` : ''}${route ? ` — ${route}` : ''}`);
+            console.log(`    - ${c.title ?? ''}${c.price_yen ? ` (¥${c.price_yen.toLocaleString()})` : ''}${c.duration_min ? ` ~${c.duration_min} min` : ''}${c.route ? ` — ${c.route}` : ''}`);
           }
           if (candidates.length > 5) console.log(`    ... and ${candidates.length - 5} more`);
         }
       }
     }
 
-    if (hotel && (hotel.name || hotel.area)) {
+    if (hotel && hotel.name) {
       console.log('\nHotel Details:');
       console.log('─'.repeat(50));
-      console.log(`  ${hotel.name ?? ''}${hotel.area ? ` (${hotel.area})` : ''}`);
-      const access = hotel.access as unknown;
-      if (Array.isArray(access) && access.length > 0) {
-        console.log(`  Access: ${access.slice(0, 4).join(', ')}`);
+      console.log(`  ${hotel.name}`);
+      if (hotel.access.length > 0) {
+        console.log(`  Access: ${hotel.access.slice(0, 4).join(', ')}`);
       }
       const includes = chosenOffer?.includes as unknown;
       if (Array.isArray(includes) && includes.length > 0) {
@@ -451,7 +437,7 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
 }
 
 function showItinerary(sm: StateManager, destOpt?: string): void {
-  const destination = destOpt || sm.getActiveDestination();
+  const destination = sm.resolveDestination(destOpt);
   const plan = sm.getPlan();
   const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
 
@@ -641,7 +627,7 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
 }
 
 function showTransport(sm: StateManager, destOpt?: string): void {
-  const destination = destOpt || sm.getActiveDestination();
+  const destination = sm.resolveDestination(destOpt);
   const plan = sm.getPlan();
   const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
 
@@ -654,35 +640,28 @@ function showTransport(sm: StateManager, destOpt?: string): void {
   console.log('║                   TRANSPORT                                ║');
   console.log('╚════════════════════════════════════════════════════════════╝\n');
 
-  // Airport transfers
-  const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
-  const transfers = p3?.airport_transfers as Record<string, unknown> | undefined;
+  // Airport transfers (typed API)
+  const transfers = sm.getAirportTransfers(destination);
 
   if (transfers) {
     console.log('✈️  AIRPORT TRANSFERS');
     console.log('─'.repeat(50));
 
     for (const dir of ['arrival', 'departure'] as const) {
-      const t = transfers[dir] as Record<string, unknown> | undefined;
-      if (!t) continue;
+      const seg = transfers[dir];
+      if (!seg) continue;
 
-      const status = t.status as string || 'planned';
-      const selected = t.selected as Record<string, unknown> | undefined;
+      const status = seg.status || 'planned';
+      const selected = seg.selected;
       const icon = status === 'booked' ? '🎫' : '📋';
 
       console.log(`\n${dir.toUpperCase()} (${status})`);
       if (selected) {
-        const title = selected.title as string || '';
-        const route = selected.route as string || '';
-        const duration = selected.duration_min as number | undefined;
-        const price = selected.price_yen as number | undefined;
-        const schedule = selected.schedule as string | undefined;
-
-        console.log(`  ${icon} ${title}`);
-        console.log(`     Route: ${route}`);
-        if (duration) console.log(`     Time: ~${duration} min`);
-        if (price) console.log(`     Price: ¥${price.toLocaleString()}`);
-        if (schedule) console.log(`     Schedule: ${schedule}`);
+        console.log(`  ${icon} ${selected.title || ''}`);
+        console.log(`     Route: ${selected.route || ''}`);
+        if (selected.duration_min) console.log(`     Time: ~${selected.duration_min} min`);
+        if (selected.price_yen) console.log(`     Price: ¥${selected.price_yen.toLocaleString()}`);
+        if (selected.schedule) console.log(`     Schedule: ${selected.schedule}`);
       }
     }
     console.log('');
@@ -750,7 +729,7 @@ function showTransport(sm: StateManager, destOpt?: string): void {
 }
 
 function showBookings(sm: StateManager, destOpt?: string): void {
-  const destination = destOpt || sm.getActiveDestination();
+  const destination = sm.resolveDestination(destOpt);
   const plan = sm.getPlan();
   const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
 
@@ -1005,7 +984,7 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         let pax = 2;
         if (paxOpt) {
           const paxResult = validatePositiveInt(paxOpt, '--pax');
@@ -1186,7 +1165,7 @@ async function main(): Promise<void> {
         console.log(`   Populate P3/P4: ${!noPopulate}`);
 
         if (!dryRun) {
-          const destination = destOpt || sm.getActiveDestination();
+          const destination = sm.resolveDestination(destOpt);
           sm.selectOffer(offerId, date, !noPopulate);
           await sm.saveWithTracking('select-offer', offerId);
           console.log('✅ Offer selected');
@@ -1204,7 +1183,7 @@ async function main(): Promise<void> {
       }
 
       case 'scaffold-itinerary': {
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         const force = args.includes('--force');
         const plan = sm.getPlan();
         const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
@@ -1307,7 +1286,7 @@ async function main(): Promise<void> {
       }
 
       case 'mark-booked': {
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         const plan = sm.getPlan();
         const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
 
@@ -1386,7 +1365,7 @@ async function main(): Promise<void> {
       }
 
       case 'populate-itinerary': {
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         const force = args.includes('--force');
         const pace = (paceOpt || 'balanced').toLowerCase();
         if (!['relaxed', 'balanced', 'packed'].includes(pace)) {
@@ -1599,7 +1578,7 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         const selected = parseTransferSpec(direction as 'arrival' | 'departure', selectedOpt);
         const candidates = candidateOpts.map(c => parseTransferSpec(direction as 'arrival' | 'departure', c));
 
@@ -1688,7 +1667,7 @@ async function main(): Promise<void> {
           validatedEnd = endResult.value;
         }
 
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
 
         console.log(`\n⏱️  Setting activity time:`);
         console.log(`   Destination: ${destination}`);
@@ -1751,7 +1730,7 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         console.log(`\n🕒 Setting session time range:`);
         console.log(`   Destination: ${destination}`);
         console.log(`   Day ${dayNumber} ${session}: ${startTimeResult.value} → ${endTimeResult.value}`);
@@ -1807,7 +1786,7 @@ async function main(): Promise<void> {
           validatedBookBy = bookByResult.value;
         }
 
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
 
         console.log(`\n🎫 Setting activity booking status:`);
         console.log(`   Destination: ${destination}`);
@@ -1862,7 +1841,7 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         console.log(`\n🔄 Swapping days:`);
         console.log(`   Destination: ${destination}`);
         console.log(`   Day ${dayA} ↔ Day ${dayB}`);
@@ -1878,7 +1857,7 @@ async function main(): Promise<void> {
       }
 
       case 'validate-itinerary': {
-        const destination = destOpt || sm.getActiveDestination();
+        const destination = sm.resolveDestination(destOpt);
         const plan = sm.getPlan();
         const destObj = plan.destinations[destination] as Record<string, unknown> | undefined;
         if (!destObj) {
@@ -2098,7 +2077,8 @@ async function main(): Promise<void> {
         console.log(`Syncing bookings from plan "${effectivePlanId}"...`);
         const repo = await TursoRepository.create(effectivePlanId);
         const plan = repo.getPlan() as unknown as Record<string, unknown>;
-        const effectiveTripId = tripIdOpt || effectivePlanId.replace(/-/g, '_');
+        const { toDestSlug } = await import('../utils/plan-id');
+        const effectiveTripId = tripIdOpt || toDestSlug(effectivePlanId);
         const syncResult = await syncBookingsFromPlanJson(plan, effectiveTripId, {
           dryRun: dryRun,
         });
@@ -2153,7 +2133,7 @@ async function main(): Promise<void> {
       }
 
       case 'fetch-weather': {
-        const dest = destOpt || sm.getActiveDestination();
+        const dest = sm.resolveDestination(destOpt);
         const plan = sm.getPlan();
         const destObj = plan.destinations[dest] as Record<string, unknown> | undefined;
         if (!destObj) {
@@ -3189,7 +3169,7 @@ function printOfferComparison(offers: CompareOffer[], region: string, filterDate
 
   // Print staleness warning for old data
   const now = Date.now();
-  const staleThresholdMs = 24 * 60 * 60 * 1000; // 24 hours
+  const staleThresholdMs = FRESHNESS.STALE_THRESHOLD_MS;
   const staleOffers = offers.filter(o => {
     if (!o.scraped_at) return false;
     const scrapedTime = new Date(o.scraped_at).getTime();
@@ -3219,31 +3199,6 @@ main();
  */
 function resolveDestinationRefPath(destinationSlug: string): string | null {
   return configResolveDestinationRefPath(destinationSlug);
-}
-
-/**
- * Infer OTA source ID from URL.
- */
-function inferSourceIdFromUrl(url: string): string {
-  if (url.includes('besttour.com.tw')) return 'besttour';
-  if (url.includes('liontravel.com')) return 'liontravel';
-  if (url.includes('lifetour.com.tw')) return 'lifetour';
-  if (url.includes('settour.com.tw')) return 'settour';
-  if (url.includes('tigerairtw.com')) return 'tigerair';
-  if (url.includes('eztravel.com.tw')) return 'eztravel';
-  if (url.includes('jalan.net')) return 'jalan';
-  if (url.includes('travel.rakuten.co.jp')) return 'rakuten_travel';
-  return 'unknown';
-}
-
-function inferRegionFromDestination(destination: string): string | undefined {
-  const d = destination.toLowerCase();
-  if (d.includes('tokyo') || d.includes('tyo')) return 'tokyo';
-  if (d.includes('osaka') || d.includes('kansai') || d.includes('kyoto')) return 'kansai';
-  if (d.includes('nagoya')) return 'nagoya';
-  if (d.includes('hokkaido') || d.includes('sapporo')) return 'hokkaido';
-  if (d.includes('okinawa')) return 'okinawa';
-  return undefined;
 }
 
 function allocateClustersToDays(

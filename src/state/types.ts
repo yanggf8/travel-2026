@@ -185,6 +185,36 @@ export interface AirportTransfers {
   departure?: TransportSegment;
 }
 
+// ============================================================================
+// Flight & Hotel (Typed Read API)
+// ============================================================================
+
+export interface FlightLeg {
+  flight_number: string | null;
+  departure_airport_code: string | null;
+  departure_terminal: string | null;
+  departure_time: string | null;
+  arrival_airport_code: string | null;
+  arrival_terminal: string | null;
+  arrival_time: string | null;
+  date: string | null;
+}
+
+export interface FlightInfo {
+  airline: string | null;
+  airline_code: string | null;
+  booked_date: string | null;
+  outbound: FlightLeg | null;
+  return: FlightLeg | null;
+}
+
+export interface HotelInfo {
+  name: string | null;
+  access: string[];
+  check_in: string | null;
+  notes: string | null;
+}
+
 /**
  * Canonical Activity schema for P5 itinerary.
  * All activities have IDs for CRUD operations.

@@ -686,7 +686,8 @@ export async function checkBookingIntegrity(
   const repo = await TursoRepository.create(planId);
   const plan = repo.getPlan() as Record<string, unknown>;
 
-  const effectiveTripId = tripId || planId.replace(/-/g, '_');
+  const { toDestSlug } = require('../utils/plan-id');
+  const effectiveTripId = tripId || toDestSlug(planId);
   const { bookings: planBookings, warnings } = extractBookingsFromPlanObject(plan, effectiveTripId, extractor);
 
   const dbBookings = await queryBookings({

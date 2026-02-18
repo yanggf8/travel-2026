@@ -17,6 +17,10 @@ import type {
   EventLogState,
   TransportOption,
   TransportSegment,
+  FlightInfo,
+  FlightLeg,
+  HotelInfo,
+  AirportTransfers,
   isValidProcessStatus,
 } from './types';
 import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
@@ -180,6 +184,69 @@ export class PlanRepository implements StateRepository {
     }
 
     return null;
+  }
+
+  // ============================================================================
+  // StateReader — Flight / Hotel / Transport
+  // ============================================================================
+
+  getFlightInfo(dest: string): FlightInfo | null {
+    const destObj = this.plan.destinations[dest];
+    if (!destObj) return null;
+
+    const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+    const flight = p3?.flight as Record<string, unknown> | undefined;
+    if (!flight) return null;
+
+    const extractLeg = (raw: Record<string, unknown> | undefined | null): FlightLeg | null => {
+      if (!raw) return null;
+      return {
+        flight_number: (raw.flight_number as string) ?? null,
+        departure_airport_code: (raw.departure_airport_code as string) ?? null,
+        departure_terminal: (raw.departure_terminal as string) ?? null,
+        departure_time: (raw.departure_time as string) ?? null,
+        arrival_airport_code: (raw.arrival_airport_code as string) ?? null,
+        arrival_terminal: (raw.arrival_terminal as string) ?? null,
+        arrival_time: (raw.arrival_time as string) ?? null,
+        date: (raw.date as string) ?? null,
+      };
+    };
+
+    return {
+      airline: (flight.airline as string) ?? null,
+      airline_code: (flight.airline_code as string) ?? null,
+      booked_date: (flight.booked_date as string) ?? null,
+      outbound: extractLeg(flight.outbound as Record<string, unknown> | undefined),
+      return: extractLeg(flight.return as Record<string, unknown> | undefined),
+    };
+  }
+
+  getHotelInfo(dest: string): HotelInfo | null {
+    const destObj = this.plan.destinations[dest];
+    if (!destObj) return null;
+
+    const p4 = destObj.process_4_accommodation as Record<string, unknown> | undefined;
+    const hotel = p4?.hotel as Record<string, unknown> | undefined;
+    if (!hotel) return null;
+
+    const access = hotel.access;
+    return {
+      name: (hotel.name as string) ?? null,
+      access: Array.isArray(access) ? access as string[] : [],
+      check_in: (hotel.check_in as string) ?? null,
+      notes: (hotel.notes as string) ?? null,
+    };
+  }
+
+  getAirportTransfers(dest: string): AirportTransfers | null {
+    const destObj = this.plan.destinations[dest];
+    if (!destObj) return null;
+
+    const p3 = destObj.process_3_transportation as Record<string, unknown> | undefined;
+    const transfers = p3?.airport_transfers as Record<string, unknown> | undefined;
+    if (!transfers) return null;
+
+    return transfers as unknown as AirportTransfers;
   }
 
   // ============================================================================
