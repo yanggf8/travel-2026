@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS plan_offer_provenance (
   source_id TEXT NOT NULL,
   scraped_at TEXT NOT NULL,
   file_path TEXT,
+  offer_count INTEGER,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, source_id, scraped_at)
 );

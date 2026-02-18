@@ -95,7 +95,8 @@ User intent                          → Skill / Action
   stale/no data?                        → /p3p4-packages (scrape + auto-import)
 "find flights only"                  → /p3-flights (uses /scrape-ota)
 "compare offers"                     → read process_3_4_packages.results
-"query offers"                       → npm run travel -- query-offers --region <r>
+"query offers"                       → npm run travel -- query-offers --plan-id <id> --dest <slug>
+"import scraped files"               → npm run travel -- import-offers --dir scrapes --dest <slug>
 "is data fresh"                      → npm run travel -- check-freshness --source <s>
 "book separately"                    → /separate-bookings
 "how many leave days"                → npm run leave-calc
@@ -234,6 +235,24 @@ Includes: Kyoto Yumeyakata Kimono Experience, eSIM data
 
 Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto Station, ~75min), included in package, status: booked
 
+### Kyoto Classic Day (Winter-safe timing)
+- Recommended date: **Thu, Feb 26, 2026** (mid-trip buffer; easier to swap if weather changes)
+- Route: **Sagano Scenic Railway (Torokko)** `トロッコ嵯峨 -> トロッコ亀岡` then **Hozugawa River Boat** `亀岡 -> 嵐山`
+- Note: `JR Sagano Line (京都 -> 亀岡)` is regular transit, not the sightseeing train
+
+Proposed timeline:
+- 10:30 Arrive Arashiyama, early walk + early lunch
+- 12:00-13:00 Sagano Scenic Railway (recommended window)
+- 13:30-15:00 Hozugawa River Boat back to Arashiyama
+- 15:00-17:30 Arashiyama free time (Tenryu-ji / Bamboo Grove / cafe)
+- Fallback (cold/windy or boat suspended): keep train only, replace boat with Arashiyama walk + onsen/cafe
+
+Weather check (as of **Feb 18, 2026**; Kyoto 10-day forecast):
+- Tue, Feb 24: **17C / 9C**, precip chance **24%**
+- Wed, Feb 25: **13C / 7C**, precip chance **60%** (rain risk)
+- Thu, Feb 26: **14C / 6C**, precip chance **17%** (best pick in current window)
+- Winter boat section can feel colder than forecast due to wind/splash; re-check 24h before departure and keep one indoor fallback.
+
 ## CLI Quick Reference
 ```bash
 # === VIEWS ===
@@ -254,9 +273,12 @@ python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-
   --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
 
 # === TURSO DB ===
+npm run travel -- import-offers --dir scrapes --dest tokyo_2026 [--start 2026-02-13 --end 2026-02-17] [--dry-run]
+npm run travel -- query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000] [--json]
 npm run travel -- query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000] [--json]
+npm run travel -- check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
 npm run travel -- check-freshness --source besttour --region kansai
-npm run db:import:turso -- --dir scrapes [--start 2026-02-24 --end 2026-02-28]
+npm run db:import:turso -- --dir scrapes [--start 2026-02-24 --end 2026-02-28]   # legacy: writes offers table
 npm run db:status:turso | db:migrate:turso | db:seed:plans
 
 # === BOOKINGS ===
@@ -321,7 +343,7 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 │   ├── services/turso-service.ts  # DB access layer (all Turso queries go through here)
 │   ├── utils/                     # flight-normalizer, leave-calculator
 │   ├── skills/                    # Skill SKILL.md files + references
-│   ├── scrapers/                  # Registry + base classes
+│   ├── scrapers/                  # Registry + base classes + scrape-file-parser.ts
 │   ├── validation/                # Itinerary validator
 │   └── types/result.ts            # Result<T,E>
 └── tests/integration/

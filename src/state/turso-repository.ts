@@ -221,8 +221,8 @@ export class TursoRepository implements StateRepository {
   setOfferSelection(dest: string, offerId: string, date: string, timestamp: string): Record<string, unknown> {
     return this.bridge.setOfferSelection(dest, offerId, date, timestamp);
   }
-  importOffers(dest: string, sourceId: string, offers: Array<Record<string, unknown>>, timestamp: string, note?: string, warnings?: string[]): void {
-    this.bridge.importOffers(dest, sourceId, offers, timestamp, note, warnings);
+  importOffers(dest: string, sourceId: string, offers: Array<Record<string, unknown>>, timestamp: string, note?: string, warnings?: string[], filePath?: string, offerCount?: number): void {
+    this.bridge.importOffers(dest, sourceId, offers, timestamp, note, warnings, filePath, offerCount);
   }
   populateFromOffer(dest: string, offer: Record<string, unknown>, date: string, timestamp: string): void {
     this.bridge.populateFromOffer(dest, offer, date, timestamp);

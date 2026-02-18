@@ -901,6 +901,9 @@ async function main(): Promise<void> {
   const tripIdOpt = optionValue('--trip-id');
   const categoryOpt = optionValue('--category');
   const statusFilterOpt = optionValue('--status');
+  const dirOpt = optionValue('--dir');
+  const filesOpt = optionValue('--files');
+  const noteOpt = optionValue('--note');
 
   // Filter out flags/options from args
   const optionsWithValues = new Set([
@@ -934,6 +937,9 @@ async function main(): Promise<void> {
     '--category',
     '--status',
     '--limit',
+    '--dir',
+    '--files',
+    '--note',
   ]);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -2027,9 +2033,48 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'import-offers': {
+        const destination = sm.resolveDestination(destOpt);
+        let filePaths: string[];
+        if (filesOpt) {
+          filePaths = filesOpt.split(',').map(s => s.trim()).filter(Boolean);
+        } else {
+          const dir = dirOpt || 'scrapes';
+          filePaths = fs.existsSync(dir)
+            ? fs.readdirSync(dir)
+              .filter(f => f.endsWith('.json') && !f.includes('schema') && !f.includes('destinations') && !f.includes('ota-sources'))
+              .map(f => path.join(dir, f))
+            : [];
+        }
+        if (filePaths.length === 0) {
+          console.error('No JSON files found. Use --dir <path> or --files <csv>.');
+          process.exit(1);
+        }
+        console.log(`Importing offers for ${destination} from ${filePaths.length} file(s)${dryRun ? ' (dry-run)' : ''}...`);
+        const counts = await sm.importScrapedOffers(destination, filePaths, {
+          start: startOpt,
+          end: endOpt,
+          pax: paxOpt ? parseInt(paxOpt, 10) : 2,
+          dryRun,
+          note: noteOpt,
+        });
+        if (Object.keys(counts).length === 0) {
+          console.log('No offers imported (no matching files or all offers filtered out).');
+        } else {
+          for (const [src, count] of Object.entries(counts)) {
+            console.log(`  ${src}: ${count} offer(s)`);
+          }
+          if (!dryRun) {
+            console.log(`Saved to Turso (plan_offers).`);
+          }
+        }
+        break;
+      }
+
       case 'query-offers': {
         const { queryOffers, printTursoOfferTable } = await import('../services/turso-service');
         const results = await queryOffers({
+          planId: planIdOpt,
           destination: destOpt,
           region: optionValue('--region'),
           start: startOpt,
@@ -2061,6 +2106,8 @@ async function main(): Promise<void> {
           start: startOpt,
           end: endOpt,
           maxAgeHours: maxAgeOpt ? parseInt(maxAgeOpt, 10) : 24,
+          planId: planIdOpt,
+          destination: destOpt,
         });
         console.log(`Source:  ${source}`);
         if (result.region) console.log(`Region:  ${result.region}`);

@@ -152,7 +152,7 @@ export interface StateWriter {
   // --- Offer mutations ---
   setOfferAvailability(dest: string, offerId: string, date: string, data: Record<string, unknown>): { previousAvailability: unknown };
   setOfferSelection(dest: string, offerId: string, date: string, timestamp: string): Record<string, unknown>;
-  importOffers(dest: string, sourceId: string, offers: Array<Record<string, unknown>>, timestamp: string, note?: string, warnings?: string[]): void;
+  importOffers(dest: string, sourceId: string, offers: Array<Record<string, unknown>>, timestamp: string, note?: string, warnings?: string[], filePath?: string, offerCount?: number): void;
   populateFromOffer(dest: string, offer: Record<string, unknown>, date: string, timestamp: string): void;
 
   // --- Transport mutations ---

@@ -1,8 +1,8 @@
 {
   "name": "yokohama-travel-2026",
   "version": "1.0.0",
-  "description": "Travel planning project with status check and process automation",
-  "main": "src/status/status-check.ts",
+  "description": "Travel planning project with process automation and Turso DB-first state",
+  "main": "src/cli/travel-update.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
@@ -12,9 +12,9 @@
     "hooks:install": "cp scripts/hooks/* .git/hooks/ && chmod +x .git/hooks/*",
     "postinstall": "npm run hooks:install && python scripts/check_playwright.py -q || echo '⚠️ Playwright not installed. Run: npm run scraper:setup'",
     "scraper:setup": "python scripts/check_playwright.py --install",
-    "status": "ts-node src/status/status-check.ts",
-    "status:json": "ts-node src/status/status-check.ts --json",
-    "status:ascii": "ts-node src/status/status-check.ts --ascii",
+    "status": "ts-node src/cli/travel-update.ts status --full",
+    "status:json": "ts-node src/cli/travel-update.ts status --json",
+    "status:ascii": "ts-node src/cli/travel-update.ts status",
     "travel": "ts-node src/cli/travel-update.ts",
     "view:status": "ts-node src/cli/travel-update.ts status --full",
     "view:itinerary": "ts-node src/cli/travel-update.ts itinerary",
@@ -37,6 +37,7 @@
     "db:sync:destinations": "ts-node scripts/turso-sync-destinations.ts",
     "db:sync:events": "ts-node scripts/turso-sync-events.ts",
     "db:seed:plans": "ts-node scripts/seed-plans-current.ts",
+    "db:exec": "npx tsx scripts/turso-exec.ts",
     "scraper:doctor": "python scripts/scraper_doctor.py",
     "scraper:batch": "python scripts/scrape_batch.py",
     "scraper:pipeline": "npm run scraper:doctor && npm run scraper:batch && npm run db:import:turso && echo '✅ Pipeline complete. Run: npm run travel -- compare-offers --region <name>'"

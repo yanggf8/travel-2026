@@ -37,27 +37,23 @@ The `StateManager` class is the central hub for all state operations.
 import { StateManager } from './src/state';
 ```
 
-### Constructor
+### Construction (async factory — Turso DB is sole source of truth)
 
 ```typescript
-// File-based (default)
-const sm = new StateManager();
-const sm = new StateManager('data/travel-plan.json', 'data/state.json');
+// DB-backed (standard usage) — reads all plan data from Turso in a single batch
+const sm = await StateManager.create();                        // uses TRAVEL_PLAN_ID env or default
+const sm = await StateManager.createFromPlanId('tokyo-2026'); // explicit plan ID
 
-// Options-based (for testing)
-const sm = new StateManager({
-  planPath: 'data/travel-plan.json',
-  statePath: 'data/state.json',
-  skipSave: true,  // Don't write files
-});
-
-// In-memory (for testing)
+// In-memory (for testing — no DB calls)
 const sm = new StateManager({
   plan: { /* TravelPlanMinimal */ },
   state: { /* TravelState */ },
   skipSave: true,
 });
 ```
+
+> **Note:** The file-based constructor (`new StateManager()` / `new StateManager(path, path)`) was
+> removed. All state is stored in Turso normalized tables. Use the async factory methods above.
 
 ### Core Methods
 

@@ -507,7 +507,7 @@ export class PlanRepository implements StateRepository {
     return offer;
   }
 
-  importOffers(dest: string, sourceId: string, offers: Array<Record<string, unknown>>, timestamp: string, note?: string, warnings?: string[]): void {
+  importOffers(dest: string, sourceId: string, offers: Array<Record<string, unknown>>, timestamp: string, note?: string, warnings?: string[], filePath?: string, offerCount?: number): void {
     const destObj = this.plan.destinations[dest];
     if (!destObj) throw new Error(`Destination not found: ${dest}`);
 
@@ -519,13 +519,20 @@ export class PlanRepository implements StateRepository {
     if (!p34.results || typeof p34.results !== 'object') p34.results = {};
     const results = p34.results as Record<string, unknown>;
 
-    results.offers = offers;
+    // Merge by offer ID (preserve offers from other sources)
+    const existing = (results.offers as Array<Record<string, unknown>> | undefined) ?? [];
+    const byId = new Map(existing.map(o => [o.id as string, o]));
+    for (const o of offers) { byId.set(o.id as string, o); }
+    results.offers = Array.from(byId.values());
+
     const provenance = (results.provenance as Array<Record<string, unknown>> | undefined) ?? [];
     provenance.push({
       source_id: sourceId,
       scraped_at: timestamp,
-      offers_found: offers.length,
+      offers_found: offerCount ?? offers.length,
       ...(note ? { note } : {}),
+      ...(filePath ? { file_path: filePath } : {}),
+      ...(offerCount !== undefined ? { offer_count: offerCount } : {}),
     });
     results.provenance = provenance;
 
@@ -982,7 +989,7 @@ export class PlanRepository implements StateRepository {
       const provenance = (results34?.provenance as Array<Record<string, unknown>> | undefined) ?? [];
       for (const prov of provenance) {
         if (prov.source_id && prov.scraped_at) {
-          statements.push(`INSERT OR IGNORE INTO plan_offer_provenance (plan_id, destination, source_id, scraped_at) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(prov.source_id as string)}, ${sqlText(prov.scraped_at as string)})`);
+          statements.push(`INSERT OR IGNORE INTO plan_offer_provenance (plan_id, destination, source_id, scraped_at, file_path, offer_count) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(prov.source_id as string)}, ${sqlText(prov.scraped_at as string)}, ${sqlText(prov.file_path as string ?? null)}, ${sqlInt(prov.offer_count as number ?? null)})`);
         }
       }
 

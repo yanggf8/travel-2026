@@ -913,6 +913,19 @@ async function main() {
   }
 
   console.log('✅ ZH content schema migration complete.');
+
+  // Add offer_count column to plan_offer_provenance
+  try {
+    await client.execute('ALTER TABLE plan_offer_provenance ADD COLUMN offer_count INTEGER;');
+    console.log('✅ Added offer_count to plan_offer_provenance.');
+  } catch (e: any) {
+    if (e.message?.includes('duplicate column name') || e.message?.includes('already exists')) {
+      console.log('ℹ️  offer_count column already exists in plan_offer_provenance.');
+    } else {
+      console.warn('⚠️  Could not add offer_count to plan_offer_provenance:', e.message);
+    }
+  }
+
   console.log('Done.');
 }
 

@@ -93,16 +93,16 @@ function parseArgs(argv: string[]): CliArgs {
 
 function printHelp(): void {
   console.log(`
-Cascade Runner - Execute cascade rules on travel-plan.json
+Cascade Runner - Execute cascade rules against Turso DB plan state
 
 USAGE:
   npx ts-node src/cli/cascade.ts [OPTIONS]
   node dist/cli/cascade.js [OPTIONS]
 
 OPTIONS:
-  -i, --input <path>   Input file (default: ${PATHS.defaultPlan})
-  -o, --output <path>  Output file (only with --apply, default: same as input)
-  --apply              Apply changes (default: dry-run only)
+  -i, --input <path>   Plan path used to derive plan_id (default: ${PATHS.defaultPlan})
+                       Note: file is NOT read — path is used only to identify the plan in Turso
+  --apply              Apply changes to Turso DB (default: dry-run only)
   -f, --format <fmt>   Output format: text (default) or json
   -v, --verbose        Show detailed output
   -h, --help           Show this help
@@ -114,11 +114,11 @@ EXAMPLES:
   # Dry-run with JSON output
   npx ts-node src/cli/cascade.ts --format json
 
-  # Apply changes in-place
+  # Apply changes (writes to Turso DB normalized tables)
   npx ts-node src/cli/cascade.ts --apply
 
-  # Apply to a new file
-  npx ts-node src/cli/cascade.ts --apply --output data/travel-plan.new.json
+  # Target a specific plan by path-derived ID
+  npx ts-node src/cli/cascade.ts --apply --input data/trips/kyoto-2026/travel-plan.json
 `);
 }
 

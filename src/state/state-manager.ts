@@ -325,7 +325,7 @@ export class StateManager {
       case 'import_package_offers':
         this.importPackageOffers(
           command.destination, command.sourceId, command.offers,
-          command.note, command.warnings
+          command.note, command.warnings, command.filePath
         );
         return {};
 
@@ -693,9 +693,10 @@ export class StateManager {
     sourceId: string,
     offers: Array<Record<string, unknown>>,
     note?: string,
-    warnings?: string[]
+    warnings?: string[],
+    filePath?: string
   ): void {
-    this.repo.importOffers(destination, sourceId, offers, this.timestamp, note, warnings);
+    this.repo.importOffers(destination, sourceId, offers, this.timestamp, note, warnings, filePath, offers.length);
 
     const currentStatus = this.getProcessStatus(destination, 'process_3_4_packages');
     if (!currentStatus || currentStatus === 'pending' || currentStatus === 'researching') {
@@ -711,6 +712,63 @@ export class StateManager {
       process: 'process_3_4_packages',
       data: { source_id: sourceId, offers_found: offers.length, note },
     });
+  }
+
+  /**
+   * Import scraped offer files into plan_offers via the import_package_offers command path.
+   * Standalone async method (not added to Command union — dispatch() is synchronous).
+   *
+   * @param destination - destination slug (e.g. 'tokyo_2026')
+   * @param filePaths   - scrape JSON file paths to parse
+   * @param opts        - date filter, dry-run, note
+   * @returns per-source offer counts
+   */
+  async importScrapedOffers(
+    destination: string,
+    filePaths: string[],
+    opts?: {
+      start?: string;
+      end?: string;
+      includeUndated?: boolean;
+      pax?: number;
+      dryRun?: boolean;
+      note?: string;
+    }
+  ): Promise<Record<string, number>> {
+    const { parseScrapeFiles } = await import('../scrapers/scrape-file-parser');
+
+    const parsed = parseScrapeFiles(filePaths, {
+      start: opts?.start,
+      end: opts?.end,
+      includeUndated: opts?.includeUndated ?? true,
+      pax: opts?.pax ?? 2,
+    });
+
+    const counts: Record<string, number> = {};
+
+    for (const group of parsed) {
+      if (group.offers.length === 0) continue;
+      if (!opts?.dryRun) {
+        this.dispatch({
+          type: 'import_package_offers',
+          destination,
+          sourceId: group.sourceId,
+          offers: group.offers as unknown as Array<Record<string, unknown>>,
+          note: opts?.note ?? `import-offers: ${group.fileName}`,
+          filePath: group.filePath,
+        });
+      }
+      counts[group.sourceId] = group.offers.length;
+    }
+
+    if (!opts?.dryRun && Object.keys(counts).length > 0) {
+      await this.saveWithTracking(
+        'import-offers',
+        `${destination}: ${Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(', ')}`
+      );
+    }
+
+    return counts;
   }
 
   // ============================================================================

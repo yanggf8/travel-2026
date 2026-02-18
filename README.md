@@ -161,22 +161,20 @@ The project uses schema version `4.2.0` with destination-scoped architecture.
 
 See `CLAUDE.md` for detailed schema documentation.
 
-## Storage Decision (DB)
+## Storage (Turso DB-first)
 
-**Decision**
-- Keep JSON (`data/*.json`, `data/travel-plan.json`) as the source of truth.
-- Use **Turso** as a query/index layer (cloud SQLite) for cross-offer analytics and fast SQL queries.
+**Turso cloud is the sole source of truth.** All plan state lives in 28+ normalized tables. There are no local JSON state files — `StateManager` throws if a file path is passed.
 
-**Why**
-- Strong CLI story via `curl` and SQL; no local DB installs.
-- Works well with the existing architecture (StateManager remains the single write path for mutations).
+- Reads: single batch HTTP round-trip (38 queries → 1 request via `TursoRepository`)
+- Writes: `syncNormalizedTables()` inside a transaction — no JSON blobs
+- `StateManager.create()` / `StateManager.createFromPlanId()` are the entry points (async factory)
 
 **Common commands**
 ```bash
-./scripts/turso-query.sh "SELECT COUNT(*) FROM offers"
-npm run db:import:turso -- --dir data
-npm run db:query:turso -- --region kansai --start 2026-02-24 --end 2026-02-28
 npm run db:status:turso
+npm run db:migrate:turso
+npm run db:query:turso -- --region kansai --start 2026-02-24 --end 2026-02-28
+npm run db:exec -- "SELECT source_id, offer_count FROM plan_offer_provenance WHERE plan_id='tokyo-2026'"
 ```
 
 ## License

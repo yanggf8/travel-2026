@@ -52,6 +52,7 @@ function requireImporter(): {
 // ---------------------------------------------------------------------------
 
 export interface TursoOfferQuery {
+  planId?: string;
   destination?: string;
   region?: string;
   start?: string;
@@ -252,6 +253,52 @@ export async function queryOffers(
 ): Promise<TursoOfferResult[]> {
   const client = getClient();
 
+  // When planId is provided, query plan_offers (normalized tables)
+  if (filters.planId) {
+    const conditions: string[] = [`po.plan_id = '${sqlEscape(filters.planId)}'`];
+
+    if (filters.destination) {
+      conditions.push(`po.destination = '${sqlEscape(filters.destination)}'`);
+    }
+    if (filters.sources && filters.sources.length > 0) {
+      const escaped = filters.sources.map((s) => `'${sqlEscape(s)}'`).join(',');
+      conditions.push(`po.source_id IN (${escaped})`);
+    }
+    if (filters.type) {
+      conditions.push(`po.type = '${sqlEscape(filters.type)}'`);
+    }
+    if (filters.maxPrice != null) {
+      conditions.push(`po.price_per_person <= ${sqlInt(filters.maxPrice)}`);
+    }
+    if (filters.start) {
+      conditions.push(`(pob.best_date IS NULL OR pob.best_date >= '${sqlEscape(filters.start)}')`);
+    }
+    if (filters.end) {
+      conditions.push(`(pob.best_date IS NULL OR pob.best_date <= '${sqlEscape(filters.end)}')`);
+    }
+    if (filters.freshHours != null) {
+      conditions.push(`po.scraped_at >= datetime('now', '-${Math.trunc(filters.freshHours)} hours')`);
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+    const limit = filters.limit ? `LIMIT ${Math.trunc(filters.limit)}` : 'LIMIT 100';
+
+    const sql = `SELECT po.id, po.source_id, po.type, po.title AS name,
+      po.price_per_person, po.currency, NULL AS region, po.destination,
+      pob.best_date AS departure_date, NULL AS return_date, NULL AS nights,
+      po.availability, poh.name AS hotel_name,
+      pof.airline, po.scraped_at, po.url AS source_file
+    FROM plan_offers po
+    LEFT JOIN plan_offer_hotels poh ON poh.offer_id = po.id AND poh.plan_id = po.plan_id AND poh.destination = po.destination
+    LEFT JOIN plan_offer_flights pof ON pof.offer_id = po.id AND pof.plan_id = po.plan_id AND pof.destination = po.destination AND pof.direction = 'outbound'
+    LEFT JOIN plan_offer_best_value pob ON pob.offer_id = po.id AND pob.plan_id = po.plan_id AND pob.destination = po.destination
+    ${where} ORDER BY po.scraped_at DESC, po.price_per_person ASC ${limit};`;
+
+    const response = await client.execute(sql);
+    return rowsToObjects(response) as TursoOfferResult[];
+  }
+
+  // Legacy path: query offers table
   const conditions: string[] = [];
 
   if (filters.destination) {
@@ -302,26 +349,40 @@ export async function checkFreshness(
     start?: string;
     end?: string;
     maxAgeHours?: number;
+    planId?: string;
+    destination?: string;
   },
 ): Promise<FreshnessResult> {
   const client = getClient();
   const maxAge = opts?.maxAgeHours ?? 24;
 
-  const conditions: string[] = [`source_id = '${sqlEscape(sourceId)}'`];
-  if (opts?.region) {
-    conditions.push(`region = '${sqlEscape(opts.region)}'`);
-  }
-  if (opts?.start) {
-    conditions.push(`departure_date >= '${sqlEscape(opts.start)}'`);
-  }
-  if (opts?.end) {
-    conditions.push(`departure_date <= '${sqlEscape(opts.end)}'`);
+  let sql: string;
+
+  if (opts?.planId && opts?.destination) {
+    // Plan-based path: query plan_offer_provenance
+    const conditions: string[] = [
+      `plan_id = '${sqlEscape(opts.planId)}'`,
+      `destination = '${sqlEscape(opts.destination)}'`,
+      `source_id = '${sqlEscape(sourceId)}'`,
+    ];
+    const where = conditions.join(' AND ');
+    sql = `SELECT MAX(scraped_at) as newest, SUM(COALESCE(offer_count, 0)) as cnt FROM plan_offer_provenance WHERE ${where};`;
+  } else {
+    // Legacy path: query offers table
+    const conditions: string[] = [`source_id = '${sqlEscape(sourceId)}'`];
+    if (opts?.region) {
+      conditions.push(`region = '${sqlEscape(opts.region)}'`);
+    }
+    if (opts?.start) {
+      conditions.push(`departure_date >= '${sqlEscape(opts.start)}'`);
+    }
+    if (opts?.end) {
+      conditions.push(`departure_date <= '${sqlEscape(opts.end)}'`);
+    }
+    const where = conditions.join(' AND ');
+    sql = `SELECT COUNT(*) as cnt, MAX(scraped_at) as newest FROM offers WHERE ${where};`;
   }
 
-  const where = conditions.join(' AND ');
-
-  // Get newest scraped_at and count
-  const sql = `SELECT COUNT(*) as cnt, MAX(scraped_at) as newest FROM offers WHERE ${where};`;
   const response = await client.execute(sql);
   const rows = rowsToObjects(response);
   const row = rows[0] || {};

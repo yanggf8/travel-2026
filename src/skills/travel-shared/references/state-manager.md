@@ -2,11 +2,15 @@
 
 ## Sources of truth
 
-| File | Owner | Purpose |
-|------|-------|---------|
-| `data/travel-plan.json` (or `$TRAVEL_PLAN_PATH`) | Skills/StateManager | Trip data, status, dirty flags |
-| `data/state.json` (or `$TRAVEL_STATE_PATH`) | StateManager | Event log, audit trail |
-| `cascade_state.last_cascade_run` | Cascade Runner | Cascade ownership |
+**Turso cloud DB is the sole source of truth.** There are no local JSON state files.
+
+| Store | Owner | Purpose |
+|-------|-------|---------|
+| Turso normalized tables (28+) | StateManager / TursoRepository | All plan state, offers, itinerary, status, dirty flags, event log |
+| `cascade_state` table | Cascade Runner | Cascade ownership + last run timestamp |
+
+Construction: `await StateManager.create()` or `await StateManager.createFromPlanId('tokyo-2026')`.
+Env var: `TRAVEL_PLAN_ID` sets default plan (e.g. `tokyo-2026`).
 
 ## StateManager API
 
@@ -51,11 +55,13 @@ sm.emitEvent({ event: 'selected', destination, process, data: {...} })
 sm.getEventLog()  // Returns TravelEvent[]
 ```
 
-### File I/O
+### Persistence
 
 ```typescript
-sm.save()      // Writes travel-plan.json + state.json
-sm.getPlan()   // Returns current plan (read-only)
+sm.save()               // Writes all normalized tables to Turso (no JSON files)
+sm.saveWithTracking(cmd, summary)  // save() + operation_runs audit row
+sm.getPlan()            // Returns current in-memory plan (read-only)
+sm.getPlanId()          // Returns plan_id string (e.g. 'tokyo-2026')
 ```
 
 ### Itinerary Management

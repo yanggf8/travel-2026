@@ -139,6 +139,7 @@ export interface ImportPackageOffersCommand {
   offers: Array<Record<string, unknown>>;
   note?: string;
   warnings?: string[];
+  filePath?: string;   // source file for provenance tracking
 }
 
 // --- Transport ---
