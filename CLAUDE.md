@@ -228,30 +228,33 @@ Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1**
 ```
 Package: liontravel_190620015 — TWD 23,348/person (46,696 for 2 pax)
 Order:   2026-1311130
-Flight:  Thai Lion Air TPE→KIX / KIX→TPE
+Flight:  Thai Lion Air SL396 TPE T1 09:00 → KIX T1 13:30 / SL397 KIX T1 13:30 → TPE T1 15:40
 Hotel:   APA Hotel Kyoto Ekimae (APA京都站前, JR Kyoto Station 3min)
-Includes: Kyoto Yumeyakata Kimono Experience, eSIM data
+Includes: Kyoto Yumeyakata Kimono Experience (Day 4), JR Haruka round-trip, eSIM data
 ```
 
 Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto Station, ~75min), included in package, status: booked
 
-### Kyoto Classic Day (Winter-safe timing)
-- Recommended date: **Thu, Feb 26, 2026** (mid-trip buffer; easier to swap if weather changes)
-- Route: **Sagano Scenic Railway (Torokko)** `トロッコ嵯峨 -> トロッコ亀岡` then **Hozugawa River Boat** `亀岡 -> 嵐山`
-- Note: `JR Sagano Line (京都 -> 亀岡)` is regular transit, not the sightseeing train
+### Kyoto Itinerary (Feb 24-28)
+⚠️ **Sagano Scenic Railway (嵯峨野トロッコ) CLOSED until March 1** — use JR山陰線 to 亀岡 instead
+🍽️ **16:8 fasting** — eating window starts 11:00, no morning meals
 
-Proposed timeline:
-- 10:30 Arrive Arashiyama, early walk + early lunch
-- 12:00-13:00 Sagano Scenic Railway (recommended window)
-- 13:30-15:00 Hozugawa River Boat back to Arashiyama
-- 15:00-17:30 Arashiyama free time (Tenryu-ji / Bamboo Grove / cafe)
-- Fallback (cold/windy or boat suspended): keep train only, replace boat with Arashiyama walk + onsen/cafe
+| Day | Date | Morning | Afternoon | Evening |
+|-----|------|---------|-----------|---------|
+| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | Kyoto Station / Ramen Alley |
+| 2 | Wed 25 | 金閣寺 + 可選龍安寺 (subway→北大路) | 伏見稲荷 + 可選東福寺 | 先斗町, 晚餐, 預訂保津川遊船 |
+| 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | キモノフォレスト, 返回京都 |
+| 4 | Fri 27 | Sleep in, 可選東寺, 11:30 東山區午餐 | 夢館kimono, 三年坂, 二年坂, 可選清水寺 | 祇園, Donki (UTENA 魔髮球), 預換Haruka回程票 |
+| 5 | Sat 28 | 退房09:00, 09:30 Haruka→KIX | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30 |
+
+Day 3 保津川遊船: depart 京都 10:50 → JR山陰線 25min → 亀岡 → **11:30 boat** → 嵐山 13:30
+Book: https://ars-hozugawa.triplabo.jp ¥4,100/person, book by day before
 
 Weather check (as of **Feb 18, 2026**; Kyoto 10-day forecast):
 - Tue, Feb 24: **17C / 9C**, precip chance **24%**
 - Wed, Feb 25: **13C / 7C**, precip chance **60%** (rain risk)
-- Thu, Feb 26: **14C / 6C**, precip chance **17%** (best pick in current window)
-- Winter boat section can feel colder than forecast due to wind/splash; re-check 24h before departure and keep one indoor fallback.
+- Thu, Feb 26: **14C / 6C**, precip chance **17%**
+- Winter boat section can feel colder than forecast due to wind/splash; re-check 24h before.
 
 ## CLI Quick Reference
 ```bash
@@ -444,7 +447,7 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 ### Tokyo (Feb 13-17) — ✅ completed
 
 ### Kyoto (Feb 24-28)
-1. Book Hozugawa River Boat Ride (Day 3)
+1. **Book Hozugawa River Boat** — Day 3, 11:30 slot (https://ars-hozugawa.triplabo.jp)
 2. Restaurant reservations
 3. Fetch weather forecast
 4. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
