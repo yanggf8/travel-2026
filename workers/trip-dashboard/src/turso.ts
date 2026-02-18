@@ -2,6 +2,7 @@ export interface Env {
   TURSO_URL: string;
   TURSO_TOKEN: string;
   GOOGLE_MAPS_KEY?: string;
+  ADMIN_TOKEN?: string;
 }
 
 interface TursoCell {
@@ -533,4 +534,104 @@ export async function getBookings(
     `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency, payload_json FROM bookings_current WHERE destination = '${escaped}'`,
   ]);
   return results[0] as unknown as BookingRow[];
+}
+
+// ============================================================================
+// Write functions for inline editor
+// ============================================================================
+
+const DAY_EDITABLE_FIELDS = new Set(['theme', 'theme_zh']);
+const SESSION_EDITABLE_FIELDS = new Set([
+  'focus', 'focus_zh',
+  'activities_zh_json', 'meals_zh_json',
+  'transit_notes_zh', 'transit_notes',
+  'meals_json',
+]);
+
+interface TursoArg {
+  type: string;
+  value: string;
+}
+
+async function executeTursoWrite(
+  env: Env,
+  sql: string,
+  args: TursoArg[]
+): Promise<void> {
+  if (!env.TURSO_URL || !env.TURSO_TOKEN) {
+    throw new Error('TURSO_URL and TURSO_TOKEN secrets are not configured.');
+  }
+  const pipelineUrl = env.TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline';
+
+  const body = {
+    requests: [
+      { type: 'execute', stmt: { sql, args } },
+      { type: 'close' },
+    ],
+  };
+
+  const res = await fetch(pipelineUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.TURSO_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Turso write HTTP ${res.status}: ${text || res.statusText}`);
+  }
+
+  const json = (await res.json()) as TursoPipelineResponse;
+  const entry = json.results?.[0];
+  if (entry?.response?.error) {
+    throw new Error(`Turso write error: ${JSON.stringify(entry.response.error)}`);
+  }
+}
+
+export async function updateDayField(
+  env: Env,
+  planId: string,
+  dest: string,
+  dayNumber: number,
+  field: string,
+  value: string
+): Promise<void> {
+  if (!DAY_EDITABLE_FIELDS.has(field)) {
+    throw new Error(`Field "${field}" is not editable on itinerary_days`);
+  }
+  const sql = `UPDATE itinerary_days SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4`;
+  await executeTursoWrite(env, sql, [
+    { type: 'text', value },
+    { type: 'text', value: planId },
+    { type: 'text', value: dest },
+    { type: 'integer', value: String(dayNumber) },
+  ]);
+}
+
+export async function updateSessionField(
+  env: Env,
+  planId: string,
+  dest: string,
+  dayNumber: number,
+  sessionType: string,
+  field: string,
+  value: string
+): Promise<void> {
+  if (!SESSION_EDITABLE_FIELDS.has(field)) {
+    throw new Error(`Field "${field}" is not editable on itinerary_sessions`);
+  }
+  if (!['morning', 'afternoon', 'evening'].includes(sessionType)) {
+    throw new Error(`Invalid session type "${sessionType}"`);
+  }
+  const sql = `UPDATE itinerary_sessions SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4 AND session_type = ?5`;
+  await executeTursoWrite(env, sql, [
+    { type: 'text', value },
+    { type: 'text', value: planId },
+    { type: 'text', value: dest },
+    { type: 'integer', value: String(dayNumber) },
+    { type: 'text', value: sessionType },
+  ]);
 }

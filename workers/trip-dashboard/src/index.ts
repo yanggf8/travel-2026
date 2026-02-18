@@ -1,6 +1,29 @@
 import type { Env } from './turso';
-import { getPlan, getDashboardPlan, getBookings, listPlans } from './turso';
+import { getPlan, getDashboardPlan, getBookings, listPlans, updateDayField, updateSessionField } from './turso';
 import { renderDashboard, renderError, renderPlanIndex } from './render';
+
+async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const aBuf = encoder.encode(a);
+  const bBuf = encoder.encode(b);
+  if (aBuf.byteLength !== bBuf.byteLength) {
+    // Compare against self to keep constant time, then return false
+    crypto.subtle.timingSafeEqual(aBuf, aBuf);
+    return false;
+  }
+  return crypto.subtle.timingSafeEqual(aBuf, bBuf);
+}
+
+interface EditRequest {
+  token: string;
+  table: 'itinerary_days' | 'itinerary_sessions';
+  plan_id: string;
+  destination: string;
+  day_number: number;
+  session_type?: string;
+  field: string;
+  value: string;
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -10,6 +33,40 @@ export default {
     const lang = (langParam === 'en' ? 'en' : 'zh') as 'en' | 'zh';
     const planId = url.searchParams.get('plan');
     const showNav = url.searchParams.get('nav') === '1';
+
+    // --- POST /api/edit — inline editor write ---
+    if (request.method === 'POST' && url.pathname === '/api/edit') {
+      if (!env.ADMIN_TOKEN) {
+        return Response.json({ error: 'Admin not configured' }, { status: 403 });
+      }
+      let body: EditRequest;
+      try {
+        body = await request.json() as EditRequest;
+      } catch {
+        return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+      }
+      if (!body.token || !(await timingSafeEqual(body.token, env.ADMIN_TOKEN))) {
+        return Response.json({ error: 'Unauthorized' }, { status: 403 });
+      }
+      if (!body.table || !body.plan_id || !body.destination || !body.field || body.value === undefined) {
+        return Response.json({ error: 'Missing required fields' }, { status: 400 });
+      }
+      try {
+        if (body.table === 'itinerary_days') {
+          await updateDayField(env, body.plan_id, body.destination, body.day_number, body.field, body.value);
+        } else if (body.table === 'itinerary_sessions') {
+          if (!body.session_type) {
+            return Response.json({ error: 'session_type required for itinerary_sessions' }, { status: 400 });
+          }
+          await updateSessionField(env, body.plan_id, body.destination, body.day_number, body.session_type, body.field, body.value);
+        } else {
+          return Response.json({ error: 'Invalid table' }, { status: 400 });
+        }
+        return Response.json({ ok: true });
+      } catch (err) {
+        return Response.json({ error: err instanceof Error ? err.message : 'Write failed' }, { status: 500 });
+      }
+    }
 
     // Favicon — inline SVG airplane emoji
     if (url.pathname === '/favicon.ico') {
@@ -69,6 +126,10 @@ export default {
         }
       }
 
+      // Check edit mode: ?edit=TOKEN
+      const editToken = url.searchParams.get('edit');
+      const editMode = !!(editToken && env.ADMIN_TOKEN && await timingSafeEqual(editToken, env.ADMIN_TOKEN));
+
       try {
         const [planData, plans] = await Promise.all([
           getDashboardPlan(env, planId),
@@ -84,7 +145,7 @@ export default {
         const activeDest = planData.plan.active_destination as string;
         const bookings = await getBookings(env, activeDest);
 
-        const html = renderDashboard(planData, bookings, lang, planId, plans, env.GOOGLE_MAPS_KEY);
+        const html = renderDashboard(planData, bookings, lang, planId, plans, env.GOOGLE_MAPS_KEY, editMode);
         return new Response(html, {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',

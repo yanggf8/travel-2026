@@ -585,6 +585,106 @@ details[open] .map-summary::after { transform: rotate(90deg); }
   border-radius: 10px;
 }
 
+/* Edit mode */
+.edit-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+  vertical-align: middle;
+  line-height: 1;
+}
+.edit-btn:hover { opacity: 1; }
+
+.edit-wrap { position: relative; }
+
+.edit-field {
+  display: none;
+  margin-top: 6px;
+}
+
+.edit-field.active {
+  display: block;
+}
+
+.edit-textarea {
+  width: 100%;
+  min-height: 60px;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  resize: vertical;
+  background: var(--card);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.edit-textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.edit-save, .edit-cancel {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.edit-save {
+  background: var(--accent);
+  color: white;
+}
+
+.edit-save:active { opacity: 0.8; }
+
+.edit-cancel {
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+
+.edit-status {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  display: inline-block;
+}
+
+.edit-status-ok {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.edit-status-err {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+@keyframes flash-green {
+  0% { background: var(--green-bg); }
+  100% { background: transparent; }
+}
+
+.flash-success {
+  animation: flash-green 1.5s ease-out;
+}
+
 /* Print */
 @media print {
   body { max-width: none; padding: 0; }
@@ -593,5 +693,7 @@ details[open] .map-summary::after { transform: rotate(90deg); }
   .day-card { break-inside: avoid; }
   .badge-urgent { animation: none; }
   .map-details { display: none; }
+  .edit-btn { display: none; }
+  .edit-field { display: none !important; }
 }
 `;

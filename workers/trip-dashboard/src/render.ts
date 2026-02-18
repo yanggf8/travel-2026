@@ -249,12 +249,19 @@ function renderTransitPill(transit: string, city: string): string {
   return `<span class="pill pill-transit">\uD83D\uDE83 ${esc(transit)}</span>`;
 }
 
+interface SessionEditMeta {
+  plan_id: string;
+  dest: string;
+  day: number;
+}
+
 function renderSession(
   session: Record<string, unknown> | undefined,
   sessionKey: 'morning' | 'afternoon' | 'evening',
   lang: Lang,
   zhOverride?: SessionZhOverride,
-  mapCity?: string
+  mapCity?: string,
+  sessionEditMeta?: SessionEditMeta
 ): string {
   if (!session) return '';
 
@@ -278,24 +285,46 @@ function renderSession(
     }
   }
 
+  const em = sessionEditMeta;
+  const focusFieldId = em ? `day-${em.day}-${sessionKey}-focus_zh` : '';
+  const activitiesFieldId = em ? `day-${em.day}-${sessionKey}-activities_zh_json` : '';
+  const mealsFieldId = em ? `day-${em.day}-${sessionKey}-meals_zh_json` : '';
+  const transitFieldId = em ? `day-${em.day}-${sessionKey}-transit_notes_zh` : '';
+
   return `
     <div class="session session-${sessionKey}">
       <div class="session-label">${t(sessionKey, lang)}</div>
-      <div class="session-focus">${esc(focus)}</div>
+      <div class="session-focus">${em
+        ? editableField(focusFieldId, focus, {
+            table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+            day: em.day, session: sessionKey, field: lang === 'zh' ? 'focus_zh' : 'focus',
+          })
+        : esc(focus)}</div>
       <ul class="activity-list">
         ${activities.map((a) => {
-          // Check if this maps to a pending booking from original data
-          const isPending = pendingBookings.some((pb) => a.includes('teamLab') || a.includes('無界') || a.toLowerCase().includes(pb.toLowerCase()));
+          const isPending = pendingBookings.some((pb) => a.includes('teamLab') || a.includes('\u7121\u754C') || a.toLowerCase().includes(pb.toLowerCase()));
           if (isPending && !a.includes('<span')) {
             return `<li><span class="activity-booking">\u23F3 ${esc(a)}</span></li>`;
           }
           return `<li>${a.includes('<span') ? a : esc(a)}</li>`;
         }).join('')}
       </ul>
+      ${em ? editableField(activitiesFieldId, activities.join('\n'), {
+        table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+        day: em.day, session: sessionKey, field: 'activities_zh_json', isJsonArray: true,
+      }) : ''}
       <div class="info-pills">
         ${transit ? renderTransitPill(transit, mapCity || '') : ''}
         ${meals.map((m) => `<span class="pill pill-meal">\uD83C\uDF5C ${esc(m)}</span>`).join('')}
       </div>
+      ${em ? editableField(mealsFieldId, meals.join('\n'), {
+        table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+        day: em.day, session: sessionKey, field: 'meals_zh_json', isJsonArray: true,
+      }) : ''}
+      ${em ? editableField(transitFieldId, transit, {
+        table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+        day: em.day, session: sessionKey, field: lang === 'zh' ? 'transit_notes_zh' : 'transit_notes',
+      }) : ''}
     </div>`;
 }
 
@@ -420,7 +449,104 @@ function renderMapEmbed(day: Record<string, unknown>, hotelName: string, lang: L
   return `<div class="map-links">${links.join('')}</div>`;
 }
 
-function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: string, homeAddress: string | null, mapsKey?: string): string {
+interface EditMeta {
+  plan_id: string;
+  dest: string;
+}
+
+interface FieldMeta {
+  table: string;
+  plan_id: string;
+  dest: string;
+  day: number;
+  session?: string;
+  field: string;
+  isJsonArray?: boolean;
+}
+
+function editableField(fieldId: string, currentValue: string, meta: FieldMeta): string {
+  const dataAttr = esc(JSON.stringify({
+    table: meta.table,
+    plan_id: meta.plan_id,
+    destination: meta.dest,
+    day_number: meta.day,
+    session_type: meta.session,
+    field: meta.field,
+  }));
+  const isJson = meta.isJsonArray ? 'true' : 'false';
+  return `<span class="edit-wrap" id="wrap-${esc(fieldId)}"><span id="display-${esc(fieldId)}">${esc(currentValue)}</span><button class="edit-btn" onclick="toggleEdit('${esc(fieldId)}')" title="Edit">&#9998;</button><span id="status-${esc(fieldId)}"></span><div class="edit-field" id="edit-${esc(fieldId)}"><textarea class="edit-textarea" id="ta-${esc(fieldId)}">${esc(currentValue)}</textarea><div class="edit-actions"><button class="edit-save" onclick="saveField('${esc(fieldId)}', ${isJson})" data-meta="${dataAttr}">Save</button><button class="edit-cancel" onclick="toggleEdit('${esc(fieldId)}')">Cancel</button></div></div></span>`;
+}
+
+function renderEditScript(): string {
+  return `<script>
+(function(){
+  var token = new URLSearchParams(location.search).get('edit') || '';
+  window.__editToken = token;
+
+  window.toggleEdit = function(id) {
+    var el = document.getElementById('edit-' + id);
+    if (!el) return;
+    var isActive = el.classList.contains('active');
+    el.classList.toggle('active');
+    if (!isActive) {
+      var ta = document.getElementById('ta-' + id);
+      if (ta) ta.focus();
+    }
+  };
+
+  window.saveField = function(id, isJson) {
+    var ta = document.getElementById('ta-' + id);
+    var btn = ta.closest('.edit-field').querySelector('.edit-save');
+    var meta = JSON.parse(btn.getAttribute('data-meta'));
+    var raw = ta.value;
+    var value = raw;
+    if (isJson) {
+      var lines = raw.split('\\n').map(function(l){ return l.trim(); }).filter(Boolean);
+      value = JSON.stringify(lines);
+    }
+    meta.token = window.__editToken;
+    meta.value = value;
+    btn.disabled = true;
+    btn.textContent = '...';
+    fetch('/api/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(meta)
+    }).then(function(r){ return r.json(); }).then(function(data){
+      btn.disabled = false;
+      btn.textContent = 'Save';
+      var statusEl = document.getElementById('status-' + id);
+      if (data.ok) {
+        var display = document.getElementById('display-' + id);
+        if (display) {
+          display.textContent = isJson ? raw.split('\\n').filter(Boolean).join(', ') : raw;
+          display.classList.add('flash-success');
+          setTimeout(function(){ display.classList.remove('flash-success'); }, 1500);
+        }
+        document.getElementById('edit-' + id).classList.remove('active');
+        if (statusEl) {
+          statusEl.innerHTML = '<span class="edit-status edit-status-ok">Saved</span>';
+          setTimeout(function(){ statusEl.innerHTML = ''; }, 3000);
+        }
+      } else {
+        if (statusEl) {
+          statusEl.innerHTML = '<span class="edit-status edit-status-err">' + (data.error || 'Error') + '</span>';
+        }
+      }
+    }).catch(function(err){
+      btn.disabled = false;
+      btn.textContent = 'Save';
+      var statusEl = document.getElementById('status-' + id);
+      if (statusEl) {
+        statusEl.innerHTML = '<span class="edit-status edit-status-err">' + err.message + '</span>';
+      }
+    });
+  };
+})();
+</script>`;
+}
+
+function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: string, homeAddress: string | null, mapsKey?: string, editMeta?: EditMeta | null): string {
   // Support both formats: day_number (Tokyo) and day (Kyoto)
   const dayNum = (day.day_number as number) || (day.day as number);
   const date = day.date as string;
@@ -479,14 +605,19 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
           ${renderRouteLink(day, hotelName, lang)}
         </div>
       </div>
-      <div class="day-theme">${esc(theme)}</div>
+      <div class="day-theme">${editMeta
+        ? editableField(`day-${dayNum}-theme_zh`, theme, {
+            table: 'itinerary_days', plan_id: editMeta.plan_id, dest: editMeta.dest,
+            day: dayNum, field: lang === 'zh' ? 'theme_zh' : 'theme',
+          })
+        : esc(theme)}</div>
       ${renderWeatherStrip(day, lang)}
       ${(() => {
         const city = '';
         return [
-          renderSession(morningSession, 'morning', lang, morningOverride, city),
-          renderSession(afternoonSession, 'afternoon', lang, afternoonOverride, city),
-          renderSession(eveningSession, 'evening', lang, eveningOverride, city),
+          renderSession(morningSession, 'morning', lang, morningOverride, city, editMeta ? { ...editMeta, day: dayNum } : undefined),
+          renderSession(afternoonSession, 'afternoon', lang, afternoonOverride, city, editMeta ? { ...editMeta, day: dayNum } : undefined),
+          renderSession(eveningSession, 'evening', lang, eveningOverride, city, editMeta ? { ...editMeta, day: dayNum } : undefined),
         ].join('');
       })()}
       ${renderMapEmbed(day, hotelName, lang, homeAddress)}
@@ -713,7 +844,8 @@ export function renderDashboard(
   lang: Lang,
   planId?: string,
   plans?: PlanSummary[],
-  mapsKey?: string
+  mapsKey?: string,
+  editMode = false
 ): string {
   const plan = planData.plan;
   const activeDest = plan.active_destination as string;
@@ -743,6 +875,8 @@ export function renderDashboard(
     ? `?lang=${langParam}&plan=${esc(planId)}`
     : `?lang=${langParam}`;
 
+  const editMeta = editMode ? { plan_id: planId || '', dest: activeDest } : null;
+
   return `<!DOCTYPE html>
 <html lang="${lang === 'zh' ? 'zh-Hant' : 'en'}">
 <head>
@@ -765,7 +899,7 @@ export function renderDashboard(
   ${renderPendingAlerts(dest, lang)}
   ${renderBookingSummary(dest, lang)}
 
-  ${days.map((day) => renderDayCard(day, lang, hotelName, (dest.home_address as string) || null, mapsKey)).join('')}
+  ${days.map((day) => renderDayCard(day, lang, hotelName, (dest.home_address as string) || null, mapsKey, editMeta)).join('')}
 
   ${renderTransitSummary(dest, lang)}
 
@@ -773,6 +907,7 @@ export function renderDashboard(
     ${t('lastUpdated', lang)}: ${esc(planData.updated_at)}<br>
     Powered by Turso + Cloudflare Workers
   </div>
+${editMode ? renderEditScript() : ''}
 </body>
 </html>`;
 }
