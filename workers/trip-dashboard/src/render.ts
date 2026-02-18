@@ -60,6 +60,15 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** Render activity text: escape, convert \n to <br>, linkify https:// URLs. */
+function renderActivityText(text: string): string {
+  if (text.includes('<span')) return text; // already HTML
+  return esc(text)
+    .replace(/\n/g, '<br>')
+    .replace(/(https?:\/\/[^\s<&"，。、]+)/g,
+      (url) => `<a href="${url}" target="_blank" rel="noopener" style="color:#2563eb;font-size:11px;word-break:break-all">${url}</a>`);
+}
+
 function formatDate(dateStr: string, lang: Lang): string {
   const d = new Date(dateStr + 'T00:00:00Z');
   const days = lang === 'zh'
@@ -304,9 +313,9 @@ function renderSession(
         ${activities.map((a) => {
           const isPending = pendingBookings.some((pb) => a.includes('teamLab') || a.includes('\u7121\u754C') || a.toLowerCase().includes(pb.toLowerCase()));
           if (isPending && !a.includes('<span')) {
-            return `<li><span class="activity-booking">\u23F3 ${esc(a)}</span></li>`;
+            return `<li><span class="activity-booking">\u23F3 ${renderActivityText(a)}</span></li>`;
           }
-          return `<li>${a.includes('<span') ? a : esc(a)}</li>`;
+          return `<li>${renderActivityText(a)}</li>`;
         }).join('')}
       </ul>
       ${em ? editableField(activitiesFieldId, activities.join('\n'), {

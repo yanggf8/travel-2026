@@ -1,8 +1,8 @@
 # Japan Travel Project
 
 ## Trip Details
-- **Dates**: February 13-17, 2026 (confirmed, booked)
-- **Active Destination**: Tokyo, Japan
+- **Next Dates**: February 24-28, 2026 (Kyoto, confirmed, booked)
+- **Active Destination**: Kyoto, Japan (Tokyo Feb 13-17 ✅ completed)
 - **Schema**: `4.2.0` — Destination-scoped with canonical offer model
 
 ## Architecture
@@ -401,6 +401,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows plan index page listing all plans.
 - **Plan nav** — hidden by default for privacy (shareable links show single plan only); add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
 - **Flight links** — Flight numbers in booking summary are clickable Google search links (opens new tab)
+- **Activity links** — `https://` URLs embedded in activity text are auto-linkified (`renderActivityText()`); `\n` in activity text renders as `<br>`
 - **Day card accents** — colored left border by day type: blue (arrival), green (full day), amber (departure)
 - **Routes**: `/` (plan index), `/?plan=<slug>` (single plan, shareable), `/?plan=<slug>&nav=1` (with plan switcher), `/?plan=<slug>&lang=en` (EN), `/?plan=<slug>&edit=TOKEN` (edit mode), `/api/plan/<id>` (raw JSON), `POST /api/edit` (write field)
 - **Maps links** — Per-segment Google Maps direction links (transit/walking/driving) for every stop. Route segments stored in `day_route_segments` table, landmarks in `day_landmarks` table. Transit pill text must use place names, not service names (e.g., `成田T2 → 日暮里` not `Skyliner → 日暮里`)
@@ -440,16 +441,10 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ## Next Steps
 
-### Tokyo (Feb 13-17) — departs today
-1. **Book teamLab Borderless** — Feb 15 visit, OVERDUE (book-by was Feb 10)
-2. ~~Book Limousine Bus~~ Arrival: Skyliner + 山手線 (booked); Departure: 海鷗線 + 淺草線 (booked)
-3. Restaurant reservations
-4. ~~Fetch weather forecast~~ ✅ Done (feels-like: 體感 -1.9–14.9°C, rain Day 4-5)
-5. ~~Per-segment maps~~ ✅ Done (transit/walking per route segment, Tokyo+Kyoto)
-6. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
+### Tokyo (Feb 13-17) — ✅ completed
 
 ### Kyoto (Feb 24-28)
 1. Book Hozugawa River Boat Ride (Day 3)
 2. Restaurant reservations
-3. Fetch weather forecast — add `kyoto_2026` to `data/destinations.json` first
+3. Fetch weather forecast
 4. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
