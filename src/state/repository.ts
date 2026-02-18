@@ -26,6 +26,31 @@ import type {
 } from './types';
 
 // ============================================================================
+// Mutation input shapes
+// ============================================================================
+
+export interface FlightLegInput {
+  airline?: string;
+  airlineCode?: string;
+  bookedDate?: string;
+  flightNumber?: string;
+  departureCode?: string;
+  departureTerminal?: string;
+  departureTime?: string;
+  arrivalCode?: string;
+  arrivalTerminal?: string;
+  arrivalTime?: string;
+  date?: string;
+}
+
+export interface HotelInput {
+  name?: string;
+  access?: string[];
+  checkIn?: string;
+  notes?: string;
+}
+
+// ============================================================================
 // Row Types (typed views of plan sub-structures)
 // ============================================================================
 
@@ -154,6 +179,10 @@ export interface StateWriter {
   setOfferSelection(dest: string, offerId: string, date: string, timestamp: string): Record<string, unknown>;
   importOffers(dest: string, sourceId: string, offers: Array<Record<string, unknown>>, timestamp: string, note?: string, warnings?: string[], filePath?: string, offerCount?: number): void;
   populateFromOffer(dest: string, offer: Record<string, unknown>, date: string, timestamp: string): void;
+
+  // --- Flight / Hotel manual updates ---
+  setFlightLeg(dest: string, direction: 'outbound' | 'return', input: FlightLegInput, timestamp: string): void;
+  setHotel(dest: string, input: HotelInput, timestamp: string): void;
 
   // --- Transport mutations ---
   ensureTransportationProcess(dest: string, timestamp: string): void;

@@ -418,6 +418,21 @@ function renderRouteLink(day: Record<string, unknown>, hotelName: string, lang: 
   return `<a class="route-btn" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDDFA\uFE0F ${t('routeMap', lang)}</a>`;
 }
 
+/**
+ * Append a station suffix for Google Maps disambiguation.
+ * "JR稻荷" → "JR稻荷駅", "地鐵四條" → "地鐵四條站"
+ * Does nothing if the name already ends in 駅/站 or looks like an address.
+ */
+function toMapsName(name: string): string {
+  if (!name) return name;
+  // Already has a station suffix
+  if (name.endsWith('駅') || name.endsWith('站') || name.endsWith('Station')) return name;
+  // Contains JR or station-style prefix
+  if (/^JR/.test(name)) return name + '駅';
+  if (/^地鐵|^MRT|^Metro/.test(name)) return name + '站';
+  return name;
+}
+
 function renderMapEmbed(day: Record<string, unknown>, hotelName: string, lang: Lang, homeAddress: string | null): string {
   if (!hotelName) return '';
   const dayNum = (day.day_number as number) || 0;
@@ -439,7 +454,7 @@ function renderMapEmbed(day: Record<string, unknown>, hotelName: string, lang: L
     for (const seg of routes) {
       const from = resolve(seg.from);
       const to = resolve(seg.to);
-      const dirUrl = `https://www.google.com/maps/dir/${encodeURIComponent(from)}/${encodeURIComponent(to)}`;
+      const dirUrl = `https://www.google.com/maps/dir/${encodeURIComponent(toMapsName(from))}/${encodeURIComponent(toMapsName(to))}`;
       links.push(`<a class="map-place-link" href="${esc(dirUrl)}" target="_blank" rel="noopener">${modeIcon(seg.mode)} ${esc(display(seg.from))} → ${esc(display(seg.to))}</a>`);
     }
   }
@@ -642,6 +657,28 @@ function flightLink(displayText: string, flightNumber: string | null | undefined
   return `<a href="https://www.google.com/search?q=${query}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${esc(displayText)}</a>`;
 }
 
+/** Wrap hotel name in a Google Maps search link (opens new tab). */
+function hotelMapsLink(name: string): string {
+  if (!name) return esc(name);
+  const query = encodeURIComponent(name.trim());
+  return `<a href="https://www.google.com/maps/search/${query}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${esc(name)}</a>`;
+}
+
+/**
+ * Compute "leave by" time for departure: flightTime minus offsetMinutes.
+ * Returns HH:MM string or null if time cannot be parsed.
+ */
+function leaveByTime(departureTime: string | undefined, offsetMinutes: number): string | null {
+  if (!departureTime) return null;
+  const m = departureTime.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const totalMins = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) - offsetMinutes;
+  if (totalMins < 0) return null;
+  const h = Math.floor(totalMins / 60) % 24;
+  const mn = totalMins % 60;
+  return `${String(h).padStart(2, '0')}:${String(mn).padStart(2, '0')}`;
+}
+
 function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string {
   const transport = dest.process_3_transportation as Record<string, unknown> | undefined;
   const accommodation = dest.process_4_accommodation as Record<string, unknown> | undefined;
@@ -691,7 +728,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       icon: '\u2708\uFE0F',
       label: t('flightOut', lang),
       value: outbound
-        ? flightLink(`${airline} ${airlineCode}${(outbound.flight_number as string) || ''}`.trim(), outbound.flight_number as string)
+        ? flightLink(`${airline} ${(outbound.flight_number as string) || ''}`.trim(), outbound.flight_number as string)
         : '\u2014',
       sub: outbound
         ? `${esc(fmtAirport(outbound))} ${esc((outbound.departure_time as string) || '')} \u2192 ${esc(fmtAirport(outbound, true))} ${esc((outbound.arrival_time as string) || '')}`
@@ -702,7 +739,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       icon: '\u2708\uFE0F',
       label: t('flightBack', lang),
       value: returnFl
-        ? flightLink(`${airline} ${airlineCode}${(returnFl.flight_number as string) || ''}`.trim(), returnFl.flight_number as string)
+        ? flightLink(`${airline} ${(returnFl.flight_number as string) || ''}`.trim(), returnFl.flight_number as string)
         : '\u2014',
       sub: returnFl
         ? `${esc(fmtAirport(returnFl))} ${esc((returnFl.departure_time as string) || '')} \u2192 ${esc(fmtAirport(returnFl, true))} ${esc((returnFl.arrival_time as string) || '')}`
@@ -715,7 +752,8 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       value: hotel ? (() => {
         const name = (hotel.name as string) || '';
         const zhName = (hotel.name_zh as string) || undefined;
-        return zhName ? `${esc(name)}<span style="color:var(--text-dim);font-size:12px"> / ${esc(zhName)}</span>` : esc(name);
+        const nameLink = hotelMapsLink(name);
+        return zhName ? `${nameLink}<span style="color:var(--text-dim);font-size:12px"> / ${hotelMapsLink(zhName)}</span>` : nameLink;
       })() : '\u2014',
       sub: hotel?.access ? (hotel.access as string[]).join(', ') : '',
       badge: accommodation?.status ? statusBadge(accommodation.status as string, lang) : '',
@@ -724,19 +762,60 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       icon: '\uD83D\uDE8C',
       label: t('toHotel', lang),
       value: arrSelected ? esc((arrSelected.title as string) || '') : '\u2014',
-      sub: arrSelected
-        ? `${esc((arrSelected.route as string) || '')} \u00B7 \u00A5${(arrSelected.price_yen as number)?.toLocaleString() || ''} \u00B7 ${esc((arrSelected.schedule as string) || '')}`
-        : '',
+      sub: (() => {
+        if (!arrSelected) return '';
+        const parts: string[] = [];
+        const route = (arrSelected.route as string) || '';
+        if (route) parts.push(esc(route));
+        const priceYen = arrSelected.price_yen as number | undefined;
+        if (priceYen) parts.push(`\u00A5${priceYen.toLocaleString()}`);
+        const schedule = (arrSelected.schedule as string) || '';
+        if (schedule) parts.push(esc(schedule));
+        // KIX T1 tip: show platform access note
+        const returnCode = returnFl?.arrival_airport_code as string | undefined;
+        const returnTerminal = returnFl?.arrival_terminal as string | undefined;
+        if (returnCode === 'KIX' || returnTerminal) {
+          const tip = lang === 'zh'
+            ? '入境後→地下1樓 JR/南海月台（跟「JR特急はるか」指標走）'
+            : 'After customs → B1 JR/Nankai platforms (follow "JR Haruka" signs)';
+          parts.push(`<span style="color:var(--text-dim);font-size:12px">\uD83D\uDCA1 ${tip}</span>`);
+        }
+        return parts.join(' \u00B7 ');
+      })(),
       badge: arrival?.status ? statusBadge(arrival.status as string, lang) : '',
     },
     {
       icon: '\uD83D\uDE8C',
       label: t('toAirport', lang),
       value: depSelected ? esc((depSelected.title as string) || '') : '\u2014',
-      sub: depSelected
-        ? `${esc((depSelected.route as string) || '')} \u00B7 \u00A5${(depSelected.price_yen as number)?.toLocaleString() || ''} \u00B7 ${esc((depSelected.schedule as string) || '')}`
-        : '',
+      sub: (() => {
+        if (!depSelected) return '';
+        const parts: string[] = [];
+        const route = (depSelected.route as string) || '';
+        if (route) parts.push(esc(route));
+        const priceYen = depSelected.price_yen as number | undefined;
+        if (priceYen) parts.push(`\u00A5${priceYen.toLocaleString()}`);
+        const schedule = (depSelected.schedule as string) || '';
+        if (schedule) parts.push(esc(schedule));
+        // Countdown: need to be at airport 3 hours before departure
+        const depTime = outbound?.departure_time as string | undefined;
+        const leaveBy = leaveByTime(depTime, 180);
+        if (leaveBy) {
+          const note = lang === 'zh'
+            ? `\u2757 需在 ${leaveBy} 前抵達機場（起飛前3小時）。停車場至T1需搭接駁車`
+            : `\u2757 Arrive airport by ${leaveBy} (3hr before departure). Take shuttle bus from parking to T1`;
+          parts.push(`<span style="color:var(--warn-color, #d97706)">${note}</span>`);
+        }
+        return parts.join(' \u00B7 ');
+      })(),
       badge: departure?.status ? statusBadge(departure.status as string, lang) : '',
+    },
+    {
+      icon: '\uD83C\uDF0F',
+      label: lang === 'zh' ? '旅遊資訊' : 'Travel Info',
+      value: `<a href="https://www.japan.travel/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">Visit Japan</a>`,
+      sub: lang === 'zh' ? '日本觀光局官網' : 'Japan Tourism Agency',
+      badge: '',
     },
   ];
 

@@ -37,7 +37,7 @@ import { OfferManager } from './offer-manager';
 import { TransportManager } from './transport-manager';
 import { ItineraryManager } from './itinerary-manager';
 import { EventQuery } from './event-query';
-import type { StateRepository } from './repository';
+import type { StateRepository, FlightLegInput, HotelInput } from './repository';
 import { PlanRepository } from './plan-repository';
 import { TursoRepository } from './turso-repository';
 import type { Command, DispatchResult } from './commands';
@@ -327,6 +327,14 @@ export class StateManager {
           command.destination, command.sourceId, command.offers,
           command.note, command.warnings, command.filePath
         );
+        return {};
+
+      case 'set_flight_leg':
+        this.setFlightLeg(command.destination, command.direction, command);
+        return {};
+
+      case 'set_hotel':
+        this.setHotel(command.destination, command);
         return {};
 
       case 'set_airport_transfer':
@@ -769,6 +777,33 @@ export class StateManager {
     }
 
     return counts;
+  }
+
+  // ============================================================================
+  // Flight Leg + Hotel (Manual Updates)
+  // ============================================================================
+
+  setFlightLeg(destination: string, direction: 'outbound' | 'return', input: FlightLegInput): void {
+    this.repo.setFlightLeg(destination, direction, input, this.timestamp);
+    this.repo.touchTransportation(destination, this.timestamp);
+
+    this.emitEvent({
+      event: 'flight_leg_updated',
+      destination,
+      process: 'process_3_transportation',
+      data: { direction, ...input as Record<string, unknown> },
+    });
+  }
+
+  setHotel(destination: string, input: HotelInput): void {
+    this.repo.setHotel(destination, input, this.timestamp);
+
+    this.emitEvent({
+      event: 'hotel_updated',
+      destination,
+      process: 'process_4_accommodation',
+      data: { ...input as Record<string, unknown> },
+    });
   }
 
   // ============================================================================

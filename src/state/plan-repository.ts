@@ -23,7 +23,7 @@ import type {
   AirportTransfers,
   isValidProcessStatus,
 } from './types';
-import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
+import type { StateRepository, DateAnchorData, ActivitySearchResult, FlightLegInput, HotelInput } from './repository';
 import {
   validateTravelPlan,
   validateEventLogState,
@@ -655,6 +655,53 @@ export class PlanRepository implements StateRepository {
     if (p3) {
       p3.updated_at = timestamp;
     }
+  }
+
+  setFlightLeg(dest: string, direction: 'outbound' | 'return', input: FlightLegInput, timestamp: string): void {
+    const destObj = this.plan.destinations[dest];
+    if (!destObj) throw new Error(`Destination not found: ${dest}`);
+
+    this.ensureTransportationProcess(dest, timestamp);
+    const p3 = destObj.process_3_transportation as Record<string, unknown>;
+
+    if (!p3.flight || typeof p3.flight !== 'object') p3.flight = {};
+    const flight = p3.flight as Record<string, unknown>;
+
+    // Update shared flight-level fields
+    if (input.airline !== undefined) flight.airline = input.airline;
+    if (input.airlineCode !== undefined) flight.airline_code = input.airlineCode;
+    if (input.bookedDate !== undefined) flight.booked_date = input.bookedDate;
+
+    // Update leg-level fields
+    if (!flight[direction] || typeof flight[direction] !== 'object') flight[direction] = {};
+    const leg = flight[direction] as Record<string, unknown>;
+
+    if (input.flightNumber !== undefined) leg.flight_number = input.flightNumber;
+    if (input.departureCode !== undefined) leg.departure_airport_code = input.departureCode;
+    if (input.departureTerminal !== undefined) leg.departure_terminal = input.departureTerminal;
+    if (input.departureTime !== undefined) leg.departure_time = input.departureTime;
+    if (input.arrivalCode !== undefined) leg.arrival_airport_code = input.arrivalCode;
+    if (input.arrivalTerminal !== undefined) leg.arrival_terminal = input.arrivalTerminal;
+    if (input.arrivalTime !== undefined) leg.arrival_time = input.arrivalTime;
+    if (input.date !== undefined) leg.date = input.date;
+  }
+
+  setHotel(dest: string, input: HotelInput, timestamp: string): void {
+    const destObj = this.plan.destinations[dest];
+    if (!destObj) throw new Error(`Destination not found: ${dest}`);
+
+    if (!destObj.process_4_accommodation) {
+      (destObj as Record<string, unknown>).process_4_accommodation = {};
+    }
+    const p4 = destObj.process_4_accommodation as Record<string, unknown>;
+
+    if (!p4.hotel || typeof p4.hotel !== 'object') p4.hotel = {};
+    const hotel = p4.hotel as Record<string, unknown>;
+
+    if (input.name !== undefined) hotel.name = input.name;
+    if (input.access !== undefined) hotel.access = input.access;
+    if (input.checkIn !== undefined) hotel.check_in = input.checkIn;
+    if (input.notes !== undefined) hotel.notes = input.notes;
   }
 
   // ============================================================================

@@ -18,7 +18,7 @@ import type {
   HotelInfo,
   AirportTransfers,
 } from './types';
-import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
+import type { StateRepository, DateAnchorData, ActivitySearchResult, FlightLegInput, HotelInput } from './repository';
 import { PlanRepository } from './plan-repository';
 import { assemblePlan, assembleEventLog } from './plan-assembler';
 import { rowsToObjectsAt, sqlText } from './sql-helpers';
@@ -240,6 +240,12 @@ export class TursoRepository implements StateRepository {
     return this.bridge.selectAirportTransferOption(dest, direction, optionId, timestamp);
   }
   touchTransportation(dest: string, timestamp: string): void { this.bridge.touchTransportation(dest, timestamp); }
+  setFlightLeg(dest: string, direction: 'outbound' | 'return', input: FlightLegInput, timestamp: string): void {
+    this.bridge.setFlightLeg(dest, direction, input, timestamp);
+  }
+  setHotel(dest: string, input: HotelInput, timestamp: string): void {
+    this.bridge.setHotel(dest, input, timestamp);
+  }
   pushEvent(event: TravelEvent): void { this.bridge.pushEvent(event); }
   ensureEventLogDestination(dest: string): void { this.bridge.ensureEventLogDestination(dest); }
   setEventLogProcessState(dest: string, process: ProcessId, state: ProcessStatus): void {

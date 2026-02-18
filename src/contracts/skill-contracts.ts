@@ -53,6 +53,13 @@ export interface SkillContract {
   mutates: string[];  // State keys this operation may change
   data_freshness: DataFreshness;  // What tier of data this operation works with
   example: string;
+  /** Minimum process status preconditions (e.g. P1 must be 'confirmed'). */
+  requires?: Record<string, string | string[]>;
+  /** Process status changes + tables this operation writes. */
+  produces?: {
+    statusChanges?: Array<{ process: string; to: string }>;
+    tables?: string[];
+  };
 }
 
 /**
@@ -495,6 +502,58 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     example: 'npm run travel -- fetch-weather',
   },
 
+  // === Flight + Hotel Manual Updates (v2.1.0) ===
+
+  'set-flight': {
+    name: 'set-flight',
+    description: 'Manually set or update a flight leg (outbound/return). Use after booking separately — bypasses cascade populate.',
+    args: [
+      { name: 'direction', type: 'string', required: true, description: 'outbound | return' },
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+      { name: '--flight', type: 'string', required: false, description: 'Flight number (e.g. SL396)' },
+      { name: '--airline', type: 'string', required: false, description: 'Airline name' },
+      { name: '--airline-code', type: 'string', required: false, description: 'IATA airline code (e.g. SL)' },
+      { name: '--from', type: 'string', required: false, description: 'Departure airport code (e.g. TPE)' },
+      { name: '--dep-terminal', type: 'string', required: false, description: 'Departure terminal' },
+      { name: '--dep', type: 'string', required: false, description: 'Departure time (HH:MM)' },
+      { name: '--to', type: 'string', required: false, description: 'Arrival airport code (e.g. KIX)' },
+      { name: '--arr-terminal', type: 'string', required: false, description: 'Arrival terminal' },
+      { name: '--arr', type: 'string', required: false, description: 'Arrival time (HH:MM)' },
+      { name: '--date', type: 'string', required: false, description: 'Flight date (YYYY-MM-DD)' },
+      { name: '--booked-date', type: 'string', required: false, description: 'Booking date (YYYY-MM-DD)' },
+    ],
+    output: { type: 'void', description: 'Updates flight_legs in Turso' },
+    mutates: ['flight_legs', 'operation_runs'],
+    data_freshness: 'static',
+    requires: { process_1_date_anchor: 'confirmed' },
+    produces: {
+      statusChanges: [],
+      tables: ['flight_legs'],
+    },
+    example: 'npm run travel -- set-flight outbound --dest kyoto_2026 --flight SL396 --airline "Thai Lion Air" --airline-code SL --from TPE --dep-terminal T1 --dep 09:00 --to KIX --arr-terminal T1 --arr 12:30 --date 2026-02-24',
+  },
+
+  'set-hotel': {
+    name: 'set-hotel',
+    description: 'Manually set or update hotel info. Use after booking separately — bypasses cascade populate.',
+    args: [
+      { name: '--dest', type: 'string', required: false, description: 'Destination slug (default: active)' },
+      { name: '--name', type: 'string', required: false, description: 'Hotel name' },
+      { name: '--check-in', type: 'string', required: false, description: 'Check-in date (YYYY-MM-DD)' },
+      { name: '--access', type: 'string', required: false, description: 'Access directions (pipe-delimited for multiple)' },
+      { name: '--note', type: 'string', required: false, description: 'Additional notes' },
+    ],
+    output: { type: 'void', description: 'Updates hotels in Turso' },
+    mutates: ['hotels', 'operation_runs'],
+    data_freshness: 'static',
+    requires: { process_1_date_anchor: 'confirmed' },
+    produces: {
+      statusChanges: [],
+      tables: ['hotels'],
+    },
+    example: 'npm run travel -- set-hotel --dest kyoto_2026 --name "APA Hotel Kyoto Ekimae" --check-in 2026-02-24 --access "JR Kyoto Station 3min"',
+  },
+
   // === Operation Tracking (v1.9.0) ===
 
   'run-status': {
@@ -569,6 +628,10 @@ export const STATE_MANAGER_METHODS = {
   setActivityTime: { args: ['destination', 'dayNumber', 'session', 'activityIdOrTitle', 'opts'], returns: 'void', description: 'Set activity time fields (start/end/fixed)' },
   setSessionTimeRange: { args: ['destination', 'dayNumber', 'session', 'start', 'end'], returns: 'void', description: 'Set session time range boundary' },
   findActivity: { args: ['destination', 'idOrTitle'], returns: '{ dayNumber, session, activity } | null', description: 'Find activity by ID or title' },
+
+  // Flight + Hotel manual updates
+  setFlightLeg: { args: ['destination', 'direction', 'input'], returns: 'void', description: 'Set/update outbound or return flight leg fields' },
+  setHotel: { args: ['destination', 'input'], returns: 'void', description: 'Set/update hotel name, access, check-in, notes' },
 
   // Airport transfers
   setAirportTransferSegment: { args: ['destination', 'direction', 'segment'], returns: 'void', description: 'Set airport transfer segment (arrival/departure)' },

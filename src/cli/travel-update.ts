@@ -96,6 +96,16 @@ Commands:
     Spec fields are pipe-delimited. Only title and route are required.
     Example: set-airport-transfer arrival planned --selected "Limousine Bus|NRT T1 → Shiodome (Takeshiba)|85|3200|19:40 → ~21:05"
 
+  set-flight <outbound|return> [--dest slug] [--flight SL396] [--airline "Thai Lion Air"] [--airline-code SL]
+    [--from TPE] [--dep-terminal T1] [--dep 09:00] [--to KIX] [--arr-terminal T1] [--arr 12:30]
+    [--date 2026-02-24] [--booked-date 2026-02-24]
+    Manually set/update a flight leg. Use when booking separately (bypasses cascade populate).
+    Example: set-flight outbound --dest kyoto_2026 --flight SL396 --airline "Thai Lion Air" --from TPE --dep 09:00 --to KIX --arr 12:30
+
+  set-hotel [--dest slug] [--name "Hotel Name"] [--check-in YYYY-MM-DD] [--access "route"] [--note "notes"]
+    Manually set/update hotel info. Pipe-delimit multiple access directions.
+    Example: set-hotel --dest kyoto_2026 --name "APA Hotel Kyoto Ekimae" --check-in 2026-02-24 --access "JR Kyoto Station 3min"
+
   set-activity-booking <day> <session> <activity> <status> [--ref <ref>] [--book-by <date>]
     Set booking status for an activity.
     day: Day number (1-indexed)
@@ -904,6 +914,20 @@ async function main(): Promise<void> {
   const dirOpt = optionValue('--dir');
   const filesOpt = optionValue('--files');
   const noteOpt = optionValue('--note');
+  const flightOpt = optionValue('--flight');
+  const airlineOpt = optionValue('--airline');
+  const airlineCodeOpt = optionValue('--airline-code');
+  const fromOpt = optionValue('--from');
+  const depTerminalOpt = optionValue('--dep-terminal');
+  const depOpt = optionValue('--dep');
+  const toOpt = optionValue('--to');
+  const arrTerminalOpt = optionValue('--arr-terminal');
+  const arrOpt = optionValue('--arr');
+  const dateOpt = optionValue('--date');
+  const bookedDateOpt = optionValue('--booked-date');
+  const hotelNameOpt = optionValue('--name');
+  const checkInOpt = optionValue('--check-in');
+  const accessOpt = optionValue('--access');
 
   // Filter out flags/options from args
   const optionsWithValues = new Set([
@@ -940,6 +964,20 @@ async function main(): Promise<void> {
     '--dir',
     '--files',
     '--note',
+    '--flight',
+    '--airline',
+    '--airline-code',
+    '--from',
+    '--dep-terminal',
+    '--dep',
+    '--to',
+    '--arr-terminal',
+    '--arr',
+    '--date',
+    '--booked-date',
+    '--name',
+    '--check-in',
+    '--access',
   ]);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -1608,6 +1646,79 @@ async function main(): Promise<void> {
         }
 
         if (verbose) showStatus(sm, { full });
+        break;
+      }
+
+      case 'set-flight': {
+        const [, direction] = cleanArgs;
+
+        if (!direction || !['outbound', 'return'].includes(direction)) {
+          console.error('Error: set-flight requires <outbound|return>');
+          console.error('Example: set-flight outbound --dest kyoto_2026 --flight SL396 --airline "Thai Lion Air" --airline-code SL --from TPE --dep-terminal T1 --dep 09:00 --to KIX --arr-terminal T1 --arr 12:30 --date 2026-02-24');
+          process.exit(1);
+        }
+
+        const destination = sm.resolveDestination(destOpt);
+        const input: import('../state/repository').FlightLegInput = {};
+        if (flightOpt) input.flightNumber = flightOpt;
+        if (airlineOpt) input.airline = airlineOpt;
+        if (airlineCodeOpt) input.airlineCode = airlineCodeOpt;
+        if (fromOpt) input.departureCode = fromOpt;
+        if (depTerminalOpt) input.departureTerminal = depTerminalOpt;
+        if (depOpt) input.departureTime = depOpt;
+        if (toOpt) input.arrivalCode = toOpt;
+        if (arrTerminalOpt) input.arrivalTerminal = arrTerminalOpt;
+        if (arrOpt) input.arrivalTime = arrOpt;
+        if (dateOpt) input.date = dateOpt;
+        if (bookedDateOpt) input.bookedDate = bookedDateOpt;
+
+        console.log(`\n✈️  Setting flight leg:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Direction: ${direction}`);
+        if (input.flightNumber) console.log(`   Flight: ${input.flightNumber}`);
+        if (input.airline) console.log(`   Airline: ${input.airline} (${input.airlineCode ?? ''})`);
+        if (input.departureCode) console.log(`   From: ${input.departureCode}${input.departureTerminal ? ' T' + input.departureTerminal : ''} ${input.departureTime ?? ''}`);
+        if (input.arrivalCode) console.log(`   To: ${input.arrivalCode}${input.arrivalTerminal ? ' T' + input.arrivalTerminal : ''} ${input.arrivalTime ?? ''}`);
+        if (input.date) console.log(`   Date: ${input.date}`);
+
+        if (!dryRun) {
+          sm.setFlightLeg(destination, direction as 'outbound' | 'return', input);
+          await sm.saveWithTracking('set-flight', `${destination} ${direction} ${input.flightNumber ?? ''}`);
+          console.log('✅ Flight leg updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+        break;
+      }
+
+      case 'set-hotel': {
+        const destination = sm.resolveDestination(destOpt);
+        const input: import('../state/repository').HotelInput = {};
+        if (hotelNameOpt) input.name = hotelNameOpt;
+        if (accessOpt) input.access = accessOpt.split('|').map(s => s.trim()).filter(Boolean);
+        if (checkInOpt) input.checkIn = checkInOpt;
+        if (noteOpt) input.notes = noteOpt;
+
+        if (!input.name && !input.access && !input.checkIn && !input.notes) {
+          console.error('Error: set-hotel requires at least one of --name, --access, --check-in, --note');
+          console.error('Example: set-hotel --dest kyoto_2026 --name "APA Hotel Kyoto Ekimae" --check-in 2026-02-24 --access "JR Kyoto Station 3min"');
+          process.exit(1);
+        }
+
+        console.log(`\n🏨 Setting hotel:`);
+        console.log(`   Destination: ${destination}`);
+        if (input.name) console.log(`   Name: ${input.name}`);
+        if (input.checkIn) console.log(`   Check-in: ${input.checkIn}`);
+        if (input.access) console.log(`   Access: ${input.access.join(' | ')}`);
+        if (input.notes) console.log(`   Notes: ${input.notes}`);
+
+        if (!dryRun) {
+          sm.setHotel(destination, input);
+          await sm.saveWithTracking('set-hotel', `${destination} ${input.name ?? ''}`);
+          console.log('✅ Hotel updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
         break;
       }
 

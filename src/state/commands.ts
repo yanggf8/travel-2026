@@ -142,6 +142,34 @@ export interface ImportPackageOffersCommand {
   filePath?: string;   // source file for provenance tracking
 }
 
+// --- Flight Leg ---
+export interface SetFlightLegCommand {
+  type: 'set_flight_leg';
+  destination: string;
+  direction: 'outbound' | 'return';
+  flightNumber?: string;
+  airline?: string;
+  airlineCode?: string;
+  departureCode?: string;
+  departureTerminal?: string;
+  departureTime?: string;
+  arrivalCode?: string;
+  arrivalTerminal?: string;
+  arrivalTime?: string;
+  date?: string;
+  bookedDate?: string;
+}
+
+// --- Hotel ---
+export interface SetHotelCommand {
+  type: 'set_hotel';
+  destination: string;
+  name?: string;
+  access?: string[];
+  checkIn?: string;
+  notes?: string;
+}
+
 // --- Transport ---
 export interface SetAirportTransferCommand {
   type: 'set_airport_transfer';
@@ -273,6 +301,9 @@ export type Command =
   | UpdateOfferAvailabilityCommand
   | SelectOfferCommand
   | ImportPackageOffersCommand
+  // Flight + hotel manual updates
+  | SetFlightLegCommand
+  | SetHotelCommand
   // Transport
   | SetAirportTransferCommand
   | AddAirportTransferCandidateCommand
