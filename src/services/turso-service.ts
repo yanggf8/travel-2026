@@ -674,25 +674,19 @@ export async function queryBookings(filters: {
 // Booking Integrity Check
 // ---------------------------------------------------------------------------
 
+/**
+ * Compare bookings derived from the in-memory plan against bookings_current in DB.
+ * Caller is responsible for providing the plan object (e.g. from StateManager.getPlan()).
+ */
 export async function checkBookingIntegrity(
-  planId: string,
-  tripId?: string
+  plan: Record<string, unknown>,
+  tripId: string,
 ): Promise<{ matches: number; mismatches: string[]; dbOnly: string[]; planOnly: string[] }> {
   const extractor = requireExtractor();
 
-  // Read from normalized tables
-  const path = require('node:path');
-  const { TursoRepository } = require(path.resolve(__dirname, '..', 'state', 'turso-repository'));
-  const repo = await TursoRepository.create(planId);
-  const plan = repo.getPlan() as Record<string, unknown>;
+  const { bookings: planBookings, warnings } = extractBookingsFromPlanObject(plan, tripId, extractor);
 
-  const { toDestSlug } = require('../utils/plan-id');
-  const effectiveTripId = tripId || toDestSlug(planId);
-  const { bookings: planBookings, warnings } = extractBookingsFromPlanObject(plan, effectiveTripId, extractor);
-
-  const dbBookings = await queryBookings({
-    tripId: effectiveTripId || undefined,
-  });
+  const dbBookings = await queryBookings({ tripId });
 
   const planKeys = new Map<string, any>();
   for (const b of planBookings) {

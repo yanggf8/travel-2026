@@ -2109,9 +2109,12 @@ async function main(): Promise<void> {
 
       case 'check-booking-integrity': {
         const { checkBookingIntegrity } = await import('../services/turso-service');
+        const { toDestSlug } = await import('../utils/plan-id');
         const effectivePlanId = planIdOpt || 'tokyo-2026';
+        const effectiveTripId = tripIdOpt || toDestSlug(effectivePlanId);
+        const plan = sm.getPlan() as unknown as Record<string, unknown>;
         console.log(`Checking booking integrity (plan "${effectivePlanId}" vs Turso DB)...`);
-        const integrity = await checkBookingIntegrity(effectivePlanId, tripIdOpt);
+        const integrity = await checkBookingIntegrity(plan, effectiveTripId);
         console.log(`\nResults:`);
         console.log(`  Matches:    ${integrity.matches}`);
         console.log(`  Mismatches: ${integrity.mismatches.length}`);

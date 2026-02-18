@@ -45,7 +45,7 @@ Turso normalized tables (no JSON blobs)
 
 Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v2.0.0).
 
-### Repository Architecture (v4.0.0)
+### Repository Architecture (v4.1.0)
 ```
 CLI / Skills / Dashboard
         ↓ commands
@@ -53,14 +53,14 @@ CLI / Skills / Dashboard
         ↓ repository calls
    StateRepository       ← interface (abstract)
         ↓
-   TursoRepository       ← reads all data from normalized tables (38 queries)
+   TursoRepository       ← reads all data in one batch HTTP request (38 queries → 1 round-trip)
         ↓
    PlanRepository        ← in-memory plan object + write-back via syncNormalizedTables()
 ```
 
 ```
 WRITE:  mutate → await save() → write normalized tables (blocking) → sync bookings+events (fire-and-forget)
-READ:   await StateManager.create() → TursoRepository.create() → assemblePlan() from normalized tables → memory
+READ:   await StateManager.create() → TursoRepository.create() → executeBatch(38 queries) → assemblePlan() → memory
 ```
 
 - **Turso cloud is sole source of truth** — fully normalized, no JSON blobs
@@ -305,9 +305,10 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 │   ├── state/
 │   │   ├── state-manager.ts       # State machine: validate, transition, cascade, dispatch() (DB-only)
 │   │   ├── repository.ts          # StateRepository interface (StateReader + StateWriter)
-│   │   ├── turso-repository.ts    # Reads all data from normalized tables
-│   │   ├── plan-repository.ts    # In-memory plan + write-back via syncNormalizedTables()
-│   │   ├── plan-assembler.ts     # Assembles plan object from table row arrays
+│   │   ├── turso-repository.ts    # Reads all data in single batch request; delegates writes to PlanRepository
+│   │   ├── plan-repository.ts     # In-memory plan + write-back via syncNormalizedTables()
+│   │   ├── plan-assembler.ts      # Assembles plan object from table row arrays
+│   │   ├── sql-helpers.ts         # Shared SQL helpers (rowsToObjects, sqlText/Int/Real/Bool)
 │   │   ├── commands.ts            # 25-type Command discriminated union
 │   │   ├── types.ts               # Domain types, status transitions
 │   │   ├── itinerary-manager.ts   # Itinerary domain logic
@@ -337,7 +338,7 @@ Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 Tables:
 - **Plan core**: `plans` (PK=plan_id, `version` monotonic counter — no JSON blobs), `plan_metadata`, `plan_destinations`, `destination_details`, `destination_cities`
 - **Dates/Status**: `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `plan_root_date_anchor`
-- **Offers**: `plan_offers`, `plan_offer_flights`, `plan_offer_hotels`, `plan_offer_date_pricing`, `plan_offer_selection`, `plan_offer_best_value`
+- **Offers**: `plan_offers`, `plan_offer_flights`, `plan_offer_hotels`, `plan_offer_date_pricing`, `plan_offer_selection`, `plan_offer_best_value`, `plan_offer_provenance` (source audit trail), `plan_offer_warnings`
 - **Itinerary**: `itinerary_days` (+ weather + `theme_zh`), `itinerary_sessions` (+ `focus_zh`, `transit_notes_zh`, `meals_zh_json`, `activities_zh_json`), `activities`, `itinerary_metadata` (+ `transit_summary_zh`), `day_route_segments`, `day_landmarks`, `session_meals`, `activity_tags`
 - **Transport**: `flight_legs` (PK: plan_id+destination+direction+leg_order), `airport_transfers`, `airport_transfer_candidates`, `transportation_extras`
 - **Accommodation**: `hotels` (+ `name_zh`), `hotel_access_lines`, `accommodation_location_zone`

@@ -8,10 +8,11 @@ type TursoPipelineRequest = {
   };
 };
 
-type TursoPipelineResponse = {
+export type TursoPipelineResponse = {
   results?: Array<{
     response?: {
       result?: {
+        cols?: Array<{ name: string }>;
         rows?: unknown[];
         affected_row_count?: number;
         last_insert_rowid?: string | number;
@@ -94,6 +95,43 @@ export class TursoPipelineClient {
     }
 
     return (await res.json()) as TursoPipelineResponse;
+  }
+
+  /**
+   * Send all queries in a single HTTP request and return the full response.
+   * Use this for read batches — each query's result is at response.results[i].
+   */
+  async executeBatch(sqls: string[]): Promise<TursoPipelineResponse> {
+    const token = requireEnv(this.tokenEnv);
+    const body = {
+      requests: sqls.map((sql) => ({ type: 'execute', stmt: { sql } }) satisfies TursoPipelineRequest),
+    };
+
+    const res = await fetch(this.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Turso HTTP error ${res.status} at ${this.endpoint}: ${text || res.statusText}`);
+    }
+
+    const json = (await res.json()) as TursoPipelineResponse;
+
+    // Surface per-query errors early
+    for (let i = 0; i < sqls.length; i++) {
+      const err = json.results?.[i]?.response?.error;
+      if (err) {
+        throw new Error(`Turso batch query [${i}] error: ${JSON.stringify(err)}`);
+      }
+    }
+
+    return json;
   }
 
   async executeMany(sqlStatements: string[], batchSize = 25): Promise<void> {

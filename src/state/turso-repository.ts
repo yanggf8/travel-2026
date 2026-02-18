@@ -21,6 +21,7 @@ import type {
 import type { StateRepository, DateAnchorData, ActivitySearchResult } from './repository';
 import { PlanRepository } from './plan-repository';
 import { assemblePlan, assembleEventLog } from './plan-assembler';
+import { rowsToObjectsAt, sqlText } from './sql-helpers';
 
 // ============================================================================
 // Pipeline helper — same pattern as turso-service.ts
@@ -29,44 +30,6 @@ import { assemblePlan, assembleEventLog } from './plan-assembler';
 function requirePipeline(): { TursoPipelineClient: new (opts?: any) => any } {
   const path = require('node:path');
   return require(path.resolve(__dirname, '..', '..', 'scripts', 'turso-pipeline'));
-}
-
-function rowsToObjects(response: any): Record<string, any>[] {
-  const result = response?.results?.[0]?.response?.result;
-  if (!result?.rows || !result?.cols) return [];
-  const cols = result.cols.map((c: any) => c.name);
-  return result.rows.map((row: any[]) => {
-    const obj: Record<string, any> = {};
-    for (let i = 0; i < cols.length; i++) {
-      const cell = row[i];
-      obj[cols[i]] = cell?.value ?? null;
-    }
-    return obj;
-  });
-}
-
-// ============================================================================
-// SQL helpers
-// ============================================================================
-
-function sqlText(v: string | null | undefined): string {
-  if (v === null || v === undefined) return 'NULL';
-  return `'${String(v).replace(/'/g, "''")}'`;
-}
-
-function sqlInt(v: number | null | undefined): string {
-  if (v === null || v === undefined) return 'NULL';
-  return String(Math.round(v));
-}
-
-function sqlReal(v: number | null | undefined): string {
-  if (v === null || v === undefined) return 'NULL';
-  return String(v);
-}
-
-function sqlBool(v: boolean | null | undefined): string {
-  if (v === null || v === undefined) return '0';
-  return v ? '1' : '0';
 }
 
 // ============================================================================
@@ -123,7 +86,7 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM airport_transfer_candidates WHERE plan_id = ${pid} ORDER BY destination, direction, sort_order`, // 27
       `SELECT * FROM hotel_access_lines WHERE plan_id = ${pid} ORDER BY destination, sort_order`,    // 28
       `SELECT * FROM session_meals WHERE plan_id = ${pid} ORDER BY destination, day_number, session_type, sort_order`, // 29
-      `SELECT * FROM activity_tags WHERE activity_id LIKE 'activity_%'`,                             // 30
+      `SELECT at.activity_id, at.tag FROM activity_tags at INNER JOIN activities a ON at.activity_id = a.id WHERE a.plan_id = ${pid}`, // 30
       `SELECT * FROM event_log_state WHERE plan_id = ${pid}`,                                        // 31
       `SELECT * FROM event_log_global_processes WHERE plan_id = ${pid}`,                             // 32
       `SELECT * FROM event_log_destinations WHERE plan_id = ${pid}`,                                 // 33
@@ -133,12 +96,9 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM plan_offer_best_value WHERE plan_id = ${pid}`,                                  // 37
     ];
 
-    // Execute all queries
-    const responses: Record<string, any>[][] = [];
-    for (const q of queries) {
-      const resp = await client.execute(q);
-      responses.push(rowsToObjects(resp));
-    }
+    // Execute all queries in a single HTTP round-trip
+    const batchResponse = await client.executeBatch(queries);
+    const responses: Record<string, any>[][] = queries.map((_, i) => rowsToObjectsAt(batchResponse, i));
 
     const [
       metaRows, destRows, detailRows, cityRows, dateRows, statusRows, dirtyRows,

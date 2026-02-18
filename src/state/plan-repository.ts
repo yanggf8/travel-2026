@@ -30,6 +30,7 @@ import {
   validateDestinationSections,
   formatSectionValidationErrors,
 } from './schemas';
+import { sqlText, sqlInt, sqlReal, sqlBool } from './sql-helpers';
 
 export class PlanRepository implements StateRepository {
   private version: number;
@@ -977,6 +978,14 @@ export class PlanRepository implements StateRepository {
         statements.push(`INSERT INTO plan_offer_selection (plan_id, destination, selected_offer_id, selected_date, selected_at) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText((p34?.selected_offer_id || sel?.offer_id) as string)}, ${sqlText(sel?.date as string)}, ${sqlText((sel?.selected_at || p34?.updated_at) as string)})`);
       }
 
+      // plan_offer_provenance
+      const provenance = (results34?.provenance as Array<Record<string, unknown>> | undefined) ?? [];
+      for (const prov of provenance) {
+        if (prov.source_id && prov.scraped_at) {
+          statements.push(`INSERT OR IGNORE INTO plan_offer_provenance (plan_id, destination, source_id, scraped_at) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(prov.source_id as string)}, ${sqlText(prov.scraped_at as string)})`);
+        }
+      }
+
       // accommodation_location_zone
       if (p4) {
         const lz = (p4 as any).location_zone;
@@ -1136,41 +1145,4 @@ export class PlanRepository implements StateRepository {
   }
 }
 
-// ============================================================================
-// SQL helpers for normalized table sync
-// ============================================================================
-
-function rowsToObjects(response: any): Record<string, any>[] {
-  const result = response?.results?.[0]?.response?.result;
-  if (!result?.rows || !result?.cols) return [];
-  const cols = result.cols.map((c: any) => c.name);
-  return result.rows.map((row: any[]) => {
-    const obj: Record<string, any> = {};
-    for (let i = 0; i < cols.length; i++) {
-      const cell = row[i];
-      obj[cols[i]] = cell?.value ?? null;
-    }
-    return obj;
-  });
-}
-
-function sqlText(v: string | null | undefined): string {
-  if (v === null || v === undefined) return 'NULL';
-  return `'${String(v).replace(/'/g, "''")}'`;
-}
-
-function sqlInt(v: number | null | undefined): string {
-  if (v === null || v === undefined) return 'NULL';
-  return String(Math.round(v));
-}
-
-function sqlReal(v: number | null | undefined): string {
-  if (v === null || v === undefined) return 'NULL';
-  return String(v);
-}
-
-function sqlBool(v: boolean | null | undefined): string {
-  if (v === null || v === undefined) return '0';
-  return v ? '1' : '0';
-}
 
