@@ -1,5 +1,7 @@
 # State + Dirty Flags (Shared)
 
+> ⚠️ **Architecture note**: The current `PlanRepository` in-memory pattern is legacy. The target design uses fine-grained DB reads/writes per command — no coarse `syncNormalizedTables()` flush, no assembled plan object. See [`architecture-decisions.md`](./architecture-decisions.md) ADR-001.
+
 ## Sources of truth
 
 **Turso cloud DB is the sole source of truth.** There are no local JSON state files.
