@@ -242,9 +242,9 @@ Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto
 
 | Day | Date | Morning | Afternoon | Evening |
 |-----|------|---------|-----------|---------|
-| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | Kyoto Station / Ramen Alley |
+| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | Kyoto Station / Ramen Alley ([tabelog](https://tabelog.com/tw/kyoto/A2601/A260101/)) |
 | 2 | Wed 25 | 金閣寺 + 可選龍安寺 (subway→北大路) | 伏見稲荷 + 可選東福寺 | 先斗町, 晚餐, 預訂保津川遊船 |
-| 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | キモノフォレスト, 返回京都 |
+| 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | キモノフォレスト, 返回京都, **名代豬排 Katsukura** (JR京都伊勢丹 11F) |
 | 4 | Fri 27 | Sleep in, 可選東寺, 11:30 東山區午餐 | 夢館kimono, 三年坂, 二年坂, 可選清水寺 | 祇園, Donki (UTENA 魔髮球), 預換Haruka回程票 |
 | 5 | Sat 28 | 退房09:00, 09:30 Haruka→KIX | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30 |
 
@@ -457,6 +457,6 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ### Kyoto (Feb 24-28)
 1. **Book Hozugawa River Boat** — Day 3, 11:30 slot (https://ars-hozugawa.triplabo.jp)
-2. Restaurant reservations
+2. ~~Restaurant reservations~~ ✅ Partial — Day 1 & Day 3 evening Tabelog link added; Katsukura (名代豬排 JR京都伊勢丹 11F) added to Day 3 dinner
 3. ~~Fetch weather forecast~~ ✅ Done (Feb 19: Day1 23%/Day2 71%/Day3 42%/Day4 32%/Day5 52%) — re-run `npm run travel -- fetch-weather --all` closer to trip
 4. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
