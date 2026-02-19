@@ -88,11 +88,48 @@ function formatDate(dateStr: string, lang: Lang): string {
     : `${dow}, ${mon} ${date}`;
 }
 
+/** Translate WMO weather labels (stored in English) to Traditional Chinese. */
+const WMO_ZH: Record<string, string> = {
+  'Clear sky': '晴天',
+  'Mainly clear': '大致晴朗',
+  'Partly cloudy': '局部多雲',
+  'Overcast': '陰天',
+  'Foggy': '起霧',
+  'Depositing rime fog': '霧淞',
+  'Light drizzle': '毛毛雨',
+  'Moderate drizzle': '中等毛毛雨',
+  'Dense drizzle': '濃毛毛雨',
+  'Light freezing drizzle': '輕凍毛毛雨',
+  'Dense freezing drizzle': '濃凍毛毛雨',
+  'Slight rain': '小雨',
+  'Moderate rain': '中雨',
+  'Heavy rain': '大雨',
+  'Light freezing rain': '輕凍雨',
+  'Heavy freezing rain': '重凍雨',
+  'Slight snowfall': '小雪',
+  'Moderate snowfall': '中雪',
+  'Heavy snowfall': '大雪',
+  'Snow grains': '雪粒',
+  'Slight rain showers': '短暫小雨',
+  'Moderate rain showers': '短暫中雨',
+  'Violent rain showers': '強陣雨',
+  'Slight snow showers': '小陣雪',
+  'Heavy snow showers': '大陣雪',
+  'Thunderstorm': '雷雨',
+  'Thunderstorm with slight hail': '雷雨伴小冰雹',
+  'Thunderstorm with heavy hail': '雷雨伴大冰雹',
+};
+
+function translateWeather(label: string, lang: Lang): string {
+  if (lang !== 'zh') return label;
+  return WMO_ZH[label] ?? label;
+}
+
 function weatherIcon(description: string): string {
   const d = description.toLowerCase();
   if (d.includes('rain') || d.includes('雨')) return '\u{1F327}\uFE0F';
   if (d.includes('partly') || d.includes('局部')) return '\u26C5';
-  if (d.includes('overcast') || d.includes('多雲') || d.includes('cloudy')) return '\u2601\uFE0F';
+  if (d.includes('overcast') || d.includes('多雲') || d.includes('cloudy') || d.includes('陰')) return '\u2601\uFE0F';
   if (d.includes('snow') || d.includes('雪')) return '\u2744\uFE0F';
   if (d.includes('clear') || d.includes('晴')) return '\u2600\uFE0F';
   return '\u26C5';
@@ -381,7 +418,8 @@ function renderWeatherStrip(day: Record<string, unknown>, lang: Lang): string {
   if (!weather) {
     return `<div class="weather-strip"><span class="weather-icon">\u26C5</span><span style="color:var(--text-dim);font-size:12px">${lang === 'zh' ? '無天氣資料' : 'No weather data'}</span></div>`;
   }
-  const desc = (weather.weather_label as string) || '';
+  const rawDesc = (weather.weather_label as string) || '';
+  const desc = translateWeather(rawDesc, lang);
   const tMin = weather.temp_low_c ?? '';
   const tMax = weather.temp_high_c ?? '';
   const rain = weather.precipitation_pct ?? '';
@@ -407,7 +445,7 @@ function renderWeatherStrip(day: Record<string, unknown>, lang: Lang): string {
 
   return `
     <div class="weather-strip">
-      <span class="weather-icon">${weatherIcon(desc)}</span>
+      <span class="weather-icon">${weatherIcon(rawDesc)}</span>
       <span class="weather-temp">${tMin}\u2013${tMax}\u00B0C</span>
       ${feelsLikeHtml}
       <span style="color:var(--text-dim);font-size:12px">${esc(String(desc))}</span>
@@ -878,7 +916,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
     {
       icon: '\uD83C\uDF0F',
       label: lang === 'zh' ? '旅遊資訊' : 'Travel Info',
-      value: `<a href="https://www.japan.travel/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">Visit Japan</a>`,
+      value: `<a href="https://www.japan.travel/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${lang === 'zh' ? '日本觀光局' : 'Visit Japan'}</a>`,
       sub: lang === 'zh' ? '日本觀光局官網' : 'Japan Tourism Agency',
       badge: '',
     },
