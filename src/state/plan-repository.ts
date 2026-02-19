@@ -1109,9 +1109,10 @@ export class PlanRepository implements StateRepository {
             const timeRange = session.time_range as { start: string; end: string } | undefined;
             const meals = session.meals as string[] | undefined;
 
+            const activitiesZh = session.activities_zh as string[] | undefined | null;
             statements.push(
-              `INSERT OR REPLACE INTO itinerary_sessions (plan_id, destination, day_number, session_type, focus, transit_notes, booking_notes, meals_json, time_range_start, time_range_end, updated_at)
-               VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlText(session.focus as string)}, ${sqlText(session.transit_notes as string)}, ${sqlText(session.booking_notes as string)}, ${sqlText(meals ? JSON.stringify(meals) : null)}, ${sqlText(timeRange?.start)}, ${sqlText(timeRange?.end)}, datetime('now'))`
+              `INSERT OR REPLACE INTO itinerary_sessions (plan_id, destination, day_number, session_type, focus, focus_zh, transit_notes, transit_notes_zh, activities_zh_json, booking_notes, meals_json, time_range_start, time_range_end, updated_at)
+               VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlText(session.focus as string)}, ${sqlText(session.focus_zh as string)}, ${sqlText(session.transit_notes as string)}, ${sqlText(session.transit_notes_zh as string)}, ${sqlText(activitiesZh ? JSON.stringify(activitiesZh) : null)}, ${sqlText(session.booking_notes as string)}, ${sqlText(meals ? JSON.stringify(meals) : null)}, ${sqlText(timeRange?.start)}, ${sqlText(timeRange?.end)}, datetime('now'))`
             );
 
             const activities = session.activities as Array<string | Record<string, unknown>> | undefined;

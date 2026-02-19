@@ -299,6 +299,17 @@ export interface SetSessionFocusCommand {
   dayNumber: number;
   session: SessionType;
   focus: string | null;
+  focus_zh?: string | null;
+}
+
+export interface SetSessionZhContentCommand {
+  type: 'set_session_zh_content';
+  destination: string;
+  dayNumber: number;
+  session: SessionType;
+  focus_zh?: string | null;
+  transit_notes_zh?: string | null;
+  activities_zh?: string[] | null;
 }
 
 // ============================================================================
@@ -343,7 +354,8 @@ export type Command =
   | SetSessionTimeRangeCommand
   | SetDayThemeCommand
   | SetDayWeatherCommand
-  | SetSessionFocusCommand;
+  | SetSessionFocusCommand
+  | SetSessionZhContentCommand;
 
 /** Result from dispatch — includes any generated IDs or return values. */
 export interface DispatchResult {

@@ -1017,6 +1017,8 @@ async function main(): Promise<void> {
     '--notes',
     '--start-time',
     '--zh',
+    '--transit-zh',
+    '--activities-zh-json',
   ]);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -2104,6 +2106,62 @@ async function main(): Promise<void> {
           sm.setDayTheme(destination, dayNumber, themeArg ?? null, themeZhOpt ?? undefined);
           await sm.saveWithTracking('set-day-theme', `D${dayNumber}`);
           console.log('✅ Day theme updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
+      case 'set-session-zh': {
+        // set-session-zh <day> <session> [--zh "focus_zh"] [--transit-zh "transit_notes_zh"] [--activities-zh-json '[...]']
+        const [, dayStr, sessionArg] = cleanArgs;
+
+        if (!dayStr || !sessionArg) {
+          console.error('Error: set-session-zh requires <day> <session>');
+          console.error('  --zh "Chinese focus text"');
+          console.error('  --transit-zh "Chinese transit notes"');
+          console.error('  --activities-zh-json \'["act1","act2"]\'');
+          console.error('Example: set-session-zh 2 morning --zh "金閣寺・可選龍安寺" --transit-zh "地鐵→北大路→公車→金閣寺道"');
+          process.exit(1);
+        }
+
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) {
+          console.error(`Error: ${dayResult.error}`);
+          process.exit(1);
+        }
+        const sessionDay = dayResult.value;
+        const sessionType = sessionArg as 'morning' | 'afternoon' | 'evening';
+        if (!['morning', 'afternoon', 'evening'].includes(sessionType)) {
+          console.error(`Error: session must be morning, afternoon, or evening`);
+          process.exit(1);
+        }
+
+        const focusZhOpt = optionValue('--zh') ?? undefined;
+        const transitZhOpt = optionValue('--transit-zh') ?? undefined;
+        const activitiesZhJsonOpt = optionValue('--activities-zh-json') ?? undefined;
+        let activitiesZh: string[] | undefined;
+        if (activitiesZhJsonOpt) {
+          try {
+            activitiesZh = JSON.parse(activitiesZhJsonOpt);
+          } catch {
+            console.error('Error: --activities-zh-json must be a valid JSON array of strings');
+            process.exit(1);
+          }
+        }
+
+        const destination = sm.resolveDestination(destOpt);
+        console.log(`\n🌏 Setting session ZH content:`);
+        console.log(`   Destination: ${destination}, Day ${sessionDay}, ${sessionType}`);
+        if (focusZhOpt) console.log(`   focus_zh: "${focusZhOpt}"`);
+        if (transitZhOpt) console.log(`   transit_notes_zh: "${transitZhOpt}"`);
+        if (activitiesZh) console.log(`   activities_zh: ${activitiesZh.length} items`);
+
+        if (!dryRun) {
+          sm.setSessionZhContent(destination, sessionDay, sessionType, focusZhOpt, transitZhOpt, activitiesZh);
+          await sm.saveWithTracking('set-session-zh', `D${sessionDay}/${sessionType}`);
+          console.log('✅ Session ZH content updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
         }

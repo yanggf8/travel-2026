@@ -315,9 +315,12 @@ function renderSession(
   if (!session) return '';
 
   const focus = zhOverride?.focus ?? ((session.focus as string) || '');
+  // Show English subtitle in ZH mode when both are available (bilingual display)
+  const focusEnSub = (zhOverride?.focus && session.focus) ? (session.focus as string) : null;
+  const enActivities = extractActivities((session.activities as unknown[]) || []);
   const activities = zhOverride
-    ? zhOverride.activities
-    : extractActivities((session.activities as unknown[]) || []);
+    ? (zhOverride.activities.length > 0 ? zhOverride.activities : enActivities)
+    : enActivities;
   const meals = zhOverride?.meals ?? ((session.meals as string[]) || []);
   const transit = zhOverride?.transit_notes ?? ((session.transit_notes as string) || '');
 
@@ -348,7 +351,7 @@ function renderSession(
             table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
             day: em.day, session: sessionKey, field: lang === 'zh' ? 'focus_zh' : 'focus',
           })
-        : esc(focus)}</div>
+        : esc(focus)}${focusEnSub ? `<div class="focus-sub-en">${esc(focusEnSub)}</div>` : ''}</div>
       <ul class="activity-list">
         ${activities.map((a) => {
           const isPending = pendingBookings.some((pb) => a.includes('teamLab') || a.includes('\u7121\u754C') || a.toLowerCase().includes(pb.toLowerCase()));

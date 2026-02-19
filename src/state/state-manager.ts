@@ -422,7 +422,14 @@ export class StateManager {
 
       case 'set_session_focus':
         this.setSessionFocus(
-          command.destination, command.dayNumber, command.session, command.focus
+          command.destination, command.dayNumber, command.session, command.focus, command.focus_zh
+        );
+        return {};
+
+      case 'set_session_zh_content':
+        this.setSessionZhContent(
+          command.destination, command.dayNumber, command.session,
+          command.focus_zh, command.transit_notes_zh, command.activities_zh
         );
         return {};
 
@@ -1339,16 +1346,47 @@ export class StateManager {
     destination: string,
     dayNumber: number,
     session: SessionType,
-    focus: string | null
+    focus: string | null,
+    focus_zh?: string | null
   ): void {
     this.repo.setSessionField(destination, dayNumber, session, 'focus', focus);
+    if (focus_zh !== undefined) {
+      this.repo.setSessionField(destination, dayNumber, session, 'focus_zh', focus_zh);
+    }
     this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'itinerary_session_focus_set',
       destination,
       process: 'process_5_daily_itinerary',
-      data: { day_number: dayNumber, session, focus },
+      data: { day_number: dayNumber, session, focus, focus_zh },
+    });
+  }
+
+  setSessionZhContent(
+    destination: string,
+    dayNumber: number,
+    session: SessionType,
+    focus_zh?: string | null,
+    transit_notes_zh?: string | null,
+    activities_zh?: string[] | null
+  ): void {
+    if (focus_zh !== undefined) {
+      this.repo.setSessionField(destination, dayNumber, session, 'focus_zh', focus_zh);
+    }
+    if (transit_notes_zh !== undefined) {
+      this.repo.setSessionField(destination, dayNumber, session, 'transit_notes_zh', transit_notes_zh);
+    }
+    if (activities_zh !== undefined) {
+      this.repo.setSessionField(destination, dayNumber, session, 'activities_zh', activities_zh);
+    }
+    this.repo.touchItinerary(destination, this.timestamp);
+
+    this.emitEvent({
+      event: 'itinerary_session_zh_content_set',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, session, focus_zh, transit_notes_zh, activities_zh },
     });
   }
 
