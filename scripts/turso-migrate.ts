@@ -914,6 +914,15 @@ async function main() {
 
   console.log('✅ ZH content schema migration complete.');
 
+  // Add display_name column to destination_cities
+  try {
+    await client.execute('ALTER TABLE destination_cities ADD COLUMN display_name TEXT;');
+    console.log('✅ Added display_name to destination_cities.');
+  } catch (e: any) {
+    if (!e.message?.includes('duplicate column name')) throw e;
+    console.log('ℹ️  display_name column already exists in destination_cities.');
+  }
+
   // Add offer_count column to plan_offer_provenance
   try {
     await client.execute('ALTER TABLE plan_offer_provenance ADD COLUMN offer_count INTEGER;');
@@ -1066,6 +1075,197 @@ async function main() {
       console.log(`✅ Backfilled global_config: ${g.key}=${g.value}`);
     } catch (e: any) {
       console.warn(`⚠️  Could not backfill global_config ${g.key}:`, e.message);
+    }
+  }
+
+  // ========================================
+  // OTA Sources: Create table + seed rows
+  // ========================================
+
+  try {
+    console.log('Creating ota_sources table...');
+    await client.execute(`CREATE TABLE IF NOT EXISTS ota_sources (
+  source_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type_json TEXT,
+  status TEXT DEFAULT 'active',
+  scraper_script TEXT,
+  regions_json TEXT,
+  url_template TEXT,
+  notes TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+    console.log('✅ Created ota_sources table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) {
+      console.log('ℹ️  ota_sources table already exists.');
+    } else {
+      console.warn('⚠️  Could not create ota_sources table:', e.message);
+    }
+  }
+
+  const otaSources: Array<{
+    source_id: string;
+    name: string;
+    type_json: string;
+    status: string;
+    scraper_script: string | null;
+    regions_json: string | null;
+    url_template: string | null;
+    notes: string | null;
+  }> = [
+    {
+      source_id: 'besttour',
+      name: '喜鴻假期',
+      type_json: '["package"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: '["tokyo","kansai","hokkaido","kyushu","okinawa"]',
+      url_template: 'https://www.besttour.com.tw',
+      notes: 'Use listing URL for search, NOT /e_web/DOM/ (returns 404). Primarily group tours.',
+    },
+    {
+      source_id: 'liontravel',
+      name: '雄獅旅遊',
+      type_json: '["package","flight","hotel"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_liontravel_dated.py',
+      regions_json: '["tokyo","kansai","hokkaido","okinawa"]',
+      url_template: 'https://vacation.liontravel.com/search?Destination={dest_code}&FromDate={from_yyyymmdd}&ToDate={to_yyyymmdd}&Days={days}&roomlist={adults}-0-0',
+      notes: 'FIT search via vacation.liontravel.com, group tour URL unknown',
+    },
+    {
+      source_id: 'tigerair',
+      name: '台灣虎航',
+      type_json: '["flight"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_tigerair.py',
+      regions_json: null,
+      url_template: 'https://www.tigerairtw.com',
+      notes: 'Form-based scraper (no URL deep-linking), requires Playwright form interaction. No listing page.',
+    },
+    {
+      source_id: 'lifetour',
+      name: '五福旅遊',
+      type_json: '["package","flight","hotel"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: '["tokyo","kansai","hokkaido","kyushu","okinawa"]',
+      url_template: 'https://tour.lifetour.com.tw/searchlist/{departure}/{region_code}',
+      notes: 'Group tour listing at tour.lifetour.com.tw/searchlist/{departure}/{region}. Some packages include 伴自由 (semi-FIT) days.',
+    },
+    {
+      source_id: 'settour',
+      name: '東南旅遊',
+      type_json: '["package","flight","hotel"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: '["tokyo","kansai","hokkaido","kyushu","okinawa"]',
+      url_template: 'https://tour.settour.com.tw/search?destinationCode={dest_code}',
+      notes: 'Group tour uses .product-item containers with code in slider-flightInfo_* IDs. FIT available at fit.settour.com.tw.',
+    },
+    {
+      source_id: 'travel4u',
+      name: '山富旅遊',
+      type_json: '["package"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: '["tokyo","kansai","hokkaido","kyushu","okinawa","nagoya"]',
+      url_template: 'https://www.travel4u.com.tw/group/area/{area_code}/japan/',
+      notes: '山富旅遊 - Taiwan OTA with group tours. Area codes map to Japan regions.',
+    },
+    {
+      source_id: 'eztravel',
+      name: '易遊網',
+      type_json: '["package","flight","hotel"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_eztravel.py',
+      regions_json: '["tokyo","kansai","nagoya","okinawa","sapporo","fukuoka"]',
+      url_template: 'https://packages.eztravel.com.tw/roundtrip-TPE-{dest_code}?checkin={depart_date}&checkout={return_date}&adult={pax}&child=0',
+      notes: 'FIT at packages.eztravel.com.tw. Hotels shown may be in different city than destination (e.g., Kobe for Osaka). Check baggage - typically NOT included with LCC flights.',
+    },
+    {
+      source_id: 'jalan',
+      name: 'じゃらん',
+      type_json: '["hotel"]',
+      status: 'inactive',
+      scraper_script: null,
+      regions_json: null,
+      url_template: 'https://www.jalan.net',
+      notes: 'Japan domestic OTA - for local hotel bookings',
+    },
+    {
+      source_id: 'rakuten_travel',
+      name: '楽天トラベル',
+      type_json: '["hotel","package"]',
+      status: 'inactive',
+      scraper_script: null,
+      regions_json: null,
+      url_template: 'https://travel.rakuten.co.jp',
+      notes: 'Japan domestic OTA',
+    },
+    {
+      source_id: 'trip',
+      name: 'Trip.com',
+      type_json: '["flight"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: null,
+      url_template: 'https://www.trip.com/flights/{origin}-to-{dest}/tickets-{origin_code}-{dest_code}?dcity={origin_code}&acity={dest_code}&ddate={depart_date}&flighttype=ow&class=y&quantity={pax}',
+      notes: 'Flight search works via Playwright. Hotel details require login. Roundtrip search only shows outbound - scrape return as separate one-way. Prices in USD, convert to TWD (~32).',
+    },
+    {
+      source_id: 'booking',
+      name: 'Booking.com',
+      type_json: '["hotel"]',
+      status: 'inactive',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: null,
+      url_template: 'https://www.booking.com/searchresults.{lang}.html?dest_id={dest_id}&dest_type=city&checkin={checkin}&checkout={checkout}&group_adults={adults}&no_rooms={rooms}&selected_currency={currency}',
+      notes: 'Cloudflare bot protection. Use lang=zh-tw for Traditional Chinese. Initial search may not load results - retry or use direct hotel URL. Prices shown per night.',
+    },
+    {
+      source_id: 'agoda',
+      name: 'Agoda',
+      type_json: '["hotel"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: null,
+      url_template: 'https://www.agoda.com/{hotel_slug}/hotel/{city_slug}-{country}.html?checkIn={checkin}&los={nights}&adults={adults}&rooms={rooms}&currency={currency}',
+      notes: 'Direct hotel page URLs work reliably — full pricing, reviews, amenities. Search pages may return 0 results for dates >6 months out. Use hotel_page URL template for best results.',
+    },
+    {
+      source_id: 'skyscanner',
+      name: 'Skyscanner',
+      type_json: '["flight"]',
+      status: 'inactive',
+      scraper_script: null,
+      regions_json: null,
+      url_template: 'https://www.skyscanner.com.tw',
+      notes: 'Strong bot detection - returns captcha page. Use Google Flights instead for multi-airline price comparison.',
+    },
+    {
+      source_id: 'google_flights',
+      name: 'Google Flights',
+      type_json: '["flight"]',
+      status: 'active',
+      scraper_script: 'scripts/scrape_package.py',
+      regions_json: null,
+      url_template: 'https://www.google.com/travel/flights?q=Flights+to+{dest}+from+{origin}+on+{depart_date}+through+{return_date}&curr={currency}&hl=zh-TW',
+      notes: 'Uses natural-language query URL format. Returns all-inclusive TWD prices with airline, times, duration, nonstop flags, and CO2 data. No form interaction needed.',
+    },
+  ];
+
+  for (const src of otaSources) {
+    try {
+      const esc = (s: string | null | undefined) =>
+        s !== null && s !== undefined ? `'${String(s).replace(/'/g, "''")}'` : 'NULL';
+      await client.execute(
+        `INSERT OR IGNORE INTO ota_sources (source_id, name, type_json, status, scraper_script, regions_json, url_template, notes) VALUES (${esc(src.source_id)}, ${esc(src.name)}, ${esc(src.type_json)}, ${esc(src.status)}, ${esc(src.scraper_script)}, ${esc(src.regions_json)}, ${esc(src.url_template)}, ${esc(src.notes)})`
+      );
+      console.log(`✅ Seeded ota_sources: ${src.source_id}`);
+    } catch (e: any) {
+      console.warn(`⚠️  Could not seed ota_sources ${src.source_id}:`, e.message);
     }
   }
 

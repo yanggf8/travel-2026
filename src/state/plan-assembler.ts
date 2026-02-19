@@ -10,6 +10,13 @@ function num(v: any): number | null { return v != null ? Number(v) : null; }
 function bool(v: any): boolean { return v === 1 || v === '1' || v === true; }
 function tryJson(v: any): any { if (!v) return null; try { return JSON.parse(v); } catch { return null; } }
 
+/** Strip null values from a DB row — Zod optional() accepts undefined but not null. */
+function coerceRow<T extends Record<string, unknown>>(row: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) out[k] = v === null ? undefined : v;
+  return out as T;
+}
+
 /** Index rows by a key field */
 function groupBy(rows: R[], key: string): Map<string, R[]> {
   const m = new Map<string, R[]>();
@@ -246,20 +253,23 @@ export function assemblePlan(
       p4.location_zone = { status: lz.selected_area ? 'selected' : 'pending', selected_area: lz.selected_area, candidates: tryJson(lz.candidates_json) || [] };
     }
     if (hotelRow) {
+      const hotel = coerceRow(hotelRow);
       const accessLines = accessByDest.get(slug) || [];
       p4.hotel = {
-        name: hotelRow.name, access: accessLines.length > 0 ? accessLines.map(a => a.line) : (hotelRow.access_json ? tryJson(hotelRow.access_json) : []),
-        check_in: hotelRow.check_in ?? undefined, notes: hotelRow.notes ?? undefined,
+        name: hotel.name, access: accessLines.length > 0 ? accessLines.map((a: R) => a.line) : (hotel.access_json ? tryJson(hotel.access_json) : []),
+        check_in: hotel.check_in, notes: hotel.notes,
       };
     }
     dest.process_4_accommodation = p4;
 
     // P5 itinerary
     const p5Status = statuses.find(s => s.process_id === 'process_5_daily_itinerary')?.status || 'pending';
-    const itinMeta = itinMetaByDest.get(slug);
-    const p5: any = { status: p5Status, scaffolded_at: itinMeta?.scaffolded_at ?? undefined, populated_at: itinMeta?.populated_at ?? undefined, transit_summary: itinMeta?.transit_summary ?? undefined };
+    const itinMetaRaw = itinMetaByDest.get(slug);
+    const itinMeta = itinMetaRaw ? coerceRow(itinMetaRaw) : undefined;
+    const p5: any = { status: p5Status, scaffolded_at: itinMeta?.scaffolded_at, populated_at: itinMeta?.populated_at, transit_summary: itinMeta?.transit_summary };
     const days = daysByDest.get(slug) || [];
-    p5.days = days.map(dayRow => {
+    p5.days = days.map(rawDayRow => {
+      const dayRow = coerceRow(rawDayRow);
       const day: any = { day_number: num(dayRow.day_number), date: dayRow.date, theme: dayRow.theme, day_type: dayRow.day_type, status: dayRow.status || 'draft' };
       if (dayRow.weather_label || dayRow.temp_low_c != null) {
         day.weather = {
@@ -320,7 +330,7 @@ export function assembleEventLog(
     session: s.session, project: s.project, version: s.version,
     active_destination: s.active_destination || '', current_focus: s.current_focus || '',
     next_actions: tryJson(s.next_actions_json) || [],
-    event_log: evtRows.map(e => ({ event: e.event_type, at: e.event_at, destination: e.destination ?? undefined, process: e.process_id !== 'global' ? e.process_id : undefined, data: tryJson(e.event_data) ?? undefined })),
+    event_log: evtRows.map(e => { const ev = coerceRow(e); return { event: ev.event_type, at: ev.event_at, destination: ev.destination, process: ev.process_id !== 'global' ? ev.process_id : undefined, data: tryJson(ev.event_data) }; }),
     global_processes: {},
     destinations: {},
   };

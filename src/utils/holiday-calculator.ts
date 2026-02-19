@@ -23,6 +23,7 @@ import {
   calculateLeaveDays,
 } from '../utils/leave-calculator';
 import { Result } from '../types';
+import { getOriginConfig } from '../config/loader';
 
 // Re-export types that consumers may need
 export type { HolidayCalendar, HolidayEntry, MakeupWorkday, LeaveDayResult, DayDetail };
@@ -37,35 +38,20 @@ const MARKET_TO_COUNTRY: Record<string, string> = {
   jp: 'japan',
 };
 
-interface OriginConfig {
-  holiday_calendar: string;
-}
-
-interface DestinationsFile {
-  origins: Record<string, OriginConfig>;
-}
-
 /**
  * Resolve the calendar file path for a market code.
- * Reads origins from destinations.json so the mapping stays in one place.
+ * Checks DB-backed origin config first (via getOriginConfig), then falls back
+ * to the convention path data/holidays/{country}-{year}.json.
  */
 function resolveCalendarPath(market: string, year: number): string {
   const country = MARKET_TO_COUNTRY[market] ?? market;
 
-  // Try destinations.json first (authoritative)
-  try {
-    const destPath = path.resolve(process.cwd(), 'data/destinations.json');
-    const raw = fs.readFileSync(destPath, 'utf-8');
-    const dest: DestinationsFile = JSON.parse(raw);
-    const origin = dest.origins[country];
-    if (origin?.holiday_calendar) {
-      // The path in destinations.json may contain a specific year;
-      // replace if needed
-      const calPath = origin.holiday_calendar.replace(/\d{4}/, String(year));
-      return path.resolve(process.cwd(), calPath);
-    }
-  } catch {
-    // Fall through to convention-based lookup
+  // Try DB-backed origin config first (authoritative)
+  const originCfg = getOriginConfig(country);
+  if (originCfg?.holiday_calendar) {
+    // The stored path may contain a specific year — replace if needed
+    const calPath = originCfg.holiday_calendar.replace(/\d{4}/, String(year));
+    return path.resolve(process.cwd(), calPath);
   }
 
   // Convention: data/holidays/{country}-{year}.json

@@ -63,8 +63,9 @@ WRITE:  mutate → await save() → write normalized tables (blocking) → sync 
 READ:   await StateManager.create() → TursoRepository.create() → executeBatch(38 queries) → assemblePlan() → memory
 ```
 
-- **Turso cloud is sole source of truth** — fully normalized, no JSON blobs
+- **Turso cloud is sole source of truth** — fully normalized, no JSON blobs, no config JSON files
 - **No file-based state** — `StateManager` constructor throws without `repo` or `plan`; all legacy file I/O removed
+- **Destination config in DB** — `destination_config` table (replaces `data/destinations.json`); loaded at startup via `loadDestinationConfigFromDb()` into in-memory cache; all sync APIs (`getDestinationConfig()` etc.) read from cache
 - **28+ normalized tables** — see Data Model above
 - **`flight_legs` table** — fully normalized flight data with `departure_terminal`/`arrival_terminal` columns
 - `StateManager.create()` is async factory — reads from normalized tables via `TursoRepository.create()`
@@ -85,9 +86,9 @@ READ:   await StateManager.create() → TursoRepository.create() → executeBatc
 ```
 User intent                          → Skill / Action
 ──────────────────────────────────────────────────────
-"plan a trip to [place]"             → Check destinations.json
+"plan a trip to [place]"             → Check destination_config in Turso
   destination exists?                   → /p1-dates (if dates not set)
-  destination missing?                  → create ref + /p2-destination
+  destination missing?                  → add to destination_config + /p2-destination
 "set dates" / "change dates"         → /p1-dates
 "which city" / "how many nights"     → /p2-destination
 "find packages" / "search OTA"       → check-freshness first
@@ -105,7 +106,7 @@ User intent                          → Skill / Action
 "show bookings"                      → npm run travel -- query-bookings (from DB)
 "show status"                        → npm run view:status
 "show schedule"                      → npm run view:itinerary
-"weather" / "forecast"               → npm run travel -- fetch-weather [--dest slug]
+"weather" / "forecast"               → npm run travel -- fetch-weather [--dest slug] [--all]
 User provides OTA URL                → /scrape-ota (see URL Routing)
 User provides booking confirmation   → npm run travel -- set-activity-booking
 "deploy dashboard" / "publish trip"  → cd workers/trip-dashboard && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
@@ -264,7 +265,7 @@ npm run view:prices -- --flights scrapes/date-range-prices.json --hotel-per-nigh
 
 # === COMPARISON ===
 npm run travel -- compare-offers --region osaka [--json]
-npm run compare-trips -- --input data/osaka-trip-comparison.json [--detailed]
+npm run compare-trips -- --input data/osaka-trip-comparison.json [--detailed]  # file removed
 npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4
 npm run compare-true-cost -- --region kansai --pax 2 --date 2026-02-24
 
@@ -302,7 +303,7 @@ npm run travel -- set-airport-transfer <arrival|departure> <planned|booked> --se
 npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
 npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
 npm run travel -- swap-days <dayA> <dayB> [--dest slug]
-npm run travel -- fetch-weather [--dest slug]
+npm run travel -- fetch-weather [--dest slug] [--all]
 
 # === OPERATION TRACKING ===
 npm run travel -- run-status [run-id]
@@ -313,9 +314,9 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 ```
 /
 ├── data/
-│   ├── destinations.json          # Destination config (v1.1.0)
-│   ├── ota-sources.json           # OTA registry
-│   └── holidays/taiwan-2026.json  # Holiday calendar
+│   ├── holidays/taiwan-2026.json  # Holiday calendar
+│   ├── hotel-areas.json           # Zone categorization (used by compare-true-cost)
+│   └── transport-routes.json      # Transit routes (used by compare-true-cost)
 ├── scrapes/                       # Ephemeral scraper outputs (gitignored)
 ├── scripts/                       # Python scrapers + migration tools
 │   └── hooks/pre-commit           # Runs typecheck + validate:data
@@ -352,7 +353,8 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 └── tests/integration/
 ```
 
-Config files: `data/destinations.json`, `data/ota-sources.json`, `src/config/constants.ts` (defaults/exchange rates), `src/skills/travel-shared/references/ota-knowledge.json` (baggage rules).
+Config: `src/config/constants.ts` (defaults/exchange rates), `src/skills/travel-shared/references/ota-knowledge.json` (baggage rules).
+Destination/OTA config: stored in Turso (`destination_config`, `ota_sources`, `origin_config`, `global_config` tables — no JSON files).
 Note: `ref_path`/`scraper_script` must be repo-relative paths.
 
 ## Turso DB
@@ -371,6 +373,7 @@ Tables:
 - **Event log**: `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`, `event_log_process_events`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
 - **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
+- **Global config** (not plan-scoped): `destination_config` (slug PK, coordinates/timezone/airports), `origin_config` (taiwan origin), `global_config` (default_destination, default_origin), `ota_sources` (OTA registry — replaces ota-sources.json)
 - **Other**: `offers`, `destinations`, `events`, `bookings`
 - **Dead**: `flights` (old JSON blob table — no writes, kept for reference only)
 
@@ -449,5 +452,5 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 ### Kyoto (Feb 24-28)
 1. **Book Hozugawa River Boat** — Day 3, 11:30 slot (https://ars-hozugawa.triplabo.jp)
 2. Restaurant reservations
-3. Fetch weather forecast
+3. ~~Fetch weather forecast~~ ✅ Done (Feb 19: Day1 23%/Day2 71%/Day3 42%/Day4 32%/Day5 52%) — re-run `npm run travel -- fetch-weather --all` closer to trip
 4. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)

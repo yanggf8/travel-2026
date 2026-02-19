@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS destination_cities (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   city_slug TEXT NOT NULL,
+  display_name TEXT,
   role TEXT NOT NULL,
   nights INTEGER,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -719,3 +720,20 @@ CREATE INDEX IF NOT EXISTS idx_operation_runs_plan
   ON operation_runs(plan_id, started_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_runs_idempotency
   ON operation_runs(plan_id, idempotency_key);
+
+
+-- =====================
+-- OTA Sources Config
+-- =====================
+
+CREATE TABLE IF NOT EXISTS ota_sources (
+  source_id    TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  type_json    TEXT,              -- JSON array: ["package","flight","hotel"]
+  status       TEXT DEFAULT 'active',
+  scraper_script TEXT,
+  regions_json TEXT,              -- JSON array of supported regions
+  url_template TEXT,
+  notes        TEXT,
+  updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);

@@ -72,6 +72,7 @@ let projectRootCache: string | null = null;
 let dbDestCache: Record<string, DestinationConfig> | null = null;
 let dbOriginCache: Record<string, Record<string, string | string[]>> | null = null;
 let dbGlobalCache: Record<string, string> | null = null;
+let dbOtaSourcesCache: Map<string, OtaSourceConfig> | null = null;
 /** Whether a DB load has been attempted (avoids repeated attempts on DB failure) */
 let dbLoadAttempted = false;
 
@@ -105,6 +106,7 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
       'SELECT slug, display_name, ref_id, ref_path, timezone, currency, markets_json, primary_airports_json, language, origin, lat, lon FROM destination_config',
       'SELECT slug, country_code, currency, timezone, holiday_calendar, primary_airports_json FROM origin_config',
       'SELECT key, value FROM global_config',
+      'SELECT source_id, name, type_json, status, scraper_script, regions_json, url_template, notes FROM ota_sources',
     ]);
 
     // Helper: parse result at index i into plain objects
@@ -173,8 +175,33 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
     }
     dbGlobalCache = newGlobalCache;
 
+    // Build OTA sources cache
+    const otaRows = rowsAt(3);
+    const newOtaCache = new Map<string, OtaSourceConfig>();
+    for (const row of otaRows) {
+      const types: ('package' | 'flight' | 'hotel')[] = row.type_json ? JSON.parse(row.type_json) : [];
+      const regions: string[] | undefined = row.regions_json ? JSON.parse(row.regions_json) : undefined;
+      const cfg: OtaSourceConfig = {
+        source_id: row.source_id,
+        display_name: row.name,
+        display_name_en: row.name,
+        types,
+        base_url: row.url_template || '',
+        markets: [],
+        currency: 'TWD',
+        supported: row.status === 'active',
+        scraper_script: row.scraper_script || null,
+        notes: row.notes || undefined,
+      };
+      if (regions) (cfg as any).regions = regions;
+      newOtaCache.set(row.source_id, cfg);
+    }
+    if (newOtaCache.size > 0) {
+      dbOtaSourcesCache = newOtaCache;
+    }
+
     console.error(
-      `[loader] Loaded ${Object.keys(newDestCache).length} destinations from DB`
+      `[loader] Loaded ${Object.keys(newDestCache).length} destinations, ${newOtaCache.size} OTA sources from DB`
     );
   } catch (err: any) {
     console.error('[loader] Could not load destination config from DB:', err.message);
@@ -257,18 +284,53 @@ export function loadDestinations(): DestinationsFile {
 
 /**
  * Load OTA sources configuration.
+ * Checks DB cache first (populated by loadDestinationConfigFromDb), falls back to JSON file.
  */
 export function loadOtaSources(): OtaSourcesFile {
   if (otaSourcesCache) return otaSourcesCache;
 
+  // If DB cache is populated, synthesize an OtaSourcesFile from it
+  if (dbOtaSourcesCache !== null && dbOtaSourcesCache.size > 0) {
+    const sources: Record<string, OtaSourceConfig> = {};
+    for (const [id, cfg] of dbOtaSourcesCache) {
+      sources[id] = cfg;
+    }
+    otaSourcesCache = { version: 'db', sources };
+    return otaSourcesCache;
+  }
+
+  // Fallback: try JSON file
   const configPath = resolveRepoPath('data/ota-sources.json', 'OTA sources config');
   if (!fs.existsSync(configPath)) {
-    throw new Error(`OTA sources config not found: ${configPath}`);
+    throw new Error(`OTA sources config not found: ${configPath}. Run db:migrate:turso to seed ota_sources table.`);
   }
 
   const content = fs.readFileSync(configPath, 'utf-8');
   otaSourcesCache = JSON.parse(content) as OtaSourcesFile;
   return otaSourcesCache;
+}
+
+/**
+ * Get OTA source configuration by ID.
+ * Checks DB cache directly for efficiency, falls back through loadOtaSources().
+ */
+export function getOtaSource(sourceId: string): OtaSourceConfig | undefined {
+  if (dbOtaSourcesCache !== null) {
+    return dbOtaSourcesCache.get(sourceId) ?? undefined;
+  }
+  const config = loadOtaSources();
+  return config.sources[sourceId] ?? undefined;
+}
+
+/**
+ * Get all OTA source configs as an array.
+ * Checks DB cache directly for efficiency, falls back through loadOtaSources().
+ */
+export function getAllOtaSources(): OtaSourceConfig[] {
+  if (dbOtaSourcesCache !== null) {
+    return Array.from(dbOtaSourcesCache.values());
+  }
+  return Object.values(loadOtaSources().sources);
 }
 
 /**
@@ -281,6 +343,7 @@ export function clearConfigCache(): void {
   dbDestCache = null;
   dbOriginCache = null;
   dbGlobalCache = null;
+  dbOtaSourcesCache = null;
   dbLoadAttempted = false;
 }
 
@@ -363,6 +426,33 @@ export function getDefaultDestination(): string {
 export function getDestinationCurrency(slug: string): string {
   const destConfig = getDestinationConfig(slug);
   return destConfig?.currency || 'JPY';
+}
+
+export interface OriginConfig {
+  slug: string;
+  country_code?: string;
+  currency?: string;
+  timezone?: string;
+  holiday_calendar?: string;
+  primary_airports?: string[];
+}
+
+/**
+ * Get origin configuration by slug (e.g., 'taiwan').
+ * Returns undefined if DB has not been loaded yet or slug not found.
+ */
+export function getOriginConfig(slug: string): OriginConfig | undefined {
+  if (dbOriginCache === null) return undefined;
+  const row = dbOriginCache[slug];
+  if (!row) return undefined;
+  return {
+    slug,
+    country_code: (row.country_code as string) || undefined,
+    currency: (row.currency as string) || undefined,
+    timezone: (row.timezone as string) || undefined,
+    holiday_calendar: (row.holiday_calendar as string) || undefined,
+    primary_airports: Array.isArray(row.primary_airports) ? (row.primary_airports as string[]) : undefined,
+  };
 }
 
 // ============================================================================

@@ -1,7 +1,7 @@
 ---
 name: new-destination
 description: Add new destination to configuration with validation to prevent runtime errors
-version: 1.0.0
+version: 2.0.0
 requires_skills: [travel-shared]
 requires_processes: []
 provides_processes: []
@@ -20,7 +20,7 @@ Add new destination to system configuration with proper validation to prevent:
 ## When to Use
 
 Run when:
-- Planning a new trip to a destination not in `destinations.json`
+- Planning a new trip to a destination not in the DB
 - Adding a combined region (e.g., osaka_kyoto, tokyo_yokohama)
 - Splitting an existing region into separate destinations
 
@@ -29,17 +29,14 @@ Run when:
 ### 1. Check existing destinations
 
 ```bash
-cat data/destinations.json | jq '.destinations | keys'
+npm run travel -- query-bookings --dest tokyo_2026  # replace to see DB destinations
+npm run view:status
 ```
 
-**Example output**:
-```json
-[
-  "tokyo_2026",
-  "nagoya_2026",
-  "osaka_2026",
-  "osaka_kyoto_2026"
-]
+Or query the DB directly:
+
+```bash
+npx ts-node scripts/turso-exec.ts "SELECT slug, display_name FROM destination_config"
 ```
 
 ### 2. Determine destination details
@@ -53,28 +50,23 @@ cat data/destinations.json | jq '.destinations | keys'
 - `primary_airports`: Airport codes (e.g., `["KIX", "ITM"]`)
 - `coordinates`: Lat/lon for weather API
 
-**Example**: Adding standalone Kyoto
-```json
+### 3. Add destination to DB via migration
+
+Add an `INSERT OR IGNORE` block to `scripts/turso-migrate.ts` inside the existing destinations backfill loop, then run the migration:
+
+```typescript
+// In scripts/turso-migrate.ts — add to the destinations array:
 {
-  "slug": "kyoto_2026",
-  "display_name": "Kyoto",
-  "ref_id": "kyoto",
-  "ref_path": "src/skills/travel-shared/references/destinations/kyoto.json",
-  "timezone": "Asia/Tokyo",
-  "currency": "JPY",
-  "markets": ["TW", "JP"],
-  "primary_airports": ["KIX", "ITM"],
-  "language": "ja",
-  "origin": "taiwan",
-  "coordinates": { "lat": 35.0116, "lon": 135.7681 }
-}
+  slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto',
+  ref_path: 'src/skills/travel-shared/references/destinations/kyoto.json',
+  timezone: 'Asia/Tokyo', currency: 'JPY',
+  markets_json: '["TW","JP"]', primary_airports_json: '["KIX"]',
+  language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
+},
 ```
 
-### 3. Add to destinations.json
-
 ```bash
-# Edit data/destinations.json
-# Add new entry under "destinations" object
+npm run db:migrate:turso
 ```
 
 **Validation**:
@@ -86,7 +78,6 @@ cat data/destinations.json | jq '.destinations | keys'
 ### 4. Create destination reference file
 
 ```bash
-# Create POI/cluster data file
 touch src/skills/travel-shared/references/destinations/<ref_id>.json
 ```
 
@@ -120,52 +111,42 @@ touch src/skills/travel-shared/references/destinations/<ref_id>.json
 }
 ```
 
-### 5. Create plan in Turso (optional)
+### 5. Add destination slug to plan via CLI
+
+After the config row exists in DB, use the standard CLI flow to initialize the plan:
 
 ```bash
-npm run db:seed:plans
+npm run travel -- set-dates 2026-02-24 2026-02-28 --plan-id kyoto-2026
+npm run view:status -- --plan-id kyoto-2026
 ```
 
-**Purpose**: Initialize destination in cloud database for cross-device sync
-
-### 6. Add ZH content (optional)
+### 6. Verify configuration
 
 ```bash
-# Create Chinese translation for dashboard
-touch data/<slug>-trip-plan-zh.md
+# Should show destination loaded from DB
+npm run view:status -- --plan-id kyoto-2026
+
+# Should show: Destination: Kyoto, Status: All processes pending
 ```
 
-### 7. Verify configuration
+### 7. Test weather fetch
 
 ```bash
-# Test destination loads
-npm run view:status -- --dest <slug>
-
-# Should show:
-# Destination: <display_name>
-# Status: All processes pending (expected for new destination)
-```
-
-### 8. Test weather fetch
-
-```bash
-# Verify coordinates work with weather API
-npm run travel -- fetch-weather --dest <slug>
-
+npm run travel -- fetch-weather --dest kyoto_2026
 # Should fetch without "destination not found" error
 ```
 
 ## Validation Checklist
 
 ```
-□ Slug is unique (not in existing destinations)
+□ Slug is unique (not in destination_config table)
 □ Display name is human-readable
 □ Timezone is valid IANA format
 □ Currency is valid ISO code
 □ Coordinates are valid (lat/lon)
 □ Primary airports are valid IATA codes
 □ Reference file created (if using POI data)
-□ destinations.json is valid JSON (no syntax errors)
+□ db:migrate:turso ran successfully
 □ Weather fetch works
 □ view:status shows destination
 ```
@@ -174,9 +155,9 @@ npm run travel -- fetch-weather --dest <slug>
 
 ### Issue: "Destination not found" when fetching weather
 
-**Cause**: Slug in command doesn't match slug in destinations.json
+**Cause**: Slug in command doesn't match slug in `destination_config` DB table
 
-**Fix**: Check exact slug spelling (case-sensitive)
+**Fix**: Check exact slug spelling (case-sensitive); confirm row exists in DB
 
 ### Issue: Weather API returns wrong location
 
@@ -188,68 +169,25 @@ npm run travel -- fetch-weather --dest <slug>
 
 **Cause**: OTA region codes don't match destination
 
-**Fix**: Update `data/ota-sources.json` with correct region mappings
+**Fix**: Update `data/ota-sources.json` with correct region mappings (OTA sources are separate from destination config)
 
 ### Issue: Dashboard doesn't show destination
 
-**Cause**: Turso database not synced
+**Cause**: Plan not initialized in Turso
 
-**Fix**: Run `npm run db:sync:destinations`
-
-## Quick Command
-
-```bash
-# Validate destinations.json syntax
-cat data/destinations.json | jq '.' > /dev/null && echo "✅ Valid JSON" || echo "❌ Syntax error"
-
-# List all destinations
-cat data/destinations.json | jq -r '.destinations | keys[]'
-
-# Check specific destination
-cat data/destinations.json | jq '.destinations.<slug>'
-```
-
-## Example: Adding Kyoto as Standalone
-
-```bash
-# 1. Check it doesn't exist
-cat data/destinations.json | jq '.destinations.kyoto_2026'
-# null (good, doesn't exist)
-
-# 2. Add to destinations.json
-# (Edit file manually)
-
-# 3. Create reference file
-cat > src/skills/travel-shared/references/destinations/kyoto.json << 'EOF'
-{
-  "destination": "kyoto",
-  "display_name": "Kyoto",
-  "areas": {
-    "central": ["Kyoto Station"],
-    "east": ["Gion", "Higashiyama"]
-  },
-  "clusters": {},
-  "pois": {}
-}
-EOF
-
-# 4. Verify
-npm run view:status -- --dest kyoto_2026
-
-# 5. Test weather
-npm run travel -- fetch-weather --dest kyoto_2026
-```
+**Fix**: Run `npm run db:seed:plans` or use CLI to set dates for the new plan
 
 ## Integration with Other Skills
 
-- **Before**: Check if destination already exists (avoid duplicates)
+- **Before**: Check if destination already exists in DB (avoid duplicates)
 - **After**: `/p1-dates` (set dates for new destination)
 - **After**: `/p2-destination` (configure destination details)
 - **Related**: `/weather-update` (test weather fetch)
 
 ## See Also
 
-- `data/destinations.json` — Destination registry
+- `scripts/turso-migrate.ts` — Migration script (source of truth for DB schema and seed data)
+- `scripts/schema.sql` — Read-only DDL reference
 - `src/skills/travel-shared/references/destinations/` — POI data
-- `data/ota-sources.json` — OTA region mappings
+- `data/ota-sources.json` — OTA region mappings (separate from destination config)
 - `/weather-update` — Weather fetch validation

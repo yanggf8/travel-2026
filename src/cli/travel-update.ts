@@ -132,10 +132,12 @@ Commands:
     Validate itinerary for time conflicts, business hours, booking deadlines, and area efficiency.
     Example: validate-itinerary --severity warning
 
-  fetch-weather [--dest slug]
+  fetch-weather [--dest slug] [--all]
     Fetch weather forecast from Open-Meteo and store on itinerary days.
     Requires itinerary to be scaffolded first. Dates must be within 16-day forecast window.
+    Use --all to fetch weather for every destination that has itinerary days.
     Example: fetch-weather
+    Example: fetch-weather --all
 
   search-offers --dest slug [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--pax N] [--types package,flight,hotel] [--source id] [--json]
     Search across registered OTA scrapers (if any are registered at runtime).
@@ -2298,6 +2300,34 @@ async function main(): Promise<void> {
       }
 
       case 'fetch-weather': {
+        if (args.includes('--all')) {
+          const plan = sm.getPlan();
+          const destinations = Object.keys(plan.destinations || {});
+          let totalUpdated = 0;
+          for (const d of destinations) {
+            const destObj = plan.destinations[d] as Record<string, unknown> | undefined;
+            const p5 = destObj?.process_5_daily_itinerary as Record<string, unknown> | undefined;
+            const days = p5?.days as Array<Record<string, unknown>> | undefined;
+            if (!days || days.length === 0) { console.log(`  Skipping ${d} (no itinerary days)`); continue; }
+            const firstDate = days[0].date as string;
+            const lastDate = days[days.length - 1].date as string;
+            const { fetchWeather } = require('../services/weather-service');
+            try {
+              const forecasts = await fetchWeather(firstDate, lastDate, d);
+              if (forecasts.length === 0) { console.log(`  ${d}: outside 16-day window`); continue; }
+              for (let i = 0; i < days.length && i < forecasts.length; i++) {
+                sm.setDayWeather(d, days[i].day_number as number, forecasts[i]);
+              }
+              console.log(`  ${d}: updated ${forecasts.length} day(s)`);
+              totalUpdated += forecasts.length;
+            } catch (e: any) {
+              console.warn(`  ${d}: failed — ${e.message}`);
+            }
+          }
+          if (totalUpdated > 0) await sm.saveWithTracking('fetch-weather', 'all destinations');
+          break;
+        }
+
         const dest = sm.resolveDestination(destOpt);
         const plan = sm.getPlan();
         const destObj = plan.destinations[dest] as Record<string, unknown> | undefined;
