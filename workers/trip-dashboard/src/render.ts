@@ -917,6 +917,13 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       badge: departure?.status ? statusBadge(departure.status as string, lang) : '',
     },
     {
+      icon: '\uD83D\uDCCB',
+      label: lang === 'zh' ? '日本入境申請' : 'Japan Entry',
+      value: `<a href="https://www.vjw.digital.go.jp/main/#/vjwplo001" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${lang === 'zh' ? 'Visit Japan Web' : 'Visit Japan Web'}</a>`,
+      sub: lang === 'zh' ? '出發前一天線上填寫，QR-Code快速出關，免填ED卡' : 'Pre-register online the day before — QR code replaces paper ED card',
+      badge: '',
+    },
+    {
       icon: '\uD83C\uDF0F',
       label: lang === 'zh' ? '旅遊資訊' : 'Travel Info',
       value: `<a href="https://www.japan.travel/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${lang === 'zh' ? '日本觀光局' : 'Visit Japan'}</a>`,
