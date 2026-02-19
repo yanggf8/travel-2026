@@ -68,6 +68,9 @@ export async function fetchWeather(
   endDate: string,
   destination: string
 ): Promise<DayWeather[]> {
+  const { loadDestinationConfigFromDb } = await import('../config/loader');
+  await loadDestinationConfigFromDb();
+
   const config = getDestinationConfig(destination);
   if (!config) {
     throw new Error(`Destination not found: ${destination}`);

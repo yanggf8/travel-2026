@@ -660,6 +660,43 @@ CREATE TABLE IF NOT EXISTS bookings (
 
 
 -- =====================
+-- Global Destination Config (not plan-scoped)
+-- =====================
+
+CREATE TABLE IF NOT EXISTS destination_config (
+  slug TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  ref_id TEXT,
+  ref_path TEXT,
+  timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
+  currency TEXT NOT NULL DEFAULT 'JPY',
+  markets_json TEXT,
+  primary_airports_json TEXT,
+  language TEXT DEFAULT 'ja',
+  origin TEXT DEFAULT 'taiwan',
+  lat REAL,
+  lon REAL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS origin_config (
+  slug TEXT PRIMARY KEY,
+  country_code TEXT,
+  currency TEXT,
+  timezone TEXT,
+  holiday_calendar TEXT,
+  primary_airports_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS global_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- =====================
 -- Operation Tracking
 -- =====================
 

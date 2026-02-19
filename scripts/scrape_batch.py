@@ -35,16 +35,35 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent))
 from scrape_listings import scrape_listings, build_listing_url, save_listings
 
-# OTAs that support listing scrapes
-LISTING_OTAS = ["besttour", "lifetour", "settour"]
-FIT_OTAS = ["liontravel"]
-
 
 def load_ota_config():
     """Load OTA configuration."""
     config_path = Path(__file__).parent.parent / "data" / "ota-sources.json"
     with open(config_path) as f:
         return json.load(f)["sources"]
+
+
+def get_listing_otas() -> list[str]:
+    """Get OTAs that support listing scrapes (from config)."""
+    config = load_ota_config()
+    return [
+        source_id
+        for source_id, source in config.items()
+        if source.get("supported") and source.get("supports_listing")
+    ]
+
+
+def get_fit_otas() -> list[str]:
+    """Get OTAs that support FIT packages (from config)."""
+    config = load_ota_config()
+    return [
+        source_id
+        for source_id, source in config.items()
+        if source.get("supported")
+        and isinstance(source.get("product_lines"), dict)
+        and isinstance(source["product_lines"].get("fit"), dict)
+        and source["product_lines"]["fit"].get("supported")
+    ]
 
 
 async def scrape_single_ota(
@@ -101,19 +120,22 @@ async def run_batch(args):
     print("=" * 60)
 
     # Determine which OTAs to scrape
+    listing_otas = get_listing_otas()
+    fit_otas = get_fit_otas()
+
     if args.sources:
         sources = [s.strip() for s in args.sources.split(",")]
     else:
         # Default: all listing OTAs + FIT if date provided
-        sources = LISTING_OTAS.copy()
+        sources = listing_otas.copy()
         if args.date:
-            sources.extend(FIT_OTAS)
+            sources.extend(fit_otas)
 
     # Filter by type
     if args.type == "fit":
-        sources = [s for s in sources if s in FIT_OTAS]
+        sources = [s for s in sources if s in fit_otas]
     elif args.type == "group":
-        sources = [s for s in sources if s in LISTING_OTAS]
+        sources = [s for s in sources if s in listing_otas]
 
     print(f"\nSources: {', '.join(sources)}")
     print(f"Destination: {args.dest}")

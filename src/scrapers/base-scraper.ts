@@ -48,6 +48,12 @@ export abstract class BaseScraper implements IOtaScraper {
   abstract search(params: OtaSearchParams): Promise<ScrapeResult>;
   abstract scrapeProduct(url: string): Promise<ScrapeResult>;
 
+  /**
+   * Check if this scraper supports the given destination slug.
+   * NOTE: Requires destination config cache to be pre-loaded via
+   * loadDestinationConfigFromDb() before the CLI/process starts.
+   * The cache is populated at CLI startup in travel-update.ts main().
+   */
   supportsDestination(destination: string): boolean {
     const destConfig = getDestinationConfig(destination);
     if (!destConfig) return false;

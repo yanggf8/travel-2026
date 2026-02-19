@@ -926,6 +926,149 @@ async function main() {
     }
   }
 
+  // ========================================
+  // Global Config Tables: destination_config, origin_config, global_config
+  // ========================================
+
+  try {
+    console.log('Creating destination_config table...');
+    await client.execute(`CREATE TABLE IF NOT EXISTS destination_config (
+  slug TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  ref_id TEXT,
+  ref_path TEXT,
+  timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
+  currency TEXT NOT NULL DEFAULT 'JPY',
+  markets_json TEXT,
+  primary_airports_json TEXT,
+  language TEXT DEFAULT 'ja',
+  origin TEXT DEFAULT 'taiwan',
+  lat REAL,
+  lon REAL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+    console.log('✅ Created destination_config table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) {
+      console.log('ℹ️  destination_config table already exists.');
+    } else {
+      console.warn('⚠️  Could not create destination_config table:', e.message);
+    }
+  }
+
+  try {
+    console.log('Creating origin_config table...');
+    await client.execute(`CREATE TABLE IF NOT EXISTS origin_config (
+  slug TEXT PRIMARY KEY,
+  country_code TEXT,
+  currency TEXT,
+  timezone TEXT,
+  holiday_calendar TEXT,
+  primary_airports_json TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+    console.log('✅ Created origin_config table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) {
+      console.log('ℹ️  origin_config table already exists.');
+    } else {
+      console.warn('⚠️  Could not create origin_config table:', e.message);
+    }
+  }
+
+  try {
+    console.log('Creating global_config table...');
+    await client.execute(`CREATE TABLE IF NOT EXISTS global_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+    console.log('✅ Created global_config table.');
+  } catch (e: any) {
+    if (e.message?.includes('already exists')) {
+      console.log('ℹ️  global_config table already exists.');
+    } else {
+      console.warn('⚠️  Could not create global_config table:', e.message);
+    }
+  }
+
+  // Backfill destination_config rows
+  const destinations = [
+    {
+      slug: 'tokyo_2026', display_name: 'Tokyo', ref_id: 'tokyo',
+      ref_path: 'src/skills/travel-shared/references/destinations/tokyo.json',
+      timezone: 'Asia/Tokyo', currency: 'JPY',
+      markets_json: '["TW","JP"]', primary_airports_json: '["NRT","HND"]',
+      language: 'ja', origin: 'taiwan', lat: 35.6762, lon: 139.6503,
+    },
+    {
+      slug: 'nagoya_2026', display_name: 'Nagoya', ref_id: 'nagoya',
+      ref_path: 'src/skills/travel-shared/references/destinations/nagoya.json',
+      timezone: 'Asia/Tokyo', currency: 'JPY',
+      markets_json: '["TW","JP"]', primary_airports_json: '["NGO"]',
+      language: 'ja', origin: 'taiwan', lat: 35.1815, lon: 136.9066,
+    },
+    {
+      slug: 'osaka_2026', display_name: 'Osaka', ref_id: 'osaka',
+      ref_path: 'src/skills/travel-shared/references/destinations/osaka.json',
+      timezone: 'Asia/Tokyo', currency: 'JPY',
+      markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
+      language: 'ja', origin: 'taiwan', lat: 34.6937, lon: 135.5023,
+    },
+    {
+      slug: 'osaka_kyoto_2026', display_name: 'Osaka + Kyoto', ref_id: 'osaka_kyoto',
+      ref_path: 'src/skills/travel-shared/references/destinations/osaka_kyoto.json',
+      timezone: 'Asia/Tokyo', currency: 'JPY',
+      markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
+      language: 'ja', origin: 'taiwan', lat: 34.6937, lon: 135.5023,
+    },
+    {
+      slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto',
+      ref_path: 'src/skills/travel-shared/references/destinations/kyoto.json',
+      timezone: 'Asia/Tokyo', currency: 'JPY',
+      markets_json: '["TW","JP"]', primary_airports_json: '["KIX"]',
+      language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
+    },
+  ];
+
+  for (const d of destinations) {
+    try {
+      const esc = (s: string | null | undefined) => s !== null && s !== undefined ? `'${String(s).replace(/'/g, "''")}'` : 'NULL';
+      await client.execute(
+        `INSERT OR IGNORE INTO destination_config (slug, display_name, ref_id, ref_path, timezone, currency, markets_json, primary_airports_json, language, origin, lat, lon) VALUES (${esc(d.slug)}, ${esc(d.display_name)}, ${esc(d.ref_id)}, ${esc(d.ref_path)}, ${esc(d.timezone)}, ${esc(d.currency)}, ${esc(d.markets_json)}, ${esc(d.primary_airports_json)}, ${esc(d.language)}, ${esc(d.origin)}, ${d.lat}, ${d.lon})`
+      );
+      console.log(`✅ Backfilled destination_config: ${d.slug}`);
+    } catch (e: any) {
+      console.warn(`⚠️  Could not backfill destination_config ${d.slug}:`, e.message);
+    }
+  }
+
+  // Backfill origin_config rows
+  try {
+    await client.execute(
+      `INSERT OR IGNORE INTO origin_config (slug, country_code, currency, timezone, holiday_calendar, primary_airports_json) VALUES ('taiwan', 'TW', 'TWD', 'Asia/Taipei', 'data/holidays/taiwan-2026.json', '["TPE","TSA","RMQ","KHH"]')`
+    );
+    console.log('✅ Backfilled origin_config: taiwan');
+  } catch (e: any) {
+    console.warn('⚠️  Could not backfill origin_config taiwan:', e.message);
+  }
+
+  // Backfill global_config rows
+  const globalConfigs = [
+    { key: 'default_destination', value: 'tokyo_2026' },
+    { key: 'default_origin', value: 'taiwan' },
+  ];
+  for (const g of globalConfigs) {
+    try {
+      await client.execute(
+        `INSERT OR IGNORE INTO global_config (key, value) VALUES ('${g.key}', '${g.value}')`
+      );
+      console.log(`✅ Backfilled global_config: ${g.key}=${g.value}`);
+    } catch (e: any) {
+      console.warn(`⚠️  Could not backfill global_config ${g.key}:`, e.message);
+    }
+  }
+
   console.log('Done.');
 }
 

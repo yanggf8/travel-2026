@@ -342,6 +342,7 @@
       "display_name_en": "Trip.com",
       "types": ["flight"],
       "base_url": "https://www.trip.com",
+      "parser_module": "trip_com",
       "markets": ["TW", "JP", "INTL"],
       "currency": "USD",
       "supported": true,

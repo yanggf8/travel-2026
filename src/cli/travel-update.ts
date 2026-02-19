@@ -994,6 +994,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Pre-load destination config from Turso DB so all sync loader APIs work
+  const { loadDestinationConfigFromDb } = await import('../config/loader');
+  await loadDestinationConfigFromDb();
+
   const sm = planIdOpt
     ? await StateManager.createFromPlanId(planIdOpt)
     : await StateManager.create(planOpt, stateOpt);

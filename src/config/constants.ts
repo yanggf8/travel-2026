@@ -97,6 +97,13 @@ export function convertToTWD(amount: number, fromCurrency: CurrencyCode): number
 }
 
 /**
+ * Data freshness thresholds.
+ */
+export const FRESHNESS = {
+  STALE_THRESHOLD_MS: 24 * 60 * 60 * 1000, // 24 hours
+} as const;
+
+/**
  * Default LCC baggage fee per person per direction (TWD).
  */
 export const DEFAULT_LCC_BAGGAGE_FEE = 1750;

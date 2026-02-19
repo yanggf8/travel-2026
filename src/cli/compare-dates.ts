@@ -16,6 +16,7 @@ import * as path from 'path';
 import { normalizeFlightData, scanFlightFiles, FlightSearchResult } from '../utils/flight-normalizer';
 import { loadHolidayCalendar, calculateLeaveDays, LeaveDayResult, HolidayCalendar } from '../utils/leave-calculator';
 import { EXCHANGE_RATES, convertToTWD, DEFAULTS, DEFAULT_LCC_BAGGAGE_FEE } from '../config/constants';
+import { addDays, getDayOfWeek } from '../utils/date-utils';
 import { Result } from '../types';
 
 // Types
@@ -65,20 +66,6 @@ interface CompareOptions {
 }
 
 const DAY_NAMES_ZH = ['日', '一', '二', '三', '四', '五', '六'];
-
-function addDays(dateStr: string, days: number): string {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const date = new Date(y, m - 1, d + days);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function getDayOfWeek(dateStr: string): number {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d).getDay();
-}
 
 function parseLionTravelFIT(filePath: string): FITPackage | null {
   try {

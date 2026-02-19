@@ -2,33 +2,46 @@
 OTA Scraper Registry
 
 Maps URLs and source IDs to the appropriate parser class.
+All mappings are data-driven from data/ota-sources.json.
 """
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
-from .base import BaseScraper
+from .base import BaseScraper, load_ota_config
 
 
-# URL pattern → source_id mapping
-_URL_PATTERNS: list[tuple[str, str]] = [
-    (r"besttour\.com\.tw", "besttour"),
-    (r"liontravel\.com", "liontravel"),
-    (r"lifetour\.com\.tw", "lifetour"),
-    (r"settour\.com\.tw", "settour"),
-    (r"travel4u\.com\.tw", "travel4u"),
-    (r"tigerairtw\.com", "tigerair"),
-    (r"trip\.com", "trip"),
-    (r"google\.com/travel/flights", "google_flights"),
-    (r"agoda\.com", "agoda"),
-    (r"eztravel\.com\.tw", "eztravel"),
-    (r"booking\.com", "booking"),
-]
-
-# Lazy-loaded parser instances
+# Lazy-loaded caches
+_url_patterns: list[tuple[str, str]] | None = None
 _parser_cache: dict[str, BaseScraper] = {}
+
+
+def _build_url_patterns() -> list[tuple[str, str]]:
+    """Build URL patterns from ota-sources.json base_url fields."""
+    global _url_patterns
+    if _url_patterns is not None:
+        return _url_patterns
+
+    config = load_ota_config()
+    patterns: list[tuple[str, str]] = []
+    for source_id, source in config.items():
+        base_url = source.get("base_url", "")
+        if not base_url:
+            continue
+        # Extract domain from base_url
+        parsed = urlparse(base_url)
+        domain = parsed.netloc or parsed.path
+        # Remove www. prefix for broader matching
+        domain = domain.removeprefix("www.")
+        patterns.append((re.escape(domain), source_id))
+
+    _url_patterns = patterns
+    return _url_patterns
 
 
 def detect_ota(url: str) -> Optional[str]:
@@ -37,7 +50,8 @@ def detect_ota(url: str) -> Optional[str]:
 
     Returns source_id string or None if URL doesn't match any known OTA.
     """
-    for pattern, source_id in _URL_PATTERNS:
+    patterns = _build_url_patterns()
+    for pattern, source_id in patterns:
         if re.search(pattern, url):
             return source_id
     return None
@@ -57,45 +71,47 @@ def get_parser(source_id: str) -> BaseScraper:
     return parser
 
 
+def _get_parser_module_name(source_id: str) -> str:
+    """Get the parser module name for a source_id.
+
+    Convention: module name == source_id.
+    Exception: sources with a 'parser_module' field in config override this.
+    """
+    config = load_ota_config()
+    source = config.get(source_id, {})
+    return source.get("parser_module", source_id)
+
+
 def _create_parser(source_id: str) -> BaseScraper:
-    """Create a parser instance by source_id (lazy import to avoid circular deps)."""
-    if source_id == "besttour":
-        from .parsers.besttour import BestTourParser
-        return BestTourParser()
-    elif source_id == "liontravel":
-        from .parsers.liontravel import LionTravelParser
-        return LionTravelParser()
-    elif source_id == "lifetour":
-        from .parsers.lifetour import LifetourParser
-        return LifetourParser()
-    elif source_id == "settour":
-        from .parsers.settour import SettourParser
-        return SettourParser()
-    elif source_id == "travel4u":
-        from .parsers.travel4u import Travel4UParser
-        return Travel4UParser()
-    elif source_id == "tigerair":
-        from .parsers.tigerair import TigerairParser
-        return TigerairParser()
-    elif source_id == "trip":
-        from .parsers.trip_com import TripComParser
-        return TripComParser()
-    elif source_id == "google_flights":
-        from .parsers.google_flights import GoogleFlightsParser
-        return GoogleFlightsParser()
-    elif source_id == "agoda":
-        from .parsers.agoda import AgodaParser
-        return AgodaParser()
-    elif source_id == "eztravel":
-        from .parsers.eztravel import EzTravelParser
-        return EzTravelParser()
-    else:
+    """Create a parser instance by source_id using dynamic import."""
+    module_name = _get_parser_module_name(source_id)
+
+    try:
+        module = importlib.import_module(f".parsers.{module_name}", package="scripts.scrapers")
+    except ModuleNotFoundError:
+        available = get_available_parsers()
         raise ValueError(
-            f"No parser registered for source_id '{source_id}'. "
-            f"Available: besttour, liontravel, lifetour, settour, travel4u, tigerair, trip, google_flights, agoda, eztravel"
+            f"No parser module found for source_id '{source_id}' "
+            f"(tried 'scripts.scrapers.parsers.{module_name}'). "
+            f"Available: {', '.join(available)}"
         )
+
+    # Find the BaseScraper subclass in the module
+    for _, obj in inspect.getmembers(module, inspect.isclass):
+        if issubclass(obj, BaseScraper) and obj is not BaseScraper:
+            return obj()
+
+    raise ValueError(
+        f"No BaseScraper subclass found in 'scripts.scrapers.parsers.{module_name}' "
+        f"for source_id '{source_id}'"
+    )
 
 
 def get_available_parsers() -> list[str]:
-    """Return list of all available parser source IDs."""
-    return ["besttour", "liontravel", "lifetour", "settour", "travel4u", "tigerair", "trip", "google_flights", "agoda", "eztravel"]
+    """Return list of all available parser source IDs (supported with scraper_script)."""
+    config = load_ota_config()
+    return [
+        source_id
+        for source_id, source in config.items()
+        if source.get("supported") and source.get("scraper_script")
+    ]

@@ -18,13 +18,7 @@ import {
   getHolidaysInRange,
   type LeaveResult,
 } from '../utils/holiday-calculator';
-
-// Helper: Add days to a date
-function addDays(dateStr: string, days: number): string {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
+import { addDays } from '../utils/date-utils';
 
 // Helper: Format leave plan for display
 function formatLeavePlan(plan: LeaveResult): string {
