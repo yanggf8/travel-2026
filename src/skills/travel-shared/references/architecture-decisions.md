@@ -112,4 +112,12 @@ Implementation approach:
 2. Implement `TursoDbClient` backed by the existing Turso HTTP pipeline
 3. Rewrite each `StateManager` method as targeted reads + writes against `DbClient`
 4. Remove `PlanRepository`, `plan-assembler.ts`, `syncNormalizedTables()`
-5. Tests inject a mock `DbClient` — no `skipSave: true` hack needed
+
+### Testing
+
+No mocks. Tests run against a real DB (local SQLite via `libsql` embedded, or a dedicated Turso test database). Mocks diverge from the real schema and give false confidence — a passing mock test is no guarantee the SQL is correct.
+
+Test pattern:
+- Seed a test plan into the real DB
+- Call `dispatch(command)`
+- Assert the DB row directly (`SELECT` the updated column)
