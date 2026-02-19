@@ -63,7 +63,7 @@ WRITE:  mutate → await save() → write normalized tables (blocking) → sync 
 READ:   await StateManager.create() → TursoRepository.create() → executeBatch(38 queries) → assemblePlan() → memory
 ```
 
-> ⚠️ **Legacy pattern** — the in-memory repo + coarse `syncNormalizedTables()` flush is the current implementation but not the target. See ADR-001 in `src/skills/travel-shared/references/architecture-decisions.md`. Target: each command = one targeted SELECT (validate) + one targeted UPDATE/INSERT. No assembled plan object. No flush.
+> **Target pattern (ADR-001)**: each command = one targeted SELECT (validate) + one targeted UPDATE/INSERT. No assembled plan object. No flush. Dashboard reads Turso directly — StateManager internals have zero impact on web pages. See `src/skills/travel-shared/references/architecture-decisions.md`.
 
 - **Turso cloud is sole source of truth** — fully normalized, no JSON blobs, no config JSON files
 - **No file-based state** — `StateManager` constructor throws without `repo` or `plan`; all legacy file I/O removed

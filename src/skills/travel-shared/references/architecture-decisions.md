@@ -105,9 +105,11 @@ const dirty = await db.queryMany(
 
 ### Migration path
 
-The current in-memory repo is live for Kyoto (Feb 24-28). Do not migrate mid-trip.
+The external contracts are already stable — `dispatch(Command)` on the CLI side, normalized Turso tables on the DB side, and the dashboard reads Turso directly without going through StateManager. Changing the internals has zero impact on existing data or any web page.
 
-When starting the next destination:
-- Implement `StateManagerV2` alongside the current one, sharing the same `dispatch()` command interface
-- Each command method in V2 is a targeted read + targeted write
-- Run V2 for new destinations, V1 for existing — retire V1 when Kyoto closes
+Implementation approach:
+1. Define `DbClient` interface (queryOne / queryMany / execute)
+2. Implement `TursoDbClient` backed by the existing Turso HTTP pipeline
+3. Rewrite each `StateManager` method as targeted reads + writes against `DbClient`
+4. Remove `PlanRepository`, `plan-assembler.ts`, `syncNormalizedTables()`
+5. Tests inject a mock `DbClient` — no `skipSave: true` hack needed
