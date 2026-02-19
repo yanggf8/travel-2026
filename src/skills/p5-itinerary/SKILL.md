@@ -249,6 +249,28 @@ npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:
 npm run travel -- validate-itinerary [--severity warning]
 ```
 
+## Traditional Chinese (ZH) Content
+
+All ZH content lives in DB columns — never hardcoded in Worker. After scaffolding in English, populate ZH fields:
+
+```bash
+# Per-session (focus + transit + activities)
+npm run travel -- set-session-zh <day> <morning|afternoon|evening> \
+  --zh "中文焦點標題" \
+  --transit-zh "中文交通說明" \
+  --activities-zh-json '["活動一","活動二 https://maps.link"]' \
+  [--plan-id kyoto-2026]
+
+# Day theme
+npm run travel -- set-day-theme <day> [en_theme] --zh "中文主題" [--plan-id kyoto-2026]
+```
+
+**Bulk population (new destination):** Copy `scripts/set-kyoto-zh-sessions-v2.ts` — uses Turso parameterized pipeline API to update all 15 sessions in one HTTP request. Required for Unicode/emoji; inline SQL silently fails.
+
+**Adding links to activities:** Embed `https://` URLs directly in activity text — `renderActivityText()` auto-linkifies them. Works for Tabelog, Google Maps, booking pages.
+
+**Bilingual display:** Dashboard shows ZH primary + EN subtitle when `focus_zh` is set. Activities fall back to EN when `activities_zh` is empty.
+
 ## Example Session
 
 ```
