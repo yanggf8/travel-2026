@@ -27,7 +27,7 @@ interface FlightSearchInput {
 
 ## Output Schema
 
-Writes to `travel-plan.json`:
+Writes via StateManager (DB-backed, no direct JSON):
 ```typescript
 process_3_transportation: {
   status: 'researched' | 'selected';
@@ -87,8 +87,8 @@ npm run travel -- filter-flights --type lcc
 
 ## State Changes
 
-- **travel-plan.json**: Updates `process_3_transportation.flight.candidates`
-- **state.json**: Emits `flight_candidates_added` event
+- **StateManager**: Updates `process_3_transportation.flight.candidates`
+- **Event log**: Emits `flight_candidates_added` event
 - **Cascade triggers**: Marks P5 dirty if dates change
 
 ## Dependencies

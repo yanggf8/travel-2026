@@ -31,7 +31,7 @@ interface PackageSearchInput {
 
 ## Output Schema
 
-Writes to `travel-plan.json`:
+Writes via StateManager (DB-backed, no direct JSON):
 ```typescript
 process_3_4_packages: {
   status: 'researched' | 'selected';
@@ -110,10 +110,10 @@ python scripts/filter_packages.py scrapes/*-scrape.json --max-price 20000 --type
 
 ## State Changes
 
-- **travel-plan.json**: 
+- **StateManager**: 
   - Updates `process_3_4_packages.results.offers`
   - On selection: populates `process_3_transportation` and `process_4_accommodation`
-- **state.json**: 
+- **Event log**: 
   - Emits `package_offers_imported` event
   - Emits `offer_selected` event
   - Emits `cascade_populated` event
@@ -161,7 +161,7 @@ python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24
 ## DB Integration
 
 After package selection, bookings are automatically synced to Turso:
-- `StateManager.save()` writes to both JSON and DB
+- `StateManager.save()` writes to normalized tables (no JSON)
 - Query bookings: `npm run travel -- query-bookings --category package`
 - The agent should use `query-bookings` to check status, not read JSON paths
 - Manual sync: `npm run travel -- sync-bookings`

@@ -462,3 +462,10 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 2. ~~Restaurant reservations~~ ✅ Partial — Day 1 & Day 3 evening Tabelog link added; Katsukura (名代豬排 JR京都伊勢丹 11F) added to Day 3 dinner
 3. ~~Fetch weather forecast~~ ✅ Done (Feb 19: Day1 23%/Day2 71%/Day3 42%/Day4 32%/Day5 52%) — re-run `npm run travel -- fetch-weather --all` closer to trip
 4. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
+
+### Engineering (next destination)
+1. **StateManagerV2** — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`)
+   - `DbClient` interface: `queryOne / queryMany / execute`
+   - Each command = targeted SELECT (validate) + targeted UPDATE/INSERT
+   - Remove `PlanRepository`, `plan-assembler.ts`, `syncNormalizedTables()`
+2. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB (local SQLite or dedicated Turso test DB)

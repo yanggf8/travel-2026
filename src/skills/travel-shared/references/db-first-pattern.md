@@ -1,21 +1,22 @@
 # DB-First Pattern (Critical)
 
-## Rule: Never Edit JSON Directly
+## Rule: Never Edit Or Read JSON Directly
 
-**All mutations must go through StateManager or CLI commands.**
+**All reads and mutations must go through StateManager or CLI commands.**
 
 ### Why This Matters
 
-Direct JSON edits bypass:
+Direct JSON access bypasses:
 1. **Event logging** — No audit trail of what changed
 2. **Dirty flags** — Cascade system doesn't know to re-evaluate
 3. **Status validation** — Invalid state transitions allowed
 4. **Timestamp tracking** — No record of when changes occurred
+5. **Consistency guarantees** — DB tables and cache views can drift
 
 ### The Right Way
 
 ```typescript
-// WRONG — Direct JSON edit
+// WRONG — Direct JSON access
 plan.destinations.tokyo_2026.process_3_transportation.status = 'selected';
 
 // RIGHT — Via StateManager
@@ -43,7 +44,7 @@ npm run travel -- set-activity-booking 2 morning "teamLab" booked --ref "TLB-123
 
 ### Read-Only Operations
 
-Reads are fine — StateManager or direct JSON parse:
+Reads must go through StateManager/Repository (no JSON parse):
 ```typescript
 const sm = await StateManager.create();
 const plan = sm.getPlan();
