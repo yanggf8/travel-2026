@@ -115,9 +115,14 @@ Implementation approach:
 
 ### Testing
 
-No mocks. Tests run against a real DB (local SQLite via `libsql` embedded, or a dedicated Turso test database). Mocks diverge from the real schema and give false confidence — a passing mock test is no guarantee the SQL is correct.
+No mocks. Real DB, real SQL.
 
-Test pattern:
-- Seed a test plan into the real DB
-- Call `dispatch(command)`
-- Assert the DB row directly (`SELECT` the updated column)
+```
+beforeEach → seed minimal plan data into test DB
+test        → dispatch(command)
+             → SELECT the affected row
+             → assert expected value
+afterEach  → tear down (DELETE WHERE plan_id = 'test-plan')
+```
+
+Good seed data is the test fixture. If the seed is realistic, the test is meaningful. If the SQL is wrong, the test fails — no mock to hide it.
