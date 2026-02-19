@@ -401,7 +401,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
       const dayKey = `${dest}:${dayNumber}`;
       const dayRoutes = routesByDestDay.get(dayKey);
       if (dayRoutes && dayRoutes.length > 0) {
-        day.route_segments = dayRoutes.map(r => ({ from: r.from_place, to: r.to_place, mode: r.mode }));
+        day.route_segments = dayRoutes.map(r => ({ from: r.from_place, to: r.to_place, mode: r.mode, duration_min: r.duration_min ? parseInt(r.duration_min, 10) : null, notes: r.notes || null, start_time: r.start_time || null }));
       }
       const dayLandmarks = landmarksByDestDay.get(dayKey);
       if (dayLandmarks && dayLandmarks.length > 0) {

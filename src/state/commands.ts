@@ -247,6 +247,28 @@ export interface SetActivityTimeCommand {
   isFixedTime?: boolean;
 }
 
+export interface SetActivityTitleCommand {
+  type: 'set_activity_title';
+  destination: string;
+  dayNumber: number;
+  session: SessionType;
+  activityIdOrTitle: string;
+  newTitle: string;
+}
+
+export interface SetRouteSegmentCommand {
+  type: 'set_route_segment';
+  destination: string;
+  dayNumber: number;
+  sortOrder: number;
+  fromPlace: string;
+  toPlace: string;
+  mode: 'transit' | 'walking' | 'driving';
+  durationMin?: number;
+  notes?: string;
+  startTime?: string;
+}
+
 export interface SetSessionTimeRangeCommand {
   type: 'set_session_time_range';
   destination: string;
@@ -261,6 +283,7 @@ export interface SetDayThemeCommand {
   destination: string;
   dayNumber: number;
   theme: string | null;
+  themeZh?: string | null;
 }
 
 export interface SetDayWeatherCommand {
@@ -315,6 +338,8 @@ export type Command =
   | RemoveActivityCommand
   | SetActivityBookingCommand
   | SetActivityTimeCommand
+  | SetActivityTitleCommand
+  | SetRouteSegmentCommand
   | SetSessionTimeRangeCommand
   | SetDayThemeCommand
   | SetDayWeatherCommand

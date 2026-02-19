@@ -540,6 +540,53 @@ details[open] .map-summary::after { transform: rotate(90deg); }
 .map-place-link:active { background: var(--accent-light); }
 @media (max-width: 480px) { .map-container iframe { min-height: 200px; } }
 
+/* Route legs section */
+.route-legs-section {
+  margin: 0 0 4px 0;
+  padding: 10px 16px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.route-legs-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.route-leg {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.route-leg-icon { flex-shrink: 0; }
+.route-leg-places {
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 500;
+  flex: 1;
+}
+.route-leg-places:hover { text-decoration: underline; color: var(--accent); }
+.route-leg-time {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.route-leg-dur {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.route-leg-notes {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 /* Plan index */
 .plan-index {
   display: grid;

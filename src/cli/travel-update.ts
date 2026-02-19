@@ -119,6 +119,20 @@ Commands:
     Set optional time fields for an activity (start/end/fixed).
     Example: set-activity-time 5 afternoon "Hotel checkout" --start 11:00 --fixed true
 
+  set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM] [--plan-id <id>]
+    Upsert a route segment on a day (0-based sort_order). mode: transit | walking | driving
+    Example: set-route-segment 1 0 "關渡" "嘟嘟房桃園機場貨運1站" driving --duration 45 --start-time 06:00
+    Example: set-route-segment 1 1 "嘟嘟房桃園機場貨運1站" "桃園國際機場第一航廈" transit --duration 15 --start-time 06:45
+
+  set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug] [--plan-id <id>]
+    Set day theme/title. Use --zh to set Traditional Chinese title (shown by default).
+    Example: set-day-theme 1 --zh "抵達京都・安頓"
+    Example: set-day-theme 2 "Kinkaku-ji day" --zh "金閣寺・伏見稲荷"
+
+  set-activity-title <day> <session> <activity> "<new_title>" [--plan-id <id>]
+    Rename an activity by title substring or ID.
+    Example: set-activity-title 2 morning "Fushimi Inari" "金閣寺 (Kinkaku-ji)"
+
   set-session-time-range <day> <session> --start HH:MM --end HH:MM
     Set optional time boundaries for a session.
     Example: set-session-time-range 5 afternoon --start 11:00 --end 14:45
@@ -601,6 +615,22 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
 
       console.log('');
     }
+
+    // Route segments
+    const routeSegments = day.route_segments as Array<Record<string, unknown>> | undefined;
+    if (routeSegments && routeSegments.length > 0) {
+      console.log('  🗺️  ROUTE:');
+      for (const seg of routeSegments) {
+        const from = seg.from_place as string;
+        const to = seg.to_place as string;
+        const mode = seg.mode as string;
+        const dur = seg.duration_min != null ? ` (~${seg.duration_min} min)` : '';
+        const notes = seg.notes as string | undefined;
+        const modeIcon = mode === 'driving' ? '🚗' : mode === 'walking' ? '🚶' : '🚌';
+        console.log(`    ${modeIcon} ${from} → ${to}${dur}${notes ? `  (${notes})` : ''}`);
+      }
+      console.log('');
+    }
   }
 
   // Pending bookings summary
@@ -893,6 +923,8 @@ async function main(): Promise<void> {
   const assignOpt = optionValue('--assign');
   const refOpt = optionValue('--ref');
   const bookByOpt = optionValue('--book-by');
+  const durationOpt = optionValue('--duration');
+  const notesOpt = optionValue('--notes');
   const selectedOpt = optionValue('--selected');
   const candidateOpts = optionValues('--candidate');
   const startOpt = optionValue('--start');
@@ -930,6 +962,7 @@ async function main(): Promise<void> {
   const hotelNameOpt = optionValue('--name');
   const checkInOpt = optionValue('--check-in');
   const accessOpt = optionValue('--access');
+  const startTimeOpt = optionValue('--start-time');
 
   // Filter out flags/options from args
   const optionsWithValues = new Set([
@@ -980,6 +1013,10 @@ async function main(): Promise<void> {
     '--name',
     '--check-in',
     '--access',
+    '--duration',
+    '--notes',
+    '--start-time',
+    '--zh',
   ]);
   const cleanArgs: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -1930,6 +1967,143 @@ async function main(): Promise<void> {
           );
           await sm.saveWithTracking('set-activity-booking', `D${dayNumber} ${session} ${activity}`);
           console.log('✅ Activity booking status updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
+      case 'set-route-segment': {
+        const [, dayStr, sortOrderStr, fromPlace, toPlace, mode] = cleanArgs;
+
+        if (!dayStr || !sortOrderStr || !fromPlace || !toPlace || !mode) {
+          console.error('Error: set-route-segment requires <day> <sort_order> <from> <to> <mode>');
+          console.error('Example: set-route-segment 1 0 "關渡" "嘟嘟房桃園機場貨運1站" driving --duration 45');
+          process.exit(1);
+        }
+
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) { console.error(`Error: ${dayResult.error}`); process.exit(1); }
+        const dayNumber = dayResult.value;
+
+        const sortOrder = parseInt(sortOrderStr, 10);
+        if (isNaN(sortOrder) || sortOrder < 0) {
+          console.error('Error: <sort_order> must be a non-negative integer (0-based)');
+          process.exit(1);
+        }
+
+        const validModes = ['transit', 'walking', 'driving'];
+        if (!validModes.includes(mode)) {
+          console.error('Error: <mode> must be one of: transit | walking | driving');
+          process.exit(1);
+        }
+
+        const durationMin = durationOpt ? parseInt(durationOpt, 10) : undefined;
+        if (durationOpt && isNaN(durationMin!)) {
+          console.error('Error: --duration must be a number (minutes)');
+          process.exit(1);
+        }
+
+        const destination = sm.resolveDestination(destOpt);
+
+        console.log(`\n🗺️  Setting route segment:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Day ${dayNumber} slot ${sortOrder}: ${fromPlace} → ${toPlace} (${mode}${durationMin != null ? `, ${durationMin} min` : ''}${startTimeOpt ? `, start ${startTimeOpt}` : ''})`);
+        if (notesOpt) console.log(`   Notes: ${notesOpt}`);
+
+        if (!dryRun) {
+          sm.setRouteSegment(destination, dayNumber, sortOrder, fromPlace, toPlace, mode as 'transit' | 'walking' | 'driving', durationMin, notesOpt ?? undefined, startTimeOpt ?? undefined);
+          await sm.saveWithTracking('set-route-segment', `D${dayNumber} slot${sortOrder} ${fromPlace}→${toPlace}`);
+          console.log('✅ Route segment updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
+      case 'set-activity-title': {
+        const [, dayStr, session, activity, newTitle] = cleanArgs;
+
+        if (!dayStr || !session || !activity || !newTitle) {
+          console.error('Error: set-activity-title requires <day> <session> <activity> <new_title>');
+          console.error('Example: set-activity-title 2 morning "Fushimi Inari" "金閣寺 (Kinkaku-ji)"');
+          process.exit(1);
+        }
+
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) {
+          console.error(`Error: ${dayResult.error}`);
+          process.exit(1);
+        }
+        const dayNumber = dayResult.value;
+
+        const validSessions = ['morning', 'afternoon', 'evening'];
+        if (!validSessions.includes(session)) {
+          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          process.exit(1);
+        }
+
+        if (!newTitle.trim()) {
+          console.error('Error: <new_title> cannot be empty');
+          process.exit(1);
+        }
+
+        const destination = sm.resolveDestination(destOpt);
+
+        console.log(`\n✏️  Renaming activity:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   Day ${dayNumber} ${session}: "${activity}"`);
+        console.log(`   New title: "${newTitle}"`);
+
+        if (!dryRun) {
+          sm.setActivityTitle(
+            destination,
+            dayNumber,
+            session as 'morning' | 'afternoon' | 'evening',
+            activity,
+            newTitle
+          );
+          await sm.saveWithTracking('set-activity-title', `D${dayNumber} ${session} ${activity}`);
+          console.log('✅ Activity title updated');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
+      case 'set-day-theme': {
+        const [, dayStr, themeArg] = cleanArgs;
+
+        if (!dayStr) {
+          console.error('Error: set-day-theme requires <day> and --zh "<title>"');
+          console.error('Example: set-day-theme 1 --zh "抵達京都"');
+          console.error('Example: set-day-theme 2 "Kinkaku-ji full day" --zh "金閣寺・伏見稲荷"');
+          process.exit(1);
+        }
+
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) {
+          console.error(`Error: ${dayResult.error}`);
+          process.exit(1);
+        }
+        const dayNumber = dayResult.value;
+        const themeZhOpt = optionValue('--zh');
+
+        // themeArg is optional (update only ZH if omitted)
+        const destination = sm.resolveDestination(destOpt);
+
+        console.log(`\n🏷️  Setting day theme:`);
+        console.log(`   Destination: ${destination}, Day ${dayNumber}`);
+        if (themeArg) console.log(`   Theme (EN): "${themeArg}"`);
+        if (themeZhOpt) console.log(`   Theme (ZH): "${themeZhOpt}"`);
+
+        if (!dryRun) {
+          sm.setDayTheme(destination, dayNumber, themeArg ?? null, themeZhOpt ?? undefined);
+          await sm.saveWithTracking('set-day-theme', `D${dayNumber}`);
+          console.log('✅ Day theme updated');
         } else {
           console.log('🔸 DRY RUN - no changes saved');
         }

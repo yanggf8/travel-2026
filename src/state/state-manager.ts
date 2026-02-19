@@ -390,6 +390,21 @@ export class StateManager {
         );
         return {};
 
+      case 'set_activity_title':
+        this.setActivityTitle(
+          command.destination, command.dayNumber, command.session,
+          command.activityIdOrTitle, command.newTitle
+        );
+        return {};
+
+      case 'set_route_segment':
+        this.setRouteSegment(
+          command.destination, command.dayNumber, command.sortOrder,
+          command.fromPlace, command.toPlace, command.mode,
+          command.durationMin, command.notes, command.startTime
+        );
+        return {};
+
       case 'set_session_time_range':
         this.setSessionTimeRange(
           command.destination, command.dayNumber, command.session,
@@ -398,7 +413,7 @@ export class StateManager {
         return {};
 
       case 'set_day_theme':
-        this.setDayTheme(command.destination, command.dayNumber, command.theme);
+        this.setDayTheme(command.destination, command.dayNumber, command.theme, command.themeZh);
         return {};
 
       case 'set_day_weather':
@@ -1049,6 +1064,91 @@ export class StateManager {
     });
   }
 
+  setActivityTitle(
+    destination: string,
+    dayNumber: number,
+    session: SessionType,
+    activityIdOrTitle: string,
+    newTitle: string
+  ): void {
+    const activities = this.repo.getSessionActivities(destination, dayNumber, session);
+    if (!activities) {
+      const day = this.repo.getDay(destination, dayNumber);
+      if (!day) throw new Error(`Day ${dayNumber} not found in ${destination}`);
+      throw new Error(`Session ${session} not found in Day ${dayNumber}`);
+    }
+
+    const idx = this.repo.findActivityIndex(activities, activityIdOrTitle);
+    if (idx === -1) {
+      throw new Error(`Activity not found: "${activityIdOrTitle}" in Day ${dayNumber} ${session}`);
+    }
+
+    const current = activities[idx];
+    const previousTitle = typeof current === 'string'
+      ? current
+      : ((current as Record<string, unknown>).title as string | undefined);
+
+    const activityObj = this.repo.updateActivityAtIndex(
+      destination, dayNumber, session, idx, { title: newTitle }
+    );
+    this.repo.touchItinerary(destination, this.timestamp);
+
+    this.emitEvent({
+      event: 'activity_title_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: {
+        day_number: dayNumber,
+        session,
+        activity_id: activityObj.id,
+        from_title: previousTitle,
+        to_title: newTitle,
+      },
+    });
+  }
+
+  setRouteSegment(
+    destination: string,
+    dayNumber: number,
+    sortOrder: number,
+    fromPlace: string,
+    toPlace: string,
+    mode: 'transit' | 'walking' | 'driving',
+    durationMin?: number,
+    notes?: string,
+    startTime?: string
+  ): void {
+    const day = this.repo.getDay(destination, dayNumber);
+    if (!day) throw new Error(`Day ${dayNumber} not found in ${destination}`);
+
+    const segments = (day.route_segments as Array<Record<string, unknown>> | undefined) || [];
+    const existing = segments.findIndex(s => s.sort_order === sortOrder);
+    const segment: Record<string, unknown> = {
+      sort_order: sortOrder,
+      from_place: fromPlace,
+      to_place: toPlace,
+      mode,
+      duration_min: durationMin ?? null,
+      notes: notes ?? null,
+      start_time: startTime ?? null,
+    };
+    if (existing >= 0) {
+      segments[existing] = segment;
+    } else {
+      segments.push(segment);
+      segments.sort((a, b) => (a.sort_order as number) - (b.sort_order as number));
+    }
+    day.route_segments = segments;
+    this.repo.touchItinerary(destination, this.timestamp);
+
+    this.emitEvent({
+      event: 'route_segment_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, sort_order: sortOrder, from_place: fromPlace, to_place: toPlace, mode, duration_min: durationMin },
+    });
+  }
+
   setSessionTimeRange(
     destination: string,
     dayNumber: number,
@@ -1210,15 +1310,16 @@ export class StateManager {
     return this.repo.getDay(destination, dayNumber);
   }
 
-  setDayTheme(destination: string, dayNumber: number, theme: string | null): void {
-    this.repo.setDayField(destination, dayNumber, 'theme', theme);
+  setDayTheme(destination: string, dayNumber: number, theme: string | null, themeZh?: string | null): void {
+    if (theme !== undefined) this.repo.setDayField(destination, dayNumber, 'theme', theme);
+    if (themeZh !== undefined) this.repo.setDayField(destination, dayNumber, 'theme_zh', themeZh);
     this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'itinerary_day_theme_set',
       destination,
       process: 'process_5_daily_itinerary',
-      data: { day_number: dayNumber, theme },
+      data: { day_number: dayNumber, theme, theme_zh: themeZh },
     });
   }
 

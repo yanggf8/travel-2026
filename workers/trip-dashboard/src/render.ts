@@ -5,6 +5,9 @@ interface RouteSegment {
   from: string;
   to: string;
   mode: 'transit' | 'walking' | 'driving';
+  duration_min: number | null;
+  notes: string | null;
+  start_time: string | null;
 }
 
 type Lang = 'en' | 'zh';
@@ -442,6 +445,54 @@ function toMapsName(name: string): string {
   return name;
 }
 
+/** Add duration_min to HH:MM → HH:MM string. Returns null if start_time is missing. */
+function addMinutes(timeStr: string, minutes: number): string {
+  const m = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return timeStr;
+  const total = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + minutes;
+  const h = Math.floor(total / 60) % 24;
+  const mn = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(mn).padStart(2, '0')}`;
+}
+
+function renderRouteLegs(day: Record<string, unknown>, hotelName: string, lang: Lang, homeAddress: string | null): string {
+  const routes = day.route_segments as RouteSegment[] | undefined;
+  if (!routes || routes.length === 0) return '';
+
+  const resolve = (name: string) => name === 'hotel' ? hotelName : name === 'home' ? (homeAddress || (lang === 'zh' ? '住家' : 'Home')) : name;
+  const modeIcon = (mode: string) => mode === 'transit' ? '🚌' : mode === 'driving' ? '🚗' : '🚶';
+  const label = lang === 'zh' ? '今日路線' : 'Today\'s Route';
+  const minUnit = lang === 'zh' ? '分' : 'min';
+
+  const legs = routes.map(seg => {
+    const from = esc(resolve(seg.from));
+    const to = esc(resolve(seg.to));
+
+    // Clock time: "06:00 → 06:45" if start_time available
+    let timeHtml = '';
+    if (seg.start_time && seg.duration_min) {
+      const arrive = addMinutes(seg.start_time, seg.duration_min);
+      timeHtml = `<span class="route-leg-time">${esc(seg.start_time)} → ${esc(arrive)}</span>`;
+    } else if (seg.start_time) {
+      timeHtml = `<span class="route-leg-time">${esc(seg.start_time)}</span>`;
+    }
+
+    const dur = seg.duration_min ? `<span class="route-leg-dur">~${seg.duration_min} ${minUnit}</span>` : '';
+    const notes = seg.notes ? `<span class="route-leg-notes">${esc(seg.notes)}</span>` : '';
+    const dirUrl = `https://www.google.com/maps/dir/${encodeURIComponent(toMapsName(resolve(seg.from)))}/${encodeURIComponent(toMapsName(resolve(seg.to)))}`;
+    return `<div class="route-leg">
+      <span class="route-leg-icon">${modeIcon(seg.mode)}</span>
+      <a class="route-leg-places" href="${esc(dirUrl)}" target="_blank" rel="noopener">${from} → ${to}</a>
+      ${timeHtml}${dur}${notes}
+    </div>`;
+  }).join('');
+
+  return `<div class="route-legs-section">
+    <div class="route-legs-label">${esc(label)}</div>
+    ${legs}
+  </div>`;
+}
+
 function renderMapEmbed(day: Record<string, unknown>, hotelName: string, lang: Lang, homeAddress: string | null): string {
   if (!hotelName) return '';
   const dayNum = (day.day_number as number) || 0;
@@ -464,7 +515,9 @@ function renderMapEmbed(day: Record<string, unknown>, hotelName: string, lang: L
       const from = resolve(seg.from);
       const to = resolve(seg.to);
       const dirUrl = `https://www.google.com/maps/dir/${encodeURIComponent(toMapsName(from))}/${encodeURIComponent(toMapsName(to))}`;
-      links.push(`<a class="map-place-link" href="${esc(dirUrl)}" target="_blank" rel="noopener">${modeIcon(seg.mode)} ${esc(display(seg.from))} → ${esc(display(seg.to))}</a>`);
+      const durText = seg.duration_min ? ` (${seg.duration_min} ${lang === 'zh' ? '分' : 'min'})` : '';
+      const notesText = seg.notes ? ` · ${seg.notes}` : '';
+      links.push(`<a class="map-place-link" href="${esc(dirUrl)}" target="_blank" rel="noopener">${modeIcon(seg.mode)} ${esc(display(seg.from))} → ${esc(display(seg.to))}${esc(durText)}${esc(notesText)}</a>`);
     }
   }
 
@@ -636,6 +689,7 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
           })
         : esc(theme)}</div>
       ${renderWeatherStrip(day, lang)}
+      ${renderRouteLegs(day, hotelName, lang, homeAddress)}
       ${(() => {
         const city = '';
         return [
@@ -667,9 +721,10 @@ function flightLink(displayText: string, flightNumber: string | null | undefined
 }
 
 /** Wrap hotel name in a Google Maps search link (opens new tab). */
-function hotelMapsLink(name: string): string {
+function hotelMapsLink(name: string, city?: string): string {
   if (!name) return esc(name);
-  const query = encodeURIComponent(name.trim());
+  const searchTerm = city ? `${name.trim()}, ${city.trim()}` : name.trim();
+  const query = encodeURIComponent(searchTerm);
   return `<a href="https://www.google.com/maps/search/${query}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${esc(name)}</a>`;
 }
 
@@ -693,6 +748,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
   const accommodation = dest.process_4_accommodation as Record<string, unknown> | undefined;
   const packages = dest.process_3_4_packages as Record<string, unknown> | undefined;
   const transfers = transport?.airport_transfers as Record<string, unknown> | undefined;
+  const city = (dest.display_name as string) || '';
 
   const flight = transport?.flight as Record<string, unknown> | undefined;
   const outbound = flight?.outbound as Record<string, unknown> | undefined;
@@ -761,8 +817,8 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       value: hotel ? (() => {
         const name = (hotel.name as string) || '';
         const zhName = (hotel.name_zh as string) || undefined;
-        const nameLink = hotelMapsLink(name);
-        return zhName ? `${nameLink}<span style="color:var(--text-dim);font-size:12px"> / ${hotelMapsLink(zhName)}</span>` : nameLink;
+        const nameLink = hotelMapsLink(name, city);
+        return zhName ? `${nameLink}<span style="color:var(--text-dim);font-size:12px"> / ${hotelMapsLink(zhName, city)}</span>` : nameLink;
       })() : '\u2014',
       sub: hotel?.access ? (hotel.access as string[]).join(', ') : '',
       badge: accommodation?.status ? statusBadge(accommodation.status as string, lang) : '',
@@ -966,10 +1022,11 @@ export function renderDashboard(
   const editMeta = editMode ? { plan_id: planId || '', dest: activeDest } : null;
 
   return `<!DOCTYPE html>
-<html lang="${lang === 'zh' ? 'zh-Hant' : 'en'}">
+<html lang="${lang === 'zh' ? 'zh-TW' : 'en'}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="google" content="notranslate">
   <title>${esc(displayName)} ${lang === 'zh' ? '旅行計畫' : 'Trip Plan'}</title>
   <style>${CSS}</style>
 </head>
@@ -993,7 +1050,7 @@ export function renderDashboard(
 
   <div class="footer">
     ${t('lastUpdated', lang)}: ${esc(planData.updated_at)}<br>
-    Powered by Turso + Cloudflare Workers
+    ${lang === 'zh' ? '資料由 Turso + Cloudflare Workers 提供' : 'Powered by Turso + Cloudflare Workers'}
   </div>
 ${editMode ? renderEditScript() : ''}
 </body>
@@ -1021,10 +1078,11 @@ export function renderPlanIndex(plans: PlanSummary[], lang: Lang): string {
   }).join('');
 
   return `<!DOCTYPE html>
-<html lang="${lang === 'zh' ? 'zh-Hant' : 'en'}">
+<html lang="${lang === 'zh' ? 'zh-TW' : 'en'}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="google" content="notranslate">
   <title>${title}</title>
   <style>${CSS}</style>
 </head>
@@ -1040,7 +1098,7 @@ export function renderPlanIndex(plans: PlanSummary[], lang: Lang): string {
     ${plans.length > 0 ? planCards : `<p style="text-align:center;color:var(--text-dim);padding:32px 0">${lang === 'zh' ? '\u5C1A\u7121\u65C5\u884C\u8A08\u756B' : 'No plans yet'}</p>`}
   </div>
 
-  <div class="footer">Powered by Turso + Cloudflare Workers</div>
+  <div class="footer">${lang === 'zh' ? '資料由 Turso + Cloudflare Workers 提供' : 'Powered by Turso + Cloudflare Workers'}</div>
 </body>
 </html>`;
 }

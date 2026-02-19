@@ -38,7 +38,7 @@ export function assemblePlan(
   flightLegRows: R[], hotelRows: R[], transferRows: R[],
   locZoneRows: R[], transportExtraRows: R[], itinMetaRows: R[],
   transferCandRows: R[], accessLineRows: R[], mealRows: R[], tagRows: R[],
-  bestValueRows: R[],
+  bestValueRows: R[], routeSegmentRows: R[] = [],
 ): TravelPlanMinimal {
   const meta = metaRows[0];
 
@@ -128,6 +128,7 @@ export function assemblePlan(
   const tagMap = new Map<string, string[]>();
   for (const r of tagRows) { if (!tagMap.has(r.activity_id)) tagMap.set(r.activity_id, []); tagMap.get(r.activity_id)!.push(r.tag); }
   const bestValueByOffer = new Map(bestValueRows.map(r => [r.offer_id, r]));
+  const routeSegsByDest = groupBy(routeSegmentRows, 'destination');
 
   // --- Per-destination ---
   for (const dr of destRows) {
@@ -270,7 +271,7 @@ export function assemblePlan(
     const days = daysByDest.get(slug) || [];
     p5.days = days.map(rawDayRow => {
       const dayRow = coerceRow(rawDayRow);
-      const day: any = { day_number: num(dayRow.day_number), date: dayRow.date, theme: dayRow.theme, day_type: dayRow.day_type, status: dayRow.status || 'draft' };
+      const day: any = { day_number: num(dayRow.day_number), date: dayRow.date, theme: dayRow.theme, theme_zh: dayRow.theme_zh ?? null, day_type: dayRow.day_type, status: dayRow.status || 'draft' };
       if (dayRow.weather_label || dayRow.temp_low_c != null) {
         day.weather = {
           weather_label: dayRow.weather_label, temp_low_c: num(dayRow.temp_low_c), temp_high_c: num(dayRow.temp_high_c),
@@ -299,6 +300,20 @@ export function assemblePlan(
             notes: a.notes || null, priority: a.priority || 'want',
           })),
         };
+      }
+      const routeSegs = (routeSegsByDest.get(slug) || [])
+        .filter((r: R) => String(r.day_number) === String(dayRow.day_number))
+        .sort((a: R, b: R) => num(a.sort_order)! - num(b.sort_order)!);
+      if (routeSegs.length > 0) {
+        day.route_segments = routeSegs.map((r: R) => ({
+          sort_order: num(r.sort_order),
+          from_place: r.from_place,
+          to_place: r.to_place,
+          mode: r.mode,
+          duration_min: num(r.duration_min) ?? null,
+          notes: r.notes ?? null,
+          start_time: r.start_time ?? null,
+        }));
       }
       return day;
     });
@@ -330,7 +345,7 @@ export function assembleEventLog(
     session: s.session, project: s.project, version: s.version,
     active_destination: s.active_destination || '', current_focus: s.current_focus || '',
     next_actions: tryJson(s.next_actions_json) || [],
-    event_log: evtRows.map(e => { const ev = coerceRow(e); return { event: ev.event_type, at: ev.event_at, destination: ev.destination, process: ev.process_id !== 'global' ? ev.process_id : undefined, data: tryJson(ev.event_data) }; }),
+    event_log: evtRows.map(e => { const ev = coerceRow(e); const d = tryJson(ev.event_data); return { event: ev.event_type, at: ev.event_at, destination: ev.destination, process: ev.process_id !== 'global' ? ev.process_id : undefined, ...(d != null ? { data: d } : {}) }; }),
     global_processes: {},
     destinations: {},
   };

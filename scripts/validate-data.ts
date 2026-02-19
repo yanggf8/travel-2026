@@ -61,8 +61,10 @@ function addResult(
  * Load JSON file safely
  */
 function loadJson<T>(filePath: string): T | null {
+  const fullPath = path.join(PROJECT_ROOT, filePath);
+  if (!fs.existsSync(fullPath)) return null; // migrated to DB — skip silently
   try {
-    const content = fs.readFileSync(path.join(PROJECT_ROOT, filePath), 'utf-8');
+    const content = fs.readFileSync(fullPath, 'utf-8');
     return JSON.parse(content) as T;
   } catch (e) {
     addResult('file', 'error', `Failed to load ${filePath}: ${e instanceof Error ? e.message : String(e)}`);

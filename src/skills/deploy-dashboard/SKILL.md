@@ -19,6 +19,14 @@ After itinerary finalized and/or weather fetched.
 
 ## Workflow
 
+### 0. Verify wrangler auth
+
+```bash
+npx wrangler whoami
+```
+
+If "Not logged in": **stop and ask user to run `npx wrangler login` in their terminal** — OAuth requires an interactive browser session that Claude Code cannot complete. Wait for confirmation before proceeding.
+
 ### 1. Pre-check .env configuration
 
 ```bash
@@ -70,6 +78,7 @@ Actual routes:
 
 | Error | Cause | Fix |
 |-------|-------|-----|
+| `Not logged in` / non-interactive error | OAuth session expired or `CLOUDFLARE_API_TOKEN` set | User runs `npx wrangler login` in terminal; then retry |
 | Authentication failed | `CLOUDFLARE_API_TOKEN` env var set | `unset CLOUDFLARE_API_TOKEN` |
 | Missing secrets | Wrangler secrets not configured | See step 2 above |
 | Build failed | Missing deps or TS errors | `cd workers/trip-dashboard && npm install` |

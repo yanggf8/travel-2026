@@ -488,6 +488,9 @@ CREATE TABLE IF NOT EXISTS day_route_segments (
   from_place TEXT NOT NULL,
   to_place TEXT NOT NULL,
   mode TEXT NOT NULL,
+  duration_min INTEGER,
+  notes TEXT,
+  start_time TEXT,
   PRIMARY KEY (plan_id, destination, day_number, sort_order)
 );
 
