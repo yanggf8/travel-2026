@@ -126,7 +126,7 @@ export const FlightSchema = z.object({
 export const HotelSchema = z.object({
   name: z.string(),
   slug: z.string().optional(),
-  area: z.string(),
+  area: z.string().optional(),
   area_type: z.enum(['central', 'airport', 'suburb', 'unknown']).optional(),
   star_rating: z.number().nullable().optional(),
   access: z.array(z.string()).optional(),
