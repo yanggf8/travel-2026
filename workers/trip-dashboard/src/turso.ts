@@ -133,6 +133,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     /* 14 */ `SELECT * FROM itinerary_metadata WHERE plan_id = '${escaped}'`,
     /* 15 */ `SELECT * FROM day_route_segments WHERE plan_id = '${escaped}' ORDER BY destination, day_number, sort_order`,
     /* 16 */ `SELECT * FROM day_landmarks WHERE plan_id = '${escaped}' ORDER BY destination, day_number, sort_order`,
+    /* 17 */ `SELECT slug, currency FROM destination_config`,
   ]);
 
   const [
@@ -140,7 +141,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     offerRows, offerDatePricingRows, offerSelRows,
     flightLegRows, hotelRows, accessLineRows, transferRows,
     dayRows, sessionRows, activityRows, itinMetaRows,
-    routeSegRows, landmarkRows,
+    routeSegRows, landmarkRows, destConfigRows,
   ] = results;
 
   if (metaRows.length === 0) return null;
@@ -152,6 +153,9 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
 
   const destDisplayNames = new Map<string, string>();
   for (const r of destRows) destDisplayNames.set(r.slug!, r.display_name || r.slug!);
+
+  const currencyBySlug = new Map<string, string>();
+  for (const r of destConfigRows) if (r.slug && r.currency) currencyBySlug.set(r.slug, r.currency);
 
   const dateAnchorMap = new Map<string, Row>();
   for (const r of dateRows) dateAnchorMap.set(r.destination!, r);
@@ -421,6 +425,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
 
     destinations[dest] = {
       display_name: destDisplayNames.get(dest) || dest.replace(/_/g, ' '),
+      currency: currencyBySlug.get(dest) || null,
       home_address: destRow?.home_address || null,
       process_1_date_anchor: dateAnchor ? {
         confirmed_dates: { start: dateAnchor.start_date, end: dateAnchor.end_date },

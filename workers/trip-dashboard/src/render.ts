@@ -790,6 +790,7 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
   const packages = dest.process_3_4_packages as Record<string, unknown> | undefined;
   const transfers = transport?.airport_transfers as Record<string, unknown> | undefined;
   const city = (dest.display_name as string) || '';
+  const isJapan = (dest.currency as string | null) === 'JPY';
 
   const flight = transport?.flight as Record<string, unknown> | undefined;
   const outbound = flight?.outbound as Record<string, unknown> | undefined;
@@ -916,20 +917,22 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
       })(),
       badge: departure?.status ? statusBadge(departure.status as string, lang) : '',
     },
-    {
-      icon: '\uD83D\uDCCB',
-      label: lang === 'zh' ? '日本入境申請' : 'Japan Entry',
-      value: `<a href="https://www.vjw.digital.go.jp/main/#/vjwplo001" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${lang === 'zh' ? 'Visit Japan Web' : 'Visit Japan Web'}</a>`,
-      sub: lang === 'zh' ? '出發前一天線上填寫，QR-Code快速出關，免填ED卡' : 'Pre-register online the day before — QR code replaces paper ED card',
-      badge: '',
-    },
-    {
-      icon: '\uD83C\uDF0F',
-      label: lang === 'zh' ? '旅遊資訊' : 'Travel Info',
-      value: `<a href="https://www.japan.travel/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${lang === 'zh' ? '日本觀光局' : 'Visit Japan'}</a>`,
-      sub: lang === 'zh' ? '日本觀光局官網' : 'Japan Tourism Agency',
-      badge: '',
-    },
+    ...(isJapan ? [
+      {
+        icon: '\uD83D\uDCCB',
+        label: lang === 'zh' ? '日本入境申請' : 'Japan Entry',
+        value: `<a href="https://www.vjw.digital.go.jp/main/#/vjwplo001" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${lang === 'zh' ? 'Visit Japan Web' : 'Visit Japan Web'}</a>`,
+        sub: lang === 'zh' ? '出發前一天線上填寫，QR-Code快速出關，免填ED卡' : 'Pre-register online the day before — QR code replaces paper ED card',
+        badge: '',
+      },
+      {
+        icon: '\uD83C\uDF0F',
+        label: lang === 'zh' ? '旅遊資訊' : 'Travel Info',
+        value: `<a href="https://www.japan.travel/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${lang === 'zh' ? '日本觀光局' : 'Visit Japan'}</a>`,
+        sub: lang === 'zh' ? '日本觀光局官網' : 'Japan Tourism Agency',
+        badge: '',
+      },
+    ] : []),
   ];
 
   return `

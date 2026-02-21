@@ -1,6 +1,6 @@
 # OTA Registry (Shared)
 
-Source of truth (data): `data/travel-plan.json` → `ota_sources`.
+Source of truth: `ota_sources` table in Turso (global, not plan-scoped). `data/travel-plan.json` is deleted.
 
 ## Expected fields
 

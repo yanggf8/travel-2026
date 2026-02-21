@@ -329,7 +329,7 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 ├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard
 │   ├── wrangler.toml              # Worker config + secret bindings
 │   ├── src/index.ts               # Request handler + router + favicon
-│   ├── src/turso.ts               # Turso HTTP pipeline client (17-query pipeline)
+│   ├── src/turso.ts               # Turso HTTP pipeline client (18-query pipeline)
 │   ├── src/render.ts              # SSR HTML renderer (ZH from DB, no hardcoded content)
 │   └── src/styles.ts              # Mobile-first inline CSS
 ├── src/

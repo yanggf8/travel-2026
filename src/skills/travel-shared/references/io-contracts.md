@@ -6,7 +6,7 @@ These are the stable “envelope” contracts used by all travel skills.
 
 ```ts
 interface TravelSkillCommonInput {
-  active_destination: string; // slug in travel-plan.json destinations.*
+  active_destination: string; // slug in plan_destinations table (Turso); e.g. 'tokyo_2026'
 
   date_filters: {
     start_date: string; // ISO-8601 date

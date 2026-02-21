@@ -1,6 +1,6 @@
 # Cascade Triggers (Shared)
 
-Source of truth (data): `data/travel-plan.json` → `cascade_rules.triggers`.
+Source of truth: `cascade_triggers` table in Turso (plan-scoped). `data/travel-plan.json` is deleted.
 
 ## Common triggers
 

@@ -2,7 +2,7 @@
 
 All OTA scrapers normalize results into a single canonical model so skills can compose.
 
-Source of truth (data): `data/travel-plan.json` → `canonical_offer_schema`.
+Source of truth: `plan_offers` + `plan_offer_date_pricing` tables in Turso. `data/travel-plan.json` is deleted.
 Zod schema: `src/state/schemas.ts` → `OfferSchema`.
 
 ## Minimal required fields
