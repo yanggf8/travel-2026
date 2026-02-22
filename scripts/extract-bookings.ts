@@ -203,6 +203,10 @@ export function extractTransferBookings(
     const selected = segment.selected as Record<string, unknown> | undefined;
     if (!selected) continue;
 
+    // Only track transfers that were actually booked in advance (e.g. package-included Haruka)
+    // Skip station-buy transit (planned/completed) — those are expenses, not bookings
+    if (segStatus !== 'booked') continue;
+
     const selectedId = direction;  // Use direction only — one selected transfer per direction, avoids duplicate keys when id changes
     const title = (selected.title as string) || `Airport transfer (${direction})`;
     const route = selected.route as string | undefined;
