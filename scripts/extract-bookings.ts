@@ -158,7 +158,7 @@ export function extractPackageBookings(
   if (fullOffer?.includes) payload.includes = fullOffer.includes;
 
   rows.push({
-    booking_key: buildBookingKey(tripId, dest, 'package', selectedOfferId, selectedDate || 'no-date'),
+    booking_key: buildBookingKey(tripId, dest, 'package', selectedOfferId),
     trip_id: tripId,
     destination: dest,
     category: 'package',
@@ -203,7 +203,7 @@ export function extractTransferBookings(
     const selected = segment.selected as Record<string, unknown> | undefined;
     if (!selected) continue;
 
-    const selectedId = (selected.id as string) || direction;
+    const selectedId = direction;  // Use direction only — one selected transfer per direction, avoids duplicate keys when id changes
     const title = (selected.title as string) || `Airport transfer (${direction})`;
     const route = selected.route as string | undefined;
     const priceYen = selected.price_yen as number | undefined;
@@ -214,7 +214,7 @@ export function extractTransferBookings(
     if (schedule) payload.schedule = schedule;
 
     rows.push({
-      booking_key: buildBookingKey(tripId, dest, 'transfer', direction, selectedId),
+      booking_key: buildBookingKey(tripId, dest, 'transfer', direction),
       trip_id: tripId,
       destination: dest,
       category: 'transfer',

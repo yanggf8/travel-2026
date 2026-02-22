@@ -168,8 +168,10 @@ async function main() {
       // offer selection
       if (p34?.selected_offer_id || p34?.results?.selection) {
         const sel = p34.results?.selection || {};
+        const chosenOffer = p34.chosen_offer as Record<string, unknown> | undefined;
+        const selectedDate = sel.date || chosenOffer?.selected_date || null;
         stmts.push(`INSERT INTO plan_offer_selection (plan_id, destination, selected_offer_id, selected_date, selected_at)
-          VALUES (${esc(planId)}, ${esc(destSlug)}, ${esc(p34.selected_offer_id || sel.offer_id)}, ${esc(sel.date)}, ${esc(sel.selected_at || p34.updated_at)})`);
+          VALUES (${esc(planId)}, ${esc(destSlug)}, ${esc(p34.selected_offer_id || sel.offer_id)}, ${esc(selectedDate)}, ${esc(sel.selected_at || p34.updated_at)})`);
       }
 
       // provenance

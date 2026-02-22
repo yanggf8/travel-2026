@@ -200,9 +200,12 @@ async function main() {
                   );
                 } else {
                   const actId = (act.id as string) || `migrated_${planId}_${destSlug}_d${dayNumber}_${sessionType}_${i}`;
+                  // If booking_status is booked/pending/waitlist, force booking_required=true
+                  const bookingStatus = act.booking_status as string | undefined;
+                  const bookingRequired = (act.booking_required as boolean) || ['booked', 'pending', 'waitlist'].includes(bookingStatus || '');
                   statements.push(
                     `INSERT OR REPLACE INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title, area, nearest_station, duration_min, booking_required, booking_url, booking_status, booking_ref, book_by, start_time, end_time, is_fixed_time, cost_estimate, tags_json, notes, priority, updated_at)
-                     VALUES (${sqlText(actId)}, ${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlInt(i)}, ${sqlText(act.title as string)}, ${sqlText(act.area as string)}, ${sqlText(act.nearest_station as string)}, ${sqlInt(act.duration_min as number)}, ${sqlBool(act.booking_required as boolean)}, ${sqlText(act.booking_url as string)}, ${sqlText(act.booking_status as string)}, ${sqlText(act.booking_ref as string)}, ${sqlText(act.book_by as string)}, ${sqlText(act.start_time as string)}, ${sqlText(act.end_time as string)}, ${sqlBool(act.is_fixed_time as boolean)}, ${sqlInt(act.cost_estimate as number)}, ${sqlText(act.tags ? JSON.stringify(act.tags) : null)}, ${sqlText(act.notes as string)}, ${sqlText((act.priority as string) || 'want')}, datetime('now'))`
+                     VALUES (${sqlText(actId)}, ${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlInt(i)}, ${sqlText(act.title as string)}, ${sqlText(act.area as string)}, ${sqlText(act.nearest_station as string)}, ${sqlInt(act.duration_min as number)}, ${sqlBool(bookingRequired)}, ${sqlText(act.booking_url as string)}, ${sqlText(bookingStatus as string)}, ${sqlText(act.booking_ref as string)}, ${sqlText(act.book_by as string)}, ${sqlText(act.start_time as string)}, ${sqlText(act.end_time as string)}, ${sqlBool(act.is_fixed_time as boolean)}, ${sqlInt(act.cost_estimate as number)}, ${sqlText(act.tags ? JSON.stringify(act.tags) : null)}, ${sqlText(act.notes as string)}, ${sqlText((act.priority as string) || 'want')}, datetime('now'))`
                   );
                 }
               }
