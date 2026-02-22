@@ -245,7 +245,7 @@ Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto
 | Day | Date | Morning | Afternoon | Evening |
 |-----|------|---------|-----------|---------|
 | 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | Kyoto Station / Ramen Alley ([tabelog](https://tabelog.com/tw/kyoto/A2601/A260101/)) |
-| 2 | Wed 25 | 金閣寺 + 可選龍安寺 (subway→北大路) | 伏見稲荷 + 可選東福寺 | 先斗町, 晚餐, 預訂保津川遊船 |
+| 2 | Wed 25 | 伏見稻荷大社 (JR奈良線→稲荷) + 金閣寺 quick photo (烏丸線→北大路→101/102公車) | 四條河原町購物 | 先斗町晚餐 |
 | 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | キモノフォレスト, 返回京都, **名代豬排 Katsukura** (JR京都伊勢丹 11F) |
 | 4 | Fri 27 | Sleep in, 可選東寺, 11:30 東山區午餐 | 夢館kimono, 三年坂, 二年坂, 可選清水寺 | 祇園, Donki (UTENA 魔髮球), 預換Haruka回程票 |
 | 5 | Sat 28 | 退房09:00, 09:30 Haruka→KIX | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30 |
@@ -253,10 +253,12 @@ Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto
 Day 3 保津川遊船: depart 京都 10:50 → JR山陰線 25min → 亀岡 → **11:30 boat** → 嵐山 13:30
 Book: https://ars-hozugawa.triplabo.jp ¥4,100/person, book by day before
 
-Weather check (as of **Feb 18, 2026**; Kyoto 10-day forecast):
-- Tue, Feb 24: **17C / 9C**, precip chance **24%**
-- Wed, Feb 25: **13C / 7C**, precip chance **60%** (rain risk)
-- Thu, Feb 26: **14C / 6C**, precip chance **17%**
+Weather check (as of **Feb 22, 2026**; Kyoto 10-day forecast):
+- Tue, Feb 24: **2.8–14.9°C**, precip chance **43%** (overcast)
+- Wed, Feb 25: **8.5–10.7°C**, precip chance **94%** (moderate rain — bring umbrella)
+- Thu, Feb 26: **8.2–16.1°C**, precip chance **54%** (foggy)
+- Fri, Feb 27: **7.4–16.3°C**, precip chance **40%** (overcast)
+- Sat, Feb 28: **10.9–16°C**, precip chance **81%** (moderate rain)
 - Winter boat section can feel colder than forecast due to wind/splash; re-check 24h before.
 
 ## CLI Quick Reference
