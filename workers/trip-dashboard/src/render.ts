@@ -874,8 +874,13 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
         const parts: string[] = [];
         const route = (arrSelected.route as string) || '';
         if (route) parts.push(esc(route));
-        const priceYen = arrSelected.price_yen as number | undefined;
-        if (priceYen) parts.push(`\u00A5${priceYen.toLocaleString()}`);
+        const arrPkgIncl = arrSelected.package_included as boolean | undefined;
+        if (arrPkgIncl) {
+          parts.push(lang === 'zh' ? '套裝已含' : 'Included');
+        } else {
+          const priceYen = arrSelected.price_yen as number | undefined;
+          if (priceYen) parts.push(`\u00A5${priceYen.toLocaleString()}`);
+        }
         const schedule = (arrSelected.schedule as string) || '';
         if (schedule) parts.push(esc(schedule));
         // KIX T1 tip: show platform access note
@@ -900,17 +905,22 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
         const parts: string[] = [];
         const route = (depSelected.route as string) || '';
         if (route) parts.push(esc(route));
-        const priceYen = depSelected.price_yen as number | undefined;
-        if (priceYen) parts.push(`\u00A5${priceYen.toLocaleString()}`);
+        const depPkgIncl = depSelected.package_included as boolean | undefined;
+        if (depPkgIncl) {
+          parts.push(lang === 'zh' ? '套裝已含' : 'Included');
+        } else {
+          const priceYen = depSelected.price_yen as number | undefined;
+          if (priceYen) parts.push(`\u00A5${priceYen.toLocaleString()}`);
+        }
         const schedule = (depSelected.schedule as string) || '';
         if (schedule) parts.push(esc(schedule));
-        // Countdown: need to be at airport 3 hours before departure
+        // Countdown: need to be at airport 3 hours before departure (outbound from origin)
         const depTime = outbound?.departure_time as string | undefined;
         const leaveBy = leaveByTime(depTime, 180);
         if (leaveBy) {
           const note = lang === 'zh'
-            ? `\u2757 需在 ${leaveBy} 前抵達機場（起飛前3小時）。停車場至T1需搭接駁車`
-            : `\u2757 Arrive airport by ${leaveBy} (3hr before departure). Take shuttle bus from parking to T1`;
+            ? `\u2757 去程提醒：需在 ${leaveBy} 前抵達機場（起飛前3小時）`
+            : `\u2757 Outbound reminder: Arrive airport by ${leaveBy} (3hr before departure)`;
           parts.push(`<span style="color:var(--warn-color, #d97706)">${note}</span>`);
         }
         return parts.join(' \u00B7 ');

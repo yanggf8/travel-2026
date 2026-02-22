@@ -231,7 +231,7 @@ Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1**
 ```
 Package: liontravel_190620015 — TWD 23,348/person (46,696 for 2 pax)
 Order:   2026-1311130
-Flight:  Thai Lion Air SL396 TPE T1 09:00 → KIX T1 13:30 / SL397 KIX T1 13:30 → TPE T1 15:40
+Flight:  Thai Lion Air SL396 TPE T1 09:00(UTC+8) → KIX T1 12:30(UTC+9) / SL397 KIX T1 13:30(UTC+9) → TPE T1 15:40(UTC+8)
 Hotel:   APA Hotel Kyoto Ekimae (APA京都站前, JR Kyoto Station 3min)
 Includes: Kyoto Yumeyakata Kimono Experience (Day 4), JR Haruka round-trip, eSIM data
 ```
@@ -244,11 +244,11 @@ Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto
 
 | Day | Date | Morning | Afternoon | Evening |
 |-----|------|---------|-----------|---------|
-| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | 京都駅伊勢丹・Porta（3COINS, UNIQLO）+ 京都駅周邊晚餐 |
+| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00(UTC+8) | 12:30 KIX arrival(UTC+9), Haruka→京都 | 京都駅伊勢丹・Porta（3COINS, UNIQLO）+ 京都駅周邊晚餐 |
 | 2 | Wed 25 | **北野天滿宮梅花祭** (2/25限定, 野點茶會¥1,500) + 午餐 | 金閣寺 (入園¥500, 30-40分) → 京都駅休息 | 京都駅晚餐（Katsukura豬排）→ **teamLab Biovortex** ~19:00 |
 | 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | 四條購物（藥妝）+ **先斗町晚餐** + AVANTI唐吉訶德 |
 | 4 | Fri 27 | 伏見稻荷大社 (JR奈良線→稲荷, 5分) | 夢館kimono→計程車→東山（三年坂, 二年坂, 八坂之塔） | 祇園, AEON MALL, 預換Haruka |
-| 5 | Sat 28 | 退房09:00 → 京都駅搭Haruka | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30 |
+| 5 | Sat 28 | 退房09:00 → 京都駅搭Haruka | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30(UTC+9) |
 
 Day 3 保津川遊船: depart 京都 10:50 → JR山陰線 25min → 亀岡 → **11:30 boat** → 嵐山 13:30
 Book: https://ars-hozugawa.triplabo.jp ¥4,100/person, book by day before
