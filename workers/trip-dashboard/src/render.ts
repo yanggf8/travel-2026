@@ -859,7 +859,17 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
         ? flightLink(`${airline} ${(returnFl.flight_number as string) || ''}`.trim(), returnFl.flight_number as string)
         : '\u2014',
       sub: returnFl
-        ? `${esc(fmtAirport(returnFl))} ${esc((returnFl.departure_time as string) || '')} \u2192 ${esc(fmtAirport(returnFl, true))} ${esc((returnFl.arrival_time as string) || '')}`
+        ? (() => {
+          const line = `${esc(fmtAirport(returnFl))} ${esc((returnFl.departure_time as string) || '')} \u2192 ${esc(fmtAirport(returnFl, true))} ${esc((returnFl.arrival_time as string) || '')}`;
+          const leaveBy = leaveByTime(returnFl.departure_time as string | undefined, 180);
+          if (leaveBy) {
+            const warn = lang === 'zh'
+              ? `\u2757 回程提醒：需在 ${leaveBy} 前抵達機場（起飛前3小時）`
+              : `\u2757 Return reminder: Arrive airport by ${leaveBy} (3hr before departure)`;
+            return `${line}<br><span style="color:var(--warn-color, #d97706)">${warn}</span>`;
+          }
+          return line;
+        })()
         : '',
       badge: '',
     },
