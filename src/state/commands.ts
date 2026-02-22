@@ -269,6 +269,22 @@ export interface SetRouteSegmentCommand {
   startTime?: string;
 }
 
+export interface RouteSegmentInput {
+  from: string;
+  to: string;
+  mode: 'transit' | 'walking' | 'driving';
+  duration?: number;
+  notes?: string;
+  start_time?: string;
+}
+
+export interface SetRouteSegmentsBulkCommand {
+  type: 'set_route_segments_bulk';
+  destination: string;
+  dayNumber: number;
+  segments: RouteSegmentInput[];
+}
+
 export interface SetSessionTimeRangeCommand {
   type: 'set_session_time_range';
   destination: string;
@@ -310,6 +326,7 @@ export interface SetSessionZhContentCommand {
   focus_zh?: string | null;
   transit_notes_zh?: string | null;
   activities_zh?: string[] | null;
+  meals_zh?: string[] | null;
 }
 
 // ============================================================================
@@ -351,6 +368,7 @@ export type Command =
   | SetActivityTimeCommand
   | SetActivityTitleCommand
   | SetRouteSegmentCommand
+  | SetRouteSegmentsBulkCommand
   | SetSessionTimeRangeCommand
   | SetDayThemeCommand
   | SetDayWeatherCommand

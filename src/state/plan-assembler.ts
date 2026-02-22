@@ -290,6 +290,7 @@ export function assemblePlan(
           transit_notes: sRow?.transit_notes || null, transit_notes_zh: sRow?.transit_notes_zh || null,
           booking_notes: sRow?.booking_notes || null,
           activities_zh: sRow?.activities_zh_json ? tryJson(sRow.activities_zh_json) : null,
+          meals_zh: sRow?.meals_zh_json ? tryJson(sRow.meals_zh_json) : null,
           meals: meals.map(m => m.meal),
           time_range: (sRow?.time_range_start || sRow?.time_range_end) ? { start: sRow?.time_range_start, end: sRow?.time_range_end } : undefined,
           activities: acts.map(a => ({

@@ -124,6 +124,10 @@ Commands:
     Example: set-route-segment 1 0 "關渡" "嘟嘟房桃園機場貨運1站" driving --duration 45 --start-time 06:00
     Example: set-route-segment 1 1 "嘟嘟房桃園機場貨運1站" "桃園國際機場第一航廈" transit --duration 15 --start-time 06:45
 
+  set-route-segments-bulk <day> --json '[{"from":"A","to":"B","mode":"walking","duration":5},...]' [--dest slug] [--plan-id <id>]
+    Replace ALL route segments for a day with the provided JSON array. Auto-assigns sort_order.
+    Example: set-route-segments-bulk 4 --json '[{"from":"hotel","to":"京都駅","mode":"walking","duration":3},{"from":"京都駅","to":"稲荷駅","mode":"transit","duration":5,"notes":"JR奈良線"}]'
+
   set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug] [--plan-id <id>]
     Set day theme/title. Use --zh to set Traditional Chinese title (shown by default).
     Example: set-day-theme 1 --zh "抵達京都・安頓"
@@ -2025,6 +2029,62 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'set-route-segments-bulk': {
+        // set-route-segments-bulk <day> --json '[{"from":"A","to":"B","mode":"walking","duration":5},...]'
+        const [, dayStr] = cleanArgs;
+
+        if (!dayStr) {
+          console.error('Error: set-route-segments-bulk requires <day> --json \'[...]\'');
+          console.error('  Each segment: {"from":"place","to":"place","mode":"transit|walking|driving","duration":N,"notes":"...","start_time":"HH:MM"}');
+          console.error('Example: set-route-segments-bulk 4 --json \'[{"from":"hotel","to":"京都駅","mode":"walking","duration":3}]\'');
+          process.exit(1);
+        }
+
+        const dayResult = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult.ok) {
+          console.error(`Error: ${dayResult.error}`);
+          process.exit(1);
+        }
+        const dayNumber = dayResult.value;
+
+        const jsonOpt = optionValue('--json');
+        if (!jsonOpt) {
+          console.error('Error: --json is required with a JSON array of route segments');
+          process.exit(1);
+        }
+
+        let segments: Array<{ from: string; to: string; mode: 'transit' | 'walking' | 'driving'; duration?: number; notes?: string; start_time?: string }>;
+        try {
+          segments = JSON.parse(jsonOpt);
+          if (!Array.isArray(segments)) throw new Error('Not an array');
+          for (const s of segments) {
+            if (!s.from || !s.to || !s.mode) throw new Error('Each segment needs from, to, mode');
+            if (!['transit', 'walking', 'driving'].includes(s.mode)) throw new Error(`Invalid mode: ${s.mode}`);
+          }
+        } catch (e) {
+          console.error(`Error: Invalid --json: ${(e as Error).message}`);
+          process.exit(1);
+        }
+
+        const destination = sm.resolveDestination(destOpt);
+        console.log(`\n🛤️  Replacing all route segments for Day ${dayNumber}:`);
+        console.log(`   Destination: ${destination}`);
+        console.log(`   ${segments.length} segments`);
+        for (const s of segments) {
+          console.log(`   ${s.from} → ${s.to} (${s.mode}${s.duration ? `, ${s.duration}min` : ''})`);
+        }
+
+        if (!dryRun) {
+          sm.setRouteSegmentsBulk(destination, dayNumber, segments);
+          await sm.saveWithTracking('set-route-segments-bulk', `D${dayNumber} ${segments.length} segments`);
+          console.log('✅ Route segments replaced');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+
+        break;
+      }
+
       case 'set-activity-title': {
         const [, dayStr, session, activity, newTitle] = cleanArgs;
 
@@ -2114,7 +2174,7 @@ async function main(): Promise<void> {
       }
 
       case 'set-session-zh': {
-        // set-session-zh <day> <session> [--zh "focus_zh"] [--transit-zh "transit_notes_zh"] [--activities-zh-json '[...]']
+        // set-session-zh <day> <session> [--zh "focus_zh"] [--transit-zh "transit_notes_zh"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]']
         const [, dayStr, sessionArg] = cleanArgs;
 
         if (!dayStr || !sessionArg) {
@@ -2122,6 +2182,7 @@ async function main(): Promise<void> {
           console.error('  --zh "Chinese focus text"');
           console.error('  --transit-zh "Chinese transit notes"');
           console.error('  --activities-zh-json \'["act1","act2"]\'');
+          console.error('  --meals-zh-json \'["lunch: 拉麵","dinner: 壽司"]\'');
           console.error('Example: set-session-zh 2 morning --zh "金閣寺・可選龍安寺" --transit-zh "地鐵→北大路→公車→金閣寺道"');
           process.exit(1);
         }
@@ -2141,12 +2202,22 @@ async function main(): Promise<void> {
         const focusZhOpt = optionValue('--zh') ?? undefined;
         const transitZhOpt = optionValue('--transit-zh') ?? undefined;
         const activitiesZhJsonOpt = optionValue('--activities-zh-json') ?? undefined;
+        const mealsZhJsonOpt = optionValue('--meals-zh-json') ?? undefined;
         let activitiesZh: string[] | undefined;
         if (activitiesZhJsonOpt) {
           try {
             activitiesZh = JSON.parse(activitiesZhJsonOpt);
           } catch {
             console.error('Error: --activities-zh-json must be a valid JSON array of strings');
+            process.exit(1);
+          }
+        }
+        let mealsZh: string[] | undefined;
+        if (mealsZhJsonOpt) {
+          try {
+            mealsZh = JSON.parse(mealsZhJsonOpt);
+          } catch {
+            console.error('Error: --meals-zh-json must be a valid JSON array of strings');
             process.exit(1);
           }
         }
@@ -2157,9 +2228,10 @@ async function main(): Promise<void> {
         if (focusZhOpt) console.log(`   focus_zh: "${focusZhOpt}"`);
         if (transitZhOpt) console.log(`   transit_notes_zh: "${transitZhOpt}"`);
         if (activitiesZh) console.log(`   activities_zh: ${activitiesZh.length} items`);
+        if (mealsZh) console.log(`   meals_zh: ${mealsZh.length} items`);
 
         if (!dryRun) {
-          sm.setSessionZhContent(destination, sessionDay, sessionType, focusZhOpt, transitZhOpt, activitiesZh);
+          sm.setSessionZhContent(destination, sessionDay, sessionType, focusZhOpt, transitZhOpt, activitiesZh, mealsZh);
           await sm.saveWithTracking('set-session-zh', `D${sessionDay}/${sessionType}`);
           console.log('✅ Session ZH content updated');
         } else {

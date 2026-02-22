@@ -244,8 +244,8 @@ Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto
 
 | Day | Date | Morning | Afternoon | Evening |
 |-----|------|---------|-----------|---------|
-| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | 京都駅伊勢丹・Porta（3COINS）+ 京都駅周邊晚餐 |
-| 2 | Wed 25 | **北野天滿宮梅花祭** (2/25限定, 野點茶會¥1,500) + 午餐 | 金閣寺 (入園¥500, 30-40分) → 京都駅休息 | **teamLab Biovortex** ~17:30 + 京都駅晚餐 |
+| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | 京都駅伊勢丹・Porta（3COINS, UNIQLO）+ 京都駅周邊晚餐 |
+| 2 | Wed 25 | **北野天滿宮梅花祭** (2/25限定, 野點茶會¥1,500) + 午餐 | 金閣寺 (入園¥500, 30-40分) → 京都駅休息 | 京都駅晚餐（Katsukura豬排）→ **teamLab Biovortex** ~19:00 |
 | 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | 四條購物（藥妝）+ **先斗町晚餐** + AVANTI唐吉訶德 |
 | 4 | Fri 27 | 伏見稻荷大社 (JR奈良線→稲荷, 5分) | 夢館kimono→計程車→東山（三年坂, 二年坂, 八坂之塔） | 祇園, AEON MALL, 預換Haruka |
 | 5 | Sat 28 | 退房09:00 → 京都駅搭Haruka | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30 |
@@ -309,7 +309,8 @@ npm run travel -- set-activity-title <day> <session> "<activity>" "<new_title>" 
 npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
 npm run travel -- set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
 npm run travel -- set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
-npm run travel -- set-session-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activities-zh-json '[...]'] [--plan-id <id>]
+npm run travel -- set-route-segments-bulk <day> --json '[{"from":"A","to":"B","mode":"walking","duration":5},...]'
+npm run travel -- set-session-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]'] [--plan-id <id>]
 npm run travel -- swap-days <dayA> <dayB> [--dest slug]
 npm run travel -- fetch-weather [--dest slug] [--all]
 

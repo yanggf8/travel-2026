@@ -405,6 +405,12 @@ export class StateManager {
         );
         return {};
 
+      case 'set_route_segments_bulk':
+        this.setRouteSegmentsBulk(
+          command.destination, command.dayNumber, command.segments
+        );
+        return {};
+
       case 'set_session_time_range':
         this.setSessionTimeRange(
           command.destination, command.dayNumber, command.session,
@@ -429,7 +435,7 @@ export class StateManager {
       case 'set_session_zh_content':
         this.setSessionZhContent(
           command.destination, command.dayNumber, command.session,
-          command.focus_zh, command.transit_notes_zh, command.activities_zh
+          command.focus_zh, command.transit_notes_zh, command.activities_zh, command.meals_zh
         );
         return {};
 
@@ -1156,6 +1162,33 @@ export class StateManager {
     });
   }
 
+  setRouteSegmentsBulk(
+    destination: string,
+    dayNumber: number,
+    segments: Array<{ from: string; to: string; mode: 'transit' | 'walking' | 'driving'; duration?: number; notes?: string; start_time?: string }>
+  ): void {
+    const day = this.repo.getDay(destination, dayNumber);
+    if (!day) throw new Error(`Day ${dayNumber} not found in ${destination}`);
+
+    day.route_segments = segments.map((s, i) => ({
+      sort_order: i,
+      from_place: s.from,
+      to_place: s.to,
+      mode: s.mode,
+      duration_min: s.duration ?? null,
+      notes: s.notes ?? null,
+      start_time: s.start_time ?? null,
+    }));
+    this.repo.touchItinerary(destination, this.timestamp);
+
+    this.emitEvent({
+      event: 'route_segments_bulk_updated',
+      destination,
+      process: 'process_5_daily_itinerary',
+      data: { day_number: dayNumber, segment_count: segments.length },
+    });
+  }
+
   setSessionTimeRange(
     destination: string,
     dayNumber: number,
@@ -1369,7 +1402,8 @@ export class StateManager {
     session: SessionType,
     focus_zh?: string | null,
     transit_notes_zh?: string | null,
-    activities_zh?: string[] | null
+    activities_zh?: string[] | null,
+    meals_zh?: string[] | null
   ): void {
     if (focus_zh !== undefined) {
       this.repo.setSessionField(destination, dayNumber, session, 'focus_zh', focus_zh);
@@ -1380,13 +1414,16 @@ export class StateManager {
     if (activities_zh !== undefined) {
       this.repo.setSessionField(destination, dayNumber, session, 'activities_zh', activities_zh);
     }
+    if (meals_zh !== undefined) {
+      this.repo.setSessionField(destination, dayNumber, session, 'meals_zh', meals_zh);
+    }
     this.repo.touchItinerary(destination, this.timestamp);
 
     this.emitEvent({
       event: 'itinerary_session_zh_content_set',
       destination,
       process: 'process_5_daily_itinerary',
-      data: { day_number: dayNumber, session, focus_zh, transit_notes_zh, activities_zh },
+      data: { day_number: dayNumber, session, focus_zh, transit_notes_zh, activities_zh, meals_zh },
     });
   }
 
