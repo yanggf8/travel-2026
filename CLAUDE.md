@@ -244,10 +244,10 @@ Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto
 
 | Day | Date | Morning | Afternoon | Evening |
 |-----|------|---------|-----------|---------|
-| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | Kyoto Station / Ramen Alley ([tabelog](https://tabelog.com/tw/kyoto/A2601/A260101/)) |
+| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | 13:30 KIX arrival, 16:30 Haruka→京都 | Porta 地下街（3COINS）+ Porta 美食街晚餐 |
 | 2 | Wed 25 | **北野天滿宮梅花祭** (2/25限定, 野點茶會¥1,500) + 午餐 | 金閣寺 (入園¥500, 30-40分) → 京都駅休息 | **teamLab Biovortex** ~17:30 + 京都駅晚餐 |
-| 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | 四條購物 + **先斗町晚餐** |
-| 4 | Fri 27 | 伏見稻荷大社 (JR奈良線→稲荷, 5分) | 夢館kimono, 三年坂, 二年坂, 八坂之塔 | 祇園, 伊勢丹＆Porta最後採購, 預換Haruka |
+| 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | 四條購物（藥妝）+ **先斗町晚餐** + AVANTI唐吉訶德 |
+| 4 | Fri 27 | 伏見稻荷大社 (JR奈良線→稲荷, 5分) | 夢館kimono, 三年坂, 二年坂, 八坂之塔 | 祇園, 伊勢丹＆Porta最後採購, AEON MALL, 預換Haruka |
 | 5 | Sat 28 | 退房09:00 → 京都駅搭Haruka | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30 |
 
 Day 3 保津川遊船: depart 京都 10:50 → JR山陰線 25min → 亀岡 → **11:30 boat** → 嵐山 13:30
