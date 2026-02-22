@@ -892,6 +892,15 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
             : 'After customs → B1 JR/Nankai platforms (follow "JR Haruka" signs)';
           parts.push(`<span style="color:var(--text-dim);font-size:12px">\uD83D\uDCA1 ${tip}</span>`);
         }
+        // Outbound reminder: need to be at origin airport 3 hours before departure
+        const depTime = outbound?.departure_time as string | undefined;
+        const leaveBy = leaveByTime(depTime, 180);
+        if (leaveBy) {
+          const note = lang === 'zh'
+            ? `\u2757 去程提醒：需在 ${leaveBy} 前抵達機場（起飛前3小時）`
+            : `\u2757 Outbound reminder: Arrive airport by ${leaveBy} (3hr before departure)`;
+          parts.push(`<span style="color:var(--warn-color, #d97706)">${note}</span>`);
+        }
         return parts.join(' \u00B7 ');
       })(),
       badge: arrival?.status ? statusBadge(arrival.status as string, lang) : '',
@@ -914,15 +923,6 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
         }
         const schedule = (depSelected.schedule as string) || '';
         if (schedule) parts.push(esc(schedule));
-        // Countdown: need to be at airport 3 hours before departure (outbound from origin)
-        const depTime = outbound?.departure_time as string | undefined;
-        const leaveBy = leaveByTime(depTime, 180);
-        if (leaveBy) {
-          const note = lang === 'zh'
-            ? `\u2757 去程提醒：需在 ${leaveBy} 前抵達機場（起飛前3小時）`
-            : `\u2757 Outbound reminder: Arrive airport by ${leaveBy} (3hr before departure)`;
-          parts.push(`<span style="color:var(--warn-color, #d97706)">${note}</span>`);
-        }
         return parts.join(' \u00B7 ');
       })(),
       badge: departure?.status ? statusBadge(departure.status as string, lang) : '',
