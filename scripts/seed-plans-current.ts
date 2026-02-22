@@ -1,11 +1,8 @@
 /**
  * Seed plans table (plan_id + schema_version only — no blobs).
  *
- * This script is largely obsolete since all data lives in normalized tables.
- * Use `npm run db:migrate:turso` to create tables, then
- * `ts-node scripts/migrate-blob-to-tables.ts` to populate from old blob data.
- *
- * This script now only ensures the `plans` row exists for each plan_id.
+ * All data lives in normalized tables. Use `npm run db:migrate:turso` to create tables.
+ * This script ensures the `plans` row exists for each plan_id.
  *
  * Usage:
  *   npm run db:seed:plans
