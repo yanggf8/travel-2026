@@ -199,7 +199,10 @@ playwright install chromium
 
 ## Registry Reference
 
-See `data/ota-sources.json` for full OTA configuration:
+OTA configuration lives in the `ota_sources` table in Turso (no JSON files):
+```bash
+npx ts-node scripts/turso-exec.ts "SELECT source_id, display_name, scraper_script, supported, rate_limit FROM ota_sources"
+```
 - `source_id`: Unique identifier
 - `scraper_script`: Path to scraper (repo-relative)
 - `supported`: Whether scraper is implemented

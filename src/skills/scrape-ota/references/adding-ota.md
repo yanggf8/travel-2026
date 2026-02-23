@@ -4,10 +4,14 @@ Step-by-step guide to register a new OTA scraper.
 
 ## Steps
 
-1. Add entry to `data/ota-sources.json` (or `ota_sources` table in Turso):
+1. Add entry to the `ota_sources` table in Turso:
+   ```bash
+   npx ts-node scripts/turso-exec.ts "INSERT OR IGNORE INTO ota_sources (source_id, display_name, scraper_script, supported, rate_limit) VALUES ('new_ota', 'New OTA', 'scripts/scrape_package.py', 1, 10)"
+   ```
+   Fields:
    - `source_id`: unique snake_case identifier
    - `scraper_script`: repo-relative path (e.g., `scripts/scrape_package.py`)
-   - `supported`: `true`
+   - `supported`: `1` (true)
    - `rate_limit`: requests per minute
 
 2. Create parser module in `scripts/scrapers/parsers/<ota>.py`:
