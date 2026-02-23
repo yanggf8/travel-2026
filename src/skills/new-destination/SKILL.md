@@ -9,6 +9,12 @@ provides_processes: []
 
 # /new-destination
 
+## Shared references
+
+Read if adding OTA region mappings or destination POI data:
+- `../travel-shared/references/ota-registry.md` — OTA source IDs, region codes, scraper scripts
+- `../travel-shared/references/destinations/` — existing destination JSON files (use as template)
+
 ## Purpose
 
 Add new destination to system configuration with proper validation to prevent:

@@ -11,6 +11,15 @@ provides_processes: [process_3_4_packages, process_3_transportation, process_4_a
 
 Search and select package deals (flight + hotel combined).
 
+## Shared references
+
+Read first unless request is extremely narrow:
+- `../travel-shared/references/io-contracts.md`
+- `../travel-shared/references/state-manager.md`
+- `../travel-shared/references/cascade-triggers.md`
+- `../scrape-ota/SKILL.md` — OTA scraping commands and URL patterns
+- `references/legacy-spec.md` — full canonical offer schema + scraper interface spec (read when implementing or validating offer shapes)
+
 ## Overview
 
 This skill handles package tours that bundle transportation and accommodation. When a package is selected, it automatically populates P3 (transportation) and P4 (accommodation) via cascade.
@@ -150,13 +159,6 @@ python scripts/scrape_listings.py --source besttour --dest kansai
 # Filter results
 python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24
 ```
-
-## Shared References
-
-- `../travel-shared/references/io-contracts.md`
-- `../travel-shared/references/state-manager.md`
-- `../travel-shared/references/cascade-triggers.md`
-- `../scrape-ota/SKILL.md` - OTA scraping details
 
 ## DB Integration
 

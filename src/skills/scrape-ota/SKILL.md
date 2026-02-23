@@ -9,6 +9,13 @@ provides_processes: []
 
 # /scrape-ota
 
+## Shared references
+
+Read first unless request is a single known-URL scrape:
+- `../travel-shared/references/ota-registry.md` — source IDs, region codes, rate limits
+- `../travel-shared/references/ota-knowledge.json` — baggage rules, booking notes per OTA
+- `references/adding-ota.md` — step-by-step guide for registering a new OTA parser (read only when adding new OTA support)
+
 ## Role in Process Flow
 
 ```
@@ -200,12 +207,4 @@ See `data/ota-sources.json` for full OTA configuration:
 
 ## Adding New OTA Support
 
-1. Add entry to `data/ota-sources.json`
-2. Create parser module in `scripts/scrapers/parsers/<ota>.py`
-   - Subclass `BaseScraper`
-   - Implement `parse_raw_text()` for pure parsing
-   - Override `prepare_page()` for OTA-specific tab clicks etc.
-3. Register in `scripts/scrapers/registry.py` (URL pattern + `_create_parser`)
-4. Add to `scripts/scrapers/parsers/__init__.py`
-5. Add tests in `tests/scrapers/test_parsers.py`
-6. Test with sample URL: `python scripts/scrape_package.py "<url>" scrapes/<ota>-test.json`
+See `references/adding-ota.md` for the full step-by-step guide.

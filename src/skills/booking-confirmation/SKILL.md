@@ -9,6 +9,11 @@ provides_processes: []
 
 # /booking-confirmation
 
+## Shared references
+
+Read if verifying data correctness or understanding write path:
+- `../travel-shared/references/db-first-pattern.md` — why mutations go through CLI/StateManager, not direct JSON
+
 ## Purpose
 
 Prevent common post-booking data errors: wrong flight numbers, wrong hotel, stale pricing, missing booking references.

@@ -11,6 +11,15 @@ provides_processes: [process_3_transportation]
 
 Search and compare standalone flight options for P3 (transportation).
 
+## Shared references
+
+Read first unless request is extremely narrow:
+- `../travel-shared/references/io-contracts.md`
+- `../travel-shared/references/date-filters.md`
+- `../travel-shared/references/state-manager.md`
+- `../travel-shared/references/cascade-triggers.md`
+- `references/legacy-spec.md` — detailed I/O contract examples and airport tables (read when matching exact interface shapes)
+
 ## Input Schema
 
 ```typescript
@@ -103,13 +112,6 @@ Use `/scrape-ota` skill for OTA scraping. See `../scrape-ota/SKILL.md` for:
 - Supported OTAs and URL patterns
 - Scraper commands per OTA
 - Output schema
-
-## Shared References
-
-- `../travel-shared/references/io-contracts.md`
-- `../travel-shared/references/date-filters.md`
-- `../travel-shared/references/state-manager.md`
-- `../travel-shared/references/cascade-triggers.md`
 
 ## Notes
 
