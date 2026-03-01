@@ -1802,15 +1802,28 @@ async function main(): Promise<void> {
           process.exit(1);
         }
         const dest2 = sm.resolveDestination(destOpt);
-        // Resolve activity by ID or title using public findActivity
-        const found = sm.findActivity(dest2, activityArg);
-        if (!found || found.dayNumber !== dayNum2 || found.session !== sessionArg2) {
-          const altMsg = found ? ` (found in Day ${found.dayNumber} ${found.session} instead)` : '';
-          console.error(`Error: Activity "${activityArg}" not found in Day ${dayNum2} ${sessionArg2}${altMsg}`);
+        // Resolve activity within the specific day+session to avoid title-collision false rejects
+        const day2 = sm.getDay(dest2, dayNum2);
+        if (!day2) {
+          console.error(`Error: Day ${dayNum2} not found in ${dest2}`);
           process.exit(1);
         }
-        const matchTitle = found.isString ? (found.activity as string) : (found.activity as Record<string, unknown>).title as string;
-        const matchId = found.isString ? (found.activity as string) : (found.activity as Record<string, unknown>).id as string;
+        const sessionObj2 = day2[sessionArg2] as { activities?: Array<string | Record<string, unknown>> } | undefined;
+        const acts2 = sessionObj2?.activities ?? [];
+        const searchLower2 = activityArg.toLowerCase();
+        const matchAct2 = acts2.find((a: unknown) => {
+          if (typeof a === 'string') return a.toLowerCase().includes(searchLower2);
+          const r = a as Record<string, unknown>;
+          return r.id === activityArg || (typeof r.title === 'string' && r.title.toLowerCase().includes(searchLower2));
+        });
+        if (!matchAct2) {
+          console.error(`Error: Activity "${activityArg}" not found in Day ${dayNum2} ${sessionArg2}`);
+          const actList = acts2.map((a: unknown) => typeof a === 'string' ? `  "${a}"` : `  [${(a as Record<string,unknown>).id}] ${(a as Record<string,unknown>).title}`);
+          if (actList.length) console.error('Activities in this session:\n' + actList.join('\n'));
+          process.exit(1);
+        }
+        const matchTitle = typeof matchAct2 === 'string' ? matchAct2 : (matchAct2 as Record<string, unknown>).title as string;
+        const matchId = typeof matchAct2 === 'string' ? matchAct2 : (matchAct2 as Record<string, unknown>).id as string;
         console.log(`\n🗑️  Deleting activity:`);
         console.log(`   Day ${dayNum2} ${sessionArg2}: "${matchTitle}"`);
         if (!dryRun) {

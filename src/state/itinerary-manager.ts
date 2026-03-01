@@ -364,7 +364,7 @@ export class ItineraryManager {
   findActivity(
     destination: string,
     idOrTitle: string
-  ): { dayNumber: number; session: 'morning' | 'afternoon' | 'evening'; activity: string | Record<string, unknown>; isString: boolean } | null {
+  ): { dayNumber: number; session: 'morning' | 'noon' | 'afternoon' | 'evening'; activity: string | Record<string, unknown>; isString: boolean } | null {
     const destObj = this.plan.destinations[destination];
     if (!destObj) return null;
 
@@ -372,7 +372,7 @@ export class ItineraryManager {
     const days = p5?.days as Array<Record<string, unknown>> | undefined;
     if (!days) return null;
 
-    const sessions: Array<'morning' | 'afternoon' | 'evening'> = ['morning', 'afternoon', 'evening'];
+    const sessions: Array<'morning' | 'noon' | 'afternoon' | 'evening'> = ['morning', 'noon', 'afternoon', 'evening'];
     const searchLower = idOrTitle.toLowerCase();
 
     for (const day of days) {

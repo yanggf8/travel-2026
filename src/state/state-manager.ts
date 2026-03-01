@@ -1220,7 +1220,7 @@ export class StateManager {
     if (!dayBObj) throw new Error(`Day ${dayB} not found`);
 
     // Swap all session content (preserve day metadata like date, day_number, day_type)
-    const sessions: SessionType[] = ['morning', 'afternoon', 'evening'];
+    const sessions: SessionType[] = ['morning', 'noon', 'afternoon', 'evening'];
     sessions.forEach(session => {
       const tempSession = dayAObj[session];
       dayAObj[session] = dayBObj[session];

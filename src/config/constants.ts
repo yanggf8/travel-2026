@@ -21,7 +21,7 @@ export const DEFAULTS = {
   project: 'travel-planner',
 
   /** Session types in order */
-  sessionOrder: ['morning', 'afternoon', 'evening'] as const,
+  sessionOrder: ['morning', 'noon', 'afternoon', 'evening'] as const,
 } as const;
 
 /**

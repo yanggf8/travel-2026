@@ -43,7 +43,7 @@ export const DestinationStatusSchema = z.enum(['active', 'archived']);
 
 export const DayTypeSchema = z.enum(['arrival', 'full', 'departure']);
 
-export const SessionTypeSchema = z.enum(['morning', 'afternoon', 'evening']);
+export const SessionTypeSchema = z.enum(['morning', 'noon', 'afternoon', 'evening']);
 
 export const PrioritySchema = z.enum(['must', 'want', 'optional']);
 
