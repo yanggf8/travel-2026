@@ -135,7 +135,7 @@ python scripts/filter_packages.py scrapes/*-scrape.json --max-price 20000 --type
 - **Required processes**: P1 (dates), P2 (destination)
 - **Required skills**: `/scrape-ota` for OTA integration
 - **External tools**: Python scrapers (`scripts/scrape_package.py`, `scripts/scrape_listings.py`)
-- **Required files**: `data/ota-sources.json`
+- **Required DB**: `ota_sources` table in Turso (OTA registry — replaces removed `data/ota-sources.json`)
 
 ## Data Acquisition
 
