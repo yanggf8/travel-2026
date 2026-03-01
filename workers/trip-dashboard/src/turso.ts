@@ -355,7 +355,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
         };
       }
 
-      for (const sessionType of ['morning', 'afternoon', 'evening']) {
+      for (const sessionType of ['morning', 'noon', 'afternoon', 'evening']) {
         const key = sKey(dest, String(dayNumber), sessionType);
         const sRow = sessionMap.get(key);
 
@@ -628,7 +628,7 @@ export async function updateSessionField(
   if (!SESSION_EDITABLE_FIELDS.has(field)) {
     throw new Error(`Field "${field}" is not editable on itinerary_sessions`);
   }
-  if (!['morning', 'afternoon', 'evening'].includes(sessionType)) {
+  if (!['morning', 'noon', 'afternoon', 'evening'].includes(sessionType)) {
     throw new Error(`Invalid session type "${sessionType}"`);
   }
   const sql = `UPDATE itinerary_sessions SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4 AND session_type = ?5`;

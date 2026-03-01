@@ -33,7 +33,7 @@ export interface ValidationIssue {
   severity: IssueSeverity;
   category: IssueCategory;
   day?: number;
-  session?: 'morning' | 'afternoon' | 'evening';
+  session?: 'morning' | 'noon' | 'afternoon' | 'evening';
   activityId?: string;
   message: string;
   suggestion?: string;
@@ -61,7 +61,7 @@ export interface ResolvedActivity {
   id: string;
   title: string;
   day: number;
-  session: 'morning' | 'afternoon' | 'evening';
+  session: 'morning' | 'noon' | 'afternoon' | 'evening';
   startTime?: string;  // HH:MM
   endTime?: string;    // HH:MM
   durationMin: number;

@@ -280,7 +280,7 @@ export function assemblePlan(
           source_id: dayRow.weather_source_id, sourced_at: dayRow.weather_sourced_at,
         };
       }
-      for (const st of ['morning', 'afternoon', 'evening']) {
+      for (const st of ['morning', 'noon', 'afternoon', 'evening']) {
         const sk = sKey(slug, dayRow.day_number, st);
         const sRow = sessionMap.get(sk);
         const meals = mealMap.get(sk) || [];

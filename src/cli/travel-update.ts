@@ -396,7 +396,7 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
       for (const day of days) {
         const dayNum = day.day_number as number;
         const dayDate = day.date as string;
-        for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+        for (const sessionName of ['morning', 'noon', 'afternoon', 'evening'] as const) {
           const session = day[sessionName] as Record<string, unknown> | undefined;
           const timeRange = session?.time_range as { start?: string; end?: string } | undefined;
           const activities = session?.activities as Array<unknown> | undefined;
@@ -437,7 +437,7 @@ function showStatus(sm: StateManager, opts?: { full?: boolean }): void {
         console.log('\nFixed-Time Activities & Reservations:');
         console.log('─'.repeat(50));
 
-        const sessionOrder = { morning: 0, afternoon: 1, evening: 2 } as const;
+        const sessionOrder = { morning: 0, noon: 1, afternoon: 2, evening: 3 } as const;
         fixedActivities.sort((a, b) => (
           (a.day - b.day) ||
           ((sessionOrder as any)[a.session] - (sessionOrder as any)[b.session]) ||
@@ -573,7 +573,7 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
 
     console.log('');
 
-    for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+    for (const sessionName of ['morning', 'noon', 'afternoon', 'evening'] as const) {
       const session = day[sessionName] as Record<string, unknown> | undefined;
       if (!session) continue;
 
@@ -641,7 +641,7 @@ function showItinerary(sm: StateManager, destOpt?: string): void {
   const pendingBookings: Array<{ day: number; title: string; bookBy?: string }> = [];
   for (const day of days) {
     const dayNum = day.day_number as number;
-    for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+    for (const sessionName of ['morning', 'noon', 'afternoon', 'evening'] as const) {
       const session = day[sessionName] as Record<string, unknown> | undefined;
       const activities = session?.activities as Array<unknown> | undefined;
       if (!activities) continue;
@@ -761,7 +761,7 @@ function showTransport(sm: StateManager, destOpt?: string): void {
 
       console.log(`\nDay ${dayNum} (${formatDate(date)})${theme ? ` - ${theme}` : ''}`);
 
-      for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+      for (const sessionName of ['morning', 'noon', 'afternoon', 'evening'] as const) {
         const session = day[sessionName] as Record<string, unknown> | undefined;
         const transitNotes = session?.transit_notes as string | undefined;
         if (transitNotes) {
@@ -827,7 +827,7 @@ function showBookings(sm: StateManager, destOpt?: string): void {
   if (days) {
     for (const day of days) {
       const dayNum = day.day_number as number;
-      for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+      for (const sessionName of ['morning', 'noon', 'afternoon', 'evening'] as const) {
         const session = day[sessionName] as Record<string, unknown> | undefined;
         const activities = session?.activities as Array<unknown> | undefined;
         if (!activities) continue;
@@ -1536,7 +1536,7 @@ async function main(): Promise<void> {
         const explicitAssignments = parseAssignments(assignOpt);
         const allocation = allocateClustersToDays(goals, days, explicitAssignments);
 
-        const plannedAdds: Array<{ day: number; session: 'morning' | 'afternoon' | 'evening'; poiId: string; title: string }> = [];
+        const plannedAdds: Array<{ day: number; session: 'morning' | 'noon' | 'afternoon' | 'evening'; poiId: string; title: string }> = [];
         const skipped: string[] = [];
 
         for (const item of allocation) {
@@ -1786,9 +1786,9 @@ async function main(): Promise<void> {
         }
         const dayNumber = dayResult.value;
 
-        const validSessions = ['morning', 'afternoon', 'evening'];
+        const validSessions = ['morning', 'noon', 'afternoon', 'evening'];
         if (!validSessions.includes(session)) {
-          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          console.error('Error: <session> must be one of: morning | noon | afternoon | evening');
           process.exit(1);
         }
 
@@ -1873,9 +1873,9 @@ async function main(): Promise<void> {
         }
         const dayNumber = dayResult.value;
 
-        const validSessions = ['morning', 'afternoon', 'evening'];
+        const validSessions = ['morning', 'noon', 'afternoon', 'evening'];
         if (!validSessions.includes(session)) {
-          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          console.error('Error: <session> must be one of: morning | noon | afternoon | evening');
           process.exit(1);
         }
 
@@ -1929,9 +1929,9 @@ async function main(): Promise<void> {
         }
         const dayNumber = dayResult.value;
 
-        const validSessions = ['morning', 'afternoon', 'evening'];
+        const validSessions = ['morning', 'noon', 'afternoon', 'evening'];
         if (!validSessions.includes(session)) {
-          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          console.error('Error: <session> must be one of: morning | noon | afternoon | evening');
           process.exit(1);
         }
 
@@ -1965,7 +1965,7 @@ async function main(): Promise<void> {
           sm.setActivityBookingStatus(
             destination,
             dayNumber,
-            session as 'morning' | 'afternoon' | 'evening',
+            session as 'morning' | 'noon' | 'afternoon' | 'evening',
             activity,
             status as 'not_required' | 'pending' | 'booked' | 'waitlist',
             refOpt,
@@ -2101,9 +2101,9 @@ async function main(): Promise<void> {
         }
         const dayNumber = dayResult.value;
 
-        const validSessions = ['morning', 'afternoon', 'evening'];
+        const validSessions = ['morning', 'noon', 'afternoon', 'evening'];
         if (!validSessions.includes(session)) {
-          console.error('Error: <session> must be one of: morning | afternoon | evening');
+          console.error('Error: <session> must be one of: morning | noon | afternoon | evening');
           process.exit(1);
         }
 
@@ -2123,7 +2123,7 @@ async function main(): Promise<void> {
           sm.setActivityTitle(
             destination,
             dayNumber,
-            session as 'morning' | 'afternoon' | 'evening',
+            session as 'morning' | 'noon' | 'afternoon' | 'evening',
             activity,
             newTitle
           );
@@ -2193,9 +2193,9 @@ async function main(): Promise<void> {
           process.exit(1);
         }
         const sessionDay = dayResult.value;
-        const sessionType = sessionArg as 'morning' | 'afternoon' | 'evening';
-        if (!['morning', 'afternoon', 'evening'].includes(sessionType)) {
-          console.error(`Error: session must be morning, afternoon, or evening`);
+        const sessionType = sessionArg as 'morning' | 'noon' | 'afternoon' | 'evening';
+        if (!['morning', 'noon', 'afternoon', 'evening'].includes(sessionType)) {
+          console.error(`Error: session must be morning, noon, afternoon, or evening`);
           process.exit(1);
         }
 
@@ -2845,7 +2845,7 @@ function buildDaySummaries(days: Array<Record<string, unknown>>): DaySummary[] {
     let fixedTimeCount = 0;
     let pendingBookings = 0;
 
-    for (const sessionName of ['morning', 'afternoon', 'evening'] as const) {
+    for (const sessionName of ['morning', 'noon', 'afternoon', 'evening'] as const) {
       const session = day[sessionName] as Record<string, unknown> | undefined;
       const acts = (session?.activities as Array<unknown> | undefined) ?? [];
       for (const act of acts) {
@@ -3748,10 +3748,10 @@ function parseAssignments(assignOpt: string | undefined): Map<string, number> | 
   return map.size ? map : undefined;
 }
 
-function getSessionOrderForDayType(dayType: string): Array<'morning' | 'afternoon' | 'evening'> {
+function getSessionOrderForDayType(dayType: string): Array<'morning' | 'noon' | 'afternoon' | 'evening'> {
   if (dayType === 'arrival') return ['afternoon', 'evening'];
-  if (dayType === 'departure') return ['morning', 'afternoon'];
-  return ['morning', 'afternoon', 'evening'];
+  if (dayType === 'departure') return ['morning', 'noon'];
+  return ['morning', 'noon', 'afternoon', 'evening'];
 }
 
 function chunkEvenly<T>(items: T[], buckets: number): T[][] {

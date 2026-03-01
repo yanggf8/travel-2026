@@ -139,7 +139,7 @@ export interface TravelPlanMinimal {
 // Activity Schema (P5 Itinerary)
 // ============================================================================
 
-export type SessionType = 'morning' | 'afternoon' | 'evening';
+export type SessionType = 'morning' | 'noon' | 'afternoon' | 'evening';
 
 // Booking status for activities that require advance booking
 export const BOOKING_STATUSES = [

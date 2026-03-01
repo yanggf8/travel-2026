@@ -27,6 +27,7 @@ const T: Record<string, Record<Lang, string>> = {
   cost: { en: 'Cost', zh: '費用' },
   time: { en: 'Time', zh: '時間' },
   morning: { en: 'Morning', zh: '上午' },
+  noon: { en: 'Noon', zh: '中午' },
   afternoon: { en: 'Afternoon', zh: '下午' },
   evening: { en: 'Evening', zh: '晚上' },
   day: { en: 'Day', zh: '第' },
@@ -306,7 +307,7 @@ interface SessionEditMeta {
 
 function renderSession(
   session: Record<string, unknown> | undefined,
-  sessionKey: 'morning' | 'afternoon' | 'evening',
+  sessionKey: 'morning' | 'noon' | 'afternoon' | 'evening',
   lang: Lang,
   zhOverride?: SessionZhOverride,
   mapCity?: string,
@@ -676,9 +677,11 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
   // Check if this is schedule-based format (Kyoto) or session-based (Tokyo)
   const schedule = day.schedule as ScheduleItem[] | undefined;
   let morningSession: Record<string, unknown> | undefined;
+  let noonSession: Record<string, unknown> | undefined;
   let afternoonSession: Record<string, unknown> | undefined;
   let eveningSession: Record<string, unknown> | undefined;
   let morningOverride: SessionZhOverride | undefined;
+  let noonOverride: SessionZhOverride | undefined;
   let afternoonOverride: SessionZhOverride | undefined;
   let eveningOverride: SessionZhOverride | undefined;
 
@@ -692,6 +695,7 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
     eveningOverride = converted.evening;
   } else {
     morningSession = day.morning as Record<string, unknown>;
+    noonSession = day.noon as Record<string, unknown>;
     afternoonSession = day.afternoon as Record<string, unknown>;
     eveningSession = day.evening as Record<string, unknown>;
     // Build ZH overrides from DB columns on session objects
@@ -706,6 +710,7 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
         };
       };
       morningOverride = buildZhOverride(morningSession);
+      noonOverride = buildZhOverride(noonSession);
       afternoonOverride = buildZhOverride(afternoonSession);
       eveningOverride = buildZhOverride(eveningSession);
     }
@@ -735,6 +740,7 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
         const city = '';
         return [
           renderSession(morningSession, 'morning', lang, morningOverride, city, editMeta ? { ...editMeta, day: dayNum } : undefined),
+          renderSession(noonSession, 'noon', lang, noonOverride, city, editMeta ? { ...editMeta, day: dayNum } : undefined),
           renderSession(afternoonSession, 'afternoon', lang, afternoonOverride, city, editMeta ? { ...editMeta, day: dayNum } : undefined),
           renderSession(eveningSession, 'evening', lang, eveningOverride, city, editMeta ? { ...editMeta, day: dayNum } : undefined),
         ].join('');
@@ -983,7 +989,7 @@ function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang): string 
   const alerts: string[] = [];
 
   for (const day of days) {
-    for (const sessionKey of ['morning', 'afternoon', 'evening']) {
+    for (const sessionKey of ['morning', 'noon', 'afternoon', 'evening']) {
       const session = day[sessionKey] as Record<string, unknown> | undefined;
       if (!session?.activities) continue;
       for (const activity of session.activities as unknown[]) {

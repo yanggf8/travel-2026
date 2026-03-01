@@ -158,7 +158,7 @@ export class PlanRepository implements StateRepository {
     const days = p5?.days as Array<Record<string, unknown>> | undefined;
     if (!days) return null;
 
-    const sessions: SessionType[] = ['morning', 'afternoon', 'evening'];
+    const sessions: SessionType[] = ['morning', 'noon', 'afternoon', 'evening'];
     const searchLower = idOrTitle.toLowerCase();
 
     for (const day of days) {
@@ -1102,7 +1102,7 @@ export class PlanRepository implements StateRepository {
              VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(day.date as string)}, ${sqlText(day.theme as string)}, ${sqlText(day.theme_zh as string)}, ${sqlText(day.day_type as string)}, ${sqlText((day.status as string) || 'draft')}, ${sqlText(weather?.weather_label as string)}, ${sqlReal(weather?.temp_low_c as number)}, ${sqlReal(weather?.temp_high_c as number)}, ${sqlReal(weather?.feels_like_low_c as number)}, ${sqlReal(weather?.feels_like_high_c as number)}, ${sqlReal(weather?.precipitation_pct as number)}, ${sqlInt(weather?.weather_code as number)}, ${sqlText(weather?.source_id as string)}, ${sqlText(weather?.sourced_at as string)}, datetime('now'))`
           );
 
-          for (const sessionType of ['morning', 'afternoon', 'evening'] as const) {
+          for (const sessionType of ['morning', 'noon', 'afternoon', 'evening'] as const) {
             const session = day[sessionType] as Record<string, unknown> | undefined;
             if (!session) continue;
 

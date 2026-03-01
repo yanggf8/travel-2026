@@ -198,7 +198,7 @@ export class ItineraryValidator {
           severity: 'warning',
           category: 'overcrowded_day',
           day: day.dayNumber,
-          session: session as 'morning' | 'afternoon' | 'evening',
+          session: session as 'morning' | 'noon' | 'afternoon' | 'evening',
           message: `${session} has ${count} activities (max: ${this.options.maxActivitiesPerSession})`,
           suggestion: 'Spread activities across sessions',
         });
@@ -375,7 +375,7 @@ export class ItineraryValidator {
 
     // Check for evening activities before morning on same day
     for (const day of days) {
-      const sessions = ['morning', 'afternoon', 'evening'] as const;
+      const sessions = ['morning', 'noon', 'afternoon', 'evening'] as const;
       const sessionOrder = new Map(sessions.map((s, i) => [s, i]));
 
       const sortedByTime = [...day.activities]
