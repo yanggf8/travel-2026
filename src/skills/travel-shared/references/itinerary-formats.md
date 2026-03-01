@@ -94,7 +94,7 @@ The trip dashboard (`workers/trip-dashboard/`) supports **both formats**:
 
 | Format | Field Mapping |
 |--------|---------------|
-| Session-based | `day_number`, `day_type`, `morning/afternoon/evening` |
+| Session-based | `day_number`, `day_type`, `morning/noon/afternoon/evening` |
 | Schedule-based | `day` → `day_number`, infers `day_type` from title, converts `schedule[]` to sessions |
 
 ### Day Type Inference (Schedule Format)

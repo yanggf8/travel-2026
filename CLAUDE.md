@@ -25,8 +25,8 @@ Turso normalized tables (no JSON blobs)
 ├── hotel_access_lines             # hotel access directions
 ├── airport_transfers              # arrival/departure transfer info
 ├── airport_transfer_candidates    # transfer options
-├── itinerary_days                 # day cards + weather
-├── itinerary_sessions             # morning/afternoon/evening
+├── days                           # day cards + weather
+├── timesofday                     # morning/noon/afternoon/evening
 ├── activities                     # per-session activities + booking info
 ├── itinerary_metadata             # transit_summary, timestamps
 └── (+ supporting: budget, triggers, contracts, event_log_*)
@@ -301,11 +301,13 @@ npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--
 npm run travel -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
 npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
 npm run travel -- set-activity-title <day> <session> "<activity>" "<new_title>" [--plan-id <id>]
-npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
+npm run travel -- set-tod-time-range <day> <session> --start HH:MM --end HH:MM    # (alias: set-session-time-range)
 npm run travel -- set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
 npm run travel -- set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
 npm run travel -- set-route-segments-bulk <day> --json '[{"from":"A","to":"B","mode":"walking","duration":5},...]'
-npm run travel -- set-session-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]'] [--plan-id <id>]
+npm run travel -- set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]'] [--plan-id <id>]    # (alias: set-session-zh)
+npm run travel -- set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]    # (alias: set-session-focus)
+npm run travel -- delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
 npm run travel -- swap-days <dayA> <dayB> [--dest slug]
 npm run travel -- fetch-weather [--dest slug] [--all]
 
@@ -370,7 +372,7 @@ Tables:
 - **Plan core**: `plans` (PK=plan_id, `version` monotonic counter — no JSON blobs), `plan_metadata`, `plan_destinations`, `destination_details`, `destination_cities`
 - **Dates/Status**: `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `plan_root_date_anchor`
 - **Offers**: `plan_offers`, `plan_offer_flights`, `plan_offer_hotels`, `plan_offer_date_pricing`, `plan_offer_selection`, `plan_offer_best_value`, `plan_offer_provenance` (source audit trail), `plan_offer_warnings`
-- **Itinerary**: `itinerary_days` (+ weather + `theme_zh`), `itinerary_sessions` (+ `focus_zh`, `transit_notes_zh`, `meals_zh_json`, `activities_zh_json`), `activities`, `itinerary_metadata` (+ `transit_summary_zh`), `day_route_segments` (+ `duration_min`, `notes`, `start_time`), `day_landmarks`, `session_meals`, `activity_tags`
+- **Itinerary**: `days` (+ weather + `theme_zh`), `timesofday` (+ `focus_zh`, `transit_notes_zh`, `meals_zh_json`, `activities_zh_json`), `activities`, `itinerary_metadata` (+ `transit_summary_zh`), `day_route_segments` (+ `duration_min`, `notes`, `start_time`), `day_landmarks`, `session_meals`, `activity_tags`
 - **Transport**: `flight_legs` (PK: plan_id+destination+direction+leg_order), `airport_transfers`, `airport_transfer_candidates`, `transportation_extras`
 - **Accommodation**: `hotels` (+ `name_zh`), `hotel_access_lines`, `accommodation_location_zone`
 - **Cascade**: `cascade_triggers`, `cascade_global_state`, `plan_schema_contract`, `plan_process_precedence`, `plan_budget`
@@ -407,7 +409,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 - **Edit mode** — `?edit=TOKEN` activates inline editing when TOKEN matches `ADMIN_TOKEN` secret. Pencil icons appear next to editable fields (theme, focus, activities, meals, transit notes). POSTs to `/api/edit` with token in JSON body. Set token: `wrangler secret put ADMIN_TOKEN`
 - **Mobile-first** — phone-optimized day cards with weather (including feels-like temperature), transit, meals
 - **Default ZH** — Traditional Chinese by default; `?lang=en` for English
-- **ZH content** — All Chinese content stored in DB (`theme_zh`, `focus_zh`, `activities_zh_json`, `meals_zh_json`, `transit_notes_zh` on normalized tables). No hardcoded content in Worker code. Content updates take effect instantly without redeploy. Use `set-day-theme --zh` for day themes, `set-session-zh` for session focus/transit/activities, `set-route-segment` for Chinese place names. For bulk new-destination ZH population: copy `scripts/set-kyoto-zh-sessions-v2.ts` pattern (parameterized Turso pipeline queries — required for Unicode/emoji content).
+- **ZH content** — All Chinese content stored in DB (`theme_zh`, `focus_zh`, `activities_zh_json`, `meals_zh_json`, `transit_notes_zh` on normalized tables). No hardcoded content in Worker code. Content updates take effect instantly without redeploy. Use `set-day-theme --zh` for day themes, `set-tod-zh` (alias: `set-session-zh`) for session focus/transit/activities, `set-route-segment` for Chinese place names. For bulk new-destination ZH population: copy `scripts/set-kyoto-zh-sessions-v2.ts` pattern (parameterized Turso pipeline queries — required for Unicode/emoji content).
 - **Anti-translate** — `lang="zh-TW"` + `<meta name="google" content="notranslate">` prevents browser auto-translation of the ZH page.
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows plan index page listing all plans.
 - **Plan nav** — hidden by default for privacy (shareable links show single plan only); add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
@@ -428,7 +430,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 | Itinerary shows blank/empty | Schedule-based format not converted | Check `render.ts` handles both formats |
 | Wrong plan content | Plan not synced to Turso | Run `npm run db:seed:plans` |
 | "Plan not found" error | Plan ID mismatch (underscore vs hyphen) | URL uses `tokyo-2026`, DB uses `tokyo_2026` |
-| ZH content not showing | Missing `_zh` columns in DB | Run `set-session-zh` CLI per session, or bulk-populate via `scripts/set-kyoto-zh-sessions-v2.ts` pattern |
+| ZH content not showing | Missing `_zh` columns in DB | Run `set-tod-zh` CLI per session, or bulk-populate via `scripts/set-kyoto-zh-sessions-v2.ts` pattern |
 | ZH UPDATE silently fails (rows_affected=0) | Inline SQL with Unicode/emoji fails encoding | Use parameterized Turso queries: `args:[{type:"text",value:"..."},{type:"integer",value:"1"}]` — integer value must be a string |
 | Weather missing | Weather not fetched | Run `npm run travel -- fetch-weather --dest <slug>` |
 | Maps embed not showing | No `GOOGLE_MAPS_KEY` secret | `wrangler secret put GOOGLE_MAPS_KEY` (restrict key to Maps Embed API + referrer in GCP Console) |
@@ -460,9 +462,9 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 ### Engineering — Itinerary DAL Refactor
 Plan: `docs/plans/2026-03-01-itinerary-dal-refactor.md`
 
-1. **Phase A — Add `noon` session type** — `SessionType`, CLI arrays, DB migration (recreate `itinerary_sessions`+`activities` with updated CHECK), dashboard
-2. **Phase B — Missing CLI commands** — `delete-activity`, `set-tod-focus`, rename `set-session-*` → `set-tod-*` (with aliases)
-3. **Phase C — DB table rename** — `itinerary_days` → `days`, `itinerary_sessions` → `timesofday`; update 5 files + migration script
-4. **Phase D — Docs** — CLAUDE.md, skill SKILL.md files
+1. **Phase A — Add `noon` session type** ✅ — `SessionType`, CLI arrays, DB migration, dashboard
+2. **Phase B — Missing CLI commands** ✅ — `delete-activity`, `set-tod-focus`, `set-tod-zh`, `set-tod-time-range` aliases
+3. **Phase C — DB table rename** ✅ — `itinerary_days` → `days`, `itinerary_sessions` → `timesofday`
+4. **Phase D — Docs** ✅ — CLAUDE.md, skill SKILL.md files
 5. **StateManagerV2** (longer term) — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()`
 6. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB.

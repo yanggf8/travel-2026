@@ -50,7 +50,7 @@ Before running this skill, ensure:
 
 ## Session Structure
 
-Each day has 3 sessions: `morning`, `afternoon`, `evening`.
+Each day has up to 4 sessions: `morning`, `noon`, `afternoon`, `evening`.
 
 > **Format Note**: Use session-based format (documented here) for new itineraries. A legacy schedule-based format exists but is deprecated. See `../travel-shared/references/itinerary-formats.md` for details and migration guide.
 
@@ -255,7 +255,7 @@ All ZH content lives in DB columns — never hardcoded in Worker. After scaffold
 
 ```bash
 # Per-session (focus + transit + activities)
-npm run travel -- set-session-zh <day> <morning|afternoon|evening> \
+npm run travel -- set-tod-zh <day> <morning|noon|afternoon|evening> \
   --zh "中文焦點標題" \
   --transit-zh "中文交通說明" \
   --activities-zh-json '["活動一","活動二 https://maps.link"]' \

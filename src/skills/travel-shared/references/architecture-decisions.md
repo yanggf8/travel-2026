@@ -28,21 +28,21 @@ Each `StateManager` method:
 setSessionFocus(dest, day, session, focus, focus_zh) {
   this.repo.setSessionField(dest, day, session, 'focus', focus);   // mutates memory
   this.repo.setSessionField(dest, day, session, 'focus_zh', focus_zh);
-  await sm.save();  // flushes entire itinerary_sessions table
+  await sm.save();  // flushes entire timesofday table
 }
 
 // RIGHT — target pattern
 async setSessionFocus(dest, day, session, focus, focus_zh?) {
   // validate
   const exists = await db.queryOne(
-    'SELECT 1 FROM itinerary_sessions WHERE plan_id=? AND destination=? AND day_number=? AND session_type=?',
+    'SELECT 1 FROM timesofday WHERE plan_id=? AND destination=? AND day_number=? AND session_type=?',
     [planId, dest, day, session]
   );
   if (!exists) throw new Error(`Session D${day}/${session} not found in ${dest}`);
 
   // write exactly what changed
   await db.execute(
-    'UPDATE itinerary_sessions SET focus=?, focus_zh=?, updated_at=datetime("now") WHERE plan_id=? AND destination=? AND day_number=? AND session_type=?',
+    'UPDATE timesofday SET focus=?, focus_zh=?, updated_at=datetime("now") WHERE plan_id=? AND destination=? AND day_number=? AND session_type=?',
     [focus, focus_zh ?? null, planId, dest, day, session]
   );
 }
