@@ -56,26 +56,37 @@ process_3_4_packages: {
 ## CLI Commands
 
 ```bash
-# Search packages
-npm run travel -- search-packages
+# Scrape OTA packages (batch — all sources for a region)
+npm run scraper:batch -- --dest kansai [--sources besttour,liontravel] [--date 2026-02-24 --type fit]
 
-# Search with filters
-npm run travel -- search-packages --type fit --max-price 25000
+# Scrape a specific package URL
+python scripts/scrape_package.py "<url>" scrapes/besttour-<code>.json
 
-# Select a package
+# Scrape package listings page
+python scripts/scrape_listings.py --source besttour --dest kansai
+
+# Import scraped JSON files into Turso
+npm run travel -- import-offers --dir scrapes --dest <slug>
+
+# Query available offers in DB
+npm run travel -- query-offers --plan-id <id> --dest <slug> [--max-price 25000] [--json]
+
+# Check if data is fresh
+npm run travel -- check-freshness --source besttour --region kansai
+
+# Select a package (populates P3+P4 via cascade)
 npm run travel -- select-offer <offer-id> <date>
-
-# View package details
-npm run travel -- show-offer <offer-id>
 ```
 
 ### Command Reference
 
 | Command | Description | Required Args | Optional Args |
 |---------|-------------|---------------|---------------|
-| `search-packages` | Search OTA packages | None | `--type`, `--max-price` |
+| `scraper:batch` | Scrape all OTAs for a region | `--dest` | `--sources`, `--date`, `--type` |
+| `import-offers` | Import scraped JSON into DB | `--dir`, `--dest` | `--start`, `--end`, `--dry-run` |
+| `query-offers` | List offers from DB | `--plan-id`, `--dest` | `--max-price`, `--json` |
+| `check-freshness` | Check if scraped data is stale | `--source`, `--region` | `--plan-id` |
 | `select-offer` | Select package for booking | `<offer-id>`, `<date>` | None |
-| `show-offer` | Display offer details | `<offer-id>` | None |
 
 ## Workflow Examples
 
@@ -85,26 +96,33 @@ npm run travel -- show-offer <offer-id>
 # 1. Set travel dates
 npm run travel -- set-dates 2026-02-24 2026-02-28
 
-# 2. Search packages
-npm run travel -- search-packages --type fit
+# 2. Scrape packages from OTAs
+npm run scraper:batch -- --dest kansai --type fit
 
-# 3. Review offers
-npm run view:status
+# 3. Import scraped files into DB
+npm run travel -- import-offers --dir scrapes --dest kyoto_2026
 
-# 4. Select package
-npm run travel -- select-offer besttour_TYO05MM260224AM 2026-02-24
+# 4. Review available offers
+npm run travel -- query-offers --plan-id kyoto-2026 --dest kyoto_2026
 
-# 5. Verify P3/P4 populated
+# 5. Select package (auto-populates P3+P4 via cascade)
+npm run travel -- select-offer liontravel_190620015 2026-02-24
+
+# 6. Verify P3/P4 populated
 npm run view:transport
 ```
 
 ### Example 2: Budget-Constrained Search
 
 ```bash
-# Search with budget limit
-npm run travel -- search-packages --max-price 20000 --type fit
+# Scrape with budget filter
+npm run scraper:batch -- --dest kansai --type fit
 
-# Filter scraped results
+# Import and query with max-price filter
+npm run travel -- import-offers --dir scrapes --dest kyoto_2026
+npm run travel -- query-offers --plan-id kyoto-2026 --dest kyoto_2026 --max-price 20000
+
+# Or filter scraped JSON directly
 python scripts/filter_packages.py scrapes/*-scrape.json --max-price 20000 --type fit
 ```
 

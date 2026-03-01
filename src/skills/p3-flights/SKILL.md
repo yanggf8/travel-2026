@@ -51,11 +51,22 @@ process_3_transportation: {
 ## CLI Commands
 
 ```bash
-# Search flights for active destination
-npm run travel -- search-flights
+# Scrape flight prices (multi-date, Trip.com)
+python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
+  --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
 
-# Search with filters
-npm run travel -- search-flights --max-price 15000 --airline "Tigerair"
+# Scrape Tigerair prices
+python scripts/scrape_tigerair.py
+
+# Normalize and rank flight results
+npm run normalize-flights -- scrapes/trip-feb24-out.json --top 5
+
+# Manually record selected flight
+npm run travel -- set-flight outbound --dest <slug> \
+  --flight <number> --airline "<name>" --airline-code <code> \
+  --from <IATA> --dep-terminal <T> --dep HH:MM \
+  --to <IATA> --arr-terminal <T> --arr HH:MM --date YYYY-MM-DD
+npm run travel -- set-flight return --dest <slug> [same flags]
 ```
 
 ## Workflow Examples
@@ -66,24 +77,35 @@ npm run travel -- search-flights --max-price 15000 --airline "Tigerair"
 # 1. Ensure dates are set (P1)
 npm run travel -- set-dates 2026-02-24 2026-02-28
 
-# 2. Search flights
-npm run travel -- search-flights
+# 2. Scrape flights from Trip.com
+python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
+  --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
 
-# 3. Review candidates
+# 3. Review ranked results
+npm run normalize-flights -- scrapes/date-range-prices.json --top 5
+
+# 4. Record selected flight in DB
+npm run travel -- set-flight outbound --dest kyoto_2026 \
+  --flight SL396 --airline "Thai Lion Air" --airline-code SL \
+  --from TPE --dep-terminal T1 --dep 09:00 \
+  --to KIX --arr-terminal T1 --arr 12:30 --date 2026-02-24
+npm run travel -- set-flight return --dest kyoto_2026 \
+  --flight SL397 --airline "Thai Lion Air" --airline-code SL \
+  --from KIX --dep-terminal T1 --dep 13:30 \
+  --to TPE --arr-terminal T1 --arr 15:40 --date 2026-02-28
+
+# 5. Verify
 npm run view:transport
-
-# 4. Select a flight
-npm run travel -- select-flight <flight-id>
 ```
 
-### Example 2: Budget-Constrained Search
+### Example 2: Tigerair LCC Search
 
 ```bash
-# Search with budget limit
-npm run travel -- search-flights --max-price 12000
+# Scrape Tigerair prices
+python scripts/scrape_tigerair.py
 
-# Filter results
-npm run travel -- filter-flights --type lcc
+# Review output, then record best option
+npm run travel -- set-flight outbound --dest <slug> --flight IT201 --airline "Tigerair" ...
 ```
 
 ## Error Handling

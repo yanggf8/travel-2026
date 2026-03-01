@@ -54,10 +54,11 @@ Check hotel name, check-in/check-out dates, and room type match confirmation.
 ### 4. Update actual price paid
 
 ```bash
-npm run travel -- update-offer <offer-id> <date> available <actual-price> --source booking_confirmation
+npm run travel -- update-offer <offer-id> <date> available <actual-price>
 ```
 
 Offer prices are estimates; actual price may differ (discounts, surcharges, currency conversion).
+Signature: `update-offer <offer-id> <date> <availability> [price] [seats] [source]` (all positional).
 
 ### 5. Mark as booked
 
