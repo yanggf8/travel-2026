@@ -68,6 +68,28 @@ export default {
       }
     }
 
+    // Service Worker
+    if (url.pathname === '/sw.js') {
+      const sw = `const C='trip-dashboard-v1';
+self.addEventListener('install',()=>self.skipWaiting());
+self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch',e=>{
+  if(e.request.method!=='GET')return;
+  e.respondWith(
+    fetch(e.request).then(r=>{
+      if(r.ok){caches.open(C).then(c=>c.put(e.request,r.clone()));}
+      return r;
+    }).catch(()=>caches.match(e.request).then(r=>r||new Response('Offline — please visit while online to cache this page',{status:503,headers:{'Content-Type':'text/plain'}})))
+  );
+});`;
+      return new Response(sw, {
+        headers: {
+          'Content-Type': 'application/javascript',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+
     // Favicon — inline SVG airplane emoji
     if (url.pathname === '/favicon.ico') {
       const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">✈️</text></svg>';

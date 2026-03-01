@@ -1101,6 +1101,7 @@ export function renderDashboard(
   <meta name="google" content="notranslate">
   <title>${esc(displayName)} ${lang === 'zh' ? '旅行計畫' : 'Trip Plan'}</title>
   <style>${CSS}</style>
+  <script>if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js')</script>
 </head>
 <body>
   <div class="header">
@@ -1157,6 +1158,7 @@ export function renderPlanIndex(plans: PlanSummary[], lang: Lang): string {
   <meta name="google" content="notranslate">
   <title>${title}</title>
   <style>${CSS}</style>
+  <script>if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js')</script>
 </head>
 <body>
   <div class="header">
@@ -1183,6 +1185,7 @@ export function renderError(message: string, lang: Lang = 'en'): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Trip Dashboard</title>
   <style>${CSS}</style>
+  <script>if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js')</script>
 </head>
 <body>
   <div class="header">

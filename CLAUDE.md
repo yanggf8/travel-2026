@@ -238,20 +238,15 @@ Includes: Kyoto Yumeyakata Kimono Experience (Day 4), JR Haruka round-trip, eSIM
 
 Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto Station, ~75min), included in package, status: booked
 
-### Kyoto Itinerary (Feb 24-28)
-⚠️ **Sagano Scenic Railway (嵯峨野トロッコ) CLOSED until March 1** — use JR山陰線 to 亀岡 instead
-🍽️ **16:8 fasting** — eating window starts 11:00, no morning meals
+### Kyoto Itinerary (Feb 24-28) — ✅ COMPLETED
 
-| Day | Date | Morning | Afternoon | Evening |
+| Day | Date | Morning (actual) | Afternoon (actual) | Evening (actual) |
 |-----|------|---------|-----------|---------|
-| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00(UTC+8) | 12:30 KIX arrival(UTC+9), Haruka→京都 | 京都駅伊勢丹・Porta（3COINS, UNIQLO）+ 京都駅周邊晚餐 |
-| 2 | Wed 25 | **北野天滿宮梅花祭** (2/25限定, 野點茶會¥1,500) + 午餐 | 金閣寺 (入園¥500, 30-40分) → 京都駅休息 | 京都駅晚餐（Katsukura豬排）→ **teamLab Biovortex** ~19:00 |
-| 3 | Thu 26 | JR山陰線→亀岡, **11:30 保津川遊船**→嵐山 | 嵐山: 竹林, 天龍寺, 渡月橋 | 四條購物（藥妝）+ **先斗町晚餐** + AVANTI唐吉訶德 |
-| 4 | Fri 27 | 伏見稻荷大社 (JR奈良線→稲荷, 5分) | 夢館kimono→計程車→東山（三年坂, 二年坂, 八坂之塔） | 祇園, AEON MALL, 預換Haruka |
-| 5 | Sat 28 | 退房09:00 → 京都駅搭Haruka | KIX T1 check-in (10:30開放) | ✈️ SL397 KIX→TPE 13:30(UTC+9) |
-
-Day 3 保津川遊船: depart 京都 10:50 → JR山陰線 25min → 亀岡 → **11:30 boat** → 嵐山 13:30
-Book: https://ars-hozugawa.triplabo.jp ¥4,100/person, book by day before
+| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | Haruka→京都, check-in | UNIQLO + 3 Coins + 名代豬排 (Katsukura, 伊勢丹 11F) |
+| 2 | Wed 25 | 計程車→北野天滿宮梅花祭 + 中国料理 沁 + Izumiya 白梅町店 + 計程車→金閣寺 | 錦市場 + 四條 + Porta 藥妝 | 伊勢丹探索 + 名代豬排 (Katsukura, 伊勢丹 11F) |
+| 3 | Thu 26 | JR→亀岡 (太冷，放棄保津川遊船) → 折返嵐山 | 嵐山: 竹林, 天龍寺 | AEON MALL 美食廣場 |
+| 4 | Fri 27 | 東本願寺 + Live Kyoto Gojo + 夢館 | 夢館kimono→東山（三年坂, 二年坂, 八坂之塔） | 祇園 + AEON MALL（聖護院八橋未買到） |
+| 5 | Sat 28 | 退房 → 京都駅搭Haruka | KIX T1 check-in | ✈️ SL397 KIX→TPE 13:30 |
 
 Weather check (as of **Feb 22, 2026**; Kyoto 10-day forecast):
 - Tue, Feb 24: **2.8–14.9°C**, precip chance **43%** (overcast)
@@ -460,15 +455,14 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ### Tokyo (Feb 13-17) — ✅ completed
 
-### Kyoto (Feb 24-28)
-1. **Book Hozugawa River Boat** — Day 3, 11:30 slot (https://ars-hozugawa.triplabo.jp)
-2. ~~Restaurant reservations~~ ✅ Partial — Day 1 & Day 3 evening Tabelog link added; Katsukura (名代豬排 JR京都伊勢丹 11F) added to Day 3 dinner
-3. ~~Fetch weather forecast~~ ✅ Done (Feb 19: Day1 23%/Day2 71%/Day3 42%/Day4 32%/Day5 52%) — re-run `npm run travel -- fetch-weather --all` closer to trip
-4. Set `GOOGLE_MAPS_KEY` worker secret for embedded maps (optional)
+### Kyoto (Feb 24-28) — ✅ completed
 
-### Engineering (next destination)
-1. **StateManagerV2** — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`)
-   - `DbClient` interface: `queryOne / queryMany / execute`
-   - Each command = targeted SELECT (validate) + targeted UPDATE/INSERT
-   - Remove `PlanRepository`, `plan-assembler.ts`, `syncNormalizedTables()`
-2. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB (local SQLite or dedicated Turso test DB)
+### Engineering — Itinerary DAL Refactor
+Plan: `docs/plans/2026-03-01-itinerary-dal-refactor.md`
+
+1. **Phase A — Add `noon` session type** — `SessionType`, CLI arrays, DB migration (recreate `itinerary_sessions`+`activities` with updated CHECK), dashboard
+2. **Phase B — Missing CLI commands** — `delete-activity`, `set-tod-focus`, rename `set-session-*` → `set-tod-*` (with aliases)
+3. **Phase C — DB table rename** — `itinerary_days` → `days`, `itinerary_sessions` → `timesofday`; update 5 files + migration script
+4. **Phase D — Docs** — CLAUDE.md, skill SKILL.md files
+5. **StateManagerV2** (longer term) — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()`
+6. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB.
