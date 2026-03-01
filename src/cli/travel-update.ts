@@ -22,7 +22,7 @@
  */
 
 import { StateManager } from '../state/state-manager';
-import type { ProcessId, TransportOption, FlightInfo, HotelInfo, AirportTransfers } from '../state/types';
+import type { ProcessId, TransportOption, FlightInfo, HotelInfo, AirportTransfers, SessionType } from '../state/types';
 import {
   validateDestinationRef,
   validateDestinationRefConsistency,
@@ -109,7 +109,7 @@ Commands:
   set-activity-booking <day> <session> <activity> <status> [--ref <ref>] [--book-by <date>]
     Set booking status for an activity.
     day: Day number (1-indexed)
-    session: morning | afternoon | evening
+    session: morning | noon | afternoon | evening
     activity: Activity ID or title (case-insensitive)
     status: not_required | pending | booked | waitlist
     Example: set-activity-booking 3 morning "teamLab Borderless" booked --ref "TLB-12345"
@@ -137,9 +137,20 @@ Commands:
     Rename an activity by title substring or ID.
     Example: set-activity-title 2 morning "Fushimi Inari" "金閣寺 (Kinkaku-ji)"
 
-  set-session-time-range <day> <session> --start HH:MM --end HH:MM
+  delete-activity <day> <session> <activity_id_or_title> [--plan-id <id>]
+    Remove an activity from a session. activity: ID or title substring.
+    Aliases: remove-activity
+    Example: delete-activity 2 morning "teamLab Borderless"
+
+  set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]
+    Set EN session focus summary.
+    Aliases: set-session-focus
+    Example: set-tod-focus 2 morning "Kitano Tenmangu → Kinkaku-ji"
+
+  set-tod-time-range <day> <session> --start HH:MM --end HH:MM
     Set optional time boundaries for a session.
-    Example: set-session-time-range 5 afternoon --start 11:00 --end 14:45
+    Aliases: set-session-time-range
+    Example: set-tod-time-range 5 afternoon --start 11:00 --end 14:45
 
   swap-days <dayA> <dayB> [--dest slug]
     Swap all activities between two days (preserves sessions).
@@ -1771,6 +1782,53 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'delete-activity':
+      case 'remove-activity': {
+        const [, dayStr, sessionArg2, activityArg] = cleanArgs;
+        if (!dayStr || !sessionArg2 || !activityArg) {
+          console.error('Usage: delete-activity <day> <session> <activity_id_or_title>');
+          console.error('Example: delete-activity 2 morning "teamLab Borderless"');
+          process.exit(1);
+        }
+        const dayResult2 = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult2.ok) {
+          console.error(`Error: ${dayResult2.error}`);
+          process.exit(1);
+        }
+        const dayNum2 = dayResult2.value;
+        const validSessions2 = ['morning', 'noon', 'afternoon', 'evening'];
+        if (!validSessions2.includes(sessionArg2)) {
+          console.error(`Error: <session> must be one of: morning | noon | afternoon | evening`);
+          process.exit(1);
+        }
+        const dest2 = sm.resolveDestination(destOpt);
+        // Resolve activity by ID or title using public findActivity
+        const found = sm.findActivity(dest2, activityArg);
+        if (!found || found.dayNumber !== dayNum2 || found.session !== sessionArg2) {
+          const altMsg = found ? ` (found in Day ${found.dayNumber} ${found.session} instead)` : '';
+          console.error(`Error: Activity "${activityArg}" not found in Day ${dayNum2} ${sessionArg2}${altMsg}`);
+          process.exit(1);
+        }
+        const matchTitle = found.isString ? (found.activity as string) : (found.activity as Record<string, unknown>).title as string;
+        const matchId = found.isString ? (found.activity as string) : (found.activity as Record<string, unknown>).id as string;
+        console.log(`\n🗑️  Deleting activity:`);
+        console.log(`   Day ${dayNum2} ${sessionArg2}: "${matchTitle}"`);
+        if (!dryRun) {
+          await sm.dispatch({
+            type: 'remove_activity',
+            destination: dest2,
+            dayNumber: dayNum2,
+            session: sessionArg2 as SessionType,
+            activityId: matchId,
+          });
+          await sm.saveWithTracking('delete-activity', `D${dayNum2}/${sessionArg2}/${matchTitle}`);
+          console.log('✅ Activity deleted');
+        } else {
+          console.log('🔸 DRY RUN - no changes saved');
+        }
+        break;
+      }
+
       case 'set-activity-time': {
         const [, dayStr, session, activity] = cleanArgs;
         if (!dayStr || !session || !activity) {
@@ -1858,6 +1916,44 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'set-tod-focus':
+      case 'set-session-focus': {
+        // set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]
+        const [, dayStr, sessionArg3, focusText] = cleanArgs;
+        if (!dayStr || !sessionArg3) {
+          console.error('Usage: set-tod-focus <day> <session> "<focus_text>"');
+          console.error('Example: set-tod-focus 2 morning "Kitano Tenmangu → Kinkaku-ji"');
+          process.exit(1);
+        }
+        const dayResult3 = validatePositiveInt(dayStr, '<day>');
+        if (!dayResult3.ok) {
+          console.error(`Error: ${dayResult3.error}`);
+          process.exit(1);
+        }
+        const dayNum3 = dayResult3.value;
+        const validSessions3 = ['morning', 'noon', 'afternoon', 'evening'];
+        if (!validSessions3.includes(sessionArg3)) {
+          console.error(`Error: <session> must be one of: morning | noon | afternoon | evening`);
+          process.exit(1);
+        }
+        const dest3 = sm.resolveDestination(destOpt);
+        if (!dryRun) {
+          await sm.dispatch({
+            type: 'set_session_focus',
+            destination: dest3,
+            dayNumber: dayNum3,
+            session: sessionArg3 as SessionType,
+            focus: focusText ?? null,
+          });
+          await sm.saveWithTracking('set-tod-focus', `D${dayNum3}/${sessionArg3}`);
+          console.log(`✅ Focus set for D${dayNum3} ${sessionArg3}: "${focusText ?? '(cleared)'}"`);
+        } else {
+          console.log(`🔸 DRY RUN — would set D${dayNum3} ${sessionArg3} focus: "${focusText}"`);
+        }
+        break;
+      }
+
+      case 'set-tod-time-range':
       case 'set-session-time-range': {
         const [, dayStr, session] = cleanArgs;
         if (!dayStr || !session) {
@@ -2173,6 +2269,7 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'set-tod-zh':
       case 'set-session-zh': {
         // set-session-zh <day> <session> [--zh "focus_zh"] [--transit-zh "transit_notes_zh"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]']
         const [, dayStr, sessionArg] = cleanArgs;
