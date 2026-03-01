@@ -243,7 +243,7 @@ npm run travel -- set-activity-time <day> <session> "<activity>" --start HH:MM -
 npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
 
 # Set session boundaries
-npm run travel -- set-session-time-range <day> <session> --start HH:MM --end HH:MM
+npm run travel -- set-tod-time-range <day> <session> --start HH:MM --end HH:MM
 
 # Validate
 npm run travel -- validate-itinerary [--severity warning]

@@ -22,10 +22,10 @@ After itinerary scaffolded and dates within 16 days of current date.
 ### 1. Pre-check destination config
 
 ```bash
-cat data/destinations.json | jq '.destinations | keys'
+npm run travel -- query-bookings --dest all 2>/dev/null || npx tsx scripts/turso-exec.ts "SELECT slug FROM destination_config"
 ```
 
-Common issue: trying to fetch weather for "kyoto" when only "osaka_kyoto_2026" exists.
+Common issue: trying to fetch weather for "kyoto" when only "kyoto_2026" exists.
 
 ### 2. Pre-check itinerary status
 
@@ -66,7 +66,7 @@ After weather fetched, deploy via `/deploy-dashboard` skill.
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| Destination not found | Slug not in destinations.json | Check exact slug spelling |
+| Destination not found | Slug not in `destination_config` table | Check exact slug via `turso-exec "SELECT slug FROM destination_config"` |
 | Itinerary not scaffolded | P5 status = pending | `npm run travel -- scaffold-itinerary` |
 | Dates outside window | Trip >16 days away | Wait until closer to departure |
 | No feels_like data | API response changed | Check Open-Meteo status, retry |

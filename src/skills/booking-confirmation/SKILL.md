@@ -104,6 +104,6 @@ npm run travel -- validate-itinerary --severity warning
 
 ## See Also
 
-- `references/db-first-pattern.md` — Why to use CLI/StateManager
+- `../travel-shared/references/db-first-pattern.md` — Why to use CLI/StateManager
 - `/separate-bookings` — For non-package bookings
 - `/pre-trip-checklist` — Pre-departure verification

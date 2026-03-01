@@ -175,7 +175,7 @@ npm run travel -- fetch-weather --dest kyoto_2026
 
 **Cause**: OTA region codes don't match destination
 
-**Fix**: Update `data/ota-sources.json` with correct region mappings (OTA sources are separate from destination config)
+**Fix**: Update the `ota_sources` table in Turso with correct region mappings (OTA sources stored in DB, not a JSON file)
 
 ### Issue: Dashboard doesn't show destination
 
@@ -195,5 +195,5 @@ npm run travel -- fetch-weather --dest kyoto_2026
 - `scripts/turso-migrate.ts` — Migration script (source of truth for DB schema and seed data)
 - `scripts/schema.sql` — Read-only DDL reference
 - `src/skills/travel-shared/references/destinations/` — POI data
-- `data/ota-sources.json` — OTA region mappings (separate from destination config)
+- `ota_sources` table in Turso — OTA region mappings (stored in DB, not a JSON file)
 - `/weather-update` — Weather fetch validation

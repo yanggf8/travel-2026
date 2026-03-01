@@ -24,7 +24,7 @@ produce a side-by-side comparison.
 
 - Automatically gather flight prices (Trip.com) and hotel prices (Booking.com) for
   the same date range as scraped package offers.
-- Use `src/utilities/holiday-calculator.ts` for leave day calculations (not manual
+- Use `src/utils/holiday-calculator.ts` for leave day calculations (not manual
   weekday counting).
 - Present results as a ranked comparison table; ask only when user preference
   changes the outcome (budget cap, hotel class, must-have inclusions).
@@ -66,7 +66,7 @@ Comparison table with columns:
 
 ## Holiday Awareness
 
-Always use `calculateLeave()` from `src/utilities/holiday-calculator.ts` for
+Always use `calculateLeave()` from `src/utils/holiday-calculator.ts` for
 leave day calculations. This ensures:
 - Taiwan public holidays are correctly identified
 - Makeup workdays (補班) are counted as leave days

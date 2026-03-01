@@ -171,6 +171,6 @@ After package selection, bookings are automatically synced to Turso:
 ## Notes
 
 - Package selection automatically populates P3 and P4 (cascade)
-- Use this skill for bundled deals; use `/p3-flights` + `/p4-hotels` for separate bookings
+- Use this skill for bundled deals; use `/p3-flights` + `/separate-bookings` for separate bookings
 - Package offers include `date_pricing` for availability tracking
 - StateManager handles offer availability updates via `updateOfferAvailability()`
