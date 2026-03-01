@@ -467,6 +467,6 @@ Plan: `docs/plans/2026-03-01-itinerary-dal-refactor.md`
 3. **Phase C — DB table rename** ✅ — `itinerary_days` → `days`, `itinerary_sessions` → `timesofday`
 4. **Phase D — Docs** ✅ — CLAUDE.md, skill SKILL.md files
 5. **Post-implementation fixes** ✅ — `swap-days` now includes noon; `SessionTypeSchema`/`DEFAULTS.sessionOrder`/`itinerary-manager` noon gaps closed; `delete-activity` scoped to exact day+session (no title-collision false reject)
-6. **Skill doc audit** ✅ — stale file paths (`data/destinations.json`, `data/ota-sources.json`, `src/utilities/`), broken relative refs, dangling `/p4-hotels`, and stale CLI names fixed across 6 SKILL.md files
+6. **Skill doc audit** ✅ — stale file paths (`data/destinations.json`, `data/ota-sources.json`, `src/utilities/`), broken relative refs, dangling `/p4-hotels`, and stale CLI names fixed across 6 SKILL.md files; p3-flights/p3p4-packages non-existent commands replaced with real scrape→import→query→select workflow; `booking-confirmation` `update-offer --source` flag corrected to positional arg
 7. **StateManagerV2** (longer term) — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()`
 8. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB.
