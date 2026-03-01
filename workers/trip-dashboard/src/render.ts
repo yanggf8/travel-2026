@@ -349,7 +349,7 @@ function renderSession(
       <div class="session-label">${t(sessionKey, lang)}</div>
       <div class="session-focus">${em
         ? editableField(focusFieldId, focus, {
-            table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+            table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
             day: em.day, session: sessionKey, field: lang === 'zh' ? 'focus_zh' : 'focus',
           })
         : esc(focus)}${focusEnSub ? `<div class="focus-sub-en">${esc(focusEnSub)}</div>` : ''}</div>
@@ -363,7 +363,7 @@ function renderSession(
         }).join('')}
       </ul>
       ${em ? editableField(activitiesFieldId, activities.join('\n'), {
-        table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+        table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
         day: em.day, session: sessionKey, field: 'activities_zh_json', isJsonArray: true,
       }) : ''}
       <div class="info-pills">
@@ -371,11 +371,11 @@ function renderSession(
         ${meals.map((m) => `<span class="pill pill-meal">\uD83C\uDF5C ${esc(m)}</span>`).join('')}
       </div>
       ${em ? editableField(mealsFieldId, meals.join('\n'), {
-        table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+        table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
         day: em.day, session: sessionKey, field: 'meals_zh_json', isJsonArray: true,
       }) : ''}
       ${em ? editableField(transitFieldId, transit, {
-        table: 'itinerary_sessions', plan_id: em.plan_id, dest: em.dest,
+        table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
         day: em.day, session: sessionKey, field: lang === 'zh' ? 'transit_notes_zh' : 'transit_notes',
       }) : ''}
     </div>`;
@@ -730,7 +730,7 @@ function renderDayCard(day: Record<string, unknown>, lang: Lang, hotelName: stri
       </div>
       <div class="day-theme">${editMeta
         ? editableField(`day-${dayNum}-theme_zh`, theme, {
-            table: 'itinerary_days', plan_id: editMeta.plan_id, dest: editMeta.dest,
+            table: 'days', plan_id: editMeta.plan_id, dest: editMeta.dest,
             day: dayNum, field: lang === 'zh' ? 'theme_zh' : 'theme',
           })
         : esc(theme)}</div>

@@ -16,7 +16,7 @@ async function timingSafeEqual(a: string, b: string): Promise<boolean> {
 
 interface EditRequest {
   token: string;
-  table: 'itinerary_days' | 'itinerary_sessions';
+  table: 'days' | 'timesofday';
   plan_id: string;
   destination: string;
   day_number: number;
@@ -52,11 +52,11 @@ export default {
         return Response.json({ error: 'Missing required fields' }, { status: 400 });
       }
       try {
-        if (body.table === 'itinerary_days') {
+        if (body.table === 'days') {
           await updateDayField(env, body.plan_id, body.destination, body.day_number, body.field, body.value);
-        } else if (body.table === 'itinerary_sessions') {
+        } else if (body.table === 'timesofday') {
           if (!body.session_type) {
-            return Response.json({ error: 'session_type required for itinerary_sessions' }, { status: 400 });
+            return Response.json({ error: 'session_type required for timesofday' }, { status: 400 });
           }
           await updateSessionField(env, body.plan_id, body.destination, body.day_number, body.session_type, body.field, body.value);
         } else {

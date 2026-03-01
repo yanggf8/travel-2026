@@ -141,7 +141,7 @@ async function run() {
     requests.push({
       type: 'execute',
       stmt: {
-        sql: `UPDATE itinerary_sessions SET focus_zh=?, transit_notes_zh=?, activities_zh_json=? WHERE plan_id=? AND destination=? AND day_number=? AND session_type=?`,
+        sql: `UPDATE timesofday SET focus_zh=?, transit_notes_zh=?, activities_zh_json=? WHERE plan_id=? AND destination=? AND day_number=? AND session_type=?`,
         args: [
           { type: 'text', value: s.focus_zh },
           { type: 'text', value: s.transit_notes_zh },

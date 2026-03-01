@@ -185,8 +185,8 @@ async function main() {
   // 10. Create normalized itinerary tables (Phase 1)
   const itineraryTables: Array<{ name: string; sql: string }> = [
     {
-      name: 'itinerary_days',
-      sql: `CREATE TABLE IF NOT EXISTS itinerary_days (
+      name: 'days',
+      sql: `CREATE TABLE IF NOT EXISTS days (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
@@ -208,12 +208,12 @@ async function main() {
 );`,
     },
     {
-      name: 'itinerary_sessions',
-      sql: `CREATE TABLE IF NOT EXISTS itinerary_sessions (
+      name: 'timesofday',
+      sql: `CREATE TABLE IF NOT EXISTS timesofday (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
-  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'afternoon', 'evening')),
+  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'noon', 'afternoon', 'evening')),
   focus TEXT,
   transit_notes TEXT,
   booking_notes TEXT,
@@ -231,7 +231,7 @@ async function main() {
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
-  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'afternoon', 'evening')),
+  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'noon', 'afternoon', 'evening')),
   sort_order INTEGER NOT NULL DEFAULT 0,
   title TEXT NOT NULL,
   area TEXT,
@@ -433,11 +433,11 @@ async function main() {
     console.warn('⚠️  Could not rename table:', e.message);
   }
 
-  // 14. Add feels_like columns to itinerary_days
+  // 14. Add feels_like columns to days
   for (const col of ['feels_like_low_c', 'feels_like_high_c']) {
     try {
-      console.log(`Adding ${col} column to itinerary_days...`);
-      await client.execute(`ALTER TABLE itinerary_days ADD COLUMN ${col} REAL;`);
+      console.log(`Adding ${col} column to days...`);
+      await client.execute(`ALTER TABLE days ADD COLUMN ${col} REAL;`);
       console.log(`✅ Added ${col} column.`);
     } catch (e: any) {
       if (e.message?.includes('duplicate column name') || e.message?.includes('already exists')) {
@@ -863,11 +863,11 @@ async function main() {
   // ========================================
 
   const zhAlters = [
-    { table: 'itinerary_days', col: 'theme_zh TEXT' },
-    { table: 'itinerary_sessions', col: 'focus_zh TEXT' },
-    { table: 'itinerary_sessions', col: 'transit_notes_zh TEXT' },
-    { table: 'itinerary_sessions', col: 'meals_zh_json TEXT' },
-    { table: 'itinerary_sessions', col: 'activities_zh_json TEXT' },
+    { table: 'days', col: 'theme_zh TEXT' },
+    { table: 'timesofday', col: 'focus_zh TEXT' },
+    { table: 'timesofday', col: 'transit_notes_zh TEXT' },
+    { table: 'timesofday', col: 'meals_zh_json TEXT' },
+    { table: 'timesofday', col: 'activities_zh_json TEXT' },
     { table: 'hotels', col: 'name_zh TEXT' },
     { table: 'itinerary_metadata', col: 'transit_summary_zh TEXT' },
     { table: 'plan_destinations', col: 'home_address TEXT' },

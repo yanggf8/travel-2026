@@ -127,8 +127,8 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     /*  8 */ `SELECT * FROM hotels WHERE plan_id = '${escaped}'`,
     /*  9 */ `SELECT * FROM hotel_access_lines WHERE plan_id = '${escaped}' ORDER BY destination, sort_order`,
     /* 10 */ `SELECT * FROM airport_transfers WHERE plan_id = '${escaped}'`,
-    /* 11 */ `SELECT * FROM itinerary_days WHERE plan_id = '${escaped}' ORDER BY destination, day_number`,
-    /* 12 */ `SELECT * FROM itinerary_sessions WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type`,
+    /* 11 */ `SELECT * FROM days WHERE plan_id = '${escaped}' ORDER BY destination, day_number`,
+    /* 12 */ `SELECT * FROM timesofday WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type`,
     /* 13 */ `SELECT * FROM activities WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
     /* 14 */ `SELECT * FROM itinerary_metadata WHERE plan_id = '${escaped}'`,
     /* 15 */ `SELECT * FROM day_route_segments WHERE plan_id = '${escaped}' ORDER BY destination, day_number, sort_order`,
@@ -605,9 +605,9 @@ export async function updateDayField(
   value: string
 ): Promise<void> {
   if (!DAY_EDITABLE_FIELDS.has(field)) {
-    throw new Error(`Field "${field}" is not editable on itinerary_days`);
+    throw new Error(`Field "${field}" is not editable on days`);
   }
-  const sql = `UPDATE itinerary_days SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4`;
+  const sql = `UPDATE days SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4`;
   await executeTursoWrite(env, sql, [
     { type: 'text', value },
     { type: 'text', value: planId },
@@ -626,12 +626,12 @@ export async function updateSessionField(
   value: string
 ): Promise<void> {
   if (!SESSION_EDITABLE_FIELDS.has(field)) {
-    throw new Error(`Field "${field}" is not editable on itinerary_sessions`);
+    throw new Error(`Field "${field}" is not editable on timesofday`);
   }
   if (!['morning', 'noon', 'afternoon', 'evening'].includes(sessionType)) {
     throw new Error(`Invalid session type "${sessionType}"`);
   }
-  const sql = `UPDATE itinerary_sessions SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4 AND session_type = ?5`;
+  const sql = `UPDATE timesofday SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4 AND session_type = ?5`;
   await executeTursoWrite(env, sql, [
     { type: 'text', value },
     { type: 'text', value: planId },

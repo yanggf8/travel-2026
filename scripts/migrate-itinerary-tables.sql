@@ -6,7 +6,7 @@
 -- Core itinerary tables
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS itinerary_days (
+CREATE TABLE IF NOT EXISTS days (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
@@ -25,11 +25,11 @@ CREATE TABLE IF NOT EXISTS itinerary_days (
   PRIMARY KEY (plan_id, destination, day_number)
 );
 
-CREATE TABLE IF NOT EXISTS itinerary_sessions (
+CREATE TABLE IF NOT EXISTS timesofday (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
-  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'afternoon', 'evening')),
+  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'noon', 'afternoon', 'evening')),
   focus TEXT,
   transit_notes TEXT,
   booking_notes TEXT,
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS itinerary_sessions (
   time_range_end TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, day_number, session_type),
-  FOREIGN KEY (plan_id, destination, day_number) REFERENCES itinerary_days(plan_id, destination, day_number)
+  FOREIGN KEY (plan_id, destination, day_number) REFERENCES days(plan_id, destination, day_number)
 );
 
 CREATE TABLE IF NOT EXISTS activities (
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS activities (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
-  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'afternoon', 'evening')),
+  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'noon', 'afternoon', 'evening')),
   sort_order INTEGER NOT NULL DEFAULT 0,
   title TEXT NOT NULL,
   area TEXT,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS activities (
   notes TEXT,
   priority TEXT NOT NULL DEFAULT 'want' CHECK(priority IN ('must', 'want', 'optional')),
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (plan_id, destination, day_number, session_type) REFERENCES itinerary_sessions(plan_id, destination, day_number, session_type)
+  FOREIGN KEY (plan_id, destination, day_number, session_type) REFERENCES timesofday(plan_id, destination, day_number, session_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_activities_session ON activities(plan_id, destination, day_number, session_type, sort_order);

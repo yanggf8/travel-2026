@@ -5,7 +5,7 @@ async function main() {
   if (!sql) {
     console.error('Usage: npx tsx scripts/turso-exec.ts <SQL>');
     console.error('  npm run db:exec -- "SELECT * FROM plan_metadata"');
-    console.error('  npm run db:exec -- "UPDATE itinerary_sessions SET focus_zh = \'新焦點\' WHERE ..."');
+    console.error('  npm run db:exec -- "UPDATE timesofday SET focus_zh = \'新焦點\' WHERE ..."');
     process.exit(1);
   }
   const client = new TursoPipelineClient();

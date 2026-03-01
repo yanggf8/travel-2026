@@ -796,7 +796,7 @@ export class PlanRepository implements StateRepository {
 
   /**
    * Phase 1 dual-write: extract itinerary data from in-memory plan and
-   * write to normalized tables (itinerary_days, itinerary_sessions, activities,
+   * write to normalized tables (days, timesofday, activities,
    * plan_metadata, date_anchors, process_statuses, cascade_dirty_flags,
    * airport_transfers, flight_legs, hotels).
    *
@@ -811,8 +811,8 @@ export class PlanRepository implements StateRepository {
     const escapedPlanId = planId.replace(/'/g, "''");
     statements.push(
       `DELETE FROM activities WHERE plan_id = '${escapedPlanId}'`,
-      `DELETE FROM itinerary_sessions WHERE plan_id = '${escapedPlanId}'`,
-      `DELETE FROM itinerary_days WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM timesofday WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM days WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM process_statuses WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM cascade_dirty_flags WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM airport_transfers WHERE plan_id = '${escapedPlanId}'`,
@@ -1098,7 +1098,7 @@ export class PlanRepository implements StateRepository {
           const weather = day.weather as Record<string, unknown> | undefined;
 
           statements.push(
-            `INSERT OR REPLACE INTO itinerary_days (plan_id, destination, day_number, date, theme, theme_zh, day_type, status, weather_label, temp_low_c, temp_high_c, feels_like_low_c, feels_like_high_c, precipitation_pct, weather_code, weather_source_id, weather_sourced_at, updated_at)
+            `INSERT OR REPLACE INTO days (plan_id, destination, day_number, date, theme, theme_zh, day_type, status, weather_label, temp_low_c, temp_high_c, feels_like_low_c, feels_like_high_c, precipitation_pct, weather_code, weather_source_id, weather_sourced_at, updated_at)
              VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(day.date as string)}, ${sqlText(day.theme as string)}, ${sqlText(day.theme_zh as string)}, ${sqlText(day.day_type as string)}, ${sqlText((day.status as string) || 'draft')}, ${sqlText(weather?.weather_label as string)}, ${sqlReal(weather?.temp_low_c as number)}, ${sqlReal(weather?.temp_high_c as number)}, ${sqlReal(weather?.feels_like_low_c as number)}, ${sqlReal(weather?.feels_like_high_c as number)}, ${sqlReal(weather?.precipitation_pct as number)}, ${sqlInt(weather?.weather_code as number)}, ${sqlText(weather?.source_id as string)}, ${sqlText(weather?.sourced_at as string)}, datetime('now'))`
           );
 
@@ -1112,7 +1112,7 @@ export class PlanRepository implements StateRepository {
 
             const activitiesZh = session.activities_zh as string[] | undefined | null;
             statements.push(
-              `INSERT OR REPLACE INTO itinerary_sessions (plan_id, destination, day_number, session_type, focus, focus_zh, transit_notes, transit_notes_zh, activities_zh_json, booking_notes, meals_json, meals_zh_json, time_range_start, time_range_end, updated_at)
+              `INSERT OR REPLACE INTO timesofday (plan_id, destination, day_number, session_type, focus, focus_zh, transit_notes, transit_notes_zh, activities_zh_json, booking_notes, meals_json, meals_zh_json, time_range_start, time_range_end, updated_at)
                VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlText(session.focus as string)}, ${sqlText(session.focus_zh as string)}, ${sqlText(session.transit_notes as string)}, ${sqlText(session.transit_notes_zh as string)}, ${sqlText(activitiesZh ? JSON.stringify(activitiesZh) : null)}, ${sqlText(session.booking_notes as string)}, ${sqlText(meals ? JSON.stringify(meals) : null)}, ${sqlText(mealsZh ? JSON.stringify(mealsZh) : null)}, ${sqlText(timeRange?.start)}, ${sqlText(timeRange?.end)}, datetime('now'))`
             );
 

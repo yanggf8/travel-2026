@@ -379,7 +379,7 @@ CREATE TABLE IF NOT EXISTS transportation_extras (
 -- Itinerary
 -- =====================
 
-CREATE TABLE IF NOT EXISTS itinerary_days (
+CREATE TABLE IF NOT EXISTS days (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
@@ -401,11 +401,11 @@ CREATE TABLE IF NOT EXISTS itinerary_days (
   PRIMARY KEY (plan_id, destination, day_number)
 );
 
-CREATE TABLE IF NOT EXISTS itinerary_sessions (
+CREATE TABLE IF NOT EXISTS timesofday (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
-  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'afternoon', 'evening')),
+  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'noon', 'afternoon', 'evening')),
   focus TEXT,
   focus_zh TEXT,
   transit_notes TEXT,
@@ -425,7 +425,7 @@ CREATE TABLE IF NOT EXISTS activities (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   day_number INTEGER NOT NULL,
-  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'afternoon', 'evening')),
+  session_type TEXT NOT NULL CHECK(session_type IN ('morning', 'noon', 'afternoon', 'evening')),
   sort_order INTEGER NOT NULL DEFAULT 0,
   title TEXT NOT NULL,
   area TEXT,

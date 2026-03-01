@@ -74,8 +74,8 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM plan_process_precedence WHERE plan_id = ${pid}`,                                // 15
       `SELECT * FROM cascade_global_state WHERE plan_id = ${pid}`,                                   // 16
       `SELECT * FROM plan_root_date_anchor WHERE plan_id = ${pid}`,                                  // 17
-      `SELECT * FROM itinerary_days WHERE plan_id = ${pid} ORDER BY destination, day_number`,        // 18
-      `SELECT * FROM itinerary_sessions WHERE plan_id = ${pid} ORDER BY destination, day_number`,    // 19
+      `SELECT * FROM days WHERE plan_id = ${pid} ORDER BY destination, day_number`,                  // 18
+      `SELECT * FROM timesofday WHERE plan_id = ${pid} ORDER BY destination, day_number`,            // 19
       `SELECT * FROM activities WHERE plan_id = ${pid} ORDER BY destination, day_number, session_type, sort_order`, // 20
       `SELECT * FROM flight_legs WHERE plan_id = ${pid} ORDER BY destination, direction, leg_order`, // 21
       `SELECT * FROM hotels WHERE plan_id = ${pid}`,                                                 // 22
