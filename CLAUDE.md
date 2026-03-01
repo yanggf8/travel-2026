@@ -466,5 +466,6 @@ Plan: `docs/plans/2026-03-01-itinerary-dal-refactor.md`
 2. **Phase B — Missing CLI commands** ✅ — `delete-activity`, `set-tod-focus`, `set-tod-zh`, `set-tod-time-range` aliases
 3. **Phase C — DB table rename** ✅ — `itinerary_days` → `days`, `itinerary_sessions` → `timesofday`
 4. **Phase D — Docs** ✅ — CLAUDE.md, skill SKILL.md files
-5. **StateManagerV2** (longer term) — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()`
-6. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB.
+5. **Post-implementation fixes** ✅ — `swap-days` now includes noon; `SessionTypeSchema`/`DEFAULTS.sessionOrder`/`itinerary-manager` noon gaps closed; `delete-activity` scoped to exact day+session (no title-collision false reject)
+6. **StateManagerV2** (longer term) — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()`
+7. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB.
