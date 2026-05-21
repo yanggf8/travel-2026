@@ -77,6 +77,17 @@ function parseOperatingHours(hours: string | undefined): { open: number; close: 
   return null;
 }
 
+function formatDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 /**
  * Default session time ranges
  */
@@ -228,6 +239,12 @@ export class ItineraryValidator {
    */
   private validateBookingDeadlines(day: DaySummary, today: Date): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
+    const todayDate = formatDateOnly(today);
+
+    // Historical itinerary days are no longer actionable for booking workflow.
+    if (isIsoDate(day.date) && day.date < todayDate) {
+      return issues;
+    }
 
     for (const activity of day.activities) {
       if (!activity.bookingRequired) continue;

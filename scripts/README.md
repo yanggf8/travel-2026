@@ -109,6 +109,46 @@ python scripts/scrape_liontravel_dated.py detail 170525001 2026-02-11 5 scrapes/
 
 ---
 
+### `scrape_google_flights.py` - Google Flights Matrix Scraper
+
+Searches Google Flights for round-trip prices across one or more destinations,
+departure dates, and trip durations. Defaults are tuned for Taiwan-origin Japan
+searches, but all core inputs are CLI options.
+
+**Usage:**
+```bash
+python scripts/scrape_google_flights.py \
+  --depart-start YYYY-MM-DD \
+  --depart-end YYYY-MM-DD \
+  [--origin TPE] [--dest KIX,FUK] [--duration 4,5] [-o scrapes/google-flights.json]
+```
+
+**Examples:**
+```bash
+# Search Kansai/Fukuoka for 4-5 day round trips
+python scripts/scrape_google_flights.py \
+  --origin TPE \
+  --dest KIX,FUK \
+  --depart-start 2026-06-18 \
+  --depart-end 2026-06-22 \
+  --duration 4,5 \
+  -o scrapes/google-flights-jun.json
+
+# Repeat flags are also supported
+python scripts/scrape_google_flights.py \
+  --depart-start 2026-06-18 \
+  --depart-end 2026-06-20 \
+  --dest KIX \
+  --dest NGO \
+  --duration 3 \
+  --duration 4
+```
+
+Output is a JSON array sorted by cheapest parsed price. Progress logs are written
+to stderr so stdout remains parseable when `--output` is omitted.
+
+---
+
 ## OTA URL Patterns
 
 | OTA | URL Pattern | Notes |
@@ -117,6 +157,7 @@ python scripts/scrape_liontravel_dated.py detail 170525001 2026-02-11 5 scrapes/
 | **Lion Travel** | `vacation.liontravel.com/search?Destination={code}&FromDate={YYYYMMDD}&ToDate={YYYYMMDD}&roomlist={adults}-{children}-{infants}` | Search results |
 | **Lion Travel** | `vacation.liontravel.com/detail/{product_id}?FromDate={YYYYMMDD}&Days={n}&roomlist=...` | Product detail |
 | **ezTravel** | `flight.eztravel.com.tw/tickets-{origin}-{dest}?tripType=roundTrip&depDate={YYYY-MM-DD}&retDate={YYYY-MM-DD}&adult={n}` | Flight search |
+| **Google Flights** | `google.com/travel/flights?q=Flights+to+{dest}+from+{origin}+on+{date}+return+on+{date}&curr=TWD&hl=zh-TW` | Flight matrix search |
 
 ### Destination Codes (Lion Travel)
 - `JP_TYO_6` - Tokyo

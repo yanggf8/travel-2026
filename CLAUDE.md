@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Japan Travel Project
 
 ## Trip Details
@@ -77,6 +81,39 @@ READ:   await StateManager.create() → TursoRepository.create() → executeBatc
 - Plan ID: `"<trip-id>"` (e.g., `tokyo-2026`, `kyoto-2026`)
 - Tests use `skipSave: true` with `options.plan` passed in — DB calls skipped entirely
 - DB info messages use `console.error` (stderr) to avoid polluting JSON output
+
+## Development
+
+### Setup
+```bash
+npm install                   # also runs postinstall: git hooks + Playwright check
+npm run scraper:setup         # install Playwright browsers (if postinstall warned)
+```
+
+### Tests
+```bash
+npm test                      # integration/regression tests only (vitest)
+npm run test:watch            # watch mode
+npm run test:coverage         # coverage report (focused on src/state/)
+```
+
+- **Integration-only** — no unit test suite; tests live in `tests/integration/`
+- **`skipSave: true`** — tests pass `options.plan` to StateManager, skipping all DB calls
+- **Vitest config**: `vitest.config.ts` — node environment, only includes `tests/integration/**/*.test.ts`
+
+### Pre-commit
+```bash
+npm run typecheck             # tsc --noEmit (runs automatically via git hook)
+npm run validate:data         # data integrity check
+npm run doctor                # full system health check
+```
+Pre-commit hook (installed by `postinstall`) runs `typecheck` + `validate:data`.
+
+### Docs
+- `docs/API.md` — complete API reference
+- `docs/EXTENDING.md` — how to add destinations, OTAs, validators
+- `docs/SKILL_TEMPLATE.md` — skill authoring guide
+- `docs/plans/` — implementation plans for major refactors
 
 ## Agent-First Workflow
 
@@ -269,11 +306,15 @@ npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4
 npm run compare-true-cost -- --region kansai --pax 2 --date 2026-02-24
 
 # === SCRAPING ===
+npm run scraper:setup                            # Install Playwright browsers (first-time)
 npm run scraper:batch -- --dest kansai [--sources besttour,settour] [--date 2026-02-24 --type fit]
-npm run scraper:doctor                         # Test all scrapers
-npm run scraper:pipeline                       # Doctor + batch + import (end-to-end)
+npm run scraper:doctor                           # Test all scrapers
+npm run scraper:pipeline                         # Doctor + batch + import (end-to-end)
 python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
   --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
+python scripts/scrape_google_flights.py --origin TPE --dest KIX,FUK \
+  --depart-start 2026-06-18 --depart-end 2026-06-22 --duration 4,5 \
+  -o scrapes/google-flights-jun.json
 
 # === TURSO DB ===
 npm run travel -- import-offers --dir scrapes --dest tokyo_2026 [--start 2026-02-13 --end 2026-02-17] [--dry-run]
@@ -288,8 +329,10 @@ npm run db:status:turso | db:migrate:turso | db:seed:plans
 npm run travel -- sync-bookings [--dry-run]
 npm run travel -- query-bookings --dest tokyo_2026 [--category activity --status pending]
 npm run travel -- check-booking-integrity
+npm run travel -- validate-itinerary --dest tokyo_2026  # historical days skip booking-deadline failures
 
 # === UTILITIES ===
+npm test
 npm run leave-calc 2026-02-24 2026-02-28
 npm run normalize-flights -- scrapes/trip-feb24-out.json --top 5
 npm run validate:data | npm run doctor
@@ -351,12 +394,16 @@ npm run travel -- run-list [--status completed|failed|started] [--limit N]
 │   ├── contracts/skill-contracts.ts
 │   ├── cascade/runner.ts          # Cascade logic (DB-only via runAsync)
 │   ├── services/turso-service.ts  # DB access layer (all Turso queries go through here)
-│   ├── utils/                     # flight-normalizer, leave-calculator
+│   │   └── weather-service.ts
+│   ├── utils/                     # date-utils, flight-normalizer, holiday-calculator, leave-calculator, plan-id
 │   ├── skills/                    # Skill SKILL.md files + references
 │   ├── scrapers/                  # Registry + base classes + scrape-file-parser.ts
+│   ├── questionnaire/             # Trip questionnaire definitions
+│   ├── templates/                 # destination-template.json, project-init.ts
 │   ├── validation/                # Itinerary validator
 │   └── types/result.ts            # Result<T,E>
-└── tests/integration/
+├── tests/integration/
+└── docs/                          # API.md, EXTENDING.md, SKILL_TEMPLATE.md, plans/
 ```
 
 Config: `src/config/constants.ts` (defaults/exchange rates), `src/skills/travel-shared/references/ota-knowledge.json` (baggage rules).
