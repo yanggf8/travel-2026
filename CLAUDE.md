@@ -296,7 +296,10 @@ Weather check (as of **Feb 22, 2026**; Kyoto 10-day forecast):
 ## CLI Quick Reference
 ```bash
 # === VIEWS ===
+npm run travel -- plans                          # list DB plans and date anchors
 npm run view:status | view:itinerary | view:transport | view:bookings
+npm run travel -- status --travel-date 2026-06-20
+npm run travel -- itinerary --travel-start 2026-06-18 --travel-end 2026-06-25
 npm run view:prices -- --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
 
 # === COMPARISON ===
@@ -358,6 +361,13 @@ npm run travel -- fetch-weather [--dest slug] [--all]
 npm run travel -- run-status [run-id]
 npm run travel -- run-list [--status completed|failed|started] [--limit N]
 ```
+
+Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI
+uses `--travel-date`, `--travel-start/--travel-end`, or exactly one active or
+upcoming DB date anchor/planning window. Use `--travel-*` for plan selection;
+plain `--start/--end` remain command-specific filters such as offer search
+ranges. If several plans match, it fails with a plan list instead of silently
+loading a legacy default.
 
 ## Project Structure
 ```

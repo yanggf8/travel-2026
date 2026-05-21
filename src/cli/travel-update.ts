@@ -39,7 +39,9 @@ import './commands/validate';
 import './commands/search-compare';
 import './commands/view-prices';
 import './commands/turso';
+import './commands/plans';
 import { makeParsedArgs } from './shared/args';
+import { listPlans, resolvePlanFromSummaries } from './shared/plan-resolver';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -54,35 +56,60 @@ async function main(): Promise<void> {
   const verbose = args.includes('--verbose');
   const parsedArgs = makeParsedArgs(args);
 
-  const planIdOpt = parsedArgs.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID;
+  const handler = getCommandHandler(command);
+  if (!handler) {
+    console.error(`Unknown command: ${command}`);
+    console.log(HELP);
+    process.exit(1);
+  }
+
+  const explicitPlanId = parsedArgs.optionValue('--plan-id');
+  const envPlanId = process.env.TRAVEL_PLAN_ID;
   const planOpt = parsedArgs.optionValue('--plan');
   const stateOpt = parsedArgs.optionValue('--state');
 
-  if (planOpt && !planIdOpt) {
+  if (planOpt && !explicitPlanId && !envPlanId) {
     console.warn('⚠️  --plan is deprecated. Use --plan-id or set TRAVEL_PLAN_ID env var instead.');
   }
-  if (planIdOpt && (planOpt || stateOpt)) {
+  if ((explicitPlanId || envPlanId) && (planOpt || stateOpt)) {
     console.error('Error: --plan-id cannot be combined with --plan or --state');
     process.exit(1);
+  }
+
+  if (handler.requiresState === false) {
+    await handler.execute({
+      sm: undefined as any,
+      args: parsedArgs,
+      dryRun,
+      verbose,
+      planId: explicitPlanId || envPlanId,
+    });
+    return;
   }
 
   // Pre-load destination config from Turso DB so all sync loader APIs work
   const { loadDestinationConfigFromDb } = await import('../config/loader');
   await loadDestinationConfigFromDb();
 
-  const sm = planIdOpt
-    ? await StateManager.createFromPlanId(planIdOpt)
-    : await StateManager.create(planOpt, stateOpt);
+  const plans = await listPlans();
+  const resolvedPlan = resolvePlanFromSummaries({
+    explicitPlanId,
+    envPlanId,
+    planPath: planOpt,
+    date: parsedArgs.optionValue('--travel-date'),
+    rangeStart: parsedArgs.optionValue('--travel-start'),
+    rangeEnd: parsedArgs.optionValue('--travel-end'),
+  }, plans);
 
-  const handler = getCommandHandler(command);
-  if (handler) {
-    await handler.execute({ sm, args: parsedArgs, dryRun, verbose });
-    return;
+  if (resolvedPlan.note) {
+    console.error(`[plan] ${resolvedPlan.note}`);
+  }
+  if (verbose || !['explicit', 'env', 'plan-path'].includes(resolvedPlan.source)) {
+    console.error(`[plan] Using ${resolvedPlan.planId} (${resolvedPlan.source})`);
   }
 
-  console.error(`Unknown command: ${command}`);
-  console.log(HELP);
-  process.exit(1);
+  const sm = await StateManager.createFromPlanId(resolvedPlan.planId);
+  await handler.execute({ sm, args: parsedArgs, dryRun, verbose, planId: resolvedPlan.planId });
 }
 
 main().catch((err) => {

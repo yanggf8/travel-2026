@@ -18,6 +18,7 @@ export interface CliContext {
   args: ParsedArgs;
   dryRun: boolean;
   verbose: boolean;
+  planId?: string;
 }
 
 export interface CommandHandler {
@@ -27,6 +28,8 @@ export interface CommandHandler {
   description: string;
   /** Usage string for help text */
   usage: string;
+  /** Whether this command needs a loaded StateManager (default: true) */
+  requiresState?: boolean;
   /** Execute the command */
   execute(ctx: CliContext): Promise<void>;
 }

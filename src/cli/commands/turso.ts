@@ -65,9 +65,10 @@ const queryOffersCommand: CommandHandler = {
   names: ['query-offers'],
   description: 'Query offers from Turso DB with filters.',
   usage: 'query-offers [--plan-id <id>] [--dest <slug>] [--region <name>] [--start <date>] [--end <date>] [--source <id>] [--types <type>] [--max-price N] [--fresh-hours N] [--max N] [--json]',
+  requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
     const { sm, args } = ctx;
-    const planIdOpt = args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID;
+    const planIdOpt = args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID || ctx.planId;
     const destOpt = args.optionValue('--dest');
     const sourceOpt = args.optionValue('--source');
     const startOpt = args.optionValue('--start');
@@ -107,10 +108,11 @@ const checkFreshnessCommand: CommandHandler = {
   names: ['check-freshness'],
   description: 'Check data freshness for an OTA source in Turso DB.',
   usage: 'check-freshness --source <id> [--region <name>] [--start <date>] [--end <date>] [--max-age N] [--plan-id <id>] [--dest <slug>]',
+  requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
     const { args } = ctx;
     const sourceOpt = args.optionValue('--source');
-    const planIdOpt = args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID;
+    const planIdOpt = args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID || ctx.planId;
     const destOpt = args.optionValue('--dest');
     const startOpt = args.optionValue('--start');
     const endOpt = args.optionValue('--end');
@@ -149,12 +151,13 @@ const syncBookingsCommand: CommandHandler = {
   usage: 'sync-bookings [--plan-id <id>] [--trip-id <id>] [--dry-run]',
   async execute(ctx: CliContext): Promise<void> {
     const { dryRun } = ctx;
-    const planIdOpt = ctx.args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID;
+    const planIdOpt = ctx.args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID || ctx.planId;
     const tripIdOpt = ctx.args.optionValue('--trip-id');
 
     const { syncBookingsFromPlanJson } = await import('../../services/turso-service');
     const { TursoRepository } = await import('../../state/turso-repository');
-    const effectivePlanId = planIdOpt || 'tokyo-2026';
+    const effectivePlanId = planIdOpt;
+    if (!effectivePlanId) throw new Error('No plan resolved. Use --plan-id <id>.');
     console.log(`Syncing bookings from plan "${effectivePlanId}"...`);
     const repo = await TursoRepository.create(effectivePlanId);
     const plan = repo.getPlan() as unknown as Record<string, unknown>;
@@ -178,6 +181,7 @@ const queryBookingsCommand: CommandHandler = {
   names: ['query-bookings'],
   description: 'Query bookings from Turso DB with filters.',
   usage: 'query-bookings [--trip-id <id>] [--dest <slug>] [--category <type>] [--status <status>] [--max N] [--json]',
+  requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
     const { args } = ctx;
     const tripIdOpt = args.optionValue('--trip-id');
@@ -213,11 +217,12 @@ const checkBookingIntegrityCommand: CommandHandler = {
   usage: 'check-booking-integrity [--plan-id <id>] [--trip-id <id>]',
   async execute(ctx: CliContext): Promise<void> {
     const { sm, args } = ctx;
-    const planIdOpt = args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID;
+    const planIdOpt = args.optionValue('--plan-id') || process.env.TRAVEL_PLAN_ID || ctx.planId;
     const tripIdOpt = args.optionValue('--trip-id');
 
     const { checkBookingIntegrity } = await import('../../services/turso-service');
-    const effectivePlanId = planIdOpt || 'tokyo-2026';
+    const effectivePlanId = planIdOpt;
+    if (!effectivePlanId) throw new Error('No plan resolved. Use --plan-id <id>.');
     const effectiveTripId = tripIdOpt || toDestSlug(effectivePlanId);
     const plan = sm.getPlan() as unknown as Record<string, unknown>;
     console.log(`Checking booking integrity (plan "${effectivePlanId}" vs Turso DB)...`);

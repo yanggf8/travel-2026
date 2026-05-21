@@ -140,6 +140,7 @@ Commands:
   query-offers [--region name] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--sources csv] [--max-price N] [--fresh-hours N] [--max N] [--json]
     Query offers from Turso cloud database with filters.
     Example: query-offers --region kansai --start 2026-02-24 --end 2026-02-28
+    Note: --start/--end are offer filters, not plan selectors.
 
   check-freshness --source <id> [--region name] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--max-age N]
     Check if Turso has fresh data for a source/region. Returns skip/rescrape/no_data.
@@ -167,6 +168,10 @@ Commands:
     Example: run-list
     Example: run-list --status failed --limit 5
 
+  plans [--json]
+    List DB travel plans with active destination and date anchors.
+    Alias: list-plans
+
   status
     Show current plan status summary.
 
@@ -185,6 +190,9 @@ Commands:
 Options:
   --plan-id <id> Plan ID (preferred, e.g., 'kyoto-2026' or $TRAVEL_PLAN_ID)
   --plan <path>  Travel plan path (deprecated, use --plan-id instead)
+  --travel-date <date> Resolve plan by itinerary date (YYYY-MM-DD)
+  --travel-start <date> --travel-end <date>
+                Resolve plan by confirmed date anchor or candidate planning-window overlap
   --state <path> State log path (or $TRAVEL_STATE_PATH)
   --dry-run    Show what would be changed without saving
   --verbose    Show detailed output
