@@ -74,7 +74,7 @@ READ:   await StateManager.create() → TursoRepository.create() → executeBatc
 - **Destination config in DB** — `destination_config` table (replaces `data/destinations.json`); loaded at startup via `loadDestinationConfigFromDb()` into in-memory cache; all sync APIs (`getDestinationConfig()` etc.) read from cache
 - **28+ normalized tables** — see Data Model above
 - **`flight_legs` table** — fully normalized flight data with `departure_terminal`/`arrival_terminal` columns
-- `StateManager.create()` is async factory — reads from normalized tables via `TursoRepository.create()`
+- `StateManager.createFromPlanId(planId)` is the async factory — reads normalized tables via `TursoRepository.create()`
 - `StateManager.saveWithTracking(cmd, summary)` wraps `save()` with operation audit trail in `operation_runs` table
 - `plans.version` is a monotonic counter bumped on each save (audit trail only)
 - `dispatch(command)` entry point — 25 command types as discriminated union
@@ -114,6 +114,7 @@ Pre-commit hook (installed by `postinstall`) runs `typecheck` + `validate:data`.
 - `docs/EXTENDING.md` — how to add destinations, OTAs, validators
 - `docs/SKILL_TEMPLATE.md` — skill authoring guide
 - `docs/plans/` — implementation plans for major refactors
+- `docs/plans/2026-05-22-new-planning-flow.md` — **proposed** research-first "triangle" planning model (date/destination/flight explored together). Not yet adopted — the linear P1→P5 flow and Skill Decision Tree below remain authoritative.
 
 ## Agent-First Workflow
 
@@ -386,7 +387,10 @@ loading a legacy default.
 │   ├── src/render.ts              # SSR HTML renderer (ZH from DB, no hardcoded content)
 │   └── src/styles.ts              # Mobile-first inline CSS
 ├── src/
-│   ├── cli/travel-update.ts       # Main CLI entry
+│   ├── cli/
+│   │   ├── travel-update.ts       # Thin CLI entry — loads command registry, resolves plan
+│   │   ├── commands/              # ~26 command modules (one per command) + registry.ts
+│   │   └── shared/                # args, output, plan-resolver, validation helpers
 │   ├── state/
 │   │   ├── state-manager.ts       # State machine: validate, transition, cascade, dispatch() (DB-only)
 │   │   ├── repository.ts          # StateRepository interface (StateReader + StateWriter)

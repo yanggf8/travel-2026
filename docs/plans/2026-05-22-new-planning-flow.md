@@ -1,6 +1,7 @@
 # Japan Travel Planning Flow — New Design
 
 > **Date:** 2026-05-22
+> **Status:** Proposed — not yet adopted. The P1–P5 skills (`/p1-dates` … `/p5-itinerary`) and CLAUDE.md's Skill Decision Tree remain the operative flow until the open decisions below are resolved and the skills are reconciled with the stages.
 > **Purpose:** Replace P1→P2→P3→P4→P5 linear model with a research-first, iterative approach where dates/destinations/flights evolve together.
 
 ---
@@ -50,39 +51,39 @@ User picks a candidate OR asks to explore another date/destination
 
 **Key principle:** Dates and destination are not locked until flight candidates look good. The user can say "try June 20 instead" or "instead of Osaka try Kyoto" at any point.
 
+**Unit convention:** This doc speaks in **nights** (a 6-night trip). The scraper's `--duration` flag wants **trip days** = nights + 1 (depart and return days both counted). So a 6-night trip is `--duration 7`; a 5-night trip is `--duration 6`. Filenames below use the nights count (`6n`) to match what `view:prices --nights` expects.
+
 **Tools:**
 ```bash
-# NOTE: --dest accepts ONE airport code; --duration is a single integer (trip days, not nights)
+# NOTE: --dest accepts ONE airport code; --duration is a single integer (trip DAYS = nights + 1).
 # Run separately per destination and duration. Results compared manually or via view:prices.
 
-# Kansai (Osaka/Kyoto): 6-night trip = depart June 18, return June 24
+# Kansai (Osaka/Kyoto): 6-night trip → --duration 7 (e.g. depart June 18, return June 24)
 python scripts/scrape_date_range.py \
   --depart-start 2026-06-18 --depart-end 2026-06-20 \
   --origin tpe --dest kix \
   --duration 7 --pax 2 \
   -o scrapes/june-kix-6n.json
 
-# Tokyo (Narita): same dates for comparison
+# Tokyo (Narita): same 6-night window for comparison
 python scripts/scrape_date_range.py \
   --depart-start 2026-06-18 --depart-end 2026-06-20 \
   --origin tpe --dest nrt \
   --duration 7 --pax 2 \
   -o scrapes/june-nrt-6n.json
 
-# Also try 7-night (depart June 18, return June 25) for the same destinations
+# Also try 7-night (--duration 8; e.g. depart June 18, return June 25)
 python scripts/scrape_date_range.py \
   --depart-start 2026-06-18 --depart-end 2026-06-20 \
   --origin tpe --dest kix \
   --duration 8 --pax 2 \
   -o scrapes/june-kix-7n.json
 
-# Compare top results side-by-side
+# Compare top results side-by-side (--nights matches the filename: 6n → --nights 6)
 npm run view:prices -- --flights scrapes/june-kix-6n.json --nights 6
 npm run view:prices -- --flights scrapes/june-nrt-6n.json --nights 6
 npm run view:prices -- --flights scrapes/june-kix-7n.json --nights 7
 ```
-
-**Duration note:** `--duration` is trip days (depart → return, inclusive). A 6-night trip is `--duration 7` (e.g., June 18–24 = 7 days). A 5-night trip is `--duration 6` (June 18–23 = 6 days).
 
 **Manual aggregation required:** The script handles one destination + one duration per run. For the research loop, run it multiple times and compare results manually using `npm run view:prices -- --flights <file> --nights N`. An aggregator wrapper script could automate this in the future.
 
@@ -147,7 +148,7 @@ Decide this before Stage 2 because it affects which packages are viable. Some pa
 
 ### Path A: Direct Flight Purchase
 ```bash
-# Search specific dates — June 18 to June 25 = 7 nights, so duration = 8 days
+# Search specific dates — June 18 → June 25 is a 7-night trip → --duration 8 (nights + 1)
 python scripts/scrape_date_range.py \
   --depart-start 2026-06-18 --depart-end 2026-06-18 \
   --origin tpe --dest kix --duration 8 --pax 2 \
@@ -187,14 +188,19 @@ npm run travel -- query-offers --plan-id <id> --dest <slug> --max-price 30000 --
 
 **What to do:**
 ```bash
-# Set the confirmed flight details
-npm run travel -- set-flight outbound --dest <slug> --flight <num> ...
+# Set the confirmed flight details (both legs)
+npm run travel -- set-flight outbound --dest <slug> \
+  --flight SL396 --airline "Thai Lion Air" --airline-code SL \
+  --from TPE --dep 09:00 --to KIX --arr 12:30 --date 2026-06-18
+npm run travel -- set-flight return --dest <slug> \
+  --flight SL397 --airline "Thai Lion Air" --airline-code SL \
+  --from KIX --dep 13:30 --to TPE --arr 15:40 --date 2026-06-25
 
-# Validate the itinerary fits with actual flight times
-npm run travel -- validate-itinerary --severity warning
+# Validate the itinerary fits with actual flight times (--severity error|warning|info)
+npm run travel -- validate-itinerary --dest <slug> --severity warning
 
-# For each day, set activities with timing
-npm run travel -- set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed
+# For each day, set activities with timing (--fixed REQUIRES a value: true|false)
+npm run travel -- set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed true
 
 # Set day themes
 npm run travel -- set-day-theme <day> "Dotonbori Food Walk" --zh "道頓堀美食"
@@ -294,6 +300,22 @@ After any stage, user may want to iterate:
 │  (Can run anytime — not strictly sequential)           │
 └─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Skill Mapping — New Stages vs Existing P1–P5 Skills
+
+The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, and `/p5-itinerary`. This flow does not delete them — it re-sequences them. Until the skills are renamed, use this mapping:
+
+| Stage | Existing skill(s) reused | What changes |
+|-------|--------------------------|--------------|
+| Stage 0 — Triangle Research | *(no skill owner)* — `scrape_date_range.py` + `view:prices` directly | `/p3-flights` **cannot** be reused here: its `requires_processes` lists `process_1_date_anchor` + `process_2_destination`, so it needs dates/destination already locked. Stage 0 runs *before* that lock, so it is CLI/manual only. Adoption should either create a dedicated Stage 0 skill or formally document Stage 0 as CLI-only. |
+| Stage 1 — Itinerary Draft | `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | `/p1-dates` and `/p2-destination` now produce a *provisional* lock that Stage 0 can still revisit. |
+| Stage 2 — Shop Flight | `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | Unchanged behaviour; just invoked after a draft exists rather than before. |
+| Stage 3 — Expand Itinerary | `/p5-itinerary` | Unchanged. |
+| Stage 4 — Publish | `/deploy-dashboard` | Unchanged; explicitly non-sequential. |
+
+**Open reconciliation item:** once adopted, decide whether to rename the skills to `/s0`–`/s4` or keep P-numbers. Until then, CLAUDE.md's Skill Decision Tree (linear P1→P5) stays authoritative.
 
 ---
 
