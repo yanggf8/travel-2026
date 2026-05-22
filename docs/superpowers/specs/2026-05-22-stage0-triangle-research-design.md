@@ -33,9 +33,11 @@ CLAUDE.md's Skill Decision Tree, a dashboard view for Stage 0. P1–P5 remain fu
   JSON files. The contract is "Turso rows in, Turso rows out."
 - **No JSON arrays as state.** Multi-valued inputs (destinations, durations) are normalized
   child rows, never JSON-blob columns.
-- **`scrapes/*.json` is an implementation detail, not a contract.** The aggregator may capture
-  subprocess output via stdout-JSON or a transient temp file; either way that artifact is not
-  durable state and not the handoff format. Nothing reads `scrapes/*.json` back as state.
+- **The scraper's JSON output is an implementation detail, not a contract.** `scrape_date_range.py`
+  prints human-readable progress to stdout and only emits machine JSON via `--output <path>`, so
+  the aggregator captures results by passing a **transient temp file** and reading it back
+  immediately. That temp file is not durable state, not the handoff format, and is deleted after
+  parsing. Nothing reads a `scrapes/*.json` path back as state.
 - **Research can exist before a plan exists.** Stage 0 tables are *not* `plan_id`-scoped. They
   join the existing global/unscoped tables (`destination_config`, `ota_sources`,
   `origin_config`, `global_config`). A research session may ultimately spawn zero, one, or
@@ -47,7 +49,7 @@ CLAUDE.md's Skill Decision Tree, a dashboard view for Stage 0. P1–P5 remain fu
 
 ## 3. Data Model
 
-Five new tables, all unscoped (keyed by `run_id`, not `plan_id`). Added idempotently to
+Six new tables, all unscoped (keyed by `run_id`, not `plan_id`). Added idempotently to
 `scripts/turso-migrate.ts`; mirrored into `scripts/schema.sql` (read-only DDL reference).
 
 ### 3.1 `stage0_research_runs` — one row per research session
@@ -59,9 +61,16 @@ Five new tables, all unscoped (keyed by `run_id`, not `plan_id`). Added idempote
 | `pax` | INTEGER NOT NULL | passenger count |
 | `window_start` | TEXT NOT NULL | earliest departure date considered (YYYY-MM-DD) |
 | `window_end` | TEXT NOT NULL | latest departure date considered (YYYY-MM-DD) |
+| `currency` | TEXT NOT NULL | currency of all `*_twd` price columns; `TWD` |
+| `exchange_rate_usd_twd` | REAL NOT NULL | USD→TWD rate used to derive TWD totals (the `--exchange-rate` value passed to `scrape_date_range.py`) |
 | `status` | TEXT NOT NULL | `started` \| `scraping` \| `ranked` \| `adopted` \| `failed` |
 | `created_at` | TEXT NOT NULL | ISO timestamp |
 | `updated_at` | TEXT NOT NULL | ISO timestamp |
+
+> **Why persist the exchange rate:** `scrape_date_range.py` scrapes prices in USD and converts
+> via `--exchange-rate` (default 32.0); its output `params` block does **not** record the rate
+> used. Without storing it, the TWD totals in `stage0_candidates` are not reproducible or
+> re-derivable. The aggregator passes one rate per run and records it here.
 
 ### 3.2 `stage0_research_destinations` — destination candidates for a run
 
@@ -123,6 +132,27 @@ PK: (`run_id`, `nights`).
 
 PK: (`candidate_id`, `direction`).
 
+### 3.6 `stage0_scrape_attempts` — one row per (destination, duration) scrape
+
+Makes partial failures visible and retryable — the aggregator scrapes the cross product of
+destinations × durations, and any pair can fail independently.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `run_id` | TEXT NOT NULL | FK → `stage0_research_runs.run_id` |
+| `dest_code` | TEXT NOT NULL | airport IATA |
+| `nights` | INTEGER NOT NULL | trip length of this attempt |
+| `status` | TEXT NOT NULL | `pending` \| `ok` \| `failed` |
+| `candidate_count` | INTEGER | candidates produced by this attempt; NULL until done |
+| `error` | TEXT | failure message; NULL on success |
+| `attempted_at` | TEXT | ISO timestamp of last attempt; NULL until first run |
+
+PK: (`run_id`, `dest_code`, `nights`).
+
+The aggregator inserts one `pending` row per pair before scraping, then updates it to `ok`
+(with `candidate_count`) or `failed` (with `error`). A re-run retries only `failed`/`pending`
+rows for the run.
+
 ---
 
 ## 4. Ranking
@@ -151,18 +181,23 @@ Turso — created by the skill or a thin `stage0-init` step).
 **Behaviour:**
 1. Read the run, its destinations, and its durations from Turso.
 2. Set run `status = scraping`.
-3. For each (destination, duration) pair: invoke `scrape_date_range.py` with the run's
-   origin, date window, `--duration duration_days`, `--pax`. Capture results via stdout-JSON
-   (preferred) or a transient temp file — never a durable `scrapes/` path treated as state.
+3. For each (destination, duration) pair: insert a `pending` row into
+   `stage0_scrape_attempts`, then invoke `scrape_date_range.py` with the run's origin, date
+   window, `--duration duration_days`, `--pax`, and `--exchange-rate` (the run's
+   `exchange_rate_usd_twd`). Results are captured by passing `--output <tempfile>` and reading
+   that temp file back; the temp file is deleted after parsing — never a durable `scrapes/`
+   path treated as state.
 4. Parse each result's per-departure-date rows into `stage0_candidates` +
    `stage0_candidate_flights` rows. Compute `leave_days` per candidate via the leave
-   calculator.
+   calculator. Update the attempt row to `ok` with `candidate_count`.
 5. After all pairs complete, rank (section 4) and write `rank` back.
 6. Set run `status = ranked` (or `failed` on unrecoverable error).
 
-**Failure handling:** if one (destination, duration) scrape fails, log it, continue the
-others, and still rank what succeeded. The run only goes `failed` if *no* combo produced
-candidates.
+**Failure handling:** if one (destination, duration) scrape fails, record it on its
+`stage0_scrape_attempts` row (`status = failed`, `error` set), continue the others, and still
+rank what succeeded. The run only goes `failed` if *no* combo produced candidates. A re-run of
+the aggregator retries only the run's `failed`/`pending` attempt rows, leaving existing
+candidates intact.
 
 ### 5.2 CLI command — `stage0-compare`
 
@@ -172,6 +207,10 @@ New command module `src/cli/commands/stage0.ts`, registered in `travel-update.ts
 ```
 npm run travel -- stage0-compare --run <run_id> [--json] [--limit N]
 ```
+
+`--run` must be added to `OPTIONS_WITH_VALUES` in `src/cli/shared/args.ts` — otherwise the
+shared parser does not treat it as a value-bearing option and the run id leaks into
+`cleanArgs`.
 
 Reads the run's candidates from Turso, prints a ranked cross-destination table:
 
@@ -260,6 +299,9 @@ Integration tests under `tests/integration/`, real DB, following the existing
 3. **`stage0-compare`** — given a seeded run, the command prints rows in rank order and
    `--json` emits the candidates.
 4. **Adopt** — `stage0-adopt` sets `adopted_plan_id` and run `status = adopted`.
+5. **Scrape-attempt log** — given a run with seeded `stage0_scrape_attempts` rows, a mix of
+   `ok` and `failed` still ranks the `ok` candidates; a run with all attempts `failed` goes
+   `status = failed`.
 
 The aggregator's subprocess scraping is **not** unit-tested (it depends on live OTA sites,
 consistent with the rest of the scraper suite). Its *parsing* logic — scrape-result JSON →
