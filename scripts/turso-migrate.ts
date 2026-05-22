@@ -1269,6 +1269,72 @@ async function main() {
     }
   }
 
+  // ── Stage 0 — Triangle Research (unscoped: keyed by run_id, not plan_id) ──
+  console.log('Creating Stage 0 research tables...');
+  await client.executeMany([
+    `CREATE TABLE IF NOT EXISTS stage0_research_runs (
+      run_id TEXT PRIMARY KEY,
+      origin_code TEXT NOT NULL,
+      pax INTEGER NOT NULL,
+      window_start TEXT NOT NULL,
+      window_end TEXT NOT NULL,
+      currency TEXT NOT NULL,
+      exchange_rate_usd_twd REAL NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );`,
+    `CREATE TABLE IF NOT EXISTS stage0_research_destinations (
+      run_id TEXT NOT NULL,
+      dest_code TEXT NOT NULL,
+      dest_label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      PRIMARY KEY (run_id, dest_code)
+    );`,
+    `CREATE TABLE IF NOT EXISTS stage0_research_durations (
+      run_id TEXT NOT NULL,
+      nights INTEGER NOT NULL,
+      duration_days INTEGER NOT NULL,
+      PRIMARY KEY (run_id, nights)
+    );`,
+    `CREATE TABLE IF NOT EXISTS stage0_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      dest_code TEXT NOT NULL,
+      depart_date TEXT NOT NULL,
+      return_date TEXT NOT NULL,
+      nights INTEGER NOT NULL,
+      flight_total_twd INTEGER,
+      leave_days INTEGER,
+      rank INTEGER,
+      verdict TEXT,
+      adopted_plan_id TEXT
+    );`,
+    `CREATE TABLE IF NOT EXISTS stage0_candidate_flights (
+      candidate_id TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      airline TEXT,
+      depart_time TEXT,
+      arrive_time TEXT,
+      duration TEXT,
+      nonstop INTEGER,
+      price_total_twd INTEGER,
+      PRIMARY KEY (candidate_id, direction)
+    );`,
+    `CREATE TABLE IF NOT EXISTS stage0_scrape_attempts (
+      run_id TEXT NOT NULL,
+      dest_code TEXT NOT NULL,
+      nights INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      candidate_count INTEGER,
+      error TEXT,
+      attempted_at TEXT,
+      PRIMARY KEY (run_id, dest_code, nights)
+    );`,
+  ]);
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_s0_cand_run ON stage0_candidates(run_id, rank);');
+  console.log('✅ Stage 0 research tables ready.');
+
   console.log('Done.');
 }
 
