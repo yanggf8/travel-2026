@@ -44,6 +44,13 @@ CLAUDE.md's Skill Decision Tree, a dashboard view for Stage 0. P1–P5 remain fu
   several plans.
 - **Objective ranking.** Candidates sort by flight price; personal trade-offs (leave-days) are
   shown as columns and used only as deterministic tie-breakers.
+- **Runs are immutable.** A `run_id` is a fixed research input tuple — origin, date window,
+  pax, exchange rate, destination set, and duration set. Those rows are written once at run
+  creation and never edited afterward. "Re-run the aggregator" therefore means exactly one
+  thing: retry the run's `failed`/`pending` scrape attempts. Changing *any* input (add/swap a
+  destination, shift the window, change durations or pax) is a **new run** with a new
+  `run_id`. This keeps retry semantics unambiguous and removes any stale-candidate hazard —
+  there is no path by which a run's candidates can disagree with its inputs.
 
 ---
 
@@ -243,8 +250,11 @@ New skill at `src/skills/stage0-research/SKILL.md`.
   2. Create the run + destination/duration rows in Turso.
   3. Run `scripts/stage0_research.py` for the run.
   4. Show `stage0-compare` output.
-  5. Loop: user may add/swap a destination, shift the window, or change durations →
-     update rows, re-run. Stop when the user locks a candidate.
+  5. Loop: if the user wants to add/swap a destination, shift the window, or change
+     durations/pax, that is a **new run** (runs are immutable — §2) — create a fresh
+     `run_id` with the new inputs and scrape it. The previous run's candidates remain
+     intact and comparable. (Re-running the aggregator on the *same* run only retries its
+     `failed`/`pending` attempts.) Stop when the user locks a candidate.
   6. **Handoff:** on lock, hand the chosen candidate's date + destination to `/p1-dates`
      and `/p2-destination` (the normal flow takes over from there), and record the link via
      `stage0-adopt` (`adopted_plan_id`).
