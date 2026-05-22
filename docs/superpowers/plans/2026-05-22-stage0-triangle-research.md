@@ -455,6 +455,7 @@ import {
   getCandidates,
   setRunStatus,
   adoptCandidate,
+  deleteCandidatesForPair,
   type CreateRunInput,
 } from '../../src/services/stage0-service';
 ```
@@ -540,6 +541,31 @@ describe('Stage 0 service — candidates and ranking', () => {
     expect(cands[0].adopted_plan_id).toBe('osaka-2026');
     const run = await getResearchRun(runId);
     expect(run!.status).toBe('adopted');
+  });
+
+  it('deleteCandidatesForPair clears prior candidates for one pair', async () => {
+    const runId = uniqueRunId();
+    await createResearchRun({
+      runId, originCode: 'TPE', pax: 2,
+      windowStart: '2026-06-18', windowEnd: '2026-06-20', exchangeRateUsdTwd: 32,
+      destinations: [{ destCode: 'KIX', destLabel: 'Osaka (KIX)' }],
+      durations: [{ nights: 6 }],
+    });
+    await insertCandidate({
+      candidateId: `${runId}-KIX-2026-06-18-6n`, runId, destCode: 'KIX',
+      departDate: '2026-06-18', returnDate: '2026-06-24', nights: 6,
+      flightTotalTwd: 18000, leaveDays: 3, verdict: null,
+      flights: [{
+        direction: 'outbound', airline: 'SL', departTime: '09:00',
+        arriveTime: '12:30', duration: '2h30m', nonstop: true, priceTotalTwd: 9000,
+      }],
+    });
+    expect(await getCandidates(runId)).toHaveLength(1);
+
+    // A re-scrape of the same pair that yields zero candidates must still
+    // clear the prior row — the delete is keyed on the pair, not the payload.
+    await deleteCandidatesForPair(runId, 'KIX', 6);
+    expect(await getCandidates(runId)).toHaveLength(0);
   });
 });
 ```
@@ -754,7 +780,7 @@ export async function adoptCandidate(candidateId: string, planId: string): Promi
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npm test -- stage0-service`
-Expected: PASS — 5 tests (2 from Task 2 + 3 new).
+Expected: PASS — 6 tests (2 from Task 2 + 4 new).
 
 - [ ] **Step 5: Run typecheck**
 
@@ -1366,10 +1392,14 @@ const stage0ImportCommand: CommandHandler = {
     const candidates: any[] = payload.candidates || [];
     const attempts: any[] = payload.attempts || [];
 
-    // Idempotent per pair: clear prior candidates for every pair present in
-    // this handoff before inserting, so a re-import cannot hit the PK.
+    // Idempotent per pair: clear prior candidates for every pair THIS handoff
+    // processed before inserting. The delete set is built from `attempts`,
+    // not `candidates` — attempts are the authoritative list of pairs this
+    // handoff scraped. A pair that scraped successfully but returned zero
+    // flights still has an attempt row; building the set from `candidates`
+    // would skip it and leave stale rows from a prior import.
     const pairs = new Set<string>();
-    for (const c of candidates) pairs.add(`${c.destCode}|${c.nights}`);
+    for (const a of attempts) pairs.add(`${a.destCode}|${a.nights}`);
     for (const key of pairs) {
       const [destCode, nightsStr] = key.split('|');
       await deleteCandidatesForPair(runId, destCode, parseInt(nightsStr, 10));
@@ -1639,7 +1669,7 @@ git commit -m "docs: wire Stage 0 research into CLAUDE.md and planning-flow doc"
 - [ ] **Step 1: Run the full test suite**
 
 Run: `npm test`
-Expected: all tests pass, including the 4 `stage0-service` tests.
+Expected: all tests pass, including the 6 `stage0-service` tests.
 
 - [ ] **Step 2: Run typecheck**
 
