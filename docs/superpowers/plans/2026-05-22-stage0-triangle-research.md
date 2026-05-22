@@ -163,6 +163,7 @@ import { describe, expect, it, afterAll } from 'vitest';
 import {
   createResearchRun,
   getResearchRun,
+  getScrapeAttempts,
   deleteResearchRun,
   type CreateRunInput,
 } from '../../src/services/stage0-service';
@@ -208,6 +209,23 @@ describe('Stage 0 service — run creation', () => {
     expect(run!.durations).toHaveLength(2);
     // duration_days = nights + 1
     expect(run!.durations.find((d) => d.nights === 6)!.duration_days).toBe(7);
+  });
+
+  it('seeds a pending scrape-attempt row per destination x duration', async () => {
+    const runId = uniqueRunId();
+    await createResearchRun({
+      runId, originCode: 'TPE', pax: 2,
+      windowStart: '2026-06-18', windowEnd: '2026-06-20', exchangeRateUsdTwd: 32,
+      destinations: [
+        { destCode: 'KIX', destLabel: 'Osaka (KIX)' },
+        { destCode: 'NRT', destLabel: 'Tokyo (NRT)' },
+      ],
+      durations: [{ nights: 6 }, { nights: 7 }],
+    });
+    const attempts = await getScrapeAttempts(runId);
+    // 2 destinations x 2 durations = 4 pending rows
+    expect(attempts).toHaveLength(4);
+    expect(attempts.every((a) => a.status === 'pending')).toBe(true);
   });
 });
 ```
@@ -296,6 +314,21 @@ export async function createResearchRun(input: CreateRunInput): Promise<void> {
     );
   }
 
+  // Seed one 'pending' scrape-attempt row per destination x duration. This
+  // makes the full work matrix visible in the DB before scraping starts, so
+  // a mid-run crash still shows what was attempted, and the aggregator can
+  // skip already-'ok' pairs on a re-run.
+  for (const d of input.destinations) {
+    for (const dur of input.durations) {
+      stmts.push(
+        `INSERT INTO stage0_scrape_attempts
+          (run_id, dest_code, nights, status, candidate_count, error, attempted_at)
+         VALUES (${sqlText(input.runId)}, ${sqlText(d.destCode)}, ${sqlInt(dur.nights)},
+           ${sqlText('pending')}, NULL, NULL, NULL);`
+      );
+    }
+  }
+
   await client.executeMany(stmts);
 }
 
@@ -334,6 +367,38 @@ export async function getResearchRun(runId: string): Promise<ResearchRun | null>
   };
 }
 
+// ── scrape attempts (read) ───────────────────────────────────────────
+// Attempt rows are seeded as 'pending' by createResearchRun above; the
+// aggregator/import flow updates them to 'ok'/'failed'. Write helper
+// (upsertScrapeAttempt) is added in Task 3.
+
+export interface ScrapeAttempt {
+  run_id: string;
+  dest_code: string;
+  nights: number;
+  status: string;
+  candidate_count: number | null;
+  error: string | null;
+  attempted_at: string | null;
+}
+
+export async function getScrapeAttempts(runId: string): Promise<ScrapeAttempt[]> {
+  const client = new TursoPipelineClient();
+  const res = await client.execute(
+    `SELECT * FROM stage0_scrape_attempts WHERE run_id = ${sqlText(runId)}
+     ORDER BY dest_code, nights;`
+  );
+  return rowsToObjects(res).map((a) => ({
+    run_id: a.run_id,
+    dest_code: a.dest_code,
+    nights: Number(a.nights),
+    status: a.status,
+    candidate_count: a.candidate_count == null ? null : Number(a.candidate_count),
+    error: a.error ?? null,
+    attempted_at: a.attempted_at ?? null,
+  }));
+}
+
 // ── teardown helper (used by tests) ──────────────────────────────────
 
 export async function deleteResearchRun(runId: string): Promise<void> {
@@ -354,7 +419,7 @@ export async function deleteResearchRun(runId: string): Promise<void> {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npm test -- stage0-service`
-Expected: PASS — 1 test.
+Expected: PASS — 2 tests (run creation + pending scrape-attempt seeding).
 
 - [ ] **Step 5: Commit**
 
@@ -373,18 +438,30 @@ git commit -m "feat: add Stage 0 service with run creation"
 
 - [ ] **Step 1: Write the failing test for candidates + ranking**
 
-Append to `tests/integration/stage0-service.regression.test.ts` (inside the file, after the existing `describe` block):
+First, extend the **existing import block at the top of the file** (from Task 2) — add the
+new names to it rather than writing a second `import` from the same module (a duplicate
+import is a TS error):
 
 ```typescript
+import { describe, expect, it, afterAll } from 'vitest';
 import {
+  createResearchRun,
+  getResearchRun,
+  getScrapeAttempts,
+  deleteResearchRun,
   insertCandidate,
   upsertScrapeAttempt,
   rankRun,
   getCandidates,
   setRunStatus,
   adoptCandidate,
+  type CreateRunInput,
 } from '../../src/services/stage0-service';
+```
 
+Then append the new `describe` block to the end of the file:
+
+```typescript
 describe('Stage 0 service — candidates and ranking', () => {
   it('ranks candidates by price, then leave-days, then depart-date', async () => {
     const runId = uniqueRunId();
@@ -467,7 +544,8 @@ describe('Stage 0 service — candidates and ranking', () => {
 });
 ```
 
-> Note: `getScrapeAttempts` is used above — it is added in Step 3.
+> Note: `getScrapeAttempts` is already defined in Task 2's service file; Task 3 only adds the
+> write helper `upsertScrapeAttempt` and `deleteCandidatesForPair`.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -606,19 +684,13 @@ export interface ScrapeAttemptInput {
   error?: string | null;
 }
 
-export interface ScrapeAttempt {
-  run_id: string;
-  dest_code: string;
-  nights: number;
-  status: string;
-  candidate_count: number | null;
-  error: string | null;
-  attempted_at: string | null;
-}
+// `ScrapeAttempt` and `getScrapeAttempts` are already defined in Task 2.
+// This task only adds the write helper.
 
 export async function upsertScrapeAttempt(input: ScrapeAttemptInput): Promise<void> {
   const client = new TursoPipelineClient();
-  // INSERT OR REPLACE — PK is (run_id, dest_code, nights).
+  // INSERT OR REPLACE — PK is (run_id, dest_code, nights). Pending rows are
+  // seeded by createResearchRun; this overwrites them with ok/failed outcomes.
   await client.execute(
     `INSERT OR REPLACE INTO stage0_scrape_attempts
       (run_id, dest_code, nights, status, candidate_count, error, attempted_at)
@@ -628,21 +700,23 @@ export async function upsertScrapeAttempt(input: ScrapeAttemptInput): Promise<vo
   );
 }
 
-export async function getScrapeAttempts(runId: string): Promise<ScrapeAttempt[]> {
+// ── candidate replacement (idempotent re-import for one pair) ─────────
+// Deletes any existing candidates + their flights for one (run, dest,
+// nights) pair so a re-import of that pair does not collide on the
+// candidate_id PK. Used by stage0-import before inserting.
+
+export async function deleteCandidatesForPair(
+  runId: string, destCode: string, nights: number
+): Promise<void> {
   const client = new TursoPipelineClient();
-  const res = await client.execute(
-    `SELECT * FROM stage0_scrape_attempts WHERE run_id = ${sqlText(runId)}
-     ORDER BY dest_code, nights;`
-  );
-  return rowsToObjects(res).map((a) => ({
-    run_id: a.run_id,
-    dest_code: a.dest_code,
-    nights: Number(a.nights),
-    status: a.status,
-    candidate_count: a.candidate_count == null ? null : Number(a.candidate_count),
-    error: a.error ?? null,
-    attempted_at: a.attempted_at ?? null,
-  }));
+  const where =
+    `run_id = ${sqlText(runId)} AND dest_code = ${sqlText(destCode)} ` +
+    `AND nights = ${sqlInt(nights)}`;
+  await client.executeMany([
+    `DELETE FROM stage0_candidate_flights WHERE candidate_id IN
+      (SELECT candidate_id FROM stage0_candidates WHERE ${where});`,
+    `DELETE FROM stage0_candidates WHERE ${where};`,
+  ]);
 }
 
 // ── status + adopt ───────────────────────────────────────────────────
@@ -675,24 +749,12 @@ export async function adoptCandidate(candidateId: string, planId: string): Promi
 }
 ```
 
-Then add `getScrapeAttempts` to the import list at the top of the test file's second `describe` import block (it is already used in the test from Step 1 — make sure the import line includes it):
-
-```typescript
-import {
-  insertCandidate,
-  upsertScrapeAttempt,
-  rankRun,
-  getCandidates,
-  setRunStatus,
-  adoptCandidate,
-  getScrapeAttempts,
-} from '../../src/services/stage0-service';
-```
+(The test file's import block was already extended in Step 1 to include all of these names.)
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npm test -- stage0-service`
-Expected: PASS — 4 tests (1 from Task 2 + 3 new).
+Expected: PASS — 5 tests (2 from Task 2 + 3 new).
 
 - [ ] **Step 5: Run typecheck**
 
@@ -708,18 +770,23 @@ git commit -m "feat: add Stage 0 candidates, scrape-attempts, ranking, adopt"
 
 ---
 
-## Task 4: CLI — add `--run` to the arg parser
+## Task 4: CLI — register all new Stage 0 options in the arg parser
 
 **Files:**
 - Modify: `src/cli/shared/args.ts:3-14`
 
-- [ ] **Step 1: Add `--run` to `OPTIONS_WITH_VALUES`**
+Every value-bearing option the Stage 0 commands use must be in `OPTIONS_WITH_VALUES`,
+or the shared parser leaves the value in `cleanArgs`. The Stage 0 commands use:
+`--run`, `--file`, `--origin`, `--rate`. (`--start`, `--end`, `--dest`, `--pax`,
+`--limit`, `--nights` are already registered.)
 
-In `src/cli/shared/args.ts`, in the `OPTIONS_WITH_VALUES` set, add `'--run'` to the last line:
+- [ ] **Step 1: Add the four new options to `OPTIONS_WITH_VALUES`**
+
+In `src/cli/shared/args.ts`, append to the `OPTIONS_WITH_VALUES` set:
 
 ```typescript
   '--activities-zh-json', '--travel-date', '--travel-start', '--travel-end',
-  '--run',
+  '--run', '--file', '--origin', '--rate',
 ]);
 ```
 
@@ -732,7 +799,7 @@ Expected: `✅ Typecheck passed`.
 
 ```bash
 git add src/cli/shared/args.ts
-git commit -m "feat: register --run as a value-bearing CLI option"
+git commit -m "feat: register Stage 0 CLI options (--run, --file, --origin, --rate)"
 ```
 
 ---
@@ -930,13 +997,46 @@ Expected: prints the run header and `(no candidates — run the aggregator first
 
 - [ ] **Step 5: Clean up the smoke-test run**
 
-Run: `npm run db:exec -- "DELETE FROM stage0_research_durations WHERE run_id='<run_id>'; DELETE FROM stage0_research_destinations WHERE run_id='<run_id>'; DELETE FROM stage0_research_runs WHERE run_id='<run_id>';"`
+`stage0-init` seeds `stage0_scrape_attempts` rows, so the cleanup must delete those too:
+
+Run: `npm run db:exec -- "DELETE FROM stage0_scrape_attempts WHERE run_id='<run_id>'; DELETE FROM stage0_research_durations WHERE run_id='<run_id>'; DELETE FROM stage0_research_destinations WHERE run_id='<run_id>'; DELETE FROM stage0_research_runs WHERE run_id='<run_id>';"`
 Expected: exits 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Add the Stage 0 commands to the static help text**
+
+`src/cli/commands/help.ts` is a static `HELP` template string — new commands do not appear
+automatically. In `src/cli/commands/help.ts`, inside the `HELP` string's `Commands:` section,
+after the `run-status` / `run-list` block (the last command block), add:
+
+```
+  stage0-init --origin <IATA> --start <date> --end <date> --dest CODE:LABEL --nights N
+    Create a Stage 0 triangle-research run (immutable inputs; pre-plan).
+    Repeat --dest and --nights for multiple destinations/durations.
+    Example: stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 --dest KIX:"Osaka (KIX)" --nights 6
+
+  stage0-export --run <run_id> --json
+    Export a Stage 0 run as JSON (consumed by the aggregator script).
+
+  stage0-import --run <run_id> --file <path>
+    Import Stage 0 aggregator results from a handoff JSON file.
+
+  stage0-compare --run <run_id> [--json] [--limit N]
+    Show ranked Stage 0 flight candidates across destinations.
+    Example: stage0-compare --run stage0-20260522-143000
+
+  stage0-adopt <candidate_id> <plan_id>
+    Record a Stage 0 candidate as adopted into a plan.
+```
+
+- [ ] **Step 7: Run typecheck**
+
+Run: `npm run typecheck`
+Expected: `✅ Typecheck passed`.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/cli/commands/stage0.ts src/cli/travel-update.ts
+git add src/cli/commands/stage0.ts src/cli/travel-update.ts src/cli/commands/help.ts
 git commit -m "feat: add stage0-init, stage0-compare, stage0-adopt CLI commands"
 ```
 
@@ -951,13 +1051,32 @@ The aggregator reads a run from Turso, scrapes each (destination, duration) pair
 
 - [ ] **Step 1: Confirm the scrape-result JSON shape**
 
-There is **no** Python Turso helper in this repo (only TypeScript `turso-pipeline.ts` / `turso-exec.ts`), so the aggregator talks to Turso's HTTP pipeline directly for reads (the `turso_query()` function in Step 2) and never writes to Turso — all writes go through `stage0-import` (Task 7) via a transient JSON handoff.
+The aggregator performs **no** Turso I/O directly — not even reads. It loads the run via the
+`stage0-export` CLI command and writes via `stage0-import` (both in Task 7). This keeps all
+SQL in TypeScript, where `sql-helpers.ts` escaping is enforced — no SQL string is ever built
+from CLI args in Python.
+
+> **Task ordering note:** the aggregator (Task 6) calls `stage0-export`/`stage0-import`, which
+> are created in Task 7. Task 6's Step 3 smoke test only checks `--help` (no DB calls), so it
+> is safe to build Task 6 before Task 7. The full end-to-end aggregator run is exercised in
+> Task 10, after both exist. If executing strictly in order, this is fine; if a worker prefers
+> to build Task 7 first, that is also valid.
 
 Read `scripts/scrape_date_range.py` to confirm its output JSON shape, which Step 2's parser depends on: `{ scraped_at, params, results: [...] }`. Each result row has `depart_date`, `return_date`, `depart_day`, `return_day`, `combined_cheapest_twd`, and `outbound`/`inbound` objects each containing a `flights` array (whose entries have `airline`, `depart`, `arrive`, `duration`, `nonstop`, `total_usd`).
 
 - [ ] **Step 2: Create the aggregator script**
 
-Create `scripts/stage0_research.py`. It reads the run via the Turso HTTP pipeline (`TURSO_URL` + `TURSO_TOKEN` from `.env`) and hands all DB writes to the `stage0-import` CLI command (Task 7) via a transient JSON file — the aggregator itself performs no Turso writes.
+Create `scripts/stage0_research.py`. The aggregator performs **no** Turso I/O of its own —
+not even reads. It loads the run by shelling out to the `stage0-export` CLI command (Task 7,
+built before this task in the dependency order — but written after; the smoke test in Step 3
+only checks `--help`, and the end-to-end test in Task 10 runs after both exist). This keeps
+**all** SQL in TypeScript, where `sql-helpers.ts` escaping is enforced — no raw SQL strings
+are ever built from CLI args in Python.
+
+For each (destination, duration) pair, it checks the pair's seeded scrape-attempt status:
+pairs already `ok` are **skipped** (idempotent re-run); `pending`/`failed` pairs are scraped.
+It invokes `scrape_date_range.py` into a temp file, parses the results, accumulates candidate
+dicts, and hands everything to `stage0-import`.
 
 ```python
 #!/usr/bin/env python3
@@ -965,13 +1084,15 @@ Create `scripts/stage0_research.py`. It reads the run via the Turso HTTP pipelin
 Stage 0 aggregator — scrapes flight candidates across destination x duration
 for one immutable research run, then hands results to the TS CLI for import.
 
-Reads the run from Turso (read-only HTTP pipeline). For each (destination,
-duration) pair it invokes scrape_date_range.py into a temp file, parses the
-results, and accumulates candidate dicts. The accumulated candidates +
-scrape-attempt outcomes are written to a temp JSON file and handed to
-`npm run travel -- stage0-import` which performs all DB writes + ranking.
+Performs NO Turso I/O directly: it loads the run via `stage0-export` and writes
+via `stage0-import`. All SQL stays in TypeScript (sql-helpers.ts escaping).
 
-The temp files are transient implementation detail — not durable state.
+For each (destination, duration) pair it checks the seeded scrape-attempt
+status — 'ok' pairs are skipped (idempotent re-run), 'pending'/'failed' pairs
+are scraped via scrape_date_range.py into a temp file. Results are handed to
+`npm run travel -- stage0-import`, which performs all DB writes + ranking.
+
+Temp files are transient implementation detail — not durable state.
 
 Usage:
   python scripts/stage0_research.py --run <run_id>
@@ -987,65 +1108,20 @@ THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(THIS_DIR)
 
 
-def load_env():
-    env_path = os.path.join(PROJECT_ROOT, ".env")
-    if not os.path.exists(env_path):
-        return
-    with open(env_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
-
-
-def turso_query(sql):
-    """Run a read-only SQL query against Turso, return list of row-dicts."""
-    import urllib.request
-    load_env()
-    url = os.environ["TURSO_URL"].rstrip("/")
-    token = os.environ["TURSO_TOKEN"]
-    # Turso HTTP pipeline endpoint
-    endpoint = url.replace("libsql://", "https://") + "/v2/pipeline"
-    body = json.dumps({
-        "requests": [
-            {"type": "execute", "stmt": {"sql": sql}},
-            {"type": "close"},
-        ]
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        endpoint, data=body,
-        headers={"Authorization": f"Bearer {token}",
-                 "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    result = data["results"][0]
-    if result.get("type") != "ok":
-        raise RuntimeError(f"Turso query failed: {result}")
-    res = result["response"]["result"]
-    cols = [c["name"] for c in res["cols"]]
-    rows = []
-    for r in res["rows"]:
-        rows.append({cols[i]: cell.get("value") for i, cell in enumerate(r)})
-    return rows
-
-
 def load_run(run_id):
-    runs = turso_query(
-        f"SELECT * FROM stage0_research_runs WHERE run_id = '{run_id}';")
-    if not runs:
-        print(f"Error: research run not found: {run_id}", file=sys.stderr)
+    """Load the run + destinations + durations + scrape attempts via the
+    stage0-export CLI command (all SQL stays in TypeScript)."""
+    proc = subprocess.run(
+        ["npm", "run", "--silent", "travel", "--",
+         "stage0-export", "--run", run_id, "--json"],
+        check=True, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        print(f"Error: stage0-export did not return JSON for {run_id}",
+              file=sys.stderr)
+        print(proc.stdout, file=sys.stderr)
         sys.exit(1)
-    run = runs[0]
-    run["destinations"] = turso_query(
-        f"SELECT * FROM stage0_research_destinations "
-        f"WHERE run_id = '{run_id}' ORDER BY sort_order;")
-    run["durations"] = turso_query(
-        f"SELECT * FROM stage0_research_durations "
-        f"WHERE run_id = '{run_id}' ORDER BY nights;")
-    return run
 
 
 def scrape_pair(run, dest, duration_days):
@@ -1125,6 +1201,12 @@ def main():
     print(f"Stage 0 aggregator — run {run['run_id']} "
           f"({len(run['destinations'])} dest x {len(run['durations'])} duration)")
 
+    # Build a {(dest_code, nights): status} map from the seeded attempt rows.
+    attempt_status = {
+        (a["dest_code"], int(a["nights"])): a["status"]
+        for a in run.get("attempts", [])
+    }
+
     all_candidates = []
     attempts = []
     for dest in run["destinations"]:
@@ -1132,6 +1214,10 @@ def main():
             nights = int(dur["nights"])
             duration_days = int(dur["duration_days"])
             label = f"{dest['dest_code']} {nights}n"
+            # Idempotent re-run: skip pairs already scraped successfully.
+            if attempt_status.get((dest["dest_code"], nights)) == "ok":
+                print(f"  skipping {label} (already ok)")
+                continue
             try:
                 print(f"  scraping {label} ...")
                 results = scrape_pair(run, dest, duration_days)
@@ -1150,6 +1236,11 @@ def main():
                     "nights": nights, "status": "failed",
                     "candidateCount": None, "error": str(exc)[:500],
                 })
+
+    if not all_candidates and not attempts:
+        print("All pairs already scraped — nothing to do.")
+        print(f"View: npm run travel -- stage0-compare --run {run['run_id']}")
+        return
 
     # Hand off to the TS CLI for all DB writes + leave-days + ranking.
     with tempfile.NamedTemporaryFile(
@@ -1187,37 +1278,64 @@ git commit -m "feat: add Stage 0 flight aggregator script"
 
 ---
 
-## Task 7: CLI — `stage0-import` (aggregator handoff → DB)
+## Task 7: CLI — `stage0-export` and `stage0-import` (aggregator handoff)
 
 **Files:**
 - Modify: `src/cli/commands/stage0.ts`
-- Modify: `src/cli/shared/args.ts` (add `--file` if absent)
 
-`stage0-import` consumes the aggregator's JSON handoff: it inserts candidates (computing leave-days via the TS leave calculator), records scrape attempts, ranks the run, and sets final status. This keeps all DB writes and the leave calculation in TypeScript.
+`stage0-export` emits a run (run + destinations + durations + scrape attempts) as JSON for
+the Python aggregator to consume — so no SQL is built in Python. `stage0-import` consumes the
+aggregator's JSON handoff: for each scraped pair it deletes any prior candidates for that
+pair (idempotent re-run), inserts the new candidates with leave-days computed via the TS
+calculator, records scrape attempts, ranks, and sets final status. All DB writes and the
+leave calculation stay in TypeScript.
 
-- [ ] **Step 1: Confirm `--file` is a known option**
+`--file` was already registered in Task 4 — no `args.ts` change needed here.
 
-Run: `grep -n "'--file'" src/cli/shared/args.ts`
-Expected: if it prints a match, skip Step 2. If no output, do Step 2.
+- [ ] **Step 1: Add the `stage0-export` command**
 
-- [ ] **Step 2: Add `--file` to `OPTIONS_WITH_VALUES` (only if Step 1 found nothing)**
-
-In `src/cli/shared/args.ts`, add `'--file'` next to `'--run'`:
+In `src/cli/commands/stage0.ts`, add this handler before the `registerCommand(...)` calls:
 
 ```typescript
-  '--run', '--file',
-]);
+// ── stage0-export ────────────────────────────────────────────────────
+// Emits a run (run + destinations + durations + scrape attempts) as JSON.
+// The Python aggregator consumes this instead of building SQL itself.
+
+const stage0ExportCommand: CommandHandler = {
+  names: ['stage0-export'],
+  description: 'Export a Stage 0 research run as JSON (for the aggregator).',
+  usage: 'stage0-export --run <run_id> --json',
+  requiresState: false,
+  async execute(ctx: CliContext): Promise<void> {
+    const { getResearchRun, getScrapeAttempts } = require('../../services/stage0-service');
+    const runId = ctx.args.optionValue('--run');
+    if (!runId) {
+      console.error('Error: stage0-export requires --run <run_id>');
+      process.exit(1);
+    }
+    const run = await getResearchRun(runId);
+    if (!run) {
+      console.error(`Error: research run not found: ${runId}`);
+      process.exit(1);
+    }
+    const attempts = await getScrapeAttempts(runId);
+    // Single JSON object on stdout — nothing else, so Python can parse it.
+    console.log(JSON.stringify({ ...run, attempts }));
+  },
+};
 ```
 
-- [ ] **Step 3: Add the `stage0-import` command**
+- [ ] **Step 2: Add the `stage0-import` command**
 
 In `src/cli/commands/stage0.ts`, add this handler before the `registerCommand(...)` calls:
 
 ```typescript
 // ── stage0-import ────────────────────────────────────────────────────
-// Consumes the Python aggregator's JSON handoff: insert candidates (with
-// leave-days computed here via the TS calculator), record scrape attempts,
-// rank, set final run status.
+// Consumes the Python aggregator's JSON handoff. Idempotent per pair:
+// for each scraped (dest, nights) pair it first deletes any prior
+// candidates for that pair, so a re-import never collides on the
+// candidate_id PK. Inserts candidates with leave-days computed via the TS
+// calculator, records scrape attempts, ranks, sets final run status.
 
 const stage0ImportCommand: CommandHandler = {
   names: ['stage0-import'],
@@ -1227,7 +1345,8 @@ const stage0ImportCommand: CommandHandler = {
   async execute(ctx: CliContext): Promise<void> {
     const fs = require('fs');
     const {
-      insertCandidate, upsertScrapeAttempt, rankRun, setRunStatus, getResearchRun,
+      insertCandidate, upsertScrapeAttempt, rankRun, setRunStatus,
+      getResearchRun, getCandidates, deleteCandidatesForPair,
     } = require('../../services/stage0-service');
     const { calculateLeave } = require('../../utils/holiday-calculator');
     const { args } = ctx;
@@ -1246,6 +1365,15 @@ const stage0ImportCommand: CommandHandler = {
     const payload = JSON.parse(fs.readFileSync(file, 'utf-8'));
     const candidates: any[] = payload.candidates || [];
     const attempts: any[] = payload.attempts || [];
+
+    // Idempotent per pair: clear prior candidates for every pair present in
+    // this handoff before inserting, so a re-import cannot hit the PK.
+    const pairs = new Set<string>();
+    for (const c of candidates) pairs.add(`${c.destCode}|${c.nights}`);
+    for (const key of pairs) {
+      const [destCode, nightsStr] = key.split('|');
+      await deleteCandidatesForPair(runId, destCode, parseInt(nightsStr, 10));
+    }
 
     for (const a of attempts) {
       await upsertScrapeAttempt({
@@ -1269,56 +1397,77 @@ const stage0ImportCommand: CommandHandler = {
       });
     }
 
-    if (candidates.length === 0) {
+    // Rank if the run has any candidates at all (this import may have added
+    // to candidates from an earlier partial run). Mark failed only when the
+    // run is still completely empty.
+    const allCandidates = await getCandidates(runId);
+    if (allCandidates.length === 0) {
       await setRunStatus(runId, 'failed');
-      console.log(`⚠️  No candidates imported for ${runId} — run marked failed.`);
+      console.log(`⚠️  No candidates for ${runId} — run marked failed.`);
       return;
     }
     await rankRun(runId);
-    console.log(`✅ Imported ${candidates.length} candidates for ${runId}, ranked.`);
+    console.log(`✅ Imported ${candidates.length} candidates for ${runId} ` +
+      `(${allCandidates.length} total), ranked.`);
     console.log(`   View: npm run travel -- stage0-compare --run ${runId}`);
   },
 };
 ```
 
-Then add it to the registration block:
+Then add all four to the registration block:
 
 ```typescript
 registerCommand(stage0InitCommand);
 registerCommand(stage0CompareCommand);
 registerCommand(stage0AdoptCommand);
+registerCommand(stage0ExportCommand);
 registerCommand(stage0ImportCommand);
 ```
 
-- [ ] **Step 4: Run typecheck**
+- [ ] **Step 3: Run typecheck**
 
 Run: `npm run typecheck`
 Expected: `✅ Typecheck passed`.
 
-- [ ] **Step 5: Smoke-test stage0-import with a hand-built handoff file**
+- [ ] **Step 4: Smoke-test export + import with a hand-built handoff file**
 
-Create a run, then a handoff file, then import:
+Create a run, verify `stage0-export`, then import. The run id is needed in three places —
+capture it in a shell variable:
 ```bash
-npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-18 \
-  --dest KIX:"Osaka (KIX)" --nights 6
-# note the run id, then:
-echo '{"candidates":[{"candidateId":"RUNID-KIX-2026-06-18-6n","runId":"RUNID","destCode":"KIX","departDate":"2026-06-18","returnDate":"2026-06-24","nights":6,"flightTotalTwd":18000,"flights":[]}],"attempts":[{"runId":"RUNID","destCode":"KIX","nights":6,"status":"ok","candidateCount":1,"error":null}]}' > /tmp/s0-handoff.json
-# replace RUNID in the file with the real run id, then:
-npm run travel -- stage0-import --run <run_id> --file /tmp/s0-handoff.json
-npm run travel -- stage0-compare --run <run_id>
+RID=$(npm run --silent travel -- stage0-init --origin TPE \
+  --start 2026-06-18 --end 2026-06-18 --dest KIX:"Osaka (KIX)" --nights 6 \
+  | grep -oE 'stage0-[0-9]+-[0-9]+')
+echo "run id: $RID"
+
+# stage0-export must emit one JSON line the aggregator can parse:
+npm run --silent travel -- stage0-export --run "$RID" --json | head -c 200
+
+# build a handoff file with the real run id substituted in:
+printf '{"candidates":[{"candidateId":"%s-KIX-2026-06-18-6n","runId":"%s","destCode":"KIX","departDate":"2026-06-18","returnDate":"2026-06-24","nights":6,"flightTotalTwd":18000,"flights":[]}],"attempts":[{"runId":"%s","destCode":"KIX","nights":6,"status":"ok","candidateCount":1,"error":null}]}' "$RID" "$RID" "$RID" > /tmp/s0-handoff.json
+
+npm run travel -- stage0-import --run "$RID" --file /tmp/s0-handoff.json
+npm run travel -- stage0-compare --run "$RID"
 ```
-Expected: import prints `✅ Imported 1 candidates ... ranked`; compare shows one ranked row with a computed leave-days value.
+Expected: `stage0-export` prints a JSON object starting `{"run_id":"stage0-...`; import prints `✅ Imported 1 candidates ... ranked`; compare shows one ranked row with a computed (non-null) leave-days value.
+
+- [ ] **Step 5: Verify import idempotency**
+
+Run the same import a second time:
+```bash
+npm run travel -- stage0-import --run "$RID" --file /tmp/s0-handoff.json
+```
+Expected: succeeds again (no PK collision) — prints `✅ Imported 1 candidates (1 total), ranked`. The per-pair delete made it idempotent.
 
 - [ ] **Step 6: Clean up the smoke-test run**
 
-Run: `npm run db:exec -- "DELETE FROM stage0_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM stage0_candidates WHERE run_id='<run_id>'); DELETE FROM stage0_candidates WHERE run_id='<run_id>'; DELETE FROM stage0_scrape_attempts WHERE run_id='<run_id>'; DELETE FROM stage0_research_durations WHERE run_id='<run_id>'; DELETE FROM stage0_research_destinations WHERE run_id='<run_id>'; DELETE FROM stage0_research_runs WHERE run_id='<run_id>';"`
+Run: `npm run db:exec -- "DELETE FROM stage0_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM stage0_candidates WHERE run_id='$RID'); DELETE FROM stage0_candidates WHERE run_id='$RID'; DELETE FROM stage0_scrape_attempts WHERE run_id='$RID'; DELETE FROM stage0_research_durations WHERE run_id='$RID'; DELETE FROM stage0_research_destinations WHERE run_id='$RID'; DELETE FROM stage0_research_runs WHERE run_id='$RID';"`
 Expected: exits 0.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/cli/commands/stage0.ts src/cli/shared/args.ts
-git commit -m "feat: add stage0-import command for aggregator handoff"
+git add src/cli/commands/stage0.ts
+git commit -m "feat: add stage0-export and idempotent stage0-import commands"
 ```
 
 ---
@@ -1505,7 +1654,7 @@ Expected: full health check passes (0 errors).
 - [ ] **Step 4: Verify `stage0-init` appears in CLI help**
 
 Run: `npm run travel -- help`
-Expected: help text lists `stage0-init`, `stage0-compare`, `stage0-adopt`, `stage0-import`.
+Expected: help text lists `stage0-init`, `stage0-export`, `stage0-import`, `stage0-compare`, `stage0-adopt`.
 
 - [ ] **Step 5: Final commit (if any uncommitted changes remain)**
 
@@ -1530,6 +1679,13 @@ git add -A && git commit -m "chore: Stage 0 triangle research — final verifica
 - §8 doc hygiene → Task 9 ✓
 - §9 tests (migration, ranking, compare, adopt, scrape-attempt) → Task 1 Step 4, Task 3 tests ✓
 
-**Mechanism decision resolved:** the spec left "is run-creation a `stage0-init` command or skill-direct" open. This plan resolves it: `stage0-init` is a CLI command (Task 5), and a `stage0-import` command (Task 7) owns the aggregator→DB handoff so all DB writes + the leave-days calculation stay in TypeScript. The Python aggregator never writes to Turso directly — it only reads, then hands off a transient JSON file.
+**Mechanism decision resolved:** the spec left "is run-creation a `stage0-init` command or skill-direct" open. This plan resolves it: `stage0-init` is a CLI command (Task 5) that also seeds one `pending` `stage0_scrape_attempts` row per destination × duration. The Python aggregator performs **no** Turso I/O at all — it reads the run via `stage0-export` and writes via `stage0-import` (Task 7), so every SQL statement stays in TypeScript under `sql-helpers.ts` escaping. `stage0-import` is idempotent per (dest, nights) pair via `deleteCandidatesForPair`, and the aggregator skips pairs already marked `ok` — so re-running a partially-failed run is safe and never collides on the `candidate_id` PK.
 
-**Type consistency:** `CreateRunInput`, `ResearchRun`, `Candidate`, `InsertCandidateInput`, `CandidateFlight`, `ScrapeAttempt`, `ScrapeAttemptInput` defined in Task 2/3 and used consistently by Tasks 5 and 7. Function names (`createResearchRun`, `getResearchRun`, `insertCandidate`, `getCandidates`, `rankRun`, `upsertScrapeAttempt`, `getScrapeAttempts`, `setRunStatus`, `adoptCandidate`, `deleteResearchRun`) are stable across all tasks.
+**Type consistency:** `CreateRunInput`, `ResearchRun`, `ScrapeAttempt` defined in Task 2; `Candidate`, `InsertCandidateInput`, `CandidateFlight`, `ScrapeAttemptInput` defined in Task 3; all used consistently by Tasks 5 and 7. Function names (`createResearchRun`, `getResearchRun`, `getScrapeAttempts`, `deleteResearchRun` — Task 2; `insertCandidate`, `getCandidates`, `rankRun`, `upsertScrapeAttempt`, `deleteCandidatesForPair`, `setRunStatus`, `adoptCandidate` — Task 3) are stable across all tasks. `getScrapeAttempts` is defined once (Task 2) and only consumed thereafter — Task 3 does not redefine it.
+
+**Review fixes applied (post-review patch):**
+- Retry idempotency — aggregator skips `ok` pairs; `stage0-import` deletes candidates per (dest, nights) pair before inserting (`deleteCandidatesForPair`).
+- `pending` attempt rows seeded at `stage0-init`, so a mid-run crash leaves a visible work matrix.
+- No raw SQL in Python — aggregator reads via `stage0-export`, writes via `stage0-import`; all SQL stays in TypeScript.
+- `--origin`, `--rate`, `--file` registered in `OPTIONS_WITH_VALUES` alongside `--run` (Task 4).
+- Static `help.ts` updated with all five Stage 0 commands (Task 5 Step 6).
