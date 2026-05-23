@@ -129,6 +129,9 @@ User intent                          → Skill / Action
 "plan a trip to [place]"             → Check destination_config in Turso
   destination exists?                   → /p1-dates (if dates not set)
   destination missing?                  → add to destination_config + /p2-destination
+"cheapest week to go to X"           → /stage0-research (pre-lock triangle research)
+"Osaka or Tokyo, depends on price"   → /stage0-research (compare destinations + dates + price together)
+"what dates are cheapest"            → /stage0-research
 "set dates" / "change dates"         → /p1-dates
 "which city" / "how many nights"     → /p2-destination
 "find packages" / "search OTA"       → check-freshness first
@@ -362,6 +365,18 @@ npm run travel -- fetch-weather [--dest slug] [--all]
 # === OPERATION TRACKING ===
 npm run travel -- run-status [run-id]
 npm run travel -- run-list [--status completed|failed|started] [--limit N]
+
+# === STAGE 0 — TRIANGLE RESEARCH (pre-plan; unscoped) ===
+# Explore departure date × destination × flight price together before any plan exists.
+# All five commands are requiresState:false (no plan resolution).
+npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+  --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32]
+python scripts/stage0_research.py --run <run_id>          # aggregator (no Turso I/O of its own)
+npm run travel -- stage0-compare --run <run_id> [--json] [--limit N]
+npm run travel -- stage0-adopt <candidate_id> <plan_id>   # link a candidate to a real plan
+# Internal (aggregator handoff — usually not run by hand):
+npm run travel -- stage0-export --run <run_id> --json
+npm run travel -- stage0-import --run <run_id> --file <path>
 ```
 
 Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI
@@ -521,6 +536,18 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 ### Tokyo (Feb 13-17) — ✅ completed
 
 ### Kyoto (Feb 24-28) — ✅ completed
+
+### Engineering — Stage 0 Triangle Research ✅
+Spec: `docs/superpowers/specs/2026-05-22-stage0-triangle-research-design.md`
+Plan: `docs/superpowers/plans/2026-05-22-stage0-triangle-research.md`
+
+1. **6 unscoped Turso tables** ✅ — `stage0_research_runs`, `_destinations`, `_durations`, `stage0_candidates`, `stage0_candidate_flights`, `stage0_scrape_attempts` (keyed by `run_id`, not `plan_id` — research exists before any plan)
+2. **TS service layer** ✅ — `src/services/stage0-service.ts` owns all DB reads/writes; runs are immutable; ranking is `flight_total_twd ASC, leave_days ASC, depart_date ASC`
+3. **5 CLI commands** ✅ — `stage0-init` (seeds pending attempts), `stage0-export`/`stage0-import` (aggregator handoff), `stage0-compare`, `stage0-adopt`. All `requiresState: false` (pre-plan)
+4. **Python aggregator** ✅ — `scripts/stage0_research.py` performs zero Turso I/O of its own; reads via `stage0-export`, writes via `stage0-import` — all SQL stays in TypeScript under `sql-helpers.ts` escaping
+5. **`/stage0-research` orchestration skill** ✅ — `src/skills/stage0-research/SKILL.md`, owns pre-lock research (`requires_processes: []`)
+6. **`db:exec` fix** ✅ — incidental but load-bearing: `scripts/turso-exec.ts` now splits semicolon-delimited input and surfaces per-statement errors (was silently swallowing both)
+7. **Scope deliberately narrow** — P1–P5 untouched; the proposed planning-flow doc stays **Proposed**; no Skill Decision Tree rewrite
 
 ### Engineering — Itinerary DAL Refactor
 Plan: `docs/plans/2026-03-01-itinerary-dal-refactor.md`
