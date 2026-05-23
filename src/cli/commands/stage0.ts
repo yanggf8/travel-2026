@@ -145,6 +145,122 @@ const stage0AdoptCommand: CommandHandler = {
   },
 };
 
+// ── stage0-export ────────────────────────────────────────────────────
+// Emits a run (run + destinations + durations + scrape attempts) as JSON.
+// The Python aggregator consumes this instead of building SQL itself.
+
+const stage0ExportCommand: CommandHandler = {
+  names: ['stage0-export'],
+  description: 'Export a Stage 0 research run as JSON (for the aggregator).',
+  usage: 'stage0-export --run <run_id> --json',
+  requiresState: false,
+  async execute(ctx: CliContext): Promise<void> {
+    const { getResearchRun, getScrapeAttempts } = require('../../services/stage0-service');
+    const runId = ctx.args.optionValue('--run');
+    if (!runId) {
+      console.error('Error: stage0-export requires --run <run_id>');
+      process.exit(1);
+    }
+    const run = await getResearchRun(runId);
+    if (!run) {
+      console.error(`Error: research run not found: ${runId}`);
+      process.exit(1);
+    }
+    const attempts = await getScrapeAttempts(runId);
+    // Single JSON object on stdout — nothing else, so Python can parse it.
+    console.log(JSON.stringify({ ...run, attempts }));
+  },
+};
+
+// ── stage0-import ────────────────────────────────────────────────────
+// Consumes the Python aggregator's JSON handoff. Idempotent per pair:
+// for each scraped (dest, nights) pair it first deletes any prior
+// candidates for that pair, so a re-import never collides on the
+// candidate_id PK. Inserts candidates with leave-days computed via the TS
+// calculator, records scrape attempts, ranks, sets final run status.
+
+const stage0ImportCommand: CommandHandler = {
+  names: ['stage0-import'],
+  description: 'Import Stage 0 aggregator results from a handoff JSON file.',
+  usage: 'stage0-import --run <run_id> --file <path>',
+  requiresState: false,
+  async execute(ctx: CliContext): Promise<void> {
+    const fs = require('fs');
+    const {
+      insertCandidate, upsertScrapeAttempt, rankRun, setRunStatus,
+      getResearchRun, getCandidates, deleteCandidatesForPair,
+    } = require('../../services/stage0-service');
+    const { calculateLeave } = require('../../utils/holiday-calculator');
+    const { args } = ctx;
+
+    const runId = args.optionValue('--run');
+    const file = args.optionValue('--file');
+    if (!runId || !file) {
+      console.error('Error: stage0-import requires --run <run_id> and --file <path>');
+      process.exit(1);
+    }
+    const run = await getResearchRun(runId);
+    if (!run) {
+      console.error(`Error: research run not found: ${runId}`);
+      process.exit(1);
+    }
+    const payload = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const candidates: any[] = payload.candidates || [];
+    const attempts: any[] = payload.attempts || [];
+
+    // Idempotent per pair: clear prior candidates for every pair THIS handoff
+    // processed before inserting. The delete set is built from `attempts`,
+    // not `candidates` — attempts are the authoritative list of pairs this
+    // handoff scraped. A pair that scraped successfully but returned zero
+    // flights still has an attempt row; building the set from `candidates`
+    // would skip it and leave stale rows from a prior import.
+    const pairs = new Set<string>();
+    for (const a of attempts) pairs.add(`${a.destCode}|${a.nights}`);
+    for (const key of pairs) {
+      const [destCode, nightsStr] = key.split('|');
+      await deleteCandidatesForPair(runId, destCode, parseInt(nightsStr, 10));
+    }
+
+    for (const a of attempts) {
+      await upsertScrapeAttempt({
+        runId, destCode: a.destCode, nights: a.nights,
+        status: a.status, candidateCount: a.candidateCount, error: a.error,
+      });
+    }
+
+    for (const c of candidates) {
+      // Leave-days computed here — TS owns the holiday calendar.
+      const leave = calculateLeave({
+        startDate: c.departDate, endDate: c.returnDate, market: 'taiwan',
+      });
+      await insertCandidate({
+        candidateId: c.candidateId, runId, destCode: c.destCode,
+        departDate: c.departDate, returnDate: c.returnDate, nights: c.nights,
+        flightTotalTwd: c.flightTotalTwd ?? null,
+        leaveDays: leave.leaveDaysNeeded,
+        verdict: c.verdict ?? null,
+        flights: c.flights || [],
+      });
+    }
+
+    // Rank if the run has any candidates at all (this import may have added
+    // to candidates from an earlier partial run). Mark failed only when the
+    // run is still completely empty.
+    const allCandidates = await getCandidates(runId);
+    if (allCandidates.length === 0) {
+      await setRunStatus(runId, 'failed');
+      console.log(`⚠️  No candidates for ${runId} — run marked failed.`);
+      return;
+    }
+    await rankRun(runId);
+    console.log(`✅ Imported ${candidates.length} candidates for ${runId} ` +
+      `(${allCandidates.length} total), ranked.`);
+    console.log(`   View: npm run travel -- stage0-compare --run ${runId}`);
+  },
+};
+
 registerCommand(stage0InitCommand);
 registerCommand(stage0CompareCommand);
 registerCommand(stage0AdoptCommand);
+registerCommand(stage0ExportCommand);
+registerCommand(stage0ImportCommand);
