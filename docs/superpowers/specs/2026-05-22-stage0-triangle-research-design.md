@@ -1,18 +1,17 @@
 # Stage 0 — Triangle Research: Design Spec
 
 > **Date:** 2026-05-22
-> **Status:** Approved design — ready for implementation planning
-> **Scope:** A+ (narrow) — build the missing Stage 0 capability; do **not** rename or rewire P1–P5.
-> **Related:** `docs/plans/2026-05-22-new-planning-flow.md` (the proposed flow this implements one stage of)
+> **Status:** Implemented and reconciled with the adopted staged flow
+> **Scope:** A+ (narrow) — build the missing Stage 0 capability; do **not** rename P1–P5.
+> **Related:** `docs/plans/2026-05-22-new-planning-flow.md` (the adopted flow this implements one stage of)
 
 ---
 
 ## 1. Purpose
 
-The proposed planning flow (`docs/plans/2026-05-22-new-planning-flow.md`) replaces the linear
-P1→P5 model with a research-first loop. Its **Stage 0 — Triangle Research** is the only stage
-with no skill owner and no tooling: it explores departure date, destination, and flight price
-*together*, before any of them is locked.
+The adopted planning flow (`docs/plans/2026-05-22-new-planning-flow.md`) replaces the linear
+P1→P5 model with a research-first loop. Its **Stage 0 — Triangle Research** explores
+departure date, destination, and flight price *together*, before any of them is locked.
 
 `/p3-flights` cannot own this — it declares `requires_processes: [process_1_date_anchor,
 process_2_destination]`, so it needs dates and destination already chosen. Stage 0 runs
@@ -22,8 +21,8 @@ This spec defines the missing piece: a DB-backed research-session domain, an agg
 ranks flight candidates across destinations and durations, a CLI command to display the
 ranking, and an orchestration skill that drives the loop.
 
-**Out of scope:** renaming P1–P5 skills, flipping the proposal doc to "Adopted", rewiring
-CLAUDE.md's Skill Decision Tree, a dashboard view for Stage 0. P1–P5 remain fully operational.
+**Out of scope for the initial implementation:** renaming P1–P5 skills, a dashboard view for
+Stage 0. P1–P5 remain fully operational as compatibility skill names inside the staged flow.
 
 ---
 
@@ -286,15 +285,15 @@ When the user locks a candidate:
 
 ## 8. Doc hygiene (carried in this scope)
 
-These proposal-doc fixes were applied earlier and must remain consistent with this work:
-- `CLAUDE.md` — the planning-flow doc is described as **proposed**, not "supersedes P1→P5".
+These flow-doc fixes must remain consistent with this work:
+- `CLAUDE.md` — the adopted staged flow is authoritative; P1–P5 skill names remain as
+  compatibility implementation tools.
 - `docs/plans/2026-05-22-new-planning-flow.md` — Stage 0 Skill Mapping states `/p3-flights`
   **cannot** own pre-lock research; Stage 3 example uses `--fixed true`.
 
 After implementation, the planning-flow doc's Skill Mapping row for Stage 0 should be updated
-to name `/stage0-research` as the owner (replacing "no skill owner"). The doc stays
-**Proposed** — building Stage 0 does not flip it to Adopted; that still requires resolving the
-five open decisions and reconciling P1–P5.
+to name `/stage0-research` as the owner (replacing "no skill owner"). The doc is now
+**Adopted** after the Stage 0 handoff, open decisions, and CLAUDE.md routing were reconciled.
 
 ---
 
