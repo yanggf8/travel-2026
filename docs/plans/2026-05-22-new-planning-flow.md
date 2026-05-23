@@ -309,7 +309,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 
 | Stage | Existing skill(s) reused | What changes |
 |-------|--------------------------|--------------|
-| Stage 0 — Triangle Research | *(no skill owner)* — `scrape_date_range.py` + `view:prices` directly | `/p3-flights` **cannot** be reused here: its `requires_processes` lists `process_1_date_anchor` + `process_2_destination`, so it needs dates/destination already locked. Stage 0 runs *before* that lock, so it is CLI/manual only. Adoption should either create a dedicated Stage 0 skill or formally document Stage 0 as CLI-only. |
+| Stage 0 — Triangle Research | `/stage0-research` (orchestration skill) + `scripts/stage0_research.py` | `/stage0-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
 | Stage 1 — Itinerary Draft | `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | `/p1-dates` and `/p2-destination` now produce a *provisional* lock that Stage 0 can still revisit. |
 | Stage 2 — Shop Flight | `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | Unchanged behaviour; just invoked after a draft exists rather than before. |
 | Stage 3 — Expand Itinerary | `/p5-itinerary` | Unchanged. |

@@ -185,6 +185,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/deploy-dashboard` | `src/skills/deploy-dashboard/SKILL.md` | Deploy trip dashboard to CF Workers |
 | `/pre-trip-checklist` | `src/skills/pre-trip-checklist/SKILL.md` | Pre-departure verification |
 | `/new-destination` | `src/skills/new-destination/SKILL.md` | Add destination to config |
+| `/stage0-research` | `src/skills/stage0-research/SKILL.md` | Pre-lock triangle research (date/destination/flight) |
 
 ## OTA Sources
 
@@ -440,6 +441,7 @@ Tables:
 - **Event log**: `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`, `event_log_process_events`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
 - **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
+- **Stage 0 research** (unscoped, keyed by `run_id`): `stage0_research_runs`, `stage0_research_destinations`, `stage0_research_durations`, `stage0_candidates`, `stage0_candidate_flights`, `stage0_scrape_attempts` — pre-plan triangle-research domain (see `docs/superpowers/specs/2026-05-22-stage0-triangle-research-design.md`)
 - **Global config** (not plan-scoped): `destination_config` (slug PK, coordinates/timezone/airports), `origin_config` (taiwan origin), `global_config` (default_destination, default_origin), `ota_sources` (OTA registry — replaces ota-sources.json)
 - **Other**: `offers`, `destinations`, `events`, `bookings`
 - **Dead**: `flights` (old JSON blob table — no writes, kept for reference only)
