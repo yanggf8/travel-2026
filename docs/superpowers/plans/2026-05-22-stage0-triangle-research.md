@@ -1623,7 +1623,8 @@ destinations, and durations. Changing any of those = a new run.
    npm run travel -- stage0-adopt <candidate_id> <existing_plan_id>
    ```
 
-   After a new-plan handoff, continue with Stage 1:
+   After a new-plan handoff, continue with `/stage1-itinerary-draft`, whose
+   first CLI step is:
    ```bash
    npm run travel -- scaffold-itinerary --plan-id <new_plan_id> --dest <destination_slug>
    ```

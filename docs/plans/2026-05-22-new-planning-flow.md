@@ -98,7 +98,8 @@ This seeds the minimal normalized plan rows, sets P1 dates from the candidate's 
 npm run travel -- plans
 npm run view:status -- --plan-id <plan-id>
 
-# Scaffold the itinerary
+# Orchestrate the rough draft with /stage1-itinerary-draft, which runs the
+# scaffold command below and validates whether the plan should move to Stage 2.
 npm run travel -- scaffold-itinerary --plan-id <plan-id> --dest <destination-slug>
 # Example dest slug: for Kansai use the slug from destination_config table
 # (e.g., osaka_kyoto, kansai_2026, etc. — check with npm run view:status)
@@ -305,7 +306,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 | Stage | Existing skill(s) reused | What changes |
 |-------|--------------------------|--------------|
 | Stage 0 — Triangle Research | `/stage0-research` (orchestration skill) + `scripts/stage0_research.py` | `/stage0-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
-| Stage 1 — Itinerary Draft | `stage0-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Stage 0 handoff can seed the provisional P1/P2 lock; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
+| Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `stage0-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Stage 0 handoff can seed the provisional P1/P2 lock; `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
 | Stage 2 — Shop Flight | `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | Unchanged behaviour; just invoked after a draft exists rather than before. |
 | Stage 3 — Expand Itinerary | `/p5-itinerary` | Unchanged. |
 | Stage 4 — Publish | `/deploy-dashboard` | Unchanged; explicitly non-sequential. |

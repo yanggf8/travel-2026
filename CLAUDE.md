@@ -136,7 +136,7 @@ User intent                          → Skill / Action
 "set dates" / "change dates"         → /p1-dates
 "which city" / "how many nights"     → /p2-destination
 "lock this Stage 0 candidate"        → npm run travel -- stage0-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
-"draft the trip" / "rough itinerary" → scaffold-itinerary, then Stage 1 validation
+"draft the trip" / "rough itinerary" → /stage1-itinerary-draft
 "find packages" / "search OTA"       → check-freshness first
   fresh data in Turso?                  → query-offers (show existing)
   stale/no data?                        → /p3p4-packages (scrape + auto-import)
@@ -192,6 +192,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/pre-trip-checklist` | `src/skills/pre-trip-checklist/SKILL.md` | Pre-departure verification |
 | `/new-destination` | `src/skills/new-destination/SKILL.md` | Add destination to config |
 | `/stage0-research` | `src/skills/stage0-research/SKILL.md` | Pre-lock triangle research (date/destination/flight) |
+| `/stage1-itinerary-draft` | `src/skills/stage1-itinerary-draft/SKILL.md` | Rough day-by-day itinerary draft after dates/destination lock |
 
 ## OTA Sources
 
