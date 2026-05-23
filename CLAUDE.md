@@ -137,15 +137,15 @@ User intent                          → Skill / Action
 "which city" / "how many nights"     → /p2-destination
 "lock this Stage 0 candidate"        → npm run travel -- stage0-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
 "draft the trip" / "rough itinerary" → /stage1-itinerary-draft
-"find packages" / "search OTA"       → check-freshness first
+"find packages" / "search OTA"       → /stage2-shop-transport (check freshness first)
   fresh data in Turso?                  → query-offers (show existing)
   stale/no data?                        → /p3p4-packages (scrape + auto-import)
-"find flights only"                  → /p3-flights (uses /scrape-ota)
-"compare offers"                     → read process_3_4_packages.results
+"find flights only"                  → /stage2-shop-transport (uses /p3-flights)
+"compare offers"                     → /stage2-shop-transport
 "query offers"                       → npm run travel -- query-offers --plan-id <id> --dest <slug>
 "import scraped files"               → npm run travel -- import-offers --dir scrapes --dest <slug>
 "is data fresh"                      → npm run travel -- check-freshness --source <s>
-"book separately"                    → /separate-bookings
+"book separately"                    → /stage2-shop-transport (uses /separate-bookings)
 "how many leave days"                → npm run leave-calc
 "book this" / "select offer"         → npm run travel -- select-offer
 "plan the days" / "itinerary"        → /p5-itinerary
@@ -193,6 +193,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/new-destination` | `src/skills/new-destination/SKILL.md` | Add destination to config |
 | `/stage0-research` | `src/skills/stage0-research/SKILL.md` | Pre-lock triangle research (date/destination/flight) |
 | `/stage1-itinerary-draft` | `src/skills/stage1-itinerary-draft/SKILL.md` | Rough day-by-day itinerary draft after dates/destination lock |
+| `/stage2-shop-transport` | `src/skills/stage2-shop-transport/SKILL.md` | Compare direct flights vs packages and choose booking path |
 
 ## OTA Sources
 

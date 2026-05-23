@@ -83,7 +83,7 @@ still comparing dates, destinations, or flight prices, use `/stage0-research`.
 
    If timing, duration, or destination choice looks wrong, return to Stage 0
    with a narrower research request. If the rough plan is viable, proceed to
-   Stage 2 (`/p3-flights`, `/p3p4-packages`, `/separate-bookings`).
+   Stage 2 (`/stage2-shop-transport`).
 
 ## Output
 
