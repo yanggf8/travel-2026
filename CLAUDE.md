@@ -155,7 +155,7 @@ User intent                          → Skill / Action
 "weather" / "forecast"               → npm run travel -- fetch-weather [--dest slug] [--all]
 User provides OTA URL                → /scrape-ota (see URL Routing)
 User provides booking confirmation   → npm run travel -- set-activity-booking
-"deploy dashboard" / "publish trip"  → cd workers/trip-dashboard && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
+"deploy dashboard" / "publish trip"  → /stage4-publish-dashboard
 ```
 
 ### URL Routing
@@ -195,6 +195,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/stage1-itinerary-draft` | `src/skills/stage1-itinerary-draft/SKILL.md` | Rough day-by-day itinerary draft after dates/destination lock |
 | `/stage2-shop-transport` | `src/skills/stage2-shop-transport/SKILL.md` | Compare direct flights vs packages and choose booking path |
 | `/stage3-expand-itinerary` | `src/skills/stage3-expand-itinerary/SKILL.md` | Detailed booking-aware itinerary expansion |
+| `/stage4-publish-dashboard` | `src/skills/stage4-publish-dashboard/SKILL.md` | Explicit dashboard publish and verification |
 
 ## OTA Sources
 

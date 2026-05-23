@@ -98,7 +98,7 @@ End with:
 - Validation result and any remaining warnings.
 - Bookings or activities still needing confirmation.
 - One next action: revise Stage 3, update bookings, fetch weather, or proceed
-  to Stage 4 (`/deploy-dashboard`).
+  to Stage 4 (`/stage4-publish-dashboard`).
 
 ## Notes
 

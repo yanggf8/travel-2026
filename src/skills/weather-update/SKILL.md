@@ -58,9 +58,10 @@ npm run view:itinerary
 
 Each day should show weather data with `feels_like_max`. If missing, retry or check `src/services/weather-service.ts`.
 
-### 6. Deploy dashboard (optional)
+### 6. Publish dashboard (optional)
 
-After weather fetched, deploy via `/deploy-dashboard` skill.
+After weather is fetched, publish via `/stage4-publish-dashboard` when the
+user explicitly asks to deploy or refresh the live dashboard.
 
 ## Error Handling
 
@@ -74,5 +75,6 @@ After weather fetched, deploy via `/deploy-dashboard` skill.
 ## See Also
 
 - `src/services/weather-service.ts` — Weather API implementation
-- `/deploy-dashboard` — Deploy trip dashboard with weather
+- `/stage4-publish-dashboard` — Explicit dashboard publish and verification
+- `/deploy-dashboard` — Lower-level Cloudflare deploy steps
 - `/new-destination` — Add new destination to config

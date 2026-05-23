@@ -226,6 +226,10 @@ npm run travel -- set-tod-zh <day> <session> \
 
 **Goal:** Make the plan visible on the web dashboard for reference and sharing.
 
+Use `/stage4-publish-dashboard` as the orchestration skill for this stage. It
+wraps `/deploy-dashboard` and `/weather-update`, and owns publish readiness,
+explicit deployment, and post-deploy verification.
+
 **What to populate:**
 ```bash
 # ZH content for all sessions (bilingual display)
@@ -317,7 +321,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 | Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `stage0-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Stage 0 handoff can seed the provisional P1/P2 lock; `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
 | Stage 2 — Shop Flight | `/stage2-shop-transport`, `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | `/stage2-shop-transport` owns the package-vs-direct decision; lower-level P3/P4 skills remain the implementation tools. |
 | Stage 3 — Expand Itinerary | `/stage3-expand-itinerary`, `/p5-itinerary` | `/stage3-expand-itinerary` owns booking-aware detail expansion and validation; `/p5-itinerary` remains the implementation tool. |
-| Stage 4 — Publish | `/deploy-dashboard` | Unchanged; explicitly non-sequential. |
+| Stage 4 — Publish | `/stage4-publish-dashboard`, `/deploy-dashboard`, `/weather-update` | `/stage4-publish-dashboard` owns explicit publish readiness and verification; `/deploy-dashboard` remains the implementation tool. |
 
 **Naming decision:** Keep the existing `/p1-*` through `/p5-*` skill names as compatibility labels. The adopted mental model is Stage 0 through Stage 4; the P-numbered skills are implementation tools reused inside those stages.
 

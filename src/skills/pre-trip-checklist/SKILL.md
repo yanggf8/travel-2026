@@ -61,7 +61,7 @@ npm run travel -- fetch-weather --dest <slug>
 curl "https://trip-dashboard.<subdomain>.workers.dev/?plan=<slug>"
 ```
 
-Should return HTML dashboard. If 404 or error, run `/deploy-dashboard`.
+Should return HTML dashboard. If 404 or error, run `/stage4-publish-dashboard`.
 
 ### 6. Verify transport details
 
@@ -88,4 +88,5 @@ Check flight times match confirmation email, airport transfer plan set.
 
 - `/booking-confirmation` — Post-booking verification
 - `/weather-update` — Fetch weather data
-- `/deploy-dashboard` — Deploy trip dashboard
+- `/stage4-publish-dashboard` — Explicit dashboard publish and verification
+- `/deploy-dashboard` — Lower-level Cloudflare deploy steps
