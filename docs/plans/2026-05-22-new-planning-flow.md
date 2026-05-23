@@ -1,7 +1,7 @@
 # Japan Travel Planning Flow — New Design
 
 > **Date:** 2026-05-22
-> **Status:** Proposed — not yet adopted. The P1–P5 skills (`/p1-dates` … `/p5-itinerary`) and CLAUDE.md's Skill Decision Tree remain the operative flow until the open decisions below are resolved and the skills are reconciled with the stages.
+> **Status:** Adopted. Stage 0 is implemented, `stage0-adopt --create-plan --dest` closes the pre-lock to plan handoff, and CLAUDE.md's Skill Decision Tree routes new planning work through this staged flow.
 > **Purpose:** Replace P1→P2→P3→P4→P5 linear model with a research-first, iterative approach where dates/destinations/flights evolve together.
 
 ---
@@ -50,6 +50,8 @@ User picks a candidate OR asks to explore another date/destination
 ```
 
 **Key principle:** Dates and destination are not locked until flight candidates look good. The user can say "try June 20 instead" or "instead of Osaka try Kyoto" at any point.
+
+**Default scope:** Explore every departure date in the user's stated window for each supplied destination and duration. Keep the first run to 1-3 destinations and 1-3 durations unless the user explicitly asks for a wider sweep; if the cartesian product becomes large, split it into multiple immutable runs so rankings remain explainable.
 
 **Unit convention:** This doc speaks in **nights** (a 6-night trip). The scraper's `--duration` flag wants **trip days** = nights + 1 (depart and return days both counted). So a 6-night trip is `--duration 7`; a 5-night trip is `--duration 6`. Filenames below use the nights count (`6n`) to match what `view:prices --nights` expects.
 
@@ -111,6 +113,8 @@ Fill in:
 - Must-do activities (e.g., teamLab Borderless, Fushimi Inari)
 - Rough time blocks (morning/afternoon/evening)
 
+**Drafting default:** The agent drafts the first itinerary from known destination patterns, current plan constraints, and any must-do items the user already gave. Do not block Stage 1 waiting for a must-do list; ask targeted follow-up questions only when a missing preference changes routing, pacing, or booking strategy.
+
 **Multi-city lodging topology:**
 - **Split-stay**: Different hotel in each city (e.g., 3 nights Osaka + 2 nights Kyoto). Better for multi-city trips but more hotel logistics.
 - **Day-trip**: Base in one city, travel to the other city by train. Simpler logistics, more travel time each day.
@@ -163,6 +167,7 @@ npm run travel -- query-offers --plan-id <id> --dest <slug> --max-price 30000 --
 
 - If package has good hotel + good flight → select package (P3+P4 done together)
 - If direct flight is cheaper and user prefers choice of hotel → book flight separately → move to Stage 3
+- If package total is within 10% of direct flight plus a comparable hotel, prefer the package only when the hotel location, room type, cancellation terms, and lodging topology are acceptable. Otherwise prefer separate booking.
 
 **If flight is cheaper on slightly different dates →** Go back to Stage 0 with new dates, re-run triangle research.
 
@@ -202,7 +207,7 @@ npm run travel -- set-tod-zh <day> <session> \
 **Fill order:**
 1. Lock must-do activities (fixed time, priority = must)
 2. Map out transit between areas
-3. Fill in meals (lunch + dinner; no breakfast by default)
+3. Fill in meals (lunch + dinner; no breakfast by default unless the selected hotel/package includes it)
 4. Add nice-to-have activities in remaining slots
 5. Check pacing (relaxed/balanced/packed)
 
@@ -233,6 +238,8 @@ unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
 ```
 
 **This stage is not sequential — run it any time user wants to share or reference the plan.**
+
+**Deploy default:** Deploy only on explicit user request or when a task specifically asks for publishing. Itinerary/database changes do not automatically deploy the dashboard.
 
 ---
 
@@ -303,13 +310,13 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 | Stage 3 — Expand Itinerary | `/p5-itinerary` | Unchanged. |
 | Stage 4 — Publish | `/deploy-dashboard` | Unchanged; explicitly non-sequential. |
 
-**Open reconciliation item:** once adopted, decide whether to rename the skills to `/s0`–`/s4` or keep P-numbers. Until then, CLAUDE.md's Skill Decision Tree (linear P1→P5) stays authoritative.
+**Naming decision:** Keep the existing `/p1-*` through `/p5-*` skill names as compatibility labels. The adopted mental model is Stage 0 through Stage 4; the P-numbered skills are implementation tools reused inside those stages.
 
 ---
 
 ## Comparison: Old vs New
 
-| Area | Original Flow | New Proposed Flow |
+| Area | Original Flow | Adopted Flow |
 |------|---------------|-------------------|
 | Overall model | Linear P1 → P2 → P3 → P4 → P5 | Iterative research-first loop |
 | First decision | Lock dates first | Explore dates, destination, and flight price together |
@@ -327,10 +334,10 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 
 ---
 
-## Questions / Decisions Needed
+## Resolved Decisions
 
-1. **Stage 0 scrape scope**: How many date windows to explore per destination? (e.g., ±2 days around target = 5 dates × 3 durations = 15 combos per destination)
-2. **Stage 1 — who drafts the itinerary?** Agent-only or user provides must-do list first?
-3. **Stage 2 — package preference**: If package is within 10% of direct flight + separate hotel, which wins?
-4. **Stage 3 — no breakfast default**: Confirm this is the right rule? (Some hotels include breakfast)
-5. **Stage 4 — auto-deploy**: Should dashboard auto-update when itinerary changes, or only on explicit deploy?
+1. **Stage 0 scrape scope:** use every departure date in the user's stated window across supplied destinations and durations; split large searches into multiple immutable runs rather than hiding a huge sweep in one run.
+2. **Stage 1 drafting:** agent drafts first, using known destination patterns and any user-provided must-do items; ask only preference questions that materially change routing or booking.
+3. **Stage 2 package preference:** package wins within a 10% total-price band only if hotel quality/location, flight times, room terms, and lodging topology are acceptable; otherwise separate booking wins.
+4. **Stage 3 meals:** no breakfast by default unless the booked hotel/package includes it or the user asks to add it.
+5. **Stage 4 deploy:** explicit deploy only; never auto-deploy from itinerary changes.

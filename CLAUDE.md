@@ -114,7 +114,7 @@ Pre-commit hook (installed by `postinstall`) runs `typecheck` + `validate:data`.
 - `docs/EXTENDING.md` — how to add destinations, OTAs, validators
 - `docs/SKILL_TEMPLATE.md` — skill authoring guide
 - `docs/plans/` — implementation plans for major refactors
-- `docs/plans/2026-05-22-new-planning-flow.md` — **proposed** research-first "triangle" planning model (date/destination/flight explored together). Not yet adopted — the linear P1→P5 flow and Skill Decision Tree below remain authoritative.
+- `docs/plans/2026-05-22-new-planning-flow.md` — **adopted** research-first staged planning model (date/destination/flight explored together before plan lock). Existing P1–P5 skills remain implementation tools inside the stages.
 
 ## Agent-First Workflow
 
@@ -126,14 +126,17 @@ Pre-commit hook (installed by `postinstall`) runs `typecheck` + `validate:data`.
 ```
 User intent                          → Skill / Action
 ──────────────────────────────────────────────────────
-"plan a trip to [place]"             → Check destination_config in Turso
-  destination exists?                   → /p1-dates (if dates not set)
-  destination missing?                  → add to destination_config + /p2-destination
+"plan a trip to [place]"             → Stage 0/1 staged flow
+  loose dates/destination/price?         → /stage0-research
+  fixed dates + destination?             → create/verify plan, then /p1-dates + /p2-destination
+  destination missing?                  → /new-destination, then continue Stage 0/1
 "cheapest week to go to X"           → /stage0-research (pre-lock triangle research)
 "Osaka or Tokyo, depends on price"   → /stage0-research (compare destinations + dates + price together)
 "what dates are cheapest"            → /stage0-research
 "set dates" / "change dates"         → /p1-dates
 "which city" / "how many nights"     → /p2-destination
+"lock this Stage 0 candidate"        → npm run travel -- stage0-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
+"draft the trip" / "rough itinerary" → scaffold-itinerary, then Stage 1 validation
 "find packages" / "search OTA"       → check-freshness first
   fresh data in Turso?                  → query-offers (show existing)
   stale/no data?                        → /p3p4-packages (scrape + auto-import)
@@ -548,7 +551,7 @@ Plan: `docs/superpowers/plans/2026-05-22-stage0-triangle-research.md`
 4. **Python aggregator** ✅ — `scripts/stage0_research.py` performs zero Turso I/O of its own; reads via `stage0-export`, writes via `stage0-import` — all SQL stays in TypeScript under `sql-helpers.ts` escaping
 5. **`/stage0-research` orchestration skill** ✅ — `src/skills/stage0-research/SKILL.md`, owns pre-lock research (`requires_processes: []`)
 6. **`db:exec` fix** ✅ — incidental but load-bearing: `scripts/turso-exec.ts` now splits semicolon-delimited input and surfaces per-statement errors (was silently swallowing both)
-7. **Scope deliberately narrow** — P1–P5 untouched; the proposed planning-flow doc stays **Proposed**; no Skill Decision Tree rewrite
+7. **Stage flow adopted** ✅ — Stage 0 now hands off to a seeded plan via `stage0-adopt --create-plan --dest`; CLAUDE.md routes new planning through Stage 0→Stage 4 while keeping P1–P5 skill names as compatibility labels
 
 ### Engineering — Itinerary DAL Refactor
 Plan: `docs/plans/2026-03-01-itinerary-dal-refactor.md`

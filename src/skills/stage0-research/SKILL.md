@@ -9,7 +9,7 @@ provides_processes: []
 
 # /stage0-research
 
-Orchestration skill for **Stage 0 — Triangle Research** of the proposed
+Orchestration skill for **Stage 0 — Triangle Research** of the adopted
 research-first planning flow (`docs/plans/2026-05-22-new-planning-flow.md`).
 
 It explores the three interdependent variables — departure date, destination,
@@ -99,6 +99,6 @@ destinations, and durations. Changing any of those = a new run.
 - If a (destination, duration) scrape fails, the aggregator records it in
   `stage0_scrape_attempts` and continues. Re-running the aggregator on the
   same run retries only failed/pending attempts.
-- The proposed planning flow is still **Proposed** — this skill is the Stage 0
-  capability, but P1→P5 and CLAUDE.md's Skill Decision Tree remain the
-  operative flow.
+- The adopted planning flow is Stage 0 through Stage 4. Existing `/p1-*`
+  through `/p5-*` skills remain implementation tools after Stage 0 locks a
+  candidate.
