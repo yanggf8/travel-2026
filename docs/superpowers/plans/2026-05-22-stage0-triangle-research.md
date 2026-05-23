@@ -1023,10 +1023,20 @@ Expected: prints the run header and `(no candidates — run the aggregator first
 
 - [ ] **Step 5: Clean up the smoke-test run**
 
-`stage0-init` seeds `stage0_scrape_attempts` rows, so the cleanup must delete those too:
+`stage0-init` seeds `stage0_scrape_attempts` rows, so the cleanup must delete those too.
+`db:exec` runs each `;`-separated statement individually and prints `[N/M]` per statement; it exits nonzero if any fails.
 
-Run: `npm run db:exec -- "DELETE FROM stage0_scrape_attempts WHERE run_id='<run_id>'; DELETE FROM stage0_research_durations WHERE run_id='<run_id>'; DELETE FROM stage0_research_destinations WHERE run_id='<run_id>'; DELETE FROM stage0_research_runs WHERE run_id='<run_id>';"`
-Expected: exits 0.
+Run:
+```bash
+npm run db:exec -- "DELETE FROM stage0_scrape_attempts WHERE run_id='<run_id>'; DELETE FROM stage0_research_durations WHERE run_id='<run_id>'; DELETE FROM stage0_research_destinations WHERE run_id='<run_id>'; DELETE FROM stage0_research_runs WHERE run_id='<run_id>';"
+```
+Expected: 4 `[N/4]` lines, each `1 row(s) affected` (or `ok` if a table had no rows), exit 0.
+
+Then **verify** the run is gone — do not trust exit code alone:
+```bash
+npm run db:exec -- "SELECT COUNT(*) AS n FROM stage0_research_runs WHERE run_id='<run_id>';"
+```
+Expected: `{"n":"0"}`.
 
 - [ ] **Step 6: Add the Stage 0 commands to the static help text**
 
@@ -1490,8 +1500,14 @@ Expected: succeeds again (no PK collision) — prints `✅ Imported 1 candidates
 
 - [ ] **Step 6: Clean up the smoke-test run**
 
-Run: `npm run db:exec -- "DELETE FROM stage0_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM stage0_candidates WHERE run_id='$RID'); DELETE FROM stage0_candidates WHERE run_id='$RID'; DELETE FROM stage0_scrape_attempts WHERE run_id='$RID'; DELETE FROM stage0_research_durations WHERE run_id='$RID'; DELETE FROM stage0_research_destinations WHERE run_id='$RID'; DELETE FROM stage0_research_runs WHERE run_id='$RID';"`
-Expected: exits 0.
+`db:exec` runs each `;`-separated statement individually and exits nonzero if any fails — but **also verify the run is gone** rather than trusting the exit code alone.
+
+Run:
+```bash
+npm run db:exec -- "DELETE FROM stage0_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM stage0_candidates WHERE run_id='$RID'); DELETE FROM stage0_candidates WHERE run_id='$RID'; DELETE FROM stage0_scrape_attempts WHERE run_id='$RID'; DELETE FROM stage0_research_durations WHERE run_id='$RID'; DELETE FROM stage0_research_destinations WHERE run_id='$RID'; DELETE FROM stage0_research_runs WHERE run_id='$RID';"
+npm run db:exec -- "SELECT COUNT(*) AS n FROM stage0_research_runs WHERE run_id='$RID';"
+```
+Expected: 6 `[N/6]` lines from the DELETE chain, followed by `{"n":"0"}` from the verification SELECT.
 
 - [ ] **Step 7: Commit**
 
