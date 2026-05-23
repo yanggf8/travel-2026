@@ -184,6 +184,10 @@ npm run travel -- query-offers --plan-id <id> --dest <slug> --max-price 30000 --
 
 **Goal:** Fill in the full itinerary — attractions, transit between areas, meal arrangements (no breakfast), timing per session.
 
+Use `/stage3-expand-itinerary` as the orchestration skill for this stage. It
+wraps `/p5-itinerary` and the itinerary CLI commands, and owns detailed
+validation against real transport and lodging.
+
 **What to do:**
 ```bash
 # Set the confirmed flight details (both legs)
@@ -312,7 +316,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 | Stage 0 — Triangle Research | `/stage0-research` (orchestration skill) + `scripts/stage0_research.py` | `/stage0-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
 | Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `stage0-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Stage 0 handoff can seed the provisional P1/P2 lock; `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
 | Stage 2 — Shop Flight | `/stage2-shop-transport`, `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | `/stage2-shop-transport` owns the package-vs-direct decision; lower-level P3/P4 skills remain the implementation tools. |
-| Stage 3 — Expand Itinerary | `/p5-itinerary` | Unchanged. |
+| Stage 3 — Expand Itinerary | `/stage3-expand-itinerary`, `/p5-itinerary` | `/stage3-expand-itinerary` owns booking-aware detail expansion and validation; `/p5-itinerary` remains the implementation tool. |
 | Stage 4 — Publish | `/deploy-dashboard` | Unchanged; explicitly non-sequential. |
 
 **Naming decision:** Keep the existing `/p1-*` through `/p5-*` skill names as compatibility labels. The adopted mental model is Stage 0 through Stage 4; the P-numbered skills are implementation tools reused inside those stages.

@@ -110,4 +110,4 @@ End with:
 - Use existing `/p3-flights`, `/p3p4-packages`, and `/separate-bookings` skills
   for the lower-level work; this skill owns the Stage 2 decision.
 - After transport and lodging are confirmed, move to Stage 3
-  (`/p5-itinerary`) for detailed daily planning.
+  (`/stage3-expand-itinerary`) for detailed daily planning.

@@ -148,7 +148,7 @@ User intent                          → Skill / Action
 "book separately"                    → /stage2-shop-transport (uses /separate-bookings)
 "how many leave days"                → npm run leave-calc
 "book this" / "select offer"         → npm run travel -- select-offer
-"plan the days" / "itinerary"        → /p5-itinerary
+"plan the days" / "itinerary"        → /stage3-expand-itinerary
 "show bookings"                      → npm run travel -- query-bookings (from DB)
 "show status"                        → npm run view:status
 "show schedule"                      → npm run view:itinerary
@@ -194,6 +194,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/stage0-research` | `src/skills/stage0-research/SKILL.md` | Pre-lock triangle research (date/destination/flight) |
 | `/stage1-itinerary-draft` | `src/skills/stage1-itinerary-draft/SKILL.md` | Rough day-by-day itinerary draft after dates/destination lock |
 | `/stage2-shop-transport` | `src/skills/stage2-shop-transport/SKILL.md` | Compare direct flights vs packages and choose booking path |
+| `/stage3-expand-itinerary` | `src/skills/stage3-expand-itinerary/SKILL.md` | Detailed booking-aware itinerary expansion |
 
 ## OTA Sources
 

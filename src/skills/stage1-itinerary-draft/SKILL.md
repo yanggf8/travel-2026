@@ -18,8 +18,8 @@ shape, validate that the duration and lodging topology make sense, and decide
 whether to proceed to Stage 2 or return to Stage 0 with revised constraints.
 
 This is not the detailed itinerary pass. Detailed activities, exact timings,
-booking status, and full transit notes remain Stage 3 (`/p5-itinerary`) after
-transport and lodging are known.
+booking status, and full transit notes remain Stage 3
+(`/stage3-expand-itinerary`) after transport and lodging are known.
 
 ## When to use
 
