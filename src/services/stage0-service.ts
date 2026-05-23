@@ -187,3 +187,194 @@ export async function deleteResearchRun(runId: string): Promise<void> {
     `DELETE FROM stage0_research_runs WHERE run_id = ${r};`,
   ]);
 }
+
+// ── candidates ───────────────────────────────────────────────────────
+
+export interface CandidateFlight {
+  direction: 'outbound' | 'return';
+  airline: string | null;
+  departTime: string | null;
+  arriveTime: string | null;
+  duration: string | null;
+  nonstop: boolean | null;
+  priceTotalTwd: number | null;
+}
+
+export interface InsertCandidateInput {
+  candidateId: string;
+  runId: string;
+  destCode: string;
+  departDate: string;
+  returnDate: string;
+  nights: number;
+  flightTotalTwd: number | null;
+  leaveDays: number | null;
+  verdict: string | null;
+  flights: CandidateFlight[];
+}
+
+export interface Candidate {
+  candidate_id: string;
+  run_id: string;
+  dest_code: string;
+  depart_date: string;
+  return_date: string;
+  nights: number;
+  flight_total_twd: number | null;
+  leave_days: number | null;
+  rank: number | null;
+  verdict: string | null;
+  adopted_plan_id: string | null;
+}
+
+export async function insertCandidate(input: InsertCandidateInput): Promise<void> {
+  const client = newClient();
+  const stmts: string[] = [];
+  stmts.push(
+    `INSERT INTO stage0_candidates
+      (candidate_id, run_id, dest_code, depart_date, return_date, nights,
+       flight_total_twd, leave_days, rank, verdict, adopted_plan_id)
+     VALUES (${sqlText(input.candidateId)}, ${sqlText(input.runId)}, ${sqlText(input.destCode)},
+       ${sqlText(input.departDate)}, ${sqlText(input.returnDate)}, ${sqlInt(input.nights)},
+       ${sqlInt(input.flightTotalTwd)}, ${sqlInt(input.leaveDays)}, NULL,
+       ${sqlText(input.verdict)}, NULL);`
+  );
+  for (const f of input.flights) {
+    stmts.push(
+      `INSERT INTO stage0_candidate_flights
+        (candidate_id, direction, airline, depart_time, arrive_time, duration, nonstop, price_total_twd)
+       VALUES (${sqlText(input.candidateId)}, ${sqlText(f.direction)}, ${sqlText(f.airline)},
+         ${sqlText(f.departTime)}, ${sqlText(f.arriveTime)}, ${sqlText(f.duration)},
+         ${sqlInt(f.nonstop == null ? null : f.nonstop ? 1 : 0)}, ${sqlInt(f.priceTotalTwd)});`
+    );
+  }
+  await client.executeMany(stmts);
+}
+
+export async function getCandidates(runId: string): Promise<Candidate[]> {
+  const client = newClient();
+  // rank NULLs sort last so an un-ranked run still returns rows deterministically.
+  const res = await client.execute(
+    `SELECT * FROM stage0_candidates WHERE run_id = ${sqlText(runId)}
+     ORDER BY rank IS NULL, rank ASC, depart_date ASC;`
+  );
+  return rowsToObjects(res).map((c) => ({
+    candidate_id: c.candidate_id,
+    run_id: c.run_id,
+    dest_code: c.dest_code,
+    depart_date: c.depart_date,
+    return_date: c.return_date,
+    nights: Number(c.nights),
+    flight_total_twd: c.flight_total_twd == null ? null : Number(c.flight_total_twd),
+    leave_days: c.leave_days == null ? null : Number(c.leave_days),
+    rank: c.rank == null ? null : Number(c.rank),
+    verdict: c.verdict ?? null,
+    adopted_plan_id: c.adopted_plan_id ?? null,
+  }));
+}
+
+// ── ranking (spec §4: flight_total_twd ASC, leave_days ASC, depart_date ASC) ──
+
+export async function rankRun(runId: string): Promise<void> {
+  const client = newClient();
+  // Read candidates, sort in JS (deterministic, NULL price last), write rank back.
+  const res = await client.execute(
+    `SELECT candidate_id, flight_total_twd, leave_days, depart_date
+     FROM stage0_candidates WHERE run_id = ${sqlText(runId)};`
+  );
+  const rows = rowsToObjects(res);
+  rows.sort((a, b) => {
+    const pa = a.flight_total_twd == null ? Number.MAX_SAFE_INTEGER : Number(a.flight_total_twd);
+    const pb = b.flight_total_twd == null ? Number.MAX_SAFE_INTEGER : Number(b.flight_total_twd);
+    if (pa !== pb) return pa - pb;
+    const la = a.leave_days == null ? Number.MAX_SAFE_INTEGER : Number(a.leave_days);
+    const lb = b.leave_days == null ? Number.MAX_SAFE_INTEGER : Number(b.leave_days);
+    if (la !== lb) return la - lb;
+    return String(a.depart_date).localeCompare(String(b.depart_date));
+  });
+  const stmts = rows.map(
+    (r, i) =>
+      `UPDATE stage0_candidates SET rank = ${sqlInt(i + 1)}
+       WHERE candidate_id = ${sqlText(r.candidate_id)};`
+  );
+  stmts.push(
+    `UPDATE stage0_research_runs SET status = ${sqlText('ranked')},
+       updated_at = ${sqlText(nowIso())} WHERE run_id = ${sqlText(runId)};`
+  );
+  await client.executeMany(stmts);
+}
+
+// ── scrape attempts ──────────────────────────────────────────────────
+
+export interface ScrapeAttemptInput {
+  runId: string;
+  destCode: string;
+  nights: number;
+  status: 'pending' | 'ok' | 'failed';
+  candidateCount?: number | null;
+  error?: string | null;
+}
+
+// `ScrapeAttempt` and `getScrapeAttempts` are already defined in Task 2.
+// This task only adds the write helper.
+
+export async function upsertScrapeAttempt(input: ScrapeAttemptInput): Promise<void> {
+  const client = newClient();
+  // INSERT OR REPLACE — PK is (run_id, dest_code, nights). Pending rows are
+  // seeded by createResearchRun; this overwrites them with ok/failed outcomes.
+  await client.execute(
+    `INSERT OR REPLACE INTO stage0_scrape_attempts
+      (run_id, dest_code, nights, status, candidate_count, error, attempted_at)
+     VALUES (${sqlText(input.runId)}, ${sqlText(input.destCode)}, ${sqlInt(input.nights)},
+       ${sqlText(input.status)}, ${sqlInt(input.candidateCount ?? null)},
+       ${sqlText(input.error ?? null)}, ${sqlText(nowIso())});`
+  );
+}
+
+// ── candidate replacement (idempotent re-import for one pair) ─────────
+// Deletes any existing candidates + their flights for one (run, dest,
+// nights) pair so a re-import of that pair does not collide on the
+// candidate_id PK. Used by stage0-import before inserting.
+
+export async function deleteCandidatesForPair(
+  runId: string, destCode: string, nights: number
+): Promise<void> {
+  const client = newClient();
+  const where =
+    `run_id = ${sqlText(runId)} AND dest_code = ${sqlText(destCode)} ` +
+    `AND nights = ${sqlInt(nights)}`;
+  await client.executeMany([
+    `DELETE FROM stage0_candidate_flights WHERE candidate_id IN
+      (SELECT candidate_id FROM stage0_candidates WHERE ${where});`,
+    `DELETE FROM stage0_candidates WHERE ${where};`,
+  ]);
+}
+
+// ── status + adopt ───────────────────────────────────────────────────
+
+export async function setRunStatus(runId: string, status: string): Promise<void> {
+  const client = newClient();
+  await client.execute(
+    `UPDATE stage0_research_runs SET status = ${sqlText(status)},
+       updated_at = ${sqlText(nowIso())} WHERE run_id = ${sqlText(runId)};`
+  );
+}
+
+export async function adoptCandidate(candidateId: string, planId: string): Promise<void> {
+  const client = newClient();
+  // Find the run, set the pointer, mark the run adopted — one batch.
+  const res = await client.execute(
+    `SELECT run_id FROM stage0_candidates WHERE candidate_id = ${sqlText(candidateId)};`
+  );
+  const rows = rowsToObjects(res);
+  if (rows.length === 0) {
+    throw new Error(`Stage 0 candidate not found: ${candidateId}`);
+  }
+  const runId = rows[0].run_id as string;
+  await client.executeMany([
+    `UPDATE stage0_candidates SET adopted_plan_id = ${sqlText(planId)}
+      WHERE candidate_id = ${sqlText(candidateId)};`,
+    `UPDATE stage0_research_runs SET status = ${sqlText('adopted')},
+      updated_at = ${sqlText(nowIso())} WHERE run_id = ${sqlText(runId)};`,
+  ]);
+}
