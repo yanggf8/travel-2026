@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it, afterAll } from 'vitest';
 import {
   createResearchRun,
@@ -10,11 +11,19 @@ import {
   getCandidates,
   setRunStatus,
   adoptCandidate,
+  adoptCandidateToNewPlan,
   deleteCandidatesForPair,
   type CreateRunInput,
 } from '../../src/services/stage0-service';
+import { rowsToObjects, sqlText } from '../../src/state/sql-helpers';
 
 const TEST_RUN_IDS: string[] = [];
+const TEST_PLAN_IDS: string[] = [];
+
+function newClient(): any {
+  const { TursoPipelineClient } = require(path.join(process.cwd(), 'scripts', 'turso-pipeline.ts'));
+  return new TursoPipelineClient();
+}
 
 function uniqueRunId(): string {
   const id = `stage0-test-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
@@ -22,7 +31,34 @@ function uniqueRunId(): string {
   return id;
 }
 
+function uniquePlanId(): string {
+  const id = `stage0-test-plan-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  TEST_PLAN_IDS.push(id);
+  return id;
+}
+
+async function deletePlanRows(planId: string): Promise<void> {
+  const client = newClient();
+  const p = sqlText(planId);
+  await client.executeMany([
+    `DELETE FROM event_log_process_events WHERE plan_id = ${p};`,
+    `DELETE FROM event_log_dest_processes WHERE plan_id = ${p};`,
+    `DELETE FROM event_log_destinations WHERE plan_id = ${p};`,
+    `DELETE FROM event_log_state WHERE plan_id = ${p};`,
+    `DELETE FROM process_statuses WHERE plan_id = ${p};`,
+    `DELETE FROM date_anchors WHERE plan_id = ${p};`,
+    `DELETE FROM destination_cities WHERE plan_id = ${p};`,
+    `DELETE FROM destination_details WHERE plan_id = ${p};`,
+    `DELETE FROM plan_destinations WHERE plan_id = ${p};`,
+    `DELETE FROM plan_metadata WHERE plan_id = ${p};`,
+    `DELETE FROM plans WHERE plan_id = ${p};`,
+  ]);
+}
+
 afterAll(async () => {
+  for (const id of TEST_PLAN_IDS) {
+    await deletePlanRows(id);
+  }
   for (const id of TEST_RUN_IDS) {
     await deleteResearchRun(id);
   }
@@ -178,5 +214,85 @@ describe('Stage 0 service — candidates and ranking', () => {
     // clear the prior row — the delete is keyed on the pair, not the payload.
     await deleteCandidatesForPair(runId, 'KIX', 6);
     expect(await getCandidates(runId)).toHaveLength(0);
+  });
+
+  it('adopts a candidate into a newly seeded plan with locked P1/P2 rows', async () => {
+    const runId = uniqueRunId();
+    const planId = uniquePlanId();
+    await createResearchRun({
+      runId, originCode: 'TPE', pax: 2,
+      windowStart: '2026-06-18', windowEnd: '2026-06-20', exchangeRateUsdTwd: 32,
+      destinations: [{ destCode: 'KIX', destLabel: 'Osaka/Kyoto (KIX)' }],
+      durations: [{ nights: 6 }],
+    });
+    const candidateId = `${runId}-KIX-2026-06-18-6n`;
+    await insertCandidate({
+      candidateId, runId, destCode: 'KIX',
+      departDate: '2026-06-18', returnDate: '2026-06-24', nights: 6,
+      flightTotalTwd: 18000, leaveDays: 3, verdict: null, flights: [],
+    });
+
+    await adoptCandidateToNewPlan({
+      candidateId,
+      planId,
+      destinationSlug: 'osaka_kyoto_2026',
+    });
+
+    const client = newClient();
+    const res = await client.executeBatch([
+      `SELECT active_destination FROM plan_metadata WHERE plan_id = ${sqlText(planId)};`,
+      `SELECT start_date, end_date, days FROM date_anchors WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText('osaka_kyoto_2026')};`,
+      `SELECT process_id, status FROM process_statuses WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText('osaka_kyoto_2026')} ORDER BY process_id;`,
+      `SELECT primary_airport FROM destination_details WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText('osaka_kyoto_2026')};`,
+    ]);
+    expect(rowsToObjects(res.results?.[0] ? { results: [res.results[0]] } : res)[0].active_destination).toBe('osaka_kyoto_2026');
+    const dateRows = rowsToObjects(res.results?.[1] ? { results: [res.results[1]] } : res);
+    expect(dateRows[0]).toMatchObject({ start_date: '2026-06-18', end_date: '2026-06-24' });
+    expect(Number(dateRows[0].days)).toBe(7);
+    const statuses = rowsToObjects(res.results?.[2] ? { results: [res.results[2]] } : res);
+    expect(statuses).toEqual([
+      { process_id: 'process_1_date_anchor', status: 'confirmed' },
+      { process_id: 'process_2_destination', status: 'confirmed' },
+      { process_id: 'process_3_4_packages', status: 'pending' },
+      { process_id: 'process_3_transportation', status: 'pending' },
+      { process_id: 'process_4_accommodation', status: 'pending' },
+      { process_id: 'process_5_daily_itinerary', status: 'pending' },
+    ]);
+    const detailRows = rowsToObjects(res.results?.[3] ? { results: [res.results[3]] } : res);
+    expect(detailRows[0].primary_airport).toBe('KIX');
+
+    const cands = await getCandidates(runId);
+    expect(cands[0].adopted_plan_id).toBe(planId);
+    const run = await getResearchRun(runId);
+    expect(run!.status).toBe('adopted');
+  });
+
+  it('rejects create-plan adoption when destination slug airports do not match the candidate', async () => {
+    const runId = uniqueRunId();
+    const planId = uniquePlanId();
+    await createResearchRun({
+      runId, originCode: 'TPE', pax: 2,
+      windowStart: '2026-06-18', windowEnd: '2026-06-20', exchangeRateUsdTwd: 32,
+      destinations: [{ destCode: 'KIX', destLabel: 'Osaka/Kyoto (KIX)' }],
+      durations: [{ nights: 6 }],
+    });
+    const candidateId = `${runId}-KIX-2026-06-18-6n`;
+    await insertCandidate({
+      candidateId, runId, destCode: 'KIX',
+      departDate: '2026-06-18', returnDate: '2026-06-24', nights: 6,
+      flightTotalTwd: 18000, leaveDays: 3, verdict: null, flights: [],
+    });
+
+    await expect(adoptCandidateToNewPlan({
+      candidateId,
+      planId,
+      destinationSlug: 'tokyo_2026',
+    })).rejects.toThrow(/does not match destination tokyo_2026/);
+
+    const client = newClient();
+    const res = await client.execute(
+      `SELECT COUNT(*) AS n FROM plan_metadata WHERE plan_id = ${sqlText(planId)};`
+    );
+    expect(Number(rowsToObjects(res)[0].n)).toBe(0);
   });
 });

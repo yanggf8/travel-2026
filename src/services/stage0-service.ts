@@ -227,6 +227,13 @@ export interface Candidate {
   adopted_plan_id: string | null;
 }
 
+export interface AdoptToNewPlanInput {
+  candidateId: string;
+  planId: string;
+  destinationSlug: string;
+  schemaVersion?: string;
+}
+
 export async function insertCandidate(input: InsertCandidateInput): Promise<void> {
   const client = newClient();
   const stmts: string[] = [];
@@ -376,5 +383,117 @@ export async function adoptCandidate(candidateId: string, planId: string): Promi
       WHERE candidate_id = ${sqlText(candidateId)};`,
     `UPDATE stage0_research_runs SET status = ${sqlText('adopted')},
       updated_at = ${sqlText(nowIso())} WHERE run_id = ${sqlText(runId)};`,
+  ]);
+}
+
+export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promise<void> {
+  const client = newClient();
+  const schemaVersion = input.schemaVersion ?? '4.2.0';
+  const ts = nowIso();
+
+  const res = await client.executeBatch([
+    `SELECT c.*, r.origin_code
+     FROM stage0_candidates c
+     JOIN stage0_research_runs r ON r.run_id = c.run_id
+     WHERE c.candidate_id = ${sqlText(input.candidateId)};`,
+    `SELECT plan_id FROM plans WHERE plan_id = ${sqlText(input.planId)}
+     UNION
+     SELECT plan_id FROM plan_metadata WHERE plan_id = ${sqlText(input.planId)};`,
+    `SELECT * FROM destination_config WHERE slug = ${sqlText(input.destinationSlug)};`,
+  ]);
+  const candidateRows = rowsToObjectsAt(res, 0);
+  if (candidateRows.length === 0) {
+    throw new Error(`Stage 0 candidate not found: ${input.candidateId}`);
+  }
+  const existingPlanRows = rowsToObjectsAt(res, 1);
+  if (existingPlanRows.length > 0) {
+    throw new Error(`Plan already exists: ${input.planId}`);
+  }
+  const destRows = rowsToObjectsAt(res, 2);
+  if (destRows.length === 0) {
+    throw new Error(`Destination config not found: ${input.destinationSlug}`);
+  }
+
+  const candidate = candidateRows[0];
+  const destConfig = destRows[0];
+  const runId = candidate.run_id as string;
+  const startDate = candidate.depart_date as string;
+  const endDate = candidate.return_date as string;
+  const nights = Number(candidate.nights);
+  const days = nights + 1;
+  const destinationDisplayName = (destConfig.display_name as string | null) ?? input.destinationSlug;
+  const region = (destConfig.ref_id as string | null) ?? input.destinationSlug;
+  const originCode = (candidate.origin_code as string | null) ?? null;
+  const primaryAirport = candidate.dest_code as string;
+  const configuredAirports = (() => {
+    if (typeof destConfig.primary_airports_json !== 'string') return [];
+    try {
+      const parsed = JSON.parse(destConfig.primary_airports_json);
+      return Array.isArray(parsed) ? parsed.map((v) => String(v).toUpperCase()) : [];
+    } catch {
+      return [];
+    }
+  })();
+  if (configuredAirports.length > 0 && !configuredAirports.includes(primaryAirport.toUpperCase())) {
+    throw new Error(
+      `Candidate destination ${primaryAirport} does not match destination ${input.destinationSlug} ` +
+      `(configured airports: ${configuredAirports.join(', ')})`
+    );
+  }
+
+  await client.executeMany([
+    `INSERT INTO plans (plan_id, schema_version, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(schemaVersion)}, datetime('now'));`,
+    `INSERT INTO plan_metadata (plan_id, schema_version, active_destination, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(schemaVersion)}, ${sqlText(input.destinationSlug)}, datetime('now'));`,
+    `INSERT INTO plan_destinations (plan_id, slug, display_name, status, created_at, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText(destinationDisplayName)},
+       ${sqlText('active')}, ${sqlText(ts)}, ${sqlText(ts)});`,
+    `INSERT INTO destination_details (plan_id, destination, origin_city, region, primary_airport, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText(originCode)},
+       ${sqlText(region)}, ${sqlText(primaryAirport)}, datetime('now'));`,
+    `INSERT INTO destination_cities (plan_id, destination, city_slug, display_name, role, nights, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText(input.destinationSlug)},
+       ${sqlText(destinationDisplayName)}, ${sqlText('primary')}, ${sqlInt(nights)}, datetime('now'));`,
+    `INSERT INTO date_anchors (plan_id, destination, start_date, end_date, days, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText(startDate)},
+       ${sqlText(endDate)}, ${sqlInt(days)}, datetime('now'));`,
+    `INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_1_date_anchor')},
+       ${sqlText('confirmed')}, datetime('now'));`,
+    `INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_2_destination')},
+       ${sqlText('confirmed')}, datetime('now'));`,
+    `INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_3_transportation')},
+       ${sqlText('pending')}, datetime('now'));`,
+    `INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_3_4_packages')},
+       ${sqlText('pending')}, datetime('now'));`,
+    `INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_4_accommodation')},
+       ${sqlText('pending')}, datetime('now'));`,
+    `INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_5_daily_itinerary')},
+       ${sqlText('pending')}, datetime('now'));`,
+    `INSERT INTO event_log_state (plan_id, session, project, version, current_focus, active_destination, next_actions_json)
+     VALUES (${sqlText(input.planId)}, ${sqlText(ts.slice(0, 10))}, ${sqlText('japan-travel')},
+       ${sqlText('3.0')}, ${sqlText('')}, ${sqlText(input.destinationSlug)}, NULL);`,
+    `INSERT INTO event_log_destinations (plan_id, destination, status)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('active')});`,
+    `INSERT INTO event_log_process_events (plan_id, destination, process_id, event_type, event_data, event_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_1_date_anchor')},
+       ${sqlText('stage0_candidate_adopted')},
+       ${sqlText(JSON.stringify({
+         candidate_id: input.candidateId,
+         run_id: runId,
+         depart_date: startDate,
+         return_date: endDate,
+         dest_code: primaryAirport,
+       }))}, ${sqlText(ts)});`,
+    `UPDATE stage0_candidates SET adopted_plan_id = ${sqlText(input.planId)}
+      WHERE candidate_id = ${sqlText(input.candidateId)};`,
+    `UPDATE stage0_research_runs SET status = ${sqlText('adopted')},
+      updated_at = ${sqlText(ts)} WHERE run_id = ${sqlText(runId)};`,
   ]);
 }

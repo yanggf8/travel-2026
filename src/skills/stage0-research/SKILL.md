@@ -15,8 +15,8 @@ research-first planning flow (`docs/plans/2026-05-22-new-planning-flow.md`).
 It explores the three interdependent variables — departure date, destination,
 flight price — *together*, before any of them is locked. It does **not**
 replace `/p3-flights`: that skill requires P1/P2 to already exist, so it cannot
-run pre-lock. `/stage0-research` owns the pre-lock phase and hands off to
-`/p1-dates` + `/p2-destination` once the user picks a candidate.
+run pre-lock. `/stage0-research` owns the pre-lock phase and can seed the
+initial P1/P2 rows once the user picks a candidate.
 
 ## When to use
 
@@ -76,10 +76,23 @@ destinations, and durations. Changing any of those = a new run.
 
 6. **Hand off on lock.** When the user picks a candidate:
    ```bash
-   npm run travel -- stage0-adopt <candidate_id> <plan_id>
+   npm run travel -- stage0-adopt <candidate_id> <new_plan_id> \
+     --create-plan --dest <destination_slug>
    ```
-   Then invoke `/p1-dates` (set the candidate's depart/return dates) and
-   `/p2-destination` (set the destination). The normal P1→P5 flow takes over.
+   This creates the minimal normalized plan rows, sets P1 dates from the
+   candidate's depart/return dates, sets P2 destination from `--dest`, and
+   links `adopted_plan_id` on the Stage 0 candidate. Use an existing
+   `destination_config` slug such as `osaka_kyoto_2026`.
+
+   If the plan already exists, use the legacy link-only form:
+   ```bash
+   npm run travel -- stage0-adopt <candidate_id> <existing_plan_id>
+   ```
+
+   After a new-plan handoff, continue with Stage 1:
+   ```bash
+   npm run travel -- scaffold-itinerary --plan-id <new_plan_id> --dest <destination_slug>
+   ```
 
 ## Notes
 

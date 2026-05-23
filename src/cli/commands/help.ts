@@ -183,8 +183,9 @@ Commands:
     Show ranked Stage 0 flight candidates across destinations.
     Example: stage0-compare --run stage0-20260522-143000
 
-  stage0-adopt <candidate_id> <plan_id>
+  stage0-adopt <candidate_id> <plan_id> [--create-plan --dest <slug>]
     Record a Stage 0 candidate as adopted into a plan.
+    With --create-plan, seed a new plan with P1 dates and P2 destination from the candidate.
 
   plans [--json]
     List DB travel plans with active destination and date anchors.

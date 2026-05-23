@@ -130,14 +130,27 @@ const stage0CompareCommand: CommandHandler = {
 const stage0AdoptCommand: CommandHandler = {
   names: ['stage0-adopt'],
   description: 'Record a Stage 0 candidate as adopted into a plan.',
-  usage: 'stage0-adopt <candidate_id> <plan_id>',
+  usage: 'stage0-adopt <candidate_id> <plan_id> [--create-plan --dest <slug>]',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
-    const { adoptCandidate } = require('../../services/stage0-service');
+    const { adoptCandidate, adoptCandidateToNewPlan } = require('../../services/stage0-service');
     const [, candidateId, planId] = ctx.args.cleanArgs;
     if (!candidateId || !planId) {
       console.error('Error: stage0-adopt requires <candidate_id> <plan_id>');
       process.exit(1);
+    }
+    if (ctx.args.hasFlag('--create-plan')) {
+      const destinationSlug = ctx.args.optionValue('--dest');
+      if (!destinationSlug) {
+        console.error('Error: stage0-adopt --create-plan requires --dest <destination_slug>');
+        process.exit(1);
+      }
+      await adoptCandidateToNewPlan({ candidateId, planId, destinationSlug });
+      console.log(`✅ Candidate ${candidateId} adopted into new plan ${planId}`);
+      console.log(`   Destination: ${destinationSlug}`);
+      console.log('   P1 dates and P2 destination are seeded from the Stage 0 candidate.');
+      console.log(`   Next: npm run travel -- scaffold-itinerary --plan-id ${planId} --dest ${destinationSlug}`);
+      return;
     }
     await adoptCandidate(candidateId, planId);
     console.log(`✅ Candidate ${candidateId} adopted into plan ${planId}`);

@@ -55,39 +55,29 @@ User picks a candidate OR asks to explore another date/destination
 
 **Tools:**
 ```bash
-# NOTE: --dest accepts ONE airport code; --duration is a single integer (trip DAYS = nights + 1).
-# Run separately per destination and duration. Results compared manually or via view:prices.
+# Create an immutable run over destination × duration.
+npm run travel -- stage0-init --origin TPE \
+  --start 2026-06-18 --end 2026-06-20 \
+  --dest KIX:"Osaka/Kyoto (KIX)" --dest NRT:"Tokyo (NRT)" \
+  --nights 6 --nights 7 --pax 2 --rate 32
 
-# Kansai (Osaka/Kyoto): 6-night trip → --duration 7 (e.g. depart June 18, return June 24)
-python scripts/scrape_date_range.py \
-  --depart-start 2026-06-18 --depart-end 2026-06-20 \
-  --origin tpe --dest kix \
-  --duration 7 --pax 2 \
-  -o scrapes/june-kix-6n.json
+# Scrape, import, and rank. The Python wrapper performs no direct Turso I/O:
+# it reads through stage0-export and writes through stage0-import.
+python scripts/stage0_research.py --run <run_id>
 
-# Tokyo (Narita): same 6-night window for comparison
-python scripts/scrape_date_range.py \
-  --depart-start 2026-06-18 --depart-end 2026-06-20 \
-  --origin tpe --dest nrt \
-  --duration 7 --pax 2 \
-  -o scrapes/june-nrt-6n.json
-
-# Also try 7-night (--duration 8; e.g. depart June 18, return June 25)
-python scripts/scrape_date_range.py \
-  --depart-start 2026-06-18 --depart-end 2026-06-20 \
-  --origin tpe --dest kix \
-  --duration 8 --pax 2 \
-  -o scrapes/june-kix-7n.json
-
-# Compare top results side-by-side (--nights matches the filename: 6n → --nights 6)
-npm run view:prices -- --flights scrapes/june-kix-6n.json --nights 6
-npm run view:prices -- --flights scrapes/june-nrt-6n.json --nights 6
-npm run view:prices -- --flights scrapes/june-kix-7n.json --nights 7
+# Compare top candidates.
+npm run travel -- stage0-compare --run <run_id>
 ```
 
-**Manual aggregation required:** The script handles one destination + one duration per run. For the research loop, run it multiple times and compare results manually using `npm run view:prices -- --flights <file> --nights N`. An aggregator wrapper script could automate this in the future.
+**Aggregation is DB-backed:** Stage 0 stores immutable runs in unscoped `stage0_*` tables and ranks all imported candidates across destinations and durations.
 
-**Exit condition:** User says "let's lock this date and destination" → move to Stage 1.
+**Exit condition:** User says "let's lock this date and destination." Adopt the candidate into a new plan and move to Stage 1:
+
+```bash
+npm run travel -- stage0-adopt <candidate_id> <new_plan_id> --create-plan --dest <destination_slug>
+```
+
+This seeds the minimal normalized plan rows, sets P1 dates from the candidate's depart/return dates, sets P2 destination from `--dest`, and links `stage0_candidates.adopted_plan_id`.
 
 ---
 
@@ -101,22 +91,20 @@ npm run view:prices -- --flights scrapes/june-kix-7n.json --nights 7
 
 **What to draft:**
 ```bash
-# First confirm the plan and destination already exist.
-# set-dates mutates an existing plan; it does not create a missing plan_id.
+# If coming from Stage 0 with `stage0-adopt --create-plan`, the plan,
+# destination, and P1/P2 rows already exist.
 npm run travel -- plans
 npm run view:status -- --plan-id <plan-id>
-
-# If the plan_id or destination slug is missing, run the /new-destination workflow
-# and seed/migrate the DB before using the normal planning commands.
-
-# Set dates on the existing plan
-npm run travel -- set-dates 2026-06-18 2026-06-25 --plan-id <plan-id>
 
 # Scaffold the itinerary
 npm run travel -- scaffold-itinerary --plan-id <plan-id> --dest <destination-slug>
 # Example dest slug: for Kansai use the slug from destination_config table
 # (e.g., osaka_kyoto, kansai_2026, etc. — check with npm run view:status)
 ```
+
+If Stage 1 starts without a Stage 0 handoff, first ensure the plan and destination
+exist through the normal `/new-destination`, `/p1-dates`, and `/p2-destination`
+workflow.
 
 Fill in:
 - Day-by-day areas/clusters (e.g., Day 2: Dotonbori, Day 3: Arashiyama)
@@ -310,7 +298,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 | Stage | Existing skill(s) reused | What changes |
 |-------|--------------------------|--------------|
 | Stage 0 — Triangle Research | `/stage0-research` (orchestration skill) + `scripts/stage0_research.py` | `/stage0-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
-| Stage 1 — Itinerary Draft | `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | `/p1-dates` and `/p2-destination` now produce a *provisional* lock that Stage 0 can still revisit. |
+| Stage 1 — Itinerary Draft | `stage0-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Stage 0 handoff can seed the provisional P1/P2 lock; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
 | Stage 2 — Shop Flight | `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | Unchanged behaviour; just invoked after a draft exists rather than before. |
 | Stage 3 — Expand Itinerary | `/p5-itinerary` | Unchanged. |
 | Stage 4 — Publish | `/deploy-dashboard` | Unchanged; explicitly non-sequential. |
