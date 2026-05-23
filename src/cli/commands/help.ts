@@ -168,6 +168,24 @@ Commands:
     Example: run-list
     Example: run-list --status failed --limit 5
 
+  stage0-init --origin <IATA> --start <date> --end <date> --dest CODE:LABEL --nights N
+    Create a Stage 0 triangle-research run (immutable inputs; pre-plan).
+    Repeat --dest and --nights for multiple destinations/durations.
+    Example: stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 --dest KIX:"Osaka (KIX)" --nights 6
+
+  stage0-export --run <run_id> --json
+    Export a Stage 0 run as JSON (consumed by the aggregator script).
+
+  stage0-import --run <run_id> --file <path>
+    Import Stage 0 aggregator results from a handoff JSON file.
+
+  stage0-compare --run <run_id> [--json] [--limit N]
+    Show ranked Stage 0 flight candidates across destinations.
+    Example: stage0-compare --run stage0-20260522-143000
+
+  stage0-adopt <candidate_id> <plan_id>
+    Record a Stage 0 candidate as adopted into a plan.
+
   plans [--json]
     List DB travel plans with active destination and date anchors.
     Alias: list-plans

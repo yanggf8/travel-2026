@@ -40,6 +40,7 @@ import './commands/search-compare';
 import './commands/view-prices';
 import './commands/turso';
 import './commands/plans';
+import './commands/stage0';
 import { makeParsedArgs } from './shared/args';
 import { listPlans, resolvePlanFromSummaries } from './shared/plan-resolver';
 
