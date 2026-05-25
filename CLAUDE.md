@@ -2,12 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> Routing user requests → jump to **Skill Decision Tree**.
+> Commands → see **CLI Quick Reference** (full list in `docs/reference/CLI.md`).
+> Past trip details (Tokyo, Kyoto Feb 2026) → `docs/trips/`.
+
 # Japan Travel Project
 
 ## Trip Details
-- **Next Dates**: February 24-28, 2026 (Kyoto, confirmed, booked)
-- **Active Destination**: Kyoto, Japan (Tokyo Feb 13-17 ✅ completed)
-- **Schema**: `4.2.0` — Destination-scoped with canonical offer model
+- **Schema**: `4.2.0` — destination-scoped with canonical offer model
+- **Completed**: Tokyo Feb 13-17, Kyoto Feb 24-28 (see `docs/trips/`)
+- **Active**: no upcoming trip locked; use `/stage0-research` to start a new one
+- **Package name caveat**: `package.json` `name` is `yokohama-travel-2026` (legacy, project is Japan-wide)
 
 ## Architecture
 
@@ -242,157 +247,65 @@ Requires: `pip install playwright && playwright install chromium`
 
 ## Current Status
 
-| Process | Tokyo | Nagoya | Kyoto |
-|---------|-------|--------|-------------|
-| P1 Dates | ✅ confirmed (Feb 13-17) | ✅ confirmed | ✅ confirmed (Feb 24-28, 3 leave days) |
-| P2 Destination | ✅ confirmed | ✅ confirmed | ✅ confirmed |
-| P3+4 Packages | ✅ **booked** | ⏳ pending (archived) | ✅ **booked** (LionTravel FIT) |
-| P3 Transportation | 🎫 booked | 🔄 researched | 🎫 booked |
-| P4 Accommodation | 🎫 booked | ⏳ pending | 🎫 booked |
-| P5 Itinerary | 🔄 researched | ⏳ pending | 🔄 researched |
+Completed trips — full bookings, itinerary, and weather notes archived:
+- **Tokyo Feb 13-17** → `docs/trips/2026-tokyo.md`
+- **Kyoto Feb 24-28** → `docs/trips/2026-kyoto.md`
 
-### BOOKED: Tokyo Feb 13-17
-```
-Package: besttour_TYO06MM260213AM2 — TWD 27,888/person (55,776 for 2 pax)
-Flight:  Scoot TR874 TPE 13:55 → NRT T2 18:00 / TR875 NRT T1 19:55 → TPE 23:10
-Hotel:   TAVINOS Hamamatsucho (light breakfast, JR Hamamatsucho 8min)
-```
-
-Airport transfers:
-- Arrival: Skyliner + JR山手線 ¥2,720 (NRT → 日暮里 36min + 日暮里 → 浜松町 20min), status: booked
-- Departure: 海鷗線+淺草線 ¥1,520 (竹芝 → 新橋 → 成田空港, ~100min), status: booked
-Note: TR874 arrives NRT **Terminal 2**, TR875 departs NRT **Terminal 1**
-
-### Itinerary (Feb 13-17)
-| Day | Date | Morning | Afternoon | Evening |
-|-----|------|---------|-----------|---------|
-| 1 | Fri 13 | ✈️ TPE→NRT T2 | Arrival + Narita dinner | Hotel check-in |
-| 2 | Sat 14 | **teamLab Borderless** | Asakusa (Senso-ji) | Harajuku |
-| 3 | Sun 15 | Azabudai Hills | Roppongi + Shibuya | Roppongi |
-| 4 | Mon 16 | KOMEHYO (Chanel) | Isetan omiyage | Omoide Yokocho |
-| 5 | Tue 17 | Pack + Checkout | Shiodome area | ✈️ NRT T1→TPE |
-
-**Book by Feb 10**: teamLab Borderless (https://www.teamlab.art/e/borderless-azabudai/)
-**Skyliner**: https://www.keisei.co.jp/keisei/tetudou/skyliner/
-**Limousine Bus**: https://www.limousinebus.co.jp/en/ (not used — took 海鷗線+淺草線 instead)
-
-### BOOKED: Kyoto Feb 24-28
-```
-Package: liontravel_190620015 — TWD 23,348/person (46,696 for 2 pax)
-Order:   2026-1311130
-Flight:  Thai Lion Air SL396 TPE T1 09:00(UTC+8) → KIX T1 12:30(UTC+9) / SL397 KIX T1 13:30(UTC+9) → TPE T1 15:40(UTC+8)
-Hotel:   APA Hotel Kyoto Ekimae (APA京都站前, JR Kyoto Station 3min)
-Includes: Kyoto Yumeyakata Kimono Experience (Day 4), JR Haruka round-trip, eSIM data
-```
-
-Airport transfers: JR Haruka Express ¥450/trip/person round-trip (KIX ↔ Kyoto Station, ~75min), included in package, status: booked
-
-### Kyoto Itinerary (Feb 24-28) — ✅ COMPLETED
-
-| Day | Date | Morning (actual) | Afternoon (actual) | Evening (actual) |
-|-----|------|---------|-----------|---------|
-| 1 | Tue 24 | ✈️ SL396 TPE→KIX 09:00 | Haruka→京都, check-in | UNIQLO + 3 Coins + 名代豬排 (Katsukura, 伊勢丹 11F) |
-| 2 | Wed 25 | 計程車→北野天滿宮梅花祭 + 中国料理 沁 + Izumiya 白梅町店 + 計程車→金閣寺 | 錦市場 + 四條 + Porta 藥妝 | 伊勢丹探索 + 名代豬排 (Katsukura, 伊勢丹 11F) |
-| 3 | Thu 26 | JR→亀岡 (太冷，放棄保津川遊船) → 折返嵐山 | 嵐山: 竹林, 天龍寺 | AEON MALL 美食廣場 |
-| 4 | Fri 27 | 東本願寺 + Live Kyoto Gojo + 夢館 | 夢館kimono→東山（三年坂, 二年坂, 八坂之塔） | 祇園 + AEON MALL（聖護院八橋未買到） |
-| 5 | Sat 28 | 退房 → 京都駅搭Haruka | KIX T1 check-in | ✈️ SL397 KIX→TPE 13:30 |
-
-Weather check (as of **Feb 22, 2026**; Kyoto 10-day forecast):
-- Tue, Feb 24: **2.8–14.9°C**, precip chance **43%** (overcast)
-- Wed, Feb 25: **8.5–10.7°C**, precip chance **94%** (moderate rain — bring umbrella)
-- Thu, Feb 26: **8.2–16.1°C**, precip chance **54%** (foggy)
-- Fri, Feb 27: **7.4–16.3°C**, precip chance **40%** (overcast)
-- Sat, Feb 28: **10.9–16°C**, precip chance **81%** (moderate rain)
-- Winter boat section can feel colder than forecast due to wind/splash; re-check 24h before.
+No upcoming trip locked. Plan status for any active plan: `npm run view:status`.
 
 ## CLI Quick Reference
+
+Most-used commands inline; full reference (mutations, comparison, scraping internals, Stage 0 aggregator handoff) in **`docs/reference/CLI.md`**.
+
 ```bash
-# === VIEWS ===
+# Views (run any one)
 npm run travel -- plans                          # list DB plans and date anchors
-npm run view:status | view:itinerary | view:transport | view:bookings
+npm run view:status                              # booking overview
+npm run view:itinerary                           # daily plan
+npm run view:transport                           # transport summary
+npm run view:bookings                            # booking ledger
 npm run travel -- status --travel-date 2026-06-20
-npm run travel -- itinerary --travel-start 2026-06-18 --travel-end 2026-06-25
-npm run view:prices -- --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
 
-# === COMPARISON ===
-npm run travel -- compare-offers --region osaka [--json]
-npm run compare-trips -- --input data/osaka-trip-comparison.json [--detailed]  # file removed
-npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4
-npm run compare-true-cost -- --region kansai --pax 2 --date 2026-02-24
+# Stage 0 (pre-plan triangle research)
+npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+  --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2]
+python scripts/stage0_research.py --run <run_id>
+npm run travel -- stage0-compare --run <run_id>
+npm run travel -- stage0-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
 
-# === SCRAPING ===
-npm run scraper:setup                            # Install Playwright browsers (first-time)
-npm run scraper:batch -- --dest kansai [--sources besttour,settour] [--date 2026-02-24 --type fit]
-npm run scraper:doctor                           # Test all scrapers
-npm run scraper:pipeline                         # Doctor + batch + import (end-to-end)
-python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
-  --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
-python scripts/scrape_google_flights.py --origin TPE --dest KIX,FUK \
-  --depart-start 2026-06-18 --depart-end 2026-06-22 --duration 4,5 \
-  -o scrapes/google-flights-jun.json
-
-# === TURSO DB ===
-npm run travel -- import-offers --dir scrapes --dest tokyo_2026 [--start 2026-02-13 --end 2026-02-17] [--dry-run]
-npm run travel -- query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000] [--json]
-npm run travel -- query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000] [--json]
+# Offers (Turso)
+npm run travel -- import-offers --dir scrapes --dest tokyo_2026 [--start ... --end ...] [--dry-run]
+npm run travel -- query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
 npm run travel -- check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
-npm run travel -- check-freshness --source besttour --region kansai
-npm run db:import:turso -- --dir scrapes [--start 2026-02-24 --end 2026-02-28]   # legacy: writes offers table
-npm run db:status:turso | db:migrate:turso | db:seed:plans
 
-# === BOOKINGS ===
+# Bookings
 npm run travel -- sync-bookings [--dry-run]
 npm run travel -- query-bookings --dest tokyo_2026 [--category activity --status pending]
-npm run travel -- check-booking-integrity
-npm run travel -- validate-itinerary --dest tokyo_2026  # historical days skip booking-deadline failures
+npm run travel -- validate-itinerary --dest tokyo_2026
 
-# === UTILITIES ===
-npm test
-npm run leave-calc 2026-02-24 2026-02-28
-npm run normalize-flights -- scrapes/trip-feb24-out.json --top 5
-npm run validate:data | npm run doctor
+# Scraping
+npm run scraper:pipeline                         # doctor + batch + import (end-to-end)
+npm run scraper:batch -- --dest kansai [--sources besttour,settour]
 
-# === MUTATIONS ===
+# Mutations — only the 4 most common shown here.
+# Full list (set-airport-transfer, set-activity-time, set-day-theme, set-route-segment,
+# set-tod-zh, delete-activity, swap-days, run-status, check-booking-integrity, …)
+# lives in docs/reference/CLI.md. Add new mutation examples THERE, not here.
 npm run travel -- set-dates 2026-02-13 2026-02-17
 npm run travel -- select-offer <offer-id> <date>
-npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
-npm run travel -- set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
-npm run travel -- set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
-npm run travel -- set-activity-title <day> <session> "<activity>" "<new_title>" [--plan-id <id>]
-npm run travel -- set-tod-time-range <day> <session> --start HH:MM --end HH:MM    # (alias: set-session-time-range)
-npm run travel -- set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
-npm run travel -- set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
-npm run travel -- set-route-segments-bulk <day> --json '[{"from":"A","to":"B","mode":"walking","duration":5},...]'
-npm run travel -- set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]'] [--plan-id <id>]    # (alias: set-session-zh)
-npm run travel -- set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]    # (alias: set-session-focus)
-npm run travel -- delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
-npm run travel -- swap-days <dayA> <dayB> [--dest slug]
+npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."]
 npm run travel -- fetch-weather [--dest slug] [--all]
 
-# === OPERATION TRACKING ===
-npm run travel -- run-status [run-id]
-npm run travel -- run-list [--status completed|failed|started] [--limit N]
-
-# === STAGE 0 — TRIANGLE RESEARCH (pre-plan; unscoped) ===
-# Explore departure date × destination × flight price together before any plan exists.
-# All five commands are requiresState:false (no plan resolution).
-npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
-  --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32]
-python scripts/stage0_research.py --run <run_id>          # aggregator (no Turso I/O of its own)
-npm run travel -- stage0-compare --run <run_id> [--json] [--limit N]
-npm run travel -- stage0-adopt <candidate_id> <plan_id> --create-plan --dest <slug>   # seed new plan with P1/P2 from candidate
-npm run travel -- stage0-adopt <candidate_id> <plan_id>   # link to an existing plan only
-# Internal (aggregator handoff — usually not run by hand):
-npm run travel -- stage0-export --run <run_id> --json
-npm run travel -- stage0-import --run <run_id> --file <path>
+# DB + tests (run any one)
+npm run db:status:turso                          # show DB state
+npm run db:migrate:turso                         # create/upgrade tables (idempotent)
+npm run db:seed:plans                            # one-time plan seed
+npm test
+npm run validate:data                            # data integrity check
+npm run doctor                                   # full system health check
 ```
 
-Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI
-uses `--travel-date`, `--travel-start/--travel-end`, or exactly one active or
-upcoming DB date anchor/planning window. Use `--travel-*` for plan selection;
-plain `--start/--end` remain command-specific filters such as offer search
-ranges. If several plans match, it fails with a plan list instead of silently
-loading a legacy default.
+Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI uses `--travel-date`, `--travel-start/--travel-end`, or exactly one active or upcoming DB date anchor/planning window. Use `--travel-*` for plan selection; plain `--start/--end` are command-specific filters (e.g. offer search ranges). If several plans match, the CLI fails with a plan list instead of silently loading a legacy default.
 
 ## Project Structure
 ```
@@ -540,10 +453,6 @@ TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ../../.env | cut -d= -f2-) && unset CLOUDFLAR
 Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ## Next Steps
-
-### Tokyo (Feb 13-17) — ✅ completed
-
-### Kyoto (Feb 24-28) — ✅ completed
 
 ### Engineering — Stage 0 Triangle Research ✅
 Spec: `docs/superpowers/specs/2026-05-22-stage0-triangle-research-design.md`

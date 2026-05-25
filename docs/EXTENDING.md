@@ -1,5 +1,9 @@
 # Extending the Travel Skill Pack
 
+> ⚠️ **Legacy — partial accuracy.** This guide was written when destinations and OTAs lived in `data/destinations.json` / `data/ota-sources.json`. Those files no longer exist — both live in Turso tables (`destination_config`, `ota_sources`). The reference-file/scraper-class/validator/CLI sections still apply, but the "Step 1: Register in destinations.json" / "Register in ota-sources.json" steps do not.
+>
+> For new destinations, use the `/new-destination` skill (`src/skills/new-destination/SKILL.md`). For new OTA sources, insert a row into the `ota_sources` table — the table is described under **`## Turso DB`** in CLAUDE.md (search for `ota_sources`). The rest of this guide (reference files, scraper subclassing, validators, CLI command structure) is still current.
+
 This guide explains how to extend the skill pack for new destinations, OTAs, and custom validation rules.
 
 ## Table of Contents
@@ -107,6 +111,25 @@ Logical groupings for trip planning:
 ```
 
 ### Step 4: Initialize a Trip
+
+> ⚠️ **Legacy.** `project-init.ts` writes the obsolete JSON plan/state files. Use the Stage 0 → adopt flow instead, which seeds a Turso-backed plan from research:
+>
+> ```bash
+> # 1. Seed pending flight-scrape attempts for the date/destination matrix
+> npm run travel -- stage0-init --origin TPE --start 2026-04-01 --end 2026-04-05 \
+>   --dest KIX:"Kyoto via KIX" --nights 4
+>
+> # 2. Run the aggregator
+> python scripts/stage0_research.py --run <run_id>
+>
+> # 3. Pick a candidate
+> npm run travel -- stage0-compare --run <run_id>
+>
+> # 4. Adopt → creates the plan in Turso, seeds P1 dates + P2 destination
+> npm run travel -- stage0-adopt <candidate_id> kyoto-2026 --create-plan --dest kyoto_2026
+> ```
+>
+> The block below is preserved only for historical reference and no longer reflects how plans are created.
 
 ```bash
 npx ts-node src/templates/project-init.ts \

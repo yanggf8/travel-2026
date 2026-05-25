@@ -13,21 +13,34 @@ A reusable skill pack for AI-assisted travel planning. Provides StateManager, OT
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Install dependencies (postinstall installs git hooks; warns if Playwright missing)
 npm install
 
-# Initialize a new trip
-npx ts-node src/templates/project-init.ts --dest tokyo_2026 --start 2026-04-01 --end 2026-04-05
+# Optional: Playwright browsers for scrapers
+npm run scraper:setup
 
-# View status
+# See what's in the DB
+npm run travel -- plans
 npm run view:status
 
-# Validate itinerary
-npm run travel -- validate-itinerary
+# Start a new trip — full Stage 0 flow: research → compare → adopt → seeded plan
+#   See: src/skills/stage0-research/SKILL.md and CLAUDE.md → Skill Decision Tree
 
-# Run cascade checker
-npx ts-node src/cli/cascade.ts --apply
+# 1. Seed pending flight-scrape attempts for the date/destination matrix → prints <run_id>
+npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+  --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7
+
+# 2. Run the aggregator (zero Turso I/O of its own — reads/writes via the CLI)
+python scripts/stage0_research.py --run <run_id>
+
+# 3. Compare candidates
+npm run travel -- stage0-compare --run <run_id>
+
+# 4. Adopt one → creates the plan in Turso and seeds P1 dates + P2 destination
+npm run travel -- stage0-adopt <candidate_id> osaka-2026 --create-plan --dest osaka_2026
 ```
+
+Plan state lives in Turso (no JSON state files). For the full command list see `docs/reference/CLI.md`.
 
 ## Documentation
 
@@ -39,24 +52,26 @@ npx ts-node src/cli/cascade.ts --apply
 
 ```
 ├── README.md                 # This file
-├── CLAUDE.md                 # AI assistant context & architecture
+├── CLAUDE.md                 # AI assistant context & architecture (start here for routing/CLI)
 ├── docs/
 │   ├── API.md                # API reference documentation
-│   └── EXTENDING.md          # Extension guide
+│   ├── EXTENDING.md          # Extension guide
+│   ├── reference/CLI.md      # Full CLI reference
+│   └── trips/                # Past trip archives (Tokyo, Kyoto Feb 2026)
 ├── data/
-│   ├── travel-plan.json      # Main travel plan (v4.2.0)
-│   ├── state.json            # Event-driven state tracking
-│   ├── destinations.json     # Destination configuration
-│   ├── ota-sources.json      # OTA source registry
-│   └── *-scrape.json         # OTA scrape results cache
+│   ├── holidays/             # Holiday calendars (taiwan-2026.json)
+│   ├── hotel-areas.json      # Zone categorization (used by compare-true-cost)
+│   └── transport-routes.json # Transit routes (used by compare-true-cost)
+├── scrapes/                  # Ephemeral scraper outputs (gitignored)
 ├── src/
 │   ├── cascade/              # Cascade rule engine
-│   ├── cli/                  # CLI commands
+│   ├── cli/                  # CLI commands (registry-based)
 │   ├── config/               # Configuration loaders
 │   ├── contracts/            # Skill contracts for agent discovery
 │   ├── scrapers/             # OTA scraper framework
+│   ├── services/             # turso-service, weather-service, stage0-service
 │   ├── skills/               # Reusable planning skills
-│   ├── state/                # StateManager
+│   ├── state/                # StateManager + repository (Turso-only)
 │   ├── templates/            # Project & destination templates
 │   └── validation/           # Itinerary validators
 ├── scripts/
@@ -65,9 +80,13 @@ npx ts-node src/cli/cascade.ts --apply
 │   ├── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
 │   ├── scrape_date_range.py        # Multi-date flight comparison
 │   ├── scrape_tigerair.py          # Tigerair form-based scraper
+│   ├── stage0_research.py          # Stage 0 aggregator (zero Turso I/O)
 │   └── filter_packages.py          # Filter scraped packages by criteria
+├── workers/trip-dashboard/   # Cloudflare Worker — live dashboard (reads Turso)
 └── tsconfig.json
 ```
+
+> Plan state lives in Turso, not JSON files. `data/` only holds reference data (holidays, hotel zones, transit routes). See **CLAUDE.md → Turso DB** for the schema.
 
 ## Architecture
 
