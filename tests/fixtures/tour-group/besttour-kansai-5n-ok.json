@@ -1,0 +1,43 @@
+{
+  "run_id": "test-run-tg-001",
+  "scraped_at": "2026-05-25T12:00:00Z",
+  "source_id": "besttour",
+  "dest_region": "kansai",
+  "nights": 5,
+  "tour_group_offers": [
+    {
+      "offer_id": "besttour-KIX-20260620-5n-aaa111",
+      "depart_date": "2026-06-20",
+      "return_date": "2026-06-25",
+      "nights": 5,
+      "price_per_person_twd": 38900,
+      "title": "關西超值五日 大阪心齋橋 京都嵐山 含早晚餐",
+      "url": "https://www.besttour.com.tw/test/aaa111",
+      "scraped_at": "2026-05-25T12:00:00Z",
+      "source_id": "besttour",
+      "dest_region": "kansai",
+      "run_id": "test-run-tg-001",
+      "hotel_name": "Cross Hotel Osaka",
+      "hotel_star_rating": 4,
+      "meals_included_count": 6,
+      "departure_status": "guaranteed"
+    },
+    {
+      "offer_id": "besttour-KIX-20260620-5n-bbb222",
+      "depart_date": "2026-06-20",
+      "return_date": "2026-06-25",
+      "nights": 5,
+      "price_per_person_twd": 32500,
+      "title": "關西經典五日 三星酒店",
+      "url": "https://www.besttour.com.tw/test/bbb222",
+      "scraped_at": "2026-05-25T12:00:00Z",
+      "source_id": "besttour",
+      "dest_region": "kansai",
+      "run_id": "test-run-tg-001",
+      "hotel_name": "Toyoko Inn Osaka",
+      "hotel_star_rating": 3,
+      "meals_included_count": 5,
+      "departure_status": "available"
+    }
+  ]
+}

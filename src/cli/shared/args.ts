@@ -12,7 +12,7 @@ const OPTIONS_WITH_VALUES = new Set([
   '--date', '--booked-date', '--name', '--check-in', '--access',
   '--duration', '--notes', '--start-time', '--zh', '--transit-zh',
   '--activities-zh-json', '--travel-date', '--travel-start', '--travel-end',
-  '--run', '--file', '--origin', '--rate',
+  '--run', '--file', '--origin', '--rate', '--dest-region',
 ]);
 
 export function optionValue(args: string[], name: string): string | undefined {

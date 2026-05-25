@@ -1,0 +1,22 @@
+{
+  "run_id": "test-run-tg-003",
+  "scraped_at": "2026-05-25T12:00:00Z",
+  "source_id": "lifetour",
+  "dest_region": "kansai",
+  "nights": 5,
+  "tour_group_offers": [
+    {
+      "offer_id": "besttour-KIX-20260620-5n-eee555",
+      "depart_date": "2026-06-20",
+      "return_date": "2026-06-25",
+      "nights": 5,
+      "price_per_person_twd": 35000,
+      "title": "Mismatched source",
+      "url": "https://www.besttour.com.tw/test/eee555",
+      "scraped_at": "2026-05-25T12:00:00Z",
+      "source_id": "besttour",
+      "dest_region": "kansai",
+      "run_id": "test-run-tg-003"
+    }
+  ]
+}
