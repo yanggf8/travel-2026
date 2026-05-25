@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS plan_offers (
   seats_remaining INTEGER,
   includes_json TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  package_subtype TEXT,
   PRIMARY KEY (plan_id, destination, id)
 );
 
@@ -813,3 +814,58 @@ CREATE TABLE IF NOT EXISTS stage0_scrape_attempts (
 
 CREATE INDEX IF NOT EXISTS idx_s0_cand_run
   ON stage0_candidates(run_id, rank);
+
+CREATE TABLE stage0_tour_group_offers (
+  run_id TEXT NOT NULL,
+  offer_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  dest_region TEXT NOT NULL,
+  depart_date TEXT NOT NULL,
+  return_date TEXT NOT NULL,
+  nights INTEGER NOT NULL,
+  price_per_person_twd INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  scraped_at TEXT NOT NULL,
+  hotel_name TEXT,
+  hotel_star_rating INTEGER,
+  meals_included_count INTEGER,
+  departure_status TEXT,
+  seats_available INTEGER,
+  min_group_size INTEGER,
+  group_size_cap INTEGER,
+  raw_json TEXT,
+  parse_warnings_json TEXT,
+  PRIMARY KEY (run_id, offer_id)
+);
+
+CREATE INDEX idx_s0_tg_offers_lookup ON stage0_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);
+
+CREATE TABLE stage0_tour_group_scrape_attempts (
+  run_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  dest_region TEXT NOT NULL,
+  nights INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  offer_count INTEGER,
+  parsed_count INTEGER,
+  skipped_count INTEGER,
+  error TEXT,
+  attempted_at TEXT,
+  PRIMARY KEY (run_id, source_id, dest_region, nights)
+);
+
+CREATE TABLE plan_offer_group_meta (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  offer_id TEXT NOT NULL,
+  meals_included_count INTEGER,
+  departure_status TEXT,
+  seats_available INTEGER,
+  min_group_size INTEGER,
+  group_size_cap INTEGER,
+  source_offer_run_id TEXT,
+  source_offer_id TEXT,
+  PRIMARY KEY (plan_id, destination, offer_id),
+  FOREIGN KEY (plan_id, destination, offer_id) REFERENCES plan_offers(plan_id, destination, id)
+);
