@@ -1898,15 +1898,18 @@ No code change; only proceed to Task 10 if Steps 1–4 all pass. If a scraper fa
 
 ## Task 10: Push
 
-- [ ] **Step 1: Push a feature branch**
+- [ ] **Step 1: Push to master**
 
-Run:
+This is a solo repo — no PR workflow. Commit on whatever branch is convenient for iteration (feature branch is fine for isolation while live-scrape selectors are unstable), then fast-forward merge to master and push.
+
 ```bash
-git switch -c feat/tour-group-baseline
-git push -u origin feat/tour-group-baseline
+# If working on a feature branch, fold it into master first:
+# git checkout master && git merge --ff-only <branch> && git branch -d <branch> && git push origin --delete <branch>
+
+git push origin master
 ```
 
-Expected: commits from Tasks 1–8 land on a feature branch. Open a PR or merge only after reviewing the migration and live-scraper results. Do not push this multi-commit scraper/migration feature directly to `master` unless the maintainer explicitly asks for that workflow.
+Expected: commits from Tasks 1–8 land on `origin/master`.
 
 ---
 
