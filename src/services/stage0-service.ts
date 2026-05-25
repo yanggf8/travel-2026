@@ -496,4 +496,25 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
     `UPDATE stage0_research_runs SET status = ${sqlText('adopted')},
       updated_at = ${sqlText(ts)} WHERE run_id = ${sqlText(runId)};`,
   ]);
+
+  // Bridge tour-group baseline offers into the freshly created plan.
+  // Region is derived from destination_config.ref_id (the canonical region
+  // vocabulary already used by compare-offers --region <name>). Non-fatal:
+  // if no tour-group offers were scraped for this run/region/nights, the
+  // bridge no-ops and we move on.
+  try {
+    const { bridgeAuditSet } = require('./tour-group-bridge');
+    const audit = await bridgeAuditSet({
+      run_id: runId,
+      plan_id: input.planId,
+      destination: input.destinationSlug,
+      dest_region: region,
+      nights,
+    });
+    if (audit.length > 0) {
+      console.error(`ℹ️  Bridged ${audit.length} tour-group baseline offers into ${input.planId}.`);
+    }
+  } catch (err: any) {
+    console.error(`⚠️  Tour-group bridge skipped: ${err?.message || err}`);
+  }
 }
