@@ -58,7 +58,7 @@ docs/reference/CLI.md                              # MODIFY: full reference entr
 Append after `scripts/turso-migrate.ts:1334` (after the `CREATE INDEX idx_s0_cand_run` line):
 
 ```typescript
-  await client.batch([
+  await client.executeMany([
     `CREATE TABLE IF NOT EXISTS stage0_tour_group_offers (
       run_id TEXT NOT NULL,
       offer_id TEXT NOT NULL,
@@ -270,8 +270,23 @@ Expected: FAIL with `Cannot find module ../../src/services/tour-group-service`.
 Create `src/services/tour-group-service.ts`:
 
 ```typescript
-import { getTursoClient } from './turso-service';
 import { sqlText, sqlInt, rowsToObjects } from '../state/sql-helpers';
+import path from 'node:path';
+
+// Scripts live outside src/ (rootDir), so use the same dynamic require pattern
+// as stage0-service.ts and turso-service.ts.
+function getProjectRoot(): string {
+  return path.resolve(__dirname, '..', '..');
+}
+
+function requirePipeline(): { TursoPipelineClient: new (opts?: any) => any } {
+  return require(path.join(getProjectRoot(), 'scripts', 'turso-pipeline.ts'));
+}
+
+export function getTursoClient(): any {
+  const { TursoPipelineClient } = requirePipeline();
+  return new TursoPipelineClient();
+}
 
 export interface TourGroupOfferRow {
   run_id: string;
@@ -326,56 +341,55 @@ export function validateOfferRow(row: Partial<TourGroupOfferRow>): { ok: true } 
 export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<void> {
   if (rows.length === 0) return;
   const client = getTursoClient();
-  const stmts = rows.map(r => ({
-    sql: `INSERT OR REPLACE INTO stage0_tour_group_offers (
+  const stmts = rows.map(r =>
+    `INSERT OR REPLACE INTO stage0_tour_group_offers (
       run_id, offer_id, source_id, dest_region, depart_date, return_date, nights,
       price_per_person_twd, title, url, scraped_at,
       hotel_name, hotel_star_rating, meals_included_count, departure_status,
       seats_available, min_group_size, group_size_cap, raw_json, parse_warnings_json
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    args: [
-      r.run_id, r.offer_id, r.source_id, r.dest_region, r.depart_date, r.return_date, r.nights,
-      r.price_per_person_twd, r.title, r.url, r.scraped_at,
-      r.hotel_name ?? null, r.hotel_star_rating ?? null,
-      r.meals_included_count ?? null, r.departure_status ?? null,
-      r.seats_available ?? null, r.min_group_size ?? null, r.group_size_cap ?? null,
-      r.raw_json ?? null, r.parse_warnings_json ?? null,
-    ],
-  }));
-  await client.batch(stmts);
+    ) VALUES (
+      ${sqlText(r.run_id)}, ${sqlText(r.offer_id)}, ${sqlText(r.source_id)}, ${sqlText(r.dest_region)},
+      ${sqlText(r.depart_date)}, ${sqlText(r.return_date)}, ${sqlInt(r.nights)},
+      ${sqlInt(r.price_per_person_twd)}, ${sqlText(r.title)}, ${sqlText(r.url)}, ${sqlText(r.scraped_at)},
+      ${sqlText(r.hotel_name ?? null)}, ${sqlInt(r.hotel_star_rating ?? null)},
+      ${sqlInt(r.meals_included_count ?? null)}, ${sqlText(r.departure_status ?? null)},
+      ${sqlInt(r.seats_available ?? null)}, ${sqlInt(r.min_group_size ?? null)},
+      ${sqlInt(r.group_size_cap ?? null)}, ${sqlText(r.raw_json ?? null)}, ${sqlText(r.parse_warnings_json ?? null)}
+    );`
+  );
+  await client.executeMany(stmts);
 }
 
 export async function upsertScrapeAttempt(row: ScrapeAttemptRow): Promise<void> {
   const client = getTursoClient();
-  await client.execute({
-    sql: `INSERT INTO stage0_tour_group_scrape_attempts
+  await client.execute(
+    `INSERT INTO stage0_tour_group_scrape_attempts
       (run_id, source_id, dest_region, nights, status, offer_count, parsed_count, skipped_count, error, attempted_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)
+      VALUES (${sqlText(row.run_id)}, ${sqlText(row.source_id)}, ${sqlText(row.dest_region)}, ${sqlInt(row.nights)},
+        ${sqlText(row.status)}, ${sqlInt(row.offer_count ?? null)}, ${sqlInt(row.parsed_count ?? null)},
+        ${sqlInt(row.skipped_count ?? null)}, ${sqlText(row.error ?? null)}, ${sqlText(row.attempted_at ?? null)})
       ON CONFLICT(run_id, source_id, dest_region, nights) DO UPDATE SET
         status = excluded.status,
         offer_count = excluded.offer_count,
         parsed_count = excluded.parsed_count,
         skipped_count = excluded.skipped_count,
         error = excluded.error,
-        attempted_at = excluded.attempted_at`,
-    args: [
-      row.run_id, row.source_id, row.dest_region, row.nights, row.status,
-      row.offer_count ?? null, row.parsed_count ?? null, row.skipped_count ?? null,
-      row.error ?? null, row.attempted_at ?? null,
-    ],
-  });
+        attempted_at = excluded.attempted_at;`
+  );
 }
 
 export async function findScrapeAttempt(
   run_id: string, source_id: string, dest_region: string, nights: number
 ): Promise<ScrapeAttemptRow | null> {
   const client = getTursoClient();
-  const r = await client.execute({
-    sql: `SELECT * FROM stage0_tour_group_scrape_attempts
-          WHERE run_id = ? AND source_id = ? AND dest_region = ? AND nights = ?`,
-    args: [run_id, source_id, dest_region, nights],
-  });
-  const rows = rowsToObjects<ScrapeAttemptRow>(r);
+  const r = await client.execute(
+    `SELECT * FROM stage0_tour_group_scrape_attempts
+     WHERE run_id = ${sqlText(run_id)}
+       AND source_id = ${sqlText(source_id)}
+       AND dest_region = ${sqlText(dest_region)}
+       AND nights = ${sqlInt(nights)};`
+  );
+  const rows = rowsToObjects(r) as ScrapeAttemptRow[];
   return rows[0] || null;
 }
 
@@ -387,19 +401,17 @@ export async function listTourGroupOffers(filter: {
   max_price?: number;
 }): Promise<TourGroupOfferRow[]> {
   const client = getTursoClient();
-  const where: string[] = ['run_id = ?'];
-  const args: any[] = [filter.run_id];
-  if (filter.source_id) { where.push('source_id = ?'); args.push(filter.source_id); }
-  if (filter.dest_region) { where.push('dest_region = ?'); args.push(filter.dest_region); }
-  if (filter.nights !== undefined) { where.push('nights = ?'); args.push(filter.nights); }
-  if (filter.max_price !== undefined) { where.push('price_per_person_twd <= ?'); args.push(filter.max_price); }
-  const r = await client.execute({
-    sql: `SELECT * FROM stage0_tour_group_offers
-          WHERE ${where.join(' AND ')}
-          ORDER BY price_per_person_twd ASC`,
-    args,
-  });
-  return rowsToObjects<TourGroupOfferRow>(r);
+  const where: string[] = [`run_id = ${sqlText(filter.run_id)}`];
+  if (filter.source_id) where.push(`source_id = ${sqlText(filter.source_id)}`);
+  if (filter.dest_region) where.push(`dest_region = ${sqlText(filter.dest_region)}`);
+  if (filter.nights !== undefined) where.push(`nights = ${sqlInt(filter.nights)}`);
+  if (filter.max_price !== undefined) where.push(`price_per_person_twd <= ${sqlInt(filter.max_price)}`);
+  const r = await client.execute(
+    `SELECT * FROM stage0_tour_group_offers
+     WHERE ${where.join(' AND ')}
+     ORDER BY price_per_person_twd ASC;`
+  );
+  return rowsToObjects(r) as TourGroupOfferRow[];
 }
 
 /**
@@ -468,6 +480,7 @@ git commit -m "feat(tour-group): add service layer for stage0 tour-group offers 
 
 **Files:**
 - Create: `src/cli/commands/tour-group.ts`
+- Modify: `src/cli/shared/args.ts`
 - Create: `tests/integration/tour-group-import.regression.test.ts`
 - Create: `tests/fixtures/tour-group/besttour-kansai-5n-ok.json`
 - Create: `tests/fixtures/tour-group/besttour-kansai-5n-partial.json`
@@ -598,8 +611,8 @@ Create `tests/integration/tour-group-import.regression.test.ts`:
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'child_process';
 import * as path from 'path';
-import { getTursoClient } from '../../src/services/turso-service';
-import { rowsToObjects } from '../../src/state/sql-helpers';
+import { rowsToObjects, sqlInt, sqlText } from '../../src/state/sql-helpers';
+import { getTursoClient } from '../../src/services/tour-group-service';
 
 const FIXTURE_DIR = path.resolve(__dirname, '../fixtures/tour-group');
 const CLI = ['ts-node', 'src/cli/travel-update.ts'];
@@ -611,17 +624,17 @@ function runCli(args: string[]): { stdout: string; stderr: string; code: number 
 
 async function clearRun(run_id: string) {
   const c = getTursoClient();
-  await c.execute({ sql: 'DELETE FROM stage0_tour_group_offers WHERE run_id = ?', args: [run_id] });
-  await c.execute({ sql: 'DELETE FROM stage0_tour_group_scrape_attempts WHERE run_id = ?', args: [run_id] });
+  await c.execute(`DELETE FROM stage0_tour_group_offers WHERE run_id = ${sqlText(run_id)};`);
+  await c.execute(`DELETE FROM stage0_tour_group_scrape_attempts WHERE run_id = ${sqlText(run_id)};`);
 }
 
 async function seedPendingAttempt(run_id: string, source_id: string, dest_region: string, nights: number) {
   const c = getTursoClient();
-  await c.execute({
-    sql: `INSERT OR REPLACE INTO stage0_tour_group_scrape_attempts
-      (run_id, source_id, dest_region, nights, status) VALUES (?,?,?,?,'pending')`,
-    args: [run_id, source_id, dest_region, nights],
-  });
+  await c.execute(
+    `INSERT OR REPLACE INTO stage0_tour_group_scrape_attempts
+      (run_id, source_id, dest_region, nights, status)
+     VALUES (${sqlText(run_id)}, ${sqlText(source_id)}, ${sqlText(dest_region)}, ${sqlInt(nights)}, 'pending');`
+  );
 }
 
 describe('import-tour-group-offers', () => {
@@ -641,18 +654,18 @@ describe('import-tour-group-offers', () => {
     expect(code, stderr).toBe(0);
 
     const c = getTursoClient();
-    const offers = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT * FROM stage0_tour_group_offers WHERE run_id = ? ORDER BY price_per_person_twd',
-      args: ['test-run-tg-001'],
-    }));
+    const offers = rowsToObjects(await c.execute(
+      `SELECT * FROM stage0_tour_group_offers
+       WHERE run_id = 'test-run-tg-001'
+       ORDER BY price_per_person_twd;`
+    )) as any[];
     expect(offers).toHaveLength(2);
     expect(offers[0].price_per_person_twd).toBe(32500);
     expect(offers[1].hotel_star_rating).toBe(4);
 
-    const att = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT * FROM stage0_tour_group_scrape_attempts WHERE run_id = ?',
-      args: ['test-run-tg-001'],
-    }))[0];
+    const att = (rowsToObjects(await c.execute(
+      `SELECT * FROM stage0_tour_group_scrape_attempts WHERE run_id = 'test-run-tg-001';`
+    )) as any[])[0];
     expect(att.status).toBe('ok');
     expect(att.parsed_count).toBe(2);
     expect(att.skipped_count).toBe(0);
@@ -668,15 +681,13 @@ describe('import-tour-group-offers', () => {
     expect(code).toBe(0);
 
     const c = getTursoClient();
-    const offers = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT * FROM stage0_tour_group_offers WHERE run_id = ?',
-      args: ['test-run-tg-002'],
-    }));
+    const offers = rowsToObjects(await c.execute(
+      `SELECT * FROM stage0_tour_group_offers WHERE run_id = 'test-run-tg-002';`
+    )) as any[];
     expect(offers).toHaveLength(1);
-    const att = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT * FROM stage0_tour_group_scrape_attempts WHERE run_id = ?',
-      args: ['test-run-tg-002'],
-    }))[0];
+    const att = (rowsToObjects(await c.execute(
+      `SELECT * FROM stage0_tour_group_scrape_attempts WHERE run_id = 'test-run-tg-002';`
+    )) as any[])[0];
     expect(att.status).toBe('partial');
     expect(att.parsed_count).toBe(1);
     expect(att.skipped_count).toBe(1);
@@ -694,10 +705,9 @@ describe('import-tour-group-offers', () => {
     expect(stderr).toMatch(/no pending attempt|attempt not found/i);
 
     const c = getTursoClient();
-    const offers = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT COUNT(*) AS n FROM stage0_tour_group_offers WHERE run_id = ?',
-      args: ['test-run-tg-003'],
-    }));
+    const offers = rowsToObjects(await c.execute(
+      `SELECT COUNT(*) AS n FROM stage0_tour_group_offers WHERE run_id = 'test-run-tg-003';`
+    )) as any[];
     expect((offers[0] as any).n).toBe(0);
   });
 });
@@ -858,20 +868,30 @@ import './commands/tour-group';
 
 If the imports are listed alphabetically, add it between `./commands/status` and `./commands/transport` (or wherever it sorts). If not alphabetical, add it after the existing `./commands/stage0` import.
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 6: Register `--dest-region` as an option with a value**
+
+Open `src/cli/shared/args.ts` and add `--dest-region` to `OPTIONS_WITH_VALUES`:
+
+```typescript
+  '--run', '--file', '--origin', '--rate', '--dest-region',
+```
+
+This prevents `kansai` from being retained in `cleanArgs` as a positional argument for `query-tour-group-offers` and `stage0-adopt`.
+
+- [ ] **Step 7: Run the tests**
 
 Run: `npm test -- tour-group-import`
 Expected: 3 PASSED.
 
-- [ ] **Step 7: Typecheck**
+- [ ] **Step 8: Typecheck**
 
 Run: `npm run typecheck`
 Expected: 0 errors.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/cli/commands/tour-group.ts src/cli/travel-update.ts \
+git add src/cli/commands/tour-group.ts src/cli/travel-update.ts src/cli/shared/args.ts \
   tests/integration/tour-group-import.regression.test.ts \
   tests/fixtures/tour-group/
 git commit -m "feat(tour-group): add import-tour-group-offers + query-tour-group-offers CLI"
@@ -892,10 +912,9 @@ Create `tests/integration/tour-group-bridge.regression.test.ts`:
 
 ```typescript
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getTursoClient } from '../../src/services/turso-service';
-import { rowsToObjects } from '../../src/state/sql-helpers';
+import { rowsToObjects, sqlText } from '../../src/state/sql-helpers';
 import { bridgeAuditSet } from '../../src/services/tour-group-bridge';
-import { insertTourGroupOffers } from '../../src/services/tour-group-service';
+import { insertTourGroupOffers, getTursoClient } from '../../src/services/tour-group-service';
 
 const RUN = 'test-run-bridge-001';
 const PLAN = 'test-plan-bridge-001';
@@ -903,9 +922,9 @@ const DEST = 'osaka_2026';
 
 async function clear() {
   const c = getTursoClient();
-  await c.execute({ sql: 'DELETE FROM stage0_tour_group_offers WHERE run_id = ?', args: [RUN] });
-  await c.execute({ sql: 'DELETE FROM plan_offer_group_meta WHERE plan_id = ?', args: [PLAN] });
-  await c.execute({ sql: 'DELETE FROM plan_offers WHERE plan_id = ?', args: [PLAN] });
+  await c.execute(`DELETE FROM stage0_tour_group_offers WHERE run_id = ${sqlText(RUN)};`);
+  await c.execute(`DELETE FROM plan_offer_group_meta WHERE plan_id = ${sqlText(PLAN)};`);
+  await c.execute(`DELETE FROM plan_offers WHERE plan_id = ${sqlText(PLAN)};`);
 }
 
 function offer(over: any) {
@@ -935,10 +954,9 @@ describe('tour-group adopt-time bridge', () => {
     });
 
     const c = getTursoClient();
-    const inserted = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT id FROM plan_offers WHERE plan_id = ? ORDER BY price_per_person',
-      args: [PLAN],
-    }));
+    const inserted = rowsToObjects(await c.execute(
+      `SELECT id FROM plan_offers WHERE plan_id = ${sqlText(PLAN)} ORDER BY price_per_person;`
+    )) as any[];
     const ids = inserted.map(r => r.id);
     expect(ids).toContain('a1'); // raw cheapest
     expect(ids).toContain('a2'); // quality-floor
@@ -946,10 +964,9 @@ describe('tour-group adopt-time bridge', () => {
     expect(ids).toContain('b1'); // top-3 lifetour
     expect(ids).not.toContain('a4'); // 4th cheapest for besttour, no other reason to include
 
-    const meta = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT source_offer_id FROM plan_offer_group_meta WHERE plan_id = ?',
-      args: [PLAN],
-    }));
+    const meta = rowsToObjects(await c.execute(
+      `SELECT source_offer_id FROM plan_offer_group_meta WHERE plan_id = ${sqlText(PLAN)};`
+    )) as any[];
     expect(meta.map(m => m.source_offer_id).sort()).toEqual(['a1', 'a2', 'a3', 'b1'].sort());
   });
 
@@ -963,10 +980,9 @@ describe('tour-group adopt-time bridge', () => {
       dest_region: 'kansai', nights: 5,
     });
     const c = getTursoClient();
-    const ids = rowsToObjects<any>(await c.execute({
-      sql: 'SELECT id FROM plan_offers WHERE plan_id = ?',
-      args: [PLAN],
-    })).map(r => r.id).sort();
+    const ids = (rowsToObjects(await c.execute(
+      `SELECT id FROM plan_offers WHERE plan_id = ${sqlText(PLAN)};`
+    )) as any[]).map(r => r.id).sort();
     expect(ids).toEqual(['c1', 'c2']);
   });
 });
@@ -982,8 +998,8 @@ Expected: FAIL with `Cannot find module ../../src/services/tour-group-bridge`.
 Create `src/services/tour-group-bridge.ts`:
 
 ```typescript
-import { getTursoClient } from './turso-service';
-import { findAuditSet, TourGroupOfferRow } from './tour-group-service';
+import { sqlInt, sqlText } from '../state/sql-helpers';
+import { findAuditSet, getTursoClient, TourGroupOfferRow } from './tour-group-service';
 
 export interface BridgeInput {
   run_id: string;
@@ -1009,33 +1025,29 @@ export async function bridgeAuditSet(input: BridgeInput): Promise<TourGroupOffer
   if (audit.length === 0) return [];
 
   const client = getTursoClient();
-  const stmts = [];
+  const stmts: string[] = [];
   for (const o of audit) {
-    stmts.push({
-      sql: `INSERT OR REPLACE INTO plan_offers
+    stmts.push(
+      `INSERT OR REPLACE INTO plan_offers
         (plan_id, destination, id, source_id, type, title, price_per_person, currency,
          availability, url, scraped_at, duration_days, package_subtype)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      args: [
-        input.plan_id, input.destination, o.offer_id, o.source_id, 'package', o.title,
-        o.price_per_person_twd, 'TWD',
-        o.departure_status ?? null, o.url, o.scraped_at, o.nights + 1, 'group_tour',
-      ],
-    });
-    stmts.push({
-      sql: `INSERT OR REPLACE INTO plan_offer_group_meta
+       VALUES (${sqlText(input.plan_id)}, ${sqlText(input.destination)}, ${sqlText(o.offer_id)},
+         ${sqlText(o.source_id)}, ${sqlText('package')}, ${sqlText(o.title)},
+         ${sqlInt(o.price_per_person_twd)}, ${sqlText('TWD')},
+         ${sqlText(o.departure_status ?? null)}, ${sqlText(o.url)}, ${sqlText(o.scraped_at)},
+         ${sqlInt(o.nights + 1)}, ${sqlText('group_tour')});`
+    );
+    stmts.push(
+      `INSERT OR REPLACE INTO plan_offer_group_meta
         (plan_id, destination, offer_id, meals_included_count, departure_status,
          seats_available, min_group_size, group_size_cap, source_offer_run_id, source_offer_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      args: [
-        input.plan_id, input.destination, o.offer_id,
-        o.meals_included_count ?? null, o.departure_status ?? null,
-        o.seats_available ?? null, o.min_group_size ?? null, o.group_size_cap ?? null,
-        o.run_id, o.offer_id,
-      ],
-    });
+       VALUES (${sqlText(input.plan_id)}, ${sqlText(input.destination)}, ${sqlText(o.offer_id)},
+         ${sqlInt(o.meals_included_count ?? null)}, ${sqlText(o.departure_status ?? null)},
+         ${sqlInt(o.seats_available ?? null)}, ${sqlInt(o.min_group_size ?? null)},
+         ${sqlInt(o.group_size_cap ?? null)}, ${sqlText(o.run_id)}, ${sqlText(o.offer_id)});`
+    );
   }
-  await client.batch(stmts);
+  await client.executeMany(stmts);
   return audit;
 }
 ```
@@ -1055,18 +1067,14 @@ Open `src/services/stage0-service.ts`. Find `adoptCandidateToNewPlan` (around li
   // returns 0 rows and we move on.
   try {
     const { bridgeAuditSet } = await import('./tour-group-bridge');
-    // Map dest_code → dest_region. For now use a simple heuristic: the
-    // dest_region used during tour-group scraping. Fall back to the dest_code
-    // lowercased; callers can override via the explicit parameter.
-    const dest = input.candidateDestCode || ''; // already on input
     // Conservative: only bridge if the input includes a dest_region.
     if (input.destRegion) {
       const audit = await bridgeAuditSet({
-        run_id: input.runId,
+        run_id: runId,
         plan_id: input.planId,
         destination: input.destinationSlug,
         dest_region: input.destRegion,
-        nights: input.nights,
+        nights,
       });
       if (audit.length > 0) {
         console.error(`ℹ️  Bridged ${audit.length} tour-group baseline offers into ${input.planId}.`);
@@ -1081,7 +1089,6 @@ You will also need to extend the `AdoptToNewPlanInput` interface (defined earlie
 
 ```typescript
   destRegion?: string;  // Optional: if present, bridge tour-group baseline at adopt time
-  candidateDestCode?: string;  // For logging only
 ```
 
 Apply the same bridge call at the end of `adoptCandidate` (the existing-plan variant, line 370) — but only if the function takes/can be passed `destRegion`. If `adoptCandidate` doesn't take that parameter today, leave the existing-plan path alone for now and document: only `--create-plan` adoptions get the bridge in this build. A follow-up can extend `adoptCandidate`.
@@ -1091,10 +1098,10 @@ Apply the same bridge call at the end of `adoptCandidate` (the existing-plan var
 Open `src/cli/commands/stage0.ts`. Find the `stage0AdoptCommand` handler (around line 100-150, identifiable by `names: ['stage0-adopt']`). In the section that parses CLI options for the `--create-plan` path, add:
 
 ```typescript
-    const destRegion = args.optionValue('--dest-region');
+      const destRegion = ctx.args.optionValue('--dest-region');
 ```
 
-And pass it into `adoptCandidateToNewPlan({ ..., destRegion })`.
+And pass it into `adoptCandidateToNewPlan({ candidateId, planId, destinationSlug, destRegion })`.
 
 Update the `usage` string on that command to mention the optional flag:
 
@@ -1891,10 +1898,15 @@ No code change; only proceed to Task 10 if Steps 1–4 all pass. If a scraper fa
 
 ## Task 10: Push
 
-- [ ] **Step 1: Push all commits**
+- [ ] **Step 1: Push a feature branch**
 
-Run: `git push origin master`
-Expected: commits from Tasks 1–8 land on `origin/master`.
+Run:
+```bash
+git switch -c feat/tour-group-baseline
+git push -u origin feat/tour-group-baseline
+```
+
+Expected: commits from Tasks 1–8 land on a feature branch. Open a PR or merge only after reviewing the migration and live-scraper results. Do not push this multi-commit scraper/migration feature directly to `master` unless the maintainer explicitly asks for that workflow.
 
 ---
 
