@@ -49,6 +49,7 @@ BESTTOUR_REGION_PARAM = {
     "hokkaido": "japan_hokkaido",
     "kyushu": "japan_kyushu",
     "okinawa": "japan_okinawa",
+    "tohoku": "japan_tohoku",
 }
 
 LIFETOUR_REGION_CODE = {
@@ -107,19 +108,42 @@ def parse_chinese_date(s: str) -> Optional[str]:
 
 
 def parse_price_twd(s: str) -> Optional[int]:
-    """Extract first integer that looks like a TWD price from a string."""
+    """Extract a TWD tour-group price from a card text block.
+
+    Prefers the canonical BestTour/Lifetour/Settour "$N,NNN 元起" pattern,
+    which is the per-person 'starting from' price. Falls back to the first
+    plausible 4-6 digit number only if no '元起' anchor exists.
+    """
     if not s:
         return None
-    cleaned = s.replace(",", "")
-    m = re.search(r"(\d{4,6})", cleaned)
-    if not m:
-        return None
-    try:
-        v = int(m.group(1))
-    except ValueError:
-        return None
-    if 5000 < v < 300000:
-        return v
+    # Primary: '$41,800 元起' / '41800元起' — the explicit 'starting from' label.
+    for pat in [
+        r"\$?\s*([\d,]{4,9})\s*元\s*起",
+        r"NT\$?\s*([\d,]{4,9})\s*元?\s*起",
+        r"TWD\s*([\d,]{4,9})\s*元?\s*起",
+    ]:
+        m = re.search(pat, s)
+        if m:
+            try:
+                v = int(m.group(1).replace(",", ""))
+            except ValueError:
+                continue
+            if 5000 < v < 300000:
+                return v
+    # Fallback: first 4-6 digit number with a currency-ish neighbor.
+    for pat in [
+        r"\$\s*([\d,]{4,9})",
+        r"NT\$\s*([\d,]{4,9})",
+        r"TWD\s*([\d,]{4,9})",
+    ]:
+        m = re.search(pat, s)
+        if m:
+            try:
+                v = int(m.group(1).replace(",", ""))
+            except ValueError:
+                continue
+            if 5000 < v < 300000:
+                return v
     return None
 
 
@@ -170,7 +194,10 @@ async def scrape_besttour(page: Page, region: str, target_nights: int,
                           run_id: str, scraped_at: str) -> list[dict]:
     """Scrape BestTour 喜鴻 tour-group listings.
 
-    BestTour encodes everything we need in the itinerary URL itself:
+    BestTour pages render each tour as a card with ONE title anchor (whose
+    depth-2 container holds title + days + 'starting from' price) plus N
+    date anchors (one per displayed departure date). Both types of anchor
+    have hrefs of the form:
 
         https://www.besttour.com.tw/itinerary/OSA05BR260612KM
                                               │  │ │  │
@@ -179,9 +206,15 @@ async def scrape_besttour(page: Page, region: str, target_nights: int,
                                               │  └────── trip length in DAYS, zero-padded
                                               └───────── destination (OSA/TYO/UKB/...)
 
-    Listing pages render one anchor per departure date, so we parse the
-    URL pattern, filter by depart-date and trip-length, and pull the
-    title and price from the surrounding container text.
+    Title anchors give the canonical URL (often a non-June default date);
+    date anchors give the real departures. We do two passes:
+
+    1. Collect all title anchors (depth-2 container text matches '元起') and
+       index their (dest, days, airline) -> {title, price}.
+    2. For each date anchor matching target_days and the depart-date window,
+       look up the indexed price by (dest, days, airline) prefix.
+
+    A date anchor without a matching title-anchor entry is skipped.
     """
     target_days = target_nights + 1
     offers: list[dict] = []
@@ -192,23 +225,61 @@ async def scrape_besttour(page: Page, region: str, target_nights: int,
 
     url_re = re.compile(r"/itinerary/([A-Z]{3})(\d{2})([A-Z0-9]{2,4})(\d{6})")
 
+    # Pass 1: harvest title anchors (those whose depth-2 container has '元起').
+    tour_index: dict[tuple, dict] = {}
     for anchor in anchors:
         try:
             href = await anchor.get_attribute("href") or ""
-            if not href:
-                continue
             m = url_re.search(href)
             if not m:
                 continue
-            dest_code = m.group(1)        # OSA, TYO, UKB, KIX, ...
+            dest_code = m.group(1)
             days = int(m.group(2))
             airline = m.group(3)
-            ymd = m.group(4)              # YYMMDD
-
             if days != target_days:
                 continue
 
-            # YYMMDD → YYYY-MM-DD (assume 20YY)
+            container_text = await anchor.evaluate(
+                "el => { let p = el; for (let i=0;i<2;i++) { if (!p.parentElement) break; p = p.parentElement; } return p.innerText || ''; }"
+            )
+            if "元起" not in container_text:
+                continue  # date anchor or other; only title anchors have the price label
+
+            price = parse_price_twd(container_text)
+            if not price:
+                continue
+            title_m = re.search(r"【([^】]+)】[^\n]*", container_text)
+            title = title_m.group(0).strip() if title_m else f"BestTour {dest_code} {days}日"
+            departure_status = detect_departure_status(container_text)
+
+            key = (dest_code, days, airline)
+            # If multiple title anchors share the same (dest, days, airline),
+            # keep the cheapest. This is defensive — BestTour usually has one
+            # title per tour, but date anchors can also accidentally match if
+            # the listing layout shifts.
+            existing = tour_index.get(key)
+            if existing is None or price < existing["price"]:
+                tour_index[key] = {
+                    "price": price,
+                    "title": title,
+                    "departure_status": departure_status,
+                }
+        except Exception:
+            continue
+
+    # Pass 2: enumerate date anchors and emit one offer per (tour, depart_date).
+    for anchor in anchors:
+        try:
+            href = await anchor.get_attribute("href") or ""
+            m = url_re.search(href)
+            if not m:
+                continue
+            dest_code, days, airline, ymd = (
+                m.group(1), int(m.group(2)), m.group(3), m.group(4)
+            )
+            if days != target_days:
+                continue
+
             try:
                 depart_dt = datetime.strptime(ymd, "%y%m%d")
             except ValueError:
@@ -217,26 +288,16 @@ async def scrape_besttour(page: Page, region: str, target_nights: int,
             if not (depart_start <= depart_date <= depart_end):
                 continue
 
+            tour = tour_index.get((dest_code, days, airline))
+            if not tour:
+                # Date anchor with no matching title; rare. Skip — no price.
+                continue
+
             return_date = (depart_dt + timedelta(days=target_nights)).strftime("%Y-%m-%d")
             offer_id = make_offer_id("besttour", region, depart_date, target_nights, href)
             if offer_id in seen_ids:
                 continue
             seen_ids.add(offer_id)
-
-            # Title + price live in the surrounding container — walk up 6 levels.
-            container_text = await anchor.evaluate(
-                "el => { let p = el; for (let i=0;i<6;i++) { if (!p.parentElement) break; p = p.parentElement; } return p.innerText || ''; }"
-            )
-
-            # Title: first 【...】 block.
-            title_match = re.search(r"【([^】]+)】[^\n]*", container_text)
-            title = title_match.group(0).strip() if title_match else f"BestTour {dest_code} {days}日"
-
-            price = parse_price_twd(container_text)
-            if not price:
-                continue
-
-            departure_status = detect_departure_status(container_text)
 
             offers.append({
                 "run_id": run_id,
@@ -246,14 +307,14 @@ async def scrape_besttour(page: Page, region: str, target_nights: int,
                 "depart_date": depart_date,
                 "return_date": return_date,
                 "nights": target_nights,
-                "price_per_person_twd": price,
-                "title": title,
+                "price_per_person_twd": tour["price"],
+                "title": tour["title"],
                 "url": href,
                 "scraped_at": scraped_at,
-                "hotel_name": None,           # not exposed on listing card
+                "hotel_name": None,
                 "hotel_star_rating": None,
                 "meals_included_count": None,
-                "departure_status": departure_status,
+                "departure_status": tour["departure_status"],
                 "seats_available": None,
                 "min_group_size": None,
                 "group_size_cap": None,
