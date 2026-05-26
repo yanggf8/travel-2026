@@ -193,6 +193,45 @@ These are **completely different tours** — different itineraries, different pr
 
 **Updated decision rule for this trip:** Use BestTour listing data as a **starting lead** for which products exist in the window. Always cross-check the specific product URL on BestTour's site before relying on its title or price. Especially before any booking decision, verify the **product page** shows the title/price our DB recorded.
 
+### funtime.com.tw — the FIT aggregator we should have started with
+
+Discovered late in the June 2026 Okinawa research: **funtime.com.tw is a Taiwan travel-product aggregator that exposes a URL-controlled, server-rendered FIT-only search.** This is structurally the right tool for the methodology's FIT-comparable pillar — what we'd been trying to build ourselves by scraping each agency individually.
+
+URL pattern:
+```
+https://www.funtime.com.tw/localtour/result.php
+  ?from_city=TY          # 桃園/松山 (Taipei)
+  &target=CT_OKINAWA     # destination region code
+  &date_st=2026-06-10    # search window start
+  &date_ed=2026-06-25    # search window end
+  &type=fit              # ← key filter: FIT only, NOT group tours
+```
+
+**Why this changes the methodology:**
+
+1. **One URL, many agencies.** funtime pulls actual bookable FIT products from KKday, BestTour, LionTravel, and others into a unified result page. Per-date cheapest is shown directly, with multiple options per date.
+2. **Server-rendered.** Body innerText contains all titles, dates, and prices. No date-picker UI to drive, no async search wait.
+3. **`type=fit` filter is honored.** Unlike eztravel/Settour landing pages that mix products or default to teasers, funtime returns FIT-only data.
+4. **Inside-the-window pricing.** URL accepts the actual search window, so prices are for the dates we care about — not a default window we have to adjust mentally.
+
+**Confidence implication:** funtime data is **Tier 1** (server-rendered, URL-controlled) and lands in the same automation category as BestTour, but with much broader cross-agency coverage. **For future trips, funtime should be the primary FIT source** before falling back to individual agency scrapes.
+
+**Empirical result (Okinawa June 2026, Liko's 6/12-6/25 window):**
+
+| Date | Cheapest FIT TWD/人 | Options at date |
+|------|---------------------|-----------------|
+| 6/12 Fri | 11,900 | 8 |
+| 6/17 Wed | 11,900 | 3 |
+| **6/18 Thu** | **11,900** | 5 |
+| **6/21 Sun** | 12,999 | 4 |
+| 6/25 Thu | 11,900 | 3 |
+
+Compared to cheapest BestTour group tour in same window (TWD 21,999), FIT saves ~TWD 9,000-10,000/人. This is the actionable methodology output the spec was designed to produce.
+
+**Limitation:** funtime shows per-date cheapest and a count of options, not full per-product detail. To pick the specific product (hotel, airline, room class), still need to open the funtime page and click through to the partner site (KKday/BestTour/LionTravel) for that specific booking. funtime gets you to "is FIT cheaper than group tour, and by how much" — the comparison decision — fast and reliably.
+
+**Action item for future spec evolution:** add funtime to the scraper registry as the primary FIT data source. Build a `scripts/scrape_funtime.py` that consumes the URL pattern above and emits the standard `tour_group_offers` envelope with `product_kind='fit'`. Deferred until next trip — for this June 2026 trip, manual funtime lookup is sufficient.
+
 ---
 
 ## What to do for the June 2026 trip (manual workflow)
