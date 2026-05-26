@@ -171,6 +171,28 @@ Each Tier 2 agency is roughly half a day of Playwright automation work to scrape
 
 Manual rows should always carry a confidence tag in `raw_json`. The methodology layer can then weight or filter when computing the ceiling.
 
+### BestTour listing-page reliability — scraper has a title/price corruption bug (Okinawa June 2026 lesson)
+
+A real failure case discovered during the June trip, and the lesson is broader than expected:
+
+**The bug:** The BestTour two-pass scraper (`scripts/scrape_tour_groups.py`) indexes title anchors by `(dest_code, days, airline)` and resolves the cheapest title per key. When multiple distinct products share the same `(dest, days, airline)` bucket, the scraper collapses them — the **cheapest-title-wins tie-breaker attaches one product's title and price to OTHER products' date anchors** in the same bucket.
+
+Concrete example for product URL `OKA04FD260626X`:
+- **Scraper output**: title `【機加酒．沖繩自由行４日】那霸露櫻GRANTIA、亞洲航空、行李20公斤`, price `TWD 12,999`
+- **Real product page**: title `【微旅沖繩４日】玉泉洞琉球大鼓秀、海葡萄採摘、美麗海水族館、萬座毛、保證入住美國村飯店乙晚`, price `TWD 29,900`
+
+These are **completely different tours** — different itineraries, different price tiers — but they share the same `OKA04FD` URL prefix and got merged.
+
+**Two methodology corrections from this:**
+
+1. **The BestTour automation is less reliable than initially claimed.** Listing-page text prices agree with product-page prices for SOME rows but not all. Specifically, when multiple distinct products share a `(dest, days, airline)` key, the title and price for date anchors in that bucket may be **mismatched to a different product**. Confidence on any individual BestTour row drops to **medium** unless the row is the only product in its `(dest, days, airline)` bucket.
+
+2. **`機加酒/自由行` in BestTour titles is unreliable for `product_kind` classification.** A title with `自由行` may describe a fixed-departure tour with self-guided activities at the destination, not true FIT. Title keyword check passes too easily. Real FIT signal: ability to pick any depart date, any flight, any return — product page must offer date/flight selection rather than a fixed-departure list.
+
+**Action item for the scraper (deferred — out of scope for this spec):** Index BestTour title anchors by the full URL (including suffix code like `260626X`), not by `(dest, days, airline)`. Or: skip the title-pass deduplication entirely and scrape each anchor independently. Without this fix, all BestTour group-tour data should be treated as medium-confidence, with spot checks against the actual product page before any booking decision.
+
+**Updated decision rule for this trip:** Use BestTour listing data as a **starting lead** for which products exist in the window. Always cross-check the specific product URL on BestTour's site before relying on its title or price. Especially before any booking decision, verify the **product page** shows the title/price our DB recorded.
+
 ---
 
 ## What to do for the June 2026 trip (manual workflow)
