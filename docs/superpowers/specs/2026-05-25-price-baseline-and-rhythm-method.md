@@ -146,6 +146,33 @@ None of these are blockers for using the method **manually** on the June trip. T
 
 ---
 
+## Agency scraping difficulty (lessons from the BestTour build)
+
+Empirically, Taiwan travel agency price discovery splits into two tiers:
+
+**Tier 1 — server-rendered listings (automatable):**
+- **BestTour 喜鴻** — `/e_web/activity?v=japan_<region>` renders cards server-side with title, day-count, and price embedded in card text. Tour-group URLs encode destination/days/depart-date in the path (`/itinerary/OSA05BR260612KM`). Cheap to scrape: one HTTP load, parse anchors, done. **This is the only Tier 1 agency we've found.**
+
+**Tier 2 — client-side search flows (automation projects):**
+- **Settour 東南** — landing pages embed `cmsPrice` URL parameters as **teasers** (1-night-base), but real per-night prices require driving the search UI (open hidden panel, fill dates, click Search, wait for async results).
+- **LionTravel 雄獅** — FIT site (`vacation.liontravel.com`) is structured around a 1-night base with `+N/night` extensions; needs both per-night-rate capture and arithmetic to derive the full-trip price.
+- **EzTravel 易遊網** — `packages.eztravel.com.tw/roundtrip-TPE-<dest>` ignores URL date parameters; needs date-picker UI automation.
+- **ezfly 易飛旅遊** — not yet probed; likely similar.
+- **Lifetour 五福** — has Okinawa FIT but search-flow not yet probed.
+
+Each Tier 2 agency is roughly half a day of Playwright automation work to scrape reliably. For a single trip, that investment doesn't pay off.
+
+**Decision rule:** For the immediate trip, automate Tier 1 only (BestTour); use **manual browser lookups** for Tier 2 agencies, recorded into the same `stage0_tour_group_offers` table with provenance fields (`raw_json` JSON tagging `source: manual_browser_lookup`, `confidence: low|medium|high`, `observed_by: yang`, `observed_at: ISO timestamp`). Re-evaluate building Tier 2 scrapers only when we have multiple trips to compare and the same pattern emerges.
+
+**Confidence tiers for manual entries:**
+- **high** — landing-page or product page shows a *bookable* price for our exact `(depart_date, nights)`. Rare.
+- **medium** — listed price seen on a search-results page or landing-card; not confirmed at checkout.
+- **low** — teaser price (e.g. Settour `cmsPrice` in URL, base price before extensions, "starting from" copy).
+
+Manual rows should always carry a confidence tag in `raw_json`. The methodology layer can then weight or filter when computing the ceiling.
+
+---
+
 ## What to do for the June 2026 trip (manual workflow)
 
 This is what we should actually do for the immediate trip — no new code yet, just executing the method by hand:
