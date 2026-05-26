@@ -1376,6 +1376,16 @@ async function main() {
   await client.execute(
     'CREATE INDEX IF NOT EXISTS idx_s0_tg_offers_lookup ON stage0_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);'
   );
+
+  // Distinguish 跟團 (group_tour) from 機加酒/自由行 (fit) on the listing page.
+  // Both appear under the same listing URLs; only the title reliably tells them
+  // apart. Default to 'group_tour' on backfill — that's the safe assumption,
+  // since the listing page is positioned as tour-group inventory.
+  try {
+    await client.execute(`ALTER TABLE stage0_tour_group_offers ADD COLUMN product_kind TEXT NOT NULL DEFAULT 'group_tour';`);
+  } catch (e: any) {
+    if (!String(e?.message || '').match(/duplicate column name/i)) throw e;
+  }
   console.log('✅ Stage 0 tour-group tables ready.');
 
   try {

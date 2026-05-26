@@ -836,6 +836,7 @@ CREATE TABLE stage0_tour_group_offers (
   group_size_cap INTEGER,
   raw_json TEXT,
   parse_warnings_json TEXT,
+  product_kind TEXT NOT NULL DEFAULT 'group_tour',  -- 'group_tour' | 'fit'
   PRIMARY KEY (run_id, offer_id)
 );
 

@@ -35,6 +35,7 @@ export interface TourGroupOfferRow {
   group_size_cap?: number | null;
   raw_json?: string | null;
   parse_warnings_json?: string | null;
+  product_kind?: 'group_tour' | 'fit' | null;
 }
 
 export type ScrapeAttemptStatus = 'pending' | 'ok' | 'failed' | 'partial';
@@ -72,7 +73,8 @@ export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<
       run_id, offer_id, source_id, dest_region, depart_date, return_date, nights,
       price_per_person_twd, title, url, scraped_at,
       hotel_name, hotel_star_rating, meals_included_count, departure_status,
-      seats_available, min_group_size, group_size_cap, raw_json, parse_warnings_json
+      seats_available, min_group_size, group_size_cap, raw_json, parse_warnings_json,
+      product_kind
     ) VALUES (
       ${sqlText(r.run_id)},
       ${sqlText(r.offer_id)},
@@ -93,7 +95,8 @@ export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<
       ${sqlInt(r.min_group_size)},
       ${sqlInt(r.group_size_cap)},
       ${sqlText(r.raw_json)},
-      ${sqlText(r.parse_warnings_json)}
+      ${sqlText(r.parse_warnings_json)},
+      ${sqlText(r.product_kind ?? 'group_tour')}
     );`;
   });
   await client.executeMany(stmts);

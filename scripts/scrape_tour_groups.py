@@ -163,6 +163,21 @@ def parse_nights_from_title(title: str) -> Optional[int]:
     return None
 
 
+def detect_product_kind(title: str) -> str:
+    """Classify an agency listing as 跟團 (group_tour) or 機加酒/自由行 (fit).
+
+    Listing pages mix both products. Only the title carries a reliable
+    signal: 機加酒 and 自由行 always mean FIT. Anything else defaults to
+    group_tour — that's the safe assumption since these listing URLs are
+    positioned as tour-group inventory.
+    """
+    if not title:
+        return "group_tour"
+    if "機加酒" in title or "自由行" in title:
+        return "fit"
+    return "group_tour"
+
+
 def detect_departure_status(card_text: str) -> str:
     """Map agency status labels to canonical values."""
     if "額滿" in card_text or "售完" in card_text or "已滿" in card_text:
@@ -263,6 +278,7 @@ async def scrape_besttour(page: Page, region: str, target_nights: int,
                     "price": price,
                     "title": title,
                     "departure_status": departure_status,
+                    "product_kind": detect_product_kind(title),
                 }
         except Exception:
             continue
@@ -318,6 +334,7 @@ async def scrape_besttour(page: Page, region: str, target_nights: int,
                 "seats_available": None,
                 "min_group_size": None,
                 "group_size_cap": None,
+                "product_kind": tour["product_kind"],
             })
         except Exception:
             continue
@@ -427,6 +444,7 @@ async def _scrape_generic_cards(page, source_id, region, target_nights,
                 "seats_available": None,
                 "min_group_size": None,
                 "group_size_cap": None,
+                "product_kind": detect_product_kind(title),
             })
         except Exception:
             continue
