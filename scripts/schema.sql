@@ -870,3 +870,16 @@ CREATE TABLE plan_offer_group_meta (
   PRIMARY KEY (plan_id, destination, offer_id),
   FOREIGN KEY (plan_id, destination, offer_id) REFERENCES plan_offers(plan_id, destination, id)
 );
+
+CREATE TABLE holidays (
+  country TEXT NOT NULL,
+  date TEXT NOT NULL,
+  day_of_week TEXT,
+  is_holiday INTEGER NOT NULL,
+  name TEXT,
+  source_url TEXT NOT NULL,
+  source_label TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (country, date)
+);
+CREATE INDEX idx_holidays_country_date ON holidays(country, date);

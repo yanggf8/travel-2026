@@ -1415,6 +1415,27 @@ async function main() {
   );
   console.log('✅ Plan-side group-meta table ready.');
 
+  // Country-scoped public holiday calendar, fetched live from authoritative gov sources.
+  // Replaces the deprecated data/holidays/*.json files (which were hand-curated and
+  // unverifiable). Every row records its source so a future query can re-verify or refresh.
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS holidays (
+      country TEXT NOT NULL,           -- 'taiwan', 'japan', etc. (lowercase canonical name)
+      date TEXT NOT NULL,              -- ISO YYYY-MM-DD
+      day_of_week TEXT,                -- 一/二/三/四/五/六/日 for taiwan, or English
+      is_holiday INTEGER NOT NULL,     -- 0 = workday, 1 = makeup workday, 2 = holiday/weekend
+      name TEXT,                       -- holiday name in source language; NULL on plain weekends
+      source_url TEXT NOT NULL,        -- where this row was fetched from
+      source_label TEXT NOT NULL,      -- e.g. 'DGPA 行政院人事行政總處 115年辦公日曆表'
+      fetched_at TEXT NOT NULL,        -- ISO timestamp of fetch
+      PRIMARY KEY (country, date)
+    );`
+  );
+  await client.execute(
+    'CREATE INDEX IF NOT EXISTS idx_holidays_country_date ON holidays(country, date);'
+  );
+  console.log('✅ Holidays table ready.');
+
   console.log('Done.');
 }
 
