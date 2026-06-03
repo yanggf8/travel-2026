@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import type { HolidayCalendar, HolidayEntry, MakeupWorkday } from '../utils/leave-calculator';
 
 // Scripts live outside src/ (rootDir), so we use dynamic require resolved
 // from the project root to avoid TS6059 errors.
@@ -83,6 +84,23 @@ export interface TursoOfferResult {
   source_file: string | null;
 }
 
+export interface TursoRawOfferResult extends TursoOfferResult {
+  raw_data: string | null;
+}
+
+export interface TransportRouteData {
+  time_min: number;
+  cost_jpy: number;
+  method: string;
+}
+
+export interface TransportRoutesData {
+  [region: string]: {
+    routes: Record<string, TransportRouteData>;
+    hubs: Record<string, { type: string; area: string }>;
+  };
+}
+
 export interface ImportResult {
   imported: number;
   skipped: number;
@@ -96,6 +114,9 @@ export interface FreshnessResult {
   recommendation: 'skip' | 'rescrape' | 'no_data';
   region?: string;
 }
+
+const DB_MISSING_FIX =
+  'Run npm run db:migrate:turso, then run the relevant Turso backfill/seed script before using this command.';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -133,16 +154,148 @@ function extractColumns(response: any): string[] {
 }
 
 function rowsToObjects(response: any): Record<string, any>[] {
+  return rowsToObjectsAt(response, 0);
+}
+
+function rowsToObjectsAt(response: any, idx: number): Record<string, any>[] {
   const cols = extractColumns(response);
-  const rows = extractRows(response);
+  const result = response?.results?.[idx]?.response?.result;
+  const atCols = result?.cols ? result.cols.map((c: any) => c.name) : cols;
+  const rows = result?.rows || (idx === 0 ? extractRows(response) : []);
   return rows.map((row: any[]) => {
     const obj: Record<string, any> = {};
-    cols.forEach((col: string, i: number) => {
+    atCols.forEach((col: string, i: number) => {
       const cell = row[i];
       obj[col] = cell?.value ?? null;
     });
     return obj;
   });
+}
+
+function normalizeCountry(countryOrMarket: string): string {
+  const v = countryOrMarket.toLowerCase();
+  if (v === 'tw') return 'taiwan';
+  if (v === 'jp') return 'japan';
+  return v;
+}
+
+function assertRows(rows: Record<string, any>[], label: string): void {
+  if (rows.length === 0) {
+    throw new Error(`Missing Turso data for ${label}. ${DB_MISSING_FIX}`);
+  }
+}
+
+function toMonthDay(date: string): string {
+  return date.slice(5);
+}
+
+export async function loadHolidayCalendarFromTurso(
+  countryOrMarket: string,
+  year: number,
+): Promise<HolidayCalendar> {
+  const country = normalizeCountry(countryOrMarket);
+  const client = getClient();
+  const response = await client.execute(
+    `SELECT country, year, date, name, day_of_week, is_holiday, source_url, fetched_at, confidence
+     FROM holidays
+     WHERE country = '${sqlEscape(country)}'
+       AND date >= '${Math.trunc(year)}-01-01'
+       AND date <= '${Math.trunc(year)}-12-31'
+     ORDER BY date;`
+  );
+  const rows = rowsToObjects(response);
+  assertRows(rows, `holidays country=${country} year=${year}`);
+
+  const holidays: Record<string, HolidayEntry> = {};
+  const makeupWorkdays: Record<string, MakeupWorkday> = {};
+
+  for (const row of rows) {
+    const date = String(row.date);
+    const monthDay = toMonthDay(date);
+    const name = row.name ? String(row.name) : '';
+    const flag = Number(row.is_holiday);
+    if (flag === 2 && name) {
+      holidays[monthDay] = { name, name_en: '', type: 'national' };
+    } else if (flag === 1) {
+      makeupWorkdays[monthDay] = {
+        name: name || '補班日',
+        name_en: 'Makeup workday',
+        for_holiday: '',
+      };
+    }
+  }
+
+  return {
+    country,
+    year,
+    description: `Turso holidays for ${country} ${year}`,
+    holidays,
+    makeup_workdays: makeupWorkdays,
+  };
+}
+
+export async function loadHotelAreasFromTurso(): Promise<Record<string, Record<string, string[]>>> {
+  const client = getClient();
+  const response = await client.execute(
+    `SELECT region, area_type, keywords_json FROM hotel_areas ORDER BY region, area_type;`
+  );
+  const rows = rowsToObjects(response);
+  assertRows(rows, 'hotel_areas');
+
+  const out: Record<string, Record<string, string[]>> = {};
+  for (const row of rows) {
+    const region = String(row.region);
+    const areaType = String(row.area_type);
+    if (!out[region]) out[region] = {};
+    out[region][areaType] = row.keywords_json ? JSON.parse(String(row.keywords_json)) : [];
+  }
+  return out;
+}
+
+export async function loadTransportRoutesFromTurso(): Promise<TransportRoutesData> {
+  const client = getClient();
+  const response = await client.executeBatch([
+    `SELECT region, route_key, time_min, cost_jpy, method FROM transport_routes ORDER BY region, route_key;`,
+    `SELECT region, hub_id, hub_type, area FROM transport_hubs ORDER BY region, hub_id;`,
+  ]);
+  const routeRows = rowsToObjectsAt(response, 0);
+  const hubRows = rowsToObjectsAt(response, 1);
+  assertRows(routeRows, 'transport_routes');
+  assertRows(hubRows, 'transport_hubs');
+
+  const out: TransportRoutesData = {};
+  for (const row of routeRows) {
+    const region = String(row.region);
+    if (!out[region]) out[region] = { routes: {}, hubs: {} };
+    out[region].routes[String(row.route_key)] = {
+      time_min: Number(row.time_min),
+      cost_jpy: Number(row.cost_jpy),
+      method: String(row.method || ''),
+    };
+  }
+  for (const row of hubRows) {
+    const region = String(row.region);
+    if (!out[region]) out[region] = { routes: {}, hubs: {} };
+    out[region].hubs[String(row.hub_id)] = {
+      type: String(row.hub_type || ''),
+      area: String(row.area || ''),
+    };
+  }
+  return out;
+}
+
+export async function loadDestinationReferenceFromTurso(slug: string): Promise<Record<string, unknown>> {
+  const client = getClient();
+  const response = await client.execute(
+    `SELECT payload_json FROM destination_references WHERE slug = '${sqlEscape(slug)}';`
+  );
+  const rows = rowsToObjects(response);
+  assertRows(rows, `destination_references slug=${slug}`);
+  const payload = rows[0].payload_json;
+  if (!payload) {
+    throw new Error(`Missing Turso destination reference payload for slug=${slug}. Run npm run db:migrate:turso and npx ts-node scripts/backfill-local-reference-data.ts.`);
+  }
+  return JSON.parse(String(payload)) as Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +489,47 @@ export async function queryOffers(
 
   const response = await client.execute(sql);
   return rowsToObjects(response) as TursoOfferResult[];
+}
+
+export async function queryRawOffers(
+  filters: TursoOfferQuery,
+): Promise<TursoRawOfferResult[]> {
+  const client = getClient();
+  const conditions: string[] = [];
+
+  if (filters.destination) {
+    conditions.push(`destination = '${sqlEscape(filters.destination)}'`);
+  }
+  if (filters.region) {
+    conditions.push(`region = '${sqlEscape(filters.region)}'`);
+  }
+  if (filters.start) {
+    conditions.push(`departure_date >= '${sqlEscape(filters.start)}'`);
+  }
+  if (filters.end) {
+    conditions.push(`departure_date <= '${sqlEscape(filters.end)}'`);
+  }
+  if (filters.sources && filters.sources.length > 0) {
+    const escaped = filters.sources.map((s) => `'${sqlEscape(s)}'`).join(',');
+    conditions.push(`source_id IN (${escaped})`);
+  }
+  if (filters.type) {
+    conditions.push(`type = '${sqlEscape(filters.type)}'`);
+  }
+  if (filters.maxPrice != null) {
+    conditions.push(`price_per_person <= ${sqlInt(filters.maxPrice)}`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = filters.limit ? `LIMIT ${Math.trunc(filters.limit)}` : 'LIMIT 500';
+  const sql = `SELECT id, source_id, type, name, price_per_person, currency, region, destination, departure_date, return_date, nights, availability, hotel_name, airline, scraped_at, source_file, raw_data FROM offers ${where} ORDER BY scraped_at DESC, price_per_person ASC ${limit};`;
+
+  const response = await client.execute(sql);
+  const rows = rowsToObjects(response) as TursoRawOfferResult[];
+  if (rows.length === 0) {
+    throw new Error(`Missing Turso offers for filters ${JSON.stringify(filters)}. Import scraper output with npm run db:import:turso before running this command.`);
+  }
+  return rows;
 }
 
 // ---------------------------------------------------------------------------

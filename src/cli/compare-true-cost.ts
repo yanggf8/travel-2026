@@ -3,7 +3,8 @@
  * True Cost Comparison CLI
  *
  * Compares offers by total cost including package price + baggage surcharge + transport cost.
- * Uses data from: ota-knowledge.json (airlines), transport-routes.json, hotel-areas.json
+ * Uses Turso for offers, hotel areas, and transport routes. Airline metadata
+ * remains in the skill reference ota-knowledge.json.
  *
  * Usage:
  *   npx ts-node src/cli/compare-true-cost.ts --region kansai --date 2026-02-24 --pax 2
@@ -12,6 +13,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { loadHotelAreasFromTurso, loadTransportRoutesFromTurso, queryOffers } from '../services/turso-service';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,11 +67,11 @@ function loadJson<T>(filePath: string): T | null {
 }
 
 function loadTransportRoutes(): TransportRoutes {
-  return loadJson(path.join(process.cwd(), 'data', 'transport-routes.json')) || {};
+  throw new Error('loadTransportRoutes must use Turso via loadTransportRoutesFromTurso()');
 }
 
 function loadHotelAreas(): Record<string, Record<string, string[]>> {
-  return loadJson(path.join(process.cwd(), 'data', 'hotel-areas.json')) || {};
+  throw new Error('loadHotelAreas must use Turso via loadHotelAreasFromTurso()');
 }
 
 function loadAirlines(): Record<string, AirlineInfo> {
@@ -223,106 +225,26 @@ interface RawOffer {
   baggage_included: boolean | null;
 }
 
-function scanOffers(region: string, filterDate: string | undefined, pax: number): RawOffer[] {
-  const dataDir = path.join(process.cwd(), 'data');
-  if (!fs.existsSync(dataDir)) return [];
-
-  // Region aliases - files may use city names instead of region
-  const regionAliases: Record<string, string[]> = {
-    kansai: ['kansai', 'osaka', 'kyoto', 'kobe', 'nara', 'kix'],
-    tokyo: ['tokyo', 'tyo', 'nrt', 'hnd'],
-    hokkaido: ['hokkaido', 'sapporo', 'cts'],
-    okinawa: ['okinawa', 'oka', 'naha'],
-  };
-  const aliases = regionAliases[region.toLowerCase()] || [region.toLowerCase()];
-
-  const files = fs.readdirSync(dataDir).filter(f => {
-    const lower = f.toLowerCase();
-    return f.endsWith('.json') &&
-      aliases.some(alias => lower.includes(alias)) &&
-      !['schema', 'travel-plan', 'destinations', 'ota-sources', 'transport-routes', 'hotel-areas', 'state', 'holidays'].some(x => lower.includes(x));
+async function scanOffers(region: string, filterDate: string | undefined, pax: number): Promise<RawOffer[]> {
+  const rows = await queryOffers({
+    region,
+    ...(filterDate ? { start: filterDate, end: filterDate } : {}),
+    type: 'package',
+    limit: 500,
   });
 
-  const offers: RawOffer[] = [];
-  const sourceNames: Record<string, string> = {
-    besttour: '喜鴻', liontravel: '雄獅', lifetour: '五福',
-    settour: '東南', eztravel: '易遊網', tigerair: '虎航',
-  };
-
-  for (const file of files) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(dataDir, file), 'utf-8'));
-      const extracted = data.extracted || {};
-
-      // Price extraction - handle multiple formats
-      let pp: number | null = null;
-      const dp = extracted.date_pricing || data.date_pricing;
-      if (filterDate && dp?.[filterDate]?.price) {
-        pp = dp[filterDate].price;
-      } else if (dp && typeof dp === 'object') {
-        const prices = Object.values(dp).map((v: any) => v.price).filter((p: any) => typeof p === 'number' && p > 0);
-        if (prices.length) pp = Math.min(...prices as number[]);
-      }
-      if (pp == null) pp = extracted.price?.per_person || data.price?.per_person;
-
-      // Priority: offers[] array (Lifetour FIT format) - has individual hotel names
-      if (Array.isArray(data.offers) && data.offers.length > 0) {
-        for (const offer of data.offers) {
-          const offerPrice = offer.price_per_person;
-          if (typeof offerPrice === 'number' && offerPrice > 0) {
-            offers.push({
-              file,
-              source_id: offer.source_id || data.source_id || '',
-              price_per_person: offerPrice,
-              currency: data.currency || 'TWD',
-              airline: offer.airline || data.airline || '',
-              hotel: offer.hotel || offer.title?.match(/】(.+?)(自由行|飯店)/)?.[1] || '',
-              package_type: offer.package_type || data.package_type || 'fit',
-              baggage_included: data.baggage_included ?? null,
-            });
-          }
-        }
-        continue; // Skip the standard processing since we handled offers
-      }
-
-      // Fallback: price_range.min (EzTravel format - no individual offers)
-      if (pp == null && data.price_range?.min) pp = data.price_range.min;
-      if (pp == null || pp <= 0 || typeof pp !== 'number' || isNaN(pp)) continue;
-
-      // Source ID
-      const url = data.url || '';
-      let sid = data.source_id || '';
-      if (!sid) {
-        for (const key of Object.keys(sourceNames)) {
-          if (url.toLowerCase().includes(key) || file.toLowerCase().includes(key)) { sid = key; break; }
-        }
-      }
-      if (!sid) continue;
-
-      // Airline - check multiple locations
-      let airline = extracted.flight?.outbound?.airline || data.flight?.outbound?.airline || data.airline || '';
-
-      // Hotel
-      let hotel = extracted.hotel?.name || data.hotel?.name || '';
-      if (!hotel && extracted.hotel?.names?.length) hotel = extracted.hotel.names[0];
-
-      // Package type
-      let pkgType = data.package_type || 'unknown';
-      if (pkgType === 'unknown' && (url.includes('vacation.liontravel') || url.includes('自由配'))) pkgType = 'fit';
-
-      offers.push({
-        file,
-        source_id: sid,
-        price_per_person: pp,
-        currency: data.currency || extracted.price?.currency || 'TWD',
-        airline,
-        hotel,
-        package_type: pkgType,
-        baggage_included: data.baggage_included ?? null,
-      });
-    } catch { /* skip */ }
-  }
-
+  const offers: RawOffer[] = rows
+    .filter((row) => row.price_per_person !== null)
+    .map((row) => ({
+      file: row.id,
+      source_id: row.source_id,
+      price_per_person: row.price_per_person!,
+      currency: row.currency || 'TWD',
+      airline: row.airline || '',
+      hotel: row.hotel_name || row.name || '',
+      package_type: 'fit',
+      baggage_included: null,
+    }));
   offers.sort((a, b) => a.price_per_person - b.price_per_person);
   return offers;
 }
@@ -340,7 +262,7 @@ function parseItinerary(spec: string): Map<string, number> {
   return map;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const opt = (name: string) => {
     const i = args.indexOf(name);
@@ -359,12 +281,12 @@ function main(): void {
   const jpyRate = parseFloat(opt('--jpy-rate') || '0.22'); // JPY → TWD
 
   // Load reference data
-  const routes = loadTransportRoutes();
-  const hotelAreas = loadHotelAreas();
+  const routes = await loadTransportRoutesFromTurso() as TransportRoutes;
+  const hotelAreas = await loadHotelAreasFromTurso();
   const airlines = loadAirlines();
 
   // Scan offers
-  const rawOffers = scanOffers(region, filterDate, pax);
+  const rawOffers = await scanOffers(region, filterDate, pax);
   if (rawOffers.length === 0) {
     console.log(`No offers found for region "${region}".`);
     process.exit(1);
@@ -454,4 +376,7 @@ function main(): void {
   console.log('');
 }
 
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

@@ -6,7 +6,7 @@
  *
  * Destination config is stored in Turso DB (destination_config, origin_config, global_config).
  * Call loadDestinationConfigFromDb() at startup to populate the in-memory caches.
- * All sync APIs check the DB cache first, falling back to the JSON file if present.
+ * All sync APIs require the DB cache. Missing DB rows are configuration errors.
  */
 
 import * as fs from 'fs';
@@ -63,7 +63,7 @@ interface OtaSourcesFile {
 // Module-level caches
 // ============================================================================
 
-/** JSON file cache (backward compat fallback) */
+/** API-shaped caches synthesized from Turso rows. */
 let destinationsCache: DestinationsFile | null = null;
 let otaSourcesCache: OtaSourcesFile | null = null;
 let projectRootCache: string | null = null;
@@ -95,7 +95,9 @@ function requirePipeline(): { TursoPipelineClient: new (opts?: any) => any } {
  */
 export async function loadDestinationConfigFromDb(): Promise<void> {
   if (dbDestCache !== null) return; // already loaded
-  if (dbLoadAttempted) return;      // previous attempt failed, do not retry
+  if (dbLoadAttempted) {
+    missingDbConfig('Destination config DB load was attempted but no cache was populated');
+  }
   dbLoadAttempted = true;
 
   try {
@@ -104,7 +106,7 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
 
     const batchResponse = await client.executeBatch([
       'SELECT slug, display_name, ref_id, ref_path, timezone, currency, markets_json, primary_airports_json, language, origin, lat, lon FROM destination_config',
-      'SELECT slug, country_code, currency, timezone, holiday_calendar, primary_airports_json FROM origin_config',
+      'SELECT slug, country_code, currency, timezone, primary_airports_json FROM origin_config',
       'SELECT key, value FROM global_config',
       'SELECT source_id, name, type_json, status, scraper_script, regions_json, url_template, notes FROM ota_sources',
     ]);
@@ -161,7 +163,6 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
         country_code: row.country_code || '',
         currency: row.currency || '',
         timezone: row.timezone || '',
-        holiday_calendar: row.holiday_calendar || '',
         primary_airports: primaryAirports,
       };
     }
@@ -196,16 +197,13 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
       if (regions) (cfg as any).regions = regions;
       newOtaCache.set(row.source_id, cfg);
     }
-    if (newOtaCache.size > 0) {
-      dbOtaSourcesCache = newOtaCache;
-    }
+    dbOtaSourcesCache = newOtaCache;
 
     console.error(
       `[loader] Loaded ${Object.keys(newDestCache).length} destinations, ${newOtaCache.size} OTA sources from DB`
     );
   } catch (err: any) {
-    console.error('[loader] Could not load destination config from DB:', err.message);
-    // Leave caches null — sync APIs will fall back to JSON file
+    throw new Error(`Could not load destination config from Turso: ${err.message}. Run npm run db:migrate:turso to create and seed destination_config/ota_sources.`);
   }
 }
 
@@ -249,64 +247,52 @@ function resolveRepoPath(relPath: string, context: string): string {
 }
 
 // ============================================================================
-// JSON file fallback
+// DB-backed config access
 // ============================================================================
 
+function missingDbConfig(message: string): never {
+  throw new Error(`${message}. Run npm run db:migrate:turso to create/seed destination_config, origin_config, global_config, and ota_sources before running this command.`);
+}
+
 /**
- * Load destinations configuration from JSON file (backward-compat fallback).
- * No-op if DB cache is populated. No-op if file does not exist.
+ * Load destinations configuration from Turso-populated cache.
  */
 export function loadDestinations(): DestinationsFile {
   if (destinationsCache) return destinationsCache;
 
-  // If DB cache is populated, synthesize a DestinationsFile from it
-  if (dbDestCache !== null) {
-    destinationsCache = {
-      version: 'db',
-      destinations: { ...dbDestCache },
-      default_destination: dbGlobalCache?.['default_destination'] || 'tokyo_2026',
-    };
-    return destinationsCache;
+  if (dbDestCache === null) {
+    missingDbConfig('Destination config cache is empty');
+  }
+  if (Object.keys(dbDestCache).length === 0) {
+    missingDbConfig('Turso destination_config has no rows');
   }
 
-  // Fallback: try JSON file
-  const configPath = resolveRepoPath('data/destinations.json', 'Destinations config');
-  if (!fs.existsSync(configPath)) {
-    // Return an empty stub so callers do not crash; DB should be loaded first
-    destinationsCache = { version: 'empty', destinations: {}, default_destination: 'tokyo_2026' };
-    return destinationsCache;
-  }
-
-  const content = fs.readFileSync(configPath, 'utf-8');
-  destinationsCache = JSON.parse(content) as DestinationsFile;
+  destinationsCache = {
+    version: 'db',
+    destinations: { ...dbDestCache },
+    default_destination: dbGlobalCache?.['default_destination'] || missingDbConfig('Turso global_config.default_destination is missing'),
+  };
   return destinationsCache;
 }
 
 /**
- * Load OTA sources configuration.
- * Checks DB cache first (populated by loadDestinationConfigFromDb), falls back to JSON file.
+ * Load OTA sources configuration from Turso-populated cache.
  */
 export function loadOtaSources(): OtaSourcesFile {
   if (otaSourcesCache) return otaSourcesCache;
 
-  // If DB cache is populated, synthesize an OtaSourcesFile from it
-  if (dbOtaSourcesCache !== null && dbOtaSourcesCache.size > 0) {
-    const sources: Record<string, OtaSourceConfig> = {};
-    for (const [id, cfg] of dbOtaSourcesCache) {
-      sources[id] = cfg;
-    }
-    otaSourcesCache = { version: 'db', sources };
-    return otaSourcesCache;
+  if (dbOtaSourcesCache === null) {
+    missingDbConfig('OTA sources cache is empty');
+  }
+  if (dbOtaSourcesCache.size === 0) {
+    missingDbConfig('Turso ota_sources has no rows');
   }
 
-  // Fallback: try JSON file
-  const configPath = resolveRepoPath('data/ota-sources.json', 'OTA sources config');
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`OTA sources config not found: ${configPath}. Run db:migrate:turso to seed ota_sources table.`);
+  const sources: Record<string, OtaSourceConfig> = {};
+  for (const [id, cfg] of dbOtaSourcesCache) {
+    sources[id] = cfg;
   }
-
-  const content = fs.readFileSync(configPath, 'utf-8');
-  otaSourcesCache = JSON.parse(content) as OtaSourcesFile;
+  otaSourcesCache = { version: 'db', sources };
   return otaSourcesCache;
 }
 
@@ -353,33 +339,18 @@ export function clearConfigCache(): void {
 
 /**
  * Get all available destination slugs.
- * Merges DB cache + JSON file cache.
+ * Reads the Turso-backed cache.
  */
 export function getAvailableDestinations(): string[] {
-  // DB cache takes priority; JSON fallback merges in as well
-  if (dbDestCache !== null) {
-    const dbSlugs = Object.keys(dbDestCache);
-    // Merge with any JSON-only entries (if JSON still exists during transition)
-    const configPath = resolveRepoPath('data/destinations.json', 'Destinations config');
-    if (fs.existsSync(configPath)) {
-      const jsonDests = loadDestinations().destinations;
-      const merged = new Set([...dbSlugs, ...Object.keys(jsonDests)]);
-      return Array.from(merged);
-    }
-    return dbSlugs;
-  }
   const config = loadDestinations();
   return Object.keys(config.destinations);
 }
 
 /**
  * Get destination configuration by slug.
- * Checks DB cache first, then JSON cache.
+ * Checks the Turso-backed cache.
  */
 export function getDestinationConfig(slug: string): DestinationConfig | null {
-  if (dbDestCache !== null) {
-    return dbDestCache[slug] || null;
-  }
   const config = loadDestinations();
   return config.destinations[slug] || null;
 }
@@ -392,9 +363,7 @@ export function resolveDestinationRefPath(slug: string): string | null {
   const destConfig = getDestinationConfig(slug);
   if (!destConfig) {
     // Try to find by ref_id (e.g., "tokyo" matches "tokyo_2026")
-    const allDests = dbDestCache !== null
-      ? Object.values(dbDestCache)
-      : Object.values(loadDestinations().destinations);
+    const allDests = Object.values(loadDestinations().destinations);
     for (const dest of allDests) {
       if (slug.toLowerCase().includes(dest.ref_id.toLowerCase())) {
         const refPath = resolveRepoPath(dest.ref_path, `Destination ref_path (${dest.slug})`);
@@ -404,6 +373,7 @@ export function resolveDestinationRefPath(slug: string): string | null {
     return null;
   }
 
+  if (!destConfig.ref_path) return null;
   const refPath = resolveRepoPath(destConfig.ref_path, `Destination ref_path (${destConfig.slug})`);
   return fs.existsSync(refPath) ? refPath : null;
 }
@@ -414,10 +384,11 @@ export function resolveDestinationRefPath(slug: string): string | null {
  */
 export function getDefaultDestination(): string {
   if (dbGlobalCache !== null) {
-    return dbGlobalCache['default_destination'] || 'tokyo_2026';
+    const defaultDestination = dbGlobalCache['default_destination'];
+    if (!defaultDestination) missingDbConfig('Turso global_config.default_destination is missing');
+    return defaultDestination;
   }
-  const config = loadDestinations();
-  return config.default_destination;
+  return loadDestinations().default_destination;
 }
 
 /**
@@ -433,7 +404,6 @@ export interface OriginConfig {
   country_code?: string;
   currency?: string;
   timezone?: string;
-  holiday_calendar?: string;
   primary_airports?: string[];
 }
 
@@ -450,7 +420,6 @@ export function getOriginConfig(slug: string): OriginConfig | undefined {
     country_code: (row.country_code as string) || undefined,
     currency: (row.currency as string) || undefined,
     timezone: (row.timezone as string) || undefined,
-    holiday_calendar: (row.holiday_calendar as string) || undefined,
     primary_airports: Array.isArray(row.primary_airports) ? (row.primary_airports as string[]) : undefined,
   };
 }

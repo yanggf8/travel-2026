@@ -3,11 +3,11 @@
  * Data Consistency Validator
  *
  * Validates consistency between:
- * - CLAUDE.md OTA table and data/ota-sources.json
+ * - CLAUDE.md OTA table and Turso ota_sources
  * - CLAUDE.md completed items vs actual files on disk
  * - Skill SKILL.md file existence
  * - node_modules readiness
- * - Currency settings in JSON files
+ * - Currency settings in Turso config
  * - Hardcoded values in scripts (pax, prices)
  * - Scraper script file existence
  *
@@ -19,6 +19,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { TursoPipelineClient } from './turso-pipeline';
 
 interface ValidationResult {
   category: string;
@@ -90,33 +91,64 @@ function fileExists(filePath: string): boolean {
   return fs.existsSync(path.join(PROJECT_ROOT, filePath));
 }
 
+function rowsToObjects(response: any, idx = 0): Record<string, any>[] {
+  const result = response?.results?.[idx]?.response?.result;
+  if (!result?.rows || !result?.cols) return [];
+  const cols = result.cols.map((c: any) => c.name);
+  return result.rows.map((row: any[]) => {
+    const obj: Record<string, any> = {};
+    cols.forEach((name: string, i: number) => {
+      obj[name] = row[i]?.value ?? null;
+    });
+    return obj;
+  });
+}
+
 /**
- * Validate OTA sources JSON structure
+ * Validate OTA sources table structure
  */
-function validateOtaSources(): OtaSourcesFile | null {
-  const sources = loadJson<OtaSourcesFile>('data/ota-sources.json');
-  if (!sources) return null;
+async function validateOtaSources(client: TursoPipelineClient): Promise<OtaSourcesFile | null> {
+  const rows = rowsToObjects(await client.execute(
+    `SELECT source_id, name, type_json, status, scraper_script, notes FROM ota_sources ORDER BY source_id`
+  ));
+  if (rows.length === 0) {
+    addResult('ota-sources', 'error', 'Turso ota_sources has no rows. Run npm run db:migrate:turso.');
+    return null;
+  }
+  const sources: OtaSourcesFile = { version: 'db', sources: {} };
+  for (const row of rows) {
+    sources.sources[row.source_id] = {
+      source_id: row.source_id,
+      display_name: row.name,
+      display_name_en: row.name,
+      types: row.type_json ? JSON.parse(row.type_json) : [],
+      currency: 'TWD',
+      supported: row.status === 'active',
+      scraper_script: row.scraper_script || null,
+      notes: row.notes || undefined,
+    };
+  }
 
   for (const [id, source] of Object.entries(sources.sources)) {
     // Check source_id matches key
     if (source.source_id !== id) {
-      addResult('ota-sources', 'error', `Source ID mismatch: key "${id}" vs source_id "${source.source_id}"`, 'data/ota-sources.json');
+      addResult('ota-sources', 'error', `Source ID mismatch: key "${id}" vs source_id "${source.source_id}"`, 'turso:ota_sources');
     }
 
     // Check scraper_script exists if specified
     if (source.scraper_script && !fileExists(source.scraper_script)) {
-      addResult('ota-sources', 'error', `Scraper script not found: ${source.scraper_script}`, 'data/ota-sources.json');
+      addResult('ota-sources', 'error', `Scraper script not found: ${source.scraper_script}`, 'turso:ota_sources');
     }
 
     // Warning if supported but no scraper
     if (source.supported && !source.scraper_script) {
-      addResult('ota-sources', 'warning', `${id}: marked as supported but no scraper_script`, 'data/ota-sources.json');
+      addResult('ota-sources', 'warning', `${id}: marked as supported but no scraper_script`, 'turso:ota_sources');
     }
 
     // Check currency is valid
     const validCurrencies = ['TWD', 'JPY', 'USD', 'EUR'];
     if (!validCurrencies.includes(source.currency)) {
-      addResult('ota-sources', 'warning', `${id}: unknown currency "${source.currency}"`, 'data/ota-sources.json');
+      addResult('ota-sources', 'warning', `${id}: unknown currency "${source.currency}"`, 'turso:ota_sources');
     }
   }
 
@@ -163,7 +195,7 @@ function parseClaudeOtaTable(content: string): ClaudeOtaEntry[] {
 }
 
 /**
- * Compare CLAUDE.md OTA table with ota-sources.json
+ * Compare CLAUDE.md OTA table with Turso ota_sources
  */
 function validateClaudeMdConsistency(sources: OtaSourcesFile): void {
   const claudeMd = readFile('CLAUDE.md');
@@ -180,7 +212,7 @@ function validateClaudeMdConsistency(sources: OtaSourcesFile): void {
     const source = sources.sources[entry.sourceId];
 
     if (!source) {
-      addResult('consistency', 'warning', `CLAUDE.md lists "${entry.sourceId}" but not in ota-sources.json`, 'CLAUDE.md');
+      addResult('consistency', 'warning', `CLAUDE.md lists "${entry.sourceId}" but not in Turso ota_sources`, 'CLAUDE.md');
       continue;
     }
 
@@ -190,10 +222,10 @@ function validateClaudeMdConsistency(sources: OtaSourcesFile): void {
     const mdScrapeOnly = entry.supported.includes('scrape-only');
 
     if (jsonSupported && !mdSupported && !mdScrapeOnly) {
-      addResult('consistency', 'error', `${entry.sourceId}: ota-sources.json says supported=true but CLAUDE.md shows unsupported`, 'CLAUDE.md');
+      addResult('consistency', 'error', `${entry.sourceId}: Turso ota_sources says supported=true but CLAUDE.md shows unsupported`, 'CLAUDE.md');
     }
     if (!jsonSupported && mdSupported && !mdScrapeOnly) {
-      addResult('consistency', 'error', `${entry.sourceId}: ota-sources.json says supported=false but CLAUDE.md shows ✅`, 'CLAUDE.md');
+      addResult('consistency', 'error', `${entry.sourceId}: Turso ota_sources says supported=false but CLAUDE.md shows ✅`, 'CLAUDE.md');
     }
 
     // Check scraper status
@@ -212,7 +244,7 @@ function validateClaudeMdConsistency(sources: OtaSourcesFile): void {
   const claudeIds = new Set(claudeEntries.map(e => e.sourceId));
   for (const id of Object.keys(sources.sources)) {
     if (!claudeIds.has(id)) {
-      addResult('consistency', 'info', `${id}: in ota-sources.json but not listed in CLAUDE.md OTA table`, 'CLAUDE.md');
+      addResult('consistency', 'info', `${id}: in Turso ota_sources but not listed in CLAUDE.md OTA table`, 'CLAUDE.md');
     }
   }
 }
@@ -259,21 +291,19 @@ function validatePythonScripts(): void {
 }
 
 /**
- * Validate destinations.json consistency
+ * Validate destination_config consistency
  */
-function validateDestinations(): void {
-  const destinations = loadJson<Record<string, unknown>>('data/destinations.json');
-  if (!destinations) return;
-
-  // Check each destination
-  for (const [id, dest] of Object.entries(destinations.destinations || {})) {
-    const d = dest as Record<string, unknown>;
-
-    // Check ref_path exists
-    if (d.ref_path && typeof d.ref_path === 'string') {
-      if (!fileExists(d.ref_path)) {
-        addResult('destinations', 'error', `${id}: ref_path not found: ${d.ref_path}`, 'data/destinations.json');
-      }
+async function validateDestinations(client: TursoPipelineClient): Promise<void> {
+  const rows = rowsToObjects(await client.execute(
+    `SELECT slug, ref_path FROM destination_config ORDER BY slug`
+  ));
+  if (rows.length === 0) {
+    addResult('destinations', 'error', 'Turso destination_config has no rows. Run npm run db:migrate:turso.');
+    return;
+  }
+  for (const row of rows) {
+    if (row.ref_path && typeof row.ref_path === 'string' && !fileExists(row.ref_path)) {
+      addResult('destinations', 'error', `${row.slug}: ref_path not found: ${row.ref_path}`, 'turso:destination_config');
     }
   }
 }
@@ -281,39 +311,52 @@ function validateDestinations(): void {
 /**
  * Validate holiday calendars
  */
-function validateHolidayCalendars(): void {
-  const holidaysDir = path.join(PROJECT_ROOT, 'data/holidays');
-  if (!fs.existsSync(holidaysDir)) {
-    addResult('holidays', 'info', 'No holiday calendars found in data/holidays/');
+async function validateHolidayCalendars(client: TursoPipelineClient): Promise<void> {
+  const rows = rowsToObjects(await client.execute(
+    `SELECT country, year, COUNT(*) AS day_count,
+            SUM(CASE WHEN is_holiday = 2 AND name IS NOT NULL THEN 1 ELSE 0 END) AS named_holidays,
+            MIN(source_url) AS source_url,
+            MIN(fetched_at) AS fetched_at
+     FROM holidays
+     GROUP BY country, year
+     ORDER BY country, year`
+  ));
+  if (rows.length === 0) {
+    addResult('holidays', 'error', 'Turso holidays has no rows. Run npm run db:migrate:turso and npm run db:fetch:holidays:tw -- <DGPA CSV URL>.');
     return;
   }
-
-  const calendarFiles = fs.readdirSync(holidaysDir).filter(f => f.endsWith('.json'));
-
-  for (const file of calendarFiles) {
-    const calendar = loadJson<Record<string, unknown>>(`data/holidays/${file}`);
-    if (!calendar) continue;
-
-    // Check required fields
-    if (!calendar.country) {
-      addResult('holidays', 'warning', `Missing "country" field`, `data/holidays/${file}`);
+  for (const row of rows) {
+    const dayCount = Number(row.day_count || 0);
+    const namedHolidayCount = Number(row.named_holidays || 0);
+    if (dayCount < 365) {
+      addResult('holidays', 'warning', `${row.country} ${row.year}: only ${dayCount} day rows in Turso`, 'turso:holidays');
     }
-    if (!calendar.year) {
-      addResult('holidays', 'warning', `Missing "year" field`, `data/holidays/${file}`);
+    if (namedHolidayCount === 0) {
+      addResult('holidays', 'error', `${row.country} ${row.year}: no named holidays in Turso`, 'turso:holidays');
     }
-    if (!calendar.holidays || typeof calendar.holidays !== 'object') {
-      addResult('holidays', 'error', `Missing or invalid "holidays" field`, `data/holidays/${file}`);
-    }
-
-    // Validate date formats in holidays
-    if (calendar.holidays && typeof calendar.holidays === 'object') {
-      for (const date of Object.keys(calendar.holidays as Record<string, unknown>)) {
-        if (!/^\d{2}-\d{2}$/.test(date)) {
-          addResult('holidays', 'warning', `Invalid date format "${date}" (expected MM-DD)`, `data/holidays/${file}`);
-        }
-      }
+    if (!row.source_url || !row.fetched_at) {
+      addResult('holidays', 'error', `${row.country} ${row.year}: missing source_url/fetched_at provenance`, 'turso:holidays');
     }
   }
+}
+
+async function validateReferenceTables(client: TursoPipelineClient): Promise<void> {
+  const response = await client.executeBatch([
+    `SELECT COUNT(*) AS count FROM hotel_areas`,
+    `SELECT COUNT(*) AS count FROM transport_routes`,
+    `SELECT COUNT(*) AS count FROM transport_hubs`,
+    `SELECT COUNT(*) AS count FROM destination_references`,
+    `SELECT COUNT(*) AS count FROM stage0_research_artifacts`,
+    `SELECT COUNT(*) AS count FROM stage0_selected_offers`,
+  ]);
+  const labels = ['hotel_areas', 'transport_routes', 'transport_hubs', 'destination_references', 'stage0_research_artifacts', 'stage0_selected_offers'];
+  labels.forEach((label, idx) => {
+    const row = rowsToObjects(response, idx)[0] || {};
+    const count = Number(row.count || 0);
+    if (count === 0) {
+      addResult('turso-reference', 'error', `Turso ${label} has no rows. Run npx ts-node scripts/backfill-local-reference-data.ts.`, `turso:${label}`);
+    }
+  });
 }
 
 /**
@@ -441,19 +484,22 @@ function validateCliScripts(): void {
 /**
  * Main validation runner
  */
-function main(): void {
+async function main(): Promise<void> {
   const isDoctor = process.argv.includes('--doctor');
   const label = isDoctor ? 'Project health check (doctor)' : 'Data consistency validation';
   console.log(`Running ${label}...\n`);
 
+  const client = new TursoPipelineClient();
+
   // Always run: data consistency checks
-  const sources = validateOtaSources();
+  const sources = await validateOtaSources(client);
   if (sources) {
     validateClaudeMdConsistency(sources);
   }
   validatePythonScripts();
-  validateDestinations();
-  validateHolidayCalendars();
+  await validateDestinations(client);
+  await validateHolidayCalendars(client);
+  await validateReferenceTables(client);
 
   // Always run: documentation ↔ code drift checks
   validateCompletedItems();
@@ -510,4 +556,7 @@ function main(): void {
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

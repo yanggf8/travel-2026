@@ -3,7 +3,7 @@ export {
   SKILL_CONTRACTS,
   STATE_MANAGER_METHODS,
   CONFIG_LOADER_APIS,
-  CONFIG_FILES,
+  CONFIG_SOURCES,
   getSkillContract,
   listSkills,
   validateStateManagerInterface,

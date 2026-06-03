@@ -41,5 +41,8 @@ __pycache__/
 # Scrape outputs (regenerable)
 scrapes/
 
+# Research/checkpoint outputs must be imported into Turso, not tracked locally
+research/
+
 # Temp analysis/debug files in data/
 data/tmp_*

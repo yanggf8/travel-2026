@@ -5,12 +5,8 @@ import {
   validateDestinationRefConsistency,
   type DestinationRef,
 } from '../../state/destination-ref-schema';
-import {
-  resolveDestinationRefPath as configResolveDestinationRefPath,
-  getAvailableDestinations,
-} from '../../config/loader';
 import { allocateClustersToDays, parseAssignments, getSessionOrderForDayType, chunkEvenly } from '../shared/itinerary-helpers';
-import * as fs from 'fs';
+import { loadDestinationReferenceFromTurso } from '../../services/turso-service';
 
 const populateItineraryCommand: CommandHandler = {
   names: ['populate-itinerary'],
@@ -58,24 +54,14 @@ const populateItineraryCommand: CommandHandler = {
       process.exit(1);
     }
 
-    // Destination reference selection
-    const refPath = configResolveDestinationRefPath(destination);
-    if (!refPath) {
-      const available = getAvailableDestinations();
-      console.error(`Error: No destination reference available for ${destination}.`);
-      console.error('Fix: add/update entry in data/destinations.json and ensure the ref_path exists.');
-      console.error(`Available destinations: ${available.join(', ')}`);
-      process.exit(1);
-    }
-
     // Load and validate destination reference with Zod
     let ref: DestinationRef;
     try {
-      const rawRef = JSON.parse(fs.readFileSync(refPath, 'utf-8'));
-      ref = validateDestinationRef(rawRef, refPath);
+      const rawRef = await loadDestinationReferenceFromTurso(destination);
+      ref = validateDestinationRef(rawRef, `turso:destination_references/${destination}`);
 
       // Check internal consistency (dangling references)
-      const refWarnings = validateDestinationRefConsistency(ref, refPath);
+      const refWarnings = validateDestinationRefConsistency(ref, `turso:destination_references/${destination}`);
       if (refWarnings.length > 0 && verbose) {
         console.log('\n⚠️  Destination reference consistency warnings:');
         for (const w of refWarnings.slice(0, 5)) {
@@ -86,7 +72,7 @@ const populateItineraryCommand: CommandHandler = {
         }
       }
     } catch (error) {
-      console.error(`Error: Failed to load destination reference: ${refPath}`);
+      console.error(`Error: Failed to load Turso destination reference for ${destination}`);
       console.error((error as Error).message);
       process.exit(1);
     }
@@ -185,7 +171,7 @@ const populateItineraryCommand: CommandHandler = {
     console.log(`   Pace: ${pace}`);
     console.log(`   Goals: ${goals.join(', ')}`);
     if (assignOpt) console.log(`   Assign: ${assignOpt}`);
-    console.log(`   Ref: ${refPath}`);
+    console.log(`   Ref: turso:destination_references/${destination}`);
 
     if (skipped.length > 0) {
       console.log('\nSkipped:');

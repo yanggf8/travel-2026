@@ -5,6 +5,7 @@ type TursoPipelineRequest = {
   type: 'execute';
   stmt: {
     sql: string;
+    args?: TursoArg[];
   };
 };
 
@@ -53,6 +54,29 @@ export type TursoClientOptions = {
   tokenEnv?: string;
 };
 
+export type TursoArg =
+  | { type: 'null' }
+  | { type: 'text'; value: string }
+  | { type: 'integer'; value: string }
+  | { type: 'float'; value: number };
+
+export function tursoText(value: string | null | undefined): TursoArg {
+  return value === null || value === undefined
+    ? { type: 'null' }
+    : { type: 'text', value: String(value) };
+}
+
+export function tursoInt(value: number | string | null | undefined): TursoArg {
+  if (value === null || value === undefined || value === '') return { type: 'null' };
+  return { type: 'integer', value: String(Math.trunc(Number(value))) };
+}
+
+export function tursoFloat(value: number | null | undefined): TursoArg {
+  return value === null || value === undefined || !Number.isFinite(value)
+    ? { type: 'null' }
+    : { type: 'float', value };
+}
+
 export class TursoPipelineClient {
   private endpoint: string;
   private tokenEnv: string;
@@ -97,6 +121,39 @@ export class TursoPipelineClient {
     const json = (await res.json()) as any;
 
     // Surface any error in the response body (Turso can put error at top level or under results[0].response.error)
+    const topLevelError = json?.error;
+    if (topLevelError) {
+      throw new Error(`Turso pipeline error: ${JSON.stringify(topLevelError)}`);
+    }
+    const firstResultError = json?.results?.[0]?.response?.error || json?.results?.[0]?.error;
+    if (firstResultError) {
+      throw new Error(`Turso execute error: ${JSON.stringify(firstResultError)}`);
+    }
+
+    return json as TursoPipelineResponse;
+  }
+
+  async executeParams(sql: string, args: TursoArg[]): Promise<TursoPipelineResponse> {
+    const token = requireEnv(this.tokenEnv);
+    const body = {
+      requests: [{ type: 'execute', stmt: { sql, args } } satisfies TursoPipelineRequest],
+    };
+
+    const res = await fetch(this.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Turso HTTP error ${res.status} at ${this.endpoint}: ${text || res.statusText}`);
+    }
+
+    const json = (await res.json()) as any;
     const topLevelError = json?.error;
     if (topLevelError) {
       throw new Error(`Turso pipeline error: ${JSON.stringify(topLevelError)}`);
@@ -189,5 +246,43 @@ export class TursoPipelineClient {
       }
     }
   }
-}
 
+  async executeManyParams(
+    statements: Array<{ sql: string; args: TursoArg[] }>,
+    batchSize = 25,
+  ): Promise<void> {
+    for (let i = 0; i < statements.length; i += batchSize) {
+      const chunk = statements.slice(i, i + batchSize);
+      const token = requireEnv(this.tokenEnv);
+      const body = {
+        requests: chunk.map(({ sql, args }) => ({ type: 'execute', stmt: { sql, args } }) satisfies TursoPipelineRequest),
+      };
+
+      const res = await fetch(this.endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Turso HTTP error ${res.status}: ${text || res.statusText}`);
+      }
+
+      const json = (await res.json()) as any;
+      const topLevelError = json?.error;
+      if (topLevelError) {
+        throw new Error(`Turso pipeline executeManyParams error: ${JSON.stringify(topLevelError)}`);
+      }
+
+      const firstError = json.results?.find((r: any) => r?.response?.error || r?.error);
+      const err = firstError?.response?.error || firstError?.error;
+      if (err) {
+        throw new Error(`Turso pipeline executeManyParams error: ${JSON.stringify(err)}`);
+      }
+    }
+  }
+}

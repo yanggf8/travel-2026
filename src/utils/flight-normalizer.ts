@@ -5,15 +5,12 @@
  * Handles both outbound (TPE→KIX) and return (KIX→TPE) data.
  *
  * Usage:
- *   npx ts-node src/utils/flight-normalizer.ts scrapes/trip-feb24-out.json
- *   npx ts-node src/utils/flight-normalizer.ts scrapes/trip-feb28-return.json --top 5
  *   npx ts-node src/utils/flight-normalizer.ts --scan 2026-02-24 2026-02-28
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { Result } from '../types';
 import { EXCHANGE_RATES, convertToTWD } from '../config/constants';
+import { queryRawOffers, TursoRawOfferResult } from '../services/turso-service';
 
 // Types
 export interface NormalizedFlight {
@@ -173,19 +170,13 @@ function detectDirectionAndDate(data: Record<string, unknown>): { direction: 'ou
 }
 
 /**
- * Normalize a Trip.com flight search JSON file.
+ * Normalize a Trip.com flight search payload already imported into Turso.
  */
-export function normalizeFlightData(filePath: string): Result<FlightSearchResult> {
+export function normalizeFlightPayload(label: string, data: Record<string, unknown>): Result<FlightSearchResult> {
   try {
-    const absolutePath = path.isAbsolute(filePath)
-      ? filePath
-      : path.resolve(process.cwd(), filePath);
-    const content = fs.readFileSync(absolutePath, 'utf-8');
-    const data = JSON.parse(content) as Record<string, unknown>;
-
     const rawText = (data.raw_text as string) || '';
     if (!rawText) {
-      return Result.err(`No raw_text found in ${filePath}`);
+      return Result.err(`No raw_text found in ${label}`);
     }
 
     // Detect pax from URL
@@ -200,7 +191,7 @@ export function normalizeFlightData(filePath: string): Result<FlightSearchResult
     const fullFlights = flights.filter(f => !f.isLCC);
 
     return Result.ok({
-      file: filePath,
+      file: label,
       direction,
       date,
       pax,
@@ -210,53 +201,40 @@ export function normalizeFlightData(filePath: string): Result<FlightSearchResult
       cheapestAny: flights.length > 0 ? flights[0] : null,
     });
   } catch (e) {
-    return Result.err(`Failed to normalize ${filePath}: ${e instanceof Error ? e.message : String(e)}`);
+    return Result.err(`Failed to normalize ${label}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
 /**
- * Scan scrapes/ directory for flight data files matching a date range.
+ * Local flight JSON files are not a source of truth. Use Turso-imported offers.
  */
-export function scanFlightFiles(
-  dataDir: string,
-  startDate?: string,
-  endDate?: string
-): { outbound: Map<string, string>; return_: Map<string, string> } {
-  const outbound = new Map<string, string>();
-  const return_ = new Map<string, string>();
+export function normalizeFlightData(filePath: string): Result<FlightSearchResult> {
+  return Result.err(`Local flight data files are not supported: ${filePath}. Import scrape output with npm run db:import:turso and use --scan.`);
+}
 
-  const dir = path.isAbsolute(dataDir) ? dataDir : path.resolve(process.cwd(), dataDir);
-  const files = fs.readdirSync(dir).filter(f => f.startsWith('trip-') && f.endsWith('.json'));
+export function scanFlightFiles(): { outbound: Map<string, string>; return_: Map<string, string> } {
+  throw new Error('Local scrapes/ scans are not supported. Import scrape output with npm run db:import:turso and query Turso offers.');
+}
 
-  for (const file of files) {
-    const filePath = path.join(dir, file);
+async function loadFlightResultsFromTurso(startDate?: string, endDate?: string): Promise<FlightSearchResult[]> {
+  const rows = await queryRawOffers({
+    type: 'flight',
+    ...(startDate ? { start: startDate } : {}),
+    ...(endDate ? { end: endDate } : {}),
+    limit: 500,
+  });
+  const results: FlightSearchResult[] = [];
+  for (const row of rows) {
+    if (!row.raw_data) continue;
     try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const data = JSON.parse(content);
-      const url = data.url || '';
-
-      const dateMatch = url.match(/ddate=(\d{4}-\d{2}-\d{2})/);
-      if (!dateMatch) continue;
-
-      const date = dateMatch[1];
-      const isOutbound = url.includes('dcity=tpe');
-
-      if (isOutbound) {
-        // Prefer newer files (v2 suffix)
-        if (!outbound.has(date) || file.includes('v2') || file.includes('fresh')) {
-          outbound.set(date, filePath);
-        }
-      } else {
-        if (!return_.has(date) || file.includes('v2') || file.includes('fresh')) {
-          return_.set(date, filePath);
-        }
-      }
+      const payload = JSON.parse(row.raw_data) as Record<string, unknown>;
+      const normalized = normalizeFlightPayload(row.id, payload);
+      if (normalized.ok) results.push(normalized.value);
     } catch {
-      // Skip unparseable files
+      // Skip malformed imported payloads.
     }
   }
-
-  return { outbound, return_ };
+  return results;
 }
 
 /**
@@ -270,76 +248,46 @@ export function formatFlight(f: NormalizedFlight): string {
 
 // CLI entry point
 if (require.main === module) {
-  const args = process.argv.slice(2);
+  (async () => {
+    const args = process.argv.slice(2);
 
-  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-    console.log(`
+    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+      console.log(`
 Flight Data Normalizer
 
 Usage:
-  npx ts-node src/utils/flight-normalizer.ts <file.json> [--top N]
   npx ts-node src/utils/flight-normalizer.ts --scan [startDate] [endDate]
 
 Options:
-  <file.json>    Parse a single Trip.com flight JSON file
   --top N        Show only top N cheapest flights (default: all)
-  --scan         Scan scrapes/ for all flight files and summarize
+  --scan         Query Turso flight offers and summarize
 `);
-    process.exit(0);
-  }
-
-  if (args[0] === '--scan') {
-    const [, startDate, endDate] = args;
-    const { outbound, return_ } = scanFlightFiles('scrapes', startDate, endDate);
-
-    console.log('=== Outbound Flights (TPE→KIX) ===');
-    for (const [date, file] of [...outbound.entries()].sort()) {
-      const result = normalizeFlightData(file);
-      if (result.ok) {
-        const r = result.value;
-        const cheapest = r.cheapestAny;
-        console.log(`  ${date}: ${r.flights.length} flights, cheapest: ${cheapest ? formatFlight(cheapest) : 'none'}`);
-      }
+      process.exit(0);
     }
 
-    console.log('\n=== Return Flights (KIX→TPE) ===');
-    for (const [date, file] of [...return_.entries()].sort()) {
-      const result = normalizeFlightData(file);
-      if (result.ok) {
-        const r = result.value;
-        const cheapest = r.cheapestAny;
-        console.log(`  ${date}: ${r.flights.length} flights, cheapest: ${cheapest ? formatFlight(cheapest) : 'none'}`);
-      }
-    }
-  } else {
-    // Single file mode
-    const filePath = args[0];
-    const topIdx = args.indexOf('--top');
-    const topN = topIdx >= 0 ? parseInt(args[topIdx + 1], 10) : Infinity;
+    if (args[0] === '--scan') {
+      const [, startDate, endDate] = args;
+      const results = await loadFlightResultsFromTurso(startDate, endDate);
 
-    const result = normalizeFlightData(filePath);
-    if (!result.ok) {
-      console.error(result.error);
+      console.log('=== Outbound Flights (TPE→KIX) ===');
+      for (const r of results.filter((x) => x.direction === 'outbound').sort((a, b) => a.date.localeCompare(b.date))) {
+        const cheapest = r.cheapestAny;
+        console.log(`  ${r.date}: ${r.flights.length} flights, cheapest: ${cheapest ? formatFlight(cheapest) : 'none'}`);
+      }
+
+      console.log('\n=== Return Flights (KIX→TPE) ===');
+      for (const r of results.filter((x) => x.direction === 'return').sort((a, b) => a.date.localeCompare(b.date))) {
+        const cheapest = r.cheapestAny;
+        console.log(`  ${r.date}: ${r.flights.length} flights, cheapest: ${cheapest ? formatFlight(cheapest) : 'none'}`);
+      }
+    } else {
+      console.error('Error: local flight JSON input is not supported. Use --scan after importing offers into Turso.');
       process.exit(1);
     }
-
-    const r = result.value;
-    console.log(`File: ${r.file}`);
-    console.log(`Direction: ${r.direction}`);
-    console.log(`Date: ${r.date}`);
-    console.log(`Pax: ${r.pax}`);
-    console.log(`Total flights: ${r.flights.length}`);
-    console.log('');
-
-    const shown = r.flights.slice(0, topN);
-    console.log('| # | Airline | Dep | Arr | USD(2p) | TWD(2p) | Type | Bag |');
-    console.log('|---|---------|-----|-----|--------:|--------:|------|-----|');
-    shown.forEach((f, i) => {
-      const type = f.isLCC ? 'LCC' : 'FSC';
-      const bag = f.baggageIncluded ? 'inc' : 'no';
-      console.log(`| ${i + 1} | ${f.airline} | ${f.depTime} | ${f.arrTime} | ${f.priceTotal} | ${f.priceTotalTWD} | ${type} | ${bag} |`);
-    });
-  }
+  })().catch((err) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
 }
 
 export { LCC_AIRLINES, FULL_SERVICE_AIRLINES };

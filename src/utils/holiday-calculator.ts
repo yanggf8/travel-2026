@@ -1,8 +1,7 @@
 /**
  * Holiday Calculator — canonical module for holiday-aware date operations.
  *
- * Loads holiday calendars from data/holidays/ via destinations.json origin config.
- * Caches loaded calendars in memory so repeated queries don't re-read disk.
+ * Loads holiday calendars from Turso and caches them in memory.
  *
  * Usage:
  *   import { isHoliday, isWorkday, calculateLeave } from '../utils/holiday-calculator';
@@ -12,8 +11,6 @@
  *   calculateLeave({ startDate: '2026-02-13', endDate: '2026-02-17', market: 'tw' });
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   type HolidayCalendar,
   type HolidayEntry,
@@ -22,14 +19,13 @@ import {
   type DayDetail,
   calculateLeaveDays,
 } from '../utils/leave-calculator';
-import { Result } from '../types';
-import { getOriginConfig } from '../config/loader';
+import { loadHolidayCalendarFromTurso } from '../services/turso-service';
 
 // Re-export types that consumers may need
 export type { HolidayCalendar, HolidayEntry, MakeupWorkday, LeaveDayResult, DayDetail };
 
 // ---------------------------------------------------------------------------
-// Market → calendar path resolution
+// Market → country resolution
 // ---------------------------------------------------------------------------
 
 /** Map short market codes to country names used in calendar filenames */
@@ -39,23 +35,10 @@ const MARKET_TO_COUNTRY: Record<string, string> = {
 };
 
 /**
- * Resolve the calendar file path for a market code.
- * Checks DB-backed origin config first (via getOriginConfig), then falls back
- * to the convention path data/holidays/{country}-{year}.json.
+ * Resolve the Turso country key for a market code.
  */
-function resolveCalendarPath(market: string, year: number): string {
-  const country = MARKET_TO_COUNTRY[market] ?? market;
-
-  // Try DB-backed origin config first (authoritative)
-  const originCfg = getOriginConfig(country);
-  if (originCfg?.holiday_calendar) {
-    // The stored path may contain a specific year — replace if needed
-    const calPath = originCfg.holiday_calendar.replace(/\d{4}/, String(year));
-    return path.resolve(process.cwd(), calPath);
-  }
-
-  // Convention: data/holidays/{country}-{year}.json
-  return path.resolve(process.cwd(), `data/holidays/${country}-${year}.json`);
+function resolveCountry(market: string): string {
+  return MARKET_TO_COUNTRY[market] ?? market;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,24 +54,14 @@ function cacheKey(market: string, year: number): string {
 /**
  * Load (or retrieve from cache) a holiday calendar for the given market and year.
  */
-export function getCalendar(market: string, year: number): Result<HolidayCalendar> {
+export async function getCalendar(market: string, year: number): Promise<HolidayCalendar> {
   const key = cacheKey(market, year);
   const cached = calendarCache.get(key);
-  if (cached) return Result.ok(cached);
+  if (cached) return cached;
 
-  const filePath = resolveCalendarPath(market, year);
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const calendar: HolidayCalendar = JSON.parse(content);
-    calendarCache.set(key, calendar);
-    return Result.ok(calendar);
-  } catch (e) {
-    return Result.err(
-      `Holiday calendar not found for market="${market}" year=${year} (tried ${filePath}): ${
-        e instanceof Error ? e.message : String(e)
-      }`
-    );
-  }
+  const calendar = await loadHolidayCalendarFromTurso(resolveCountry(market), year);
+  calendarCache.set(key, calendar);
+  return calendar;
 }
 
 /** Clear the in-memory calendar cache (useful for testing). */
@@ -121,37 +94,33 @@ function yearOf(dateStr: string): number {
 /**
  * Check whether a date is a public holiday.
  */
-export function isHoliday(dateStr: string, market: string): boolean {
-  const cal = getCalendar(market, yearOf(dateStr));
-  if (!cal.ok) return false;
-  return toMonthDay(dateStr) in cal.value.holidays;
+export async function isHoliday(dateStr: string, market: string): Promise<boolean> {
+  const cal = await getCalendar(market, yearOf(dateStr));
+  return toMonthDay(dateStr) in cal.holidays;
 }
 
 /**
  * Get holiday info for a date, or null if it's not a holiday.
  */
-export function getHolidayInfo(dateStr: string, market: string): HolidayEntry | null {
-  const cal = getCalendar(market, yearOf(dateStr));
-  if (!cal.ok) return null;
-  return cal.value.holidays[toMonthDay(dateStr)] ?? null;
+export async function getHolidayInfo(dateStr: string, market: string): Promise<HolidayEntry | null> {
+  const cal = await getCalendar(market, yearOf(dateStr));
+  return cal.holidays[toMonthDay(dateStr)] ?? null;
 }
 
 /**
  * Check whether a date is a makeup workday (補班).
  */
-export function isMakeupWorkday(dateStr: string, market: string): boolean {
-  const cal = getCalendar(market, yearOf(dateStr));
-  if (!cal.ok) return false;
-  return toMonthDay(dateStr) in cal.value.makeup_workdays;
+export async function isMakeupWorkday(dateStr: string, market: string): Promise<boolean> {
+  const cal = await getCalendar(market, yearOf(dateStr));
+  return toMonthDay(dateStr) in cal.makeup_workdays;
 }
 
 /**
  * Get makeup workday info for a date, or null.
  */
-export function getMakeupWorkdayInfo(dateStr: string, market: string): MakeupWorkday | null {
-  const cal = getCalendar(market, yearOf(dateStr));
-  if (!cal.ok) return null;
-  return cal.value.makeup_workdays[toMonthDay(dateStr)] ?? null;
+export async function getMakeupWorkdayInfo(dateStr: string, market: string): Promise<MakeupWorkday | null> {
+  const cal = await getCalendar(market, yearOf(dateStr));
+  return cal.makeup_workdays[toMonthDay(dateStr)] ?? null;
 }
 
 /**
@@ -168,16 +137,16 @@ export function isWeekend(dateStr: string): boolean {
  * - It's a weekday AND not a holiday, OR
  * - It's a makeup workday (even if weekend)
  */
-export function isWorkday(dateStr: string, market: string): boolean {
-  if (isMakeupWorkday(dateStr, market)) return true;
-  if (isHoliday(dateStr, market)) return false;
+export async function isWorkday(dateStr: string, market: string): Promise<boolean> {
+  if (await isMakeupWorkday(dateStr, market)) return true;
+  if (await isHoliday(dateStr, market)) return false;
   return !isWeekend(dateStr);
 }
 
 /**
  * A date requires leave if it's a workday (see above).
  */
-export function requiresLeave(dateStr: string, market: string): boolean {
+export async function requiresLeave(dateStr: string, market: string): Promise<boolean> {
   return isWorkday(dateStr, market);
 }
 
@@ -198,7 +167,7 @@ export interface DateInfo {
 /**
  * Get holiday/workday info for every date in a range (inclusive).
  */
-export function getDateRange(startDate: string, endDate: string, market: string): DateInfo[] {
+export async function getDateRange(startDate: string, endDate: string, market: string): Promise<DateInfo[]> {
   const start = parseDate(startDate);
   const end = parseDate(endDate);
   const results: DateInfo[] = [];
@@ -210,8 +179,8 @@ export function getDateRange(startDate: string, endDate: string, market: string)
     const d = String(current.getDate()).padStart(2, '0');
     const dateStr = `${y}-${m}-${d}`;
 
-    const holiday = getHolidayInfo(dateStr, market);
-    const makeup = isMakeupWorkday(dateStr, market);
+    const holiday = await getHolidayInfo(dateStr, market);
+    const makeup = await isMakeupWorkday(dateStr, market);
     const weekend = current.getDay() === 0 || current.getDay() === 6;
 
     results.push({
@@ -233,15 +202,17 @@ export function getDateRange(startDate: string, endDate: string, market: string)
 /**
  * List only the holidays within a date range.
  */
-export function getHolidaysInRange(
+export async function getHolidaysInRange(
   startDate: string,
   endDate: string,
   market: string
-): Array<{ date: string; name: string; name_en: string; type: string }> {
-  return getDateRange(startDate, endDate, market)
+): Promise<Array<{ date: string; name: string; name_en: string; type: string }>> {
+  const range = await getDateRange(startDate, endDate, market);
+  return range
     .filter((d) => d.isHoliday)
     .map((d) => {
-      const info = getHolidayInfo(d.date, market)!;
+      const cal = calendarCache.get(cacheKey(market, yearOf(d.date)));
+      const info = cal?.holidays[toMonthDay(d.date)]!;
       return { date: d.date, name: info.name, name_en: info.name_en, type: info.type };
     });
 }
@@ -266,28 +237,15 @@ export interface LeaveResult {
  * @param opts.endDate    Trip end (YYYY-MM-DD)
  * @param opts.market     Origin market code ('tw', 'jp', etc.)
  */
-export function calculateLeave(opts: {
+export async function calculateLeave(opts: {
   startDate: string;
   endDate: string;
   market: string;
-}): LeaveResult {
+}): Promise<LeaveResult> {
   const year = yearOf(opts.startDate);
-  const calResult = getCalendar(opts.market, year);
+  const calendar = await getCalendar(opts.market, year);
 
-  if (!calResult.ok) {
-    // No calendar — fall back to weekday-only count
-    const dates = getDateRange(opts.startDate, opts.endDate, opts.market);
-    const weekdays = dates.filter((d) => !d.isWeekend).length;
-    return {
-      leaveDaysNeeded: weekdays,
-      totalDays: dates.length,
-      weekendDays: dates.filter((d) => d.isWeekend).length,
-      holidayDays: 0,
-      breakdown: [],
-    };
-  }
-
-  const result = calculateLeaveDays(opts.startDate, opts.endDate, calResult.value);
+  const result = calculateLeaveDays(opts.startDate, opts.endDate, calendar);
   if (!result.ok) {
     return { leaveDaysNeeded: 0, totalDays: 0, weekendDays: 0, holidayDays: 0, breakdown: [] };
   }

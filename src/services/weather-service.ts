@@ -76,7 +76,7 @@ export async function fetchWeather(
     throw new Error(`Destination not found: ${destination}`);
   }
   if (!config.coordinates) {
-    throw new Error(`No coordinates configured for ${destination}. Add coordinates to data/destinations.json.`);
+    throw new Error(`No coordinates configured for ${destination}. Add coordinates in Turso destination_config and run npm run db:migrate:turso if the table is missing.`);
   }
 
   const { lat, lon } = config.coordinates;

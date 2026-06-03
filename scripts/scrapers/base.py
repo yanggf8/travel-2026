@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 
 from .schema import ScrapeResult
 
@@ -25,18 +27,78 @@ from .schema import ScrapeResult
 _ota_config_cache: dict | None = None
 
 
+def _load_dotenv() -> None:
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        os.environ.setdefault(key, value)
+
+
+def _turso_query(sql: str) -> list[dict]:
+    _load_dotenv()
+    token = os.environ.get("TURSO_TOKEN")
+    if not token:
+        raise RuntimeError("Missing TURSO_TOKEN. Run npm run db:migrate:turso and configure .env before scraping.")
+    endpoint = os.environ.get("TURSO_HTTP_ENDPOINT")
+    if not endpoint:
+        url = os.environ.get("TURSO_URL")
+        if not url:
+            raise RuntimeError("Missing TURSO_URL. Configure .env before scraping.")
+        endpoint = url.replace("libsql://", "https://") + "/v2/pipeline"
+
+    body = json.dumps({"requests": [{"type": "execute", "stmt": {"sql": sql}}]}).encode("utf-8")
+    req = Request(
+        endpoint,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(req, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    err = payload.get("error") or payload.get("results", [{}])[0].get("error")
+    if err:
+        raise RuntimeError(f"Turso query failed: {err}")
+    result = payload.get("results", [{}])[0].get("response", {}).get("result", {})
+    cols = [c["name"] for c in result.get("cols", [])]
+    rows = []
+    for row in result.get("rows", []):
+        rows.append({cols[i]: cell.get("value") for i, cell in enumerate(row)})
+    return rows
+
+
 def load_ota_config() -> dict:
-    """Load OTA configuration from ota-sources.json."""
+    """Load OTA configuration from Turso."""
     global _ota_config_cache
     if _ota_config_cache is not None:
         return _ota_config_cache
 
-    config_path = Path(__file__).parent.parent.parent / "data" / "ota-sources.json"
-    if config_path.exists():
-        with open(config_path, encoding="utf-8") as f:
-            _ota_config_cache = json.load(f).get("sources", {})
-    else:
-        _ota_config_cache = {}
+    rows = _turso_query(
+        "SELECT source_id, name, type_json, status, scraper_script, regions_json, url_template, notes FROM ota_sources"
+    )
+    if not rows:
+        raise RuntimeError("Turso ota_sources is empty. Run npm run db:migrate:turso before scraping.")
+    _ota_config_cache = {}
+    for row in rows:
+        _ota_config_cache[row["source_id"]] = {
+            "source_id": row["source_id"],
+            "display_name": row.get("name") or row["source_id"],
+            "types": json.loads(row.get("type_json") or "[]"),
+            "supported": row.get("status") == "active",
+            "scraper_script": row.get("scraper_script"),
+            "regions": json.loads(row.get("regions_json") or "[]"),
+            "base_url": row.get("url_template") or "",
+            "notes": row.get("notes"),
+        }
     return _ota_config_cache
 
 
@@ -93,12 +155,13 @@ def _load_hotel_areas() -> dict:
     global _hotel_areas_cache
     if _hotel_areas_cache is not None:
         return _hotel_areas_cache
-    path = Path(__file__).parent.parent.parent / "data" / "hotel-areas.json"
-    if path.exists():
-        with open(path, encoding="utf-8") as f:
-            _hotel_areas_cache = json.load(f)
-    else:
-        _hotel_areas_cache = {}
+    rows = _turso_query("SELECT region, area_type, keywords_json FROM hotel_areas ORDER BY region, area_type")
+    if not rows:
+        raise RuntimeError("Turso hotel_areas is empty. Run npm run db:migrate:turso and npx ts-node scripts/backfill-local-reference-data.ts.")
+    _hotel_areas_cache = {}
+    for row in rows:
+        region = row["region"]
+        _hotel_areas_cache.setdefault(region, {})[row["area_type"]] = json.loads(row.get("keywords_json") or "[]")
     return _hotel_areas_cache
 
 

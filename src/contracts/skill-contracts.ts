@@ -30,7 +30,7 @@ export const CONTRACT_VERSION = '1.9.0';
  * so it can decide whether to re-scrape or trust cached results.
  *
  * - live:   Real-time fetch (scraper / API call). Always current.
- * - cached: Reads from previously-scraped files (scrapes/*.json).
+ * - cached: Reads from previously-imported Turso rows.
  *           May be stale — agent should check scraped_at timestamp.
  * - static: Plan state, config, or reference data. Doesn't go stale
  *           (changes only when the user mutates it).
@@ -558,14 +558,14 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
 
   'compare-offers': {
     name: 'compare-offers',
-    description: 'Compare scraped offers from local JSON files by region. Read-only — does not write to DB.',
+    description: 'Compare imported Turso offers by region. Read-only — does not write to DB.',
     args: [
-      { name: '--region', type: 'string', required: true, description: 'Region name matching scrape filenames (e.g. osaka, tokyo)' },
+      { name: '--region', type: 'string', required: true, description: 'Region name in Turso offers (e.g. osaka, tokyo)' },
       { name: '--date', type: 'string', required: false, description: 'Filter by departure date (YYYY-MM-DD)' },
       { name: '--pax', type: 'number', required: false, description: 'Number of passengers (default: 2)' },
       { name: '--json', type: 'boolean', required: false, description: 'Output raw JSON' },
     ],
-    output: { type: 'array', description: 'Sorted offer comparison table from scrapes/*.json' },
+    output: { type: 'array', description: 'Sorted offer comparison table from Turso offers' },
     mutates: [],
     data_freshness: 'cached',
     example: 'npm run travel -- compare-offers --region osaka --date 2026-02-24',
@@ -573,9 +573,12 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
 
   'view-prices': {
     name: 'view-prices',
-    description: 'Compare flight + hotel vs package total cost from a date-range scrape file. Read-only.',
+    description: 'Compare flight + hotel vs package total cost from Turso offers. Read-only.',
     args: [
-      { name: '--flights', type: 'string', required: true, description: 'Path to date-range prices JSON (from scrape_date_range.py)' },
+      { name: '--start', type: 'string', required: true, description: 'Start date (YYYY-MM-DD)' },
+      { name: '--end', type: 'string', required: true, description: 'End date (YYYY-MM-DD)' },
+      { name: '--region', type: 'string', required: false, description: 'Offer region filter' },
+      { name: '--destination', type: 'string', required: false, description: 'Destination slug filter' },
       { name: '--hotel-per-night', type: 'number', required: false, description: 'Hotel cost per night (TWD)' },
       { name: '--nights', type: 'number', required: false, description: 'Number of nights' },
       { name: '--package', type: 'number', required: false, description: 'Package price to compare against (TWD)' },
@@ -585,7 +588,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     output: { type: 'array', description: 'Price comparison table: separate booking vs package' },
     mutates: [],
     data_freshness: 'cached',
-    example: 'npm run travel -- view-prices --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740',
+    example: 'npm run travel -- view-prices --start 2026-02-24 --end 2026-02-28 --region kansai --hotel-per-night 3000 --nights 4 --package 40740',
   },
 
   'scrape-package': {
@@ -849,10 +852,10 @@ export const CONFIG_LOADER_APIS = {
 } as const;
 
 /**
- * Configuration file paths.
+ * Configuration sources.
  */
-export const CONFIG_FILES = {
-  destinations: 'data/destinations.json',
-  otaSources: 'data/ota-sources.json',
+export const CONFIG_SOURCES = {
+  destinations: 'turso:destination_config',
+  otaSources: 'turso:ota_sources',
   constants: 'src/config/constants.ts',
 } as const;

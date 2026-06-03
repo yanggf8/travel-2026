@@ -123,19 +123,18 @@ Commands:
     Example: search-offers --dest tokyo_2026 --pax 2 --types package --json
 
   compare-offers --region <name> [--date YYYY-MM-DD] [--pax N] [--json]
-    Compare scraped offers from scrapes/*.json files by region.
-    Reads existing scraped data files (no new scraping).
-    region: osaka, kansai, tokyo, etc. (matches filenames like *-osaka-*.json)
+    Compare imported Turso offers by region.
+    Reads the Turso offers table (no new scraping).
+    region: osaka, kansai, tokyo, etc.
     Example: compare-offers --region osaka --date 2026-02-26 --pax 2
 
-  view-prices --flights <file> [--hotel-per-night TWD] [--nights N] [--package TWD] [--pax N] [--json]
+  view-prices --start YYYY-MM-DD --end YYYY-MM-DD [--region name] [--destination slug] [--hotel-per-night TWD] [--nights N] [--package TWD] [--pax N] [--json]
     Compare package vs separate booking (flight+hotel) across departure dates.
-    Reads date-range flight data from scrape_date_range.py output.
-    --flights: Path to date-range JSON file (required)
-    --hotel-per-night: Hotel cost per night in TWD (default: auto-detect from scrapes/booking-*.json)
-    --nights: Number of hotel nights (default: duration - 1 from flight data)
+    Reads imported Turso flight/hotel offers.
+    --hotel-per-night: Hotel cost per night in TWD (default: auto-detect from Turso hotel offers)
+    --nights: Number of hotel nights
     --package: Package price for all pax in TWD (for comparison column)
-    Example: view-prices --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
+    Example: view-prices --start 2026-02-24 --end 2026-02-28 --region kansai --hotel-per-night 3000 --nights 4 --package 40740
 
   query-offers [--region name] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--sources csv] [--max-price N] [--fresh-hours N] [--max N] [--json]
     Query offers from Turso cloud database with filters.

@@ -2,12 +2,11 @@
  * Leave day calculator for trip planning.
  *
  * Calculates the number of leave days required for a trip,
- * accounting for weekends and public holidays.
+ * accounting for weekends and public holidays loaded from Turso.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { Result } from '../types';
+import { loadHolidayCalendarFromTurso } from '../services/turso-service';
 
 // Types
 export interface HolidayEntry {
@@ -54,32 +53,19 @@ export interface LeaveDayResult {
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAY_NAMES_ZH = ['日', '一', '二', '三', '四', '五', '六'];
 
-/**
- * Load holiday calendar from JSON file.
- */
-export function loadHolidayCalendar(filePath: string): Result<HolidayCalendar> {
+export async function loadHolidayCalendar(country: string, year: number): Promise<Result<HolidayCalendar>> {
   try {
-    const absolutePath = path.isAbsolute(filePath)
-      ? filePath
-      : path.resolve(process.cwd(), filePath);
-    const content = fs.readFileSync(absolutePath, 'utf-8');
-    return Result.ok(JSON.parse(content) as HolidayCalendar);
+    return Result.ok(await loadHolidayCalendarFromTurso(country, year));
   } catch (e) {
-    return Result.err(`Failed to load holiday calendar: ${e instanceof Error ? e.message : String(e)}`);
+    return Result.err(`Failed to load holiday calendar from Turso: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
-/**
- * Get holiday calendar for a specific year.
- * Looks in data/holidays/{country}-{year}.json
- */
-export function getHolidayCalendarForYear(
+export async function getHolidayCalendarForYear(
   country: string,
   year: number,
-  dataDir: string = 'data/holidays'
-): Result<HolidayCalendar> {
-  const filePath = path.join(dataDir, `${country}-${year}.json`);
-  return loadHolidayCalendar(filePath);
+): Promise<Result<HolidayCalendar>> {
+  return loadHolidayCalendar(country, year);
 }
 
 /**
@@ -313,27 +299,32 @@ export function formatComparisonTable(comparisons: TripComparison[]): string {
 
 // CLI entry point
 if (require.main === module) {
-  const args = process.argv.slice(2);
+  (async () => {
+    const args = process.argv.slice(2);
 
-  if (args.length < 2) {
-    console.log('Usage: npx ts-node src/utils/leave-calculator.ts <start-date> <end-date> [calendar-path]');
-    console.log('Example: npx ts-node src/utils/leave-calculator.ts 2026-02-24 2026-02-28 data/holidays/taiwan-2026.json');
+    if (args.length < 2) {
+      console.log('Usage: npx ts-node src/utils/leave-calculator.ts <start-date> <end-date> [country]');
+      console.log('Example: npx ts-node src/utils/leave-calculator.ts 2026-02-24 2026-02-28 taiwan');
+      process.exit(1);
+    }
+
+    const [startDate, endDate, country = 'taiwan'] = args;
+
+    const calendarResult = await loadHolidayCalendar(country, parseInt(startDate.slice(0, 4), 10));
+    if (!calendarResult.ok) {
+      console.error(calendarResult.error);
+      process.exit(1);
+    }
+
+    const result = calculateLeaveDays(startDate, endDate, calendarResult.value);
+    if (!result.ok) {
+      console.error(result.error);
+      process.exit(1);
+    }
+
+    console.log(formatLeaveDayTable(result.value));
+  })().catch((err) => {
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
-  }
-
-  const [startDate, endDate, calendarPath = 'data/holidays/taiwan-2026.json'] = args;
-
-  const calendarResult = loadHolidayCalendar(calendarPath);
-  if (!calendarResult.ok) {
-    console.error(calendarResult.error);
-    process.exit(1);
-  }
-
-  const result = calculateLeaveDays(startDate, endDate, calendarResult.value);
-  if (!result.ok) {
-    console.error(result.error);
-    process.exit(1);
-  }
-
-  console.log(formatLeaveDayTable(result.value));
+  });
 }

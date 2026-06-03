@@ -2,60 +2,7 @@ import type { CommandHandler, CliContext } from '../shared/types';
 import { registerCommand } from './registry';
 import { validatePositiveInt } from '../../types/validation';
 import { calculateLeave } from '../../utils/holiday-calculator';
-import * as fs from 'fs';
-import * as path from 'path';
-
-// ── types (extracted from travel-update.ts) ──────────────────────────
-
-interface DateRangeResult {
-  depart_date: string;
-  return_date: string;
-  depart_day: string;
-  return_day: string;
-  outbound: {
-    nonstop_cheapest_usd: number | null;
-    nonstop_cheapest_airline: string | null;
-    nonstop_cheapest_time: string | null;
-    flights: Array<{
-      airline: string;
-      depart: string;
-      arrive: string;
-      duration: string;
-      nonstop: boolean;
-      price_per_person_usd: number;
-      total_usd: number;
-    }>;
-  };
-  inbound: {
-    nonstop_cheapest_usd: number | null;
-    nonstop_cheapest_airline: string | null;
-    nonstop_cheapest_time: string | null;
-    flights: Array<{
-      airline: string;
-      depart: string;
-      arrive: string;
-      duration: string;
-      nonstop: boolean;
-      price_per_person_usd: number;
-      total_usd: number;
-    }>;
-  };
-  combined_cheapest_usd: number | null;
-  combined_cheapest_twd: number | null;
-}
-
-interface DateRangeData {
-  scraped_at: string;
-  params: {
-    depart_start: string;
-    depart_end: string;
-    origin: string;
-    dest: string;
-    duration: number;
-    pax: number;
-  };
-  results: DateRangeResult[];
-}
+import { queryOffers } from '../../services/turso-service';
 
 interface ViewPricesOptions {
   hotelPerNight?: number;
@@ -63,74 +10,45 @@ interface ViewPricesOptions {
   packagePrice?: number;
   pax: number;
   json: boolean;
+  startDate: string;
+  endDate: string;
+  region?: string;
+  destination?: string;
 }
 
 // ── helpers (extracted from travel-update.ts) ────────────────────────
 
-function autoDetectHotelPrice(): number | null {
-  const dataDir = path.join(process.cwd(), 'data');
-  if (!fs.existsSync(dataDir)) return null;
-
-  const bookingFiles = fs.readdirSync(dataDir)
-    .filter(f => f.startsWith('booking-') && f.endsWith('.json'))
-    .sort()
-    .reverse(); // newest first by name
-
-  for (const file of bookingFiles) {
-    try {
-      const content = fs.readFileSync(path.join(dataDir, file), 'utf-8');
-      const data = JSON.parse(content);
-      const extracted = data.extracted || {};
-      if (extracted.hotels && Array.isArray(extracted.hotels) && extracted.hotels.length > 0) {
-        // Find cheapest hotel per-night price
-        let cheapest: number | null = null;
-        for (const hotel of extracted.hotels) {
-          const price = hotel.price_per_night || hotel.price;
-          if (typeof price === 'number' && (cheapest === null || price < cheapest)) {
-            cheapest = price;
-          }
-        }
-        if (cheapest !== null) return cheapest;
-      }
-      // Fallback: look for price patterns in raw_text
-      const rawText = String(data.raw_text || '');
-      const priceMatches = rawText.match(/TWD\s+([\d,]+)/g);
-      if (priceMatches && priceMatches.length > 0) {
-        const prices = priceMatches
-          .map(m => parseInt(m.replace(/TWD\s+/, '').replace(/,/g, ''), 10))
-          .filter(p => p > 1000 && p < 50000)
-          .sort((a, b) => a - b);
-        if (prices.length > 0) return prices[0];
-      }
-    } catch {
-      // skip
-    }
-  }
-  return null;
+async function autoDetectHotelPrice(opts: Pick<ViewPricesOptions, 'region' | 'destination' | 'startDate' | 'endDate'>): Promise<number | null> {
+  const hotels = await queryOffers({
+    region: opts.region,
+    destination: opts.destination,
+    start: opts.startDate,
+    end: opts.endDate,
+    type: 'hotel',
+    limit: 50,
+  });
+  const prices = hotels
+    .map((h) => h.price_per_person)
+    .filter((p): p is number => typeof p === 'number' && Number.isFinite(p) && p > 0)
+    .sort((a, b) => a - b);
+  return prices[0] ?? null;
 }
 
-function showPriceComparison(flightsPath: string, opts: ViewPricesOptions): void {
-  const resolvedPath = path.isAbsolute(flightsPath) ? flightsPath : path.join(process.cwd(), flightsPath);
-  if (!fs.existsSync(resolvedPath)) {
-    console.error(`Error: Flight data file not found: ${resolvedPath}`);
-    process.exit(1);
+async function showPriceComparison(opts: ViewPricesOptions): Promise<void> {
+  const flightOffers = await queryOffers({
+    region: opts.region,
+    destination: opts.destination,
+    start: opts.startDate,
+    end: opts.endDate,
+    type: 'flight',
+    limit: 500,
+  });
+  if (flightOffers.length === 0) {
+    throw new Error('Missing Turso flight offers. Import scraper output with npm run db:import:turso before running view-prices.');
   }
 
-  let data: DateRangeData;
-  try {
-    data = JSON.parse(fs.readFileSync(resolvedPath, 'utf-8'));
-  } catch (e) {
-    console.error(`Error: Failed to parse flight data: ${(e as Error).message}`);
-    process.exit(1);
-  }
-
-  if (!data.results || data.results.length === 0) {
-    console.error('Error: No flight results found in data file.');
-    process.exit(1);
-  }
-
-  const duration = data.params.duration;
-  const pax = opts.pax || data.params.pax || 2;
+  const duration = opts.nights ? opts.nights + 1 : 5;
+  const pax = opts.pax || 2;
   const hotelNights = opts.nights ?? (duration - 1);
   const usdToTwd = 32;
 
@@ -138,10 +56,10 @@ function showPriceComparison(flightsPath: string, opts: ViewPricesOptions): void
   let hotelPerNight = opts.hotelPerNight;
   let hotelSource = 'manual';
   if (hotelPerNight === undefined) {
-    const detected = autoDetectHotelPrice();
+    const detected = await autoDetectHotelPrice(opts);
     if (detected !== null) {
       hotelPerNight = detected;
-      hotelSource = 'auto (booking-*.json)';
+      hotelSource = 'auto (Turso hotel offers)';
     }
   }
 
@@ -165,12 +83,13 @@ function showPriceComparison(flightsPath: string, opts: ViewPricesOptions): void
     leaveDays: number;
   }> = [];
 
-  for (const r of data.results) {
-    const outPrice = r.outbound.nonstop_cheapest_usd;
-    const inPrice = r.inbound.nonstop_cheapest_usd;
-    if (outPrice === null || inPrice === null) continue;
-
-    const flightTotalTwd = Math.round((outPrice + inPrice) * usdToTwd);
+  for (const offer of flightOffers) {
+    if (!offer.departure_date || offer.price_per_person === null) continue;
+    const outPrice = offer.price_per_person;
+    const inPrice = 0;
+    const flightTotalTwd = offer.currency === 'USD'
+      ? Math.round(outPrice * usdToTwd)
+      : outPrice * pax;
     const hotelTotalTwd = hotelPerNight !== undefined ? hotelPerNight * hotelNights : null;
     const separateTotal = hotelTotalTwd !== null ? flightTotalTwd + hotelTotalTwd : null;
     const diff = separateTotal !== null && opts.packagePrice !== undefined
@@ -178,22 +97,23 @@ function showPriceComparison(flightsPath: string, opts: ViewPricesOptions): void
       : null;
 
     // Calculate leave days
-    const leavePlan = calculateLeave({
-      startDate: r.depart_date,
-      endDate: r.return_date,
+    const returnDate = offer.return_date || offer.departure_date;
+    const leavePlan = await calculateLeave({
+      startDate: offer.departure_date,
+      endDate: returnDate,
       market: 'tw',
     });
 
     rows.push({
-      departDate: r.depart_date,
-      departDay: r.depart_day,
-      returnDate: r.return_date,
-      returnDay: r.return_day,
-      outAirline: r.outbound.nonstop_cheapest_airline || '?',
-      outTime: r.outbound.nonstop_cheapest_time || '?',
+      departDate: offer.departure_date,
+      departDay: '',
+      returnDate,
+      returnDay: '',
+      outAirline: offer.airline || offer.source_id || '?',
+      outTime: '',
       outPrice,
-      inAirline: r.inbound.nonstop_cheapest_airline || '?',
-      inTime: r.inbound.nonstop_cheapest_time || '?',
+      inAirline: '',
+      inTime: '',
       inPrice,
       flightTotal: flightTotalTwd,
       hotelTotal: hotelTotalTwd,
@@ -213,14 +133,26 @@ function showPriceComparison(flightsPath: string, opts: ViewPricesOptions): void
   rows.sort((a, b) => (a.separateTotal ?? Infinity) - (b.separateTotal ?? Infinity));
 
   if (opts.json) {
-    console.log(JSON.stringify({ params: data.params, pax, hotelPerNight, hotelNights, hotelSource, rows }, null, 2));
+    console.log(JSON.stringify({
+      params: {
+        start: opts.startDate,
+        end: opts.endDate,
+        region: opts.region,
+        destination: opts.destination,
+      },
+      pax,
+      hotelPerNight,
+      hotelNights,
+      hotelSource,
+      rows,
+    }, null, 2));
     return;
   }
 
   // Print header
   console.log(`\n  PACKAGE vs SEPARATE BOOKING COMPARISON`);
-  console.log(`  Route: ${data.params.origin.toUpperCase()} → ${data.params.dest.toUpperCase()} | ${duration} days | ${pax} pax`);
-  console.log(`  Flight data: ${path.basename(flightsPath)} (scraped: ${data.scraped_at.slice(0, 16)})`);
+  console.log(`  Scope: ${opts.destination || opts.region || 'all'} | ${duration} days | ${pax} pax`);
+  console.log(`  Flight data: Turso offers (${opts.startDate} to ${opts.endDate})`);
   if (hotelPerNight !== undefined) {
     console.log(`  Hotel: TWD ${hotelPerNight.toLocaleString()}/night x ${hotelNights} nights = TWD ${(hotelPerNight * hotelNights).toLocaleString()} (${hotelSource})`);
   }
@@ -286,19 +218,22 @@ function showPriceComparison(flightsPath: string, opts: ViewPricesOptions): void
 const viewPricesCommand: CommandHandler = {
   names: ['view-prices'],
   description: 'Compare package vs separate booking (flight + hotel) prices.',
-  usage: 'view-prices --flights <file> [--hotel-per-night N] [--nights N] [--package N] [--pax N] [--json]',
+  usage: 'view-prices --start YYYY-MM-DD --end YYYY-MM-DD [--region name|--destination slug] [--hotel-per-night N] [--nights N] [--package N] [--pax N] [--json]',
   async execute(ctx: CliContext): Promise<void> {
     const { args } = ctx;
-    const flightsOpt = args.optionValue('--flights');
+    const startOpt = args.optionValue('--start');
+    const endOpt = args.optionValue('--end');
+    const regionOpt = args.optionValue('--region');
+    const destinationOpt = args.optionValue('--destination');
     const paxOpt = args.optionValue('--pax');
     const hotelPerNightOpt = args.optionValue('--hotel-per-night');
     const nightsOpt = args.optionValue('--nights');
     const packageOpt = args.optionValue('--package');
     const jsonOpt = args.hasFlag('--json');
 
-    if (!flightsOpt) {
-      console.error('Error: view-prices requires --flights <file>');
-      console.error('Example: view-prices --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4');
+    if (!startOpt || !endOpt) {
+      console.error('Error: view-prices requires --start YYYY-MM-DD and --end YYYY-MM-DD');
+      console.error('Example: view-prices --start 2026-02-24 --end 2026-02-28 --region kansai --hotel-per-night 3000 --nights 4');
       process.exit(1);
     }
 
@@ -316,7 +251,17 @@ const viewPricesCommand: CommandHandler = {
     const nights = nightsOpt ? parseInt(nightsOpt, 10) : undefined;
     const packagePrice = packageOpt ? parseInt(packageOpt, 10) : undefined;
 
-    showPriceComparison(flightsOpt, { hotelPerNight, nights, packagePrice, pax, json: jsonOpt });
+    await showPriceComparison({
+      startDate: startOpt,
+      endDate: endOpt,
+      region: regionOpt,
+      destination: destinationOpt,
+      hotelPerNight,
+      nights,
+      packagePrice,
+      pax,
+      json: jsonOpt,
+    });
   },
 };
 

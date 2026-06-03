@@ -28,7 +28,7 @@
  */
 
 import { TursoPipelineClient } from './turso-pipeline';
-import { sqlText, sqlInt } from '../src/state/sql-helpers';
+import { tursoText, tursoInt } from './turso-pipeline';
 
 const COUNTRY = 'taiwan';
 const SOURCE_LABEL = 'DGPA 行政院人事行政總處 中華民國政府行政機關辦公日曆表';
@@ -105,20 +105,23 @@ async function main(): Promise<void> {
 
   // Prepare INSERT batch (idempotent via INSERT OR REPLACE)
   const fetched_at = new Date().toISOString();
-  const stmts = rows.map(r =>
-    `INSERT OR REPLACE INTO holidays
-      (country, date, day_of_week, is_holiday, name, source_url, source_label, fetched_at)
-     VALUES (
-       ${sqlText(COUNTRY)},
-       ${sqlText(r.date)},
-       ${sqlText(r.day_of_week)},
-       ${sqlInt(r.is_holiday)},
-       ${sqlText(r.name)},
-       ${sqlText(url)},
-       ${sqlText(SOURCE_LABEL)},
-       ${sqlText(fetched_at)}
-     );`
-  );
+  const stmts = rows.map(r => ({
+    sql: `INSERT OR REPLACE INTO holidays
+      (country, year, date, name, day_of_week, is_holiday, source_url, source_label, fetched_at, confidence)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    args: [
+      tursoText(COUNTRY),
+      tursoInt(parseInt(r.date.slice(0, 4), 10)),
+      tursoText(r.date),
+      tursoText(r.name),
+      tursoText(r.day_of_week),
+      tursoInt(r.is_holiday),
+      tursoText(url),
+      tursoText(SOURCE_LABEL),
+      tursoText(fetched_at),
+      tursoText('authoritative'),
+    ],
+  }));
 
   const client = new TursoPipelineClient();
   console.log(`\nWriting ${stmts.length} rows to Turso...`);
@@ -126,7 +129,7 @@ async function main(): Promise<void> {
   const CHUNK = 200;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     const chunk = stmts.slice(i, i + CHUNK);
-    await client.executeMany(chunk);
+    await client.executeManyParams(chunk);
     console.log(`  ${Math.min(i + CHUNK, stmts.length)}/${stmts.length}...`);
   }
   console.log(`✅ ${stmts.length} holidays/days written.`);

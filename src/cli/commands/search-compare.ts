@@ -6,8 +6,7 @@ import { FRESHNESS } from '../../config/constants';
 import { validateIsoDate, validatePositiveInt, validateDateRange } from '../../types/validation';
 import { globalRegistry } from '../../scrapers/registry';
 import type { OtaSearchParams, ScrapeResult } from '../../scrapers/types';
-import * as fs from 'fs';
-import * as path from 'path';
+import { queryOffers } from '../../services/turso-service';
 
 // ── helpers (extracted from travel-update.ts) ────────────────────────
 
@@ -124,32 +123,38 @@ export function computeBestValue(datePricing: any, pax: number): { date: string;
   return best;
 }
 
-function loadScrapedOffers(region: string, filterDate: string | undefined, pax: number): CompareOffer[] {
-  const dataDir = path.join(process.cwd(), 'data');
-  if (!fs.existsSync(dataDir)) return [];
+async function loadScrapedOffers(region: string, filterDate: string | undefined, pax: number): Promise<CompareOffer[]> {
+  const rows = await queryOffers({
+    region,
+    ...(filterDate ? { start: filterDate, end: filterDate } : {}),
+    type: 'package',
+    limit: 500,
+  });
 
-  const files = fs.readdirSync(dataDir).filter(f =>
-    f.endsWith('.json') &&
-    f.toLowerCase().includes(region.toLowerCase()) &&
-    !f.includes('schema') &&
-    !f.includes('travel-plan') &&
-    !f.includes('destinations') &&
-    !f.includes('ota-sources')
-  );
-
-  const offers: CompareOffer[] = [];
-
-  for (const file of files) {
+  const offers: CompareOffer[] = rows.map((row) => {
+    let currency = row.currency || 'TWD';
     try {
-      const filePath = path.join(dataDir, file);
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const data = JSON.parse(content);
-      const offer = parseScrapedFile(file, data, pax, filterDate);
-      if (offer) offers.push(offer);
+      currency = getOtaSourceCurrency(row.source_id);
     } catch {
-      // Skip files that can't be parsed
+      // Keep imported offer currency when OTA registry lacks this source.
     }
-  }
+    return {
+      file: row.id,
+      source_id: row.source_id,
+      source_name: row.source_id,
+      scraped_at: row.scraped_at || '',
+      url: row.source_file || '',
+      price_per_person: row.price_per_person,
+      price_total: row.price_per_person !== null ? row.price_per_person * pax : null,
+      currency,
+      airline: row.airline || '',
+      flight_outbound: '',
+      flight_return: '',
+      hotel: row.hotel_name || row.name || '',
+      type: 'package',
+      dates: [row.departure_date, row.return_date].filter(Boolean).join(' ~ '),
+    };
+  });
 
   // Sort by price (lowest first)
   offers.sort((a, b) => {
@@ -543,10 +548,10 @@ const compareOffersCommand: CommandHandler = {
       pax = paxResult.value;
     }
 
-    const offers = loadScrapedOffers(region, filterDate, pax);
+    const offers = await loadScrapedOffers(region, filterDate, pax);
     if (offers.length === 0) {
-      console.log(`\nNo scraped offers found for region "${region}".`);
-      console.log(`Make sure you have scrapes/*${region}*.json files from previous scrapes.`);
+      console.log(`\nNo Turso offers found for region "${region}".`);
+      console.log('Import scraper output with npm run db:import:turso before running compare-offers.');
       process.exit(1);
     }
 

@@ -2,7 +2,7 @@
 OTA Scraper Registry
 
 Maps URLs and source IDs to the appropriate parser class.
-All mappings are data-driven from data/ota-sources.json.
+All mappings are data-driven from Turso ota_sources.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _parser_cache: dict[str, BaseScraper] = {}
 
 
 def _build_url_patterns() -> list[tuple[str, str]]:
-    """Build URL patterns from ota-sources.json base_url fields."""
+    """Build URL patterns from Turso ota_sources base_url fields."""
     global _url_patterns
     if _url_patterns is not None:
         return _url_patterns

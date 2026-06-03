@@ -318,7 +318,7 @@ const stage0ImportCommand: CommandHandler = {
 
     for (const c of candidates) {
       // Leave-days computed here — TS owns the holiday calendar.
-      const leave = calculateLeave({
+      const leave = await calculateLeave({
         startDate: c.departDate, endDate: c.returnDate, market: 'taiwan',
       });
       await insertCandidate({

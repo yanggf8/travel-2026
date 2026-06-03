@@ -14,10 +14,12 @@ Usage:
 """
 
 import asyncio
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from scrapers.base import load_ota_config
 
 # Check Playwright first
 try:
@@ -164,15 +166,12 @@ async def run_doctor():
 
     # 2. Check OTA sources config
     print("\n2. OTA Sources Configuration")
-    config_path = Path(__file__).parent.parent / "data" / "ota-sources.json"
-    if config_path.exists():
-        with open(config_path) as f:
-            ota_config = json.load(f)
-        sources = ota_config.get("sources", {})
+    try:
+        sources = load_ota_config()
         supported = [k for k, v in sources.items() if v.get("supported")]
-        print_status("ota-sources.json", "ok", f"{len(supported)} supported OTAs")
-    else:
-        print_status("ota-sources.json", "fail", "File not found")
+        print_status("turso:ota_sources", "ok", f"{len(supported)} supported OTAs")
+    except Exception as e:
+        print_status("turso:ota_sources", "fail", str(e))
         return results
 
     # 3. Test each OTA

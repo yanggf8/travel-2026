@@ -11,13 +11,11 @@
  *   npm run compare-dates -- --start 2026-02-24 --end 2026-02-28 --nights 4
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { normalizeFlightData, scanFlightFiles, FlightSearchResult } from '../utils/flight-normalizer';
 import { loadHolidayCalendar, calculateLeaveDays, LeaveDayResult, HolidayCalendar } from '../utils/leave-calculator';
-import { EXCHANGE_RATES, convertToTWD, DEFAULTS, DEFAULT_LCC_BAGGAGE_FEE } from '../config/constants';
+import { EXCHANGE_RATES, DEFAULTS, DEFAULT_LCC_BAGGAGE_FEE } from '../config/constants';
 import { addDays, getDayOfWeek } from '../utils/date-utils';
 import { Result } from '../types';
+import { queryOffers, TursoOfferResult } from '../services/turso-service';
 
 // Types
 interface FITPackage {
@@ -59,167 +57,70 @@ interface CompareOptions {
   endDate: string;
   nights: number;
   hotelPerNight: number;
-  calendarPath: string;
-  dataDir: string;
+  market: string;
+  region?: string;
+  destination?: string;
   pax: number;
   baggageFeePerPersonPerDir: number;
 }
 
 const DAY_NAMES_ZH = ['日', '一', '二', '三', '四', '五', '六'];
 
-function parseLionTravelFIT(filePath: string): FITPackage | null {
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(content);
-    const rawText: string = data.raw_text || '';
-
-    // Extract price - look for patterns like "40,740" or "每人$20,370"
-    let priceTotalTWD = 0;
-    let pricePerPerson = 0;
-
-    // Try to find "每人費用" or per-person price
-    const perPersonMatch = rawText.match(/每人費用[^\d]*?([\d,]+)/);
-    if (perPersonMatch) {
-      pricePerPerson = parseInt(perPersonMatch[1].replace(/,/g, ''), 10);
-      priceTotalTWD = pricePerPerson * 2;
-    }
-
-    // Try "售價" or total price patterns
-    if (!priceTotalTWD) {
-      const priceMatch = rawText.match(/售價[^\d]*?([\d,]+)/);
-      if (priceMatch) {
-        pricePerPerson = parseInt(priceMatch[1].replace(/,/g, ''), 10);
-        priceTotalTWD = pricePerPerson * 2;
-      }
-    }
-
-    // Try "TWD XX,XXX" patterns - find per-person and total
-    if (!priceTotalTWD) {
-      const twdPrices = [...rawText.matchAll(/TWD\s*([\d,]+)/g)]
-        .map(m => parseInt(m[1].replace(/,/g, ''), 10))
-        .filter(p => p >= 10000 && p <= 200000);
-      if (twdPrices.length >= 2) {
-        // Smallest is per-person, next is total (2 pax)
-        twdPrices.sort((a, b) => a - b);
-        pricePerPerson = twdPrices[0];
-        priceTotalTWD = twdPrices[1];
-        // Sanity check: total should be ~2x per-person
-        if (Math.abs(priceTotalTWD - pricePerPerson * 2) > pricePerPerson * 0.1) {
-          // If not, assume first is per-person
-          priceTotalTWD = pricePerPerson * 2;
-        }
-      } else if (twdPrices.length === 1) {
-        pricePerPerson = twdPrices[0];
-        priceTotalTWD = pricePerPerson * 2;
-      }
-    }
-
-    // Try extracted price
-    if (!priceTotalTWD && data.extracted?.price) {
-      const ep = data.extracted.price;
-      if (ep.per_person) {
-        pricePerPerson = ep.per_person;
-        priceTotalTWD = pricePerPerson * 2;
-      } else if (ep.total) {
-        priceTotalTWD = ep.total;
-        pricePerPerson = Math.round(priceTotalTWD / 2);
-      }
-    }
-
-    // Extract airline - specific names first, generic patterns last
-    let airline = 'Unknown';
-    const airlinePatterns = [
-      /(泰國獅子航空|長榮航空|中華航空|國泰航空|台灣虎航|星宇航空|樂桃航空)/,
-      /(Thai Lion Air|EVA Air|China Airlines|Cathay Pacific|Peach Aviation|Tigerair Taiwan|STARLUX|Scoot)/i,
-      /(Thai Lion|EVA|Cathay|Peach|Tigerair|STARLUX|Scoot)/i,
-    ];
-    for (const pat of airlinePatterns) {
-      const m = rawText.match(pat);
-      if (m) { airline = m[1].trim(); break; }
-    }
-
-    // Fallback: check extracted flight
-    if (airline === 'Unknown' && data.extracted?.flight?.airline) {
-      airline = data.extracted.flight.airline;
-    }
-
-    // Extract hotel
-    let hotel = 'Unknown';
-    const hotelPatterns = [
-      /住宿[：:]\s*(.+)/,
-      /飯店[：:]\s*(.+)/,
-      /(Just Sleep|Hankyu Respire|TAVINOS|Dormy Inn|Toyoko Inn|APA Hotel)/i,
-      /(捷絲旅|阪急レスパイア|阪急RESPIRE)/,
-    ];
-    for (const pat of hotelPatterns) {
-      const m = rawText.match(pat);
-      if (m) { hotel = m[1].trim(); break; }
-    }
-    if (hotel === 'Unknown' && data.extracted?.hotel?.name) {
-      hotel = data.extracted.hotel.name;
-    }
-
-    // Extract dates from URL or content
-    const url: string = data.url || '';
-    let departDate = '';
-    let returnDate = '';
-
-    // Try to detect from filename
-    const fileBase = path.basename(filePath);
-    const datePatterns = fileBase.match(/feb(\d{2})/i);
-    if (datePatterns) {
-      const day = parseInt(datePatterns[1], 10);
-      departDate = `2026-02-${String(day).padStart(2, '0')}`;
-    }
-
-    if (!priceTotalTWD) return null;
-
-    return {
-      file: filePath,
-      departDate,
-      returnDate: returnDate || (departDate ? addDays(departDate, 4) : ''),
-      priceTotalTWD,
-      pricePerPerson,
-      airline,
-      hotel,
-      baggageIncluded: true, // FIT always includes baggage
-      pax: 2,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function scanFITPackages(dataDir: string): Map<string, FITPackage> {
+function mapFitPackages(offers: TursoOfferResult[], pax: number): Map<string, FITPackage> {
   const packages = new Map<string, FITPackage>();
-  const dir = path.isAbsolute(dataDir) ? dataDir : path.resolve(process.cwd(), dataDir);
-
-  const files = fs.readdirSync(dir).filter(f =>
-    f.startsWith('liontravel-') && f.includes('fresh') && f.endsWith('.json')
-  );
-
-  for (const file of files) {
-    const filePath = path.join(dir, file);
-    const pkg = parseLionTravelFIT(filePath);
-    if (pkg && pkg.departDate) {
-      packages.set(pkg.departDate, pkg);
-    }
+  for (const offer of offers) {
+    if (!offer.departure_date || offer.price_per_person == null) continue;
+    const current = packages.get(offer.departure_date);
+    if (current && current.pricePerPerson <= offer.price_per_person) continue;
+    packages.set(offer.departure_date, {
+      file: offer.id,
+      departDate: offer.departure_date,
+      returnDate: offer.return_date || '',
+      priceTotalTWD: offer.price_per_person * pax,
+      pricePerPerson: offer.price_per_person,
+      airline: offer.airline || 'Unknown',
+      hotel: offer.hotel_name || offer.name || 'Unknown',
+      baggageIncluded: true,
+      pax,
+    });
   }
-
   return packages;
 }
 
-function compareDates(options: CompareOptions): Result<DateComparison[]> {
+function mapFlightOffers(offers: TursoOfferResult[]): Map<string, TursoOfferResult> {
+  const flights = new Map<string, TursoOfferResult>();
+  for (const offer of offers) {
+    if (!offer.departure_date || offer.price_per_person == null) continue;
+    const current = flights.get(offer.departure_date);
+    if (!current || (current.price_per_person ?? Infinity) > offer.price_per_person) {
+      flights.set(offer.departure_date, offer);
+    }
+  }
+  return flights;
+}
+
+async function compareDates(options: CompareOptions): Promise<Result<DateComparison[]>> {
   // Load holiday calendar
-  const calResult = loadHolidayCalendar(options.calendarPath);
+  const calResult = await loadHolidayCalendar(options.market, parseInt(options.startDate.slice(0, 4), 10));
   if (!calResult.ok) return Result.err(calResult.error);
   const calendar = calResult.value;
 
-  // Scan flight files
-  const { outbound, return_ } = scanFlightFiles(options.dataDir);
+  const commonFilters = {
+    region: options.region,
+    destination: options.destination,
+    start: options.startDate,
+    end: addDays(options.endDate, options.nights),
+    limit: 500,
+  };
 
-  // Scan FIT packages
-  const fitPackages = scanFITPackages(options.dataDir);
+  const packageOffers = await queryOffers({ ...commonFilters, type: 'package' });
+  const flightOffers = await queryOffers({ ...commonFilters, type: 'flight' });
+  if (packageOffers.length === 0 && flightOffers.length === 0) {
+    return Result.err('Missing Turso offers for compare-dates. Import scrape output with npm run db:import:turso before running this command.');
+  }
+
+  const fitPackages = mapFitPackages(packageOffers, options.pax);
+  const flightsByDate = mapFlightOffers(flightOffers);
 
   // Generate departure dates
   const departureDates: string[] = [];
@@ -259,37 +160,29 @@ function compareDates(options: CompareOptions): Result<DateComparison[]> {
 
     // Separate booking
     let separate: SeparateBooking | null = null;
-    const outFile = outbound.get(departDate);
-    const retFile = return_.get(returnDate);
+    const outOffer = flightsByDate.get(departDate);
+    const retOffer = flightsByDate.get(returnDate);
 
-    if (outFile || retFile) {
+    if (outOffer || retOffer) {
       let outFlight: SeparateBooking['outboundFlight'] = null;
       let retFlight: SeparateBooking['returnFlight'] = null;
 
-      if (outFile) {
-        const outResult = normalizeFlightData(outFile);
-        if (outResult.ok && outResult.value.cheapestAny) {
-          const f = outResult.value.cheapestAny;
-          outFlight = {
-            airline: f.airline,
-            price: f.priceTotal,
-            priceTWD: f.priceTotalTWD,
-            baggage: f.baggageIncluded,
-          };
-        }
+      if (outOffer && outOffer.price_per_person != null) {
+        outFlight = {
+          airline: outOffer.airline || outOffer.source_id,
+          price: outOffer.price_per_person,
+          priceTWD: outOffer.price_per_person * options.pax,
+          baggage: false,
+        };
       }
 
-      if (retFile) {
-        const retResult = normalizeFlightData(retFile);
-        if (retResult.ok && retResult.value.cheapestAny) {
-          const f = retResult.value.cheapestAny;
-          retFlight = {
-            airline: f.airline,
-            price: f.priceTotal,
-            priceTWD: f.priceTotalTWD,
-            baggage: f.baggageIncluded,
-          };
-        }
+      if (retOffer && retOffer.price_per_person != null) {
+        retFlight = {
+          airline: retOffer.airline || retOffer.source_id,
+          price: retOffer.price_per_person,
+          priceTWD: retOffer.price_per_person * options.pax,
+          baggage: false,
+        };
       }
 
       const flightTotalTWD = (outFlight?.priceTWD || 0) + (retFlight?.priceTWD || 0);
@@ -451,8 +344,9 @@ function parseArgs(args: string[]): CompareOptions & { help: boolean } {
     endDate: '',
     nights: 4,
     hotelPerNight: 3200,
-    calendarPath: 'data/holidays/taiwan-2026.json',
-    dataDir: 'scrapes',
+    market: 'taiwan',
+    region: undefined as string | undefined,
+    destination: undefined as string | undefined,
     pax: DEFAULTS.pax as number,
     baggageFeePerPersonPerDir: DEFAULT_LCC_BAGGAGE_FEE,
     help: false,
@@ -464,8 +358,9 @@ function parseArgs(args: string[]): CompareOptions & { help: boolean } {
       case '--end': case '-e': result.endDate = args[++i]; break;
       case '--nights': case '-n': result.nights = parseInt(args[++i], 10); break;
       case '--hotel-per-night': result.hotelPerNight = parseInt(args[++i], 10); break;
-      case '--calendar': case '-c': result.calendarPath = args[++i]; break;
-      case '--data-dir': result.dataDir = args[++i]; break;
+      case '--market': case '-m': result.market = args[++i]; break;
+      case '--region': result.region = args[++i]; break;
+      case '--destination': result.destination = args[++i]; break;
       case '--pax': result.pax = parseInt(args[++i], 10); break;
       case '--baggage-fee': result.baggageFeePerPersonPerDir = parseInt(args[++i], 10); break;
       case '--help': case '-h': result.help = true; break;
@@ -475,7 +370,7 @@ function parseArgs(args: string[]): CompareOptions & { help: boolean } {
   return result;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help || !args.startDate || !args.endDate) {
@@ -490,21 +385,20 @@ Options:
   --end, -e            Last departure date (YYYY-MM-DD) [required]
   --nights, -n         Number of hotel nights (default: 4)
   --hotel-per-night    Hotel cost TWD/night/room (default: 3200)
-  --calendar, -c       Holiday calendar path (default: data/holidays/taiwan-2026.json)
-  --data-dir           Directory with scraped data (default: data)
+  --market, -m         Holiday country/market in Turso (default: taiwan)
+  --region             Offer region filter (optional)
+  --destination        Offer destination filter (optional)
   --pax                Number of passengers (default: 2)
   --baggage-fee        LCC baggage fee TWD/person/direction (default: 1750)
   --help, -h           Show this help
 
 Data sources:
-  FIT packages:    scrapes/liontravel-feb*-fresh.json
-  Outbound flights: scrapes/trip-feb*-out.json, scrapes/trip-flights-feb*-out*.json
-  Return flights:   scrapes/trip-feb*-return.json, scrapes/trip-flights-mar*-return*.json, scrapes/trip-mar*-return.json
+  Turso offers table (populate with npm run db:import:turso)
 `);
     process.exit(args.help ? 0 : 1);
   }
 
-  const result = compareDates(args);
+  const result = await compareDates(args);
   if (!result.ok) {
     console.error(`Error: ${result.error}`);
     process.exit(1);
@@ -513,6 +407,9 @@ Data sources:
   console.log(formatComparisons(result.value, args));
 }
 
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
 
 export { compareDates, CompareOptions, DateComparison, FITPackage, SeparateBooking };

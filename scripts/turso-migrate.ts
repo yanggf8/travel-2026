@@ -1033,10 +1033,17 @@ async function main() {
     },
     {
       slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto',
-      ref_path: 'src/skills/travel-shared/references/destinations/kyoto.json',
+      ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
       markets_json: '["TW","JP"]', primary_airports_json: '["KIX"]',
       language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
+    },
+    {
+      slug: 'okinawa_2026', display_name: 'Okinawa', ref_id: 'okinawa',
+      ref_path: '',
+      timezone: 'Asia/Tokyo', currency: 'JPY',
+      markets_json: '["TW","JP"]', primary_airports_json: '["OKA"]',
+      language: 'ja', origin: 'taiwan', lat: 26.2124, lon: 127.6792,
     },
   ];
 
@@ -1051,11 +1058,15 @@ async function main() {
       console.warn(`⚠️  Could not backfill destination_config ${d.slug}:`, e.message);
     }
   }
+  await client.execute(`UPDATE destination_config SET ref_path = '' WHERE slug = 'kyoto_2026' AND ref_path = 'src/skills/travel-shared/references/destinations/kyoto.json';`);
 
   // Backfill origin_config rows
   try {
     await client.execute(
-      `INSERT OR IGNORE INTO origin_config (slug, country_code, currency, timezone, holiday_calendar, primary_airports_json) VALUES ('taiwan', 'TW', 'TWD', 'Asia/Taipei', 'data/holidays/taiwan-2026.json', '["TPE","TSA","RMQ","KHH"]')`
+      `INSERT OR IGNORE INTO origin_config (slug, country_code, currency, timezone, holiday_calendar, primary_airports_json) VALUES ('taiwan', 'TW', 'TWD', 'Asia/Taipei', NULL, '["TPE","TSA","RMQ","KHH"]')`
+    );
+    await client.execute(
+      `UPDATE origin_config SET holiday_calendar = NULL WHERE slug = 'taiwan' AND holiday_calendar LIKE 'data/holidays/%'`
     );
     console.log('✅ Backfilled origin_config: taiwan');
   } catch (e: any) {
@@ -1410,6 +1421,42 @@ async function main() {
     'CREATE INDEX IF NOT EXISTS idx_s0_tg_offers_lookup ON stage0_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);'
   );
 
+  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_research_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    run_id TEXT,
+    destination_slug TEXT,
+    artifact_kind TEXT,
+    original_filename TEXT,
+    payload_json TEXT,
+    raw_text TEXT,
+    observed_by TEXT,
+    observed_at TEXT,
+    imported_at TEXT
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_selected_offers (
+    selection_id TEXT PRIMARY KEY,
+    run_id TEXT,
+    destination_slug TEXT,
+    source_id TEXT,
+    source_offer_id TEXT,
+    selected_depart_date TEXT,
+    selected_return_date TEXT,
+    nights INTEGER,
+    price_per_person_twd INTEGER,
+    price_total_twd INTEGER,
+    hotel_name TEXT,
+    observed_by TEXT,
+    observed_at TEXT,
+    selected_by TEXT,
+    selected_at TEXT,
+    provenance_json TEXT,
+    raw_json TEXT,
+    imported_at TEXT
+  );`);
+
+  console.log('✅ Stage 0 artifact and selected-offer tables ready.');
+
   // Distinguish 跟團 (group_tour) from 機加酒/自由行 (fit) on the listing page.
   // Both appear under the same listing URLs; only the title reliably tells them
   // apart. Default to 'group_tour' on backfill — that's the safe assumption,
@@ -1448,22 +1495,102 @@ async function main() {
   );
   console.log('✅ Plan-side group-meta table ready.');
 
+  await client.execute(`CREATE TABLE IF NOT EXISTS offers (
+    id TEXT,
+    source_file TEXT,
+    source_id TEXT,
+    type TEXT,
+    name TEXT,
+    price_per_person INTEGER,
+    currency TEXT,
+    region TEXT,
+    destination TEXT,
+    departure_date TEXT,
+    return_date TEXT,
+    nights INTEGER,
+    availability TEXT,
+    hotel_name TEXT,
+    airline TEXT,
+    raw_data TEXT,
+    scraped_at TEXT,
+    PRIMARY KEY (id, scraped_at)
+  );`);
+  console.log('✅ Offers table ready.');
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS hotel_areas (
+    region TEXT,
+    area_type TEXT,
+    keywords_json TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (region, area_type)
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS transport_routes (
+    region TEXT,
+    route_key TEXT,
+    from_hub TEXT,
+    to_hub TEXT,
+    time_min INTEGER,
+    cost_jpy INTEGER,
+    method TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (region, route_key)
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS transport_hubs (
+    region TEXT,
+    hub_id TEXT,
+    hub_type TEXT,
+    area TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (region, hub_id)
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_references (
+    slug TEXT PRIMARY KEY,
+    ref_id TEXT,
+    payload_json TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT
+  );`);
+  console.log('✅ Hotel-area and transport-route reference tables ready.');
+
   // Country-scoped public holiday calendar, fetched live from authoritative gov sources.
   // Replaces the deprecated data/holidays/*.json files (which were hand-curated and
   // unverifiable). Every row records its source so a future query can re-verify or refresh.
   await client.execute(
     `CREATE TABLE IF NOT EXISTS holidays (
-      country TEXT NOT NULL,           -- 'taiwan', 'japan', etc. (lowercase canonical name)
-      date TEXT NOT NULL,              -- ISO YYYY-MM-DD
-      day_of_week TEXT,                -- 一/二/三/四/五/六/日 for taiwan, or English
-      is_holiday INTEGER NOT NULL,     -- 0 = workday, 1 = makeup workday, 2 = holiday/weekend
-      name TEXT,                       -- holiday name in source language; NULL on plain weekends
-      source_url TEXT NOT NULL,        -- where this row was fetched from
-      source_label TEXT NOT NULL,      -- e.g. 'DGPA 行政院人事行政總處 115年辦公日曆表'
-      fetched_at TEXT NOT NULL,        -- ISO timestamp of fetch
+      country TEXT,
+      year INTEGER,
+      date TEXT,
+      name TEXT,
+      day_of_week TEXT,
+      is_holiday INTEGER,
+      source_url TEXT,
+      source_label TEXT,
+      fetched_at TEXT,
+      confidence TEXT,
       PRIMARY KEY (country, date)
     );`
   );
+  for (const col of [
+    `ALTER TABLE holidays ADD COLUMN year INTEGER;`,
+    `ALTER TABLE holidays ADD COLUMN confidence TEXT;`,
+  ]) {
+    try {
+      await client.execute(col);
+    } catch (e: any) {
+      if (!String(e?.message || '').match(/duplicate column name/i)) throw e;
+    }
+  }
+  await client.execute(`UPDATE holidays SET year = CAST(substr(date, 1, 4) AS INTEGER) WHERE year IS NULL AND date IS NOT NULL;`);
   await client.execute(
     'CREATE INDEX IF NOT EXISTS idx_holidays_country_date ON holidays(country, date);'
   );

@@ -5,12 +5,9 @@
  * Compare multiple trip options with normalized costs, leave days, and recommendations.
  *
  * Usage:
- *   npx ts-node src/cli/compare-trips.ts --input data/trip-comparison.json
- *   npx ts-node src/cli/compare-trips.ts --trips '...' --calendar data/holidays/taiwan-2026.json
+ *   npx ts-node src/cli/compare-trips.ts --trips '...' --market taiwan
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   loadHolidayCalendar,
   calculateLeaveDays,
@@ -59,7 +56,7 @@ interface TripOption {
 
 interface ComparisonInput {
   trips: TripOption[];
-  calendarPath: string;
+  market?: string;
   defaultBaggageFee?: number; // Default LCC baggage fee per person
 }
 
@@ -172,9 +169,15 @@ function analyzeTripOption(
   });
 }
 
-function compareTrips(input: ComparisonInput): Result<ComparisonResult> {
+function yearFromTrips(trips: TripOption[]): number {
+  const first = trips[0]?.startDate;
+  if (!first) throw new Error('No trips provided');
+  return parseInt(first.slice(0, 4), 10);
+}
+
+async function compareTrips(input: ComparisonInput): Promise<Result<ComparisonResult>> {
   // Load calendar
-  const calendarResult = loadHolidayCalendar(input.calendarPath);
+  const calendarResult = await loadHolidayCalendar(input.market || 'taiwan', yearFromTrips(input.trips));
   if (!calendarResult.ok) {
     return Result.err(calendarResult.error);
   }
@@ -269,13 +272,11 @@ function printUsage(): void {
 Trip Comparison CLI
 
 Usage:
-  npx ts-node src/cli/compare-trips.ts --input <file.json>
-  npx ts-node src/cli/compare-trips.ts --trips '<json>' --calendar <calendar.json>
+  npx ts-node src/cli/compare-trips.ts --trips '<json>' --market <country>
 
 Options:
-  --input, -i       Input JSON file with trips and calendar path
   --trips, -t       Inline JSON array of trip options
-  --calendar, -c    Path to holiday calendar (default: data/holidays/taiwan-2026.json)
+  --market, -m      Holiday country/market in Turso (default: taiwan)
   --detailed, -d    Show detailed breakdown for each trip
   --help, -h        Show this help
 
@@ -305,22 +306,20 @@ Input JSON format:
       "currency": "TWD"
     }
   ],
-  "calendarPath": "data/holidays/taiwan-2026.json"
+  "market": "taiwan"
 }
 `);
 }
 
 function parseArgs(args: string[]): {
-  input?: string;
   trips?: string;
-  calendar: string;
+  market: string;
   detailed: boolean;
   help: boolean;
 } {
   const result = {
-    input: undefined as string | undefined,
     trips: undefined as string | undefined,
-    calendar: 'data/holidays/taiwan-2026.json',
+    market: 'taiwan',
     detailed: false,
     help: false,
   };
@@ -328,17 +327,13 @@ function parseArgs(args: string[]): {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     switch (arg) {
-      case '--input':
-      case '-i':
-        result.input = args[++i];
-        break;
       case '--trips':
       case '-t':
         result.trips = args[++i];
         break;
-      case '--calendar':
-      case '-c':
-        result.calendar = args[++i];
+      case '--market':
+      case '-m':
+        result.market = args[++i];
         break;
       case '--detailed':
       case '-d':
@@ -364,22 +359,13 @@ async function main(): Promise<void> {
 
   let input: ComparisonInput;
 
-  if (args.input) {
-    // Load from file
-    try {
-      const content = fs.readFileSync(args.input, 'utf-8');
-      input = JSON.parse(content);
-    } catch (e) {
-      console.error(`Failed to load input file: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(1);
-    }
-  } else if (args.trips) {
+  if (args.trips) {
     // Parse inline JSON
     try {
       const trips = JSON.parse(args.trips);
       input = {
         trips,
-        calendarPath: args.calendar,
+        market: args.market,
       };
     } catch (e) {
       console.error(`Failed to parse trips JSON: ${e instanceof Error ? e.message : String(e)}`);
@@ -390,7 +376,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const result = compareTrips(input);
+  if (!input.market) input.market = args.market;
+
+  const result = await compareTrips(input);
 
   if (!result.ok) {
     console.error(`Comparison failed: ${result.error}`);

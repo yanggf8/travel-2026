@@ -58,7 +58,7 @@ describe('import-tour-group-offers', () => {
     expect(att.status).toBe('ok');
     expect(Number(att.parsed_count)).toBe(2);
     expect(Number(att.skipped_count)).toBe(0);
-  });
+  }, 15000);
 
   it('partial: one row skipped for missing required field, attempt status=partial', async () => {
     await seedPendingAttempt('test-run-tg-002', 'besttour', 'kansai', 5);
@@ -80,7 +80,7 @@ describe('import-tour-group-offers', () => {
     expect(att.status).toBe('partial');
     expect(Number(att.parsed_count)).toBe(1);
     expect(Number(att.skipped_count)).toBe(1);
-  });
+  }, 15000);
 
   it('rejects: attempt-identity mismatch — top-level source_id has no pending attempt', async () => {
     // Note: we seed 'besttour' but the file declares 'lifetour' at top level
@@ -98,5 +98,5 @@ describe('import-tour-group-offers', () => {
       `SELECT COUNT(*) AS n FROM stage0_tour_group_offers WHERE run_id = 'test-run-tg-003'`
     ));
     expect(Number((offers[0] as any).n)).toBe(0);
-  });
+  }, 15000);
 });

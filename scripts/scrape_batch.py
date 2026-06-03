@@ -20,7 +20,6 @@ Options:
 
 import argparse
 import asyncio
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -37,10 +36,9 @@ from scrape_listings import scrape_listings, build_listing_url, save_listings
 
 
 def load_ota_config():
-    """Load OTA configuration."""
-    config_path = Path(__file__).parent.parent / "data" / "ota-sources.json"
-    with open(config_path) as f:
-        return json.load(f)["sources"]
+    """Load OTA configuration from Turso."""
+    from scrapers.base import load_ota_config as _load
+    return _load()
 
 
 def get_listing_otas() -> list[str]:
@@ -49,7 +47,7 @@ def get_listing_otas() -> list[str]:
     return [
         source_id
         for source_id, source in config.items()
-        if source.get("supported") and source.get("supports_listing")
+        if source.get("supported") and source.get("scraper_script")
     ]
 
 
@@ -59,10 +57,7 @@ def get_fit_otas() -> list[str]:
     return [
         source_id
         for source_id, source in config.items()
-        if source.get("supported")
-        and isinstance(source.get("product_lines"), dict)
-        and isinstance(source["product_lines"].get("fit"), dict)
-        and source["product_lines"]["fit"].get("supported")
+        if source.get("supported") and "package" in (source.get("types") or [])
     ]
 
 

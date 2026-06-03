@@ -29,18 +29,18 @@ function formatLeavePlan(plan: LeaveResult): string {
 }
 
 // Helper: Compare departure dates
-function compareDepartureDates(dates: string[], duration: number, market: string) {
-  const results = dates.map(date => {
+async function compareDepartureDates(dates: string[], duration: number, market: string) {
+  const results = await Promise.all(dates.map(async date => {
     const endDate = addDays(date, duration - 1);
-    const plan = calculateLeave({ startDate: date, endDate, market });
-    const holidays = getHolidaysInRange(date, endDate, market);
+    const plan = await calculateLeave({ startDate: date, endDate, market });
+    const holidays = await getHolidaysInRange(date, endDate, market);
     return {
       date,
       returnDate: endDate,
       leaveDays: plan.leaveDaysNeeded,
       holidays: holidays.map(h => h.name),
     };
-  });
+  }));
   return results.sort((a, b) => a.leaveDays - b.leaveDays);
 }
 
@@ -145,7 +145,7 @@ async function main() {
 
   // Mode 1: Show holidays in range
   if (args.holidays) {
-    const holidays = getHolidaysInRange(args.holidays.start, args.holidays.end, args.market);
+    const holidays = await getHolidaysInRange(args.holidays.start, args.holidays.end, args.market);
 
     if (args.json) {
       console.log(JSON.stringify(holidays, null, 2));
@@ -169,7 +169,7 @@ async function main() {
       throw new Error('--duration is required when using --compare');
     }
 
-    const results = compareDepartureDates(args.compare, args.duration, args.market);
+    const results = await compareDepartureDates(args.compare, args.duration, args.market);
 
     if (args.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -191,7 +191,7 @@ async function main() {
   const start = validateDate(args.start, '--start');
   const end = validateDate(args.end, '--end');
 
-  const plan = calculateLeave({ startDate: start, endDate: end, market: args.market });
+  const plan = await calculateLeave({ startDate: start, endDate: end, market: args.market });
 
   if (args.json) {
     console.log(JSON.stringify(plan, null, 2));
