@@ -1,9 +1,11 @@
-# Stage 0 — Triangle Research: Design Spec
+# Stage 0 — Shaping Research: Design Spec
 
 > **Date:** 2026-05-22
-> **Status:** Implemented and reconciled with the adopted staged flow
+> **Status:** Implemented + Shaping extension adopted (2026-05)
 > **Scope:** A+ (narrow) — build the missing Stage 0 capability; do **not** rename P1–P5.
 > **Related:** `docs/plans/2026-05-22-new-planning-flow.md` (the adopted flow this implements one stage of)
+
+> **Outcome (2026-05):** Added the 7th table `stage0_research_shaping` to support dynamic, exploratory research inputs. The table name "shaping" was chosen because Stage 0 research remains fluid; it stores hard constraints, soft preferences, search directives, and other signals discovered during research. All regression tests pass.
 
 ---
 
