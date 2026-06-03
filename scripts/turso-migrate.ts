@@ -1333,6 +1333,39 @@ async function main() {
     );`,
   ]);
   await client.execute('CREATE INDEX IF NOT EXISTS idx_s0_cand_run ON stage0_candidates(run_id, rank);');
+
+  // Stage 0 Research Shaping (normalized, no JSON).
+  // Captures everything that shapes the research search space during the dynamic pre-lock phase.
+  // This includes hard constraints (e.g. Liko's 馬偕 date block), soft preferences,
+  // search directives, observed signals, and hypotheses.
+  // "constraint" is one possible role (others: soft_preference, search_directive, observed_signal...).
+  // Fully relational child table — multiple values per (aspect, role, kind) supported by multiple rows.
+  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_research_shaping (
+    shaping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    aspect TEXT NOT NULL,             -- 'date' | 'channel' | 'mobility' | 'lodging' | 'budget' | 'activity' | 'general'
+    role TEXT NOT NULL,               -- 'hard_constraint' | 'soft_preference' | 'search_directive' | 'observed_signal' | 'hypothesis'
+    kind TEXT NOT NULL,               -- e.g. 'return_no_later_than', 'exclude_depart', 'preferred_depart', 'exclude_source', 'no_car', 'location_requirement'
+    value_text TEXT,
+    value_date TEXT,
+    value_integer INTEGER,
+    notes TEXT,
+    created_at TEXT NOT NULL
+  );`);
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_s0_shaping_run ON stage0_research_shaping(run_id, aspect, role);');
+
+  // Enforce business uniqueness using expression index.
+  // COALESCE is allowed in INDEXes (unlike PRIMARY KEY definitions).
+  // This prevents truly duplicate shaping rows while still allowing different values
+  // for the same (aspect, role, kind) — e.g. multiple preferred_depart dates.
+  await client.execute(`CREATE UNIQUE INDEX IF NOT EXISTS uq_s0_shaping_value
+    ON stage0_research_shaping(
+      run_id, aspect, role, kind,
+      COALESCE(value_text, ''),
+      COALESCE(value_date, ''),
+      COALESCE(value_integer, 0)
+    );`);
+
   console.log('✅ Stage 0 research tables ready.');
 
   await client.execute(`CREATE TABLE IF NOT EXISTS stage0_tour_group_offers (

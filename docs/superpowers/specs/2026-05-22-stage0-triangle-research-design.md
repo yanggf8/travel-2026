@@ -44,19 +44,25 @@ Stage 0. P1–P5 remain fully operational as compatibility skill names inside th
 - **Objective ranking.** Candidates sort by flight price; personal trade-offs (leave-days) are
   shown as columns and used only as deterministic tie-breakers.
 - **Runs are immutable.** A `run_id` is a fixed research input tuple — origin, date window,
-  pax, exchange rate, destination set, and duration set. Those rows are written once at run
-  creation and never edited afterward. "Re-run the aggregator" therefore means exactly one
-  thing: retry the run's `failed`/`pending` scrape attempts. Changing *any* input (add/swap a
-  destination, shift the window, change durations or pax) is a **new run** with a new
-  `run_id`. This keeps retry semantics unambiguous and removes any stale-candidate hazard —
+  pax, exchange rate, destination set, duration set, **and shaping rules**. Those rows are written
+  once at run creation and never edited afterward. "Re-run the aggregator" therefore means exactly
+  one thing: retry the run's `failed`/`pending` scrape attempts. Changing *any* input (add/swap a
+  destination, shift the window, change durations, add/change shaping rules, etc.) is a **new run**
+  with a new `run_id`. This keeps retry semantics unambiguous and removes any stale-candidate hazard —
   there is no path by which a run's candidates can disagree with its inputs.
 
 ---
 
 ## 3. Data Model
 
-Six new tables, all unscoped (keyed by `run_id`, not `plan_id`). Added idempotently to
+Seven tables, all unscoped (keyed by `run_id`, not `plan_id`). Added idempotently to
 `scripts/turso-migrate.ts`; mirrored into `scripts/schema.sql` (read-only DDL reference).
+
+**Important evolution (2026-05):** The original six tables captured a relatively narrow research
+input tuple. We added `stage0_research_shaping` to support richer, dynamic research-time inputs
+discovered during Stage 0 (hard constraints, soft preferences, search directives, signals, etc.).
+"constraint" is deliberately only one possible `role` — the table is intentionally named
+"shaping" because Stage 0 research is still exploratory and fluid.
 
 ### 3.1 `stage0_research_runs` — one row per research session
 
@@ -103,7 +109,45 @@ PK: (`run_id`, `nights`).
 > `stage0_research_durations`. `scrape_date_range.py` handles the date-window sweep internally,
 > so the aggregator never loops dates itself.
 
-### 3.4 `stage0_candidates` — one ranked option per (destination, duration, departure date)
+### 3.4 `stage0_research_shaping` — dynamic research inputs and rules (added 2026-05)
+
+This table captures everything that shapes the research search space while it is still fluid.
+Unlike the simple `window_start`/`window_end` on the run header (which mainly drives the
+technical scrape), shaping records semantic rules discovered or declared during research.
+
+| Column        | Type    | Notes |
+|---------------|---------|-------|
+| `run_id`      | TEXT    | FK → `stage0_research_runs.run_id` |
+| `aspect`      | TEXT    | `date` \| `channel` \| `mobility` \| `lodging` \| `budget` \| `activity` \| `general` |
+| `role`        | TEXT    | `hard_constraint` \| `soft_preference` \| `search_directive` \| `observed_signal` \| `hypothesis` |
+| `kind`        | TEXT    | Specific rule, e.g. `return_no_later_than`, `exclude_depart`, `exclude_source`, `no_car`, `location_requirement` |
+| `value_text`  | TEXT    | Generic string / code value |
+| `value_date`  | TEXT    | Date value (YYYY-MM-DD) when applicable |
+| `value_integer` | INTEGER | Numeric value when applicable |
+| `notes`       | TEXT    | Human explanation (e.g. "Liko 馬偕 commitment") |
+| `created_at`  | TEXT    | ISO timestamp |
+
+**Design principle:** `role = 'hard_constraint'` is only one possible value. Early research often
+starts with hypotheses and soft preferences. Some later harden into constraints. This table is
+deliberately more flexible than the post-lock `plan_root_date_anchor.flexibility_json`.
+
+Example rows for a real research run with Liko-style rules (Okinawa June 2026):
+- `aspect=date`, `role=hard_constraint`, `kind=return_no_later_than`, `value_date=2026-06-27`
+- `aspect=date`, `role=hard_constraint`, `kind=exclude_depart`, `value_date=2026-06-28`, `notes=Liko 馬偕`
+- `aspect=channel`, `role=hard_constraint`, `kind=exclude_source`, `value_text=kkday`
+- `aspect=mobility`, `role=hard_constraint`, `kind=no_car`, `value_text=true`
+
+CLI usage:
+```bash
+npm run travel -- stage0-init ... \
+  --shaping date:hard_constraint:return_no_later_than:2026-06-27 \
+  --shaping date:hard_constraint:exclude_depart:2026-06-28:Liko 馬偕 commitment \
+  --shaping channel:hard_constraint:exclude_source:kkday:prior bad experience
+```
+
+`stage0-compare --run <id>` will display all shaping rules grouped by aspect.
+
+### 3.5 `stage0_candidates` — one ranked option per (destination, duration, departure date)
 
 | Column | Type | Notes |
 |--------|------|-------|

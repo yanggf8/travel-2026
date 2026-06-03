@@ -94,7 +94,19 @@ export class TursoPipelineClient {
       throw new Error(`Turso HTTP error ${res.status} at ${this.endpoint}: ${text || res.statusText}`);
     }
 
-    return (await res.json()) as TursoPipelineResponse;
+    const json = (await res.json()) as any;
+
+    // Surface any error in the response body (Turso can put error at top level or under results[0].response.error)
+    const topLevelError = json?.error;
+    if (topLevelError) {
+      throw new Error(`Turso pipeline error: ${JSON.stringify(topLevelError)}`);
+    }
+    const firstResultError = json?.results?.[0]?.response?.error || json?.results?.[0]?.error;
+    if (firstResultError) {
+      throw new Error(`Turso execute error: ${JSON.stringify(firstResultError)}`);
+    }
+
+    return json as TursoPipelineResponse;
   }
 
   /**
@@ -121,17 +133,23 @@ export class TursoPipelineClient {
       throw new Error(`Turso HTTP error ${res.status} at ${this.endpoint}: ${text || res.statusText}`);
     }
 
-    const json = (await res.json()) as TursoPipelineResponse;
+    const json = (await res.json()) as any;
 
-    // Surface per-query errors early
+    const topLevelError = json?.error;
+    if (topLevelError) {
+      throw new Error(`Turso pipeline batch error: ${JSON.stringify(topLevelError)}`);
+    }
+
+    // Surface per-query errors early (check both common locations)
     for (let i = 0; i < sqls.length; i++) {
-      const err = json.results?.[i]?.response?.error;
+      const r = json.results?.[i];
+      const err = r?.response?.error || r?.error;
       if (err) {
         throw new Error(`Turso batch query [${i}] error: ${JSON.stringify(err)}`);
       }
     }
 
-    return json;
+    return json as TursoPipelineResponse;
   }
 
   async executeMany(sqlStatements: string[], batchSize = 25): Promise<void> {
@@ -157,10 +175,17 @@ export class TursoPipelineClient {
         throw new Error(`Turso HTTP error ${res.status}: ${text || res.statusText}`);
       }
 
-      const json = (await res.json()) as TursoPipelineResponse;
-      const firstError = json.results?.find((r) => r.response?.error)?.response?.error;
-      if (firstError) {
-        throw new Error(`Turso pipeline execute error: ${JSON.stringify(firstError)}`);
+      const json = (await res.json()) as any;
+
+      const topLevelError = json?.error;
+      if (topLevelError) {
+        throw new Error(`Turso pipeline executeMany error: ${JSON.stringify(topLevelError)}`);
+      }
+
+      const firstError = json.results?.find((r: any) => r?.response?.error || r?.error);
+      const err = firstError?.response?.error || firstError?.error;
+      if (err) {
+        throw new Error(`Turso pipeline executeMany error: ${JSON.stringify(err)}`);
       }
     }
   }

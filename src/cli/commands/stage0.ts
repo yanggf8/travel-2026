@@ -14,13 +14,48 @@ function newRunId(): string {
 // ── stage0-init ──────────────────────────────────────────────────────
 // Creates an immutable research run. Destinations: --dest CODE:LABEL (repeatable).
 // Durations: --nights N (repeatable). Window: --start / --end.
+// Shaping (research directives + constraints) via repeatable --shaping flags.
+// Format: --shaping ASPECT:ROLE:KIND:VALUE[:NOTES]
+// ROLE examples: hard_constraint, soft_preference, search_directive
+// Common ASPECT: date, channel, mobility, lodging, budget, activity, general
+
+function parseShapingEntry(raw: string) {
+  const parts = raw.split(':');
+  if (parts.length < 4) {
+    throw new Error(`--shaping must be ASPECT:ROLE:KIND:VALUE[:NOTES], got: "${raw}"`);
+  }
+  const [aspect, role, kind, value, ...notesParts] = parts;
+  const notes = notesParts.length > 0 ? notesParts.join(':') : undefined;
+
+  let value_text: string | undefined;
+  let value_date: string | undefined;
+  let value_integer: number | undefined;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    value_date = value;
+  } else if (/^-?\d+$/.test(value)) {
+    value_integer = parseInt(value, 10);
+  } else {
+    value_text = value;
+  }
+
+  return {
+    aspect: aspect.toLowerCase(),
+    role: role.toLowerCase(),
+    kind: kind.toLowerCase(),
+    value_text,
+    value_date,
+    value_integer,
+    notes: notes || undefined,
+  };
+}
 
 const stage0InitCommand: CommandHandler = {
   names: ['stage0-init'],
   description: 'Create a Stage 0 research run (immutable inputs).',
   usage: 'stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 ' +
     '--dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 ' +
-    '[--pax 2] [--rate 32]',
+    '[--pax 2] [--rate 32] [--shaping ...] (repeatable)',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
     const { createResearchRun } = require('../../services/stage0-service');
@@ -33,6 +68,7 @@ const stage0InitCommand: CommandHandler = {
     const nightsOpts = args.optionValues('--nights');
     const pax = parseInt(args.optionValue('--pax') || '2', 10);
     const rate = parseFloat(args.optionValue('--rate') || '32');
+    const shapingOpts = args.optionValues('--shaping');
 
     if (!origin || !start || !end || destOpts.length === 0 || nightsOpts.length === 0) {
       console.error('Error: stage0-init requires --origin, --start, --end, ' +
@@ -50,17 +86,38 @@ const stage0InitCommand: CommandHandler = {
     });
     const durations = nightsOpts.map((n) => ({ nights: parseInt(n, 10) }));
 
+    let shaping: any[] = [];
+    if (shapingOpts.length > 0) {
+      try {
+        shaping = shapingOpts.map(parseShapingEntry);
+      } catch (e: any) {
+        console.error('Error parsing --shaping:', e.message);
+        process.exit(1);
+      }
+    }
+
     const runId = newRunId();
     await createResearchRun({
       runId, originCode: origin.toUpperCase(), pax,
       windowStart: start, windowEnd: end, exchangeRateUsdTwd: rate,
       destinations, durations,
+      shaping: shaping.length > 0 ? shaping : undefined,
     });
 
     console.log(`\n✅ Stage 0 research run created: ${runId}`);
     console.log(`   Origin: ${origin.toUpperCase()}  Window: ${start} → ${end}  Pax: ${pax}`);
     console.log(`   Destinations: ${destinations.map((d) => d.destCode).join(', ')}`);
     console.log(`   Durations: ${durations.map((d) => d.nights + 'n').join(', ')}`);
+
+    if (shaping.length > 0) {
+      console.log(`\n   Shaping rules recorded (${shaping.length}):`);
+      for (const s of shaping) {
+        const val = s.value_date ?? s.value_text ?? (s.value_integer != null ? s.value_integer : '');
+        const note = s.notes ? `  // ${s.notes}` : '';
+        console.log(`     ${s.aspect}/${s.role}/${s.kind} = ${val}${note}`);
+      }
+    }
+
     console.log(`\nNext: python scripts/stage0_research.py --run ${runId}`);
   },
 };
@@ -96,6 +153,23 @@ const stage0CompareCommand: CommandHandler = {
 
     console.log(`\nStage 0 Research — ${run.run_id}  (${run.origin_code}, ` +
       `${run.pax} pax, window ${run.window_start}..${run.window_end})`);
+
+    if (run.shaping && run.shaping.length > 0) {
+      console.log('\nResearch Shaping:');
+      const byAspect: Record<string, typeof run.shaping> = {};
+      for (const s of run.shaping) {
+        (byAspect[s.aspect] ||= []).push(s);
+      }
+      for (const [aspect, items] of Object.entries(byAspect)) {
+        console.log(`  ${aspect}:`);
+        for (const s of items) {
+          const val = s.value_date ?? s.value_text ?? (s.value_integer != null ? s.value_integer : '');
+          const roleNote = s.role === 'hard_constraint' ? ' [HARD]' : (s.role === 'soft_preference' ? ' [PREF]' : '');
+          console.log(`    - ${s.role}${roleNote} ${s.kind}${val !== '' ? ' = ' + val : ''}${s.notes ? '  // ' + s.notes : ''}`);
+        }
+      }
+    }
+
     console.log('');
     if (candidates.length === 0) {
       console.log('(no candidates — run the aggregator first)\n');
@@ -180,8 +254,9 @@ const stage0ExportCommand: CommandHandler = {
       process.exit(1);
     }
     const attempts = await getScrapeAttempts(runId);
+    const shaping = await require('../../services/stage0-service').getResearchShaping(runId);
     // Single JSON object on stdout — nothing else, so Python can parse it.
-    console.log(JSON.stringify({ ...run, attempts }));
+    console.log(JSON.stringify({ ...run, attempts, shaping }));
   },
 };
 

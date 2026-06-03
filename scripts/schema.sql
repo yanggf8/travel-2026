@@ -815,6 +815,34 @@ CREATE TABLE IF NOT EXISTS stage0_scrape_attempts (
 CREATE INDEX IF NOT EXISTS idx_s0_cand_run
   ON stage0_candidates(run_id, rank);
 
+-- Stage 0 Research Shaping (normalized, no JSON blobs).
+-- Everything that shapes the research search space in the dynamic pre-lock phase.
+-- "hard_constraint" is one possible role; others include soft_preference, search_directive, etc.
+-- See turso-migrate.ts for full description.
+CREATE TABLE IF NOT EXISTS stage0_research_shaping (
+  shaping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  aspect TEXT NOT NULL,             -- 'date' | 'channel' | 'mobility' | 'lodging' | 'budget' | 'activity' | 'general'
+  role TEXT NOT NULL,               -- 'hard_constraint' | 'soft_preference' | 'search_directive' | 'observed_signal' | 'hypothesis'
+  kind TEXT NOT NULL,
+  value_text TEXT,
+  value_date TEXT,
+  value_integer INTEGER,
+  notes TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_s0_shaping_run ON stage0_research_shaping(run_id, aspect, role);
+
+-- Enforce business uniqueness via expression index (COALESCE allowed in indexes).
+-- Prevents duplicate shaping rows for the same (aspect, role, kind, value).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_s0_shaping_value
+  ON stage0_research_shaping(
+    run_id, aspect, role, kind,
+    COALESCE(value_text, ''),
+    COALESCE(value_date, ''),
+    COALESCE(value_integer, 0)
+  );
+
 CREATE TABLE stage0_tour_group_offers (
   run_id TEXT NOT NULL,
   offer_id TEXT NOT NULL,

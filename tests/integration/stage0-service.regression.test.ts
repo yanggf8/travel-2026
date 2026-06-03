@@ -3,6 +3,7 @@ import { describe, expect, it, afterAll } from 'vitest';
 import {
   createResearchRun,
   getResearchRun,
+  getResearchShaping,
   getScrapeAttempts,
   deleteResearchRun,
   insertCandidate,
@@ -91,6 +92,37 @@ describe('Stage 0 service — run creation', () => {
     expect(run!.durations).toHaveLength(2);
     // duration_days = nights + 1
     expect(run!.durations.find((d) => d.nights === 6)!.duration_days).toBe(7);
+  });
+
+  it('creates a run with shaping rules (date + channel + mobility) and reads them back', async () => {
+    const runId = uniqueRunId();
+    await createResearchRun({
+      runId,
+      originCode: 'TPE',
+      pax: 2,
+      windowStart: '2026-06-12',
+      windowEnd: '2026-06-25',
+      exchangeRateUsdTwd: 32,
+      destinations: [{ destCode: 'OKA', destLabel: 'Okinawa (OKA)' }],
+      durations: [{ nights: 3 }],
+      shaping: [
+        { aspect: 'date', role: 'hard_constraint', kind: 'return_no_later_than', value_date: '2026-06-27' },
+        { aspect: 'date', role: 'hard_constraint', kind: 'exclude_depart', value_date: '2026-06-28', notes: 'Liko 馬偕' },
+        { aspect: 'channel', role: 'hard_constraint', kind: 'exclude_source', value_text: 'kkday' },
+        { aspect: 'mobility', role: 'hard_constraint', kind: 'no_car', value_text: 'true' },
+      ],
+    });
+    TEST_RUN_IDS.push(runId);
+
+    const run = await getResearchRun(runId);
+    expect(run).not.toBeNull();
+    expect(run!.shaping).toHaveLength(4);
+    expect(run!.shaping.some(s => s.kind === 'return_no_later_than')).toBe(true);
+
+    const direct = await getResearchShaping(runId);
+    expect(direct).toHaveLength(4);
+
+    // Cleanup already handled by afterAll via TEST_RUN_IDS
   });
 
   it('seeds a pending scrape-attempt row per destination x duration', async () => {

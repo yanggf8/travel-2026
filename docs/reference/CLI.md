@@ -101,7 +101,8 @@ Explore departure date × destination × flight price together before any plan e
 
 ```bash
 npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
-  --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32]
+  --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32] \
+  [--shaping ASPECT:ROLE:KIND:VALUE[:NOTES] ...]   # e.g. date:hard_constraint:return_no_later_than:2026-06-27
 python scripts/stage0_research.py --run <run_id>          # aggregator (no Turso I/O of its own)
 npm run travel -- stage0-compare --run <run_id> [--json] [--limit N]
 npm run travel -- stage0-adopt <candidate_id> <plan_id> --create-plan --dest <slug>   # seed new plan with P1/P2

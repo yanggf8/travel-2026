@@ -36,6 +36,25 @@ export interface CreateRunInput {
   exchangeRateUsdTwd: number;
   destinations: Array<{ destCode: string; destLabel: string }>;
   durations: Array<{ nights: number }>;
+  shaping?: Array<{
+    aspect: string;
+    role: string;           // 'hard_constraint' | 'soft_preference' | 'search_directive' | ...
+    kind: string;
+    value_text?: string | null;
+    value_date?: string | null;
+    value_integer?: number | null;
+    notes?: string | null;
+  }>;
+}
+
+export interface ResearchShaping {
+  aspect: string;
+  role: string;
+  kind: string;
+  value_text: string | null;
+  value_date: string | null;
+  value_integer: number | null;
+  notes: string | null;
 }
 
 export interface ResearchRun {
@@ -51,6 +70,7 @@ export interface ResearchRun {
   updated_at: string;
   destinations: Array<{ dest_code: string; dest_label: string; sort_order: number }>;
   durations: Array<{ nights: number; duration_days: number }>;
+  shaping: ResearchShaping[];
 }
 
 function nowIso(): string {
@@ -87,6 +107,20 @@ export async function createResearchRun(input: CreateRunInput): Promise<void> {
     );
   }
 
+  // Research shaping (normalized, no JSON). Includes hard constraints, soft preferences,
+  // search directives, etc. "hard_constraint" is one role among others.
+  if (input.shaping && input.shaping.length > 0) {
+    for (const s of input.shaping) {
+      stmts.push(
+        `INSERT INTO stage0_research_shaping
+           (run_id, aspect, role, kind, value_text, value_date, value_integer, notes, created_at)
+         VALUES (${sqlText(input.runId)}, ${sqlText(s.aspect)}, ${sqlText(s.role)}, ${sqlText(s.kind)},
+           ${sqlText(s.value_text ?? null)}, ${sqlText(s.value_date ?? null)},
+           ${sqlInt(s.value_integer ?? null)}, ${sqlText(s.notes ?? null)}, ${sqlText(ts)});`
+      );
+    }
+  }
+
   // Seed one 'pending' scrape-attempt row per destination x duration. This
   // makes the full work matrix visible in the DB before scraping starts, so
   // a mid-run crash still shows what was attempted, and the aggregator can
@@ -113,6 +147,7 @@ export async function getResearchRun(runId: string): Promise<ResearchRun | null>
     `SELECT * FROM stage0_research_runs WHERE run_id = ${sqlText(runId)};`,
     `SELECT * FROM stage0_research_destinations WHERE run_id = ${sqlText(runId)} ORDER BY sort_order;`,
     `SELECT * FROM stage0_research_durations WHERE run_id = ${sqlText(runId)} ORDER BY nights;`,
+    `SELECT * FROM stage0_research_shaping WHERE run_id = ${sqlText(runId)} ORDER BY aspect, role, kind;`,
   ]);
   const runRows = rowsToObjectsAt(res, 0);
   if (runRows.length === 0) return null;
@@ -137,6 +172,15 @@ export async function getResearchRun(runId: string): Promise<ResearchRun | null>
       nights: Number(d.nights),
       duration_days: Number(d.duration_days),
     })),
+    shaping: rowsToObjectsAt(res, 3).map((s) => ({
+      aspect: s.aspect,
+      role: s.role,
+      kind: s.kind,
+      value_text: s.value_text ?? null,
+      value_date: s.value_date ?? null,
+      value_integer: s.value_integer == null ? null : Number(s.value_integer),
+      notes: s.notes ?? null,
+    })),
   };
 }
 
@@ -153,6 +197,23 @@ export interface ScrapeAttempt {
   candidate_count: number | null;
   error: string | null;
   attempted_at: string | null;
+}
+
+export async function getResearchShaping(runId: string): Promise<ResearchShaping[]> {
+  const client = newClient();
+  const res = await client.execute(
+    `SELECT * FROM stage0_research_shaping WHERE run_id = ${sqlText(runId)}
+     ORDER BY aspect, role, kind;`
+  );
+  return rowsToObjects(res).map((s) => ({
+    aspect: s.aspect,
+    role: s.role,
+    kind: s.kind,
+    value_text: s.value_text ?? null,
+    value_date: s.value_date ?? null,
+    value_integer: s.value_integer == null ? null : Number(s.value_integer),
+    notes: s.notes ?? null,
+  }));
 }
 
 export async function getScrapeAttempts(runId: string): Promise<ScrapeAttempt[]> {
@@ -184,6 +245,7 @@ export async function deleteResearchRun(runId: string): Promise<void> {
     `DELETE FROM stage0_scrape_attempts WHERE run_id = ${r};`,
     `DELETE FROM stage0_research_durations WHERE run_id = ${r};`,
     `DELETE FROM stage0_research_destinations WHERE run_id = ${r};`,
+    `DELETE FROM stage0_research_shaping WHERE run_id = ${r};`,
     `DELETE FROM stage0_research_runs WHERE run_id = ${r};`,
   ]);
 }
@@ -400,6 +462,7 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
      UNION
      SELECT plan_id FROM plan_metadata WHERE plan_id = ${sqlText(input.planId)};`,
     `SELECT * FROM destination_config WHERE slug = ${sqlText(input.destinationSlug)};`,
+    `SELECT * FROM stage0_research_shaping WHERE run_id = (SELECT run_id FROM stage0_candidates WHERE candidate_id = ${sqlText(input.candidateId)}) ORDER BY aspect, role, kind;`,
   ]);
   const candidateRows = rowsToObjectsAt(res, 0);
   if (candidateRows.length === 0) {
@@ -417,6 +480,7 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
   const candidate = candidateRows[0];
   const destConfig = destRows[0];
   const runId = candidate.run_id as string;
+  const shapingRows = rowsToObjectsAt(res, 3); // shaping from the research run
   const startDate = candidate.depart_date as string;
   const endDate = candidate.return_date as string;
   const nights = Number(candidate.nights);
@@ -490,6 +554,13 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
          depart_date: startDate,
          return_date: endDate,
          dest_code: primaryAirport,
+         shaping_count: shapingRows.length,
+         shaping_summary: shapingRows.map((s: any) => ({
+           aspect: s.aspect,
+           role: s.role,
+           kind: s.kind,
+           value: s.value_date || s.value_text || s.value_integer,
+         })),
        }))}, ${sqlText(ts)});`,
     `UPDATE stage0_candidates SET adopted_plan_id = ${sqlText(input.planId)}
       WHERE candidate_id = ${sqlText(input.candidateId)};`,

@@ -142,6 +142,24 @@ Commands:
     Example: query-offers --region kansai --start 2026-02-24 --end 2026-02-28
     Note: --start/--end are offer filters, not plan selectors.
 
+  add-offer --run <run_id> --source <id> --region <code> --depart <YYYY-MM-DD> --return <YYYY-MM-DD> --nights N --price <twd> --title "<title>" --url <url> [--hotel "<name>"] [--kind fit|group_tour] [--seats N] [--note "<text>"]
+    Directly insert a single manual FIT or group-tour offer into Turso DB (no JSON file required).
+    Designed for quickly recording data while browsing product pages during Stage 0 research.
+
+  add-besttour-offer --url <besttour-itinerary-url> --price <twd> --hotel "<name>" [--seats N] [--note "..."] [--run <run_id>]
+    Fast BestTour-specific version of add-offer.
+    Auto-infers nights and dates from the product code in the URL (e.g. OKA04FD260612BU).
+    Example: add-besttour-offer --url "https://www.besttour.com.tw/itinerary/OKA04FD260612BU" --price 16888 --hotel "WBF水之都那霸酒店" --seats 2 --note "FD230 13:30 | 只有6/12跟6/26"
+
+  add-lifetour-offer --url <lifetour url> --price <twd> --hotel "<name>" [--depart YYYY-MM-DD] [--return YYYY-MM-DD] [--seats N] [--note "..."] [--run <run_id>]
+    Fast helper for 五福旅遊 (Lifetour). Works with both search list pages and product pages.
+    Example: add-lifetour-offer --url "https://tour.lifetour.com.tw/searchlist/tpe/0001-0005" --price 17200 --hotel "水之都那霸飯店" --seats 2 --depart 2026-06-21 --return 2026-06-24 --note "沖繩機加酒"
+
+  chat-format --run <run_id> [--region okinawa] [--max N] [--hotel "substring"]
+    Print qualified candidates in clean messenger/chat format (ready to copy-paste).
+    Use --hotel to filter (e.g. "水之都" or "Mercure").
+    Example: chat-format --run stage0-20260525-093508 --region okinawa --hotel "水之都"
+
   check-freshness --source <id> [--region name] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--max-age N]
     Check if Turso has fresh data for a source/region. Returns skip/rescrape/no_data.
     Example: check-freshness --source besttour --region kansai
@@ -168,10 +186,12 @@ Commands:
     Example: run-list
     Example: run-list --status failed --limit 5
 
-  stage0-init --origin <IATA> --start <date> --end <date> --dest CODE:LABEL --nights N
+  stage0-init --origin <IATA> --start <date> --end <date> --dest CODE:LABEL --nights N [--shaping ...]
     Create a Stage 0 triangle-research run (immutable inputs; pre-plan).
     Repeat --dest and --nights for multiple destinations/durations.
+    Use --shaping ASPECT:ROLE:KIND:VALUE[:NOTES] (repeatable) for hard constraints, preferences, etc.
     Example: stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 --dest KIX:"Osaka (KIX)" --nights 6
+    Example: ... --shaping date:hard_constraint:return_no_later_than:2026-06-27 --shaping channel:hard_constraint:exclude_source:kkday
 
   stage0-export --run <run_id> --json
     Export a Stage 0 run as JSON (consumed by the aggregator script).
