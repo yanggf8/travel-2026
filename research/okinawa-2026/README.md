@@ -51,6 +51,22 @@ Strongest specific-hotel options captured so far (return ≤ 2026-06-27):
 
 Many Funtime "自選市區" at ~11.9k–13k as price floor.
 
+## Current Watchlist — 2026-06-04 funtime live page
+
+After LionTravel phone-confirmed the 6/21 Aqua Citta option is no longer sold, watchlist focus shifted to similarly decent central Naha options that still align with the 6/21 reference date.
+
+- BestTour / 喜鴻 via funtime: 逸之彩溫泉度假飯店
+  - 6/21–6/24 (3n / 4 days) @ 18,988 TWD/person
+  - URL: https://www.besttour.com.tw/itinerary/OKA04MM260621AT?fc=ft
+  - DB offer_id: besttour-okinawa-20260621-3n-mpyxqrds
+  - Notes: Peach / 樂桃, 20kg checked baggage, funtime data-id `ID:BEST_23632_CT_OKINAWA`
+
+- BestTour / 喜鴻 via funtime: 逸之彩溫泉度假飯店
+  - 6/21–6/25 (4n / 5 days) @ 20,300 TWD/person
+  - URL: https://www.besttour.com.tw/e_web/travel?v=OKA05MM260621EF&fc=ft
+  - DB offer_id: besttour-okinawa-20260621-4n-mpyxqsm9
+  - Notes: Peach / 樂桃, 20kg checked baggage, funtime data-id `ID:BEST_23674_CT_OKINAWA`
+
 ## Post-28 June Exploration (new focus after Liko feedback 2026-05-27)
 
 Liko prefers later dates (captured as observed_signal + soft_preference in DB).
