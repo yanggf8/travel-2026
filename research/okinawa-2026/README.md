@@ -26,6 +26,11 @@
 - Funtime no longer exposes a Travel4U / 山富 6/21 Aqua Citta link. The visible 6/21 water-city match is LionTravel only.
 - The old Travel4U 6/21–6/24 @ 16,199 entry remains a May 27 historical reference, not a live-confirmed option.
 
+**2026-06-04 Liko shaping update**:
+- Liko can accept a 2026-06-13 departure if the package quality is good.
+- This reopens 6/13 as an actionable date, but not generic early-June leads: prioritize good central Naha / Yui-rail walkable hotels.
+- BestTour 逸之彩 6/13 is now a serious watchlist candidate; both 4-day and 5-day variants exist.
+
 **Shaping is multi-role and evolves** (all stored in stage0_research_shaping):
 - Early entries: date:hard_constraint:return_no_later_than + exclude_depart (original Liko schedule)
 - Later entries (after Liko response): observed_signal:liko_prefers_late + soft_preference:explore_after_28
@@ -54,6 +59,24 @@ Many Funtime "自選市區" at ~11.9k–13k as price floor.
 ## Current Watchlist — 2026-06-04 funtime live page
 
 After LionTravel phone-confirmed the 6/21 Aqua Citta option is no longer sold, watchlist focus shifted to similarly decent central Naha options that still align with the 6/21 reference date.
+
+- BestTour / 喜鴻: 逸之彩溫泉度假飯店
+  - 6/13–6/16 (3n / 4 days) @ 19,888 TWD/person, available seats: 2
+  - URL: https://www.besttour.com.tw/itinerary/OKA04MM260613AT?fc=ft
+  - DB offer_id: besttour-okinawa-20260613-3n-mpyzyua0
+  - Flights: MM922 TPE 09:35 → OKA 12:20; MM929 OKA 16:45 → TPE 17:20
+  - Hotel: twin room 20㎡, 120cm × 2 beds, 3 nights; Makishi Station ~1 min walk, Kokusai-dori ~6 min walk
+  - Notes: Peach / 樂桃, 20kg checked baggage, outdoor pool + natural hot spring
+  - Booking caveat: BestTour page says order requires customer-service confirmation in ~1–3 business days; availability is not final until confirmed.
+
+- BestTour / 喜鴻: 逸之彩溫泉度假飯店
+  - 6/13–6/17 (4n / 5 days) @ 20,800 TWD/person, available seats: 2
+  - URL: https://www.besttour.com.tw/itinerary/OKA05MM260613EF?fc=ft
+  - DB offer_id: besttour-okinawa-20260613-4n-mpyzyub0
+  - Flights: MM924 TPE 14:50 → OKA 17:35; MM927 OKA 13:15 → TPE 13:50
+  - Hotel: twin room 20㎡, 120cm × 2 beds, 4 nights; Makishi Station ~1 min walk, Kokusai-dori ~6 min walk
+  - Notes: Peach / 樂桃, 20kg checked baggage, outdoor pool + natural hot spring
+  - Booking caveat: BestTour page says order requires customer-service confirmation in ~1–3 business days; availability is not final until confirmed.
 
 - BestTour / 喜鴻 via funtime: 逸之彩溫泉度假飯店
   - 6/21–6/24 (3n / 4 days) @ 18,988 TWD/person
