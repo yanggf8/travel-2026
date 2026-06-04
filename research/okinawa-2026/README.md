@@ -59,13 +59,19 @@ After LionTravel phone-confirmed the 6/21 Aqua Citta option is no longer sold, w
   - 6/21–6/24 (3n / 4 days) @ 18,988 TWD/person
   - URL: https://www.besttour.com.tw/itinerary/OKA04MM260621AT?fc=ft
   - DB offer_id: besttour-okinawa-20260621-3n-mpyxqrds
-  - Notes: Peach / 樂桃, 20kg checked baggage, funtime data-id `ID:BEST_23632_CT_OKINAWA`
+  - Flights: MM922 TPE 09:35 → OKA 12:20; MM929 OKA 16:45 → TPE 17:20
+  - Hotel: twin room 20㎡, 120cm × 2 beds, 3 nights; Makishi Station ~1 min walk, Kokusai-dori ~6 min walk
+  - Notes: Peach / 樂桃, 20kg checked baggage, outdoor pool + natural hot spring; funtime data-id `ID:BEST_23632_CT_OKINAWA`
+  - Booking caveat: BestTour page says order requires customer-service confirmation in ~1–3 business days; availability is not final until confirmed.
 
 - BestTour / 喜鴻 via funtime: 逸之彩溫泉度假飯店
   - 6/21–6/25 (4n / 5 days) @ 20,300 TWD/person
   - URL: https://www.besttour.com.tw/e_web/travel?v=OKA05MM260621EF&fc=ft
   - DB offer_id: besttour-okinawa-20260621-4n-mpyxqsm9
-  - Notes: Peach / 樂桃, 20kg checked baggage, funtime data-id `ID:BEST_23674_CT_OKINAWA`
+  - Flights: MM924 TPE 14:45 → OKA 17:30; MM927 OKA 13:15 → TPE 13:50
+  - Hotel: twin room 20㎡, 120cm × 2 beds, 4 nights; Makishi Station ~1 min walk, Kokusai-dori ~6 min walk
+  - Notes: Peach / 樂桃, 20kg checked baggage, outdoor pool + natural hot spring; funtime data-id `ID:BEST_23674_CT_OKINAWA`
+  - Booking caveat: BestTour page says order requires customer-service confirmation in ~1–3 business days; availability is not final until confirmed.
 
 ## Post-28 June Exploration (new focus after Liko feedback 2026-05-27)
 
