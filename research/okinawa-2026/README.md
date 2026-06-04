@@ -19,7 +19,12 @@
 - lodging:soft_preference:preferred_hotel_area: 中央那霸 Yui-rail 可步行 / 水之都那霸飯店優先 (飯店要好，優先有泳池的知名飯店)
 - channel:soft_preference:preferred_sources: liontravel, besttour, travel4u, lifetour
 
-**Note**: "keep 21" — the 6/21 LionTravel 水之都 at 14,499 remains a strong reference point.
+**2026-06-04 live re-check**:
+- 6/12 Aqua Citta-style leads are now rejected as too early for this trip.
+- LionTravel phone confirmation: the 6/21–6/24 Aqua Citta / 水之都 offer at 14,499 is no longer being sold.
+- Funtime 6/21-only page still shows the LionTravel Aqua Citta anchor, but it is stale relative to the phone confirmation and should not be treated as bookable.
+- Funtime no longer exposes a Travel4U / 山富 6/21 Aqua Citta link. The visible 6/21 water-city match is LionTravel only.
+- The old Travel4U 6/21–6/24 @ 16,199 entry remains a May 27 historical reference, not a live-confirmed option.
 
 **Shaping is multi-role and evolves** (all stored in stage0_research_shaping):
 - Early entries: date:hard_constraint:return_no_later_than + exclude_depart (original Liko schedule)
@@ -33,13 +38,13 @@ Strongest specific-hotel options captured so far (return ≤ 2026-06-27):
 
 - LionTravel 水之都那霸飯店 (Aqua Citta Naha)
   - 6/14–17 @ 14,499
-  - 6/21–24 @ 14,499 (with flight details) ← **keep 21** per current preference
+  - 6/21–24 @ 14,499 (with flight details) — **stale; phone-confirmed no longer sold on 2026-06-04**
 
 - BestTour WBF水之都那霸酒店
-  - 6/12–15 @ 16,888 (earliest strong window)
+  - 6/12–15 @ 16,888 — rejected as too early
 
 - Travel4U 水之都那霸飯店
-  - 6/21–24 @ 16,199
+  - 6/21–24 @ 16,199 — historical May 27 capture; not live-confirmed on 2026-06-04
 
 - Lifetour Mercure Okinawa Naha
   - 6/14 @ 18,900
