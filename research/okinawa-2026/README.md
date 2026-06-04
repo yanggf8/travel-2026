@@ -31,6 +31,12 @@
 - This reopens 6/13 as an actionable date, but not generic early-June leads: prioritize good central Naha / Yui-rail walkable hotels.
 - BestTour 逸之彩 6/13 is now a serious watchlist candidate; both 4-day and 5-day variants exist.
 
+**Source reliability note — funtime**:
+- funtime is useful for finding FIT leads quickly, but it can show stale partner inventory.
+- Any funtime-derived lead must be re-verified on the original agency/product page before treating it as available, priced correctly, or bookable.
+- This rule was confirmed by the 6/21 LionTravel Aqua Citta case: funtime still exposed the anchor, but LionTravel phone confirmation said the offer was no longer being sold.
+- Record funtime-only data as a lead, not as final availability.
+
 **Shaping is multi-role and evolves** (all stored in stage0_research_shaping):
 - Early entries: date:hard_constraint:return_no_later_than + exclude_depart (original Liko schedule)
 - Later entries (after Liko response): observed_signal:liko_prefers_late + soft_preference:explore_after_28
