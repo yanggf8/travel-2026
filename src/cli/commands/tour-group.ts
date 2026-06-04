@@ -14,7 +14,7 @@ interface ImportFileEnvelope {
 
 const importTourGroupCommand: CommandHandler = {
   names: ['import-tour-group-offers'],
-  description: 'Import tour-group offers from a scraper output JSON file into stage0 tables.',
+  description: 'Import tour-group offers from a scraper output JSON file into shaping tables.',
   usage: 'import-tour-group-offers --run <run_id> --file <path>',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
@@ -100,7 +100,7 @@ const importTourGroupCommand: CommandHandler = {
 
 const queryTourGroupCommand: CommandHandler = {
   names: ['query-tour-group-offers'],
-  description: 'List tour-group offers collected for a Stage 0 run.',
+  description: 'List tour-group offers collected for a Shaping Stage run.',
   usage: 'query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--nights N] [--max-price TWD] [--json]',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
@@ -160,20 +160,20 @@ interface BaselineRow {
   fit_savings_pct: number | null;
 }
 
-const stage0BaselineCommand: CommandHandler = {
-  names: ['stage0-baseline'],
-  description: 'Show the methodology baseline view (group-tour ceiling vs FIT comparable) for a Stage 0 run.',
-  usage: 'stage0-baseline --run <run_id> [--dest-region <region>] [--nights N] [--json]',
+const shapingBaselineCommand: CommandHandler = {
+  names: ['shaping-baseline'],
+  description: 'Show the methodology baseline view (group-tour ceiling vs FIT comparable) for a Shaping Stage run.',
+  usage: 'shaping-baseline --run <run_id> [--dest-region <region>] [--nights N] [--json]',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
     const { args } = ctx;
     const runId = args.optionValue('--run');
     if (!runId) {
-      console.error('Error: stage0-baseline requires --run <run_id>');
+      console.error('Error: shaping-baseline requires --run <run_id>');
       process.exit(1);
     }
 
-    const { getResearchRun } = require('../../services/stage0-service');
+    const { getResearchRun } = require('../../services/shaping-service');
     const run = await getResearchRun(runId);
     if (!run) {
       console.error(`Error: research run not found: ${runId}`);
@@ -262,7 +262,7 @@ const stage0BaselineCommand: CommandHandler = {
       return;
     }
 
-    console.log(`\nStage 0 Baseline — ${run.run_id}  (${run.origin_code}, ` +
+    console.log(`\nShaping Stage Baseline — ${run.run_id}  (${run.origin_code}, ` +
       `${run.pax} pax, window ${run.window_start}..${run.window_end})`);
     const filterDesc = [
       filterDestRegion ? `region=${filterDestRegion}` : null,
@@ -314,4 +314,4 @@ const stage0BaselineCommand: CommandHandler = {
 
 registerCommand(importTourGroupCommand);
 registerCommand(queryTourGroupCommand);
-registerCommand(stage0BaselineCommand);
+registerCommand(shapingBaselineCommand);

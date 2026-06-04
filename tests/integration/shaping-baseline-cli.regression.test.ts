@@ -13,14 +13,14 @@ function runCli(cmdArgs: string[]): { stdout: string; stderr: string; code: numb
 
 async function clear() {
   const c = getTursoClient();
-  await c.execute(`DELETE FROM stage0_tour_group_offers WHERE run_id = ${sqlText(RUN)}`);
-  await c.execute(`DELETE FROM stage0_research_runs WHERE run_id = ${sqlText(RUN)}`);
+  await c.execute(`DELETE FROM shaping_tour_group_offers WHERE run_id = ${sqlText(RUN)}`);
+  await c.execute(`DELETE FROM shaping_research_runs WHERE run_id = ${sqlText(RUN)}`);
 }
 
 async function seedRun() {
   const c = getTursoClient();
   // Minimal research run so the command can resolve it
-  await c.execute(`INSERT INTO stage0_research_runs
+  await c.execute(`INSERT INTO shaping_research_runs
     (run_id, origin_code, pax, window_start, window_end, currency, exchange_rate_usd_twd, status, created_at, updated_at)
     VALUES (${sqlText(RUN)}, 'TPE', 2, '2026-06-12', '2026-06-25', 'TWD', 32.0, 'open', '2026-05-27T00:00:00Z', '2026-05-27T00:00:00Z')`);
 }
@@ -34,26 +34,26 @@ function offer(over: any) {
   };
 }
 
-describe('stage0-baseline CLI', () => {
+describe('shaping-baseline CLI', () => {
   beforeEach(async () => {
     await clear();
     await seedRun();
   });
 
   it('errors when run_id is missing', () => {
-    const { code, stderr } = runCli(['stage0-baseline']);
+    const { code, stderr } = runCli(['shaping-baseline']);
     expect(code).not.toBe(0);
     expect(stderr).toMatch(/requires --run|--run/i);
   });
 
   it('errors when run does not exist', () => {
-    const { code, stderr } = runCli(['stage0-baseline', '--run', 'no-such-run']);
+    const { code, stderr } = runCli(['shaping-baseline', '--run', 'no-such-run']);
     expect(code).not.toBe(0);
     expect(stderr).toMatch(/not found/i);
   });
 
   it('shows empty result cleanly when no offers exist', () => {
-    const { code, stdout } = runCli(['stage0-baseline', '--run', RUN]);
+    const { code, stdout } = runCli(['shaping-baseline', '--run', RUN]);
     expect(code, stdout).toBe(0);
     expect(stdout).toMatch(/no offers|no tour-group/i);
   });
@@ -73,7 +73,7 @@ describe('stage0-baseline CLI', () => {
               raw_json: '{"confidence":"high","source":"funtime_aggregator"}' }),
     ]);
 
-    const { code, stdout } = runCli(['stage0-baseline', '--run', RUN]);
+    const { code, stdout } = runCli(['shaping-baseline', '--run', RUN]);
     expect(code, stdout).toBe(0);
     expect(stdout).toMatch(/baseline/i);
     expect(stdout).toContain('11,900'); // cheapest FIT on 6/18 surfaces
@@ -91,7 +91,7 @@ describe('stage0-baseline CLI', () => {
       offer({ offer_id: 'fit1', product_kind: 'fit', price_per_person_twd: 11900,
               raw_json: '{"confidence":"high"}' }),
     ]);
-    const { stdout } = runCli(['stage0-baseline', '--run', RUN]);
+    const { stdout } = runCli(['shaping-baseline', '--run', RUN]);
     // Savings = 21999 - 11900 = 10099
     expect(stdout).toMatch(/10,?099|savings|cheaper/i);
   });
@@ -101,7 +101,7 @@ describe('stage0-baseline CLI', () => {
       offer({ offer_id: 'oka1', dest_region: 'okinawa', product_kind: 'fit', price_per_person_twd: 11900 }),
       offer({ offer_id: 'kan1', dest_region: 'kansai', product_kind: 'fit', price_per_person_twd: 22888 }),
     ]);
-    const { stdout } = runCli(['stage0-baseline', '--run', RUN, '--dest-region', 'okinawa']);
+    const { stdout } = runCli(['shaping-baseline', '--run', RUN, '--dest-region', 'okinawa']);
     expect(stdout).toContain('11,900');
     expect(stdout).not.toContain('22,888');
   });
@@ -112,7 +112,7 @@ describe('stage0-baseline CLI', () => {
       offer({ offer_id: 'fit1', product_kind: 'fit', price_per_person_twd: 11900,
               raw_json: '{"confidence":"high"}' }),
     ]);
-    const { stdout } = runCli(['stage0-baseline', '--run', RUN, '--json']);
+    const { stdout } = runCli(['shaping-baseline', '--run', RUN, '--json']);
     const parsed = JSON.parse(stdout);
     expect(parsed.run_id).toBe(RUN);
     expect(Array.isArray(parsed.baseline_rows)).toBe(true);

@@ -318,7 +318,7 @@ async function upsertTourOffers(client: TursoPipelineClient, offers: any[]): Pro
     if (rawJson.selected === true || rawJson.selected === 1 || rawJson.selected === 'true') {
       const selectionId = `${o.run_id}:${o.offer_id}`;
       selectionStmts.push({
-        sql: `INSERT OR REPLACE INTO stage0_selected_offers
+        sql: `INSERT OR REPLACE INTO shaping_selected_offers
           (selection_id, run_id, destination_slug, source_id, source_offer_id, selected_depart_date,
            selected_return_date, nights, price_per_person_twd, price_total_twd, hotel_name,
            observed_by, observed_at, selected_by, selected_at, provenance_json, raw_json, imported_at)
@@ -381,7 +381,7 @@ async function backfillResearch(client: TursoPipelineClient): Promise<{ artifact
             : 'checkpoint';
 
     await client.executeParams(
-      `INSERT OR REPLACE INTO stage0_research_artifacts
+      `INSERT OR REPLACE INTO shaping_research_artifacts
         (artifact_id, run_id, destination_slug, artifact_kind, original_filename, payload_json, raw_text,
          observed_by, observed_at, imported_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,

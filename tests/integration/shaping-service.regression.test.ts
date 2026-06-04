@@ -15,7 +15,7 @@ import {
   adoptCandidateToNewPlan,
   deleteCandidatesForPair,
   type CreateRunInput,
-} from '../../src/services/stage0-service';
+} from '../../src/services/shaping-service';
 import { rowsToObjects, sqlText } from '../../src/state/sql-helpers';
 
 const TEST_RUN_IDS: string[] = [];
@@ -27,13 +27,13 @@ function newClient(): any {
 }
 
 function uniqueRunId(): string {
-  const id = `stage0-test-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const id = `shaping-test-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   TEST_RUN_IDS.push(id);
   return id;
 }
 
 function uniquePlanId(): string {
-  const id = `stage0-test-plan-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const id = `shaping-test-plan-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   TEST_PLAN_IDS.push(id);
   return id;
 }
@@ -65,7 +65,7 @@ afterAll(async () => {
   }
 });
 
-describe('Stage 0 service — run creation', () => {
+describe('Shaping Stage service — run creation', () => {
   it('creates a run with destinations and durations, reads it back', async () => {
     const runId = uniqueRunId();
     const input: CreateRunInput = {
@@ -143,7 +143,7 @@ describe('Stage 0 service — run creation', () => {
   });
 });
 
-describe('Stage 0 service — candidates and ranking', () => {
+describe('Shaping Stage service — candidates and ranking', () => {
   it('ranks candidates by price, then leave-days, then depart-date', async () => {
     const runId = uniqueRunId();
     await createResearchRun({

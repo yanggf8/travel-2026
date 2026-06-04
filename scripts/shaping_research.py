@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Stage 0 aggregator — scrapes flight candidates across destination x duration
+Shaping Stage aggregator — scrapes flight candidates across destination x duration
 for one immutable research run, then hands results to the TS CLI for import.
 
-Performs NO Turso I/O directly: it loads the run via `stage0-export` and writes
-via `stage0-import`. All SQL stays in TypeScript (sql-helpers.ts escaping).
+Performs NO Turso I/O directly: it loads the run via `shaping-export` and writes
+via `shaping-import`. All SQL stays in TypeScript (sql-helpers.ts escaping).
 
 For each (destination, duration) pair it checks the seeded scrape-attempt
 status — 'ok' pairs are skipped (idempotent re-run), 'pending'/'failed' pairs
 are scraped via scrape_date_range.py into a temp file. Results are handed to
-`npm run travel -- stage0-import`, which performs all DB writes + ranking.
+`npm run travel -- shaping-import`, which performs all DB writes + ranking.
 
 Temp files are transient implementation detail — not durable state.
 
 Usage:
-  python scripts/stage0_research.py --run <run_id>
+  python scripts/shaping_research.py --run <run_id>
 """
 import argparse
 import json
@@ -29,15 +29,15 @@ PROJECT_ROOT = os.path.dirname(THIS_DIR)
 
 def load_run(run_id):
     """Load the run + destinations + durations + scrape attempts via the
-    stage0-export CLI command (all SQL stays in TypeScript)."""
+    shaping-export CLI command (all SQL stays in TypeScript)."""
     proc = subprocess.run(
         ["npm", "run", "--silent", "travel", "--",
-         "stage0-export", "--run", run_id, "--json"],
+         "shaping-export", "--run", run_id, "--json"],
         check=True, cwd=PROJECT_ROOT, capture_output=True, text=True)
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError:
-        print(f"Error: stage0-export did not return JSON for {run_id}",
+        print(f"Error: shaping-export did not return JSON for {run_id}",
               file=sys.stderr)
         print(proc.stdout, file=sys.stderr)
         sys.exit(1)
@@ -71,7 +71,7 @@ def scrape_pair(run, dest, duration_days):
 
 
 def build_candidates(run, dest, nights, results):
-    """Map scrape results -> candidate dicts for stage0-import."""
+    """Map scrape results -> candidate dicts for shaping-import."""
     candidates = []
     for r in results:
         depart = r.get("depart_date")
@@ -104,7 +104,7 @@ def build_candidates(run, dest, nights, results):
             "returnDate": return_date,
             "nights": nights,
             "flightTotalTwd": int(total) if total is not None else None,
-            "leaveDays": None,  # computed by stage0-import (TS leave calculator)
+            "leaveDays": None,  # computed by shaping-import (TS leave calculator)
             "verdict": None,
             "flights": flights,
         })
@@ -112,12 +112,12 @@ def build_candidates(run, dest, nights, results):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Stage 0 flight aggregator")
-    parser.add_argument("--run", required=True, help="Stage 0 run_id")
+    parser = argparse.ArgumentParser(description="Shaping Stage flight aggregator")
+    parser.add_argument("--run", required=True, help="Shaping Stage run_id")
     args = parser.parse_args()
 
     run = load_run(args.run)
-    print(f"Stage 0 aggregator — run {run['run_id']} "
+    print(f"Shaping Stage aggregator — run {run['run_id']} "
           f"({len(run['destinations'])} dest x {len(run['durations'])} duration)")
 
     # Build a {(dest_code, nights): status} map from the seeded attempt rows.
@@ -158,7 +158,7 @@ def main():
 
     if not all_candidates and not attempts:
         print("All pairs already scraped — nothing to do.")
-        print(f"View: npm run travel -- stage0-compare --run {run['run_id']}")
+        print(f"View: npm run travel -- shaping-compare --run {run['run_id']}")
         return
 
     # Hand off to the TS CLI for all DB writes + leave-days + ranking.
@@ -169,14 +169,14 @@ def main():
                   ensure_ascii=False)
     try:
         subprocess.run(
-            ["npm", "run", "travel", "--", "stage0-import",
+            ["npm", "run", "travel", "--", "shaping-import",
              "--run", run["run_id"], "--file", handoff_path],
             check=True, cwd=PROJECT_ROOT)
     finally:
         if os.path.exists(handoff_path):
             os.unlink(handoff_path)
 
-    print(f"Done. View: npm run travel -- stage0-compare --run {run['run_id']}")
+    print(f"Done. View: npm run travel -- shaping-compare --run {run['run_id']}")
 
 
 if __name__ == "__main__":

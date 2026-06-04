@@ -346,10 +346,10 @@ async function validateReferenceTables(client: TursoPipelineClient): Promise<voi
     `SELECT COUNT(*) AS count FROM transport_routes`,
     `SELECT COUNT(*) AS count FROM transport_hubs`,
     `SELECT COUNT(*) AS count FROM destination_references`,
-    `SELECT COUNT(*) AS count FROM stage0_research_artifacts`,
-    `SELECT COUNT(*) AS count FROM stage0_selected_offers`,
+    `SELECT COUNT(*) AS count FROM shaping_research_artifacts`,
+    `SELECT COUNT(*) AS count FROM shaping_selected_offers`,
   ]);
-  const labels = ['hotel_areas', 'transport_routes', 'transport_hubs', 'destination_references', 'stage0_research_artifacts', 'stage0_selected_offers'];
+  const labels = ['hotel_areas', 'transport_routes', 'transport_hubs', 'destination_references', 'shaping_research_artifacts', 'shaping_selected_offers'];
   labels.forEach((label, idx) => {
     const row = rowsToObjects(response, idx)[0] || {};
     const count = Number(row.count || 0);

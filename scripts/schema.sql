@@ -747,7 +747,7 @@ CREATE TABLE IF NOT EXISTS ota_sources (
 -- Stage 0 — Triangle Research
 -- =====================
 
-CREATE TABLE IF NOT EXISTS stage0_research_runs (
+CREATE TABLE IF NOT EXISTS shaping_research_runs (
   run_id TEXT PRIMARY KEY,
   origin_code TEXT NOT NULL,
   pax INTEGER NOT NULL,
@@ -760,7 +760,7 @@ CREATE TABLE IF NOT EXISTS stage0_research_runs (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS stage0_research_destinations (
+CREATE TABLE IF NOT EXISTS shaping_research_destinations (
   run_id TEXT NOT NULL,
   dest_code TEXT NOT NULL,
   dest_label TEXT NOT NULL,
@@ -768,14 +768,14 @@ CREATE TABLE IF NOT EXISTS stage0_research_destinations (
   PRIMARY KEY (run_id, dest_code)
 );
 
-CREATE TABLE IF NOT EXISTS stage0_research_durations (
+CREATE TABLE IF NOT EXISTS shaping_research_durations (
   run_id TEXT NOT NULL,
   nights INTEGER NOT NULL,
   duration_days INTEGER NOT NULL,
   PRIMARY KEY (run_id, nights)
 );
 
-CREATE TABLE IF NOT EXISTS stage0_candidates (
+CREATE TABLE IF NOT EXISTS shaping_candidates (
   candidate_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
   dest_code TEXT NOT NULL,
@@ -789,7 +789,7 @@ CREATE TABLE IF NOT EXISTS stage0_candidates (
   adopted_plan_id TEXT
 );
 
-CREATE TABLE IF NOT EXISTS stage0_candidate_flights (
+CREATE TABLE IF NOT EXISTS shaping_candidate_flights (
   candidate_id TEXT NOT NULL,
   direction TEXT NOT NULL,
   airline TEXT,
@@ -801,7 +801,7 @@ CREATE TABLE IF NOT EXISTS stage0_candidate_flights (
   PRIMARY KEY (candidate_id, direction)
 );
 
-CREATE TABLE IF NOT EXISTS stage0_scrape_attempts (
+CREATE TABLE IF NOT EXISTS shaping_scrape_attempts (
   run_id TEXT NOT NULL,
   dest_code TEXT NOT NULL,
   nights INTEGER NOT NULL,
@@ -813,13 +813,13 @@ CREATE TABLE IF NOT EXISTS stage0_scrape_attempts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_s0_cand_run
-  ON stage0_candidates(run_id, rank);
+  ON shaping_candidates(run_id, rank);
 
 -- Stage 0 Research Shaping (normalized, no JSON blobs).
 -- Everything that shapes the research search space in the dynamic pre-lock phase.
 -- "hard_constraint" is one possible role; others include soft_preference, search_directive, etc.
 -- See turso-migrate.ts for full description.
-CREATE TABLE IF NOT EXISTS stage0_research_shaping (
+CREATE TABLE IF NOT EXISTS shaping_rules (
   shaping_id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
   aspect TEXT NOT NULL,             -- 'date' | 'channel' | 'mobility' | 'lodging' | 'budget' | 'activity' | 'general'
@@ -831,19 +831,19 @@ CREATE TABLE IF NOT EXISTS stage0_research_shaping (
   notes TEXT,
   created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_s0_shaping_run ON stage0_research_shaping(run_id, aspect, role);
+CREATE INDEX IF NOT EXISTS idx_s0_shaping_run ON shaping_rules(run_id, aspect, role);
 
 -- Enforce business uniqueness via expression index (COALESCE allowed in indexes).
 -- Prevents duplicate shaping rows for the same (aspect, role, kind, value).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_s0_shaping_value
-  ON stage0_research_shaping(
+  ON shaping_rules(
     run_id, aspect, role, kind,
     COALESCE(value_text, ''),
     COALESCE(value_date, ''),
     COALESCE(value_integer, 0)
   );
 
-CREATE TABLE stage0_tour_group_offers (
+CREATE TABLE shaping_tour_group_offers (
   run_id TEXT NOT NULL,
   offer_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
@@ -868,9 +868,9 @@ CREATE TABLE stage0_tour_group_offers (
   PRIMARY KEY (run_id, offer_id)
 );
 
-CREATE INDEX idx_s0_tg_offers_lookup ON stage0_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);
+CREATE INDEX idx_s0_tg_offers_lookup ON shaping_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);
 
-CREATE TABLE stage0_tour_group_scrape_attempts (
+CREATE TABLE shaping_tour_group_scrape_attempts (
   run_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
   dest_region TEXT NOT NULL,

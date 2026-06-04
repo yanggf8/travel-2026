@@ -69,7 +69,7 @@ export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<
   if (rows.length === 0) return;
   const client = getTursoClient();
   const stmts = rows.map(r => {
-    return `INSERT OR REPLACE INTO stage0_tour_group_offers (
+    return `INSERT OR REPLACE INTO shaping_tour_group_offers (
       run_id, offer_id, source_id, dest_region, depart_date, return_date, nights,
       price_per_person_twd, title, url, scraped_at,
       hotel_name, hotel_star_rating, meals_included_count, departure_status,
@@ -104,7 +104,7 @@ export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<
 
 export async function upsertScrapeAttempt(row: ScrapeAttemptRow): Promise<void> {
   const client = getTursoClient();
-  await client.execute(`INSERT INTO stage0_tour_group_scrape_attempts
+  await client.execute(`INSERT INTO shaping_tour_group_scrape_attempts
       (run_id, source_id, dest_region, nights, status, offer_count, parsed_count, skipped_count, error, attempted_at)
       VALUES (
         ${sqlText(row.run_id)},
@@ -132,7 +132,7 @@ export async function findScrapeAttempt(
 ): Promise<ScrapeAttemptRow | null> {
   const client = getTursoClient();
   const r = await client.execute(
-    `SELECT * FROM stage0_tour_group_scrape_attempts
+    `SELECT * FROM shaping_tour_group_scrape_attempts
      WHERE run_id = ${sqlText(run_id)}
        AND source_id = ${sqlText(source_id)}
        AND dest_region = ${sqlText(dest_region)}
@@ -156,7 +156,7 @@ export async function listTourGroupOffers(filter: {
   if (filter.nights !== undefined) { where.push(`nights = ${sqlInt(filter.nights)}`); }
   if (filter.max_price !== undefined) { where.push(`price_per_person_twd <= ${sqlInt(filter.max_price)}`); }
   const r = await client.execute(
-    `SELECT * FROM stage0_tour_group_offers
+    `SELECT * FROM shaping_tour_group_offers
      WHERE ${where.join(' AND ')}
      ORDER BY price_per_person_twd ASC;`
   );

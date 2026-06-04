@@ -3,14 +3,14 @@
 Tour-group listing scraper.
 
 Scrapes tour-group (團體/跟團) listings from Taiwan travel agency sites for the
-Stage 0 baseline. Writes a JSON envelope matching the importer contract
+Shaping Stage baseline. Writes a JSON envelope matching the importer contract
 documented in docs/superpowers/specs/2026-05-25-tour-group-scraper-design.md §3.3.
 
 Usage:
     python scripts/scrape_tour_groups.py \\
         --source besttour --dest-region kansai --nights 5 \\
         --depart-start 2026-06-14 --depart-end 2026-06-28 \\
-        --run-id stage0-20260525-... \\
+        --run-id shaping-20260525-... \\
         --output scrapes/besttour-kansai-5n.json
 
 Live-site selectors drift. If a run returns 0 offers, open the listing URL
@@ -508,7 +508,7 @@ def _envelope(args, offers: list[dict], scraped_at: str) -> dict:
 
 
 def main():
-    p = argparse.ArgumentParser(description="Tour-group listing scraper for Stage 0 baseline.")
+    p = argparse.ArgumentParser(description="Tour-group listing scraper for Shaping Stage baseline.")
     p.add_argument("--source", required=True, choices=list(SOURCE_HANDLERS),
                    help="Agency source ID (besttour, lifetour, settour).")
     p.add_argument("--dest-region", required=True,
@@ -517,7 +517,7 @@ def main():
                    help="Trip length in nights (filter — exact match against title).")
     p.add_argument("--depart-start", required=True, help="YYYY-MM-DD")
     p.add_argument("--depart-end", required=True, help="YYYY-MM-DD")
-    p.add_argument("--run-id", required=True, help="Stage 0 run ID (must match a pending attempt row).")
+    p.add_argument("--run-id", required=True, help="Shaping Stage run ID (must match a pending attempt row).")
     p.add_argument("--output", required=True, help="Output JSON path.")
     args = p.parse_args()
 

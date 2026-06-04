@@ -1280,10 +1280,10 @@ async function main() {
     }
   }
 
-  // ── Stage 0 — Triangle Research (unscoped: keyed by run_id, not plan_id) ──
-  console.log('Creating Stage 0 research tables...');
+  // ── Shaping Stage — Triangle Research (unscoped: keyed by run_id, not plan_id) ──
+  console.log('Creating Shaping Stage research tables...');
   await client.executeMany([
-    `CREATE TABLE IF NOT EXISTS stage0_research_runs (
+    `CREATE TABLE IF NOT EXISTS shaping_research_runs (
       run_id TEXT PRIMARY KEY,
       origin_code TEXT NOT NULL,
       pax INTEGER NOT NULL,
@@ -1295,20 +1295,20 @@ async function main() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );`,
-    `CREATE TABLE IF NOT EXISTS stage0_research_destinations (
+    `CREATE TABLE IF NOT EXISTS shaping_research_destinations (
       run_id TEXT NOT NULL,
       dest_code TEXT NOT NULL,
       dest_label TEXT NOT NULL,
       sort_order INTEGER NOT NULL,
       PRIMARY KEY (run_id, dest_code)
     );`,
-    `CREATE TABLE IF NOT EXISTS stage0_research_durations (
+    `CREATE TABLE IF NOT EXISTS shaping_research_durations (
       run_id TEXT NOT NULL,
       nights INTEGER NOT NULL,
       duration_days INTEGER NOT NULL,
       PRIMARY KEY (run_id, nights)
     );`,
-    `CREATE TABLE IF NOT EXISTS stage0_candidates (
+    `CREATE TABLE IF NOT EXISTS shaping_candidates (
       candidate_id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL,
       dest_code TEXT NOT NULL,
@@ -1321,7 +1321,7 @@ async function main() {
       verdict TEXT,
       adopted_plan_id TEXT
     );`,
-    `CREATE TABLE IF NOT EXISTS stage0_candidate_flights (
+    `CREATE TABLE IF NOT EXISTS shaping_candidate_flights (
       candidate_id TEXT NOT NULL,
       direction TEXT NOT NULL,
       airline TEXT,
@@ -1332,7 +1332,7 @@ async function main() {
       price_total_twd INTEGER,
       PRIMARY KEY (candidate_id, direction)
     );`,
-    `CREATE TABLE IF NOT EXISTS stage0_scrape_attempts (
+    `CREATE TABLE IF NOT EXISTS shaping_scrape_attempts (
       run_id TEXT NOT NULL,
       dest_code TEXT NOT NULL,
       nights INTEGER NOT NULL,
@@ -1343,15 +1343,15 @@ async function main() {
       PRIMARY KEY (run_id, dest_code, nights)
     );`,
   ]);
-  await client.execute('CREATE INDEX IF NOT EXISTS idx_s0_cand_run ON stage0_candidates(run_id, rank);');
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_s0_cand_run ON shaping_candidates(run_id, rank);');
 
-  // Stage 0 Research Shaping (normalized, no JSON).
+  // Shaping Stage Research Shaping (normalized, no JSON).
   // Captures everything that shapes the research search space during the dynamic pre-lock phase.
   // This includes hard constraints (e.g. Liko's 馬偕 date block), soft preferences,
   // search directives, observed signals, and hypotheses.
   // "constraint" is one possible role (others: soft_preference, search_directive, observed_signal...).
   // Fully relational child table — multiple values per (aspect, role, kind) supported by multiple rows.
-  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_research_shaping (
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_rules (
     shaping_id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
     aspect TEXT NOT NULL,             -- 'date' | 'channel' | 'mobility' | 'lodging' | 'budget' | 'activity' | 'general'
@@ -1363,23 +1363,23 @@ async function main() {
     notes TEXT,
     created_at TEXT NOT NULL
   );`);
-  await client.execute('CREATE INDEX IF NOT EXISTS idx_s0_shaping_run ON stage0_research_shaping(run_id, aspect, role);');
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_s0_shaping_run ON shaping_rules(run_id, aspect, role);');
 
   // Enforce business uniqueness using expression index.
   // COALESCE is allowed in INDEXes (unlike PRIMARY KEY definitions).
   // This prevents truly duplicate shaping rows while still allowing different values
   // for the same (aspect, role, kind) — e.g. multiple preferred_depart dates.
   await client.execute(`CREATE UNIQUE INDEX IF NOT EXISTS uq_s0_shaping_value
-    ON stage0_research_shaping(
+    ON shaping_rules(
       run_id, aspect, role, kind,
       COALESCE(value_text, ''),
       COALESCE(value_date, ''),
       COALESCE(value_integer, 0)
     );`);
 
-  console.log('✅ Stage 0 research tables ready.');
+  console.log('✅ Shaping Stage research tables ready.');
 
-  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_tour_group_offers (
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_tour_group_offers (
     run_id TEXT NOT NULL,
     offer_id TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -1403,7 +1403,7 @@ async function main() {
     PRIMARY KEY (run_id, offer_id)
   );`);
 
-  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_tour_group_scrape_attempts (
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_tour_group_scrape_attempts (
     run_id TEXT NOT NULL,
     source_id TEXT NOT NULL,
     dest_region TEXT NOT NULL,
@@ -1418,10 +1418,10 @@ async function main() {
   );`);
 
   await client.execute(
-    'CREATE INDEX IF NOT EXISTS idx_s0_tg_offers_lookup ON stage0_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);'
+    'CREATE INDEX IF NOT EXISTS idx_s0_tg_offers_lookup ON shaping_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);'
   );
 
-  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_research_artifacts (
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_research_artifacts (
     artifact_id TEXT PRIMARY KEY,
     run_id TEXT,
     destination_slug TEXT,
@@ -1434,7 +1434,7 @@ async function main() {
     imported_at TEXT
   );`);
 
-  await client.execute(`CREATE TABLE IF NOT EXISTS stage0_selected_offers (
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_selected_offers (
     selection_id TEXT PRIMARY KEY,
     run_id TEXT,
     destination_slug TEXT,
@@ -1455,18 +1455,18 @@ async function main() {
     imported_at TEXT
   );`);
 
-  console.log('✅ Stage 0 artifact and selected-offer tables ready.');
+  console.log('✅ Shaping artifact and selected-offer tables ready.');
 
   // Distinguish 跟團 (group_tour) from 機加酒/自由行 (fit) on the listing page.
   // Both appear under the same listing URLs; only the title reliably tells them
   // apart. Default to 'group_tour' on backfill — that's the safe assumption,
   // since the listing page is positioned as tour-group inventory.
   try {
-    await client.execute(`ALTER TABLE stage0_tour_group_offers ADD COLUMN product_kind TEXT NOT NULL DEFAULT 'group_tour';`);
+    await client.execute(`ALTER TABLE shaping_tour_group_offers ADD COLUMN product_kind TEXT NOT NULL DEFAULT 'group_tour';`);
   } catch (e: any) {
     if (!String(e?.message || '').match(/duplicate column name/i)) throw e;
   }
-  console.log('✅ Stage 0 tour-group tables ready.');
+  console.log('✅ Shaping Stage tour-group tables ready.');
 
   try {
     await client.execute(`ALTER TABLE plan_offers ADD COLUMN package_subtype TEXT;`);

@@ -81,7 +81,7 @@ async function main() {
 
   // Multi-statement → run statements one by one. executeBatch() throws on
   // the first per-statement error and swallows the rest, which is exactly
-  // the failure mode that silently dropped Stage 0 cleanup DELETEs. By
+  // the failure mode that silently dropped Shaping Stage cleanup DELETEs. By
   // catching per statement we can report partial success and still exit
   // nonzero if anything failed.
   let anyFailed = false;

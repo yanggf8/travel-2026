@@ -34,7 +34,7 @@ const addBestTourOfferCommand: CommandHandler = {
     const price = parseInt(priceStr, 10);
     const seats = args.optionValue('--seats') ? parseInt(args.optionValue('--seats')!, 10) : null;
     const note = args.optionValue('--note') || '';
-    const runId = args.optionValue('--run') || 'stage0-20260525-093508'; // default to the current Okinawa research run
+    const runId = args.optionValue('--run') || 'shaping-20260525-093508'; // default to the current Okinawa research run
 
     // Parse product code from URL
     const match = url.match(/\/itinerary\/(OKA(\d{2})([A-Z]{2}))(\d{6})([A-Z0-9]+)/);

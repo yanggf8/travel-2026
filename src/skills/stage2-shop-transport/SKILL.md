@@ -25,7 +25,7 @@ lodging state through the existing P3/P4 tools.
   know whether a single-base package can work.
 
 Do **not** use this while dates/destination are still flexible. If cheaper
-flights on adjacent dates would change the trip, return to `/stage0-research`.
+flights on adjacent dates would change the trip, return to `/shaping-research`.
 
 ## Workflow
 
@@ -72,7 +72,7 @@ flights on adjacent dates would change the trip, return to `/stage0-research`.
      total is within 10% of direct flight plus comparable hotel.
    - Separate booking wins if the package hotel/location is weak, cancellation
      terms are poor, room type is wrong, or the user needs lodging flexibility.
-   - Return to Stage 0 if materially better prices require different dates.
+   - Return to Shaping Stage if materially better prices require different dates.
    - Return to Stage 1 if the lodging topology must change before shopping can
      continue.
 
@@ -100,7 +100,7 @@ End with:
 - A ranked comparison of viable package and direct-booking options.
 - The recommended booking path and why.
 - Any blocked assumptions, especially hotel topology or flight timing.
-- One next action: select/book, return to Stage 0, return to Stage 1, or proceed
+- One next action: select/book, return to Shaping Stage, return to Stage 1, or proceed
   to Stage 3 after booking is confirmed.
 
 ## Notes
