@@ -112,21 +112,21 @@ Logical groupings for trip planning:
 
 ### Step 4: Initialize a Trip
 
-> ⚠️ **Legacy.** `project-init.ts` writes the obsolete JSON plan/state files. Use the Stage 0 → adopt flow instead, which seeds a Turso-backed plan from research:
+> ⚠️ **Legacy.** `project-init.ts` writes the obsolete JSON plan/state files. Use the Shaping Stage → adopt flow instead, which seeds a Turso-backed plan from research:
 >
 > ```bash
 > # 1. Seed pending flight-scrape attempts for the date/destination matrix
-> npm run travel -- stage0-init --origin TPE --start 2026-04-01 --end 2026-04-05 \
+> npm run travel -- shaping-init --origin TPE --start 2026-04-01 --end 2026-04-05 \
 >   --dest KIX:"Kyoto via KIX" --nights 4
 >
 > # 2. Run the aggregator
-> python scripts/stage0_research.py --run <run_id>
+> python scripts/shaping_research.py --run <run_id>
 >
 > # 3. Pick a candidate
-> npm run travel -- stage0-compare --run <run_id>
+> npm run travel -- shaping-compare --run <run_id>
 >
 > # 4. Adopt → creates the plan in Turso, seeds P1 dates + P2 destination
-> npm run travel -- stage0-adopt <candidate_id> kyoto-2026 --create-plan --dest kyoto_2026
+> npm run travel -- shaping-adopt <candidate_id> kyoto-2026 --create-plan --dest kyoto_2026
 > ```
 >
 > The block below is preserved only for historical reference and no longer reflects how plans are created.

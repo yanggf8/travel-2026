@@ -1,10 +1,10 @@
 /**
- * Stage 0 Service — all DB reads/writes for the triangle-research domain.
+ * Shaping Stage Service — all DB reads/writes for the triangle-research domain.
  *
- * Stage 0 tables are unscoped (keyed by run_id, not plan_id) — research
+ * Shaping Stage tables are unscoped (keyed by run_id, not plan_id) — research
  * exists before any plan exists. Runs are IMMUTABLE: research inputs are
  * written once at creation and never edited; changing an input means a new
- * run. See docs/superpowers/specs/2026-05-22-stage0-triangle-research-design.md
+ * run. See docs/superpowers/specs/2026-05-22-shaping-triangle-research-design.md
  */
 
 import path from 'node:path';
@@ -85,7 +85,7 @@ export async function createResearchRun(input: CreateRunInput): Promise<void> {
   const stmts: string[] = [];
 
   stmts.push(
-    `INSERT INTO stage0_research_runs
+    `INSERT INTO shaping_research_runs
       (run_id, origin_code, pax, window_start, window_end, currency,
        exchange_rate_usd_twd, status, created_at, updated_at)
      VALUES (${sqlText(input.runId)}, ${sqlText(input.originCode)}, ${sqlInt(input.pax)},
@@ -95,14 +95,14 @@ export async function createResearchRun(input: CreateRunInput): Promise<void> {
 
   input.destinations.forEach((d, i) => {
     stmts.push(
-      `INSERT INTO stage0_research_destinations (run_id, dest_code, dest_label, sort_order)
+      `INSERT INTO shaping_research_destinations (run_id, dest_code, dest_label, sort_order)
        VALUES (${sqlText(input.runId)}, ${sqlText(d.destCode)}, ${sqlText(d.destLabel)}, ${sqlInt(i)});`
     );
   });
 
   for (const dur of input.durations) {
     stmts.push(
-      `INSERT INTO stage0_research_durations (run_id, nights, duration_days)
+      `INSERT INTO shaping_research_durations (run_id, nights, duration_days)
        VALUES (${sqlText(input.runId)}, ${sqlInt(dur.nights)}, ${sqlInt(dur.nights + 1)});`
     );
   }
@@ -112,7 +112,7 @@ export async function createResearchRun(input: CreateRunInput): Promise<void> {
   if (input.shaping && input.shaping.length > 0) {
     for (const s of input.shaping) {
       stmts.push(
-        `INSERT INTO stage0_research_shaping
+        `INSERT INTO shaping_rules
            (run_id, aspect, role, kind, value_text, value_date, value_integer, notes, created_at)
          VALUES (${sqlText(input.runId)}, ${sqlText(s.aspect)}, ${sqlText(s.role)}, ${sqlText(s.kind)},
            ${sqlText(s.value_text ?? null)}, ${sqlText(s.value_date ?? null)},
@@ -128,7 +128,7 @@ export async function createResearchRun(input: CreateRunInput): Promise<void> {
   for (const d of input.destinations) {
     for (const dur of input.durations) {
       stmts.push(
-        `INSERT INTO stage0_scrape_attempts
+        `INSERT INTO shaping_scrape_attempts
           (run_id, dest_code, nights, status, candidate_count, error, attempted_at)
          VALUES (${sqlText(input.runId)}, ${sqlText(d.destCode)}, ${sqlInt(dur.nights)},
            ${sqlText('pending')}, NULL, NULL, NULL);`
@@ -144,10 +144,10 @@ export async function createResearchRun(input: CreateRunInput): Promise<void> {
 export async function getResearchRun(runId: string): Promise<ResearchRun | null> {
   const client = newClient();
   const res = await client.executeBatch([
-    `SELECT * FROM stage0_research_runs WHERE run_id = ${sqlText(runId)};`,
-    `SELECT * FROM stage0_research_destinations WHERE run_id = ${sqlText(runId)} ORDER BY sort_order;`,
-    `SELECT * FROM stage0_research_durations WHERE run_id = ${sqlText(runId)} ORDER BY nights;`,
-    `SELECT * FROM stage0_research_shaping WHERE run_id = ${sqlText(runId)} ORDER BY aspect, role, kind;`,
+    `SELECT * FROM shaping_research_runs WHERE run_id = ${sqlText(runId)};`,
+    `SELECT * FROM shaping_research_destinations WHERE run_id = ${sqlText(runId)} ORDER BY sort_order;`,
+    `SELECT * FROM shaping_research_durations WHERE run_id = ${sqlText(runId)} ORDER BY nights;`,
+    `SELECT * FROM shaping_rules WHERE run_id = ${sqlText(runId)} ORDER BY aspect, role, kind;`,
   ]);
   const runRows = rowsToObjectsAt(res, 0);
   if (runRows.length === 0) return null;
@@ -202,7 +202,7 @@ export interface ScrapeAttempt {
 export async function getResearchShaping(runId: string): Promise<ResearchShaping[]> {
   const client = newClient();
   const res = await client.execute(
-    `SELECT * FROM stage0_research_shaping WHERE run_id = ${sqlText(runId)}
+    `SELECT * FROM shaping_rules WHERE run_id = ${sqlText(runId)}
      ORDER BY aspect, role, kind;`
   );
   return rowsToObjects(res).map((s) => ({
@@ -219,7 +219,7 @@ export async function getResearchShaping(runId: string): Promise<ResearchShaping
 export async function getScrapeAttempts(runId: string): Promise<ScrapeAttempt[]> {
   const client = newClient();
   const res = await client.execute(
-    `SELECT * FROM stage0_scrape_attempts WHERE run_id = ${sqlText(runId)}
+    `SELECT * FROM shaping_scrape_attempts WHERE run_id = ${sqlText(runId)}
      ORDER BY dest_code, nights;`
   );
   return rowsToObjects(res).map((a) => ({
@@ -239,14 +239,14 @@ export async function deleteResearchRun(runId: string): Promise<void> {
   const client = newClient();
   const r = sqlText(runId);
   await client.executeMany([
-    `DELETE FROM stage0_candidate_flights WHERE candidate_id IN
-      (SELECT candidate_id FROM stage0_candidates WHERE run_id = ${r});`,
-    `DELETE FROM stage0_candidates WHERE run_id = ${r};`,
-    `DELETE FROM stage0_scrape_attempts WHERE run_id = ${r};`,
-    `DELETE FROM stage0_research_durations WHERE run_id = ${r};`,
-    `DELETE FROM stage0_research_destinations WHERE run_id = ${r};`,
-    `DELETE FROM stage0_research_shaping WHERE run_id = ${r};`,
-    `DELETE FROM stage0_research_runs WHERE run_id = ${r};`,
+    `DELETE FROM shaping_candidate_flights WHERE candidate_id IN
+      (SELECT candidate_id FROM shaping_candidates WHERE run_id = ${r});`,
+    `DELETE FROM shaping_candidates WHERE run_id = ${r};`,
+    `DELETE FROM shaping_scrape_attempts WHERE run_id = ${r};`,
+    `DELETE FROM shaping_research_durations WHERE run_id = ${r};`,
+    `DELETE FROM shaping_research_destinations WHERE run_id = ${r};`,
+    `DELETE FROM shaping_rules WHERE run_id = ${r};`,
+    `DELETE FROM shaping_research_runs WHERE run_id = ${r};`,
   ]);
 }
 
@@ -300,7 +300,7 @@ export async function insertCandidate(input: InsertCandidateInput): Promise<void
   const client = newClient();
   const stmts: string[] = [];
   stmts.push(
-    `INSERT INTO stage0_candidates
+    `INSERT INTO shaping_candidates
       (candidate_id, run_id, dest_code, depart_date, return_date, nights,
        flight_total_twd, leave_days, rank, verdict, adopted_plan_id)
      VALUES (${sqlText(input.candidateId)}, ${sqlText(input.runId)}, ${sqlText(input.destCode)},
@@ -310,7 +310,7 @@ export async function insertCandidate(input: InsertCandidateInput): Promise<void
   );
   for (const f of input.flights) {
     stmts.push(
-      `INSERT INTO stage0_candidate_flights
+      `INSERT INTO shaping_candidate_flights
         (candidate_id, direction, airline, depart_time, arrive_time, duration, nonstop, price_total_twd)
        VALUES (${sqlText(input.candidateId)}, ${sqlText(f.direction)}, ${sqlText(f.airline)},
          ${sqlText(f.departTime)}, ${sqlText(f.arriveTime)}, ${sqlText(f.duration)},
@@ -324,7 +324,7 @@ export async function getCandidates(runId: string): Promise<Candidate[]> {
   const client = newClient();
   // rank NULLs sort last so an un-ranked run still returns rows deterministically.
   const res = await client.execute(
-    `SELECT * FROM stage0_candidates WHERE run_id = ${sqlText(runId)}
+    `SELECT * FROM shaping_candidates WHERE run_id = ${sqlText(runId)}
      ORDER BY rank IS NULL, rank ASC, depart_date ASC;`
   );
   return rowsToObjects(res).map((c) => ({
@@ -349,7 +349,7 @@ export async function rankRun(runId: string): Promise<void> {
   // Read candidates, sort in JS (deterministic, NULL price last), write rank back.
   const res = await client.execute(
     `SELECT candidate_id, flight_total_twd, leave_days, depart_date
-     FROM stage0_candidates WHERE run_id = ${sqlText(runId)};`
+     FROM shaping_candidates WHERE run_id = ${sqlText(runId)};`
   );
   const rows = rowsToObjects(res);
   rows.sort((a, b) => {
@@ -363,11 +363,11 @@ export async function rankRun(runId: string): Promise<void> {
   });
   const stmts = rows.map(
     (r, i) =>
-      `UPDATE stage0_candidates SET rank = ${sqlInt(i + 1)}
+      `UPDATE shaping_candidates SET rank = ${sqlInt(i + 1)}
        WHERE candidate_id = ${sqlText(r.candidate_id)};`
   );
   stmts.push(
-    `UPDATE stage0_research_runs SET status = ${sqlText('ranked')},
+    `UPDATE shaping_research_runs SET status = ${sqlText('ranked')},
        updated_at = ${sqlText(nowIso())} WHERE run_id = ${sqlText(runId)};`
   );
   await client.executeMany(stmts);
@@ -392,7 +392,7 @@ export async function upsertScrapeAttempt(input: ScrapeAttemptInput): Promise<vo
   // INSERT OR REPLACE — PK is (run_id, dest_code, nights). Pending rows are
   // seeded by createResearchRun; this overwrites them with ok/failed outcomes.
   await client.execute(
-    `INSERT OR REPLACE INTO stage0_scrape_attempts
+    `INSERT OR REPLACE INTO shaping_scrape_attempts
       (run_id, dest_code, nights, status, candidate_count, error, attempted_at)
      VALUES (${sqlText(input.runId)}, ${sqlText(input.destCode)}, ${sqlInt(input.nights)},
        ${sqlText(input.status)}, ${sqlInt(input.candidateCount ?? null)},
@@ -403,7 +403,7 @@ export async function upsertScrapeAttempt(input: ScrapeAttemptInput): Promise<vo
 // ── candidate replacement (idempotent re-import for one pair) ─────────
 // Deletes any existing candidates + their flights for one (run, dest,
 // nights) pair so a re-import of that pair does not collide on the
-// candidate_id PK. Used by stage0-import before inserting.
+// candidate_id PK. Used by shaping-import before inserting.
 
 export async function deleteCandidatesForPair(
   runId: string, destCode: string, nights: number
@@ -413,9 +413,9 @@ export async function deleteCandidatesForPair(
     `run_id = ${sqlText(runId)} AND dest_code = ${sqlText(destCode)} ` +
     `AND nights = ${sqlInt(nights)}`;
   await client.executeMany([
-    `DELETE FROM stage0_candidate_flights WHERE candidate_id IN
-      (SELECT candidate_id FROM stage0_candidates WHERE ${where});`,
-    `DELETE FROM stage0_candidates WHERE ${where};`,
+    `DELETE FROM shaping_candidate_flights WHERE candidate_id IN
+      (SELECT candidate_id FROM shaping_candidates WHERE ${where});`,
+    `DELETE FROM shaping_candidates WHERE ${where};`,
   ]);
 }
 
@@ -424,7 +424,7 @@ export async function deleteCandidatesForPair(
 export async function setRunStatus(runId: string, status: string): Promise<void> {
   const client = newClient();
   await client.execute(
-    `UPDATE stage0_research_runs SET status = ${sqlText(status)},
+    `UPDATE shaping_research_runs SET status = ${sqlText(status)},
        updated_at = ${sqlText(nowIso())} WHERE run_id = ${sqlText(runId)};`
   );
 }
@@ -433,17 +433,17 @@ export async function adoptCandidate(candidateId: string, planId: string): Promi
   const client = newClient();
   // Find the run, set the pointer, mark the run adopted — one batch.
   const res = await client.execute(
-    `SELECT run_id FROM stage0_candidates WHERE candidate_id = ${sqlText(candidateId)};`
+    `SELECT run_id FROM shaping_candidates WHERE candidate_id = ${sqlText(candidateId)};`
   );
   const rows = rowsToObjects(res);
   if (rows.length === 0) {
-    throw new Error(`Stage 0 candidate not found: ${candidateId}`);
+    throw new Error(`Shaping Stage candidate not found: ${candidateId}`);
   }
   const runId = rows[0].run_id as string;
   await client.executeMany([
-    `UPDATE stage0_candidates SET adopted_plan_id = ${sqlText(planId)}
+    `UPDATE shaping_candidates SET adopted_plan_id = ${sqlText(planId)}
       WHERE candidate_id = ${sqlText(candidateId)};`,
-    `UPDATE stage0_research_runs SET status = ${sqlText('adopted')},
+    `UPDATE shaping_research_runs SET status = ${sqlText('adopted')},
       updated_at = ${sqlText(nowIso())} WHERE run_id = ${sqlText(runId)};`,
   ]);
 }
@@ -455,18 +455,18 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
 
   const res = await client.executeBatch([
     `SELECT c.*, r.origin_code
-     FROM stage0_candidates c
-     JOIN stage0_research_runs r ON r.run_id = c.run_id
+     FROM shaping_candidates c
+     JOIN shaping_research_runs r ON r.run_id = c.run_id
      WHERE c.candidate_id = ${sqlText(input.candidateId)};`,
     `SELECT plan_id FROM plans WHERE plan_id = ${sqlText(input.planId)}
      UNION
      SELECT plan_id FROM plan_metadata WHERE plan_id = ${sqlText(input.planId)};`,
     `SELECT * FROM destination_config WHERE slug = ${sqlText(input.destinationSlug)};`,
-    `SELECT * FROM stage0_research_shaping WHERE run_id = (SELECT run_id FROM stage0_candidates WHERE candidate_id = ${sqlText(input.candidateId)}) ORDER BY aspect, role, kind;`,
+    `SELECT * FROM shaping_rules WHERE run_id = (SELECT run_id FROM shaping_candidates WHERE candidate_id = ${sqlText(input.candidateId)}) ORDER BY aspect, role, kind;`,
   ]);
   const candidateRows = rowsToObjectsAt(res, 0);
   if (candidateRows.length === 0) {
-    throw new Error(`Stage 0 candidate not found: ${input.candidateId}`);
+    throw new Error(`Shaping Stage candidate not found: ${input.candidateId}`);
   }
   const existingPlanRows = rowsToObjectsAt(res, 1);
   if (existingPlanRows.length > 0) {
@@ -547,7 +547,7 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
      VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('active')});`,
     `INSERT INTO event_log_process_events (plan_id, destination, process_id, event_type, event_data, event_at)
      VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_1_date_anchor')},
-       ${sqlText('stage0_candidate_adopted')},
+       ${sqlText('shaping_candidate_adopted')},
        ${sqlText(JSON.stringify({
          candidate_id: input.candidateId,
          run_id: runId,
@@ -562,9 +562,9 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
            value: s.value_date || s.value_text || s.value_integer,
          })),
        }))}, ${sqlText(ts)});`,
-    `UPDATE stage0_candidates SET adopted_plan_id = ${sqlText(input.planId)}
+    `UPDATE shaping_candidates SET adopted_plan_id = ${sqlText(input.planId)}
       WHERE candidate_id = ${sqlText(input.candidateId)};`,
-    `UPDATE stage0_research_runs SET status = ${sqlText('adopted')},
+    `UPDATE shaping_research_runs SET status = ${sqlText('adopted')},
       updated_at = ${sqlText(ts)} WHERE run_id = ${sqlText(runId)};`,
   ]);
 

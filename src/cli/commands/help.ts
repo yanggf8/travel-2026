@@ -144,7 +144,7 @@ Commands:
 
   add-offer --run <run_id> --source <id> --region <code> --depart <YYYY-MM-DD> --return <YYYY-MM-DD> --nights N --price <twd> --title "<title>" --url <url> [--hotel "<name>"] [--kind fit|group_tour] [--seats N] [--note "<text>"]
     Directly insert a single manual FIT or group-tour offer into Turso DB (no JSON file required).
-    Designed for quickly recording data while browsing product pages during Stage 0 research.
+    Designed for quickly recording data while browsing product pages during Shaping Stage research.
 
   add-besttour-offer --url <besttour-itinerary-url> --price <twd> --hotel "<name>" [--seats N] [--note "..."] [--run <run_id>]
     Fast BestTour-specific version of add-offer.
@@ -158,7 +158,7 @@ Commands:
   chat-format --run <run_id> [--region okinawa] [--max N] [--hotel "substring"]
     Print qualified candidates in clean messenger/chat format (ready to copy-paste).
     Use --hotel to filter (e.g. "水之都" or "Mercure").
-    Example: chat-format --run stage0-20260525-093508 --region okinawa --hotel "水之都"
+    Example: chat-format --run shaping-20260525-093508 --region okinawa --hotel "水之都"
 
   check-freshness --source <id> [--region name] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--max-age N]
     Check if Turso has fresh data for a source/region. Returns skip/rescrape/no_data.
@@ -186,25 +186,25 @@ Commands:
     Example: run-list
     Example: run-list --status failed --limit 5
 
-  stage0-init --origin <IATA> --start <date> --end <date> --dest CODE:LABEL --nights N [--shaping ...]
-    Create a Stage 0 triangle-research run (immutable inputs; pre-plan).
+  shaping-init --origin <IATA> --start <date> --end <date> --dest CODE:LABEL --nights N [--shaping ...]
+    Create a Shaping Stage triangle-research run (immutable inputs; pre-plan).
     Repeat --dest and --nights for multiple destinations/durations.
     Use --shaping ASPECT:ROLE:KIND:VALUE[:NOTES] (repeatable) for hard constraints, preferences, etc.
-    Example: stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 --dest KIX:"Osaka (KIX)" --nights 6
+    Example: shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 --dest KIX:"Osaka (KIX)" --nights 6
     Example: ... --shaping date:hard_constraint:return_no_later_than:2026-06-27 --shaping channel:hard_constraint:exclude_source:kkday
 
-  stage0-export --run <run_id> --json
-    Export a Stage 0 run as JSON (consumed by the aggregator script).
+  shaping-export --run <run_id> --json
+    Export a Shaping Stage run as JSON (consumed by the aggregator script).
 
-  stage0-import --run <run_id> --file <path>
-    Import Stage 0 aggregator results from a handoff JSON file.
+  shaping-import --run <run_id> --file <path>
+    Import Shaping Stage aggregator results from a handoff JSON file.
 
-  stage0-compare --run <run_id> [--json] [--limit N]
-    Show ranked Stage 0 flight candidates across destinations.
-    Example: stage0-compare --run stage0-20260522-143000
+  shaping-compare --run <run_id> [--json] [--limit N]
+    Show ranked Shaping Stage flight candidates across destinations.
+    Example: shaping-compare --run shaping-20260522-143000
 
-  stage0-adopt <candidate_id> <plan_id> [--create-plan --dest <slug>]
-    Record a Stage 0 candidate as adopted into a plan.
+  shaping-adopt <candidate_id> <plan_id> [--create-plan --dest <slug>]
+    Record a Shaping Stage candidate as adopted into a plan.
     With --create-plan, seed a new plan with P1 dates and P2 destination from the candidate.
 
   plans [--json]

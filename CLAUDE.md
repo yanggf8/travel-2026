@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Trip Details
 - **Schema**: `4.2.0` — destination-scoped with canonical offer model
 - **Completed**: Tokyo Feb 13-17, Kyoto Feb 24-28 (see `docs/trips/`)
-- **Active**: no upcoming trip locked; use `/stage0-research` to start a new one
+- **Active**: no upcoming trip locked; use `/shaping-research` to start a new one
 - **Package name caveat**: `package.json` `name` is `yokohama-travel-2026` (legacy, project is Japan-wide)
 
 ## Architecture
@@ -100,6 +100,10 @@ npm run scraper:setup         # install Playwright browsers (if postinstall warn
 npm test                      # integration/regression tests only (vitest)
 npm run test:watch            # watch mode
 npm run test:coverage         # coverage report (focused on src/state/)
+
+# Single test
+npx vitest run tests/integration/shaping-service.regression.test.ts  # one file
+npx vitest run -t "cascade resets process_5"                         # one test by name (substring)
 ```
 
 - **Integration-only** — no unit test suite; tests live in `tests/integration/`
@@ -119,6 +123,7 @@ Pre-commit hook (installed by `postinstall`) runs `typecheck` + `validate:data`.
 - `docs/EXTENDING.md` — how to add destinations, OTAs, validators
 - `docs/SKILL_TEMPLATE.md` — skill authoring guide
 - `docs/plans/` — implementation plans for major refactors
+- `docs/superpowers/specs/` — methodology specs (Shaping Stage design, price-baseline/rhythm method, tour-group scraper, decision methodology). Read these when the user asks "how should we approach X" rather than "what's the command for X."
 - `docs/plans/2026-05-22-new-planning-flow.md` — **adopted** research-first staged planning model (date/destination/flight explored together before plan lock). Existing P1–P5 skills remain implementation tools inside the stages.
 
 ## Agent-First Workflow
@@ -131,16 +136,16 @@ Pre-commit hook (installed by `postinstall`) runs `typecheck` + `validate:data`.
 ```
 User intent                          → Skill / Action
 ──────────────────────────────────────────────────────
-"plan a trip to [place]"             → Stage 0/1 staged flow
-  loose dates/destination/price?         → /stage0-research
+"plan a trip to [place]"             → Shaping Stage/1 staged flow
+  loose dates/destination/price?         → /shaping-research
   fixed dates + destination?             → create/verify plan, then /p1-dates + /p2-destination
-  destination missing?                  → /new-destination, then continue Stage 0/1
-"cheapest week to go to X"           → /stage0-research (pre-lock triangle research)
-"Osaka or Tokyo, depends on price"   → /stage0-research (compare destinations + dates + price together)
-"what dates are cheapest"            → /stage0-research
+  destination missing?                  → /new-destination, then continue Shaping Stage/1
+"cheapest week to go to X"           → /shaping-research (pre-lock triangle research)
+"Osaka or Tokyo, depends on price"   → /shaping-research (compare destinations + dates + price together)
+"what dates are cheapest"            → /shaping-research
 "set dates" / "change dates"         → /p1-dates
 "which city" / "how many nights"     → /p2-destination
-"lock this Stage 0 candidate"        → npm run travel -- stage0-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
+"lock this Shaping Stage candidate"        → npm run travel -- shaping-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
 "draft the trip" / "rough itinerary" → /stage1-itinerary-draft
 "find packages" / "search OTA"       → /stage2-shop-transport (check freshness first)
   fresh data in Turso?                  → query-offers (show existing)
@@ -196,7 +201,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/deploy-dashboard` | `src/skills/deploy-dashboard/SKILL.md` | Deploy trip dashboard to CF Workers |
 | `/pre-trip-checklist` | `src/skills/pre-trip-checklist/SKILL.md` | Pre-departure verification |
 | `/new-destination` | `src/skills/new-destination/SKILL.md` | Add destination to config |
-| `/stage0-research` | `src/skills/stage0-research/SKILL.md` | Pre-lock triangle research (date/destination/flight) |
+| `/shaping-research` | `src/skills/shaping-research/SKILL.md` | Pre-lock triangle research (date/destination/flight) |
 | `/stage1-itinerary-draft` | `src/skills/stage1-itinerary-draft/SKILL.md` | Rough day-by-day itinerary draft after dates/destination lock |
 | `/stage2-shop-transport` | `src/skills/stage2-shop-transport/SKILL.md` | Compare direct flights vs packages and choose booking path |
 | `/stage3-expand-itinerary` | `src/skills/stage3-expand-itinerary/SKILL.md` | Detailed booking-aware itinerary expansion |
@@ -255,7 +260,7 @@ No upcoming trip locked. Plan status for any active plan: `npm run view:status`.
 
 ## CLI Quick Reference
 
-Most-used commands inline; full reference (mutations, comparison, scraping internals, Stage 0 aggregator handoff) in **`docs/reference/CLI.md`**.
+Most-used commands inline; the **canonical full reference** (every mutation, comparison view, scraping flag, Shaping Stage aggregator handoff) lives in **`docs/reference/CLI.md`**. Add new commands there, not here.
 
 ```bash
 # Views (run any one)
@@ -266,12 +271,12 @@ npm run view:transport                           # transport summary
 npm run view:bookings                            # booking ledger
 npm run travel -- status --travel-date 2026-06-20
 
-# Stage 0 (pre-plan triangle research)
-npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+# Shaping Stage (pre-plan triangle research)
+npm run travel -- shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2]
-python scripts/stage0_research.py --run <run_id>
-npm run travel -- stage0-compare --run <run_id>
-npm run travel -- stage0-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
+python scripts/shaping_research.py --run <run_id>
+npm run travel -- shaping-compare --run <run_id>
+npm run travel -- shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
 
 # Offers (Turso)
 npm run travel -- import-offers --dir scrapes --dest tokyo_2026 [--start ... --end ...] [--dry-run]
@@ -286,6 +291,13 @@ npm run travel -- validate-itinerary --dest tokyo_2026
 # Scraping
 npm run scraper:pipeline                         # doctor + batch + import (end-to-end)
 npm run scraper:batch -- --dest kansai [--sources besttour,settour]
+
+# Tour-group / FIT offers (manual entry for sources without a full scraper)
+npm run travel -- import-tour-group-offers --run <run_id> --file <path>
+npm run travel -- query-tour-group-offers --run <run_id> [--source <id>] [--nights N] [--max-price TWD] [--json]
+npm run travel -- shaping-baseline --run <run_id>           # methodology comparison view
+npm run travel -- add-besttour-offer --url <url> --price <twd> --hotel "<name>"
+npm run travel -- add-lifetour-offer --url <url> --price <twd> --hotel "<name>"
 
 # Mutations — only the 4 most common shown here.
 # Full list (set-airport-transfer, set-activity-time, set-day-theme, set-route-segment,
@@ -377,7 +389,7 @@ Tables:
 - **Event log**: `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`, `event_log_process_events`
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
 - **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
-- **Stage 0 research** (unscoped, keyed by `run_id`): `stage0_research_runs`, `stage0_research_destinations`, `stage0_research_durations`, `stage0_candidates`, `stage0_candidate_flights`, `stage0_scrape_attempts` — pre-plan triangle-research domain (see `docs/superpowers/specs/2026-05-22-stage0-triangle-research-design.md`)
+- **Shaping Stage** (formerly "Stage 0"; unscoped, keyed by `run_id`): `shaping_research_runs`, `shaping_research_destinations`, `shaping_research_durations`, `shaping_rules` (hard/soft shaping constraints), `shaping_candidates`, `shaping_candidate_flights`, `shaping_scrape_attempts`, `shaping_tour_group_offers`, `shaping_tour_group_scrape_attempts`, `shaping_research_artifacts`, `shaping_selected_offers` — pre-plan triangle-research + constraint-shaping domain. Commands: `shaping-init/compare/adopt/baseline/export/import`; skill `/shaping-research`. (see `docs/superpowers/specs/2026-05-22-stage0-shaping.md`)
 - **Global config** (not plan-scoped): `destination_config` (slug PK, coordinates/timezone/airports), `origin_config` (taiwan origin), `global_config` (default_destination, default_origin), `ota_sources` (OTA registry — replaces ota-sources.json)
 - **Other**: `offers`, `destinations`, `events`, `bookings`
 - **Dead**: `flights` (old JSON blob table — no writes, kept for reference only)
@@ -454,26 +466,7 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 ## Next Steps
 
-### Engineering — Stage 0 Triangle Research ✅
-Spec: `docs/superpowers/specs/2026-05-22-stage0-triangle-research-design.md`
-Plan: `docs/superpowers/plans/2026-05-22-stage0-triangle-research.md`
+Active engineering roadmap (completed work is in `docs/plans/` and git history — not duplicated here):
 
-1. **6 unscoped Turso tables** ✅ — `stage0_research_runs`, `_destinations`, `_durations`, `stage0_candidates`, `stage0_candidate_flights`, `stage0_scrape_attempts` (keyed by `run_id`, not `plan_id` — research exists before any plan)
-2. **TS service layer** ✅ — `src/services/stage0-service.ts` owns all DB reads/writes; runs are immutable; ranking is `flight_total_twd ASC, leave_days ASC, depart_date ASC`
-3. **5 CLI commands** ✅ — `stage0-init` (seeds pending attempts), `stage0-export`/`stage0-import` (aggregator handoff), `stage0-compare`, `stage0-adopt` (can link to existing plans or `--create-plan --dest <slug>` to seed P1/P2). All `requiresState: false` (pre-plan)
-4. **Python aggregator** ✅ — `scripts/stage0_research.py` performs zero Turso I/O of its own; reads via `stage0-export`, writes via `stage0-import` — all SQL stays in TypeScript under `sql-helpers.ts` escaping
-5. **`/stage0-research` orchestration skill** ✅ — `src/skills/stage0-research/SKILL.md`, owns pre-lock research (`requires_processes: []`)
-6. **`db:exec` fix** ✅ — incidental but load-bearing: `scripts/turso-exec.ts` now splits semicolon-delimited input and surfaces per-statement errors (was silently swallowing both)
-7. **Stage flow adopted** ✅ — Stage 0 now hands off to a seeded plan via `stage0-adopt --create-plan --dest`; CLAUDE.md routes new planning through Stage 0→Stage 4 while keeping P1–P5 skill names as compatibility labels
-
-### Engineering — Itinerary DAL Refactor
-Plan: `docs/plans/2026-03-01-itinerary-dal-refactor.md`
-
-1. **Phase A — Add `noon` session type** ✅ — `SessionType`, CLI arrays, DB migration, dashboard
-2. **Phase B — Missing CLI commands** ✅ — `delete-activity`, `set-tod-focus`, `set-tod-zh`, `set-tod-time-range` aliases
-3. **Phase C — DB table rename** ✅ — `itinerary_days` → `days`, `itinerary_sessions` → `timesofday`
-4. **Phase D — Docs** ✅ — CLAUDE.md, skill SKILL.md files
-5. **Post-implementation fixes** ✅ — `swap-days` now includes noon; `SessionTypeSchema`/`DEFAULTS.sessionOrder`/`itinerary-manager` noon gaps closed; `delete-activity` scoped to exact day+session (no title-collision false reject)
-6. **Skill doc audit** ✅ — stale file paths (`data/destinations.json`, `data/ota-sources.json`, `src/utilities/`), broken relative refs, dangling `/p4-hotels`, and stale CLI names fixed across 6 SKILL.md files; p3-flights/p3p4-packages non-existent commands replaced with real scrape→import→query→select workflow; `booking-confirmation` `update-offer --source` flag corrected to positional arg
-7. **StateManagerV2** (longer term) — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()`
-8. **Integration tests** — seed / dispatch / SELECT / assert / teardown. No mocks. Real DB.
+- **StateManagerV2** — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()` so each command = one targeted SELECT (validate) + one targeted UPDATE/INSERT. Reference plans: `docs/plans/2026-03-01-itinerary-dal-refactor.md`, `docs/plans/2026-05-22-stage0-triangle-research.md`.
+- **Integration tests** — seed / dispatch / SELECT / assert / teardown against a real Turso DB. No mocks. Reference: `vitest.config.ts` already constrains scope to `tests/integration/**/*.test.ts`; fill in the seed/assert pattern for the StateManagerV2 command set.

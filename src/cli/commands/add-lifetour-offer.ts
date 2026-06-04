@@ -3,7 +3,7 @@ import { registerCommand } from './registry';
 
 /**
  * Specialized fast helper for Lifetour (五福) product/search pages.
- * Optimized for quick manual entry during Stage 0 research.
+ * Optimized for quick manual entry during Shaping Stage research.
  */
 const addLifetourOfferCommand: CommandHandler = {
   names: ['add-lifetour-offer'],
@@ -33,7 +33,7 @@ const addLifetourOfferCommand: CommandHandler = {
     const price = parseInt(priceStr, 10);
     const seats = args.optionValue('--seats') ? parseInt(args.optionValue('--seats')!, 10) : null;
     const note = args.optionValue('--note') || '';
-    const runId = args.optionValue('--run') || 'stage0-20260525-093508';
+    const runId = args.optionValue('--run') || 'shaping-20260525-093508';
 
     // Try to detect Okinawa from the common Lifetour code
     let region = 'okinawa';

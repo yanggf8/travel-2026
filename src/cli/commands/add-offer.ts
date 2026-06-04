@@ -3,7 +3,7 @@ import { registerCommand } from './registry';
 
 const addOfferCommand: CommandHandler = {
   names: ['add-offer'],
-  description: 'Manually add a single FIT or group tour offer directly to stage0_tour_group_offers (no JSON file required).',
+  description: 'Manually add a single FIT or group tour offer directly to shaping_tour_group_offers (no JSON file required).',
   usage: [
     'add-offer --run <run_id> --source <id> --region <code> --depart YYYY-MM-DD --return YYYY-MM-DD',
     '         --nights N --price <twd> --title "<title>" --url <url> --hotel "<name>"',

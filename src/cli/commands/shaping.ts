@@ -1,17 +1,17 @@
 import type { CommandHandler, CliContext } from '../shared/types';
 import { registerCommand } from './registry';
 
-// All three commands are pre-plan (requiresState: false) — Stage 0 runs
+// All three commands are pre-plan (requiresState: false) — Shaping Stage runs
 // before any plan exists, so they must skip plan resolution.
 
 function newRunId(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
-  return `stage0-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-` +
+  return `shaping-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-` +
     `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-// ── stage0-init ──────────────────────────────────────────────────────
+// ── shaping-init ──────────────────────────────────────────────────────
 // Creates an immutable research run. Destinations: --dest CODE:LABEL (repeatable).
 // Durations: --nights N (repeatable). Window: --start / --end.
 // Shaping (research directives + constraints) via repeatable --shaping flags.
@@ -50,15 +50,15 @@ function parseShapingEntry(raw: string) {
   };
 }
 
-const stage0InitCommand: CommandHandler = {
-  names: ['stage0-init'],
-  description: 'Create a Stage 0 research run (immutable inputs).',
-  usage: 'stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 ' +
+const shapingInitCommand: CommandHandler = {
+  names: ['shaping-init'],
+  description: 'Create a Shaping Stage research run (immutable inputs).',
+  usage: 'shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 ' +
     '--dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 ' +
     '[--pax 2] [--rate 32] [--shaping ...] (repeatable)',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
-    const { createResearchRun } = require('../../services/stage0-service');
+    const { createResearchRun } = require('../../services/shaping-service');
     const { args } = ctx;
 
     const origin = args.optionValue('--origin');
@@ -71,7 +71,7 @@ const stage0InitCommand: CommandHandler = {
     const shapingOpts = args.optionValues('--shaping');
 
     if (!origin || !start || !end || destOpts.length === 0 || nightsOpts.length === 0) {
-      console.error('Error: stage0-init requires --origin, --start, --end, ' +
+      console.error('Error: shaping-init requires --origin, --start, --end, ' +
         'at least one --dest CODE:LABEL, and at least one --nights N');
       process.exit(1);
     }
@@ -104,7 +104,7 @@ const stage0InitCommand: CommandHandler = {
       shaping: shaping.length > 0 ? shaping : undefined,
     });
 
-    console.log(`\n✅ Stage 0 research run created: ${runId}`);
+    console.log(`\n✅ Shaping Stage research run created: ${runId}`);
     console.log(`   Origin: ${origin.toUpperCase()}  Window: ${start} → ${end}  Pax: ${pax}`);
     console.log(`   Destinations: ${destinations.map((d) => d.destCode).join(', ')}`);
     console.log(`   Durations: ${durations.map((d) => d.nights + 'n').join(', ')}`);
@@ -116,25 +116,34 @@ const stage0InitCommand: CommandHandler = {
         const note = s.notes ? `  // ${s.notes}` : '';
         console.log(`     ${s.aspect}/${s.role}/${s.kind} = ${val}${note}`);
       }
+    } else {
+      // Shaping is the point of this stage; an empty run almost always means the
+      // shaping step was skipped. Runs are immutable, so this becomes an orphan.
+      console.error('\n⚠️  No --shaping rules recorded for this run.');
+      console.error('   The Shaping Stage exists to capture constraints/preferences BEFORE research.');
+      console.error('   Did you (1) load prior shaping from the DB and (2) record the new rules?');
+      console.error('   Runs are immutable — if you skipped shaping, create a new run with --shaping');
+      console.error('   ASPECT:ROLE:KIND:VALUE[:NOTES] (e.g. date:hard_constraint:return_no_later_than:2026-06-24).');
+      console.error('   Check for prior shaping: db:exec "SELECT run_id FROM shaping_research_runs ORDER BY run_id DESC;"');
     }
 
-    console.log(`\nNext: python scripts/stage0_research.py --run ${runId}`);
+    console.log(`\nNext: python scripts/shaping_research.py --run ${runId}`);
   },
 };
 
-// ── stage0-compare ───────────────────────────────────────────────────
+// ── shaping-compare ───────────────────────────────────────────────────
 
-const stage0CompareCommand: CommandHandler = {
-  names: ['stage0-compare'],
-  description: 'Show ranked Stage 0 candidates across destinations.',
-  usage: 'stage0-compare --run <run_id> [--json] [--limit N]',
+const shapingCompareCommand: CommandHandler = {
+  names: ['shaping-compare'],
+  description: 'Show ranked Shaping Stage candidates across destinations.',
+  usage: 'shaping-compare --run <run_id> [--json] [--limit N]',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
-    const { getResearchRun, getCandidates } = require('../../services/stage0-service');
+    const { getResearchRun, getCandidates } = require('../../services/shaping-service');
     const { args } = ctx;
     const runId = args.optionValue('--run');
     if (!runId) {
-      console.error('Error: stage0-compare requires --run <run_id>');
+      console.error('Error: shaping-compare requires --run <run_id>');
       process.exit(1);
     }
     const run = await getResearchRun(runId);
@@ -151,7 +160,7 @@ const stage0CompareCommand: CommandHandler = {
       return;
     }
 
-    console.log(`\nStage 0 Research — ${run.run_id}  (${run.origin_code}, ` +
+    console.log(`\nShaping Stage Research — ${run.run_id}  (${run.origin_code}, ` +
       `${run.pax} pax, window ${run.window_start}..${run.window_end})`);
 
     if (run.shaping && run.shaping.length > 0) {
@@ -199,30 +208,30 @@ const stage0CompareCommand: CommandHandler = {
   },
 };
 
-// ── stage0-adopt ─────────────────────────────────────────────────────
+// ── shaping-adopt ─────────────────────────────────────────────────────
 
-const stage0AdoptCommand: CommandHandler = {
-  names: ['stage0-adopt'],
-  description: 'Record a Stage 0 candidate as adopted into a plan.',
-  usage: 'stage0-adopt <candidate_id> <plan_id> [--create-plan --dest <slug>]',
+const shapingAdoptCommand: CommandHandler = {
+  names: ['shaping-adopt'],
+  description: 'Record a Shaping Stage candidate as adopted into a plan.',
+  usage: 'shaping-adopt <candidate_id> <plan_id> [--create-plan --dest <slug>]',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
-    const { adoptCandidate, adoptCandidateToNewPlan } = require('../../services/stage0-service');
+    const { adoptCandidate, adoptCandidateToNewPlan } = require('../../services/shaping-service');
     const [, candidateId, planId] = ctx.args.cleanArgs;
     if (!candidateId || !planId) {
-      console.error('Error: stage0-adopt requires <candidate_id> <plan_id>');
+      console.error('Error: shaping-adopt requires <candidate_id> <plan_id>');
       process.exit(1);
     }
     if (ctx.args.hasFlag('--create-plan')) {
       const destinationSlug = ctx.args.optionValue('--dest');
       if (!destinationSlug) {
-        console.error('Error: stage0-adopt --create-plan requires --dest <destination_slug>');
+        console.error('Error: shaping-adopt --create-plan requires --dest <destination_slug>');
         process.exit(1);
       }
       await adoptCandidateToNewPlan({ candidateId, planId, destinationSlug });
       console.log(`✅ Candidate ${candidateId} adopted into new plan ${planId}`);
       console.log(`   Destination: ${destinationSlug}`);
-      console.log('   P1 dates and P2 destination are seeded from the Stage 0 candidate.');
+      console.log('   P1 dates and P2 destination are seeded from the Shaping Stage candidate.');
       console.log(`   Next: npm run travel -- scaffold-itinerary --plan-id ${planId} --dest ${destinationSlug}`);
       return;
     }
@@ -232,20 +241,20 @@ const stage0AdoptCommand: CommandHandler = {
   },
 };
 
-// ── stage0-export ────────────────────────────────────────────────────
+// ── shaping-export ────────────────────────────────────────────────────
 // Emits a run (run + destinations + durations + scrape attempts) as JSON.
 // The Python aggregator consumes this instead of building SQL itself.
 
-const stage0ExportCommand: CommandHandler = {
-  names: ['stage0-export'],
-  description: 'Export a Stage 0 research run as JSON (for the aggregator).',
-  usage: 'stage0-export --run <run_id> --json',
+const shapingExportCommand: CommandHandler = {
+  names: ['shaping-export'],
+  description: 'Export a Shaping Stage research run as JSON (for the aggregator).',
+  usage: 'shaping-export --run <run_id> --json',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
-    const { getResearchRun, getScrapeAttempts } = require('../../services/stage0-service');
+    const { getResearchRun, getScrapeAttempts } = require('../../services/shaping-service');
     const runId = ctx.args.optionValue('--run');
     if (!runId) {
-      console.error('Error: stage0-export requires --run <run_id>');
+      console.error('Error: shaping-export requires --run <run_id>');
       process.exit(1);
     }
     const run = await getResearchRun(runId);
@@ -254,37 +263,37 @@ const stage0ExportCommand: CommandHandler = {
       process.exit(1);
     }
     const attempts = await getScrapeAttempts(runId);
-    const shaping = await require('../../services/stage0-service').getResearchShaping(runId);
+    const shaping = await require('../../services/shaping-service').getResearchShaping(runId);
     // Single JSON object on stdout — nothing else, so Python can parse it.
     console.log(JSON.stringify({ ...run, attempts, shaping }));
   },
 };
 
-// ── stage0-import ────────────────────────────────────────────────────
+// ── shaping-import ────────────────────────────────────────────────────
 // Consumes the Python aggregator's JSON handoff. Idempotent per pair:
 // for each scraped (dest, nights) pair it first deletes any prior
 // candidates for that pair, so a re-import never collides on the
 // candidate_id PK. Inserts candidates with leave-days computed via the TS
 // calculator, records scrape attempts, ranks, sets final run status.
 
-const stage0ImportCommand: CommandHandler = {
-  names: ['stage0-import'],
-  description: 'Import Stage 0 aggregator results from a handoff JSON file.',
-  usage: 'stage0-import --run <run_id> --file <path>',
+const shapingImportCommand: CommandHandler = {
+  names: ['shaping-import'],
+  description: 'Import Shaping Stage aggregator results from a handoff JSON file.',
+  usage: 'shaping-import --run <run_id> --file <path>',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
     const fs = require('fs');
     const {
       insertCandidate, upsertScrapeAttempt, rankRun, setRunStatus,
       getResearchRun, getCandidates, deleteCandidatesForPair,
-    } = require('../../services/stage0-service');
+    } = require('../../services/shaping-service');
     const { calculateLeave } = require('../../utils/holiday-calculator');
     const { args } = ctx;
 
     const runId = args.optionValue('--run');
     const file = args.optionValue('--file');
     if (!runId || !file) {
-      console.error('Error: stage0-import requires --run <run_id> and --file <path>');
+      console.error('Error: shaping-import requires --run <run_id> and --file <path>');
       process.exit(1);
     }
     const run = await getResearchRun(runId);
@@ -343,12 +352,12 @@ const stage0ImportCommand: CommandHandler = {
     await rankRun(runId);
     console.log(`✅ Imported ${candidates.length} candidates for ${runId} ` +
       `(${allCandidates.length} total), ranked.`);
-    console.log(`   View: npm run travel -- stage0-compare --run ${runId}`);
+    console.log(`   View: npm run travel -- shaping-compare --run ${runId}`);
   },
 };
 
-registerCommand(stage0InitCommand);
-registerCommand(stage0CompareCommand);
-registerCommand(stage0AdoptCommand);
-registerCommand(stage0ExportCommand);
-registerCommand(stage0ImportCommand);
+registerCommand(shapingInitCommand);
+registerCommand(shapingCompareCommand);
+registerCommand(shapingAdoptCommand);
+registerCommand(shapingExportCommand);
+registerCommand(shapingImportCommand);

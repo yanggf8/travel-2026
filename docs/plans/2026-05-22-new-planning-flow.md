@@ -1,7 +1,7 @@
 # Japan Travel Planning Flow — New Design
 
 > **Date:** 2026-05-22
-> **Status:** Adopted. Stage 0 is implemented, `stage0-adopt --create-plan --dest` closes the pre-lock to plan handoff, and CLAUDE.md's Skill Decision Tree routes new planning work through this staged flow.
+> **Status:** Adopted. Shaping Stage is implemented, `shaping-adopt --create-plan --dest` closes the pre-lock to plan handoff, and CLAUDE.md's Skill Decision Tree routes new planning work through this staged flow.
 > **Purpose:** Replace P1→P2→P3→P4→P5 linear model with a research-first, iterative approach where dates/destinations/flights evolve together.
 
 ---
@@ -14,7 +14,7 @@ The process is **research-first, booking-last**.
 
 ---
 
-## Stage 0 — Triangle Research (Research Phase)
+## Shaping Stage — Triangle Research (Research Phase)
 
 **Goal:** Find the best combination of departure date range, duration, and destination candidate by checking flight prices across multiple dimensions.
 
@@ -58,34 +58,34 @@ User picks a candidate OR asks to explore another date/destination
 **Tools:**
 ```bash
 # Create an immutable run over destination × duration.
-npm run travel -- stage0-init --origin TPE \
+npm run travel -- shaping-init --origin TPE \
   --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka/Kyoto (KIX)" --dest NRT:"Tokyo (NRT)" \
   --nights 6 --nights 7 --pax 2 --rate 32
 
 # Scrape, import, and rank. The Python wrapper performs no direct Turso I/O:
-# it reads through stage0-export and writes through stage0-import.
-python scripts/stage0_research.py --run <run_id>
+# it reads through shaping-export and writes through shaping-import.
+python scripts/shaping_research.py --run <run_id>
 
 # Compare top candidates.
-npm run travel -- stage0-compare --run <run_id>
+npm run travel -- shaping-compare --run <run_id>
 ```
 
-**Aggregation is DB-backed:** Stage 0 stores immutable runs in unscoped `stage0_*` tables and ranks all imported candidates across destinations and durations.
+**Aggregation is DB-backed:** Shaping Stage stores immutable runs in unscoped `shaping_*` tables and ranks all imported candidates across destinations and durations.
 
 **Exit condition:** User says "let's lock this date and destination." Adopt the candidate into a new plan and move to Stage 1:
 
 ```bash
-npm run travel -- stage0-adopt <candidate_id> <new_plan_id> --create-plan --dest <destination_slug>
+npm run travel -- shaping-adopt <candidate_id> <new_plan_id> --create-plan --dest <destination_slug>
 ```
 
-This seeds the minimal normalized plan rows, sets P1 dates from the candidate's depart/return dates, sets P2 destination from `--dest`, and links `stage0_candidates.adopted_plan_id`.
+This seeds the minimal normalized plan rows, sets P1 dates from the candidate's depart/return dates, sets P2 destination from `--dest`, and links `shaping_candidates.adopted_plan_id`.
 
 ---
 
 ## Stage 1 — Itinerary Draft
 
-**Goal:** With a proposed date + destination, build a rough itinerary to validate the choice. If timing or pacing feels wrong, go back to Stage 0 to explore alternatives.
+**Goal:** With a proposed date + destination, build a rough itinerary to validate the choice. If timing or pacing feels wrong, go back to Shaping Stage to explore alternatives.
 
 **Input:**
 - Locked: departure date, return date, destination
@@ -93,7 +93,7 @@ This seeds the minimal normalized plan rows, sets P1 dates from the candidate's 
 
 **What to draft:**
 ```bash
-# If coming from Stage 0 with `stage0-adopt --create-plan`, the plan,
+# If coming from Shaping Stage with `shaping-adopt --create-plan`, the plan,
 # destination, and P1/P2 rows already exist.
 npm run travel -- plans
 npm run view:status -- --plan-id <plan-id>
@@ -105,7 +105,7 @@ npm run travel -- scaffold-itinerary --plan-id <plan-id> --dest <destination-slu
 # (e.g., osaka_kyoto, kansai_2026, etc. — check with npm run view:status)
 ```
 
-If Stage 1 starts without a Stage 0 handoff, first ensure the plan and destination
+If Stage 1 starts without a Shaping Stage handoff, first ensure the plan and destination
 exist through the normal `/new-destination`, `/p1-dates`, and `/p2-destination`
 workflow.
 
@@ -124,9 +124,9 @@ Fill in:
 Decide this before Stage 2 because it affects which packages are viable. Some packages only cover one city or one hotel base.
 
 **Decision point:**
-- If the itinerary is too packed or too loose, revise the draft or return to Stage 0 for a different duration.
-- If proposed flight times create arrival/departure-day conflicts, return to Stage 0 or Stage 2 with narrower flight criteria.
-- If a must-see requires a different day/date, adjust the draft or return to Stage 0.
+- If the itinerary is too packed or too loose, revise the draft or return to Shaping Stage for a different duration.
+- If proposed flight times create arrival/departure-day conflicts, return to Shaping Stage or Stage 2 with narrower flight criteria.
+- If a must-see requires a different day/date, adjust the draft or return to Shaping Stage.
 - If the lodging topology does not fit the package/direct-booking strategy, revise the topology before Stage 2.
 
 **Exit condition:** Itinerary draft, duration, flight timing assumptions, and lodging topology all look viable → move to Stage 2.
@@ -155,11 +155,11 @@ python scripts/scrape_date_range.py \
 npm run travel -- query-offers --region kansai --start 2026-06-18 --end 2026-06-25 --max-price 30000 --json
 ```
 
-**Note:** Stage 0 only researches flights. To compare direct vs package, run Path B below first to scrape and import package data, then return to Path A results.
+**Note:** Shaping Stage only researches flights. To compare direct vs package, run Path B below first to scrape and import package data, then return to Path A results.
 
 ### Path B: Package (Flight + Hotel)
 ```bash
-# IMPORTANT: Run this BEFORE comparing direct vs package — Stage 0 only has flight data
+# IMPORTANT: Run this BEFORE comparing direct vs package — Shaping Stage only has flight data
 # Search packages for the locked dates
 npm run scraper:batch -- --dest kansai --date 2026-06-18 --type fit
 
@@ -174,7 +174,7 @@ npm run travel -- query-offers --plan-id <id> --dest <slug> --max-price 30000 --
 - If direct flight is cheaper and user prefers choice of hotel → book flight separately → move to Stage 3
 - If package total is within 10% of direct flight plus a comparable hotel, prefer the package only when the hotel location, room type, cancellation terms, and lodging topology are acceptable. Otherwise prefer separate booking.
 
-**If flight is cheaper on slightly different dates →** Go back to Stage 0 with new dates, re-run triangle research.
+**If flight is cheaper on slightly different dates →** Go back to Shaping Stage with new dates, re-run triangle research.
 
 ---
 
@@ -262,8 +262,8 @@ After any stage, user may want to iterate:
 
 | Trigger | Action | Go to |
 |---------|--------|-------|
-| "Flight price changed — is June 19 better?" | Re-scrape flights | Stage 0 |
-| "I want to add Kyoto as a second destination" | Update dates/destination | Stage 0 → Stage 1 |
+| "Flight price changed — is June 19 better?" | Re-scrape flights | Shaping Stage |
+| "I want to add Kyoto as a second destination" | Update dates/destination | Shaping Stage → Stage 1 |
 | "Hotel in package looks bad" | Unselect offer, shop separately | Stage 2 |
 | "Day 3 is too packed" | Re-balance itinerary | Stage 3 |
 | "Add a must-see in Kyoto" | Insert activity, check transit | Stage 3 |
@@ -284,14 +284,14 @@ After any stage, user may want to iterate:
 ┌─────────────────────────────────────────────────────────┐
 │  STAGE 1: Itinerary Draft                               │
 │  Rough day-by-day plan → validate timing fit            │
-│  If bad timing → back to Stage 0                        │
+│  If bad timing → back to Shaping Stage                        │
 └────────────────┬────────────────────────────────────────┘
                  │ itinerary fits
                  ▼
 ┌─────────────────────────────────────────────────────────┐
 │  STAGE 2: Shop Flight                                   │
 │  Direct booking OR package (flight + hotel)            │
-│  If different dates cheaper → back to Stage 0          │
+│  If different dates cheaper → back to Shaping Stage          │
 └────────────────┬────────────────────────────────────────┘
                  │ flight confirmed
                  ▼
@@ -317,13 +317,13 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 
 | Stage | Existing skill(s) reused | What changes |
 |-------|--------------------------|--------------|
-| Stage 0 — Triangle Research | `/stage0-research` (orchestration skill) + `scripts/stage0_research.py` | `/stage0-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
-| Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `stage0-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Stage 0 handoff can seed the provisional P1/P2 lock; `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
+| Shaping Stage — Triangle Research | `/shaping-research` (orchestration skill) + `scripts/shaping_research.py` | `/shaping-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
+| Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `shaping-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Shaping Stage handoff can seed the provisional P1/P2 lock; `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
 | Stage 2 — Shop Flight | `/stage2-shop-transport`, `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | `/stage2-shop-transport` owns the package-vs-direct decision; lower-level P3/P4 skills remain the implementation tools. |
 | Stage 3 — Expand Itinerary | `/stage3-expand-itinerary`, `/p5-itinerary` | `/stage3-expand-itinerary` owns booking-aware detail expansion and validation; `/p5-itinerary` remains the implementation tool. |
 | Stage 4 — Publish | `/stage4-publish-dashboard`, `/deploy-dashboard`, `/weather-update` | `/stage4-publish-dashboard` owns explicit publish readiness and verification; `/deploy-dashboard` remains the implementation tool. |
 
-**Naming decision:** Keep the existing `/p1-*` through `/p5-*` skill names as compatibility labels. The adopted mental model is Stage 0 through Stage 4; the P-numbered skills are implementation tools reused inside those stages.
+**Naming decision:** Keep the existing `/p1-*` through `/p5-*` skill names as compatibility labels. The adopted mental model is Shaping Stage through Stage 4; the P-numbered skills are implementation tools reused inside those stages.
 
 ---
 
@@ -336,7 +336,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 | Destination choice | Chosen after dates are set | Compared alongside flight/date options |
 | Flight prices | Checked after date/destination decisions | Used early as a primary decision signal |
 | Date flexibility | Low; going back is possible but awkward | Expected; dates can change during research |
-| Stage 0 equivalent | No dedicated triangle research stage | New Stage 0 researches date + destination + flight price |
+| Shaping Stage equivalent | No dedicated triangle research stage | New Shaping Stage researches date + destination + flight price |
 | Itinerary timing | Built late after transport/accommodation | Rough itinerary drafted before booking |
 | Package vs separate booking | P3 transport then P4 accommodation are separate sequential steps | Stage 2 chooses direct flight vs flight+hotel package |
 | Multi-city lodging | Usually handled later during itinerary planning | Decided before package/direct-booking choice |
@@ -349,7 +349,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 
 ## Resolved Decisions
 
-1. **Stage 0 scrape scope:** use every departure date in the user's stated window across supplied destinations and durations; split large searches into multiple immutable runs rather than hiding a huge sweep in one run.
+1. **Shaping Stage scrape scope:** use every departure date in the user's stated window across supplied destinations and durations; split large searches into multiple immutable runs rather than hiding a huge sweep in one run.
 2. **Stage 1 drafting:** agent drafts first, using known destination patterns and any user-provided must-do items; ask only preference questions that materially change routing or booking.
 3. **Stage 2 package preference:** package wins within a 10% total-price band only if hotel quality/location, flight times, room terms, and lodging topology are acceptable; otherwise separate booking wins.
 4. **Stage 3 meals:** no breakfast by default unless the booked hotel/package includes it or the user asks to add it.

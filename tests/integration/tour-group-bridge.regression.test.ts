@@ -9,7 +9,7 @@ const DEST = 'osaka_2026';
 
 async function clear() {
   const c = getTursoClient();
-  await c.execute(`DELETE FROM stage0_tour_group_offers WHERE run_id = ${sqlText(RUN)}`);
+  await c.execute(`DELETE FROM shaping_tour_group_offers WHERE run_id = ${sqlText(RUN)}`);
   await c.execute(`DELETE FROM plan_offer_group_meta WHERE plan_id = ${sqlText(PLAN)}`);
   await c.execute(`DELETE FROM plan_offers WHERE plan_id = ${sqlText(PLAN)}`);
 }

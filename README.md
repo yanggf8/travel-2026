@@ -23,21 +23,21 @@ npm run scraper:setup
 npm run travel -- plans
 npm run view:status
 
-# Start a new trip — full Stage 0 flow: research → compare → adopt → seeded plan
-#   See: src/skills/stage0-research/SKILL.md and CLAUDE.md → Skill Decision Tree
+# Start a new trip — full Shaping Stage flow: research → compare → adopt → seeded plan
+#   See: src/skills/shaping-research/SKILL.md and CLAUDE.md → Skill Decision Tree
 
 # 1. Seed pending flight-scrape attempts for the date/destination matrix → prints <run_id>
-npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+npm run travel -- shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7
 
 # 2. Run the aggregator (zero Turso I/O of its own — reads/writes via the CLI)
-python scripts/stage0_research.py --run <run_id>
+python scripts/shaping_research.py --run <run_id>
 
 # 3. Compare candidates
-npm run travel -- stage0-compare --run <run_id>
+npm run travel -- shaping-compare --run <run_id>
 
 # 4. Adopt one → creates the plan in Turso and seeds P1 dates + P2 destination
-npm run travel -- stage0-adopt <candidate_id> osaka-2026 --create-plan --dest osaka_2026
+npm run travel -- shaping-adopt <candidate_id> osaka-2026 --create-plan --dest osaka_2026
 ```
 
 Plan state lives in Turso (no JSON state files). For the full command list see `docs/reference/CLI.md`.
@@ -69,7 +69,7 @@ Plan state lives in Turso (no JSON state files). For the full command list see `
 │   ├── config/               # Configuration loaders
 │   ├── contracts/            # Skill contracts for agent discovery
 │   ├── scrapers/             # OTA scraper framework
-│   ├── services/             # turso-service, weather-service, stage0-service
+│   ├── services/             # turso-service, weather-service, shaping-service
 │   ├── skills/               # Reusable planning skills
 │   ├── state/                # StateManager + repository (Turso-only)
 │   ├── templates/            # Project & destination templates
@@ -80,7 +80,7 @@ Plan state lives in Turso (no JSON state files). For the full command list see `
 │   ├── scrape_liontravel_dated.py  # Lion Travel date-specific scraper
 │   ├── scrape_date_range.py        # Multi-date flight comparison
 │   ├── scrape_tigerair.py          # Tigerair form-based scraper
-│   ├── stage0_research.py          # Stage 0 aggregator (zero Turso I/O)
+│   ├── shaping_research.py          # Shaping Stage aggregator (zero Turso I/O)
 │   └── filter_packages.py          # Filter scraped packages by criteria
 ├── workers/trip-dashboard/   # Cloudflare Worker — live dashboard (reads Turso)
 └── tsconfig.json

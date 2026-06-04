@@ -14,8 +14,8 @@ function runCli(args: string[]): { stdout: string; stderr: string; code: number 
 
 async function clearRun(run_id: string) {
   const c = getTursoClient();
-  await c.execute(`DELETE FROM stage0_tour_group_offers WHERE run_id = ${sqlText(run_id)}`);
-  await c.execute(`DELETE FROM stage0_tour_group_scrape_attempts WHERE run_id = ${sqlText(run_id)}`);
+  await c.execute(`DELETE FROM shaping_tour_group_offers WHERE run_id = ${sqlText(run_id)}`);
+  await c.execute(`DELETE FROM shaping_tour_group_scrape_attempts WHERE run_id = ${sqlText(run_id)}`);
 }
 
 function sqlText(v: string): string {
@@ -24,7 +24,7 @@ function sqlText(v: string): string {
 
 async function seedPendingAttempt(run_id: string, source_id: string, dest_region: string, nights: number) {
   const c = getTursoClient();
-  await c.execute(`INSERT OR REPLACE INTO stage0_tour_group_scrape_attempts
+  await c.execute(`INSERT OR REPLACE INTO shaping_tour_group_scrape_attempts
     (run_id, source_id, dest_region, nights, status) VALUES (${sqlText(run_id)}, ${sqlText(source_id)}, ${sqlText(dest_region)}, ${nights}, 'pending')`);
 }
 
@@ -46,14 +46,14 @@ describe('import-tour-group-offers', () => {
 
     const c = getTursoClient();
     const offers = rowsToObjects(await c.execute(
-      `SELECT * FROM stage0_tour_group_offers WHERE run_id = 'test-run-tg-001' ORDER BY price_per_person_twd`
+      `SELECT * FROM shaping_tour_group_offers WHERE run_id = 'test-run-tg-001' ORDER BY price_per_person_twd`
     ));
     expect(offers).toHaveLength(2);
     expect(Number(offers[0].price_per_person_twd)).toBe(32500);
     expect(Number(offers[1].hotel_star_rating)).toBe(4);
 
     const att = rowsToObjects(await c.execute(
-      `SELECT * FROM stage0_tour_group_scrape_attempts WHERE run_id = 'test-run-tg-001'`
+      `SELECT * FROM shaping_tour_group_scrape_attempts WHERE run_id = 'test-run-tg-001'`
     ))[0];
     expect(att.status).toBe('ok');
     expect(Number(att.parsed_count)).toBe(2);
@@ -71,11 +71,11 @@ describe('import-tour-group-offers', () => {
 
     const c = getTursoClient();
     const offers = rowsToObjects(await c.execute(
-      `SELECT * FROM stage0_tour_group_offers WHERE run_id = 'test-run-tg-002'`
+      `SELECT * FROM shaping_tour_group_offers WHERE run_id = 'test-run-tg-002'`
     ));
     expect(offers).toHaveLength(1);
     const att = rowsToObjects(await c.execute(
-      `SELECT * FROM stage0_tour_group_scrape_attempts WHERE run_id = 'test-run-tg-002'`
+      `SELECT * FROM shaping_tour_group_scrape_attempts WHERE run_id = 'test-run-tg-002'`
     ))[0];
     expect(att.status).toBe('partial');
     expect(Number(att.parsed_count)).toBe(1);
@@ -95,7 +95,7 @@ describe('import-tour-group-offers', () => {
 
     const c = getTursoClient();
     const offers = rowsToObjects(await c.execute(
-      `SELECT COUNT(*) AS n FROM stage0_tour_group_offers WHERE run_id = 'test-run-tg-003'`
+      `SELECT COUNT(*) AS n FROM shaping_tour_group_offers WHERE run_id = 'test-run-tg-003'`
     ));
     expect(Number((offers[0] as any).n)).toBe(0);
   });

@@ -13,9 +13,9 @@ Orchestration skill for **Stage 1 — Itinerary Draft** of the adopted
 research-first planning flow (`docs/plans/2026-05-22-new-planning-flow.md`).
 
 Stage 1 starts after the user has locked dates and destination, usually through
-`stage0-adopt --create-plan --dest`. Its job is to create a rough day-by-day
+`shaping-adopt --create-plan --dest`. Its job is to create a rough day-by-day
 shape, validate that the duration and lodging topology make sense, and decide
-whether to proceed to Stage 2 or return to Stage 0 with revised constraints.
+whether to proceed to Stage 2 or return to Shaping Stage with revised constraints.
 
 This is not the detailed itinerary pass. Detailed activities, exact timings,
 booking status, and full transit notes remain Stage 3
@@ -24,13 +24,13 @@ booking status, and full transit notes remain Stage 3
 ## When to use
 
 - User says "draft the trip", "rough itinerary", "does this date/destination
-  work", or "continue after locking the Stage 0 candidate".
+  work", or "continue after locking the Shaping Stage candidate".
 - A plan exists with confirmed P1 dates and P2 destination, whether created by
-  `stage0-adopt --create-plan` or by the older `/p1-dates` + `/p2-destination`
+  `shaping-adopt --create-plan` or by the older `/p1-dates` + `/p2-destination`
   path.
 
 Do **not** use this before dates and destination are locked. If the user is
-still comparing dates, destinations, or flight prices, use `/stage0-research`.
+still comparing dates, destinations, or flight prices, use `/shaping-research`.
 
 ## Workflow
 
@@ -43,7 +43,7 @@ still comparing dates, destinations, or flight prices, use `/stage0-research`.
    - P2 destination is confirmed.
    - `destination_config` slug matches the active destination.
 
-   If the plan came from Stage 0, these rows should already exist. If not, run
+   If the plan came from Shaping Stage, these rows should already exist. If not, run
    `/p1-dates` and `/p2-destination` before continuing.
 
 2. **Create the day skeleton**
@@ -81,7 +81,7 @@ still comparing dates, destinations, or flight prices, use `/stage0-research`.
    - Package/direct-booking strategy.
    - Cross-city transit load.
 
-   If timing, duration, or destination choice looks wrong, return to Stage 0
+   If timing, duration, or destination choice looks wrong, return to Shaping Stage
    with a narrower research request. If the rough plan is viable, proceed to
    Stage 2 (`/stage2-shop-transport`).
 
@@ -91,7 +91,7 @@ End with:
 - A day-by-day rough itinerary.
 - Recommended lodging topology.
 - Any assumptions that could affect booking.
-- One next action: proceed to Stage 2, revise Stage 1, or return to Stage 0.
+- One next action: proceed to Stage 2, revise Stage 1, or return to Shaping Stage.
 
 ## Notes
 
@@ -100,4 +100,4 @@ End with:
 - Use existing P1/P2 skills for revisions; Stage 1 is the decision wrapper, not
   a replacement for those lower-level write paths.
 - Existing `/p1-*` through `/p5-*` skill names remain compatibility
-  implementation tools inside the adopted Stage 0 through Stage 4 flow.
+  implementation tools inside the adopted Shaping Stage through Stage 4 flow.
