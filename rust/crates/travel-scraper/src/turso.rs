@@ -63,23 +63,7 @@ impl TravelDb {
                     region, destination, departure_date, return_date, nights, availability,
                     hotel_name, airline, raw_data, scraped_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-                 ON CONFLICT(id) DO UPDATE SET
-                    source_file=excluded.source_file,
-                    source_id=excluded.source_id,
-                    type=excluded.type,
-                    name=excluded.name,
-                    price_per_person=excluded.price_per_person,
-                    currency=excluded.currency,
-                    region=excluded.region,
-                    destination=excluded.destination,
-                    departure_date=excluded.departure_date,
-                    return_date=excluded.return_date,
-                    nights=excluded.nights,
-                    availability=excluded.availability,
-                    hotel_name=excluded.hotel_name,
-                    airline=excluded.airline,
-                    raw_data=excluded.raw_data,
-                    scraped_at=excluded.scraped_at",
+                 ON CONFLICT(id, scraped_at) DO NOTHING",
                 params![
                     row.id.clone(),
                     row.source_file.clone(),
@@ -348,8 +332,11 @@ impl OfferRow {
             sql_text(Some(&self.raw_data)),
             sql_text(self.scraped_at.as_deref()),
         ];
+        // offers PK is composite (id, scraped_at) — append-only ingestion: the
+        // same offer re-scraped at a NEW time becomes a new row (price history);
+        // an exact (id, scraped_at) duplicate is a no-op. Matches the TS importer.
         format!(
-            "INSERT INTO offers ({}) VALUES ({}) ON CONFLICT(id) DO UPDATE SET source_file=excluded.source_file, source_id=excluded.source_id, type=excluded.type, name=excluded.name, price_per_person=excluded.price_per_person, currency=excluded.currency, region=excluded.region, destination=excluded.destination, departure_date=excluded.departure_date, return_date=excluded.return_date, nights=excluded.nights, availability=excluded.availability, hotel_name=excluded.hotel_name, airline=excluded.airline, raw_data=excluded.raw_data, scraped_at=excluded.scraped_at;",
+            "INSERT INTO offers ({}) VALUES ({}) ON CONFLICT(id, scraped_at) DO NOTHING;",
             cols.join(","),
             values.join(",")
         )

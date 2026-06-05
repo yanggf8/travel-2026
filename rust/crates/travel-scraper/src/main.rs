@@ -1832,6 +1832,17 @@ async fn import_offers(offers_file: PathBuf, dry_run: bool) -> Result<(), CliErr
         )));
     }
 
+    // scraped_at is part of the offers composite PK (id, scraped_at) and is NOT
+    // NULL — fail loud rather than attempt an insert that violates the constraint.
+    for row in &rows {
+        if row.scraped_at.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(CliError::runtime(format!(
+                "offer '{}' is missing scraped_at (required by offers PK); fix the capture/parser",
+                row.id
+            )));
+        }
+    }
+
     println!("offers\t{}", rows.len());
     if dry_run {
         println!("dry_run\ttrue");
