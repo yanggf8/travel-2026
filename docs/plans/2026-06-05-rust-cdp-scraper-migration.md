@@ -1,6 +1,11 @@
 # Rust CDP Scraper Migration Plan
 
-**Status:** In progress — Phase 0 + capture core DONE and verified (see Progress).  
+**Status:** In progress — full pipeline DONE (browser/CDP → capture → interactive click/fill →
+rule-driven parser → Turso import), no-JSON/plain-text, native Rust→Turso. 10 OTA `parser_rules`
+seeded; settour + liontravel real-scrape-verified and their Python parsers deleted. Remaining:
+real-scrape-gate the other package OTAs (besttour/lifetour/travel4u) then delete their Python; design
+a flight/hotel rule shape for the 5 flight/hotel sources (currently `has_custom_parser=1`, fail-loud).
+See Progress.  
 **Decision:** Replace Python OTA scrapers with a Rust scraper CLI.  
 **Do not edit `package.json` yet:** preserve the current TS fallback rule until the Rust scraper path is complete and tested.
 
