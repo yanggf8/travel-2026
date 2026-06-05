@@ -378,6 +378,17 @@ Success criteria:
   already implements this tiered Read/Write resolution with `mint_allowed` — reuse it. So the plan is:
   bootstrap secret from runtime injection → turso-util mints a scoped token → use → expire. Not a vault.
 
+  **GitHub secrets do NOT fit the local scraper (2026-06 research).** GitHub Actions Secrets and GitHub
+  OIDC ("secretless" workload identity) are both **CI-only** — they hand credentials to a GitHub Actions
+  *runner*, and don't extend to external machines. Our scraper runs interactively on a developer WSL box
+  driving real Chrome — it can never be a headless CI job — so neither reaches it. Conclusion: the
+  project splits by runtime:
+  - **Local scraper/CLI** (your machine, interactive): bootstrap secret from **OS keychain or injected
+    env** + Turso token-minting. No GitHub, no repo `.env`.
+  - **Cloudflare Worker** (cloud runtime, the dashboard): **CF Worker secret bindings** (already done via
+    `wrangler secret put`); GitHub OIDC is the right option *only* if/when the Worker deploys via GitHub
+    Actions (keyless deploy), not for the scraper.
+
 ## Risks
 
 - CDP crates may lag Chrome protocol changes.
