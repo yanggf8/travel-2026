@@ -300,16 +300,36 @@ Success criteria:
 - Added an interactive profile guard. Mutating commands require the dedicated automation profile to be
   confirmed from Chrome command-line data, or an explicit `--i-understand-profile` override.
 - **Verified on settour FIT:** selector-driven calendar interaction changed the rendered offer from
-  `2026/06/08-2026/06/09` (1 night, IT210/IT211, `$13,733` per person) to
-  `2026/06/20-2026/06/24` (4 nights, IT212/IT211, `$20,760` per person), then captured the updated
-  `travel-capture-v1` artifact from the real Windows Chrome.
+  `2026/06/08-2026/06/09` (1 night, IT210/IT211, 機加酒未稅總價 `TWD 23,359`/2pax) to
+  `2026/06/20-2026/06/24` (4 nights, IT212/IT211, 機加酒未稅總價 `TWD 36,587`/2pax ≈ 18,294 pp), then
+  captured the updated `travel-capture-v1` artifact from the real Windows Chrome. The URL `depDate`
+  was identical in both captures — the rendered offer changed only because of the interaction, not the
+  URL params. (Figures read from the capture files; the 6/20 offer matches the verified Turso record
+  `settour-fit-kyoto-20260620-4n`.)
+
+### Parser stage — settour DONE and verified
+- Added `parse capture <file> --source <id>` — a PURE transform (no browser/CDP/Turso) reading a
+  `travel-capture-v1` file → CanonicalOffer[] JSON in the "Format B" shape the existing TS importer
+  (`scripts/import-offers-to-turso.ts`) already accepts (`{source_id, package_type, url, scraped_at,
+  dates, price, flight, hotel}`).
+- **settour parser** (`parse_settour` in `main.rs`): extracts dates, nights, IT-flight numbers,
+  total + per-person price, hotel name, `package_type=fit` from the captured raw_text.
+- **Golden-file parity test** (`tests/settour_parity.rs`, `cargo test` ✓): the fixture
+  `tests/fixtures/settour-kyoto-20260620-capture.json` (html stripped; public search page, no PII)
+  parses to the exact known-correct values of the Turso record `settour-fit-kyoto-20260620-4n`:
+  6/20→6/24, 4 nights, IT212/IT211, total TWD 36,587 / 18,294 pp, 微笑飯店京都烏丸五條, fit.
+- `TravelCapture` now derives `Deserialize` so capture files round-trip back into the parser.
+- Note: settour FIT renders ONE cheapest-combo offer per capture; parser emits one offer. Per-person
+  is total/2 (the adtCount=2 flow) rounded to nearest. Both grounded in real capture content.
 
 ### Remaining (next milestones, in order)
-- `liontravel` (then per Parser Migration Order) **parser**: `travel-capture-v1` → `CanonicalOffer[]`,
-  with golden-file parity vs current Python output before any Python deletion.
-- `travel-capture-v1` → `CanonicalOffer[]` parser stage and replay tests for settour/liontravel captures.
-- Screenshot capture; OTA domain allowlist; Rust Turso import (optional — TS importer stays until parser
-  core proven).
+- `liontravel` parser (then per Parser Migration Order: travel4u, besttour, lifetour, flight/hotel
+  sources). Same pattern: capture fixture → parser → golden-file parity test.
+- Python decommission per source: only after ≥2 successful real scrapes + parity (plan policy). No
+  Python deleted yet.
+- Screenshot capture; OTA domain allowlist; profile-guard hardening (currently needs
+  `--i-understand-profile` because Chrome wasn't launched with `--enable-automation`); Rust Turso
+  import (optional — TS importer stays until parser core proven).
 
 ## Risks
 

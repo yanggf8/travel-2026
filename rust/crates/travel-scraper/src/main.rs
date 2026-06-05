@@ -66,6 +66,11 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             steps,
             profile_override,
         )),
+        Command::Parse(ParseCommand::Capture {
+            capture_file,
+            source_id,
+            out,
+        }) => parse_capture(capture_file, source_id, out),
     }
 }
 
@@ -77,6 +82,15 @@ struct Cli {
 enum Command {
     Browser(BrowserCommand),
     Scrape(ScrapeCommand),
+    Parse(ParseCommand),
+}
+
+enum ParseCommand {
+    Capture {
+        capture_file: PathBuf,
+        source_id: String,
+        out: Option<PathBuf>,
+    },
 }
 
 enum BrowserCommand {
@@ -191,6 +205,19 @@ impl Cli {
                         include_html: has_flag(rest, "--html"),
                         steps,
                         profile_override: has_flag(rest, "--i-understand-profile"),
+                    }),
+                })
+            }
+            [group, cmd, file, rest @ ..] if group == "parse" && cmd == "capture" => {
+                let source_id = option_value(rest, "--source")
+                    .ok_or_else(|| CliError::usage("parse capture requires --source <id>"))?
+                    .to_string();
+                Ok(Self {
+                    endpoint,
+                    command: Command::Parse(ParseCommand::Capture {
+                        capture_file: PathBuf::from(file),
+                        source_id,
+                        out: option_value(rest, "--out").map(PathBuf::from),
                     }),
                 })
             }
@@ -482,18 +509,29 @@ impl Drop for CdpSession {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 struct TravelCapture {
-    schema: &'static str,
+    #[serde(default = "default_schema")]
+    schema: String,
     source_id: String,
+    #[serde(default)]
     captured_at: String,
     url: String,
+    #[serde(default)]
     title: String,
     raw_text: String,
+    #[serde(default)]
     links: Vec<CaptureLink>,
+    #[serde(default)]
     tables: Vec<Vec<Vec<String>>>,
+    #[serde(default)]
     html: Option<String>,
+    #[serde(default)]
     screenshot_path: Option<String>,
+}
+
+fn default_schema() -> String {
+    "travel-capture-v1".to_string()
 }
 
 #[derive(Serialize, serde::Deserialize)]
@@ -733,7 +771,7 @@ async fn capture_page(
     };
 
     Ok(TravelCapture {
-        schema: "travel-capture-v1",
+        schema: "travel-capture-v1".to_string(),
         source_id: source_id.to_string(),
         captured_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         url,
@@ -1202,6 +1240,341 @@ impl Endpoint {
             base_path,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Parser stage: travel-capture-v1 (file) -> CanonicalOffer[] (Format B JSON).
+//
+// PURE transformation. No browser, no CDP, no Turso. Reads a capture file and
+// emits the offer JSON shape the existing TS importer (scripts/import-offers-to-turso.ts,
+// "Format B") already accepts:
+//   { source_id, package_type, url, scraped_at,
+//     dates:{departure_date,return_date,duration_nights},
+//     price:{per_person,price_total,currency},
+//     flight:{outbound,return}, hotel:{name} }
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Default)]
+struct OfferDates {
+    departure_date: String,
+    return_date: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_nights: Option<u32>,
+}
+
+#[derive(Serialize, Default)]
+struct OfferPrice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    per_person: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    price_total: Option<i64>,
+    currency: String,
+}
+
+#[derive(Serialize, Default)]
+struct OfferFlightLeg {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    flight_number: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    airline: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    date: String,
+}
+
+#[derive(Serialize, Default)]
+struct OfferFlight {
+    outbound: OfferFlightLeg,
+    #[serde(rename = "return")]
+    return_leg: OfferFlightLeg,
+}
+
+#[derive(Serialize, Default)]
+struct OfferHotel {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct CanonicalOfferOut {
+    source_id: String,
+    package_type: String,
+    url: String,
+    scraped_at: String,
+    dates: OfferDates,
+    price: OfferPrice,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flight: Option<OfferFlight>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hotel: Option<OfferHotel>,
+}
+
+fn parse_capture(
+    capture_file: PathBuf,
+    source_id: String,
+    out: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let text = std::fs::read_to_string(&capture_file).map_err(|err| {
+        CliError::runtime(format!(
+            "failed to read capture file {}: {err}",
+            capture_file.display()
+        ))
+    })?;
+    let capture: TravelCapture = serde_json::from_str(&text).map_err(|err| {
+        CliError::runtime(format!("capture file is not valid travel-capture-v1 JSON: {err}"))
+    })?;
+
+    let offers = match source_id.as_str() {
+        "settour" => parse_settour(&capture)?,
+        other => {
+            return Err(CliError::runtime(format!(
+                "no Rust parser for source '{other}' yet (implemented: settour)"
+            )));
+        }
+    };
+
+    if offers.is_empty() {
+        return Err(CliError::runtime(
+            "parser produced 0 offers from the capture (structured failure — check the captured raw_text)",
+        ));
+    }
+
+    let json = serde_json::to_string_pretty(&offers)
+        .map_err(|err| CliError::runtime(format!("failed to serialize offers: {err}")))?;
+
+    match out {
+        Some(path) => {
+            let target = if path.is_dir() || path.extension().is_none() {
+                std::fs::create_dir_all(&path).ok();
+                let stem = format!(
+                    "{}-offers-{}.json",
+                    source_id,
+                    capture.captured_at.replace([':', '-'], "")
+                );
+                path.join(stem)
+            } else {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                path
+            };
+            std::fs::write(&target, &json).map_err(|err| {
+                CliError::runtime(format!("failed to write offers to {}: {err}", target.display()))
+            })?;
+            println!("offers\t{}", offers.len());
+            println!("out\t{}", target.display());
+        }
+        None => {
+            println!("{json}");
+        }
+    }
+    Ok(())
+}
+
+/// settour FIT parser: travel-capture-v1 raw_text -> CanonicalOffer[].
+/// The fit.settour.com.tw product page renders one offer (cheapest flight+hotel
+/// combo) per capture. Extracts: dates, nights, flights, total/per-person price,
+/// hotel name, product_kind=fit.
+fn parse_settour(capture: &TravelCapture) -> Result<Vec<CanonicalOfferOut>, CliError> {
+    let rt = &capture.raw_text;
+
+    // Dates: "2026/06/20(六)~2026/06/24(三)"
+    let (depart, ret) = extract_date_range(rt);
+    // Nights: "共4晚" or "共5日"
+    let nights = extract_nights(rt);
+    // Total price (機加酒未稅總價 ... NNN,NNN). Per-person derived if adtCount known.
+    let total = extract_settour_total(rt);
+    // Flight numbers: IT212 / IT211 etc.
+    let flights = extract_flight_numbers(rt);
+    // Hotel: first non-empty hotel-ish name line; fall back to capture title scan.
+    let hotel = extract_settour_hotel(rt);
+
+    if depart.is_empty() {
+        return Ok(vec![]); // structured empty — caller turns this into a loud error
+    }
+
+    // settour FIT default is 2 pax (adtCount=2 in our flow); per_person = total/2,
+    // rounded to nearest (matches the Turso record's rounding: 36587/2 → 18294).
+    let per_person = total.map(|t| (t + 1) / 2);
+
+    let flight = if flights.0.is_some() || flights.1.is_some() {
+        Some(OfferFlight {
+            outbound: OfferFlightLeg {
+                flight_number: flights.0.clone().unwrap_or_default(),
+                airline: String::new(),
+                date: depart.clone(),
+            },
+            return_leg: OfferFlightLeg {
+                flight_number: flights.1.clone().unwrap_or_default(),
+                airline: String::new(),
+                date: ret.clone(),
+            },
+        })
+    } else {
+        None
+    };
+
+    let offer = CanonicalOfferOut {
+        source_id: "settour".to_string(),
+        package_type: "fit".to_string(),
+        url: capture.url.clone(),
+        scraped_at: if capture.captured_at.is_empty() {
+            now_iso()
+        } else {
+            capture.captured_at.clone()
+        },
+        dates: OfferDates {
+            departure_date: depart,
+            return_date: ret,
+            duration_nights: nights,
+        },
+        price: OfferPrice {
+            per_person,
+            price_total: total,
+            currency: "TWD".to_string(),
+        },
+        flight,
+        hotel: hotel.map(|name| OfferHotel { name }),
+    };
+
+    Ok(vec![offer])
+}
+
+/// "2026/06/20(六)~2026/06/24(三)" -> ("2026-06-20", "2026-06-24").
+/// Char-safe: scans a sliding window of 10 chars looking for YYYY/MM/DD.
+fn extract_date_range(text: &str) -> (String, String) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut dates: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i + 10 <= chars.len() {
+        let w = &chars[i..i + 10];
+        let is_date = w[0].is_ascii_digit()
+            && w[1].is_ascii_digit()
+            && w[2].is_ascii_digit()
+            && w[3].is_ascii_digit()
+            && w[4] == '/'
+            && w[5].is_ascii_digit()
+            && w[6].is_ascii_digit()
+            && w[7] == '/'
+            && w[8].is_ascii_digit()
+            && w[9].is_ascii_digit();
+        if is_date {
+            let s: String = w.iter().collect::<String>().replace('/', "-");
+            if !dates.contains(&s) {
+                dates.push(s);
+            }
+            i += 10;
+        } else {
+            i += 1;
+        }
+    }
+    let depart = dates.first().cloned().unwrap_or_default();
+    let ret = dates.get(1).cloned().unwrap_or_default();
+    (depart, ret)
+}
+
+/// "共4晚" or "共5日" -> Some(nights). 共N日 means N-1 nights.
+fn extract_nights(text: &str) -> Option<u32> {
+    if let Some(n) = capture_after(text, "共", "晚") {
+        return n.parse::<u32>().ok();
+    }
+    if let Some(n) = capture_after(text, "共", "日") {
+        return n.parse::<u32>().ok().map(|d| d.saturating_sub(1));
+    }
+    None
+}
+
+/// "機加酒未稅總價" followed by an amount like "36,587".
+fn extract_settour_total(text: &str) -> Option<i64> {
+    let idx = text.find("機加酒未稅總價")?;
+    let rest = &text[idx..];
+    extract_first_amount(rest)
+}
+
+/// First number-with-commas amount (>= 4 digits) in `text`.
+fn extract_first_amount(text: &str) -> Option<i64> {
+    let mut digits = String::new();
+    let mut started = false;
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            started = true;
+        } else if ch == ',' && started {
+            continue;
+        } else if started {
+            if digits.len() >= 4 {
+                return digits.parse::<i64>().ok();
+            }
+            digits.clear();
+            started = false;
+        }
+    }
+    if digits.len() >= 4 {
+        digits.parse::<i64>().ok()
+    } else {
+        None
+    }
+}
+
+/// Flight numbers like IT212 / IT211 — returns (outbound, return) = (first, second distinct).
+fn extract_flight_numbers(text: &str) -> (Option<String>, Option<String>) {
+    let mut found: Vec<String> = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i + 2 < chars.len() {
+        if chars[i].is_ascii_uppercase()
+            && chars[i + 1].is_ascii_uppercase()
+            && chars[i + 2].is_ascii_digit()
+        {
+            let mut code = String::new();
+            code.push(chars[i]);
+            code.push(chars[i + 1]);
+            let mut j = i + 2;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                code.push(chars[j]);
+                j += 1;
+            }
+            if code.len() >= 4 && code.len() <= 6 && !found.contains(&code) {
+                found.push(code);
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    (found.first().cloned(), found.get(1).cloned())
+}
+
+/// settour hotel name: the line immediately AFTER the stay-block anchor
+/// "飯店 <City> 入住：…". The anchor line carries the check-in/out dates; the
+/// next non-empty line is the real hotel name (e.g. "微笑飯店京都烏丸五條").
+fn extract_settour_hotel(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.starts_with("飯店") && t.contains("入住") {
+            // next non-empty line = hotel name
+            for next in lines.iter().skip(i + 1) {
+                let n = next.trim();
+                if n.is_empty() {
+                    continue;
+                }
+                return Some(n.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Substring between `start` marker and `end` marker, taking only digits in between.
+fn capture_after(text: &str, start: &str, end: &str) -> Option<String> {
+    let s = text.find(start)? + start.len();
+    let rest = &text[s..];
+    let e = rest.find(end)?;
+    let mid: String = rest[..e].chars().filter(|c| c.is_ascii_digit()).collect();
+    if mid.is_empty() { None } else { Some(mid) }
+}
+
+fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 fn is_loopback_endpoint(endpoint: &str) -> bool {
