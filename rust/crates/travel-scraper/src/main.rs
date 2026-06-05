@@ -7,7 +7,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
-use std::fs;
 use std::io::{ErrorKind as IoErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -17,7 +16,6 @@ use std::time::Duration;
 mod turso;
 
 const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:9222";
-const DEFAULT_CAPTURE_DIR: &str = "scrapes/captures";
 const SETTLE_TIMEOUT_SECS: u64 = 18;
 
 fn main() -> ExitCode {
@@ -70,19 +68,15 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             profile_override,
         )),
         Command::Parse(ParseCommand::Capture {
-            capture_file,
+            capture_id,
             source_id,
-            out,
-        }) => run_async(parse_capture(capture_file, source_id, out)),
+            dry_run,
+        }) => run_async(parse_capture(capture_id, source_id, dry_run)),
         Command::ParserRules(ParserRulesCommand::SeedDefaults) => {
             run_async(seed_default_parser_rules())
         }
         Command::Db(DbCommand::Query { sql }) => run_async(db_query(sql)),
         Command::Db(DbCommand::Exec { sql }) => run_async(db_exec(sql)),
-        Command::Import(ImportCommand::Offers {
-            offers_file,
-            dry_run,
-        }) => run_async(import_offers(offers_file, dry_run)),
     }
 }
 
@@ -97,7 +91,6 @@ enum Command {
     Parse(ParseCommand),
     ParserRules(ParserRulesCommand),
     Db(DbCommand),
-    Import(ImportCommand),
 }
 
 enum ParserRulesCommand {
@@ -109,15 +102,11 @@ enum DbCommand {
     Exec { sql: String },
 }
 
-enum ImportCommand {
-    Offers { offers_file: PathBuf, dry_run: bool },
-}
-
 enum ParseCommand {
     Capture {
-        capture_file: PathBuf,
+        capture_id: String,
         source_id: String,
-        out: Option<PathBuf>,
+        dry_run: bool,
     },
 }
 
@@ -236,16 +225,16 @@ impl Cli {
                     }),
                 })
             }
-            [group, cmd, file, rest @ ..] if group == "parse" && cmd == "capture" => {
+            [group, cmd, capture_id, rest @ ..] if group == "parse" && cmd == "capture" => {
                 let source_id = option_value(rest, "--source")
                     .ok_or_else(|| CliError::usage("parse capture requires --source <id>"))?
                     .to_string();
                 Ok(Self {
                     endpoint,
                     command: Command::Parse(ParseCommand::Capture {
-                        capture_file: PathBuf::from(file),
+                        capture_id: capture_id.to_string(),
                         source_id,
-                        out: option_value(rest, "--out").map(PathBuf::from),
+                        dry_run: has_flag(rest, "--dry-run"),
                     }),
                 })
             }
@@ -269,20 +258,13 @@ impl Cli {
                     sql: sql.to_string(),
                 }),
             }),
-            [group, cmd, file, rest @ ..] if group == "import" && cmd == "offers" => Ok(Self {
-                endpoint,
-                command: Command::Import(ImportCommand::Offers {
-                    offers_file: PathBuf::from(file),
-                    dry_run: has_flag(rest, "--dry-run"),
-                }),
-            }),
             _ => Err(CliError::usage(usage())),
         }
     }
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--out <path-or-dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--out <dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--out <dir>] [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-file.json> --source <id> [--out <path-or-dir>]\n  travel-scraper parser rules seed-defaults\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n  travel-scraper import offers <offers.json> [--dry-run]\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  TURSO_URL and TURSO_TOKEN are read from env or repo .env for db/import/parser commands.\n"
+    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-id> --source <id> [--dry-run]\n  travel-scraper parser rules seed-defaults\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n`parse capture <capture-id>` reads raw_text from Turso, parses via parser_rules, and\nimports offers straight to Turso (`--dry-run` prints plain text instead).\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  TURSO_URL and TURSO_TOKEN are read from env or repo .env for db/parse/parser commands.\n"
 }
 
 fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -424,7 +406,7 @@ async fn capture_snapshot(
     let page = cdp.page_for_rest_target(rest_page).await?;
     let source = source_id.unwrap_or_else(|| infer_source_id(&rest_page.url));
     let capture = capture_page(&page, &source, include_html).await?;
-    write_capture_and_report(capture, out.as_deref())
+    write_capture_and_report(capture, out.as_deref()).await
 }
 
 async fn scrape_url(
@@ -454,7 +436,7 @@ async fn scrape_url(
     }
     settle_rendered_page(&page).await?;
     let capture = capture_page(&page, &source_id, include_html).await?;
-    write_capture_and_report(capture, out.as_deref())
+    write_capture_and_report(capture, out.as_deref()).await
 }
 
 async fn scrape_interact(
@@ -489,7 +471,7 @@ async fn scrape_interact(
     execute_interaction_steps(&page, &steps).await?;
     settle_rendered_page(&page).await?;
     let capture = capture_page(&page, &source_id, include_html).await?;
-    write_capture_and_report(capture, out.as_deref())
+    write_capture_and_report(capture, out.as_deref()).await
 }
 
 struct CdpSession {
@@ -876,23 +858,38 @@ async fn evaluate_tables(page: &chromiumoxide::Page) -> Result<Vec<Vec<Vec<Strin
     .map_err(|err| CliError::runtime(format!("tables capture returned unexpected shape: {err}")))
 }
 
-fn write_capture_and_report(capture: TravelCapture, out: Option<&Path>) -> Result<(), CliError> {
-    let path = capture_output_path(out, &capture.source_id)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            CliError::runtime(format!(
-                "failed to create capture directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    let json = serde_json::to_string_pretty(&capture)
-        .map_err(|err| CliError::runtime(format!("failed to serialize capture JSON: {err}")))?;
-    fs::write(&path, json).map_err(|err| {
-        CliError::runtime(format!("failed to write capture {}: {err}", path.display()))
-    })?;
+/// Store a capture as a row in the Turso `captures` table (raw_text is plain
+/// text). No JSON file is written. Prints the capture_id to use with `parse`.
+async fn write_capture_and_report(
+    capture: TravelCapture,
+    _out: Option<&Path>,
+) -> Result<(), CliError> {
+    let captured_at = if capture.captured_at.is_empty() {
+        now_iso()
+    } else {
+        capture.captured_at.clone()
+    };
+    let capture_id = format!(
+        "{}-{}",
+        sanitize_filename(&capture.source_id),
+        captured_at.replace([':', '-'], "")
+    );
 
-    println!("capture\t{}", path.display());
+    let db = turso::TravelDb::connect()
+        .await
+        .map_err(CliError::runtime)?;
+    db.insert_capture(
+        &capture_id,
+        &capture.source_id,
+        &capture.url,
+        &capture.title,
+        &captured_at,
+        &capture.raw_text,
+    )
+    .await
+    .map_err(CliError::runtime)?;
+
+    println!("capture_id\t{capture_id}");
     println!("title\t{}", capture.title);
     println!("url\t{}", capture.url);
     println!("raw_text_chars\t{}", capture.raw_text.chars().count());
@@ -900,17 +897,6 @@ fn write_capture_and_report(capture: TravelCapture, out: Option<&Path>) -> Resul
     Ok(())
 }
 
-fn capture_output_path(out: Option<&Path>, source_id: &str) -> Result<PathBuf, CliError> {
-    let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ");
-    let filename = format!("{}-{timestamp}.json", sanitize_filename(source_id));
-    match out {
-        Some(path) if path.extension().and_then(|ext| ext.to_str()) == Some("json") => {
-            Ok(path.to_path_buf())
-        }
-        Some(path) => Ok(path.join(filename)),
-        None => Ok(Path::new(DEFAULT_CAPTURE_DIR).join(filename)),
-    }
-}
 
 fn sanitize_filename(value: &str) -> String {
     let sanitized: String = value
@@ -1456,26 +1442,41 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
     ]
 }
 
+/// Parse a stored capture (by capture_id, read from the Turso captures table)
+/// into offers and import them straight to Turso — no JSON file boundary.
+/// `--dry-run` prints the parsed offers as plain text instead of importing.
 async fn parse_capture(
-    capture_file: PathBuf,
+    capture_id: String,
     source_id: String,
-    out: Option<PathBuf>,
+    dry_run: bool,
 ) -> Result<(), CliError> {
-    let text = std::fs::read_to_string(&capture_file).map_err(|err| {
-        CliError::runtime(format!(
-            "failed to read capture file {}: {err}",
-            capture_file.display()
-        ))
-    })?;
-    let capture: TravelCapture = serde_json::from_str(&text).map_err(|err| {
-        CliError::runtime(format!(
-            "capture file is not valid travel-capture-v1 JSON: {err}"
-        ))
-    })?;
-
     let db = turso::TravelDb::connect()
         .await
         .map_err(CliError::runtime)?;
+
+    // Read the capture's raw_text from Turso (plain text, not a JSON file).
+    let (_stored_source, url, raw_text) = db
+        .get_capture(&capture_id)
+        .await
+        .map_err(CliError::runtime)?
+        .ok_or_else(|| {
+            CliError::runtime(format!(
+                "no capture with capture_id='{capture_id}' in Turso; run a scrape/snapshot first"
+            ))
+        })?;
+    let capture = TravelCapture {
+        schema: default_schema(),
+        source_id: source_id.clone(),
+        captured_at: now_iso(),
+        url,
+        title: String::new(),
+        raw_text,
+        links: Vec::new(),
+        tables: Vec::new(),
+        html: None,
+        screenshot_path: None,
+    };
+
     db.ensure_parser_rules_table()
         .await
         .map_err(CliError::runtime)?;
@@ -1508,39 +1509,46 @@ async fn parse_capture(
         ));
     }
 
-    let json = serde_json::to_string_pretty(&offers)
-        .map_err(|err| CliError::runtime(format!("failed to serialize offers: {err}")))?;
-
-    match out {
-        Some(path) => {
-            let target = if path.is_dir() || path.extension().is_none() {
-                std::fs::create_dir_all(&path).ok();
-                let stem = format!(
-                    "{}-offers-{}.json",
-                    source_id,
-                    capture.captured_at.replace([':', '-'], "")
-                );
-                path.join(stem)
-            } else {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                path
-            };
-            std::fs::write(&target, &json).map_err(|err| {
-                CliError::runtime(format!(
-                    "failed to write offers to {}: {err}",
-                    target.display()
-                ))
-            })?;
-            println!("offers\t{}", offers.len());
-            println!("out\t{}", target.display());
+    if dry_run {
+        // plain-text view of what would be imported
+        for o in &offers {
+            print_offer_plain(o);
         }
-        None => {
-            println!("{json}");
-        }
+        println!("offers\t{}", offers.len());
+        println!("dry_run\ttrue");
+        return Ok(());
     }
+
+    // Import straight to Turso — no offers JSON file.
+    let mut imported = 0u64;
+    for o in &offers {
+        let row = offer_to_row(o, Some(format!("capture:{capture_id}")));
+        if row.scraped_at.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(CliError::runtime(format!(
+                "offer '{}' missing scraped_at (required by offers PK)",
+                row.id
+            )));
+        }
+        imported += db.insert_offer(&row).await.map_err(CliError::runtime)?;
+    }
+    println!("offers\t{}", offers.len());
+    println!("imported\t{imported}");
     Ok(())
+}
+
+/// Plain-text (tab-separated) rendering of one parsed offer — no JSON.
+fn print_offer_plain(o: &CanonicalOfferOut) {
+    println!(
+        "{}\t{}\t{}→{}\t{}n\tpp={}\ttotal={}\t{}",
+        o.source_id,
+        o.package_type,
+        o.dates.departure_date,
+        o.dates.return_date,
+        o.dates.duration_nights.unwrap_or(0),
+        o.price.per_person.unwrap_or(0),
+        o.price.price_total.unwrap_or(0),
+        o.hotel.as_ref().map(|h| h.name.as_str()).unwrap_or(""),
+    );
 }
 
 fn parse_generic(
@@ -1807,10 +1815,19 @@ async fn db_query(sql: String) -> Result<(), CliError> {
     let db = turso::TravelDb::connect()
         .await
         .map_err(CliError::runtime)?;
-    let rows = db.query_json(&sql).await.map_err(CliError::runtime)?;
-    let json = serde_json::to_string_pretty(&rows)
-        .map_err(|err| CliError::runtime(format!("failed to serialize query rows: {err}")))?;
-    println!("{json}");
+    // Plain-text table output (no JSON): tab-separated header + rows.
+    let (cols, rows) = db.query_table(&sql).await.map_err(CliError::runtime)?;
+    if rows.is_empty() {
+        println!("(0 rows)");
+        return Ok(());
+    }
+    println!("{}", cols.join("\t"));
+    for row in &rows {
+        // newlines in cells would break the line-oriented table; flatten them
+        let cells: Vec<String> = row.iter().map(|c| c.replace('\n', " ")).collect();
+        println!("{}", cells.join("\t"));
+    }
+    println!("({} rows)", rows.len());
     Ok(())
 }
 
@@ -1823,81 +1840,7 @@ async fn db_exec(sql: String) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn import_offers(offers_file: PathBuf, dry_run: bool) -> Result<(), CliError> {
-    let rows = read_offer_rows(&offers_file)?;
-    if rows.is_empty() {
-        return Err(CliError::runtime(format!(
-            "no importable offers in {}",
-            offers_file.display()
-        )));
-    }
-
-    // scraped_at is part of the offers composite PK (id, scraped_at) and is NOT
-    // NULL — fail loud rather than attempt an insert that violates the constraint.
-    for row in &rows {
-        if row.scraped_at.as_deref().map(str::trim).unwrap_or("").is_empty() {
-            return Err(CliError::runtime(format!(
-                "offer '{}' is missing scraped_at (required by offers PK); fix the capture/parser",
-                row.id
-            )));
-        }
-    }
-
-    println!("offers\t{}", rows.len());
-    if dry_run {
-        println!("dry_run\ttrue");
-        for row in &rows {
-            println!("{}", row.dry_run_sql());
-        }
-        return Ok(());
-    }
-
-    let db = turso::TravelDb::connect()
-        .await
-        .map_err(CliError::runtime)?;
-    let mut changed = 0u64;
-    for row in &rows {
-        changed += db.insert_offer(row).await.map_err(CliError::runtime)?;
-    }
-    println!("rows_affected\t{changed}");
-    Ok(())
-}
-
-fn read_offer_rows(offers_file: &Path) -> Result<Vec<turso::OfferRow>, CliError> {
-    let text = std::fs::read_to_string(offers_file).map_err(|err| {
-        CliError::runtime(format!(
-            "failed to read offers file {}: {err}",
-            offers_file.display()
-        ))
-    })?;
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|err| CliError::runtime(format!("offers file is not valid JSON: {err}")))?;
-
-    let offers: Vec<CanonicalOfferOut> = if value.is_array() {
-        serde_json::from_value(value)
-            .map_err(|err| CliError::runtime(format!("offers array has unexpected shape: {err}")))?
-    } else if let Some(array) = value.get("offers") {
-        serde_json::from_value(array.clone()).map_err(|err| {
-            CliError::runtime(format!("offers envelope has unexpected shape: {err}"))
-        })?
-    } else {
-        return Err(CliError::runtime(
-            "offers JSON must be a CanonicalOffer[] array or an object with offers[]",
-        ));
-    };
-
-    let source_file = offers_file
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string);
-    Ok(offers
-        .iter()
-        .map(|offer| offer_to_row(offer, source_file.clone()))
-        .collect())
-}
-
 fn offer_to_row(offer: &CanonicalOfferOut, source_file: Option<String>) -> turso::OfferRow {
-    let raw_data = serde_json::to_string(offer).unwrap_or_else(|_| "{}".to_string());
     let hotel_name = offer
         .hotel
         .as_ref()
@@ -1933,7 +1876,6 @@ fn offer_to_row(offer: &CanonicalOfferOut, source_file: Option<String>) -> turso
         availability: None,
         hotel_name,
         airline,
-        raw_data,
         scraped_at: non_empty_string(&offer.scraped_at),
     }
 }

@@ -1,5 +1,4 @@
 use libsql::{Connection, Value, params};
-use serde_json::{Map, Value as JsonValue};
 use std::env;
 use std::path::PathBuf;
 
@@ -20,33 +19,6 @@ impl TravelDb {
         Ok(Self { conn })
     }
 
-    pub async fn query_json(&self, sql: &str) -> Result<JsonValue, String> {
-        let mut rows = self
-            .conn
-            .query(sql, ())
-            .await
-            .map_err(|err| format!("Turso query failed: {err}"))?;
-        let mut out = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|err| format!("failed to read Turso row: {err}"))?
-        {
-            let mut object = Map::new();
-            for idx in 0..row.column_count() {
-                let name = row
-                    .column_name(idx)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("col_{idx}"));
-                let value = row
-                    .get_value(idx)
-                    .map_err(|err| format!("failed to read column {idx}: {err}"))?;
-                object.insert(name, libsql_value_to_json(value));
-            }
-            out.push(JsonValue::Object(object));
-        }
-        Ok(JsonValue::Array(out))
-    }
 
     pub async fn exec(&self, sql: &str) -> Result<u64, String> {
         self.conn
@@ -55,14 +27,125 @@ impl TravelDb {
             .map_err(|err| format!("Turso exec failed: {err}"))
     }
 
+    /// Query returning column names + rows of plain string cells, for table
+    /// rendering in the CLI (no JSON output).
+    pub async fn query_table(&self, sql: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+        let mut rows = self
+            .conn
+            .query(sql, ())
+            .await
+            .map_err(|err| format!("Turso query failed: {err}"))?;
+        let mut cols: Vec<String> = Vec::new();
+        let mut out: Vec<Vec<String>> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|err| format!("failed to read Turso row: {err}"))?
+        {
+            if cols.is_empty() {
+                for idx in 0..row.column_count() {
+                    cols.push(
+                        row.column_name(idx)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("col_{idx}")),
+                    );
+                }
+            }
+            let mut cells = Vec::with_capacity(cols.len());
+            for idx in 0..row.column_count() {
+                let value = row
+                    .get_value(idx)
+                    .map_err(|err| format!("failed to read column {idx}: {err}"))?;
+                cells.push(libsql_value_to_plain(value));
+            }
+            out.push(cells);
+        }
+        Ok((cols, out))
+    }
+
+    /// Ensure the captures table exists (plain-text raw_text, no JSON files).
+    pub async fn ensure_captures_table(&self) -> Result<(), String> {
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS captures (
+                    capture_id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    url TEXT,
+                    title TEXT,
+                    captured_at TEXT NOT NULL,
+                    raw_text TEXT NOT NULL
+                 )",
+                (),
+            )
+            .await
+            .map_err(|err| format!("failed to create captures table: {err}"))?;
+        Ok(())
+    }
+
+    /// Store a capture as a row (raw_text is plain text — never a JSON file).
+    pub async fn insert_capture(
+        &self,
+        capture_id: &str,
+        source_id: &str,
+        url: &str,
+        title: &str,
+        captured_at: &str,
+        raw_text: &str,
+    ) -> Result<(), String> {
+        self.ensure_captures_table().await?;
+        self.conn
+            .execute(
+                "INSERT INTO captures (capture_id, source_id, url, title, captured_at, raw_text)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(capture_id) DO UPDATE SET
+                    source_id=excluded.source_id, url=excluded.url, title=excluded.title,
+                    captured_at=excluded.captured_at, raw_text=excluded.raw_text",
+                params![
+                    capture_id.to_string(),
+                    source_id.to_string(),
+                    url.to_string(),
+                    title.to_string(),
+                    captured_at.to_string(),
+                    raw_text.to_string(),
+                ],
+            )
+            .await
+            .map_err(|err| format!("failed to insert capture: {err}"))?;
+        Ok(())
+    }
+
+    /// Read a stored capture's source_id + raw_text by capture_id (for parsing).
+    pub async fn get_capture(&self, capture_id: &str) -> Result<Option<(String, String, String)>, String> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT source_id, url, raw_text FROM captures WHERE capture_id = ?1",
+                params![capture_id.to_string()],
+            )
+            .await
+            .map_err(|err| format!("failed to query capture: {err}"))?;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|err| format!("failed to read capture row: {err}"))?
+        {
+            let source_id: String = row.get(0).map_err(|e| format!("col source_id: {e}"))?;
+            let url: String = row.get(1).unwrap_or_default();
+            let raw_text: String = row.get(2).map_err(|e| format!("col raw_text: {e}"))?;
+            Ok(Some((source_id, url, raw_text)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn insert_offer(&self, row: &OfferRow) -> Result<u64, String> {
         self.conn
             .execute(
                 "INSERT INTO offers (
                     id, source_file, source_id, type, name, price_per_person, currency,
                     region, destination, departure_date, return_date, nights, availability,
-                    hotel_name, airline, raw_data, scraped_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                    hotel_name, airline, scraped_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                  ON CONFLICT(id, scraped_at) DO NOTHING",
                 params![
                     row.id.clone(),
@@ -80,7 +163,6 @@ impl TravelDb {
                     row.availability.clone(),
                     row.hotel_name.clone(),
                     row.airline.clone(),
-                    row.raw_data.clone(),
                     row.scraped_at.clone(),
                 ],
             )
@@ -288,59 +370,7 @@ pub struct OfferRow {
     pub availability: Option<String>,
     pub hotel_name: Option<String>,
     pub airline: Option<String>,
-    pub raw_data: String,
     pub scraped_at: Option<String>,
-}
-
-impl OfferRow {
-    pub fn dry_run_sql(&self) -> String {
-        let cols = [
-            "id",
-            "source_file",
-            "source_id",
-            "type",
-            "name",
-            "price_per_person",
-            "currency",
-            "region",
-            "destination",
-            "departure_date",
-            "return_date",
-            "nights",
-            "availability",
-            "hotel_name",
-            "airline",
-            "raw_data",
-            "scraped_at",
-        ];
-        let values = [
-            sql_text(Some(&self.id)),
-            sql_text(self.source_file.as_deref()),
-            sql_text(Some(&self.source_id)),
-            sql_text(Some(&self.kind)),
-            sql_text(self.name.as_deref()),
-            sql_int(self.price_per_person),
-            sql_text(self.currency.as_deref()),
-            sql_text(self.region.as_deref()),
-            sql_text(self.destination.as_deref()),
-            sql_text(self.departure_date.as_deref()),
-            sql_text(self.return_date.as_deref()),
-            sql_int(self.nights),
-            sql_text(self.availability.as_deref()),
-            sql_text(self.hotel_name.as_deref()),
-            sql_text(self.airline.as_deref()),
-            sql_text(Some(&self.raw_data)),
-            sql_text(self.scraped_at.as_deref()),
-        ];
-        // offers PK is composite (id, scraped_at) — append-only ingestion: the
-        // same offer re-scraped at a NEW time becomes a new row (price history);
-        // an exact (id, scraped_at) duplicate is a no-op. Matches the TS importer.
-        format!(
-            "INSERT INTO offers ({}) VALUES ({}) ON CONFLICT(id, scraped_at) DO NOTHING;",
-            cols.join(","),
-            values.join(",")
-        )
-    }
 }
 
 struct TursoCreds {
@@ -407,27 +437,15 @@ fn unquote_env_value(value: &str) -> String {
     }
 }
 
-fn libsql_value_to_json(value: Value) -> JsonValue {
+/// Render a libsql cell as a plain string for table output (no JSON).
+fn libsql_value_to_plain(value: Value) -> String {
     match value {
-        Value::Null => JsonValue::Null,
-        Value::Integer(value) => JsonValue::from(value),
-        Value::Real(value) => JsonValue::from(value),
-        Value::Text(value) => JsonValue::from(value),
-        Value::Blob(value) => JsonValue::from(format!("<blob:{} bytes>", value.len())),
+        Value::Null => String::new(),
+        Value::Integer(value) => value.to_string(),
+        Value::Real(value) => value.to_string(),
+        Value::Text(value) => value,
+        Value::Blob(value) => format!("<blob:{} bytes>", value.len()),
     }
-}
-
-fn sql_text(value: Option<&str>) -> String {
-    match value {
-        Some(value) => format!("'{}'", value.replace('\'', "''")),
-        None => "NULL".to_string(),
-    }
-}
-
-fn sql_int(value: Option<i64>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "NULL".to_string())
 }
 
 fn none_if_empty(value: String) -> Option<String> {

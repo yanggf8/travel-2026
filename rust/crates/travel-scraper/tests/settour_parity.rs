@@ -1,15 +1,12 @@
-// Golden parity test for the generic Turso-rule parser — no JSON fixture file.
+// Golden parity test for the generic Turso-rule parser — no JSON anywhere.
 //
-// Input: a minimal travel-capture-v1 (raw_text only) built INLINE from the real
-// settour FIT render (no committed JSON blob).
-// Expected: read live from the cloud DB (Turso) — the verified record
+// Flow: seed a `captures` row in Turso (raw_text only), run
+// `parse capture <id> --source settour --dry-run` (plain-text output), parse the
+// plain-text offer line, and compare to the live Turso record
 // shaping_tour_group_offers.offer_id = 'settour-fit-kyoto-20260620-4n'.
 //
-// This proves parser parity using parser_rules from Turso. Skips (does not
-// fail) if Turso creds are absent, so the test is runnable offline without
-// silently passing on missing data.
+// Skips (does not fail) if Turso creds are absent.
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -17,85 +14,80 @@ fn binary_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_travel-scraper"))
 }
 
-// Minimal travel-capture-v1 raw_text — the exact lines parse_settour reads,
-// lifted verbatim from a real settour FIT capture (6/20→6/24 京都).
-const INLINE_RAW_TEXT: &str = "\
-2026/06/20(六)~2026/06/24(三)\n\
-飯店 Kyoto 入住：2026/06/20(六)   退房：2026/06/24(三)   (共4晚)修改入住日期\n\
-微笑飯店京都烏丸五條\n\
-Smile Hotel Kyoto karasumagojo\n\
-台灣虎航IT212\n\
-台灣虎航IT211\n\
-機加酒未稅總價\n\
-$36,587\n\
-機票稅金 \n\
-$4,404\n";
+const CAPTURE_ID: &str = "settour-parity-test";
 
-fn inline_capture_json() -> String {
-    let capture = serde_json::json!({
-        "schema": "travel-capture-v1",
-        "source_id": "settour",
-        "captured_at": "2026-06-05T17:40:23Z",
-        "url": "https://fit.settour.com.tw/product/v2?depDate=20260620,20260624&adtCount=2&displayName=京都",
-        "title": "機加酒自由行搜尋推薦 | 東南旅遊",
-        "raw_text": INLINE_RAW_TEXT,
-        "links": [],
-        "tables": [],
-        "html": null,
-        "screenshot_path": null
-    });
-    serde_json::to_string(&capture).unwrap()
+// Minimal raw_text — the exact lines the generic settour rule reads, from a real
+// settour FIT capture (6/20→6/24 京都). Single-quotes escaped for the SQL insert.
+const RAW_TEXT: &str = "2026/06/20(六)~2026/06/24(三)\n飯店 Kyoto 入住：2026/06/20(六)   退房：2026/06/24(三)   (共4晚)修改入住日期\n微笑飯店京都烏丸五條\nSmile Hotel Kyoto karasumagojo\n台灣虎航IT212\n台灣虎航IT211\n機加酒未稅總價\n$36,587\n機票稅金 \n$4,404\n";
+
+fn run(args: &[&str]) -> std::process::Output {
+    Command::new(binary_path())
+        .args(args)
+        .output()
+        .expect("run travel-scraper")
 }
 
-fn run_parser_on_inline_capture() -> serde_json::Value {
-    // parse capture takes a file path; write the inline capture to a temp file.
-    let mut tmp = std::env::temp_dir();
-    tmp.push(format!("settour-parity-{}.json", std::process::id()));
-    {
-        let mut f = std::fs::File::create(&tmp).expect("create temp capture");
-        f.write_all(inline_capture_json().as_bytes())
-            .expect("write temp");
-    }
-    let output = Command::new(binary_path())
-        .arg("parse")
-        .arg("capture")
-        .arg(&tmp)
-        .arg("--source")
-        .arg("settour")
-        .output()
-        .expect("run travel-scraper");
-    let _ = std::fs::remove_file(&tmp);
+fn seed_capture_row() {
+    // captures table is created on demand by scrape/insert_capture; ensure it
+    // exists, then upsert the test row.
+    let create = run(&[
+        "db",
+        "exec",
+        "CREATE TABLE IF NOT EXISTS captures (capture_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT, title TEXT, captured_at TEXT NOT NULL, raw_text TEXT NOT NULL)",
+    ]);
+    assert!(create.status.success(), "create captures: {}", String::from_utf8_lossy(&create.stderr));
 
-    assert!(
-        output.status.success(),
-        "parse capture failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+    let sql = format!(
+        "INSERT OR REPLACE INTO captures (capture_id, source_id, url, title, captured_at, raw_text) \
+         VALUES ('{CAPTURE_ID}', 'settour', 'https://fit.settour.com.tw/product/v2', 't', '2026-06-06T00:00:00Z', '{}')",
+        RAW_TEXT.replace('\'', "''")
     );
-    let offers: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("parser output is valid JSON");
-    let arr = offers.as_array().expect("output is array");
-    assert_eq!(arr.len(), 1, "expected one offer");
-    arr[0].clone()
+    let seed = run(&["db", "exec", &sql]);
+    assert!(seed.status.success(), "seed capture: {}", String::from_utf8_lossy(&seed.stderr));
 }
 
 fn seed_default_parser_rules() {
-    let output = Command::new(binary_path())
-        .arg("parser")
-        .arg("rules")
-        .arg("seed-defaults")
-        .output()
-        .expect("run travel-scraper parser rules seed-defaults");
-    assert!(
-        output.status.success(),
-        "parser rules seed-defaults failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let out = run(&["parser", "rules", "seed-defaults"]);
+    assert!(out.status.success(), "seed-defaults: {}", String::from_utf8_lossy(&out.stderr));
 }
 
-/// Read TURSO_URL/TURSO_TOKEN from the repo .env.
+/// Run `parse capture <id> --dry-run` and parse the plain-text offer line:
+///   source\tkind\tdepart→return\tNn\tpp=N\ttotal=N\thotel
+fn parse_offer_plain() -> (String, String, String, i64, i64, i64, String) {
+    let out = run(&["parse", "capture", CAPTURE_ID, "--source", "settour", "--dry-run"]);
+    assert!(out.status.success(), "parse capture: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with("settour\t"))
+        .unwrap_or_else(|| panic!("no offer line in output:\n{stdout}"));
+    let f: Vec<&str> = line.split('\t').collect();
+    assert!(f.len() >= 7, "unexpected offer line: {line}");
+    let dates: Vec<&str> = f[2].split('→').collect();
+    let nights: i64 = f[3].trim_end_matches('n').parse().unwrap();
+    let pp: i64 = f[4].trim_start_matches("pp=").parse().unwrap();
+    let total: i64 = f[5].trim_start_matches("total=").parse().unwrap();
+    (
+        f[1].to_string(),          // kind
+        dates[0].to_string(),      // depart
+        dates[1].to_string(),      // return
+        nights,
+        pp,
+        total,
+        f[6].to_string(),          // hotel
+    )
+}
+
 fn turso_creds() -> Option<(String, String)> {
-    let body = read_repo_env()?;
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let body = loop {
+        if let Ok(b) = std::fs::read_to_string(path.join(".env")) {
+            break b;
+        }
+        if !path.pop() {
+            return None;
+        }
+    };
     let mut url = None;
     let mut token = None;
     for line in body.lines() {
@@ -108,20 +100,6 @@ fn turso_creds() -> Option<(String, String)> {
     Some((url?, token?))
 }
 
-fn read_repo_env() -> Option<String> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    loop {
-        let candidate = path.join(".env");
-        if let Ok(body) = std::fs::read_to_string(candidate) {
-            return Some(body);
-        }
-        if !path.pop() {
-            break;
-        }
-    }
-    None
-}
-
 #[tokio::test]
 async fn settour_parser_matches_cloud_db_record() {
     let Some((url, token)) = turso_creds() else {
@@ -129,12 +107,10 @@ async fn settour_parser_matches_cloud_db_record() {
         return;
     };
     seed_default_parser_rules();
+    seed_capture_row();
 
-    // Expected values: live from Turso.
-    let db = libsql::Builder::new_remote(url, token)
-        .build()
-        .await
-        .expect("connect Turso");
+    // Expected: live from Turso.
+    let db = libsql::Builder::new_remote(url, token).build().await.expect("connect Turso");
     let conn = db.connect().expect("conn");
     let mut rows = conn
         .query(
@@ -144,12 +120,7 @@ async fn settour_parser_matches_cloud_db_record() {
         )
         .await
         .expect("query");
-    let row = rows
-        .next()
-        .await
-        .expect("row result")
-        .expect("record exists in Turso");
-
+    let row = rows.next().await.expect("row").expect("record exists in Turso");
     let exp_depart: String = row.get(0).unwrap();
     let exp_return: String = row.get(1).unwrap();
     let exp_nights: i64 = row.get(2).unwrap();
@@ -157,25 +128,14 @@ async fn settour_parser_matches_cloud_db_record() {
     let exp_hotel: String = row.get(4).unwrap();
     let exp_kind: String = row.get(5).unwrap();
 
-    // Actual values: from the Rust generic parser, with rules loaded from Turso.
-    let o = run_parser_on_inline_capture();
-    println!(
-        "generic_settour_output\t{}",
-        serde_json::to_string(&o).unwrap()
-    );
+    // Actual: generic parser, rules + capture from Turso, plain-text output.
+    let (kind, depart, ret, nights, pp, total, hotel) = parse_offer_plain();
 
-    assert_eq!(o["dates"]["departure_date"], exp_depart);
-    assert_eq!(o["dates"]["return_date"], exp_return);
-    assert_eq!(o["dates"]["duration_nights"], exp_nights);
-    assert_eq!(o["price"]["per_person"], exp_pp);
-    assert_eq!(o["package_type"], exp_kind);
-    // hotel_name in Turso has an English suffix; parser yields the ZH name — assert prefix match.
-    let parsed_hotel = o["hotel"]["name"].as_str().unwrap();
-    assert!(
-        exp_hotel.starts_with(parsed_hotel),
-        "hotel mismatch: parser='{parsed_hotel}' vs turso='{exp_hotel}'"
-    );
-    // Total is the rendered two-passenger price. It is not equal to pp*2
-    // because per-person is rounded up from 36587 / 2.
-    assert_eq!(o["price"]["price_total"], 36587);
+    assert_eq!(depart, exp_depart);
+    assert_eq!(ret, exp_return);
+    assert_eq!(nights, exp_nights);
+    assert_eq!(pp, exp_pp);
+    assert_eq!(kind, exp_kind);
+    assert!(exp_hotel.starts_with(&hotel), "hotel mismatch: parser='{hotel}' vs turso='{exp_hotel}'");
+    assert_eq!(total, 36587);
 }
