@@ -342,6 +342,45 @@ Success criteria:
   now a Turso `parser_rules` row plus a parity check. A Rust parser file is only justified when the row
   sets `has_custom_parser=1` because the page is genuinely too irregular for regex/marker rules.
 
+### No-JSON capture→parse→import — DONE
+- Pipeline boundary changed from file JSON to Turso rows + plain-text CLI output. `browser snapshot` and
+  `scrape` store rendered captures in Turso `captures` (`capture_id`, `source_id`, `url`, `title`,
+  `captured_at`, `raw_text`) and print a `capture_id`.
+- `parse capture <capture-id> --source <id> [--dry-run]` reads raw text from Turso, loads
+  `parser_rules`, parses, and imports directly into `offers`. `--dry-run` prints a tab-separated
+  plain-text offer line; no `scrapes/captures/*.json`, no `CanonicalOffer[]` file, no `import offers`
+  file boundary.
+- `db query` renders tab-separated plain-text tables. JSON remains only as an internal protocol/library
+  detail where unavoidable, not a user-facing artifact or source of truth.
+
+### OTA parser_rules seed + Python decommission — DONE
+- `parser rules seed-defaults` now seeds 10 rows:
+  `agoda`, `besttour`, `eztravel`, `google_flights`, `lifetour`, `liontravel`, `settour`, `tigerair`,
+  `travel4u`, `trip`.
+- Verified generic parser path via Turso-backed tests:
+  - `settour`: real Rust+CDP verified; Python parser decommissioned.
+  - `liontravel`: real Rust+CDP verified; Python parser decommissioned.
+  - `lifetour`: rule verified against live Turso record
+    `lifetour-okinawa-20260621-2n-mpnpatpt` using a representative rendered-text capture row
+    (`2026-06-21→2026-06-24`, 2 nights, TWD 15,130 pp, 沖繩那霸旭橋托麗芙特酒店). It is not
+    decommissioned yet because it still needs a real Rust+CDP scrape gate.
+- Remaining seeded package sources:
+  - `besttour`: seeded generic FIT-style row from `scripts/scrapers/parsers/besttour.py`; needs real
+    capture parity. Caveat: source has both FIT and group-tour shapes, but current `parser_rules` is one
+    row per source, so product-kind classification may need a rule extension before deletion.
+  - `travel4u`: seeded generic group-style row from `scripts/scrapers/parsers/travel4u.py`; needs real
+    capture parity. Caveat: Travel4U can expose FIT and group pages; one source-level `product_kind` is
+    not enough for all captures.
+- Seeded but flagged custom (`has_custom_parser=1`) because the current generic engine is package-shaped
+  and requires date/night/hotel fields:
+  `tigerair`, `google_flights`, `trip`, `eztravel` (flight-only) and `agoda` (hotel-only).
+  Recommendation: add a smaller flight/hotel rule shape or targeted override before attempting deletion.
+- Deleted verified Python parser modules:
+  `scripts/scrapers/parsers/settour.py`, `scripts/scrapers/parsers/liontravel.py`.
+  `scripts/scrapers/parsers/__init__.py` no longer imports them, `scripts/scrapers/registry.py` no
+  longer advertises missing parser modules, and the legacy `scripts/scrape_liontravel_dated.py` is now a
+  loud decommission stub.
+
 ### Rust→Turso CLI — DONE and verified
 - Added a native `libsql` Turso module for `travel-scraper`. It reads `TURSO_URL`/`TURSO_TOKEN` from
   the process environment or the repo `.env`, and fails loud if credentials are missing.
@@ -362,11 +401,12 @@ Success criteria:
   untouched.
 
 ### Remaining (next milestones, in order)
-- Seed remaining OTAs (`travel4u`, `besttour`, flight/hotel sources, and any unseeded group sources)
-  as `parser_rules` rows, then add Turso-backed parity checks. `lifetour` is seeded but still needs a
-  real-capture parity check before decommission decisions.
-- Python decommission per source: only after ≥2 successful real scrapes + parity (plan policy). No
-  Python deleted yet.
+- Real-scrape the newly seeded OTAs, starting with `lifetour`, `besttour`, and `travel4u`; then delete
+  their Python parser only after the Rust+CDP scrape + Turso parity gate passes.
+- Extend the generic rule shape for flight-only and hotel-only sources, or implement explicit custom
+  overrides for rows with `has_custom_parser=1`.
+- Python decommission per source: delete-verified-now, port-rest-lazily. Only `settour` + `liontravel`
+  are deleted so far.
   - **DECOMMISSION PACE (user, 2026-06):** delete-verified-now, port-rest-lazily. Delete the Python
     parser for an OTA as soon as it's verified by real Rust CDP scrapes (settour + liontravel qualify —
     both real-scraped via live Chrome). Keep the other ~8 Python parsers until each OTA is actually

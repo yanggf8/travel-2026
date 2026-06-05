@@ -897,7 +897,6 @@ async fn write_capture_and_report(
     Ok(())
 }
 
-
 fn sanitize_filename(value: &str) -> String {
     let sanitized: String = value
         .chars()
@@ -1437,6 +1436,126 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             currency: "TWD".to_string(),
             has_custom_parser: false,
             source_url: Some("repo:scripts/scrapers/parsers/lifetour.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "besttour".to_string(),
+            product_kind: "fit".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"(\d+)\s*[天日]".to_string(),
+            nights_is_days: true,
+            price_marker: "售價".to_string(),
+            price_amount_rx: r"(?:NT?\$?\s*)?([\d,]{4,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 2,
+            flight_rx: r"([A-Z]{1,2}\d{2,4})".to_string(),
+            hotel_anchor_rx: r"^(住宿|飯店|旅館|酒店)$".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: false,
+            source_url: Some("repo:scripts/scrapers/parsers/besttour.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "travel4u".to_string(),
+            product_kind: "group".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"([５６４７\d]+)\s*[天日]".to_string(),
+            nights_is_days: true,
+            price_marker: "售價".to_string(),
+            price_amount_rx: r"(?:NT?\$?\s*)?([\d,]{4,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 2,
+            flight_rx: r"([A-Z]{1,2}\d{2,4})".to_string(),
+            hotel_anchor_rx: r"^(住宿|飯店|旅館|酒店)$".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: false,
+            source_url: Some("repo:scripts/scrapers/parsers/travel4u.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "tigerair".to_string(),
+            product_kind: "flight".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"(\d+)".to_string(),
+            nights_is_days: false,
+            price_marker: "TWD".to_string(),
+            price_amount_rx: r"([\d,]{3,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 1,
+            flight_rx: r"\b(IT\s*\d{3,4})\b".to_string(),
+            hotel_anchor_rx: r"^$".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: true,
+            source_url: Some("repo:scripts/scrapers/parsers/tigerair.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "google_flights".to_string(),
+            product_kind: "flight".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"(\d+)".to_string(),
+            nights_is_days: false,
+            price_marker: "$".to_string(),
+            price_amount_rx: r"([\d,]{3,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 1,
+            flight_rx: r"([A-Z]{2}\d{2,4})".to_string(),
+            hotel_anchor_rx: r"^$".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: true,
+            source_url: Some("repo:scripts/scrapers/parsers/google_flights.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "trip".to_string(),
+            product_kind: "flight".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"(\d+)".to_string(),
+            nights_is_days: false,
+            price_marker: "US$".to_string(),
+            price_amount_rx: r"([\d,]{2,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 1,
+            flight_rx: r"([A-Z]{2}\d{2,4})".to_string(),
+            hotel_anchor_rx: r"^$".to_string(),
+            currency: "USD".to_string(),
+            has_custom_parser: true,
+            source_url: Some("repo:scripts/scrapers/parsers/trip_com.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "agoda".to_string(),
+            product_kind: "hotel".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"(\d+)\s*晚".to_string(),
+            nights_is_days: false,
+            price_marker: "NT$".to_string(),
+            price_amount_rx: r"([\d,]{3,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 1,
+            flight_rx: r"([A-Z]{2}\d{2,4})".to_string(),
+            hotel_anchor_rx: r"(飯店|酒店|旅館|民宿|青旅|Hotel|Inn|Resort|Hostel|House|Suites?)"
+                .to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: true,
+            source_url: Some("repo:scripts/scrapers/parsers/agoda.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "eztravel".to_string(),
+            product_kind: "flight".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"(\d+)".to_string(),
+            nights_is_days: false,
+            price_marker: "TWD".to_string(),
+            price_amount_rx: r"([\d,]{3,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 1,
+            flight_rx: r"([A-Z]{2}\d{2,4})".to_string(),
+            hotel_anchor_rx: r"^$".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: true,
+            source_url: Some("repo:scripts/scrapers/parsers/eztravel.py".to_string()),
             fetched_at,
         },
     ]
@@ -1523,7 +1642,13 @@ async fn parse_capture(
     let mut imported = 0u64;
     for o in &offers {
         let row = offer_to_row(o, Some(format!("capture:{capture_id}")));
-        if row.scraped_at.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if row
+            .scraped_at
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             return Err(CliError::runtime(format!(
                 "offer '{}' missing scraped_at (required by offers PK)",
                 row.id

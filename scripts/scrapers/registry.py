@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import re
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -114,8 +115,12 @@ def _create_parser(source_id: str) -> BaseScraper:
 def get_available_parsers() -> list[str]:
     """Return list of all available parser source IDs (supported with scraper_script)."""
     config = load_ota_config()
-    return [
-        source_id
-        for source_id, source in config.items()
-        if source.get("supported") and source.get("scraper_script")
-    ]
+    available = []
+    parser_dir = Path(__file__).parent / "parsers"
+    for source_id, source in config.items():
+        if not (source.get("supported") and source.get("scraper_script")):
+            continue
+        module_name = source.get("parser_module", source_id)
+        if (parser_dir / f"{module_name}.py").exists():
+            available.append(source_id)
+    return available

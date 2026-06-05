@@ -6,8 +6,6 @@ Uses real scraped data from data/ as fixtures.
 
 from scrapers.parsers.besttour import BestTourParser
 from scrapers.parsers.lifetour import LifetourParser
-from scrapers.parsers.settour import SettourParser
-from scrapers.parsers.liontravel import LionTravelParser
 from scrapers.parsers.tigerair import parse_tigerair_flights
 from scrapers.parsers.trip_com import (
     parse_nonstop_flights, date_range, add_days, day_of_week, build_oneway_url,
@@ -47,9 +45,7 @@ class TestRegistry:
     def test_available_parsers(self):
         parsers = get_available_parsers()
         assert "besttour" in parsers
-        assert "liontravel" in parsers
         assert "lifetour" in parsers
-        assert "settour" in parsers
         assert "tigerair" in parsers
         assert "trip" in parsers
 
@@ -158,41 +154,6 @@ class TestLifetourParser:
         assert "travel_insurance" in result.inclusions
         assert "airport_tax" in result.inclusions
         assert "breakfast" in result.inclusions
-
-
-class TestSettourParser:
-    def test_parse_no_crash(self, settour_data):
-        """Settour data may have empty extraction but should not crash."""
-        parser = SettourParser()
-        result = parser.parse_raw_text(settour_data["raw_text"], url=settour_data["url"])
-
-        assert result.source_id == "settour"
-        assert isinstance(result.flight.outbound, object)
-        assert isinstance(result.hotel, object)
-        assert isinstance(result.inclusions, list)
-
-
-class TestLionTravelParser:
-    def test_parse_search_prices(self, liontravel_data):
-        """LionTravel parser extracts prices from search results."""
-        parser = LionTravelParser()
-        result = parser.parse_raw_text(liontravel_data["raw_text"], url=liontravel_data["url"])
-
-        assert result.source_id == "liontravel"
-        # Fixture has TWD 18,500, 19,800, 21,200 - should extract cheapest
-        assert result.price.is_populated
-        assert result.price.per_person == 18500
-        assert result.price.currency == "TWD"
-
-    def test_package_type_classification(self, liontravel_data):
-        parser = LionTravelParser()
-        result = parser.parse_raw_text(liontravel_data["raw_text"], url=liontravel_data["url"])
-        # LionTravel vacation.liontravel.com is FIT only
-        assert result.package_type == "fit"
-
-    def test_source_id(self):
-        parser = LionTravelParser()
-        assert parser.source_id == "liontravel"
 
 
 class TestTigerairParser:

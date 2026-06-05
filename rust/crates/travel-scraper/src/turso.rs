@@ -19,7 +19,6 @@ impl TravelDb {
         Ok(Self { conn })
     }
 
-
     pub async fn exec(&self, sql: &str) -> Result<u64, String> {
         self.conn
             .execute(sql, ())
@@ -115,7 +114,10 @@ impl TravelDb {
     }
 
     /// Read a stored capture's source_id + raw_text by capture_id (for parsing).
-    pub async fn get_capture(&self, capture_id: &str) -> Result<Option<(String, String, String)>, String> {
+    pub async fn get_capture(
+        &self,
+        capture_id: &str,
+    ) -> Result<Option<(String, String, String)>, String> {
         let mut rows = self
             .conn
             .query(

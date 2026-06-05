@@ -7,8 +7,6 @@ from a specific OTA's page text.
 
 from .besttour import BestTourParser
 from .lifetour import LifetourParser
-from .settour import SettourParser
-from .liontravel import LionTravelParser
 from .tigerair import TigerairParser
 from .trip_com import TripComParser
 from .google_flights import GoogleFlightsParser
@@ -19,8 +17,6 @@ from .eztravel import EzTravelParser
 __all__ = [
     "BestTourParser",
     "LifetourParser",
-    "SettourParser",
-    "LionTravelParser",
     "TigerairParser",
     "TripComParser",
     "GoogleFlightsParser",

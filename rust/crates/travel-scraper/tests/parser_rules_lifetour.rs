@@ -1,8 +1,8 @@
-// Second-OTA parity for the generic Turso-rule parser — no JSON anywhere.
+// Lifetour parity for the generic Turso-rule parser — no JSON anywhere.
 //
 // Seeds a `captures` row in Turso, runs `parse capture <id> --dry-run`
-// (plain-text output), and compares to the verified LionTravel booked record in
-// Turso. Skips if creds absent.
+// (plain-text output), and compares to a verified Lifetour record in Turso.
+// Skips if creds absent.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -11,8 +11,8 @@ fn binary_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_travel-scraper"))
 }
 
-const CAPTURE_ID: &str = "liontravel-parity-test";
-const RAW_TEXT: &str = "2026/06/12~2026/06/16\n共4晚\n中華航空CI120\n中華航空CI121\n總金額\nTWD 37,108\n飯店\nHOTEL AZAT NAHA\n";
+const CAPTURE_ID: &str = "lifetour-parity-test";
+const RAW_TEXT: &str = "2026/06/21~2026/06/24\n3天2夜\n虎航IT230\n虎航IT231\nNT$15,130元\n住宿\n沖繩那霸旭橋托麗芙特酒店 (Hotel Torifito Naha Asahibashi)\n";
 
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(binary_path())
@@ -34,7 +34,7 @@ fn seed_capture_row() {
     );
     let sql = format!(
         "INSERT OR REPLACE INTO captures (capture_id, source_id, url, title, captured_at, raw_text) \
-         VALUES ('{CAPTURE_ID}', 'liontravel', 'https://vacation.liontravel.com/detail/170531004', 't', '2026-06-06T00:00:00Z', '{}')",
+         VALUES ('{CAPTURE_ID}', 'lifetour', 'https://tour.lifetour.com.tw/detail/okinawa', 't', '2026-06-06T00:00:00Z', '{}')",
         RAW_TEXT.replace('\'', "''")
     );
     let seed = run(&["db", "exec", &sql]);
@@ -61,7 +61,7 @@ fn parse_offer_plain() -> (String, String, String, i64, i64, i64, String) {
         "capture",
         CAPTURE_ID,
         "--source",
-        "liontravel",
+        "lifetour",
         "--dry-run",
     ]);
     assert!(
@@ -72,7 +72,7 @@ fn parse_offer_plain() -> (String, String, String, i64, i64, i64, String) {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let line = stdout
         .lines()
-        .find(|l| l.starts_with("liontravel\t"))
+        .find(|l| l.starts_with("lifetour\t"))
         .unwrap_or_else(|| panic!("no offer line:\n{stdout}"));
     let f: Vec<&str> = line.split('\t').collect();
     assert!(f.len() >= 7, "unexpected line: {line}");
@@ -111,7 +111,7 @@ fn turso_creds() -> Option<(String, String)> {
 }
 
 #[tokio::test]
-async fn liontravel_rule_parser_matches_cloud_db_record() {
+async fn lifetour_rule_parser_matches_cloud_db_record() {
     let Some((url, token)) = turso_creds() else {
         eprintln!("SKIP: no TURSO_URL/TURSO_TOKEN in .env — cannot verify against cloud DB");
         return;
@@ -127,7 +127,7 @@ async fn liontravel_rule_parser_matches_cloud_db_record() {
     let mut rows = conn
         .query(
             "SELECT depart_date, return_date, nights, price_per_person_twd, hotel_name, product_kind \
-             FROM shaping_tour_group_offers WHERE offer_id = 'liontravel-170531004-oka-20260612-BOOKED'",
+             FROM shaping_tour_group_offers WHERE offer_id = 'lifetour-okinawa-20260621-2n-mpnpatpt'",
             (),
         )
         .await
@@ -150,7 +150,7 @@ async fn liontravel_rule_parser_matches_cloud_db_record() {
     assert_eq!(ret, exp_return);
     assert_eq!(nights, exp_nights);
     assert_eq!(pp, exp_pp);
-    assert_eq!(total, 37108);
+    assert_eq!(total, exp_pp * 2);
     assert_eq!(kind, exp_kind);
     assert_eq!(hotel, exp_hotel);
 }

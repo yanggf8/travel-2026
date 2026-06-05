@@ -35,7 +35,11 @@ fn seed_capture_row() {
         "exec",
         "CREATE TABLE IF NOT EXISTS captures (capture_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT, title TEXT, captured_at TEXT NOT NULL, raw_text TEXT NOT NULL)",
     ]);
-    assert!(create.status.success(), "create captures: {}", String::from_utf8_lossy(&create.stderr));
+    assert!(
+        create.status.success(),
+        "create captures: {}",
+        String::from_utf8_lossy(&create.stderr)
+    );
 
     let sql = format!(
         "INSERT OR REPLACE INTO captures (capture_id, source_id, url, title, captured_at, raw_text) \
@@ -43,19 +47,38 @@ fn seed_capture_row() {
         RAW_TEXT.replace('\'', "''")
     );
     let seed = run(&["db", "exec", &sql]);
-    assert!(seed.status.success(), "seed capture: {}", String::from_utf8_lossy(&seed.stderr));
+    assert!(
+        seed.status.success(),
+        "seed capture: {}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
 }
 
 fn seed_default_parser_rules() {
     let out = run(&["parser", "rules", "seed-defaults"]);
-    assert!(out.status.success(), "seed-defaults: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "seed-defaults: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// Run `parse capture <id> --dry-run` and parse the plain-text offer line:
 ///   source\tkind\tdepart→return\tNn\tpp=N\ttotal=N\thotel
 fn parse_offer_plain() -> (String, String, String, i64, i64, i64, String) {
-    let out = run(&["parse", "capture", CAPTURE_ID, "--source", "settour", "--dry-run"]);
-    assert!(out.status.success(), "parse capture: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run(&[
+        "parse",
+        "capture",
+        CAPTURE_ID,
+        "--source",
+        "settour",
+        "--dry-run",
+    ]);
+    assert!(
+        out.status.success(),
+        "parse capture: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let line = stdout
         .lines()
@@ -68,13 +91,13 @@ fn parse_offer_plain() -> (String, String, String, i64, i64, i64, String) {
     let pp: i64 = f[4].trim_start_matches("pp=").parse().unwrap();
     let total: i64 = f[5].trim_start_matches("total=").parse().unwrap();
     (
-        f[1].to_string(),          // kind
-        dates[0].to_string(),      // depart
-        dates[1].to_string(),      // return
+        f[1].to_string(),     // kind
+        dates[0].to_string(), // depart
+        dates[1].to_string(), // return
         nights,
         pp,
         total,
-        f[6].to_string(),          // hotel
+        f[6].to_string(), // hotel
     )
 }
 
@@ -110,7 +133,10 @@ async fn settour_parser_matches_cloud_db_record() {
     seed_capture_row();
 
     // Expected: live from Turso.
-    let db = libsql::Builder::new_remote(url, token).build().await.expect("connect Turso");
+    let db = libsql::Builder::new_remote(url, token)
+        .build()
+        .await
+        .expect("connect Turso");
     let conn = db.connect().expect("conn");
     let mut rows = conn
         .query(
@@ -120,7 +146,11 @@ async fn settour_parser_matches_cloud_db_record() {
         )
         .await
         .expect("query");
-    let row = rows.next().await.expect("row").expect("record exists in Turso");
+    let row = rows
+        .next()
+        .await
+        .expect("row")
+        .expect("record exists in Turso");
     let exp_depart: String = row.get(0).unwrap();
     let exp_return: String = row.get(1).unwrap();
     let exp_nights: i64 = row.get(2).unwrap();
@@ -136,6 +166,9 @@ async fn settour_parser_matches_cloud_db_record() {
     assert_eq!(nights, exp_nights);
     assert_eq!(pp, exp_pp);
     assert_eq!(kind, exp_kind);
-    assert!(exp_hotel.starts_with(&hotel), "hotel mismatch: parser='{hotel}' vs turso='{exp_hotel}'");
+    assert!(
+        exp_hotel.starts_with(&hotel),
+        "hotel mismatch: parser='{hotel}' vs turso='{exp_hotel}'"
+    );
     assert_eq!(total, 36587);
 }

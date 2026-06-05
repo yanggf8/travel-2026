@@ -15,7 +15,10 @@ const CAPTURE_ID: &str = "settour-import-roundtrip-test";
 const RAW_TEXT: &str = "2026/06/20(六)~2026/06/24(三)\n飯店 Kyoto 入住：2026/06/20(六)   退房：2026/06/24(三)   (共4晚)修改入住日期\n微笑飯店京都烏丸五條\nSmile Hotel Kyoto karasumagojo\n台灣虎航IT212\n台灣虎航IT211\n機加酒未稅總價\n$36,587\n機票稅金 \n$4,404\n";
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(binary_path()).args(args).output().expect("run travel-scraper")
+    Command::new(binary_path())
+        .args(args)
+        .output()
+        .expect("run travel-scraper")
 }
 
 fn turso_creds() -> Option<(String, String)> {
@@ -49,20 +52,32 @@ async fn rust_parse_import_round_trips_to_turso() {
 
     // Seed parser rules + a capture row.
     let seed_rules = run(&["parser", "rules", "seed-defaults"]);
-    assert!(seed_rules.status.success(), "seed-defaults: {}", String::from_utf8_lossy(&seed_rules.stderr));
+    assert!(
+        seed_rules.status.success(),
+        "seed-defaults: {}",
+        String::from_utf8_lossy(&seed_rules.stderr)
+    );
     let create = run(&[
         "db",
         "exec",
         "CREATE TABLE IF NOT EXISTS captures (capture_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT, title TEXT, captured_at TEXT NOT NULL, raw_text TEXT NOT NULL)",
     ]);
-    assert!(create.status.success(), "create captures: {}", String::from_utf8_lossy(&create.stderr));
+    assert!(
+        create.status.success(),
+        "create captures: {}",
+        String::from_utf8_lossy(&create.stderr)
+    );
     let seed_sql = format!(
         "INSERT OR REPLACE INTO captures (capture_id, source_id, url, title, captured_at, raw_text) \
          VALUES ('{CAPTURE_ID}', 'settour', 'https://fit.settour.com.tw/product/v2?depDate=20260620,20260624', 't', '2026-06-06T00:00:00Z', '{}')",
         RAW_TEXT.replace('\'', "''")
     );
     let seed = run(&["db", "exec", &seed_sql]);
-    assert!(seed.status.success(), "seed capture: {}", String::from_utf8_lossy(&seed.stderr));
+    assert!(
+        seed.status.success(),
+        "seed capture: {}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
 
     // Parse + import (no dry-run) → writes to the offers table, no JSON file.
     let import = run(&["parse", "capture", CAPTURE_ID, "--source", "settour"]);
@@ -74,7 +89,10 @@ async fn rust_parse_import_round_trips_to_turso() {
     );
 
     // Query the imported offer back.
-    let db = libsql::Builder::new_remote(url, token).build().await.expect("connect Turso");
+    let db = libsql::Builder::new_remote(url, token)
+        .build()
+        .await
+        .expect("connect Turso");
     let conn = db.connect().expect("conn");
     let mut rows = conn
         .query(
@@ -85,7 +103,11 @@ async fn rust_parse_import_round_trips_to_turso() {
         )
         .await
         .expect("query imported offer");
-    let row = rows.next().await.expect("row").expect("imported row exists");
+    let row = rows
+        .next()
+        .await
+        .expect("row")
+        .expect("imported row exists");
 
     let source_id: String = row.get(0).unwrap();
     let kind: String = row.get(1).unwrap();
