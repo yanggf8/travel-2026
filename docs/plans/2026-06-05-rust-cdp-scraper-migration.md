@@ -314,22 +314,42 @@ Success criteria:
   dates, price, flight, hotel}`).
 - **settour parser** (`parse_settour` in `main.rs`): extracts dates, nights, IT-flight numbers,
   total + per-person price, hotel name, `package_type=fit` from the captured raw_text.
-- **Golden-file parity test** (`tests/settour_parity.rs`, `cargo test` ✓): the fixture
-  `tests/fixtures/settour-kyoto-20260620-capture.json` (html stripped; public search page, no PII)
-  parses to the exact known-correct values of the Turso record `settour-fit-kyoto-20260620-4n`:
+- **Golden parity test** (`tests/settour_parity.rs`, `cargo test` ✓): an inline minimal public settour
+  capture parses to the exact known-correct values read from the live Turso record
+  `settour-fit-kyoto-20260620-4n`:
   6/20→6/24, 4 nights, IT212/IT211, total TWD 36,587 / 18,294 pp, 微笑飯店京都烏丸五條, fit.
 - `TravelCapture` now derives `Deserialize` so capture files round-trip back into the parser.
 - Note: settour FIT renders ONE cheapest-combo offer per capture; parser emits one offer. Per-person
   is total/2 (the adtCount=2 flow) rounded to nearest. Both grounded in real capture content.
 
+### Rust→Turso CLI — DONE and verified
+- Added a native `libsql` Turso module for `travel-scraper`. It reads `TURSO_URL`/`TURSO_TOKEN` from
+  the process environment or the repo `.env`, and fails loud if credentials are missing.
+- Added `db query <sql>` and `db exec <sql>` so Rust can inspect/mutate Turso without npm.
+- Added `import offers <offers.json> [--dry-run]`, mapping parser output into the legacy `offers`
+  table with parameterized writes for Unicode-safe values. Live schema note: the cloud `offers` table
+  still has `id TEXT PRIMARY KEY`, so Rust uses a date-aware stable id plus idempotent
+  `ON CONFLICT(id) DO UPDATE`; this avoids the old `settour_v2` collision while preserving the legacy
+  columns.
+- **Verified:** `db query "SELECT offer_id FROM shaping_tour_group_offers LIMIT 3"` returned live cloud
+  rows; `parse capture ...settour-20260605T174023Z.json` → `import offers ...` wrote
+  `settour_v2_20260620_4n` to Turso with 6/20→6/24, 4 nights, TWD 18,294 pp, 微笑飯店京都烏丸五條, 台灣虎航.
+- **Turso-backed round-trip test** (`tests/turso_import.rs`, `cargo test` ✓): builds an offer in memory,
+  imports it through the Rust binary, queries it back, asserts equality, then cleans up. No committed JSON
+  fixture is used.
+- Evaluated `/home/yanggf/b/gwebcdb/crates/turso-util`: useful, but finance-registry oriented and coupled
+  to its own token/cache model. The travel scraper keeps a thin local Turso module for now; gwebcdb remains
+  untouched.
+
 ### Remaining (next milestones, in order)
 - `liontravel` parser (then per Parser Migration Order: travel4u, besttour, lifetour, flight/hotel
-  sources). Same pattern: capture fixture → parser → golden-file parity test.
+  sources). Same pattern: rendered capture → parser → Turso-backed parity test.
 - Python decommission per source: only after ≥2 successful real scrapes + parity (plan policy). No
   Python deleted yet.
 - Screenshot capture; OTA domain allowlist; profile-guard hardening (currently needs
-  `--i-understand-profile` because Chrome wasn't launched with `--enable-automation`); Rust Turso
-  import (optional — TS importer stays until parser core proven).
+  `--i-understand-profile` because Chrome wasn't launched with `--enable-automation`).
+- Full npm/Python/TS-importer decommission remains a separate tracked migration. TODO: write a dedicated
+  "kill npm — pure Rust+Turso" migration plan before removing npm scripts or TypeScript importer code.
 
 ### TODO — deferred, tracked (write a dedicated plan for each)
 

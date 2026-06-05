@@ -3,7 +3,7 @@ use chromiumoxide::cdp::browser_protocol::browser::GetBrowserCommandLineParams;
 use chromiumoxide::cdp::browser_protocol::target::TargetId;
 use chrono::Utc;
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -12,6 +12,8 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
+
+mod turso;
 
 const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:9222";
 const DEFAULT_CAPTURE_DIR: &str = "scrapes/captures";
@@ -71,6 +73,12 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             source_id,
             out,
         }) => parse_capture(capture_file, source_id, out),
+        Command::Db(DbCommand::Query { sql }) => run_async(db_query(sql)),
+        Command::Db(DbCommand::Exec { sql }) => run_async(db_exec(sql)),
+        Command::Import(ImportCommand::Offers {
+            offers_file,
+            dry_run,
+        }) => run_async(import_offers(offers_file, dry_run)),
     }
 }
 
@@ -83,6 +91,17 @@ enum Command {
     Browser(BrowserCommand),
     Scrape(ScrapeCommand),
     Parse(ParseCommand),
+    Db(DbCommand),
+    Import(ImportCommand),
+}
+
+enum DbCommand {
+    Query { sql: String },
+    Exec { sql: String },
+}
+
+enum ImportCommand {
+    Offers { offers_file: PathBuf, dry_run: bool },
 }
 
 enum ParseCommand {
@@ -221,13 +240,32 @@ impl Cli {
                     }),
                 })
             }
+            [group, cmd, sql] if group == "db" && cmd == "query" => Ok(Self {
+                endpoint,
+                command: Command::Db(DbCommand::Query {
+                    sql: sql.to_string(),
+                }),
+            }),
+            [group, cmd, sql] if group == "db" && cmd == "exec" => Ok(Self {
+                endpoint,
+                command: Command::Db(DbCommand::Exec {
+                    sql: sql.to_string(),
+                }),
+            }),
+            [group, cmd, file, rest @ ..] if group == "import" && cmd == "offers" => Ok(Self {
+                endpoint,
+                command: Command::Import(ImportCommand::Offers {
+                    offers_file: PathBuf::from(file),
+                    dry_run: has_flag(rest, "--dry-run"),
+                }),
+            }),
             _ => Err(CliError::usage(usage())),
         }
     }
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--out <path-or-dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--out <dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--out <dir>] [--html] [--i-understand-profile]\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n"
+    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--out <path-or-dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--out <dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--out <dir>] [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-file.json> --source <id> [--out <path-or-dir>]\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n  travel-scraper import offers <offers.json> [--dry-run]\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  TURSO_URL and TURSO_TOKEN are read from env or repo .env for db/import commands.\n"
 }
 
 fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -1254,46 +1292,58 @@ impl Endpoint {
 //     flight:{outbound,return}, hotel:{name} }
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct OfferDates {
+    #[serde(default)]
     departure_date: String,
+    #[serde(default)]
     return_date: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     duration_nights: Option<u32>,
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct OfferPrice {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     per_person: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     price_total: Option<i64>,
+    #[serde(default)]
     currency: String,
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct OfferFlightLeg {
     #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default)]
     flight_number: String,
     #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default)]
     airline: String,
     #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default)]
     date: String,
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct OfferFlight {
+    #[serde(default)]
     outbound: OfferFlightLeg,
     #[serde(rename = "return")]
+    #[serde(default)]
     return_leg: OfferFlightLeg,
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct OfferHotel {
+    #[serde(default)]
     name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct CanonicalOfferOut {
     source_id: String,
     package_type: String,
@@ -1302,8 +1352,10 @@ struct CanonicalOfferOut {
     dates: OfferDates,
     price: OfferPrice,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     flight: Option<OfferFlight>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     hotel: Option<OfferHotel>,
 }
 
@@ -1319,7 +1371,9 @@ fn parse_capture(
         ))
     })?;
     let capture: TravelCapture = serde_json::from_str(&text).map_err(|err| {
-        CliError::runtime(format!("capture file is not valid travel-capture-v1 JSON: {err}"))
+        CliError::runtime(format!(
+            "capture file is not valid travel-capture-v1 JSON: {err}"
+        ))
     })?;
 
     let offers = match source_id.as_str() {
@@ -1357,7 +1411,10 @@ fn parse_capture(
                 path
             };
             std::fs::write(&target, &json).map_err(|err| {
-                CliError::runtime(format!("failed to write offers to {}: {err}", target.display()))
+                CliError::runtime(format!(
+                    "failed to write offers to {}: {err}",
+                    target.display()
+                ))
             })?;
             println!("offers\t{}", offers.len());
             println!("out\t{}", target.display());
@@ -1367,6 +1424,213 @@ fn parse_capture(
         }
     }
     Ok(())
+}
+
+async fn db_query(sql: String) -> Result<(), CliError> {
+    let db = turso::TravelDb::connect()
+        .await
+        .map_err(CliError::runtime)?;
+    let rows = db.query_json(&sql).await.map_err(CliError::runtime)?;
+    let json = serde_json::to_string_pretty(&rows)
+        .map_err(|err| CliError::runtime(format!("failed to serialize query rows: {err}")))?;
+    println!("{json}");
+    Ok(())
+}
+
+async fn db_exec(sql: String) -> Result<(), CliError> {
+    let db = turso::TravelDb::connect()
+        .await
+        .map_err(CliError::runtime)?;
+    let changed = db.exec(&sql).await.map_err(CliError::runtime)?;
+    println!("rows_affected\t{changed}");
+    Ok(())
+}
+
+async fn import_offers(offers_file: PathBuf, dry_run: bool) -> Result<(), CliError> {
+    let rows = read_offer_rows(&offers_file)?;
+    if rows.is_empty() {
+        return Err(CliError::runtime(format!(
+            "no importable offers in {}",
+            offers_file.display()
+        )));
+    }
+
+    println!("offers\t{}", rows.len());
+    if dry_run {
+        println!("dry_run\ttrue");
+        for row in &rows {
+            println!("{}", row.dry_run_sql());
+        }
+        return Ok(());
+    }
+
+    let db = turso::TravelDb::connect()
+        .await
+        .map_err(CliError::runtime)?;
+    let mut changed = 0u64;
+    for row in &rows {
+        changed += db.insert_offer(row).await.map_err(CliError::runtime)?;
+    }
+    println!("rows_affected\t{changed}");
+    Ok(())
+}
+
+fn read_offer_rows(offers_file: &Path) -> Result<Vec<turso::OfferRow>, CliError> {
+    let text = std::fs::read_to_string(offers_file).map_err(|err| {
+        CliError::runtime(format!(
+            "failed to read offers file {}: {err}",
+            offers_file.display()
+        ))
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|err| CliError::runtime(format!("offers file is not valid JSON: {err}")))?;
+
+    let offers: Vec<CanonicalOfferOut> = if value.is_array() {
+        serde_json::from_value(value)
+            .map_err(|err| CliError::runtime(format!("offers array has unexpected shape: {err}")))?
+    } else if let Some(array) = value.get("offers") {
+        serde_json::from_value(array.clone()).map_err(|err| {
+            CliError::runtime(format!("offers envelope has unexpected shape: {err}"))
+        })?
+    } else {
+        return Err(CliError::runtime(
+            "offers JSON must be a CanonicalOffer[] array or an object with offers[]",
+        ));
+    };
+
+    let source_file = offers_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string);
+    Ok(offers
+        .iter()
+        .map(|offer| offer_to_row(offer, source_file.clone()))
+        .collect())
+}
+
+fn offer_to_row(offer: &CanonicalOfferOut, source_file: Option<String>) -> turso::OfferRow {
+    let raw_data = serde_json::to_string(offer).unwrap_or_else(|_| "{}".to_string());
+    let hotel_name = offer
+        .hotel
+        .as_ref()
+        .map(|hotel| hotel.name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
+    let airline = offer.flight.as_ref().and_then(|flight| {
+        let airline = flight.outbound.airline.trim();
+        if !airline.is_empty() {
+            Some(airline.to_string())
+        } else {
+            infer_airline_from_flight_number(&flight.outbound.flight_number)
+        }
+    });
+
+    turso::OfferRow {
+        id: offer_row_id(offer),
+        source_file,
+        source_id: offer.source_id.clone(),
+        kind: "package".to_string(),
+        name: None,
+        price_per_person: offer.price.per_person,
+        currency: if offer.price.currency.trim().is_empty() {
+            None
+        } else {
+            Some(offer.price.currency.clone())
+        },
+        region: infer_region(&offer.url),
+        destination: infer_destination(&offer.url),
+        departure_date: non_empty_string(&offer.dates.departure_date),
+        return_date: non_empty_string(&offer.dates.return_date),
+        nights: offer.dates.duration_nights.map(i64::from),
+        availability: None,
+        hotel_name,
+        airline,
+        raw_data,
+        scraped_at: non_empty_string(&offer.scraped_at),
+    }
+}
+
+fn offer_row_id(offer: &CanonicalOfferOut) -> String {
+    let product_code = product_code_from_url(&offer.url).unwrap_or_else(|| "unknown".to_string());
+    let mut parts = vec![offer.source_id.clone(), sanitize_id_part(&product_code)];
+    if !offer.dates.departure_date.is_empty() {
+        parts.push(offer.dates.departure_date.replace('-', ""));
+    }
+    if let Some(nights) = offer.dates.duration_nights {
+        parts.push(format!("{nights}n"));
+    }
+    parts.join("_")
+}
+
+fn product_code_from_url(url: &str) -> Option<String> {
+    let base = url.split('?').next().unwrap_or(url).trim_end_matches('/');
+    let last = base
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .next_back()?;
+    let cleaned = last
+        .strip_suffix(".html")
+        .or_else(|| last.strip_suffix(".htm"))
+        .unwrap_or(last);
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    }
+}
+
+fn infer_airline_from_flight_number(flight_number: &str) -> Option<String> {
+    if flight_number.starts_with("IT") {
+        Some("台灣虎航".to_string())
+    } else {
+        None
+    }
+}
+
+fn infer_destination(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("kix") || lower.contains("%e4%ba%ac%e9%83%bd") {
+        Some("osaka_2026".to_string())
+    } else {
+        None
+    }
+}
+
+fn infer_region(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("%e4%ba%ac%e9%83%bd") {
+        Some("kyoto".to_string())
+    } else if lower.contains("kix") {
+        Some("kansai".to_string())
+    } else {
+        None
+    }
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn sanitize_id_part(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
 }
 
 /// settour FIT parser: travel-capture-v1 raw_text -> CanonicalOffer[].

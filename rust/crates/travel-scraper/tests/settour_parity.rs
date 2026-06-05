@@ -53,7 +53,8 @@ fn run_parser_on_inline_capture() -> serde_json::Value {
     tmp.push(format!("settour-parity-{}.json", std::process::id()));
     {
         let mut f = std::fs::File::create(&tmp).expect("create temp capture");
-        f.write_all(inline_capture_json().as_bytes()).expect("write temp");
+        f.write_all(inline_capture_json().as_bytes())
+            .expect("write temp");
     }
     let output = Command::new(binary_path())
         .arg("parse")
@@ -77,10 +78,9 @@ fn run_parser_on_inline_capture() -> serde_json::Value {
     arr[0].clone()
 }
 
-/// Read TURSO_URL/TURSO_TOKEN from the repo .env (../../.env relative to the crate).
+/// Read TURSO_URL/TURSO_TOKEN from the repo .env.
 fn turso_creds() -> Option<(String, String)> {
-    let env_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.env");
-    let body = std::fs::read_to_string(env_path).ok()?;
+    let body = read_repo_env()?;
     let mut url = None;
     let mut token = None;
     for line in body.lines() {
@@ -91,6 +91,20 @@ fn turso_creds() -> Option<(String, String)> {
         }
     }
     Some((url?, token?))
+}
+
+fn read_repo_env() -> Option<String> {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        let candidate = path.join(".env");
+        if let Ok(body) = std::fs::read_to_string(candidate) {
+            return Some(body);
+        }
+        if !path.pop() {
+            break;
+        }
+    }
+    None
 }
 
 #[tokio::test]
@@ -114,7 +128,11 @@ async fn settour_parser_matches_cloud_db_record() {
         )
         .await
         .expect("query");
-    let row = rows.next().await.expect("row result").expect("record exists in Turso");
+    let row = rows
+        .next()
+        .await
+        .expect("row result")
+        .expect("record exists in Turso");
 
     let exp_depart: String = row.get(0).unwrap();
     let exp_return: String = row.get(1).unwrap();
@@ -137,6 +155,7 @@ async fn settour_parser_matches_cloud_db_record() {
         exp_hotel.starts_with(parsed_hotel),
         "hotel mismatch: parser='{parsed_hotel}' vs turso='{exp_hotel}'"
     );
-    // total is parser-derived; sanity-check it's per_person*2.
-    assert_eq!(o["price"]["price_total"], exp_pp * 2);
+    // Total is the rendered two-passenger price. It is not equal to pp*2
+    // because per-person is rounded up from 36587 / 2.
+    assert_eq!(o["price"]["price_total"], 36587);
 }
