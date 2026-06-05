@@ -90,6 +90,27 @@ READ:   await StateManager.create() → TursoRepository.create() → executeBatc
 
 ## Development
 
+### CLI Execution Priority (Future Design — Pending Rust Migration)
+```
+npm script (CLI entrypoint)
+  ├── Rust binary first  → ./bin/<tool>          (if -x exists)
+  └── TypeScript fallback → ts-node src/...      (always available)
+Python/other → explicit `scraper:*` namespace only (forced, never default)
+```
+
+**Current state:** `package.json` uses pure `ts-node` only. **Do not modify `package.json`** until Rust migration is complete and all tests pass.
+
+**Rust binary naming convention (planned):**
+- `travel` → main CLI (`travel`, `status`, `view:*`, `db:sync:*`)
+- `travel-validate` → validation commands (`validate:data`, `doctor`)
+- `travel-compare` → comparison commands (`compare-trips`, `compare-dates`, `compare-true-cost`)
+- `travel-utils` → utility commands (`normalize-flights`, `leave-calc`)
+- `travel-db` → DB operations (`db:import`, `db:migrate`, `db:*`)
+
+**Build Rust binaries to:** `./bin/` (gitignored). CLI falls back to TypeScript when binary missing.
+
+**Reference:** `docs/plans/2026-06-05-rust-cli-migration.md` (agent spec — read before any Rust work)
+
 ### Setup
 ```bash
 npm install                   # also runs postinstall: git hooks + Playwright check

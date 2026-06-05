@@ -2,6 +2,8 @@
 
 Full reference for the `travel` CLI and supporting scripts. CLAUDE.md keeps a short list of the most-used commands; everything else lives here.
 
+> **Execution priority (planned):** CLI → Rust first → TypeScript fallback → Python (`scraper:*`) forced only. See `docs/plans/2026-06-05-rust-cli-migration.md`. **Current:** pure `ts-node` in `package.json`. Do not modify until Rust migration tested.
+
 ## Plan resolution
 `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI uses `--travel-date`, `--travel-start/--travel-end`, or exactly one active or upcoming DB date anchor/planning window. Use `--travel-*` for plan selection; plain `--start/--end` remain command-specific filters (e.g. offer search ranges). If several plans match, the CLI fails with a plan list instead of silently loading a legacy default.
 

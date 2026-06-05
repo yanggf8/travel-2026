@@ -1,6 +1,6 @@
 # Rust CDP Scraper Migration Plan
 
-**Status:** Proposed  
+**Status:** In progress — Phase 0 + capture core DONE and verified (see Progress).  
 **Decision:** Replace Python OTA scrapers with a Rust scraper CLI.  
 **Do not edit `package.json` yet:** preserve the current TS fallback rule until the Rust scraper path is complete and tested.
 
@@ -258,6 +258,47 @@ Success criteria:
 - capture artifact is saved
 - parser emits at least one canonical offer or a structured failure
 - the offer JSON can be consumed by the existing Turso import path
+
+## Progress (verified)
+
+### Phase 0 — browser discovery — DONE (commit, pre-`8cdd005`)
+- `rust/crates/travel-scraper` workspace; dependency-free CLI (raw `std::net::TcpStream` HTTP to the
+  CDP `/json/*` REST endpoints).
+- `browser doctor` + `browser pages` verified live against the user's real Windows Chrome
+  (Chrome/148 @ `127.0.0.1:9222`); `browser pages` listed the user's actual open OTA tab.
+- `package.json` untouched; gwebcdb untouched; `bin/` + `rust/target/` gitignored.
+
+### Capture core — DONE and verified (commit `8cdd005`)
+- Added `chromiumoxide` + `tokio` + serde/chrono for the **CDP WebSocket** path (the REST `/json/*`
+  endpoints can list targets but cannot read rendered content). REST doctor/pages preserved as-is.
+- `browser snapshot --page N` and `scrape url "<url>"` emit a `travel-capture-v1` file
+  (raw_text = body.innerText, links, tables) under `scrapes/captures/` (gitignored raw landing zone).
+- **Verified:** capture read 4,669 chars of real rendered SPA content from the live LionTravel page —
+  proving the core thesis (Rust+CDP reads what headless WSL Chromium cannot).
+
+### Lessons that refined the design
+1. **Public quote page ≠ authenticated order page.** The LionTravel product-detail URL
+   (`/detail/<id>?FromDate=…&Days=5`) is a client-side **quote** page that resets to its `2天1夜`
+   default — URL params do NOT pin the multi-night state. The real booked detail (hotel/airline/price)
+   lives on the **logged-in order page** (`member.liontravel.com/order/myorderlist`). Capturing search
+   offers therefore needs **interactive click/fill** to set dates on the SPA, not URL params — this
+   promotes the deferred click/fill TODO to the next real milestone.
+2. **Authenticated capture flow works and is safe.** User logs into the OTA manually in the dedicated
+   automation Chrome (`:9222`); the tool reads only the already-rendered page. For sensitive order
+   pages, extract **facts only → Turso** and do NOT persist raw order text to disk (it holds name/
+   contact). This kept the no-local-data + privacy boundary intact end-to-end.
+3. **Headless was wrong on specifics, not just missing.** For the booked Okinawa FIT, headless scraping
+   reported the wrong airline (EVA vs 中華), wrong hotel (Smile vs AZAT), and wrong price (30,714 vs the
+   real 37,108). Only the CDP read of the authenticated session was correct — concrete justification
+   for the migration.
+
+### Remaining (next milestones, in order)
+- **Interactive click/fill** (`Page.dispatch`/Input domain) — set dates/search params on SPAs so quote
+  pages render the intended multi-night state (the actual blocker for search-scraping). + profile-guard
+  and OTA domain-allowlist (currently deferred TODOs).
+- `liontravel` (then per Parser Migration Order) **parser**: `travel-capture-v1` → `CanonicalOffer[]`,
+  with golden-file parity vs current Python output before any Python deletion.
+- Screenshot capture; Rust Turso import (optional — TS importer stays until parser core proven).
 
 ## Risks
 
