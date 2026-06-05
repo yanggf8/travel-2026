@@ -378,6 +378,20 @@ Success criteria:
   already implements this tiered Read/Write resolution with `mint_allowed` — reuse it. So the plan is:
   bootstrap secret from runtime injection → turso-util mints a scoped token → use → expire. Not a vault.
 
+  **DECISION (user, 2026-06): adopt `gwebcdb/crates/turso-util` token-minting — it already exists.**
+  This is the chosen credential path, NOT a new design. turso-util is a working broker:
+  `resolve_token(cfg, tier, …)` / `resolve_cached_or_mint(...)` with `TokenTier::{Read, Write, Secrets}`,
+  shells `turso db tokens create <db> --expiration <e>`, caches the minted token per (db, tier) with a
+  permission check (refuses world-readable cache; chmod 600), and reuses until expiry. **Bootstrap = an
+  authenticated Turso CLI** (`turso auth login` / operator file), or `TURSO_<TIER>_TOKEN` env override —
+  NO static full-access token in a repo `.env`. The travel-2026 Rust binary should depend on turso-util
+  (path-dep or vendor) and call `connect(cfg, TokenTier::Read)` for scrapes / `Write` for imports,
+  REPLACING the current `.env`-reading `src/turso.rs`. Codex's note that turso-util is "finance-registry
+  oriented" — re-evaluate: its `RegistryConfig` is parameterized (db_name_envs, token_envs, config_home),
+  so it can be configured for the travel DB; only confirm it's not hard-coding finance specifics before
+  vendoring. Current `.env` token is non-expiring + full-access (JWT has no `exp`/`a` claim) — exactly
+  what minting replaces.
+
   **GitHub secrets do NOT fit the local scraper (2026-06 research).** GitHub Actions Secrets and GitHub
   OIDC ("secretless" workload identity) are both **CI-only** — they hand credentials to a GitHub Actions
   *runner*, and don't extend to external machines. Our scraper runs interactively on a developer WSL box
