@@ -1,4 +1,5 @@
 use chromiumoxide::Browser;
+use chromiumoxide::cdp::browser_protocol::browser::GetBrowserCommandLineParams;
 use chromiumoxide::cdp::browser_protocol::target::TargetId;
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -35,12 +36,36 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             page_index,
             source_id,
             out,
-        }) => run_async(capture_snapshot(&cli.endpoint, page_index, source_id, out)),
+            include_html,
+        }) => run_async(capture_snapshot(
+            &cli.endpoint,
+            page_index,
+            source_id,
+            out,
+            include_html,
+        )),
         Command::Scrape(ScrapeCommand::Url {
             url,
             source_id,
             out,
-        }) => run_async(scrape_url(&cli.endpoint, url, source_id, out)),
+            include_html,
+        }) => run_async(scrape_url(&cli.endpoint, url, source_id, out, include_html)),
+        Command::Scrape(ScrapeCommand::Interact {
+            url,
+            source_id,
+            out,
+            include_html,
+            steps,
+            profile_override,
+        }) => run_async(scrape_interact(
+            &cli.endpoint,
+            url,
+            source_id,
+            out,
+            include_html,
+            steps,
+            profile_override,
+        )),
     }
 }
 
@@ -61,6 +86,7 @@ enum BrowserCommand {
         page_index: usize,
         source_id: Option<String>,
         out: Option<PathBuf>,
+        include_html: bool,
     },
 }
 
@@ -69,7 +95,23 @@ enum ScrapeCommand {
         url: String,
         source_id: String,
         out: Option<PathBuf>,
+        include_html: bool,
     },
+    Interact {
+        url: String,
+        source_id: String,
+        out: Option<PathBuf>,
+        include_html: bool,
+        steps: Vec<InteractionStep>,
+        profile_override: bool,
+    },
+}
+
+enum InteractionStep {
+    Fill { selector: String, value: String },
+    Click { selector: String },
+    Wait { ms: u64 },
+    WaitFor { selector: String },
 }
 
 impl Cli {
@@ -114,6 +156,7 @@ impl Cli {
                         page_index,
                         source_id: option_value(rest, "--source").map(str::to_string),
                         out: option_value(rest, "--out").map(PathBuf::from),
+                        include_html: has_flag(rest, "--html"),
                     }),
                 })
             }
@@ -127,6 +170,27 @@ impl Cli {
                         url: url.to_string(),
                         source_id,
                         out: option_value(rest, "--out").map(PathBuf::from),
+                        include_html: has_flag(rest, "--html"),
+                    }),
+                })
+            }
+            [group, cmd, url, rest @ ..] if group == "scrape" && cmd == "interact" => {
+                let source_id = option_value(rest, "--source")
+                    .ok_or_else(|| CliError::usage("scrape interact requires --source <id>"))?
+                    .to_string();
+                let steps = option_values(rest, "--step")
+                    .into_iter()
+                    .map(parse_interaction_step)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Self {
+                    endpoint,
+                    command: Command::Scrape(ScrapeCommand::Interact {
+                        url: url.to_string(),
+                        source_id,
+                        out: option_value(rest, "--out").map(PathBuf::from),
+                        include_html: has_flag(rest, "--html"),
+                        steps,
+                        profile_override: has_flag(rest, "--i-understand-profile"),
                     }),
                 })
             }
@@ -136,12 +200,68 @@ impl Cli {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--out <path-or-dir>]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--out <dir>]\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n"
+    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--out <path-or-dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--out <dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--out <dir>] [--html] [--i-understand-profile]\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n"
 }
 
 fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     let index = args.iter().position(|arg| arg == name)?;
     args.get(index + 1).map(String::as_str)
+}
+
+fn option_values<'a>(args: &'a [String], name: &str) -> Vec<&'a str> {
+    args.windows(2)
+        .filter_map(|pair| {
+            if pair[0] == name {
+                Some(pair[1].as_str())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn has_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg == name)
+}
+
+fn parse_interaction_step(raw: &str) -> Result<InteractionStep, CliError> {
+    if let Some(rest) = raw.strip_prefix("fill:") {
+        let (selector, value) = rest
+            .rsplit_once('=')
+            .ok_or_else(|| CliError::usage("fill step must be fill:SEL=VALUE"))?;
+        if selector.trim().is_empty() {
+            return Err(CliError::usage("fill step selector cannot be empty"));
+        }
+        return Ok(InteractionStep::Fill {
+            selector: selector.to_string(),
+            value: value.to_string(),
+        });
+    }
+    if let Some(selector) = raw.strip_prefix("click:") {
+        if selector.trim().is_empty() {
+            return Err(CliError::usage("click step selector cannot be empty"));
+        }
+        return Ok(InteractionStep::Click {
+            selector: selector.to_string(),
+        });
+    }
+    if let Some(value) = raw.strip_prefix("wait:") {
+        let ms = value
+            .parse::<u64>()
+            .map_err(|_| CliError::usage("wait step must be wait:MS with integer milliseconds"))?;
+        return Ok(InteractionStep::Wait { ms });
+    }
+    if let Some(selector) = raw.strip_prefix("waitfor:") {
+        if selector.trim().is_empty() {
+            return Err(CliError::usage("waitfor step selector cannot be empty"));
+        }
+        return Ok(InteractionStep::WaitFor {
+            selector: selector.to_string(),
+        });
+    }
+    Err(CliError::usage(format!(
+        "unknown interaction step '{raw}'; expected fill:, click:, wait:, or waitfor:"
+    )))
 }
 
 fn run_async<F>(future: F) -> Result<(), CliError>
@@ -200,6 +320,7 @@ async fn capture_snapshot(
     page_index: usize,
     source_id: Option<String>,
     out: Option<PathBuf>,
+    include_html: bool,
 ) -> Result<(), CliError> {
     if !is_loopback_endpoint(endpoint) {
         println!(
@@ -220,7 +341,7 @@ async fn capture_snapshot(
     let mut cdp = CdpSession::connect(endpoint).await?;
     let page = cdp.page_for_rest_target(rest_page).await?;
     let source = source_id.unwrap_or_else(|| infer_source_id(&rest_page.url));
-    let capture = capture_page(&page, &source).await?;
+    let capture = capture_page(&page, &source, include_html).await?;
     write_capture_and_report(capture, out.as_deref())
 }
 
@@ -229,6 +350,7 @@ async fn scrape_url(
     url: String,
     source_id: String,
     out: Option<PathBuf>,
+    include_html: bool,
 ) -> Result<(), CliError> {
     if !is_loopback_endpoint(endpoint) {
         println!(
@@ -249,7 +371,42 @@ async fn scrape_url(
         println!("warning\tCDP Page.navigate did not complete cleanly: {err}");
     }
     settle_rendered_page(&page).await?;
-    let capture = capture_page(&page, &source_id).await?;
+    let capture = capture_page(&page, &source_id, include_html).await?;
+    write_capture_and_report(capture, out.as_deref())
+}
+
+async fn scrape_interact(
+    endpoint: &str,
+    url: String,
+    source_id: String,
+    out: Option<PathBuf>,
+    include_html: bool,
+    steps: Vec<InteractionStep>,
+    profile_override: bool,
+) -> Result<(), CliError> {
+    if !is_loopback_endpoint(endpoint) {
+        println!(
+            "warning\tcdp endpoint is not localhost/127.0.0.1; do not expose CDP to LAN or internet"
+        );
+    }
+    let rest_pages = fetch_pages(endpoint)?;
+    let page_index = rest_pages
+        .iter()
+        .position(|page| page.kind == "page")
+        .ok_or_else(|| CliError::runtime("CDP is reachable, but no page target is open"))?;
+    let rest_page = rest_pages[page_index].clone();
+
+    let mut cdp = CdpSession::connect(endpoint).await?;
+    guard_interactive_profile(&mut cdp, profile_override).await?;
+    let page = cdp.page_for_rest_target(&rest_page).await?;
+    println!("navigating\t{url}");
+    if let Err(err) = page.goto(url).await {
+        println!("warning\tCDP Page.navigate did not complete cleanly: {err}");
+    }
+    settle_rendered_page(&page).await?;
+    execute_interaction_steps(&page, &steps).await?;
+    settle_rendered_page(&page).await?;
+    let capture = capture_page(&page, &source_id, include_html).await?;
     write_capture_and_report(capture, out.as_deref())
 }
 
@@ -304,6 +461,19 @@ impl CdpSession {
             rest_page.id, rest_page.url
         )))
     }
+
+    async fn browser_command_line(&mut self) -> Result<Vec<String>, CliError> {
+        let response = self
+            .browser
+            .execute(GetBrowserCommandLineParams::default())
+            .await
+            .map_err(|err| {
+                CliError::runtime(format!(
+                    "failed to read Browser.getBrowserCommandLine for profile guard: {err}"
+                ))
+            })?;
+        Ok(response.result.arguments)
+    }
 }
 
 impl Drop for CdpSession {
@@ -356,9 +526,185 @@ async fn settle_rendered_page(page: &chromiumoxide::Page) -> Result<(), CliError
     Ok(())
 }
 
+async fn execute_interaction_steps(
+    page: &chromiumoxide::Page,
+    steps: &[InteractionStep],
+) -> Result<(), CliError> {
+    for (index, step) in steps.iter().enumerate() {
+        let step_index = index + 1;
+        match step {
+            InteractionStep::Fill { selector, value } => {
+                println!("step\t{step_index}\tfill\t{selector}");
+                let element = page.find_element(selector).await.map_err(|err| {
+                    CliError::runtime(format!(
+                        "step {step_index} failed: selector not found for fill '{selector}': {err}"
+                    ))
+                })?;
+                element.focus().await.map_err(|err| {
+                    CliError::runtime(format!(
+                        "step {step_index} failed: could not focus '{selector}': {err}"
+                    ))
+                })?;
+                set_control_value(page, selector, value, step_index).await?;
+            }
+            InteractionStep::Click { selector } => {
+                println!("step\t{step_index}\tclick\t{selector}");
+                let element = page.find_element(selector).await.map_err(|err| {
+                    CliError::runtime(format!(
+                        "step {step_index} failed: selector not found for click '{selector}': {err}"
+                    ))
+                })?;
+                element.click().await.map_err(|err| {
+                    CliError::runtime(format!(
+                        "step {step_index} failed: could not click '{selector}': {err}"
+                    ))
+                })?;
+            }
+            InteractionStep::Wait { ms } => {
+                println!("step\t{step_index}\twait\t{ms}ms");
+                tokio::time::sleep(Duration::from_millis(*ms)).await;
+            }
+            InteractionStep::WaitFor { selector } => {
+                println!("step\t{step_index}\twaitfor\t{selector}");
+                wait_for_selector(page, selector, step_index).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn set_control_value(
+    page: &chromiumoxide::Page,
+    selector: &str,
+    value: &str,
+    step_index: usize,
+) -> Result<(), CliError> {
+    let selector_json = serde_json::to_string(selector)
+        .map_err(|err| CliError::runtime(format!("failed to encode selector JSON: {err}")))?;
+    let value_json = serde_json::to_string(value)
+        .map_err(|err| CliError::runtime(format!("failed to encode fill value JSON: {err}")))?;
+    let function = format!(
+        r#"() => {{
+  const el = document.querySelector({selector_json});
+  if (!el) return "__TRAVEL_SCRAPER_MISSING__";
+  const value = {value_json};
+  const tag = (el.tagName || "").toLowerCase();
+  const oldValue = el.value;
+  if (tag === "input" || tag === "textarea" || tag === "select") {{
+    const proto = tag === "textarea"
+      ? HTMLTextAreaElement.prototype
+      : tag === "select"
+        ? HTMLSelectElement.prototype
+        : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+    if (descriptor && descriptor.set) {{
+      descriptor.set.call(el, value);
+    }} else {{
+      el.value = value;
+    }}
+  }} else if (el.isContentEditable) {{
+    el.textContent = value;
+  }} else {{
+    return "__TRAVEL_SCRAPER_UNSUPPORTED__:" + tag;
+  }}
+  if (el._valueTracker) {{
+    el._valueTracker.setValue(oldValue);
+  }}
+  el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+  el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+  return tag + ":" + (el.value || el.textContent || "");
+}}"#
+    );
+    let result = evaluate_string(page, &function).await?;
+    if result == "__TRAVEL_SCRAPER_MISSING__" {
+        return Err(CliError::runtime(format!(
+            "step {step_index} failed: selector disappeared before fill '{selector}'"
+        )));
+    }
+    if let Some(tag) = result.strip_prefix("__TRAVEL_SCRAPER_UNSUPPORTED__:") {
+        return Err(CliError::runtime(format!(
+            "step {step_index} failed: selector '{selector}' resolved to unsupported fill target '{tag}'"
+        )));
+    }
+    Ok(())
+}
+
+async fn wait_for_selector(
+    page: &chromiumoxide::Page,
+    selector: &str,
+    step_index: usize,
+) -> Result<(), CliError> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut last_error = None;
+    while tokio::time::Instant::now() < deadline {
+        match page.find_element(selector).await {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                last_error = Some(err.to_string());
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
+    Err(CliError::runtime(format!(
+        "step {step_index} failed: selector not found within 10s for waitfor '{selector}'{}",
+        last_error.map(|err| format!(": {err}")).unwrap_or_default()
+    )))
+}
+
+async fn guard_interactive_profile(
+    cdp: &mut CdpSession,
+    profile_override: bool,
+) -> Result<(), CliError> {
+    match cdp.browser_command_line().await {
+        Ok(arguments) => {
+            if profile_arguments_show_dedicated_profile(&arguments) {
+                println!("profile_guard\tok\tdedicated automation profile detected");
+                Ok(())
+            } else if profile_override {
+                println!(
+                    "warning\tprofile guard could not confirm a dedicated automation profile; proceeding because --i-understand-profile was provided"
+                );
+                Ok(())
+            } else {
+                let user_data_dir = browser_user_data_dir(&arguments).unwrap_or_else(|| "-".into());
+                Err(CliError::runtime(format!(
+                    "interactive scrape refused: connected Chrome is not confirmed as the dedicated automation profile (user-data-dir={user_data_dir}). Relaunch Chrome with C:\\chrome-profiles\\travel-browser or pass --i-understand-profile to override for this run."
+                )))
+            }
+        }
+        Err(err) if profile_override => {
+            println!(
+                "warning\tprofile guard could not read Chrome command line ({err}); proceeding because --i-understand-profile was provided"
+            );
+            Ok(())
+        }
+        Err(err) => Err(CliError::runtime(format!(
+            "interactive scrape refused: could not confirm the dedicated automation profile: {err}. Relaunch Chrome with --enable-automation and --user-data-dir=C:\\chrome-profiles\\travel-browser, or pass --i-understand-profile to override for this run."
+        ))),
+    }
+}
+
+fn profile_arguments_show_dedicated_profile(arguments: &[String]) -> bool {
+    let Some(user_data_dir) = browser_user_data_dir(arguments) else {
+        return false;
+    };
+    let lower = user_data_dir.to_ascii_lowercase().replace('\\', "/");
+    lower.contains("chrome-profiles/")
+        && (lower.contains("/travel-browser") || lower.contains("/codex-browser"))
+}
+
+fn browser_user_data_dir(arguments: &[String]) -> Option<String> {
+    arguments.iter().find_map(|arg| {
+        arg.strip_prefix("--user-data-dir=")
+            .or_else(|| arg.strip_prefix("/user-data-dir="))
+            .map(str::to_string)
+    })
+}
+
 async fn capture_page(
     page: &chromiumoxide::Page,
     source_id: &str,
+    include_html: bool,
 ) -> Result<TravelCapture, CliError> {
     let title = page
         .get_title()
@@ -374,6 +720,17 @@ async fn capture_page(
         evaluate_string(page, "() => document.body ? document.body.innerText : ''").await?;
     let links = evaluate_links(page).await?;
     let tables = evaluate_tables(page).await?;
+    let html = if include_html {
+        Some(
+            evaluate_string(
+                page,
+                "() => document.documentElement ? document.documentElement.outerHTML : ''",
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
 
     Ok(TravelCapture {
         schema: "travel-capture-v1",
@@ -384,7 +741,7 @@ async fn capture_page(
         raw_text,
         links,
         tables,
-        html: None,
+        html,
         screenshot_path: None,
     })
 }

@@ -292,13 +292,24 @@ Success criteria:
    real 37,108). Only the CDP read of the authenticated session was correct — concrete justification
    for the migration.
 
+### Interactive click/fill + DOM capture — DONE and verified
+- Added optional `--html` capture for `browser snapshot`, `scrape url`, and `scrape interact`.
+  HTML stays off by default because rendered DOM can be large and sensitive.
+- Added `scrape interact <url> --source <id> --step ...`: ordered `click`, `fill`, `wait`, and
+  bounded `waitfor` steps. Step failures are loud and include the step index plus selector.
+- Added an interactive profile guard. Mutating commands require the dedicated automation profile to be
+  confirmed from Chrome command-line data, or an explicit `--i-understand-profile` override.
+- **Verified on settour FIT:** selector-driven calendar interaction changed the rendered offer from
+  `2026/06/08-2026/06/09` (1 night, IT210/IT211, `$13,733` per person) to
+  `2026/06/20-2026/06/24` (4 nights, IT212/IT211, `$20,760` per person), then captured the updated
+  `travel-capture-v1` artifact from the real Windows Chrome.
+
 ### Remaining (next milestones, in order)
-- **Interactive click/fill** (`Page.dispatch`/Input domain) — set dates/search params on SPAs so quote
-  pages render the intended multi-night state (the actual blocker for search-scraping). + profile-guard
-  and OTA domain-allowlist (currently deferred TODOs).
 - `liontravel` (then per Parser Migration Order) **parser**: `travel-capture-v1` → `CanonicalOffer[]`,
   with golden-file parity vs current Python output before any Python deletion.
-- Screenshot capture; Rust Turso import (optional — TS importer stays until parser core proven).
+- `travel-capture-v1` → `CanonicalOffer[]` parser stage and replay tests for settour/liontravel captures.
+- Screenshot capture; OTA domain allowlist; Rust Turso import (optional — TS importer stays until parser
+  core proven).
 
 ## Risks
 
