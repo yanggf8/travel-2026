@@ -367,6 +367,11 @@ Success criteria:
   real-capture parity check before decommission decisions.
 - Python decommission per source: only after ≥2 successful real scrapes + parity (plan policy). No
   Python deleted yet.
+  - **DECOMMISSION PACE (user, 2026-06):** delete-verified-now, port-rest-lazily. Delete the Python
+    parser for an OTA as soon as it's verified by real Rust CDP scrapes (settour + liontravel qualify —
+    both real-scraped via live Chrome). Keep the other ~8 Python parsers until each OTA is actually
+    scraped through the Rust path. Python shrinks incrementally as OTAs are exercised, not in one bulk
+    pass. (~30 Python files remain today; only settour/liontravel are real-scrape-verified so far.)
 - Screenshot capture; OTA domain allowlist; profile-guard hardening (currently needs
   `--i-understand-profile` because Chrome wasn't launched with `--enable-automation`).
 - Full npm/Python/TS-importer decommission remains a separate tracked migration. TODO: write a dedicated
