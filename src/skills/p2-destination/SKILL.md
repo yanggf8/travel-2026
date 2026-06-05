@@ -16,7 +16,7 @@ Read these first unless the request is extremely narrow:
 - `../travel-shared/references/io-contracts.md`
 - `../travel-shared/references/state-manager.md`
 - `../travel-shared/references/cascade-triggers.md`
-- `../travel-shared/references/destinations/{destination}.json` - destination reference file
+- destination reference (areas, POIs, clusters, transit, tips) — from Turso, via `npm run travel -- query-destination-ref --slug {destination}`
 
 ## Agent-First Defaults
 
@@ -30,7 +30,7 @@ Read these first unless the request is extremely narrow:
 
 ## Workflow
 
-1. **Read destination reference** (`src/skills/travel-shared/references/destinations/{slug}.json`)
+1. **Read destination reference** — `npm run travel -- query-destination-ref --slug {slug}` (reads Turso; throws if the destination is not registered)
 2. **Collect city preferences** from user (or infer from attractions list)
 3. **Determine night allocation**:
    - Count attractions per city

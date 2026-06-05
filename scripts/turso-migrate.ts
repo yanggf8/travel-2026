@@ -1005,28 +1005,28 @@ async function main() {
   const destinations = [
     {
       slug: 'tokyo_2026', display_name: 'Tokyo', ref_id: 'tokyo',
-      ref_path: 'src/skills/travel-shared/references/destinations/tokyo.json',
+      ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
       markets_json: '["TW","JP"]', primary_airports_json: '["NRT","HND"]',
       language: 'ja', origin: 'taiwan', lat: 35.6762, lon: 139.6503,
     },
     {
       slug: 'nagoya_2026', display_name: 'Nagoya', ref_id: 'nagoya',
-      ref_path: 'src/skills/travel-shared/references/destinations/nagoya.json',
+      ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
       markets_json: '["TW","JP"]', primary_airports_json: '["NGO"]',
       language: 'ja', origin: 'taiwan', lat: 35.1815, lon: 136.9066,
     },
     {
       slug: 'osaka_2026', display_name: 'Osaka', ref_id: 'osaka',
-      ref_path: 'src/skills/travel-shared/references/destinations/osaka.json',
+      ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
       markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
       language: 'ja', origin: 'taiwan', lat: 34.6937, lon: 135.5023,
     },
     {
       slug: 'osaka_kyoto_2026', display_name: 'Osaka + Kyoto', ref_id: 'osaka_kyoto',
-      ref_path: 'src/skills/travel-shared/references/destinations/osaka_kyoto.json',
+      ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
       markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
       language: 'ja', origin: 'taiwan', lat: 34.6937, lon: 135.5023,
@@ -1595,6 +1595,141 @@ async function main() {
     'CREATE INDEX IF NOT EXISTS idx_holidays_country_date ON holidays(country, date);'
   );
   console.log('✅ Holidays table ready.');
+
+  // ---------------------------------------------------------------------------
+  // OTA domain-knowledge reference tables (replaces ota-knowledge.json).
+  // Seeded by scripts/seed-ota-knowledge.ts. No runtime file reads.
+  // ---------------------------------------------------------------------------
+  await client.execute(`CREATE TABLE IF NOT EXISTS airlines (
+    code TEXT PRIMARY KEY,
+    name TEXT,
+    type TEXT,
+    hand_baggage_kg INTEGER,
+    checked_bag_included INTEGER,
+    checked_bag_kg INTEGER,
+    checked_bag_cost_twd INTEGER,
+    checked_bag_cost_jpy INTEGER,
+    classification_baggage_note TEXT,
+    classification_meal TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS booking_types (
+    slug TEXT PRIMARY KEY,
+    name_zh TEXT,
+    description TEXT,
+    rules_json TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS platform_behaviors (
+    platform TEXT PRIMARY KEY,
+    currency TEXT,
+    price_display TEXT,
+    baggage_labels_json TEXT,
+    quirks_json TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS comparison_rules (
+    id INTEGER PRIMARY KEY,
+    rule TEXT,
+    sort_order INTEGER,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT
+  );`);
+  console.log('✅ OTA knowledge reference tables ready.');
+
+  // ---------------------------------------------------------------------------
+  // Normalized destination reference tables (replaces destinations/*.json and
+  // the destination_references JSON-blob table). Seeded by
+  // scripts/seed-destination-refs.ts. No runtime file reads, no JSON blobs.
+  // ---------------------------------------------------------------------------
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_areas (
+    slug TEXT,
+    area_id TEXT,
+    name TEXT,
+    type TEXT,
+    stations_json TEXT,
+    vibe TEXT,
+    best_for_json TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (slug, area_id)
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_pois (
+    slug TEXT,
+    poi_id TEXT,
+    title TEXT,
+    area TEXT,
+    nearest_station TEXT,
+    duration_min INTEGER,
+    booking_required INTEGER,
+    booking_url TEXT,
+    cost_estimate INTEGER,
+    tags_json TEXT,
+    notes TEXT,
+    hours TEXT,
+    address TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (slug, poi_id)
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_clusters (
+    slug TEXT,
+    cluster_id TEXT,
+    name TEXT,
+    description TEXT,
+    pois_json TEXT,
+    duration_min INTEGER,
+    best_area TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (slug, cluster_id)
+  );`);
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_transit (
+    slug TEXT,
+    pair_key TEXT,
+    kind TEXT,
+    minutes INTEGER,
+    line TEXT,
+    station_from TEXT,
+    station_to TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (slug, pair_key)
+  );`);
+
+  // tips live alongside the destination scalars in destination_config
+  try {
+    await client.execute(`ALTER TABLE destination_config ADD COLUMN tips_json TEXT;`);
+  } catch (e: any) {
+    if (!String(e?.message || '').match(/duplicate column name/i)) throw e;
+  }
+
+  // ref_path must NOT point at a local file (no-local-data rule). Reference data
+  // now lives in the normalized tables above; clear any legacy file-path values.
+  await client.execute(
+    `UPDATE destination_config SET ref_path = '' WHERE ref_path LIKE 'src/skills/%';`
+  );
+
+  // Supersede the JSON-blob table (no blobs in DB). Data is now normalized.
+  await client.execute(`DROP TABLE IF EXISTS destination_references;`);
+  console.log('✅ Normalized destination reference tables ready (blob table dropped).');
 
   console.log('Done.');
 }

@@ -13,7 +13,7 @@ provides_processes: []
 
 Read if adding OTA region mappings or destination POI data:
 - `../travel-shared/references/ota-registry.md` — OTA source IDs, region codes, scraper scripts
-- `../travel-shared/references/destinations/` — existing destination JSON files (use as template)
+- existing destination reference data (areas/POIs/clusters/transit) — in Turso; inspect a similar one with `npm run travel -- query-destination-ref --slug tokyo_2026` and copy its shape into `scripts/seed-destination-refs.ts`
 
 ## Purpose
 
@@ -64,7 +64,7 @@ Add an `INSERT OR IGNORE` block to `scripts/turso-migrate.ts` inside the existin
 // In scripts/turso-migrate.ts — add to the destinations array:
 {
   slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto',
-  ref_path: 'src/skills/travel-shared/references/destinations/kyoto.json',
+  ref_path: '',  // reference data lives in normalized Turso tables, not a file
   timezone: 'Asia/Tokyo', currency: 'JPY',
   markets_json: '["TW","JP"]', primary_airports_json: '["KIX"]',
   language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
@@ -81,41 +81,33 @@ npm run db:migrate:turso
 - Timezone must be valid IANA format
 - Currency must be ISO 4217 code
 
-### 4. Create destination reference file
+### 4. Seed destination reference data into Turso
+
+Reference data (areas, POIs, clusters, transit, tips) lives in the normalized
+Turso tables `destination_areas`, `destination_pois`, `destination_clusters`,
+`destination_transit`, and `destination_config.tips_json` — **never in a local
+JSON file**. Add the new destination's data to the inline `DATA` constant in
+`scripts/seed-destination-refs.ts` (keyed by slug), then run it:
 
 ```bash
-touch src/skills/travel-shared/references/destinations/<ref_id>.json
+npx ts-node scripts/seed-destination-refs.ts
 ```
 
-**Template**:
-```json
-{
-  "destination": "kyoto",
-  "display_name": "Kyoto",
-  "areas": {
-    "central": ["Kyoto Station", "Downtown"],
-    "east": ["Gion", "Higashiyama"],
-    "north": ["Kinkaku-ji", "Arashiyama"]
-  },
-  "clusters": {
-    "gion_traditional": {
-      "name": "Gion Traditional District",
-      "area": "east",
-      "pois": ["gion_geisha", "yasaka_shrine", "kiyomizu_temple"]
-    }
-  },
-  "pois": {
-    "gion_geisha": {
-      "title": "Gion Geisha District",
-      "area": "east",
-      "nearest_station": "Gion-Shijo",
-      "duration_min": 120,
-      "booking_required": false,
-      "tags": ["culture", "traditional", "photo"]
-    }
-  }
-}
+Per-table shape (one row per area / POI / cluster / transit pair):
+
+- **destination_areas**: `area_id, name, type, stations[], vibe, best_for[]`
+- **destination_pois**: `poi_id, title, area, nearest_station, duration_min, booking_required, booking_url?, cost_estimate, tags[], notes?, hours?, address?`
+- **destination_clusters**: `cluster_id, name, description, pois[], duration_min, best_area`
+- **destination_transit**: `pair_key, kind('estimate'|'inter_city'), minutes, line, station_from?, station_to?`
+- **tips**: array of strings → `destination_config.tips_json`
+
+Verify with:
+
+```bash
+npm run travel -- query-destination-ref --slug <slug>
 ```
+
+(throws if the destination has no reference rows — fail loud, no file fallback).
 
 ### 5. Add destination slug to plan via CLI
 
@@ -151,7 +143,7 @@ npm run travel -- fetch-weather --dest kyoto_2026
 □ Currency is valid ISO code
 □ Coordinates are valid (lat/lon)
 □ Primary airports are valid IATA codes
-□ Reference file created (if using POI data)
+□ Reference rows seeded into Turso (if using POI data) — query-destination-ref shows them
 □ db:migrate:turso ran successfully
 □ Weather fetch works
 □ view:status shows destination
@@ -194,6 +186,6 @@ npm run travel -- fetch-weather --dest kyoto_2026
 
 - `scripts/turso-migrate.ts` — Migration script (source of truth for DB schema and seed data)
 - `scripts/schema.sql` — Read-only DDL reference
-- `src/skills/travel-shared/references/destinations/` — POI data
+- `scripts/seed-destination-refs.ts` + `destination_areas`/`destination_pois`/`destination_clusters`/`destination_transit` tables in Turso — POI/area/cluster/transit data (stored in DB, not a JSON file)
 - `ota_sources` table in Turso — OTA region mappings (stored in DB, not a JSON file)
 - `/weather-update` — Weather fetch validation

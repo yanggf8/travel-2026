@@ -145,36 +145,11 @@ async function backfillTransport(client: TursoPipelineClient): Promise<{ routes:
   return { routes: routeStmts.length, hubs: hubStmts.length };
 }
 
-async function backfillDestinationReferences(client: TursoPipelineClient): Promise<number> {
-  const dir = path.join(ROOT, 'src', 'skills', 'travel-shared', 'references', 'destinations');
-  const slugByRefId: Record<string, string> = {
-    tokyo: 'tokyo_2026',
-    nagoya: 'nagoya_2026',
-    osaka: 'osaka_2026',
-    osaka_kyoto: 'osaka_kyoto_2026',
-  };
-  const stmts: Array<{ sql: string; args: any[] }> = [];
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.json'))) {
-    const refId = path.basename(file, '.json');
-    const slug = slugByRefId[refId];
-    if (!slug) continue;
-    const payload = fs.readFileSync(path.join(dir, file), 'utf-8');
-    stmts.push({
-      sql: `INSERT OR REPLACE INTO destination_references
-        (slug, ref_id, payload_json, source_url, fetched_at, confidence)
-        VALUES (?, ?, ?, ?, ?, ?);`,
-      args: [
-        tursoText(slug),
-        tursoText(refId),
-        tursoText(payload),
-        tursoText(`legacy:src/skills/travel-shared/references/destinations/${file}`),
-        tursoText(IMPORTED_AT),
-        tursoText('legacy_backfill'),
-      ],
-    });
-  }
-  if (stmts.length > 0) await client.executeManyParams(stmts);
-  return stmts.length;
+// Destination reference data is now seeded into normalized Turso tables by
+// scripts/seed-destination-refs.ts (the destination_references JSON-blob table
+// has been dropped). This legacy blob backfill is intentionally a no-op.
+async function backfillDestinationReferences(_client: TursoPipelineClient): Promise<number> {
+  return 0;
 }
 
 async function upsertOkinawaDestination(client: TursoPipelineClient): Promise<void> {

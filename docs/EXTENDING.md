@@ -27,7 +27,7 @@ Add an entry to `data/destinations.json`:
     "slug": "kyoto_2026",
     "display_name": "Kyoto",
     "ref_id": "kyoto",
-    "ref_path": "src/skills/travel-shared/references/destinations/kyoto.json",
+    "ref_path": "",
     "timezone": "Asia/Tokyo",
     "currency": "JPY",
     "markets": ["TW", "JP"],
@@ -37,18 +37,22 @@ Add an entry to `data/destinations.json`:
 }
 ```
 
-### Step 2: Create Reference File
+### Step 2: Seed Reference Data into Turso
 
-Copy the template and customize:
+Reference data lives in normalized Turso tables (`destination_areas`,
+`destination_pois`, `destination_clusters`, `destination_transit`, and
+`destination_config.tips_json`) — **never a local JSON file**. Add the new
+destination to the inline `DATA` constant in `scripts/seed-destination-refs.ts`
+(keyed by slug), then run:
 
 ```bash
-cp src/templates/destination-template.json \
-   src/skills/travel-shared/references/destinations/kyoto.json
+npx ts-node scripts/seed-destination-refs.ts
+npm run travel -- query-destination-ref --slug kyoto_2026   # verify
 ```
 
-### Step 3: Populate Reference Data
+### Step 3: Reference Data Shape
 
-The reference file contains:
+The reference data per destination (each object below = one table row):
 
 #### Areas
 Neighborhoods/districts with transport stations:

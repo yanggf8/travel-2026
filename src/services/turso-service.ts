@@ -284,18 +284,147 @@ export async function loadTransportRoutesFromTurso(): Promise<TransportRoutesDat
   return out;
 }
 
-export async function loadDestinationReferenceFromTurso(slug: string): Promise<Record<string, unknown>> {
+export interface AirlineRef {
+  code: string;
+  type: 'LCC' | 'FSC';
+  hand_baggage_kg: number;
+  checked_bag_included: boolean;
+  checked_bag_cost_twd?: number;
+  checked_bag_kg?: number;
+}
+
+// Stable airline slug keys (match the original ota-knowledge.json keys and the
+// nameMap in compare-true-cost.ts), keyed by IATA code.
+const AIRLINE_SLUG_BY_CODE: Record<string, string> = {
+  MM: 'peach',
+  SL: 'thai_lion',
+  IT: 'tigerair',
+  GK: 'jetstar',
+  VZ: 'thai_vietjet',
+  BR: 'eva',
+  CI: 'china_airlines',
+  JX: 'starlux',
+};
+
+/**
+ * Load airline baggage reference, keyed by stable slug (peach, eva, thai_lion, …)
+ * to match the lookup logic in compare-true-cost. Replaces reading ota-knowledge.json.
+ * Throws if the airlines table is empty (fail loud — no local-file fallback).
+ */
+export async function loadAirlinesFromTurso(): Promise<Record<string, AirlineRef>> {
   const client = getClient();
   const response = await client.execute(
-    `SELECT payload_json FROM destination_references WHERE slug = '${sqlEscape(slug)}';`
+    `SELECT code, name, type, hand_baggage_kg, checked_bag_included, checked_bag_kg, checked_bag_cost_twd
+       FROM airlines ORDER BY code;`
   );
   const rows = rowsToObjects(response);
-  assertRows(rows, `destination_references slug=${slug}`);
-  const payload = rows[0].payload_json;
-  if (!payload) {
-    throw new Error(`Missing Turso destination reference payload for slug=${slug}. Run npm run db:migrate:turso and npx ts-node scripts/backfill-local-reference-data.ts.`);
+  assertRows(rows, 'airlines');
+
+  const out: Record<string, AirlineRef> = {};
+  for (const row of rows) {
+    const code = String(row.code);
+    const slug = AIRLINE_SLUG_BY_CODE[code] ?? String(row.name).toLowerCase().replace(/\s+/g, '_');
+    out[slug] = {
+      code: String(row.code),
+      type: String(row.type) === 'FSC' ? 'FSC' : 'LCC',
+      hand_baggage_kg: Number(row.hand_baggage_kg),
+      checked_bag_included: Number(row.checked_bag_included) === 1,
+      checked_bag_kg: row.checked_bag_kg === null ? undefined : Number(row.checked_bag_kg),
+      checked_bag_cost_twd: row.checked_bag_cost_twd === null ? undefined : Number(row.checked_bag_cost_twd),
+    };
   }
-  return JSON.parse(String(payload)) as Record<string, unknown>;
+  return out;
+}
+
+export async function loadDestinationReferenceFromTurso(slug: string): Promise<Record<string, unknown>> {
+  const client = getClient();
+  const esc = sqlEscape(slug);
+  const response = await client.executeBatch([
+    `SELECT display_name, timezone, currency, primary_airports_json, tips_json
+       FROM destination_config WHERE slug = '${esc}';`,
+    `SELECT area_id, name, type, stations_json, vibe, best_for_json
+       FROM destination_areas WHERE slug = '${esc}' ORDER BY area_id;`,
+    `SELECT poi_id, title, area, nearest_station, duration_min, booking_required, booking_url,
+            cost_estimate, tags_json, notes, hours, address
+       FROM destination_pois WHERE slug = '${esc}' ORDER BY poi_id;`,
+    `SELECT cluster_id, name, description, pois_json, duration_min, best_area
+       FROM destination_clusters WHERE slug = '${esc}' ORDER BY cluster_id;`,
+    `SELECT pair_key, kind, minutes, line, station_from, station_to
+       FROM destination_transit WHERE slug = '${esc}' ORDER BY kind, pair_key;`,
+  ]);
+
+  const configRows = rowsToObjectsAt(response, 0);
+  assertRows(configRows, `destination_config slug=${slug}`);
+  const cfg = configRows[0];
+  const areaRows = rowsToObjectsAt(response, 1);
+  const poiRows = rowsToObjectsAt(response, 2);
+  const clusterRows = rowsToObjectsAt(response, 3);
+  const transitRows = rowsToObjectsAt(response, 4);
+
+  const parseJson = (v: any, fallback: any) => {
+    if (v === null || v === undefined) return fallback;
+    try { return JSON.parse(String(v)); } catch { return fallback; }
+  };
+
+  const areas = areaRows.map((r) => ({
+    id: String(r.area_id),
+    name: r.name ?? null,
+    type: r.type ?? null,
+    stations: parseJson(r.stations_json, []),
+    vibe: r.vibe ?? null,
+    best_for: parseJson(r.best_for_json, []),
+  }));
+
+  const pois = poiRows.map((r) => ({
+    id: String(r.poi_id),
+    title: r.title ?? null,
+    area: r.area ?? null,
+    nearest_station: r.nearest_station ?? null,
+    duration_min: r.duration_min === null ? null : Number(r.duration_min),
+    booking_required: Number(r.booking_required) === 1,
+    ...(r.booking_url ? { booking_url: String(r.booking_url) } : {}),
+    cost_estimate: r.cost_estimate === null ? null : Number(r.cost_estimate),
+    tags: parseJson(r.tags_json, []),
+    ...(r.notes ? { notes: String(r.notes) } : {}),
+    ...(r.hours ? { hours: String(r.hours) } : {}),
+    ...(r.address ? { address: String(r.address) } : {}),
+  }));
+
+  // clusters as a keyed object (cluster_id → cluster), matching DestinationRefSchema.
+  const clusters: Record<string, unknown> = {};
+  for (const r of clusterRows) {
+    clusters[String(r.cluster_id)] = {
+      name: r.name ?? null,
+      description: r.description ?? null,
+      pois: parseJson(r.pois_json, []),
+      duration_min: r.duration_min === null ? undefined : Number(r.duration_min),
+      best_area: r.best_area ?? undefined,
+    };
+  }
+
+  const transit_estimates: Record<string, unknown> = {};
+  const inter_city_transit: Record<string, unknown> = {};
+  for (const r of transitRows) {
+    const entry: Record<string, unknown> = { minutes: Number(r.minutes), line: r.line ?? null };
+    if (r.station_from) entry.station_from = String(r.station_from);
+    if (r.station_to) entry.station_to = String(r.station_to);
+    if (String(r.kind) === 'inter_city') inter_city_transit[String(r.pair_key)] = entry;
+    else transit_estimates[String(r.pair_key)] = entry;
+  }
+
+  return {
+    destination_id: slug,
+    display_name: cfg.display_name ?? null,
+    timezone: cfg.timezone ?? null,
+    currency: cfg.currency ?? null,
+    primary_airports: parseJson(cfg.primary_airports_json, []),
+    areas,
+    pois,
+    clusters,
+    transit_estimates,
+    ...(Object.keys(inter_city_transit).length ? { inter_city_transit } : {}),
+    tips: parseJson(cfg.tips_json, []),
+  };
 }
 
 // ---------------------------------------------------------------------------

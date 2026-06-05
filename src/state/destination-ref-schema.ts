@@ -1,10 +1,13 @@
 /**
  * Destination Reference Schema
  *
- * Zod validation for destination reference files (e.g., tokyo.json).
+ * Zod validation for the destination reference object.
  * Used by populate-itinerary and other skills that consume POI/cluster data.
  *
- * Reference files live at: src/skills/travel-shared/references/destinations/{id}.json
+ * The reference object is assembled from normalized Turso tables
+ * (destination_areas / destination_pois / destination_clusters /
+ * destination_transit / destination_config.tips_json) by
+ * loadDestinationReferenceFromTurso() — no local JSON files.
  */
 
 import { z } from 'zod';
@@ -75,7 +78,7 @@ export const TransitEstimateSchema = z.object({
 export const DestinationRefSchema = z.object({
   destination_id: z.string(),
   display_name: z.string(),
-  country: z.string(),
+  country: z.string().optional(),
   timezone: z.string().optional(),
   currency: z.string().optional(),
   primary_airports: z.array(z.string()).optional(),

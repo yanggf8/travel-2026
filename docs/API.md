@@ -358,9 +358,10 @@ const destinations = getAvailableDestinations();
 const config = getDestinationConfig('tokyo_2026');
 // { slug, display_name, timezone, currency, primary_airports, ... }
 
-// Get POI reference file path
-const refPath = resolveDestinationRefPath('tokyo_2026');
-// '/path/to/src/skills/travel-shared/references/destinations/tokyo.json'
+// Get POI / area / cluster reference data (assembled from normalized Turso tables)
+const ref = await loadDestinationReferenceFromTurso('tokyo_2026');
+// { destination_id, display_name, areas, pois, clusters, transit_estimates, tips, ... }
+// CLI equivalent: npm run travel -- query-destination-ref --slug tokyo_2026
 ```
 
 ### OTA Sources
@@ -449,30 +450,24 @@ if (isOk(result)) {
 
 ### Adding a New Destination
 
-1. Add entry to `data/destinations.json`:
-```json
+1. Add an `INSERT OR IGNORE` row to the destinations backfill in `scripts/turso-migrate.ts`
+   (`ref_path` stays empty — reference data is in normalized tables, not a file), then
+   `npm run db:migrate:turso`:
+```typescript
 {
-  "kyoto_2026": {
-    "slug": "kyoto_2026",
-    "display_name": "Kyoto",
-    "ref_id": "kyoto",
-    "ref_path": "src/skills/travel-shared/references/destinations/kyoto.json",
-    "timezone": "Asia/Tokyo",
-    "currency": "JPY",
-    "markets": ["TW", "JP"],
-    "primary_airports": ["KIX", "ITM"],
-    "language": "ja"
-  }
+  slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto', ref_path: '',
+  timezone: 'Asia/Tokyo', currency: 'JPY',
+  markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
+  language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
 }
 ```
 
-2. Create reference file from template:
+2. Seed POIs / areas / clusters / transit into Turso (no JSON file):
 ```bash
-cp src/templates/destination-template.json \
-   src/skills/travel-shared/references/destinations/kyoto.json
+# add the slug's data to the DATA constant in scripts/seed-destination-refs.ts, then:
+npx ts-node scripts/seed-destination-refs.ts
+npm run travel -- query-destination-ref --slug kyoto_2026   # verify
 ```
-
-3. Populate POIs, areas, and clusters in the reference file.
 
 ### Adding a New OTA
 

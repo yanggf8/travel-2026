@@ -3,17 +3,14 @@
  * True Cost Comparison CLI
  *
  * Compares offers by total cost including package price + baggage surcharge + transport cost.
- * Uses Turso for offers, hotel areas, and transport routes. Airline metadata
- * remains in the skill reference ota-knowledge.json.
+ * Uses Turso for offers, hotel areas, transport routes, and airline metadata.
  *
  * Usage:
  *   npx ts-node src/cli/compare-true-cost.ts --region kansai --date 2026-02-24 --pax 2
  *   npx ts-node src/cli/compare-true-cost.ts --region kansai --date 2026-02-24 --itinerary "kyoto:1,osaka:2"
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { loadHotelAreasFromTurso, loadTransportRoutesFromTurso, queryOffers } from '../services/turso-service';
+import { loadHotelAreasFromTurso, loadTransportRoutesFromTurso, loadAirlinesFromTurso, queryOffers } from '../services/turso-service';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,26 +57,8 @@ interface TrueCostOffer {
 // Data loaders
 // ---------------------------------------------------------------------------
 
-function loadJson<T>(filePath: string): T | null {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch { return null; }
-}
-
-function loadTransportRoutes(): TransportRoutes {
-  throw new Error('loadTransportRoutes must use Turso via loadTransportRoutesFromTurso()');
-}
-
-function loadHotelAreas(): Record<string, Record<string, string[]>> {
-  throw new Error('loadHotelAreas must use Turso via loadHotelAreasFromTurso()');
-}
-
-function loadAirlines(): Record<string, AirlineInfo> {
-  const knowledge = loadJson<any>(
-    path.join(process.cwd(), 'src', 'skills', 'travel-shared', 'references', 'ota-knowledge.json')
-  );
-  return knowledge?.airlines || {};
-}
+// Reference data (airlines, hotel areas, transport routes) is loaded from Turso
+// in main() via the *FromTurso() helpers — no local files, no fallback.
 
 // ---------------------------------------------------------------------------
 // Hotel area detection (mirrors Python version)
@@ -283,7 +262,7 @@ async function main(): Promise<void> {
   // Load reference data
   const routes = await loadTransportRoutesFromTurso() as TransportRoutes;
   const hotelAreas = await loadHotelAreasFromTurso();
-  const airlines = loadAirlines();
+  const airlines = await loadAirlinesFromTurso();
 
   // Scan offers
   const rawOffers = await scanOffers(region, filterDate, pax);

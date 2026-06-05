@@ -44,6 +44,7 @@ import './commands/add-lifetour-offer';
 import './commands/chat-format';
 import './commands/turso';
 import './commands/plans';
+import './commands/query-destination-ref';
 import './commands/shaping';
 import './commands/tour-group';
 import { makeParsedArgs } from './shared/args';

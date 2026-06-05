@@ -295,16 +295,34 @@ function validatePythonScripts(): void {
  */
 async function validateDestinations(client: TursoPipelineClient): Promise<void> {
   const rows = rowsToObjects(await client.execute(
-    `SELECT slug, ref_path FROM destination_config ORDER BY slug`
+    `SELECT slug FROM destination_config ORDER BY slug`
   ));
   if (rows.length === 0) {
     addResult('destinations', 'error', 'Turso destination_config has no rows. Run npm run db:migrate:turso.');
     return;
   }
+  // Reference data lives in normalized Turso tables (no local JSON, no ref_path file).
+  // Every registered destination should have at least one area row.
+  const areaCounts = rowsToObjects(await client.execute(
+    `SELECT slug, COUNT(*) AS n FROM destination_areas GROUP BY slug`
+  ));
+  const countBySlug = new Map<string, number>();
+  for (const r of areaCounts) countBySlug.set(String(r.slug), Number(r.n));
   for (const row of rows) {
-    if (row.ref_path && typeof row.ref_path === 'string' && !fileExists(row.ref_path)) {
-      addResult('destinations', 'error', `${row.slug}: ref_path not found: ${row.ref_path}`, 'turso:destination_config');
+    const slug = String(row.slug);
+    if (!countBySlug.get(slug)) {
+      addResult('destinations', 'warning',
+        `${slug}: no rows in destination_areas. Run npx ts-node scripts/seed-destination-refs.ts.`,
+        'turso:destination_areas');
     }
+  }
+
+  // OTA airline reference must be seeded (consumed by compare-true-cost).
+  const airlineRows = rowsToObjects(await client.execute(`SELECT COUNT(*) AS n FROM airlines`));
+  if (!airlineRows.length || Number(airlineRows[0].n) === 0) {
+    addResult('destinations', 'error',
+      'airlines table is empty. Run npx ts-node scripts/seed-ota-knowledge.ts.',
+      'turso:airlines');
   }
 }
 
@@ -345,16 +363,25 @@ async function validateReferenceTables(client: TursoPipelineClient): Promise<voi
     `SELECT COUNT(*) AS count FROM hotel_areas`,
     `SELECT COUNT(*) AS count FROM transport_routes`,
     `SELECT COUNT(*) AS count FROM transport_hubs`,
-    `SELECT COUNT(*) AS count FROM destination_references`,
+    `SELECT COUNT(*) AS count FROM destination_areas`,
+    `SELECT COUNT(*) AS count FROM airlines`,
     `SELECT COUNT(*) AS count FROM shaping_research_artifacts`,
     `SELECT COUNT(*) AS count FROM shaping_selected_offers`,
   ]);
-  const labels = ['hotel_areas', 'transport_routes', 'transport_hubs', 'destination_references', 'shaping_research_artifacts', 'shaping_selected_offers'];
-  labels.forEach((label, idx) => {
+  const checks = [
+    { label: 'hotel_areas', seed: 'scripts/backfill-local-reference-data.ts' },
+    { label: 'transport_routes', seed: 'scripts/backfill-local-reference-data.ts' },
+    { label: 'transport_hubs', seed: 'scripts/backfill-local-reference-data.ts' },
+    { label: 'destination_areas', seed: 'scripts/seed-destination-refs.ts' },
+    { label: 'airlines', seed: 'scripts/seed-ota-knowledge.ts' },
+    { label: 'shaping_research_artifacts', seed: 'scripts/backfill-local-reference-data.ts' },
+    { label: 'shaping_selected_offers', seed: 'scripts/backfill-local-reference-data.ts' },
+  ];
+  checks.forEach(({ label, seed }, idx) => {
     const row = rowsToObjects(response, idx)[0] || {};
     const count = Number(row.count || 0);
     if (count === 0) {
-      addResult('turso-reference', 'error', `Turso ${label} has no rows. Run npx ts-node scripts/backfill-local-reference-data.ts.`, `turso:${label}`);
+      addResult('turso-reference', 'error', `Turso ${label} has no rows. Run npx ts-node ${seed}.`, `turso:${label}`);
     }
   });
 }

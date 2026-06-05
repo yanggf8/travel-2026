@@ -58,10 +58,10 @@ const populateItineraryCommand: CommandHandler = {
     let ref: DestinationRef;
     try {
       const rawRef = await loadDestinationReferenceFromTurso(destination);
-      ref = validateDestinationRef(rawRef, `turso:destination_references/${destination}`);
+      ref = validateDestinationRef(rawRef, `turso:destination-ref/${destination}`);
 
       // Check internal consistency (dangling references)
-      const refWarnings = validateDestinationRefConsistency(ref, `turso:destination_references/${destination}`);
+      const refWarnings = validateDestinationRefConsistency(ref, `turso:destination-ref/${destination}`);
       if (refWarnings.length > 0 && verbose) {
         console.log('\n⚠️  Destination reference consistency warnings:');
         for (const w of refWarnings.slice(0, 5)) {
@@ -171,7 +171,7 @@ const populateItineraryCommand: CommandHandler = {
     console.log(`   Pace: ${pace}`);
     console.log(`   Goals: ${goals.join(', ')}`);
     if (assignOpt) console.log(`   Assign: ${assignOpt}`);
-    console.log(`   Ref: turso:destination_references/${destination}`);
+    console.log(`   Ref: turso:destination-ref/${destination}`);
 
     if (skipped.length > 0) {
       console.log('\nSkipped:');

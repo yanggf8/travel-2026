@@ -363,15 +363,16 @@ Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI u
 │   ├── skills/                    # Skill SKILL.md files + references
 │   ├── scrapers/                  # Registry + base classes + scrape-file-parser.ts
 │   ├── questionnaire/             # Trip questionnaire definitions
-│   ├── templates/                 # destination-template.json, project-init.ts
+│   ├── templates/                 # project-init.ts
 │   ├── validation/                # Itinerary validator
 │   └── types/result.ts            # Result<T,E>
 ├── tests/integration/
 └── docs/                          # API.md, EXTENDING.md, SKILL_TEMPLATE.md, plans/
 ```
 
-Config: `src/config/constants.ts` (defaults/exchange rates), `src/skills/travel-shared/references/ota-knowledge.json` (baggage rules).
+Config: `src/config/constants.ts` (defaults/exchange rates). OTA baggage/booking rules: Turso tables `airlines`, `booking_types`, `platform_behaviors`, `comparison_rules` (seeded by `scripts/seed-ota-knowledge.ts` — no JSON file).
 Destination/OTA config: stored in Turso (`destination_config`, `ota_sources`, `origin_config`, `global_config` tables — no JSON files).
+Destination reference data (areas/POIs/clusters/transit/tips): Turso tables `destination_areas`, `destination_pois`, `destination_clusters`, `destination_transit`, `destination_config.tips_json` (seeded by `scripts/seed-destination-refs.ts`; read via `query-destination-ref` — no JSON file, no blob).
 Note: `ref_path`/`scraper_script` must be repo-relative paths.
 
 ## Turso DB

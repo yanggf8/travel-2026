@@ -17,7 +17,7 @@ Read these first unless the request is extremely narrow:
 - `../travel-shared/references/state-manager.md`
 - `../travel-shared/references/cascade-triggers.md`
 - `../travel-shared/references/itinerary-formats.md` — **Session vs Schedule formats, dashboard compatibility**
-- `../travel-shared/references/destinations/{destination}.json` — POI, areas, clusters
+- destination reference (POI, areas, clusters, transit) — from Turso, via `npm run travel -- query-destination-ref --slug {destination}`
 
 ## Agent-First Defaults
 
@@ -277,7 +277,7 @@ npm run travel -- set-day-theme <day> [en_theme] --zh "中文主題" [--plan-id 
 User: "Plan the free days for our Osaka trip"
 
 Agent:
-1. Read destination ref: osaka_kyoto.json → clusters, POIs, areas
+1. Read destination ref: `query-destination-ref --slug osaka_kyoto_2026` → clusters, POIs, areas
 2. Read package data: Day 2-3 are free, Day 4 guided
 3. Check hotel location: Shinsaibashi area → Namba/Shinsaibashi base
 4. Assign clusters:

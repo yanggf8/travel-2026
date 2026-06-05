@@ -13,7 +13,7 @@ provides_processes: []
 
 Read first unless request is a single known-URL scrape:
 - `../travel-shared/references/ota-registry.md` — source IDs, region codes, rate limits
-- `../travel-shared/references/ota-knowledge.json` — baggage rules, booking notes per OTA
+- OTA baggage rules / booking notes — from Turso tables `airlines`, `booking_types`, `platform_behaviors`, `comparison_rules` (query directly, e.g. `npm run travel -- turso "SELECT * FROM airlines"`)
 - `references/adding-ota.md` — step-by-step guide for registering a new OTA parser (read only when adding new OTA support)
 
 ## Role in Process Flow
