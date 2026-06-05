@@ -87,7 +87,11 @@ def _create_parser(source_id: str) -> BaseScraper:
     module_name = _get_parser_module_name(source_id)
 
     try:
-        module = importlib.import_module(f".parsers.{module_name}", package="scripts.scrapers")
+        # Use this module's own package so parsers load in the SAME namespace as
+        # the BaseScraper we compare against. Hardcoding "scripts.scrapers" while
+        # callers import bare "scrapers" creates a second module copy whose
+        # BaseScraper is a different class object → issubclass() fails.
+        module = importlib.import_module(f".parsers.{module_name}", package=__package__)
     except ModuleNotFoundError:
         available = get_available_parsers()
         raise ValueError(
