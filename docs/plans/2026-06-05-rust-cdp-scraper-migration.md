@@ -308,7 +308,8 @@ Success criteria:
   `settour-fit-kyoto-20260620-4n`.)
 
 ### Parser stage — settour DONE and verified
-- Added `parse capture <file> --source <id>` — a PURE transform (no browser/CDP/Turso) reading a
+- Added `parse capture <file> --source <id>` — a pure transform after rule lookup (no browser/CDP/Turso
+  writes) reading a
   `travel-capture-v1` file → CanonicalOffer[] JSON in the "Format B" shape the existing TS importer
   (`scripts/import-offers-to-turso.ts`) already accepts (`{source_id, package_type, url, scraped_at,
   dates, price, flight, hotel}`).
@@ -321,6 +322,25 @@ Success criteria:
 - `TravelCapture` now derives `Deserialize` so capture files round-trip back into the parser.
 - Note: settour FIT renders ONE cheapest-combo offer per capture; parser emits one offer. Per-person
   is total/2 (the adtCount=2 flow) rounded to nearest. Both grounded in real capture content.
+
+### Rule-driven parser engine — DONE and verified
+- Added Turso table `parser_rules` plus `parser rules seed-defaults`. Rules are regex/marker rows
+  (`date_range_rx`, `nights_rx`, `price_marker`, `price_amount_rx`, `flight_rx`,
+  `hotel_anchor_rx`, price basis, pax divisor, product kind), not per-OTA Rust files.
+- `parse capture` now loads the `parser_rules` row for `--source`. `has_custom_parser=0` routes through
+  the generic engine; `has_custom_parser=1` is reserved for rare Rust override functions. Missing row,
+  invalid regex, or unextractable required fields fail loud.
+- Seeded live Turso rows for `settour`, `liontravel`, and `lifetour`, all with
+  `has_custom_parser=0`. Provenance is stored as `source_url=repo:scripts/scrapers/parsers/<source>.py`.
+- **Verified generic path:** `cargo test -- --nocapture` parsed settour and liontravel through Turso
+  rules and matched live `shaping_tour_group_offers` records:
+  - settour: 2026-06-20→2026-06-24, 4 nights, IT212/IT211, TWD 36,587 total / 18,294 pp,
+    微笑飯店京都烏丸五條, fit.
+  - liontravel: 2026-06-12→2026-06-16, 4 nights, CI120/CI121, TWD 37,108 total / 18,554 pp,
+    HOTEL AZAT NAHA, fit.
+- This supersedes the old per-OTA "Parser Migration Order" as a code-writing sequence: adding an OTA is
+  now a Turso `parser_rules` row plus a parity check. A Rust parser file is only justified when the row
+  sets `has_custom_parser=1` because the page is genuinely too irregular for regex/marker rules.
 
 ### Rust→Turso CLI — DONE and verified
 - Added a native `libsql` Turso module for `travel-scraper`. It reads `TURSO_URL`/`TURSO_TOKEN` from
@@ -342,8 +362,9 @@ Success criteria:
   untouched.
 
 ### Remaining (next milestones, in order)
-- `liontravel` parser (then per Parser Migration Order: travel4u, besttour, lifetour, flight/hotel
-  sources). Same pattern: rendered capture → parser → Turso-backed parity test.
+- Seed remaining OTAs (`travel4u`, `besttour`, flight/hotel sources, and any unseeded group sources)
+  as `parser_rules` rows, then add Turso-backed parity checks. `lifetour` is seeded but still needs a
+  real-capture parity check before decommission decisions.
 - Python decommission per source: only after ≥2 successful real scrapes + parity (plan policy). No
   Python deleted yet.
 - Screenshot capture; OTA domain allowlist; profile-guard hardening (currently needs

@@ -3,6 +3,7 @@ use chromiumoxide::cdp::browser_protocol::browser::GetBrowserCommandLineParams;
 use chromiumoxide::cdp::browser_protocol::target::TargetId;
 use chrono::Utc;
 use futures_util::StreamExt;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
@@ -72,7 +73,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             capture_file,
             source_id,
             out,
-        }) => parse_capture(capture_file, source_id, out),
+        }) => run_async(parse_capture(capture_file, source_id, out)),
+        Command::ParserRules(ParserRulesCommand::SeedDefaults) => {
+            run_async(seed_default_parser_rules())
+        }
         Command::Db(DbCommand::Query { sql }) => run_async(db_query(sql)),
         Command::Db(DbCommand::Exec { sql }) => run_async(db_exec(sql)),
         Command::Import(ImportCommand::Offers {
@@ -91,8 +95,13 @@ enum Command {
     Browser(BrowserCommand),
     Scrape(ScrapeCommand),
     Parse(ParseCommand),
+    ParserRules(ParserRulesCommand),
     Db(DbCommand),
     Import(ImportCommand),
+}
+
+enum ParserRulesCommand {
+    SeedDefaults,
 }
 
 enum DbCommand {
@@ -240,6 +249,14 @@ impl Cli {
                     }),
                 })
             }
+            [group, subgroup, cmd]
+                if group == "parser" && subgroup == "rules" && cmd == "seed-defaults" =>
+            {
+                Ok(Self {
+                    endpoint,
+                    command: Command::ParserRules(ParserRulesCommand::SeedDefaults),
+                })
+            }
             [group, cmd, sql] if group == "db" && cmd == "query" => Ok(Self {
                 endpoint,
                 command: Command::Db(DbCommand::Query {
@@ -265,7 +282,7 @@ impl Cli {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--out <path-or-dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--out <dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--out <dir>] [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-file.json> --source <id> [--out <path-or-dir>]\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n  travel-scraper import offers <offers.json> [--dry-run]\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  TURSO_URL and TURSO_TOKEN are read from env or repo .env for db/import commands.\n"
+    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--out <path-or-dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--out <dir>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--out <dir>] [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-file.json> --source <id> [--out <path-or-dir>]\n  travel-scraper parser rules seed-defaults\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n  travel-scraper import offers <offers.json> [--dry-run]\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  TURSO_URL and TURSO_TOKEN are read from env or repo .env for db/import/parser commands.\n"
 }
 
 fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -1281,11 +1298,11 @@ impl Endpoint {
 }
 
 // ---------------------------------------------------------------------------
-// Parser stage: travel-capture-v1 (file) -> CanonicalOffer[] (Format B JSON).
+// Parser stage: travel-capture-v1 (file) + Turso parser_rules -> CanonicalOffer[].
 //
-// PURE transformation. No browser, no CDP, no Turso. Reads a capture file and
-// emits the offer JSON shape the existing TS importer (scripts/import-offers-to-turso.ts,
-// "Format B") already accepts:
+// Pure offline transformation after rule lookup: no browser, no CDP, no Turso
+// writes. Emits the offer JSON shape the existing TS importer
+// (scripts/import-offers-to-turso.ts, "Format B") already accepts:
 //   { source_id, package_type, url, scraped_at,
 //     dates:{departure_date,return_date,duration_nights},
 //     price:{per_person,price_total,currency},
@@ -1359,7 +1376,87 @@ struct CanonicalOfferOut {
     hotel: Option<OfferHotel>,
 }
 
-fn parse_capture(
+async fn seed_default_parser_rules() -> Result<(), CliError> {
+    let db = turso::TravelDb::connect()
+        .await
+        .map_err(CliError::runtime)?;
+    db.ensure_parser_rules_table()
+        .await
+        .map_err(CliError::runtime)?;
+
+    let mut changed = 0_u64;
+    for rule in default_parser_rules() {
+        changed += db
+            .upsert_parser_rule(&rule)
+            .await
+            .map_err(CliError::runtime)?;
+        println!(
+            "seeded\t{}\tcustom={}",
+            rule.source_id, rule.has_custom_parser
+        );
+    }
+    println!("rows_affected\t{changed}");
+    Ok(())
+}
+
+fn default_parser_rules() -> Vec<turso::ParserRule> {
+    let fetched_at = Some(now_iso());
+    vec![
+        turso::ParserRule {
+            source_id: "settour".to_string(),
+            product_kind: "fit".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"共(\d+)晚".to_string(),
+            nights_is_days: false,
+            price_marker: "機加酒未稅總價".to_string(),
+            price_amount_rx: r"([\d,]{4,})".to_string(),
+            price_basis: "total".to_string(),
+            pax_divisor: 2,
+            flight_rx: r"([A-Z]{2}\d{3,4})".to_string(),
+            hotel_anchor_rx: r"飯店.*入住".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: false,
+            source_url: Some("repo:scripts/scrapers/parsers/settour.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "liontravel".to_string(),
+            product_kind: "fit".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"共(\d+)晚".to_string(),
+            nights_is_days: false,
+            price_marker: "總金額".to_string(),
+            price_amount_rx: r"(?:TWD\s*)?([\d,]{4,})".to_string(),
+            price_basis: "total".to_string(),
+            pax_divisor: 2,
+            flight_rx: r"([A-Z]{2}\d{3,4})".to_string(),
+            hotel_anchor_rx: r"飯店".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: false,
+            source_url: Some("repo:scripts/scrapers/parsers/liontravel.py".to_string()),
+            fetched_at: fetched_at.clone(),
+        },
+        turso::ParserRule {
+            source_id: "lifetour".to_string(),
+            product_kind: "fit".to_string(),
+            date_range_rx: r"(\d{4}/\d{2}/\d{2}).*?~.*?(\d{4}/\d{2}/\d{2})".to_string(),
+            nights_rx: r"(\d+)\s*天\s*(\d+)\s*夜".to_string(),
+            nights_is_days: false,
+            price_marker: "NT$".to_string(),
+            price_amount_rx: r"([\d,]{4,})".to_string(),
+            price_basis: "per_person".to_string(),
+            pax_divisor: 2,
+            flight_rx: r"([A-Z]{1,2}\d{2,4})".to_string(),
+            hotel_anchor_rx: r"^住宿$".to_string(),
+            currency: "TWD".to_string(),
+            has_custom_parser: false,
+            source_url: Some("repo:scripts/scrapers/parsers/lifetour.py".to_string()),
+            fetched_at,
+        },
+    ]
+}
+
+async fn parse_capture(
     capture_file: PathBuf,
     source_id: String,
     out: Option<PathBuf>,
@@ -1376,13 +1473,33 @@ fn parse_capture(
         ))
     })?;
 
-    let offers = match source_id.as_str() {
-        "settour" => parse_settour(&capture)?,
-        other => {
-            return Err(CliError::runtime(format!(
-                "no Rust parser for source '{other}' yet (implemented: settour)"
-            )));
+    let db = turso::TravelDb::connect()
+        .await
+        .map_err(CliError::runtime)?;
+    db.ensure_parser_rules_table()
+        .await
+        .map_err(CliError::runtime)?;
+    let rule = db
+        .parser_rule(&source_id)
+        .await
+        .map_err(CliError::runtime)?
+        .ok_or_else(|| {
+            CliError::runtime(format!(
+                "missing parser_rules row for source_id='{source_id}'; run `travel-scraper parser rules seed-defaults` or insert a rule row"
+            ))
+        })?;
+
+    let offers = if rule.has_custom_parser {
+        match source_id.as_str() {
+            "settour" => parse_settour(&capture)?,
+            other => {
+                return Err(CliError::runtime(format!(
+                    "parser_rules has_custom_parser=1 for source '{other}', but no Rust override is implemented"
+                )));
+            }
         }
+    } else {
+        parse_generic(&capture, &rule)?
     };
 
     if offers.is_empty() {
@@ -1424,6 +1541,266 @@ fn parse_capture(
         }
     }
     Ok(())
+}
+
+fn parse_generic(
+    capture: &TravelCapture,
+    rule: &turso::ParserRule,
+) -> Result<Vec<CanonicalOfferOut>, CliError> {
+    let raw_text = &capture.raw_text;
+    let (depart, ret) = extract_rule_date_range(raw_text, rule)?;
+    let nights = extract_rule_nights(raw_text, rule)?;
+    let (price_total, per_person) = extract_rule_price(raw_text, rule)?;
+    let flights = extract_rule_flights(raw_text, rule)?;
+    let hotel = extract_rule_hotel(raw_text, rule)?;
+
+    let flight = if flights.0.is_some() || flights.1.is_some() {
+        let outbound_number = flights.0.clone().unwrap_or_default();
+        let return_number = flights.1.clone().unwrap_or_default();
+        Some(OfferFlight {
+            outbound: OfferFlightLeg {
+                airline: infer_airline_from_flight_number(&outbound_number).unwrap_or_default(),
+                flight_number: outbound_number,
+                date: depart.clone(),
+            },
+            return_leg: OfferFlightLeg {
+                airline: infer_airline_from_flight_number(&return_number).unwrap_or_default(),
+                flight_number: return_number,
+                date: ret.clone(),
+            },
+        })
+    } else {
+        None
+    };
+
+    Ok(vec![CanonicalOfferOut {
+        source_id: rule.source_id.clone(),
+        package_type: rule.product_kind.clone(),
+        url: capture.url.clone(),
+        scraped_at: if capture.captured_at.is_empty() {
+            now_iso()
+        } else {
+            capture.captured_at.clone()
+        },
+        dates: OfferDates {
+            departure_date: depart,
+            return_date: ret,
+            duration_nights: Some(nights),
+        },
+        price: OfferPrice {
+            per_person: Some(per_person),
+            price_total,
+            currency: rule.currency.clone(),
+        },
+        flight,
+        hotel: Some(OfferHotel { name: hotel }),
+    }])
+}
+
+fn extract_rule_date_range(
+    raw_text: &str,
+    rule: &turso::ParserRule,
+) -> Result<(String, String), CliError> {
+    let rx = compile_rule_regex(rule, "date_range_rx", &rule.date_range_rx)?;
+    let caps = rx.captures(raw_text).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' could not extract dates with date_range_rx={:?}",
+            rule.source_id, rule.date_range_rx
+        ))
+    })?;
+    let depart_raw = caps.get(1).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' date_range_rx must capture departure date in group 1",
+            rule.source_id
+        ))
+    })?;
+    let return_raw = caps.get(2).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' date_range_rx must capture return date in group 2",
+            rule.source_id
+        ))
+    })?;
+    Ok((
+        normalize_rule_date(depart_raw.as_str(), rule)?,
+        normalize_rule_date(return_raw.as_str(), rule)?,
+    ))
+}
+
+fn extract_rule_nights(raw_text: &str, rule: &turso::ParserRule) -> Result<u32, CliError> {
+    let rx = compile_rule_regex(rule, "nights_rx", &rule.nights_rx)?;
+    let caps = rx.captures(raw_text).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' could not extract nights with nights_rx={:?}",
+            rule.source_id, rule.nights_rx
+        ))
+    })?;
+    let group_index = if rule.nights_is_days {
+        1
+    } else {
+        caps.len().saturating_sub(1)
+    };
+    let raw = caps.get(group_index).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' nights_rx must capture a numeric value",
+            rule.source_id
+        ))
+    })?;
+    let value = digits_only(raw.as_str()).parse::<u32>().map_err(|_| {
+        CliError::runtime(format!(
+            "parser rule '{}' captured invalid nights value {:?}",
+            rule.source_id,
+            raw.as_str()
+        ))
+    })?;
+    if rule.nights_is_days {
+        Ok(value.saturating_sub(1))
+    } else {
+        Ok(value)
+    }
+}
+
+fn extract_rule_price(
+    raw_text: &str,
+    rule: &turso::ParserRule,
+) -> Result<(Option<i64>, i64), CliError> {
+    let marker_index = raw_text.find(&rule.price_marker).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' could not find price_marker={:?}",
+            rule.source_id, rule.price_marker
+        ))
+    })?;
+    let price_scope = &raw_text[marker_index + rule.price_marker.len()..];
+    let rx = compile_rule_regex(rule, "price_amount_rx", &rule.price_amount_rx)?;
+    let caps = rx.captures(price_scope).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' could not extract price with price_amount_rx={:?} after marker {:?}",
+            rule.source_id, rule.price_amount_rx, rule.price_marker
+        ))
+    })?;
+    let raw_amount = caps.get(1).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' price_amount_rx must capture amount in group 1",
+            rule.source_id
+        ))
+    })?;
+    let amount = parse_amount(raw_amount.as_str()).ok_or_else(|| {
+        CliError::runtime(format!(
+            "parser rule '{}' captured invalid price amount {:?}",
+            rule.source_id,
+            raw_amount.as_str()
+        ))
+    })?;
+
+    match rule.price_basis.as_str() {
+        "total" => {
+            if rule.pax_divisor <= 0 {
+                return Err(CliError::runtime(format!(
+                    "parser rule '{}' has invalid pax_divisor={}",
+                    rule.source_id, rule.pax_divisor
+                )));
+            }
+            Ok((
+                Some(amount),
+                (amount + rule.pax_divisor - 1) / rule.pax_divisor,
+            ))
+        }
+        "per_person" => {
+            let total = if rule.pax_divisor > 0 {
+                Some(amount * rule.pax_divisor)
+            } else {
+                None
+            };
+            Ok((total, amount))
+        }
+        other => Err(CliError::runtime(format!(
+            "parser rule '{}' has unsupported price_basis={other:?}; expected total or per_person",
+            rule.source_id
+        ))),
+    }
+}
+
+fn extract_rule_flights(
+    raw_text: &str,
+    rule: &turso::ParserRule,
+) -> Result<(Option<String>, Option<String>), CliError> {
+    let rx = compile_rule_regex(rule, "flight_rx", &rule.flight_rx)?;
+    let mut found = Vec::new();
+    for caps in rx.captures_iter(raw_text) {
+        let value = caps
+            .get(1)
+            .or_else(|| caps.get(0))
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
+        if !value.is_empty() && !found.contains(&value) {
+            found.push(value);
+        }
+    }
+    Ok((found.first().cloned(), found.get(1).cloned()))
+}
+
+fn extract_rule_hotel(raw_text: &str, rule: &turso::ParserRule) -> Result<String, CliError> {
+    let rx = compile_rule_regex(rule, "hotel_anchor_rx", &rule.hotel_anchor_rx)?;
+    let lines: Vec<&str> = raw_text.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        if !rx.is_match(line.trim()) {
+            continue;
+        }
+        for next in lines.iter().skip(idx + 1) {
+            let name = next.trim();
+            if !name.is_empty() {
+                return Ok(name.to_string());
+            }
+        }
+    }
+    Err(CliError::runtime(format!(
+        "parser rule '{}' could not extract hotel; no non-empty line after hotel_anchor_rx={:?}",
+        rule.source_id, rule.hotel_anchor_rx
+    )))
+}
+
+fn compile_rule_regex(
+    rule: &turso::ParserRule,
+    field: &str,
+    pattern: &str,
+) -> Result<Regex, CliError> {
+    Regex::new(pattern).map_err(|err| {
+        CliError::runtime(format!(
+            "parser rule '{}' has invalid {field} regex {:?}: {err}",
+            rule.source_id, pattern
+        ))
+    })
+}
+
+fn normalize_rule_date(value: &str, rule: &turso::ParserRule) -> Result<String, CliError> {
+    let normalized = value.trim().replace('/', "-");
+    let bytes = normalized.as_bytes();
+    let valid = bytes.len() == 10
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit);
+    if valid {
+        Ok(normalized)
+    } else {
+        Err(CliError::runtime(format!(
+            "parser rule '{}' captured unsupported date format {:?}; expected YYYY/MM/DD or YYYY-MM-DD",
+            rule.source_id, value
+        )))
+    }
+}
+
+fn parse_amount(value: &str) -> Option<i64> {
+    let digits = digits_only(value);
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse::<i64>().ok()
+    }
+}
+
+fn digits_only(value: &str) -> String {
+    value.chars().filter(|ch| ch.is_ascii_digit()).collect()
 }
 
 async fn db_query(sql: String) -> Result<(), CliError> {
@@ -1582,6 +1959,18 @@ fn product_code_from_url(url: &str) -> Option<String> {
 fn infer_airline_from_flight_number(flight_number: &str) -> Option<String> {
     if flight_number.starts_with("IT") {
         Some("台灣虎航".to_string())
+    } else if flight_number.starts_with("CI") {
+        Some("中華航空".to_string())
+    } else if flight_number.starts_with("BR") {
+        Some("長榮航空".to_string())
+    } else if flight_number.starts_with("JX") {
+        Some("星宇航空".to_string())
+    } else if flight_number.starts_with("MM") {
+        Some("樂桃航空".to_string())
+    } else if flight_number.starts_with("TR") {
+        Some("酷航".to_string())
+    } else if flight_number.starts_with("GK") {
+        Some("捷星航空".to_string())
     } else {
         None
     }

@@ -1,13 +1,8 @@
-// Golden parity test for the generic Turso-rule parser — no JSON fixture file.
+// Second-OTA parity for the generic Turso-rule parser.
 //
-// Input: a minimal travel-capture-v1 (raw_text only) built INLINE from the real
-// settour FIT render (no committed JSON blob).
-// Expected: read live from the cloud DB (Turso) — the verified record
-// shaping_tour_group_offers.offer_id = 'settour-fit-kyoto-20260620-4n'.
-//
-// This proves parser parity using parser_rules from Turso. Skips (does not
-// fail) if Turso creds are absent, so the test is runnable offline without
-// silently passing on missing data.
+// No committed JSON fixture: the test builds a minimal travel-capture-v1 body
+// inline, writes a temp input only because the CLI contract is file-based, and
+// compares parser output to the verified LionTravel booked record in Turso.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -17,27 +12,23 @@ fn binary_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_travel-scraper"))
 }
 
-// Minimal travel-capture-v1 raw_text — the exact lines parse_settour reads,
-// lifted verbatim from a real settour FIT capture (6/20→6/24 京都).
 const INLINE_RAW_TEXT: &str = "\
-2026/06/20(六)~2026/06/24(三)\n\
-飯店 Kyoto 入住：2026/06/20(六)   退房：2026/06/24(三)   (共4晚)修改入住日期\n\
-微笑飯店京都烏丸五條\n\
-Smile Hotel Kyoto karasumagojo\n\
-台灣虎航IT212\n\
-台灣虎航IT211\n\
-機加酒未稅總價\n\
-$36,587\n\
-機票稅金 \n\
-$4,404\n";
+2026/06/12~2026/06/16\n\
+共4晚\n\
+中華航空CI120\n\
+中華航空CI121\n\
+總金額\n\
+TWD 37,108\n\
+飯店\n\
+HOTEL AZAT NAHA\n";
 
 fn inline_capture_json() -> String {
     let capture = serde_json::json!({
         "schema": "travel-capture-v1",
-        "source_id": "settour",
-        "captured_at": "2026-06-05T17:40:23Z",
-        "url": "https://fit.settour.com.tw/product/v2?depDate=20260620,20260624&adtCount=2&displayName=京都",
-        "title": "機加酒自由行搜尋推薦 | 東南旅遊",
+        "source_id": "liontravel",
+        "captured_at": "2026-06-05T18:00:00Z",
+        "url": "https://vacation.liontravel.com/detail/170531004?FromDate=20260612&Days=5&roomlist=2-0-0",
+        "title": "LionTravel booked Okinawa FIT",
         "raw_text": INLINE_RAW_TEXT,
         "links": [],
         "tables": [],
@@ -48,9 +39,11 @@ fn inline_capture_json() -> String {
 }
 
 fn run_parser_on_inline_capture() -> serde_json::Value {
-    // parse capture takes a file path; write the inline capture to a temp file.
     let mut tmp = std::env::temp_dir();
-    tmp.push(format!("settour-parity-{}.json", std::process::id()));
+    tmp.push(format!(
+        "liontravel-rule-parity-{}.json",
+        std::process::id()
+    ));
     {
         let mut f = std::fs::File::create(&tmp).expect("create temp capture");
         f.write_all(inline_capture_json().as_bytes())
@@ -61,14 +54,15 @@ fn run_parser_on_inline_capture() -> serde_json::Value {
         .arg("capture")
         .arg(&tmp)
         .arg("--source")
-        .arg("settour")
+        .arg("liontravel")
         .output()
         .expect("run travel-scraper");
     let _ = std::fs::remove_file(&tmp);
 
     assert!(
         output.status.success(),
-        "parse capture failed: {}",
+        "parse capture failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let offers: serde_json::Value =
@@ -93,7 +87,6 @@ fn seed_default_parser_rules() {
     );
 }
 
-/// Read TURSO_URL/TURSO_TOKEN from the repo .env.
 fn turso_creds() -> Option<(String, String)> {
     let body = read_repo_env()?;
     let mut url = None;
@@ -123,14 +116,13 @@ fn read_repo_env() -> Option<String> {
 }
 
 #[tokio::test]
-async fn settour_parser_matches_cloud_db_record() {
+async fn liontravel_rule_parser_matches_cloud_db_record() {
     let Some((url, token)) = turso_creds() else {
         eprintln!("SKIP: no TURSO_URL/TURSO_TOKEN in .env — cannot verify against cloud DB");
         return;
     };
     seed_default_parser_rules();
 
-    // Expected values: live from Turso.
     let db = libsql::Builder::new_remote(url, token)
         .build()
         .await
@@ -139,7 +131,7 @@ async fn settour_parser_matches_cloud_db_record() {
     let mut rows = conn
         .query(
             "SELECT depart_date, return_date, nights, price_per_person_twd, hotel_name, product_kind \
-             FROM shaping_tour_group_offers WHERE offer_id = 'settour-fit-kyoto-20260620-4n'",
+             FROM shaping_tour_group_offers WHERE offer_id = 'liontravel-170531004-oka-20260612-BOOKED'",
             (),
         )
         .await
@@ -157,10 +149,9 @@ async fn settour_parser_matches_cloud_db_record() {
     let exp_hotel: String = row.get(4).unwrap();
     let exp_kind: String = row.get(5).unwrap();
 
-    // Actual values: from the Rust generic parser, with rules loaded from Turso.
     let o = run_parser_on_inline_capture();
     println!(
-        "generic_settour_output\t{}",
+        "generic_liontravel_output\t{}",
         serde_json::to_string(&o).unwrap()
     );
 
@@ -168,14 +159,10 @@ async fn settour_parser_matches_cloud_db_record() {
     assert_eq!(o["dates"]["return_date"], exp_return);
     assert_eq!(o["dates"]["duration_nights"], exp_nights);
     assert_eq!(o["price"]["per_person"], exp_pp);
+    assert_eq!(o["price"]["price_total"], 37108);
     assert_eq!(o["package_type"], exp_kind);
-    // hotel_name in Turso has an English suffix; parser yields the ZH name — assert prefix match.
-    let parsed_hotel = o["hotel"]["name"].as_str().unwrap();
-    assert!(
-        exp_hotel.starts_with(parsed_hotel),
-        "hotel mismatch: parser='{parsed_hotel}' vs turso='{exp_hotel}'"
-    );
-    // Total is the rendered two-passenger price. It is not equal to pp*2
-    // because per-person is rounded up from 36587 / 2.
-    assert_eq!(o["price"]["price_total"], 36587);
+    assert_eq!(o["hotel"]["name"], exp_hotel);
+    assert_eq!(o["flight"]["outbound"]["flight_number"], "CI120");
+    assert_eq!(o["flight"]["return"]["flight_number"], "CI121");
+    assert_eq!(o["flight"]["outbound"]["airline"], "中華航空");
 }

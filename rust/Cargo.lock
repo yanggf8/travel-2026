@@ -2274,6 +2274,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "libsql",
+ "regex",
  "serde",
  "serde_json",
  "tokio",
