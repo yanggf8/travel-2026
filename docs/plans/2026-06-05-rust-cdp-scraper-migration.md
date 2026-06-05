@@ -369,6 +369,15 @@ Success criteria:
   Decide the mechanism in its own plan; until then, env-var injection at the shell is the interim
   contract, and code must FAIL LOUD (not hunt paths) when creds are absent.
 
+  **Research finding (2026-06): Turso has NO secrets-vault product** — only DB auth tokens. A vault
+  *inside* Turso would be circular anyway (need a token to read the secret that holds the token). The
+  cloud-native answer is Turso's **Platform API + token minting**: hold ONE bootstrap credential
+  (injected by the runtime — env at process start / OS keychain / CI secret / CF Worker secret binding,
+  never a repo `.env`), and mint **short-lived, scoped (read-only/full), expiring** DB tokens at runtime
+  (`2w1d30m`-style expiry; read-only tokens where writes aren't needed). `gwebcdb/crates/turso-util`
+  already implements this tiered Read/Write resolution with `mint_allowed` — reuse it. So the plan is:
+  bootstrap secret from runtime injection → turso-util mints a scoped token → use → expire. Not a vault.
+
 ## Risks
 
 - CDP crates may lag Chrome protocol changes.
