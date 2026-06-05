@@ -331,6 +331,24 @@ Success criteria:
   `--i-understand-profile` because Chrome wasn't launched with `--enable-automation`); Rust Turso
   import (optional — TS importer stays until parser core proven).
 
+### TODO — deferred, tracked (write a dedicated plan for each)
+
+- **Kill npm — pure Rust + Turso end-state.** User goal: NO npm, NO Python, NO JSON files. Migrate
+  every `npm run travel` / `scripts/*.ts` Turso path to the Rust binary; delete `package.json`, the TS
+  importer, and the npm scripts once parity is proven. (User deferred writing this plan.)
+
+- **Credentials are cloud-native, not a local `.env`.** This is a cloud-based (Turso) project, yet
+  Turso creds (`TURSO_URL`/`TURSO_TOKEN`) are read from a **local `.env` file** in ~10 places
+  (`rust/.../turso.rs`, both Rust tests, `main.rs`, `scripts/turso-pipeline.ts`,
+  `scripts/import-offers-to-turso.ts`, other TS scripts, `workers/trip-dashboard/src/turso.ts`). That
+  local-file dependency contradicts the no-local-data direction and already caused breakage (the
+  `db query` CWD failure; the `../../.env` path walk-up in the test). Requirement: stop depending on a
+  local `.env` as the source of cred truth — resolve credentials in a cloud-native way (e.g. a single
+  documented env-injection at process start, an OS keychain/secret store, or a token broker like
+  `gwebcdb/crates/turso-util`'s tiered resolution), so no command needs to locate a repo-relative file.
+  Decide the mechanism in its own plan; until then, env-var injection at the shell is the interim
+  contract, and code must FAIL LOUD (not hunt paths) when creds are absent.
+
 ## Risks
 
 - CDP crates may lag Chrome protocol changes.
