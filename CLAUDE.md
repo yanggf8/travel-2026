@@ -198,7 +198,7 @@ URLs 404 / hit the wrong page. Scrape via the Rust CDP driver against real Chrom
 
 | URL Contains | Action |
 |-------------|--------|
-| Any OTA (besttour / liontravel / lifetour / settour / …) | Drive the real page in Chrome, then capture + parse: <br>`./rust/target/debug/travel-scraper scrape interact "<url>" --source <id> --step ...` (or `browser snapshot` on an open tab) <br>→ `./rust/target/debug/travel-scraper parse capture <capture-id> --source <id>` (parses via `parser_rules`, imports to Turso) |
+| Any OTA (besttour / liontravel / lifetour / settour / …) | Drive the real page in Chrome, then capture + verify + parse: <br>`./rust/target/debug/travel-scraper scrape interact "<url>" --source <id> --step ...` (or `browser snapshot` on an open tab) <br>→ `./rust/target/debug/travel-scraper verify <source-id> <capture-id>` (read-only regex diagnostics) <br>→ `./rust/target/debug/travel-scraper parse capture <capture-id> --source <id>` (imports to Turso) |
 | Non-OTA URL | Use WebFetch as normal |
 
 The driver navigates/clicks the actual UI (no fragile URL templates). Captures live in the

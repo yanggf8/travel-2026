@@ -34,6 +34,35 @@ fn tigerair_flight_rule_parses_without_hotel_or_nights() {
 }
 
 #[test]
+fn verify_reports_field_status_plain_text() {
+    if !common::can_access_turso() || !common::seed_rules() {
+        return;
+    }
+    if !common::seed_capture(
+        TIGERAIR_CAPTURE_ID,
+        "tigerair",
+        "https://booking.tigerairtw.com/zh-TW/index",
+        TIGERAIR_RAW_TEXT,
+    ) {
+        return;
+    }
+    let out = common::run(&["verify", "tigerair", TIGERAIR_CAPTURE_ID]);
+    assert!(
+        out.status.success(),
+        "verify failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("verify\ttigerair\t"));
+    assert!(stdout.contains("rule_product_kind\tflight"));
+    assert!(stdout.contains("field\tdepart_return\tOK\t2026-06-21→"));
+    assert!(stdout.contains("field\tnights\tOK\tnot-required:product_kind=flight"));
+    assert!(stdout.contains("field\thotel\tOK\tnot-required:product_kind=flight"));
+    assert!(stdout.contains("overall\tOK\toffers=1"));
+}
+
+#[test]
 fn agoda_hotel_rule_parses_without_flight() {
     if !common::can_access_turso() || !common::seed_rules() {
         return;

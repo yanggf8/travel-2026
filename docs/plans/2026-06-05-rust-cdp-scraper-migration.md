@@ -2,7 +2,9 @@
 
 **Status:** In progress — full pipeline DONE (browser/CDP → capture → interactive click/fill →
 rule-driven parser → Turso import), no-JSON/plain-text, native Rust→Turso. 10 OTA `parser_rules`
-seeded; settour + liontravel real-scrape-verified and their Python parsers deleted. Remaining:
+seeded; settour + liontravel real-scrape-verified and their Python parsers deleted. Added
+`verify <source> <capture-id>` for live regex close-out; current stored real rendered capture verifies
+settour only. Remaining:
 real-scrape-gate the other package OTAs (besttour/lifetour/travel4u) and the flight/hotel-only OTAs
 before advancing decommission status. Flight/hotel rule shape is implemented and seeded; live capture
 parity is still required per source.
@@ -365,6 +367,21 @@ Success criteria:
 - `db query` renders tab-separated plain-text tables. JSON remains only as an internal protocol/library
   detail where unavoidable, not a user-facing artifact or source of truth.
 
+### Live capture rule verifier — DONE
+- Added `verify <source-id> <capture-id>` as a read-only close-out command. It loads `captures.raw_text`
+  from Turso, loads the source's `parser_rules` row, prints every rule regex, then reports each extracted
+  field as `OK`, `MISSING`, or `not-required`:
+  depart/return, nights, price, flight number, airline, hotel, and an overall parser result. It never
+  imports offers.
+- Current Turso `captures` table contains 10 rows. Only `settour-test-0620` is a full rendered-page
+  capture (2164 chars of actual Settour page text); it verifies cleanly:
+  `2026-06-20→2026-06-24`, 4 nights, IT212/IT211, TWD 36,587 total / 18,294 pp,
+  微笑飯店京都烏丸五條.
+- Other stored rows are snippet/test rows (`*-parity-test`, `*-rule-test`, `*-roundtrip-test`,
+  `tigerair-test`). They are useful command/test fixtures but are not live verification evidence.
+- No regex changes were needed from current stored captures. `tigerair-test` intentionally fails
+  (`dummy flight text`) and is not a real capture.
+
 ### OTA parser_rules seed + Python decommission — DONE
 - `parser rules seed-defaults` now seeds 10 rows:
   `agoda`, `besttour`, `eztravel`, `google_flights`, `lifetour`, `liontravel`, `settour`, `tigerair`,
@@ -384,6 +401,14 @@ Success criteria:
   - `agoda`: hotel-only rule shape test added (`product_kind=hotel`; no flight required).
 - `google_flights`, `trip`, and `eztravel` are seeded with flight rules and `has_custom_parser=0`, but
   still need live or representative parity cases before being considered verified.
+- Live verification status from Turso captures:
+  - `settour`: LIVE-VERIFIED against full rendered capture `settour-test-0620`.
+  - `liontravel`: already decommissioned from prior real Rust+CDP verification; no additional full
+    rendered capture is currently stored in `captures`.
+  - `besttour`, `lifetour`, `travel4u`: snippet-verified only; awaiting live user-driven capture before
+    Python/archive deletion status can advance.
+  - `tigerair`, `google_flights`, `trip`, `agoda`, `eztravel`: rule-shape/snippet verified where tests
+    exist; awaiting live user-driven capture.
 - Deleted verified Python parser modules:
   `scripts/scrapers/parsers/settour.py`, `scripts/scrapers/parsers/liontravel.py`.
   `scripts/scrapers/parsers/__init__.py` no longer imports them, `scripts/scrapers/registry.py` no
@@ -401,12 +426,11 @@ Success criteria:
 - `parse capture` imports directly into `offers` with append-only conflict handling
   (`ON CONFLICT(id, scraped_at) DO NOTHING`) and no JSON file boundary.
 - Added `db token-status <read|write|secrets>` as a plain-text credential probe.
-- Current local verification note: this shell's Turso CLI is not authenticated, so live cloud parity
-  tests skip-not-fail and `db token-status read` fails loud with the `turso auth login` instruction.
+- Current local verification note: `db token-status read` resolves through the broker cache
+  (`source=cache`, db `travel-2026`). If the cache expires, run `turso auth login` to mint fresh tier
+  tokens.
 
 ### Remaining (next milestones, in order)
-- Authenticate the local Turso CLI (`turso auth login`) or provide `TRAVEL_TURSO_<TIER>_TOKEN` plus
-  `TRAVEL_TURSO_URL`, then re-run live `parser rules seed-defaults`, `db query`, and parity tests.
 - Real-scrape the newly seeded OTAs, starting with `lifetour`, `besttour`, and `travel4u`; then advance
   status only after the Rust+CDP scrape + Turso parity gate passes.
 - Real-scrape flight/hotel-only sources (`tigerair`, `google_flights`, `trip`, `agoda`, `eztravel`) and

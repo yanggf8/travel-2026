@@ -73,6 +73,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             source_id,
             dry_run,
         }) => run_async(parse_capture(capture_id, source_id, dry_run)),
+        Command::Verify {
+            source_id,
+            capture_id,
+        } => run_async(verify_capture(source_id, capture_id)),
         Command::ParserRules(ParserRulesCommand::SeedDefaults) => {
             run_async(seed_default_parser_rules())
         }
@@ -91,6 +95,10 @@ enum Command {
     Browser(BrowserCommand),
     Scrape(ScrapeCommand),
     Parse(ParseCommand),
+    Verify {
+        source_id: String,
+        capture_id: String,
+    },
     ParserRules(ParserRulesCommand),
     Db(DbCommand),
 }
@@ -241,6 +249,13 @@ impl Cli {
                     }),
                 })
             }
+            [cmd, source_id, capture_id] if cmd == "verify" => Ok(Self {
+                endpoint,
+                command: Command::Verify {
+                    source_id: source_id.to_string(),
+                    capture_id: capture_id.to_string(),
+                },
+            }),
             [group, subgroup, cmd]
                 if group == "parser" && subgroup == "rules" && cmd == "seed-defaults" =>
             {
@@ -273,7 +288,7 @@ impl Cli {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-id> --source <id> [--dry-run]\n  travel-scraper parser rules seed-defaults\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n  travel-scraper db token-status <read|write|secrets>\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n`parse capture <capture-id>` reads raw_text from Turso, parses via parser_rules, and\nimports offers straight to Turso (`--dry-run` prints plain text instead).\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
+    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-id> --source <id> [--dry-run]\n  travel-scraper verify <source-id> <capture-id>\n  travel-scraper parser rules seed-defaults\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n  travel-scraper db token-status <read|write|secrets>\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n`parse capture <capture-id>` reads raw_text from Turso, parses via parser_rules, and\nimports offers straight to Turso (`--dry-run` prints plain text instead).\n`verify <source-id> <capture-id>` is read-only: it prints rule regexes and extracted field status.\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
 }
 
 fn parse_token_tier(raw: &str) -> Result<TokenTier, CliError> {
@@ -1698,6 +1713,198 @@ async fn parse_capture(
     println!("offers\t{}", offers.len());
     println!("imported\t{imported}");
     Ok(())
+}
+
+/// Verify one stored capture against one parser_rules row without importing.
+async fn verify_capture(source_id: String, capture_id: String) -> Result<(), CliError> {
+    let db = turso::TravelDb::connect_read()
+        .await
+        .map_err(CliError::runtime)?;
+    let (stored_source, url, raw_text) = db
+        .get_capture(&capture_id)
+        .await
+        .map_err(CliError::runtime)?
+        .ok_or_else(|| {
+            CliError::runtime(format!(
+                "no capture with capture_id='{capture_id}' in Turso; run a scrape/snapshot first"
+            ))
+        })?;
+    if stored_source != source_id {
+        println!("warning\tcapture_source_mismatch\tstored={stored_source}\trequested={source_id}");
+    }
+    let rule = db
+        .parser_rule(&source_id)
+        .await
+        .map_err(CliError::runtime)?
+        .ok_or_else(|| {
+            CliError::runtime(format!(
+                "missing parser_rules row for source_id='{source_id}'; run `travel-scraper parser rules seed-defaults` or insert a rule row"
+            ))
+        })?;
+    let capture = TravelCapture {
+        schema: default_schema(),
+        source_id: source_id.clone(),
+        captured_at: now_iso(),
+        url,
+        title: String::new(),
+        raw_text,
+        links: Vec::new(),
+        tables: Vec::new(),
+        html: None,
+        screenshot_path: None,
+    };
+
+    println!("verify\t{source_id}\t{capture_id}");
+    println!("capture_source\t{stored_source}");
+    println!("url\t{}", capture.url);
+    println!("raw_text_chars\t{}", capture.raw_text.chars().count());
+    println!("snippet\t{}", content_snippet(&capture.raw_text));
+    print_rule_report(&rule);
+    print_field_report("depart_return", verify_date_range(&capture.raw_text, &rule));
+    print_field_report("nights", verify_nights(&capture.raw_text, &rule));
+    print_field_report("price", verify_price(&capture.raw_text, &rule));
+    print_field_report("flight", verify_flight(&capture.raw_text, &rule));
+    print_field_report("airline", verify_airline(&capture.raw_text, &rule));
+    print_field_report("hotel", verify_hotel(&capture.raw_text, &rule));
+
+    match if rule.has_custom_parser {
+        match source_id.as_str() {
+            "settour" => parse_settour(&capture),
+            other => Err(CliError::runtime(format!(
+                "parser_rules has_custom_parser=1 for source '{other}', but no Rust override is implemented"
+            ))),
+        }
+    } else {
+        parse_generic(&capture, &rule)
+    } {
+        Ok(offers) if offers.is_empty() => {
+            println!("overall\tMISSING\tparser produced 0 offers");
+        }
+        Ok(offers) => {
+            println!("overall\tOK\toffers={}", offers.len());
+            for offer in &offers {
+                print_offer_plain(offer);
+            }
+        }
+        Err(err) => {
+            println!("overall\tMISSING\t{err}");
+        }
+    }
+
+    Ok(())
+}
+
+fn print_rule_report(rule: &turso::ParserRule) {
+    println!("rule_source\t{}", rule.source_id);
+    println!("rule_product_kind\t{}", rule.product_kind);
+    println!("rule_has_custom_parser\t{}", rule.has_custom_parser);
+    println!("rule_date_range_rx\t{}", rule.date_range_rx);
+    println!("rule_nights_rx\t{}", rule.nights_rx);
+    println!("rule_price_marker\t{}", rule.price_marker);
+    println!("rule_price_amount_rx\t{}", rule.price_amount_rx);
+    println!("rule_price_basis\t{}", rule.price_basis);
+    println!("rule_pax_divisor\t{}", rule.pax_divisor);
+    println!("rule_flight_rx\t{}", rule.flight_rx);
+    println!("rule_airline_rx\t{}", rule.airline_rx);
+    println!("rule_hotel_anchor_rx\t{}", rule.hotel_anchor_rx);
+    println!("rule_hotel_name_rx\t{}", rule.hotel_name_rx);
+}
+
+fn print_field_report(name: &str, result: VerifyField) {
+    match result {
+        VerifyField::Ok(value) => println!("field\t{name}\tOK\t{value}"),
+        VerifyField::Missing(reason) => println!("field\t{name}\tMISSING\t{reason}"),
+        VerifyField::NotRequired(reason) => println!("field\t{name}\tOK\tnot-required:{reason}"),
+    }
+}
+
+enum VerifyField {
+    Ok(String),
+    Missing(String),
+    NotRequired(String),
+}
+
+fn verify_date_range(raw_text: &str, rule: &turso::ParserRule) -> VerifyField {
+    match extract_rule_date_range(raw_text, rule) {
+        Ok((depart, ret)) => VerifyField::Ok(format!("{depart}→{ret}")),
+        Err(err) => VerifyField::Missing(err.to_string()),
+    }
+}
+
+fn verify_nights(raw_text: &str, rule: &turso::ParserRule) -> VerifyField {
+    if rule.product_kind == "flight" {
+        return VerifyField::NotRequired("product_kind=flight".to_string());
+    }
+    match extract_rule_nights(raw_text, rule) {
+        Ok(value) => VerifyField::Ok(value.to_string()),
+        Err(err) => VerifyField::Missing(err.to_string()),
+    }
+}
+
+fn verify_price(raw_text: &str, rule: &turso::ParserRule) -> VerifyField {
+    match extract_rule_price(raw_text, rule) {
+        Ok((total, pp)) => VerifyField::Ok(format!(
+            "pp={pp}\ttotal={}",
+            total
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "".to_string())
+        )),
+        Err(err) => VerifyField::Missing(err.to_string()),
+    }
+}
+
+fn verify_flight(raw_text: &str, rule: &turso::ParserRule) -> VerifyField {
+    if rule.product_kind == "hotel" {
+        return VerifyField::NotRequired("product_kind=hotel".to_string());
+    }
+    match extract_rule_flights(raw_text, rule) {
+        Ok((Some(outbound), Some(return_leg))) => {
+            VerifyField::Ok(format!("{outbound}/{return_leg}"))
+        }
+        Ok((Some(outbound), None)) => VerifyField::Ok(outbound),
+        Ok((None, Some(return_leg))) => VerifyField::Ok(return_leg),
+        Ok((None, None)) if rule.product_kind == "flight" => {
+            VerifyField::Missing("flight rule found no flight number".to_string())
+        }
+        Ok((None, None)) => VerifyField::Missing("no flight number matched".to_string()),
+        Err(err) => VerifyField::Missing(err.to_string()),
+    }
+}
+
+fn verify_airline(raw_text: &str, rule: &turso::ParserRule) -> VerifyField {
+    if rule.product_kind == "hotel" {
+        return VerifyField::NotRequired("product_kind=hotel".to_string());
+    }
+    match extract_rule_airline(raw_text, rule) {
+        Ok(Some(value)) => VerifyField::Ok(value),
+        Ok(None) if rule.airline_rx.trim().is_empty() => {
+            VerifyField::NotRequired("airline_rx empty".to_string())
+        }
+        Ok(None) if rule.product_kind == "flight" => {
+            match extract_rule_flights(raw_text, rule)
+                .ok()
+                .and_then(|value| value.0)
+            {
+                Some(flight) => VerifyField::Ok(
+                    infer_airline_from_flight_number(&flight)
+                        .unwrap_or_else(|| "flight-number-only".to_string()),
+                ),
+                None => VerifyField::Missing("airline rule found no airline".to_string()),
+            }
+        }
+        Ok(None) => VerifyField::Missing("no airline matched".to_string()),
+        Err(err) => VerifyField::Missing(err.to_string()),
+    }
+}
+
+fn verify_hotel(raw_text: &str, rule: &turso::ParserRule) -> VerifyField {
+    if rule.product_kind == "flight" {
+        return VerifyField::NotRequired("product_kind=flight".to_string());
+    }
+    match extract_rule_hotel(raw_text, rule) {
+        Ok(value) => VerifyField::Ok(value),
+        Err(err) => VerifyField::Missing(err.to_string()),
+    }
 }
 
 /// Plain-text (tab-separated) rendering of one parsed offer — no JSON.
