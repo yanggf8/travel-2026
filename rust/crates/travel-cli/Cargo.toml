@@ -1,0 +1,18 @@
+[package]
+name = "travel-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "travel"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+libsql = "0.6"
+regex = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+turso-util = { path = "../turso-util" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

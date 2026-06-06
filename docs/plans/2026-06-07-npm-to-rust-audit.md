@@ -83,11 +83,11 @@ Difficulty scale:
 | `view:prices` | travel-CLI command | `view-prices.ts` 268 + `turso-service.ts` 1,275 | No StateManager; DB reads | medium | `travel prices view` |
 | `validate:data` | dev/infra | `scripts/validate-data.ts` 576 + `turso-pipeline.ts` 288 | No | medium | `travel validate data` |
 | `doctor` | dev/infra | `scripts/validate-data.ts` 576 + `--doctor` | No | medium | `travel doctor` |
-| `compare-trips` | comparison/util | `compare-trips.ts` 401 + leave calculator 330 | No | trivial/medium | `travel compare trips` |
+| `compare-trips` | comparison/util | `compare-trips.ts` 401 + leave calculator 330 | No | trivial/medium | `travel compare trips` — Phase 1 Rust-built, text-first input, TS deletion pending |
 | `compare-dates` | comparison/util | `compare-dates.ts` 415 + `turso-service.ts` 1,275 | No StateManager; DB reads | medium | `travel compare dates` |
 | `compare-true-cost` | comparison/util | `compare-true-cost.ts` 361 + `turso-service.ts` 1,275 | No StateManager; DB reads | medium | `travel compare true-cost` |
-| `normalize-flights` | comparison/util | `flight-normalizer.ts` 293 | No | trivial/medium | `travel normalize flights` |
-| `leave-calc` | comparison/util | `leave-calculator.ts` 330 + `turso-service.ts` 1,275 holiday reads | No StateManager; DB reads | medium | `travel leave calc` |
+| `normalize-flights` | comparison/util | `flight-normalizer.ts` 293 | No | trivial/medium | `travel normalize flights` — Phase 1 Rust-built, rendered-text input, TS deletion pending |
+| `leave-calc` | comparison/util | `leave-calculator.ts` 330 + `turso-service.ts` 1,275 holiday reads | No StateManager; DB reads | medium | `travel leave calc` — Phase 1 Rust-built, exact plain-text parity, TS deletion pending |
 | `db:import:turso` | DB script | `import-offers-to-turso.ts` 540 + `turso-pipeline.ts` 288 | No | medium | obsolete for scraper path; otherwise `travel db import-offers` |
 | `db:migrate:turso` | DB script | `turso-migrate.ts` 1,737 + `turso-pipeline.ts` 288 | No | hard | `travel db migrate` |
 | `db:status:turso` | DB script | `turso-status.ts` 73 + `turso-pipeline.ts` 288 | No | trivial/medium | `travel db status` |
@@ -206,6 +206,17 @@ Deliverables:
 - `travel leave calc`.
 - Unit tests for date/flight parsing and formatting.
 - Output diff against existing TS commands on fixed inputs.
+
+Progress as of 2026-06-07:
+- New crate `rust/crates/travel-cli` added with binary name `travel`.
+- `travel leave calc` reads holidays from Turso through vendored `turso-util` read-tier token minting
+  and matches the TS plain-text output on the fixed 2026-06-20 to 2026-06-24 Taiwan range.
+- `travel compare trips` is Rust-built using repeatable plain-text trip specs instead of the old
+  JSON-only TS `--trips` surface. It preserves the TS summary/detail rendering and leave/cost math.
+- `travel normalize flights` is Rust-built for rendered plain text via `--text` or `--stdin`; it does
+  not preserve the old TS dependency on legacy `offers.raw_data` JSON.
+- Phase 1 TS files are Rust-parity-verified for behavior/output shape, but TS deletion remains pending
+  until user sign-off. Root `package.json` is unchanged.
 
 Estimate: 2-4 days.
 
@@ -373,4 +384,3 @@ Mitigation:
 
 Total: roughly 5-10 weeks of focused work, depending on how much of the current TS command surface is
 still active and how strict parity needs to be for older commands.
-
