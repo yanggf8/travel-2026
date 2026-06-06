@@ -2,6 +2,7 @@ mod compare;
 mod db;
 mod flights;
 mod leave;
+mod offers;
 mod plans;
 
 use std::{env, io::Read, process};
@@ -32,6 +33,10 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             normalize_flights(rest)
         }
         [cmd] if cmd == "plans" => plans::run().await,
+        [cmd, rest @ ..] if cmd == "query-offers" => {
+            let opts = offers::OffersArgs::parse(rest)?;
+            offers::run(&opts).await
+        }
         _ => Err(format!(
             "unknown command: {}\nRun `travel --help` for usage.",
             args.join(" ")
@@ -92,6 +97,6 @@ fn normalize_flights(args: &[String]) -> Result<(), String> {
 
 fn print_usage() {
     println!(
-        "Travel CLI\n\nUsage:\n  travel plans\n  travel compare trips --trip '<key=value;...>' [--trip '<key=value;...>'] [--market taiwan] [--detailed]\n  travel normalize flights --text '<rendered flight text>' --url '<source url>' [--label name]\n  travel normalize flights --stdin --url '<source url>' [--label name]\n  travel leave calc <start-date> <end-date> [country]\n\nRules:\n  plain-text input and output; no JSON files or JSON output"
+        "Travel CLI\n\nUsage:\n  travel plans\n  travel query-offers [--source a,b] [--region r] [--dest d] [--max-price N] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--limit N]\n  travel compare trips --trip '<key=value;...>' [--trip '<key=value;...>'] [--market taiwan] [--detailed]\n  travel normalize flights --text '<rendered flight text>' --url '<source url>' [--label name]\n  travel normalize flights --stdin --url '<source url>' [--label name]\n  travel leave calc <start-date> <end-date> [country]\n\nRules:\n  plain-text input and output; no JSON files or JSON output"
     );
 }
