@@ -109,11 +109,20 @@ function rowsToObjects(response: any, idx = 0): Record<string, any>[] {
  */
 async function validateOtaSources(client: TursoPipelineClient): Promise<OtaSourcesFile | null> {
   const rows = rowsToObjects(await client.execute(
-    `SELECT source_id, name, type_json, status, scraper_script, notes FROM ota_sources ORDER BY source_id`
+    `SELECT source_id, name, status, scraper_script, notes FROM ota_sources ORDER BY source_id`
   ));
   if (rows.length === 0) {
     addResult('ota-sources', 'error', 'Turso ota_sources has no rows. Run npm run db:migrate:turso.');
     return null;
+  }
+  // type list from normalized child table (no JSON column).
+  const typeRows = rowsToObjects(await client.execute(
+    `SELECT source_id, type FROM ota_source_types ORDER BY source_id`
+  ));
+  const typesBySource = new Map<string, string[]>();
+  for (const r of typeRows) {
+    if (!typesBySource.has(r.source_id)) typesBySource.set(r.source_id, []);
+    typesBySource.get(r.source_id)!.push(r.type);
   }
   const sources: OtaSourcesFile = { version: 'db', sources: {} };
   for (const row of rows) {
@@ -121,7 +130,7 @@ async function validateOtaSources(client: TursoPipelineClient): Promise<OtaSourc
       source_id: row.source_id,
       display_name: row.name,
       display_name_en: row.name,
-      types: row.type_json ? JSON.parse(row.type_json) : [],
+      types: (typesBySource.get(row.source_id) ?? []) as any,
       currency: 'TWD',
       supported: row.status === 'active',
       scraper_script: row.scraper_script || null,

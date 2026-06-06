@@ -42,13 +42,21 @@ async function main(): Promise<void> {
     for (const a of d.areas) {
       stmts.push({
         sql: `INSERT OR REPLACE INTO destination_areas
-          (slug, area_id, name, type, stations_json, vibe, best_for_json, source_url, fetched_at, confidence)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          (slug, area_id, name, type, vibe, source_url, fetched_at, confidence)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
         args: [
           tursoText(slug), tursoText(a.id), tursoText(a.name), tursoText(a.type),
-          tursoText(JSON.stringify(a.stations)), tursoText(a.vibe), tursoText(JSON.stringify(a.best_for)),
-          tursoText(SOURCE_URL), tursoText(FETCHED_AT), tursoText(CONFIDENCE),
+          tursoText(a.vibe), tursoText(SOURCE_URL), tursoText(FETCHED_AT), tursoText(CONFIDENCE),
         ],
+      });
+      // Normalized list child rows (no JSON columns).
+      stmts.push({ sql: `DELETE FROM destination_area_stations WHERE slug = ? AND area_id = ?;`, args: [tursoText(slug), tursoText(a.id)] });
+      a.stations.forEach((station, i) => {
+        stmts.push({ sql: `INSERT INTO destination_area_stations (slug, area_id, station, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(slug), tursoText(a.id), tursoText(station), tursoInt(i)] });
+      });
+      stmts.push({ sql: `DELETE FROM destination_area_best_for WHERE slug = ? AND area_id = ?;`, args: [tursoText(slug), tursoText(a.id)] });
+      a.best_for.forEach((tag, i) => {
+        stmts.push({ sql: `INSERT INTO destination_area_best_for (slug, area_id, tag, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(slug), tursoText(a.id), tursoText(tag), tursoInt(i)] });
       });
       nAreas++;
     }
@@ -56,28 +64,36 @@ async function main(): Promise<void> {
       stmts.push({
         sql: `INSERT OR REPLACE INTO destination_pois
           (slug, poi_id, title, area, nearest_station, duration_min, booking_required, booking_url,
-           cost_estimate, tags_json, notes, hours, address, source_url, fetched_at, confidence)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+           cost_estimate, notes, hours, address, source_url, fetched_at, confidence)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         args: [
           tursoText(slug), tursoText(p.id), tursoText(p.title), tursoText(p.area),
           tursoText(p.nearest_station), tursoInt(p.duration_min), tursoInt(p.booking_required ? 1 : 0),
-          tursoText(p.booking_url ?? null), tursoInt(p.cost_estimate), tursoText(JSON.stringify(p.tags)),
+          tursoText(p.booking_url ?? null), tursoInt(p.cost_estimate),
           tursoText(p.notes ?? null), tursoText(p.hours ?? null), tursoText(p.address ?? null),
           tursoText(SOURCE_URL), tursoText(FETCHED_AT), tursoText(CONFIDENCE),
         ],
+      });
+      stmts.push({ sql: `DELETE FROM destination_poi_tags WHERE slug = ? AND poi_id = ?;`, args: [tursoText(slug), tursoText(p.id)] });
+      p.tags.forEach((tag, i) => {
+        stmts.push({ sql: `INSERT INTO destination_poi_tags (slug, poi_id, tag, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(slug), tursoText(p.id), tursoText(tag), tursoInt(i)] });
       });
       nPois++;
     }
     for (const c of d.clusters) {
       stmts.push({
         sql: `INSERT OR REPLACE INTO destination_clusters
-          (slug, cluster_id, name, description, pois_json, duration_min, best_area, source_url, fetched_at, confidence)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          (slug, cluster_id, name, description, duration_min, best_area, source_url, fetched_at, confidence)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         args: [
           tursoText(slug), tursoText(c.id), tursoText(c.name), tursoText(c.description),
-          tursoText(JSON.stringify(c.pois)), tursoInt(c.duration_min), tursoText(c.best_area),
+          tursoInt(c.duration_min), tursoText(c.best_area),
           tursoText(SOURCE_URL), tursoText(FETCHED_AT), tursoText(CONFIDENCE),
         ],
+      });
+      stmts.push({ sql: `DELETE FROM destination_cluster_pois WHERE slug = ? AND cluster_id = ?;`, args: [tursoText(slug), tursoText(c.id)] });
+      c.pois.forEach((poiId, i) => {
+        stmts.push({ sql: `INSERT INTO destination_cluster_pois (slug, cluster_id, poi_id, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(slug), tursoText(c.id), tursoText(poiId), tursoInt(i)] });
       });
       nClusters++;
     }
@@ -94,10 +110,10 @@ async function main(): Promise<void> {
       });
       nTransit++;
     }
-    // tips → destination_config.tips_json (only if the slug row exists)
-    stmts.push({
-      sql: `UPDATE destination_config SET tips_json = ? WHERE slug = ?;`,
-      args: [tursoText(JSON.stringify(d.tips)), tursoText(slug)],
+    // tips → destination_tips child rows (no JSON column).
+    stmts.push({ sql: `DELETE FROM destination_tips WHERE slug = ?;`, args: [tursoText(slug)] });
+    d.tips.forEach((tip, i) => {
+      stmts.push({ sql: `INSERT INTO destination_tips (slug, tip, sort_order) VALUES (?, ?, ?);`, args: [tursoText(slug), tursoText(tip), tursoInt(i)] });
     });
     nTips += d.tips.length;
   }

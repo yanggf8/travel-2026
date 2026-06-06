@@ -463,6 +463,7 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
      SELECT plan_id FROM plan_metadata WHERE plan_id = ${sqlText(input.planId)};`,
     `SELECT * FROM destination_config WHERE slug = ${sqlText(input.destinationSlug)};`,
     `SELECT * FROM shaping_rules WHERE run_id = (SELECT run_id FROM shaping_candidates WHERE candidate_id = ${sqlText(input.candidateId)}) ORDER BY aspect, role, kind;`,
+    `SELECT airport FROM destination_airports WHERE slug = ${sqlText(input.destinationSlug)} ORDER BY sort_order;`,
   ]);
   const candidateRows = rowsToObjectsAt(res, 0);
   if (candidateRows.length === 0) {
@@ -489,15 +490,8 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
   const region = (destConfig.ref_id as string | null) ?? input.destinationSlug;
   const originCode = (candidate.origin_code as string | null) ?? null;
   const primaryAirport = candidate.dest_code as string;
-  const configuredAirports = (() => {
-    if (typeof destConfig.primary_airports_json !== 'string') return [];
-    try {
-      const parsed = JSON.parse(destConfig.primary_airports_json);
-      return Array.isArray(parsed) ? parsed.map((v) => String(v).toUpperCase()) : [];
-    } catch {
-      return [];
-    }
-  })();
+  const configuredAirports = rowsToObjectsAt(res, 4)
+    .map((r) => String(r.airport).toUpperCase());
   if (configuredAirports.length > 0 && !configuredAirports.includes(primaryAirport.toUpperCase())) {
     throw new Error(
       `Candidate destination ${primaryAirport} does not match destination ${input.destinationSlug} ` +

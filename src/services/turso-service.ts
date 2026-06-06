@@ -340,17 +340,24 @@ export async function loadDestinationReferenceFromTurso(slug: string): Promise<R
   const client = getClient();
   const esc = sqlEscape(slug);
   const response = await client.executeBatch([
-    `SELECT display_name, timezone, currency, primary_airports_json, tips_json
+    `SELECT display_name, timezone, currency
        FROM destination_config WHERE slug = '${esc}';`,
-    `SELECT area_id, name, type, stations_json, vibe, best_for_json
+    `SELECT area_id, name, type, vibe
        FROM destination_areas WHERE slug = '${esc}' ORDER BY area_id;`,
     `SELECT poi_id, title, area, nearest_station, duration_min, booking_required, booking_url,
-            cost_estimate, tags_json, notes, hours, address
+            cost_estimate, notes, hours, address
        FROM destination_pois WHERE slug = '${esc}' ORDER BY poi_id;`,
-    `SELECT cluster_id, name, description, pois_json, duration_min, best_area
+    `SELECT cluster_id, name, description, duration_min, best_area
        FROM destination_clusters WHERE slug = '${esc}' ORDER BY cluster_id;`,
     `SELECT pair_key, kind, minutes, line, station_from, station_to
        FROM destination_transit WHERE slug = '${esc}' ORDER BY kind, pair_key;`,
+    // Normalized list child rows (no JSON columns).
+    `SELECT area_id, station FROM destination_area_stations WHERE slug = '${esc}' ORDER BY area_id, sort_order;`,
+    `SELECT area_id, tag FROM destination_area_best_for WHERE slug = '${esc}' ORDER BY area_id, sort_order;`,
+    `SELECT poi_id, tag FROM destination_poi_tags WHERE slug = '${esc}' ORDER BY poi_id, sort_order;`,
+    `SELECT cluster_id, poi_id FROM destination_cluster_pois WHERE slug = '${esc}' ORDER BY cluster_id, sort_order;`,
+    `SELECT tip FROM destination_tips WHERE slug = '${esc}' ORDER BY sort_order;`,
+    `SELECT airport FROM destination_airports WHERE slug = '${esc}' ORDER BY sort_order;`,
   ]);
 
   const configRows = rowsToObjectsAt(response, 0);
@@ -361,18 +368,32 @@ export async function loadDestinationReferenceFromTurso(slug: string): Promise<R
   const clusterRows = rowsToObjectsAt(response, 3);
   const transitRows = rowsToObjectsAt(response, 4);
 
-  const parseJson = (v: any, fallback: any) => {
-    if (v === null || v === undefined) return fallback;
-    try { return JSON.parse(String(v)); } catch { return fallback; }
+  // Group list child rows by their parent id (preserves sort_order from ORDER BY).
+  const groupBy = (rows: Record<string, any>[], key: string, val: string): Map<string, string[]> => {
+    const m = new Map<string, string[]>();
+    for (const r of rows) {
+      const k = String(r[key]);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(String(r[val]));
+    }
+    return m;
   };
+  const flat = (rows: Record<string, any>[], val: string): string[] => rows.map((r) => String(r[val]));
+
+  const stationsByArea = groupBy(rowsToObjectsAt(response, 5), 'area_id', 'station');
+  const bestForByArea = groupBy(rowsToObjectsAt(response, 6), 'area_id', 'tag');
+  const tagsByPoi = groupBy(rowsToObjectsAt(response, 7), 'poi_id', 'tag');
+  const poisByCluster = groupBy(rowsToObjectsAt(response, 8), 'cluster_id', 'poi_id');
+  const tips = flat(rowsToObjectsAt(response, 9), 'tip');
+  const primaryAirports = flat(rowsToObjectsAt(response, 10), 'airport');
 
   const areas = areaRows.map((r) => ({
     id: String(r.area_id),
     name: r.name ?? null,
     type: r.type ?? null,
-    stations: parseJson(r.stations_json, []),
+    stations: stationsByArea.get(String(r.area_id)) ?? [],
     vibe: r.vibe ?? null,
-    best_for: parseJson(r.best_for_json, []),
+    best_for: bestForByArea.get(String(r.area_id)) ?? [],
   }));
 
   const pois = poiRows.map((r) => ({
@@ -384,7 +405,7 @@ export async function loadDestinationReferenceFromTurso(slug: string): Promise<R
     booking_required: Number(r.booking_required) === 1,
     ...(r.booking_url ? { booking_url: String(r.booking_url) } : {}),
     cost_estimate: r.cost_estimate === null ? null : Number(r.cost_estimate),
-    tags: parseJson(r.tags_json, []),
+    tags: tagsByPoi.get(String(r.poi_id)) ?? [],
     ...(r.notes ? { notes: String(r.notes) } : {}),
     ...(r.hours ? { hours: String(r.hours) } : {}),
     ...(r.address ? { address: String(r.address) } : {}),
@@ -396,7 +417,7 @@ export async function loadDestinationReferenceFromTurso(slug: string): Promise<R
     clusters[String(r.cluster_id)] = {
       name: r.name ?? null,
       description: r.description ?? null,
-      pois: parseJson(r.pois_json, []),
+      pois: poisByCluster.get(String(r.cluster_id)) ?? [],
       duration_min: r.duration_min === null ? undefined : Number(r.duration_min),
       best_area: r.best_area ?? undefined,
     };
@@ -417,13 +438,13 @@ export async function loadDestinationReferenceFromTurso(slug: string): Promise<R
     display_name: cfg.display_name ?? null,
     timezone: cfg.timezone ?? null,
     currency: cfg.currency ?? null,
-    primary_airports: parseJson(cfg.primary_airports_json, []),
+    primary_airports: primaryAirports,
     areas,
     pois,
     clusters,
     transit_estimates,
     ...(Object.keys(inter_city_transit).length ? { inter_city_transit } : {}),
-    tips: parseJson(cfg.tips_json, []),
+    tips,
   };
 }
 

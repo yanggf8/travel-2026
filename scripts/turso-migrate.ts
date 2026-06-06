@@ -1,4 +1,4 @@
-import { TursoPipelineClient } from './turso-pipeline';
+import { TursoPipelineClient, tursoText, tursoInt } from './turso-pipeline';
 
 async function main() {
   const client = new TursoPipelineClient();
@@ -1001,48 +1001,61 @@ async function main() {
     }
   }
 
-  // Backfill destination_config rows
+  // Child tables for destination/origin airports + markets must exist before the
+  // config backfill writes to them (de-JSON: no JSON columns). Idempotent.
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_airports (
+    slug TEXT, airport TEXT, sort_order INTEGER, PRIMARY KEY (slug, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_markets (
+    slug TEXT, market TEXT, sort_order INTEGER, PRIMARY KEY (slug, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS origin_airports (
+    slug TEXT, airport TEXT, sort_order INTEGER, PRIMARY KEY (slug, sort_order)
+  );`);
+
+  // Backfill destination_config rows. Airports/markets are scalar string arrays
+  // here (source code, not DB JSON) and written to child tables below.
   const destinations = [
     {
       slug: 'tokyo_2026', display_name: 'Tokyo', ref_id: 'tokyo',
       ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
-      markets_json: '["TW","JP"]', primary_airports_json: '["NRT","HND"]',
+      markets: ['TW', 'JP'], primary_airports: ['NRT', 'HND'],
       language: 'ja', origin: 'taiwan', lat: 35.6762, lon: 139.6503,
     },
     {
       slug: 'nagoya_2026', display_name: 'Nagoya', ref_id: 'nagoya',
       ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
-      markets_json: '["TW","JP"]', primary_airports_json: '["NGO"]',
+      markets: ['TW', 'JP'], primary_airports: ['NGO'],
       language: 'ja', origin: 'taiwan', lat: 35.1815, lon: 136.9066,
     },
     {
       slug: 'osaka_2026', display_name: 'Osaka', ref_id: 'osaka',
       ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
-      markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
+      markets: ['TW', 'JP'], primary_airports: ['KIX', 'ITM'],
       language: 'ja', origin: 'taiwan', lat: 34.6937, lon: 135.5023,
     },
     {
       slug: 'osaka_kyoto_2026', display_name: 'Osaka + Kyoto', ref_id: 'osaka_kyoto',
       ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
-      markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
+      markets: ['TW', 'JP'], primary_airports: ['KIX', 'ITM'],
       language: 'ja', origin: 'taiwan', lat: 34.6937, lon: 135.5023,
     },
     {
       slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto',
       ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
-      markets_json: '["TW","JP"]', primary_airports_json: '["KIX"]',
+      markets: ['TW', 'JP'], primary_airports: ['KIX'],
       language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
     },
     {
       slug: 'okinawa_2026', display_name: 'Okinawa', ref_id: 'okinawa',
       ref_path: '',
       timezone: 'Asia/Tokyo', currency: 'JPY',
-      markets_json: '["TW","JP"]', primary_airports_json: '["OKA"]',
+      markets: ['TW', 'JP'], primary_airports: ['OKA'],
       language: 'ja', origin: 'taiwan', lat: 26.2124, lon: 127.6792,
     },
   ];
@@ -1051,8 +1064,17 @@ async function main() {
     try {
       const esc = (s: string | null | undefined) => s !== null && s !== undefined ? `'${String(s).replace(/'/g, "''")}'` : 'NULL';
       await client.execute(
-        `INSERT OR IGNORE INTO destination_config (slug, display_name, ref_id, ref_path, timezone, currency, markets_json, primary_airports_json, language, origin, lat, lon) VALUES (${esc(d.slug)}, ${esc(d.display_name)}, ${esc(d.ref_id)}, ${esc(d.ref_path)}, ${esc(d.timezone)}, ${esc(d.currency)}, ${esc(d.markets_json)}, ${esc(d.primary_airports_json)}, ${esc(d.language)}, ${esc(d.origin)}, ${d.lat}, ${d.lon})`
+        `INSERT OR IGNORE INTO destination_config (slug, display_name, ref_id, ref_path, timezone, currency, language, origin, lat, lon) VALUES (${esc(d.slug)}, ${esc(d.display_name)}, ${esc(d.ref_id)}, ${esc(d.ref_path)}, ${esc(d.timezone)}, ${esc(d.currency)}, ${esc(d.language)}, ${esc(d.origin)}, ${d.lat}, ${d.lon})`
       );
+      // Child rows (no JSON columns).
+      await client.execute(`DELETE FROM destination_airports WHERE slug = ${esc(d.slug)}`);
+      for (let i = 0; i < d.primary_airports.length; i++) {
+        await client.execute(`INSERT INTO destination_airports (slug, airport, sort_order) VALUES (${esc(d.slug)}, ${esc(d.primary_airports[i])}, ${i})`);
+      }
+      await client.execute(`DELETE FROM destination_markets WHERE slug = ${esc(d.slug)}`);
+      for (let i = 0; i < d.markets.length; i++) {
+        await client.execute(`INSERT INTO destination_markets (slug, market, sort_order) VALUES (${esc(d.slug)}, ${esc(d.markets[i])}, ${i})`);
+      }
       console.log(`✅ Backfilled destination_config: ${d.slug}`);
     } catch (e: any) {
       console.warn(`⚠️  Could not backfill destination_config ${d.slug}:`, e.message);
@@ -1063,11 +1085,16 @@ async function main() {
   // Backfill origin_config rows
   try {
     await client.execute(
-      `INSERT OR IGNORE INTO origin_config (slug, country_code, currency, timezone, holiday_calendar, primary_airports_json) VALUES ('taiwan', 'TW', 'TWD', 'Asia/Taipei', NULL, '["TPE","TSA","RMQ","KHH"]')`
+      `INSERT OR IGNORE INTO origin_config (slug, country_code, currency, timezone, holiday_calendar) VALUES ('taiwan', 'TW', 'TWD', 'Asia/Taipei', NULL)`
     );
     await client.execute(
       `UPDATE origin_config SET holiday_calendar = NULL WHERE slug = 'taiwan' AND holiday_calendar LIKE 'data/holidays/%'`
     );
+    const taiwanAirports = ['TPE', 'TSA', 'RMQ', 'KHH'];
+    await client.execute(`DELETE FROM origin_airports WHERE slug = 'taiwan'`);
+    for (let i = 0; i < taiwanAirports.length; i++) {
+      await client.execute(`INSERT INTO origin_airports (slug, airport, sort_order) VALUES ('taiwan', '${taiwanAirports[i]}', ${i})`);
+    }
     console.log('✅ Backfilled origin_config: taiwan');
   } catch (e: any) {
     console.warn('⚠️  Could not backfill origin_config taiwan:', e.message);
@@ -1106,6 +1133,15 @@ async function main() {
   notes TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
+    // Normalized list child tables (no JSON columns). type_json/regions_json
+    // above stay only so a pre-migration DB upgrades cleanly; new reads/writes
+    // use these child tables, and the JSON columns are dropped post-cutover.
+    await client.execute(`CREATE TABLE IF NOT EXISTS ota_source_types (
+      source_id TEXT, type TEXT, PRIMARY KEY (source_id, type)
+    );`);
+    await client.execute(`CREATE TABLE IF NOT EXISTS ota_source_regions (
+      source_id TEXT, region TEXT, PRIMARY KEY (source_id, region)
+    );`);
     console.log('✅ Created ota_sources table.');
   } catch (e: any) {
     if (e.message?.includes('already exists')) {
@@ -1271,9 +1307,21 @@ async function main() {
     try {
       const esc = (s: string | null | undefined) =>
         s !== null && s !== undefined ? `'${String(s).replace(/'/g, "''")}'` : 'NULL';
+      // Scalar columns only; type/regions go to child tables (no JSON in columns).
       await client.execute(
-        `INSERT OR IGNORE INTO ota_sources (source_id, name, type_json, status, scraper_script, regions_json, url_template, notes) VALUES (${esc(src.source_id)}, ${esc(src.name)}, ${esc(src.type_json)}, ${esc(src.status)}, ${esc(src.scraper_script)}, ${esc(src.regions_json)}, ${esc(src.url_template)}, ${esc(src.notes)})`
+        `INSERT OR IGNORE INTO ota_sources (source_id, name, status, scraper_script, url_template, notes) VALUES (${esc(src.source_id)}, ${esc(src.name)}, ${esc(src.status)}, ${esc(src.scraper_script)}, ${esc(src.url_template)}, ${esc(src.notes)})`
       );
+      // Parse the source-code list literals ONCE here (migration code) → child rows.
+      const types: string[] = src.type_json ? JSON.parse(src.type_json) : [];
+      const regions: string[] = src.regions_json ? JSON.parse(src.regions_json) : [];
+      await client.execute(`DELETE FROM ota_source_types WHERE source_id = ${esc(src.source_id)}`);
+      for (const t of types) {
+        await client.execute(`INSERT OR IGNORE INTO ota_source_types (source_id, type) VALUES (${esc(src.source_id)}, ${esc(t)})`);
+      }
+      await client.execute(`DELETE FROM ota_source_regions WHERE source_id = ${esc(src.source_id)}`);
+      for (const r of regions) {
+        await client.execute(`INSERT OR IGNORE INTO ota_source_regions (source_id, region) VALUES (${esc(src.source_id)}, ${esc(r)})`);
+      }
       console.log(`✅ Seeded ota_sources: ${src.source_id}`);
     } catch (e: any) {
       console.warn(`⚠️  Could not seed ota_sources ${src.source_id}:`, e.message);
@@ -1652,14 +1700,14 @@ async function main() {
   // the destination_references JSON-blob table). Seeded by
   // scripts/seed-destination-refs.ts. No runtime file reads, no JSON blobs.
   // ---------------------------------------------------------------------------
+  // List fields (stations/best_for/tags/pois/tips) live in normalized child
+  // tables created in deJsonReferenceData() — no *_json columns here.
   await client.execute(`CREATE TABLE IF NOT EXISTS destination_areas (
     slug TEXT,
     area_id TEXT,
     name TEXT,
     type TEXT,
-    stations_json TEXT,
     vibe TEXT,
-    best_for_json TEXT,
     source_url TEXT,
     fetched_at TEXT,
     confidence TEXT,
@@ -1676,7 +1724,6 @@ async function main() {
     booking_required INTEGER,
     booking_url TEXT,
     cost_estimate INTEGER,
-    tags_json TEXT,
     notes TEXT,
     hours TEXT,
     address TEXT,
@@ -1691,7 +1738,6 @@ async function main() {
     cluster_id TEXT,
     name TEXT,
     description TEXT,
-    pois_json TEXT,
     duration_min INTEGER,
     best_area TEXT,
     source_url TEXT,
@@ -1714,13 +1760,6 @@ async function main() {
     PRIMARY KEY (slug, pair_key)
   );`);
 
-  // tips live alongside the destination scalars in destination_config
-  try {
-    await client.execute(`ALTER TABLE destination_config ADD COLUMN tips_json TEXT;`);
-  } catch (e: any) {
-    if (!String(e?.message || '').match(/duplicate column name/i)) throw e;
-  }
-
   // ref_path must NOT point at a local file (no-local-data rule). Reference data
   // now lives in the normalized tables above; clear any legacy file-path values.
   await client.execute(
@@ -1731,7 +1770,192 @@ async function main() {
   await client.execute(`DROP TABLE IF EXISTS destination_references;`);
   console.log('✅ Normalized destination reference tables ready (blob table dropped).');
 
+  await deJsonReferenceData(client);
+
   console.log('Done.');
+}
+
+// ---------------------------------------------------------------------------
+// Batch A — de-JSON the reference-data columns.
+//
+// Rule (memory: no-json-in-rdb): no JSON-encoded value may live in any RDB
+// column. The destination_* / *_config tables stored lists as `*_json` TEXT.
+// This migration creates one child row per list element. JSON is parsed here
+// ONCE, in one-shot migration code, purely to eliminate it — runtime readers
+// will never parse JSON from a column again.
+//
+// Idempotent: child tables use CREATE TABLE IF NOT EXISTS; each backfill deletes
+// the rows it owns for a (slug[,parent_id]) before re-inserting, so re-running
+// the migration converges. The legacy `*_json` columns are NOT dropped here —
+// they are dropped in a later migration step after all readers/writers cut over
+// (drop-after-cutover, per plan).
+// ---------------------------------------------------------------------------
+async function deJsonReferenceData(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch A: de-JSON reference-data columns...');
+
+  // 1. Child tables (one row per list element).
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_area_stations (
+    slug TEXT, area_id TEXT, station TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, area_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_area_best_for (
+    slug TEXT, area_id TEXT, tag TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, area_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_poi_tags (
+    slug TEXT, poi_id TEXT, tag TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, poi_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_cluster_pois (
+    slug TEXT, cluster_id TEXT, poi_id TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, cluster_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_tips (
+    slug TEXT, tip TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_airports (
+    slug TEXT, airport TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS destination_markets (
+    slug TEXT, market TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS origin_airports (
+    slug TEXT, airport TEXT, sort_order INTEGER,
+    PRIMARY KEY (slug, sort_order)
+  );`);
+
+  // 2. Read the legacy JSON columns IF they still exist. On a second run the
+  // columns are already dropped; skip the backfill and fall through to the
+  // (idempotent) drop step below.
+  // Guard on a column read by the FIRST backfill SELECT (destination_areas).
+  // If any legacy column is already dropped, the whole batch was applied before.
+  const areaCols = rowsAt(await client.executeBatch([`PRAGMA table_info(destination_areas);`]), 0).map((r) => String(r.name));
+  if (!areaCols.includes('stations_json')) {
+    console.log('  legacy JSON columns already dropped; skipping backfill.');
+  } else {
+  const resp = await client.executeBatch([
+    `SELECT slug, area_id, stations_json, best_for_json FROM destination_areas;`,
+    `SELECT slug, poi_id, tags_json FROM destination_pois;`,
+    `SELECT slug, cluster_id, pois_json FROM destination_clusters;`,
+    `SELECT slug, tips_json, primary_airports_json, markets_json FROM destination_config;`,
+    `SELECT slug, primary_airports_json FROM origin_config;`,
+  ]);
+
+  const areas = rowsAt(resp, 0);
+  const pois = rowsAt(resp, 1);
+  const clusters = rowsAt(resp, 2);
+  const configs = rowsAt(resp, 3);
+  const origins = rowsAt(resp, 4);
+
+  const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+
+  // destination_areas.stations_json + best_for_json
+  for (const r of areas) {
+    stmts.push({ sql: `DELETE FROM destination_area_stations WHERE slug = ? AND area_id = ?;`, args: [tursoText(r.slug), tursoText(r.area_id)] });
+    stmts.push({ sql: `DELETE FROM destination_area_best_for WHERE slug = ? AND area_id = ?;`, args: [tursoText(r.slug), tursoText(r.area_id)] });
+    parseJsonArray(r.stations_json).forEach((station, i) => {
+      stmts.push({ sql: `INSERT INTO destination_area_stations (slug, area_id, station, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(r.slug), tursoText(r.area_id), tursoText(station), tursoInt(i)] });
+    });
+    parseJsonArray(r.best_for_json).forEach((tag, i) => {
+      stmts.push({ sql: `INSERT INTO destination_area_best_for (slug, area_id, tag, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(r.slug), tursoText(r.area_id), tursoText(tag), tursoInt(i)] });
+    });
+  }
+
+  // destination_pois.tags_json
+  for (const r of pois) {
+    stmts.push({ sql: `DELETE FROM destination_poi_tags WHERE slug = ? AND poi_id = ?;`, args: [tursoText(r.slug), tursoText(r.poi_id)] });
+    parseJsonArray(r.tags_json).forEach((tag, i) => {
+      stmts.push({ sql: `INSERT INTO destination_poi_tags (slug, poi_id, tag, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(r.slug), tursoText(r.poi_id), tursoText(tag), tursoInt(i)] });
+    });
+  }
+
+  // destination_clusters.pois_json
+  for (const r of clusters) {
+    stmts.push({ sql: `DELETE FROM destination_cluster_pois WHERE slug = ? AND cluster_id = ?;`, args: [tursoText(r.slug), tursoText(r.cluster_id)] });
+    parseJsonArray(r.pois_json).forEach((poiId, i) => {
+      stmts.push({ sql: `INSERT INTO destination_cluster_pois (slug, cluster_id, poi_id, sort_order) VALUES (?, ?, ?, ?);`, args: [tursoText(r.slug), tursoText(r.cluster_id), tursoText(poiId), tursoInt(i)] });
+    });
+  }
+
+  // destination_config.tips_json + primary_airports_json + markets_json
+  for (const r of configs) {
+    stmts.push({ sql: `DELETE FROM destination_tips WHERE slug = ?;`, args: [tursoText(r.slug)] });
+    stmts.push({ sql: `DELETE FROM destination_airports WHERE slug = ?;`, args: [tursoText(r.slug)] });
+    stmts.push({ sql: `DELETE FROM destination_markets WHERE slug = ?;`, args: [tursoText(r.slug)] });
+    parseJsonArray(r.tips_json).forEach((tip, i) => {
+      stmts.push({ sql: `INSERT INTO destination_tips (slug, tip, sort_order) VALUES (?, ?, ?);`, args: [tursoText(r.slug), tursoText(tip), tursoInt(i)] });
+    });
+    parseJsonArray(r.primary_airports_json).forEach((airport, i) => {
+      stmts.push({ sql: `INSERT INTO destination_airports (slug, airport, sort_order) VALUES (?, ?, ?);`, args: [tursoText(r.slug), tursoText(airport), tursoInt(i)] });
+    });
+    parseJsonArray(r.markets_json).forEach((market, i) => {
+      stmts.push({ sql: `INSERT INTO destination_markets (slug, market, sort_order) VALUES (?, ?, ?);`, args: [tursoText(r.slug), tursoText(market), tursoInt(i)] });
+    });
+  }
+
+  // origin_config.primary_airports_json
+  for (const r of origins) {
+    stmts.push({ sql: `DELETE FROM origin_airports WHERE slug = ?;`, args: [tursoText(r.slug)] });
+    parseJsonArray(r.primary_airports_json).forEach((airport, i) => {
+      stmts.push({ sql: `INSERT INTO origin_airports (slug, airport, sort_order) VALUES (?, ?, ?);`, args: [tursoText(r.slug), tursoText(airport), tursoInt(i)] });
+    });
+  }
+
+  await client.executeManyParams(stmts);
+  console.log(`✅ Batch A backfilled: ${areas.length} areas, ${pois.length} pois, ${clusters.length} clusters, ${configs.length} configs, ${origins.length} origins → child rows.`);
+  } // end backfill (legacy columns existed)
+
+  // Drop the legacy JSON columns now that all readers/writers use child tables.
+  // libSQL supports ALTER TABLE DROP COLUMN; ignore "no such column" on re-run.
+  const dropCols: Array<[string, string]> = [
+    ['destination_areas', 'stations_json'],
+    ['destination_areas', 'best_for_json'],
+    ['destination_pois', 'tags_json'],
+    ['destination_clusters', 'pois_json'],
+    ['destination_config', 'tips_json'],
+    ['destination_config', 'primary_airports_json'],
+    ['destination_config', 'markets_json'],
+    ['origin_config', 'primary_airports_json'],
+    ['ota_sources', 'type_json'],
+    ['ota_sources', 'regions_json'],
+  ];
+  for (const [table, col] of dropCols) {
+    try {
+      await client.execute(`ALTER TABLE ${table} DROP COLUMN ${col};`);
+      console.log(`  dropped ${table}.${col}`);
+    } catch (e: any) {
+      if (!/no such column|has no column/i.test(String(e?.message || ''))) {
+        console.warn(`⚠️  Could not drop ${table}.${col}:`, e.message);
+      }
+    }
+  }
+  console.log('✅ Batch A/B legacy JSON columns dropped.');
+}
+
+// Read pipeline batch result index into plain row objects.
+function rowsAt(resp: any, idx: number): Record<string, any>[] {
+  const result = resp?.results?.[idx]?.response?.result;
+  if (!result?.rows || !result?.cols) return [];
+  const cols = (result.cols as Array<{ name: string }>).map((c) => c.name);
+  return (result.rows as unknown[][]).map((row) => {
+    const obj: Record<string, any> = {};
+    for (let i = 0; i < cols.length; i++) obj[cols[i]] = (row as any)[i]?.value ?? null;
+    return obj;
+  });
+}
+
+// One-shot legacy-JSON decode for the migration only. NOT a runtime path.
+function parseJsonArray(v: any): string[] {
+  if (v === null || v === undefined || v === '') return [];
+  try {
+    const parsed = JSON.parse(String(v));
+    return Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
+  } catch {
+    return [];
+  }
 }
 
 main().catch(console.error);

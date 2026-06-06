@@ -1,5 +1,6 @@
 mod compare;
 mod db;
+mod destination_ref;
 mod flights;
 mod leave;
 mod offers;
@@ -36,6 +37,10 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "query-offers" => {
             let opts = offers::OffersArgs::parse(rest)?;
             offers::run(&opts).await
+        }
+        [cmd, rest @ ..] if cmd == "query-destination-ref" || cmd == "destination-ref" => {
+            let opts = destination_ref::DestRefArgs::parse(rest)?;
+            destination_ref::run(&opts).await
         }
         _ => Err(format!(
             "unknown command: {}\nRun `travel --help` for usage.",
@@ -97,6 +102,6 @@ fn normalize_flights(args: &[String]) -> Result<(), String> {
 
 fn print_usage() {
     println!(
-        "Travel CLI\n\nUsage:\n  travel plans\n  travel query-offers [--source a,b] [--region r] [--dest d] [--max-price N] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--limit N]\n  travel compare trips --trip '<key=value;...>' [--trip '<key=value;...>'] [--market taiwan] [--detailed]\n  travel normalize flights --text '<rendered flight text>' --url '<source url>' [--label name]\n  travel normalize flights --stdin --url '<source url>' [--label name]\n  travel leave calc <start-date> <end-date> [country]\n\nRules:\n  plain-text input and output; no JSON files or JSON output"
+        "Travel CLI\n\nUsage:\n  travel plans\n  travel query-offers [--source a,b] [--region r] [--dest d] [--max-price N] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--limit N]\n  travel query-destination-ref --slug <destination_slug>\n  travel compare trips --trip '<key=value;...>' [--trip '<key=value;...>'] [--market taiwan] [--detailed]\n  travel normalize flights --text '<rendered flight text>' --url '<source url>' [--label name]\n  travel normalize flights --stdin --url '<source url>' [--label name]\n  travel leave calc <start-date> <end-date> [country]\n\nRules:\n  plain-text input and output; no JSON files or JSON output"
     );
 }

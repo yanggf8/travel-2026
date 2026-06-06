@@ -105,10 +105,16 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
     const client = new TursoPipelineClient();
 
     const batchResponse = await client.executeBatch([
-      'SELECT slug, display_name, ref_id, ref_path, timezone, currency, markets_json, primary_airports_json, language, origin, lat, lon FROM destination_config',
-      'SELECT slug, country_code, currency, timezone, primary_airports_json FROM origin_config',
+      'SELECT slug, display_name, ref_id, ref_path, timezone, currency, language, origin, lat, lon FROM destination_config',
+      'SELECT slug, country_code, currency, timezone FROM origin_config',
       'SELECT key, value FROM global_config',
-      'SELECT source_id, name, type_json, status, scraper_script, regions_json, url_template, notes FROM ota_sources',
+      'SELECT source_id, name, status, scraper_script, url_template, notes FROM ota_sources',
+      // Normalized list child rows (no JSON columns).
+      'SELECT slug, market FROM destination_markets ORDER BY slug, sort_order',
+      'SELECT slug, airport FROM destination_airports ORDER BY slug, sort_order',
+      'SELECT slug, airport FROM origin_airports ORDER BY slug, sort_order',
+      'SELECT source_id, type FROM ota_source_types ORDER BY source_id',
+      'SELECT source_id, region FROM ota_source_regions ORDER BY source_id, region',
     ]);
 
     // Helper: parse result at index i into plain objects
@@ -126,14 +132,27 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
       });
     }
 
+    // Group list child rows by a key column (order preserved from ORDER BY).
+    function groupRows(idx: number, key: string, val: string): Map<string, string[]> {
+      const m = new Map<string, string[]>();
+      for (const r of rowsAt(idx)) {
+        const k = String(r[key]);
+        if (!m.has(k)) m.set(k, []);
+        m.get(k)!.push(String(r[val]));
+      }
+      return m;
+    }
+
+    const marketsBySlug = groupRows(4, 'slug', 'market');
+    const destAirportsBySlug = groupRows(5, 'slug', 'airport');
+    const originAirportsBySlug = groupRows(6, 'slug', 'airport');
+    const otaTypesBySource = groupRows(7, 'source_id', 'type');
+    const otaRegionsBySource = groupRows(8, 'source_id', 'region');
+
     // Build destination cache
     const destRows = rowsAt(0);
     const newDestCache: Record<string, DestinationConfig> = {};
     for (const row of destRows) {
-      const markets: string[] = row.markets_json ? JSON.parse(row.markets_json) : [];
-      const primaryAirports: string[] = row.primary_airports_json
-        ? JSON.parse(row.primary_airports_json)
-        : [];
       const cfg: DestinationConfig = {
         slug: row.slug,
         display_name: row.display_name,
@@ -141,8 +160,8 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
         ref_path: row.ref_path || '',
         timezone: row.timezone || 'Asia/Tokyo',
         currency: row.currency || 'JPY',
-        markets,
-        primary_airports: primaryAirports,
+        markets: marketsBySlug.get(String(row.slug)) ?? [],
+        primary_airports: destAirportsBySlug.get(String(row.slug)) ?? [],
         language: row.language || 'ja',
       };
       if (row.lat !== null && row.lon !== null) {
@@ -156,14 +175,11 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
     const originRows = rowsAt(1);
     const newOriginCache: Record<string, Record<string, string | string[]>> = {};
     for (const row of originRows) {
-      const primaryAirports: string[] = row.primary_airports_json
-        ? JSON.parse(row.primary_airports_json)
-        : [];
       newOriginCache[row.slug] = {
         country_code: row.country_code || '',
         currency: row.currency || '',
         timezone: row.timezone || '',
-        primary_airports: primaryAirports,
+        primary_airports: originAirportsBySlug.get(String(row.slug)) ?? [],
       };
     }
     dbOriginCache = newOriginCache;
@@ -180,8 +196,9 @@ export async function loadDestinationConfigFromDb(): Promise<void> {
     const otaRows = rowsAt(3);
     const newOtaCache = new Map<string, OtaSourceConfig>();
     for (const row of otaRows) {
-      const types: ('package' | 'flight' | 'hotel')[] = row.type_json ? JSON.parse(row.type_json) : [];
-      const regions: string[] | undefined = row.regions_json ? JSON.parse(row.regions_json) : undefined;
+      const types = (otaTypesBySource.get(String(row.source_id)) ?? []) as ('package' | 'flight' | 'hotel')[];
+      const regionList = otaRegionsBySource.get(String(row.source_id));
+      const regions: string[] | undefined = regionList && regionList.length > 0 ? regionList : undefined;
       const cfg: OtaSourceConfig = {
         source_id: row.source_id,
         display_name: row.name,

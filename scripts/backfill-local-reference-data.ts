@@ -155,8 +155,8 @@ async function backfillDestinationReferences(_client: TursoPipelineClient): Prom
 async function upsertOkinawaDestination(client: TursoPipelineClient): Promise<void> {
   await client.executeParams(
     `INSERT OR IGNORE INTO destination_config
-      (slug, display_name, ref_id, ref_path, timezone, currency, markets_json, primary_airports_json, language, origin, lat, lon)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      (slug, display_name, ref_id, ref_path, timezone, currency, language, origin, lat, lon)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
     [
       tursoText('okinawa_2026'),
       tursoText('Okinawa'),
@@ -164,14 +164,20 @@ async function upsertOkinawaDestination(client: TursoPipelineClient): Promise<vo
       tursoText(''),
       tursoText('Asia/Tokyo'),
       tursoText('JPY'),
-      tursoText('["TW","JP"]'),
-      tursoText('["OKA"]'),
       tursoText('ja'),
       tursoText('taiwan'),
       { type: 'float', value: 26.2124 },
       { type: 'float', value: 127.6792 },
     ],
   );
+  // Airports/markets → child tables (no JSON columns).
+  await client.executeParams(`DELETE FROM destination_markets WHERE slug = ?;`, [tursoText('okinawa_2026')]);
+  await client.executeParams(`DELETE FROM destination_airports WHERE slug = ?;`, [tursoText('okinawa_2026')]);
+  const markets = ['TW', 'JP'];
+  for (let i = 0; i < markets.length; i++) {
+    await client.executeParams(`INSERT INTO destination_markets (slug, market, sort_order) VALUES (?, ?, ?);`, [tursoText('okinawa_2026'), tursoText(markets[i]), tursoInt(i)]);
+  }
+  await client.executeParams(`INSERT INTO destination_airports (slug, airport, sort_order) VALUES (?, ?, ?);`, [tursoText('okinawa_2026'), tursoText('OKA'), tursoInt(0)]);
 }
 
 async function upsertStage0Run(client: TursoPipelineClient, payload: any): Promise<number> {
