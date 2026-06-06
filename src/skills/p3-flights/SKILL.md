@@ -9,6 +9,12 @@ provides_processes: [process_3_transportation]
 
 # /p3-flights
 
+> **⚠️ Python scrapers DECOMMISSIONED** (archived in `archive/broken-python-scrapers/`; constructed
+> URLs 404). Do NOT run `python scripts/scrape_*.py`. Get flight data via the Rust CDP driver:
+> `./rust/target/debug/travel-scraper scrape interact "<url>" --source <id> --step ...` (or
+> `browser snapshot`) → `parse capture <id> --source <id>`. NOTE: flight-only sources currently
+> need a flight rule shape (parser_rules has_custom_parser=1). Python commands below are historical.
+
 Search and compare standalone flight options for P3 (transportation).
 
 ## Shared references

@@ -1,13 +1,29 @@
 ---
 name: scrape-ota
-description: Scrape travel package details from OTA websites using Playwright. Auto-detects OTA from URL and runs appropriate scraper.
-version: 2.0.0
+description: Scrape OTA pages via the Rust CDP driver against real Chrome. (Python scrapers decommissioned.)
+version: 3.0.0
 requires_skills: [travel-shared]
 requires_processes: []
 provides_processes: []
 ---
 
 # /scrape-ota
+
+> **⚠️ DECOMMISSIONED PYTHON — DO NOT RUN ANY `python scripts/scrape_*.py`.**
+> All Python scrapers are archived under `archive/broken-python-scrapers/`: their
+> constructed URLs 404 / land on the wrong page. **Use the Rust CDP driver instead:**
+> ```
+> # 1) drive the real OTA page in Chrome (clicks/fills the actual UI — no URL templates)
+> ./rust/target/debug/travel-scraper scrape interact "<url>" --source <id> --step 'click:SEL' --step 'fill:SEL=VALUE'
+> #    (or, if you've already navigated the tab manually:)
+> ./rust/target/debug/travel-scraper browser snapshot --page <N> --source <id>
+> # 2) parse the captured page (rule-driven via the parser_rules Turso table) + import to Turso
+> ./rust/target/debug/travel-scraper parse capture <capture-id> --source <id>
+> ```
+> Captures → Turso `captures` table; offers → `offers` table. Per-OTA rules → `parser_rules`.
+> Flight/hotel-only OTAs (tigerair, google_flights, trip, agoda, eztravel) are seeded
+> `has_custom_parser=1` and currently fail loud — they need a flight/hotel rule shape first.
+> The Python tables/paths below are historical reference only.
 
 ## Shared references
 

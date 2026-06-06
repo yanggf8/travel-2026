@@ -135,15 +135,10 @@ async function validateOtaSources(client: TursoPipelineClient): Promise<OtaSourc
       addResult('ota-sources', 'error', `Source ID mismatch: key "${id}" vs source_id "${source.source_id}"`, 'turso:ota_sources');
     }
 
-    // Check scraper_script exists if specified
-    if (source.scraper_script && !fileExists(source.scraper_script)) {
-      addResult('ota-sources', 'error', `Scraper script not found: ${source.scraper_script}`, 'turso:ota_sources');
-    }
-
-    // Warning if supported but no scraper
-    if (source.supported && !source.scraper_script) {
-      addResult('ota-sources', 'warning', `${id}: marked as supported but no scraper_script`, 'turso:ota_sources');
-    }
+    // scraper_script is DECOMMISSIONED: the Python per-source scrapers are archived
+    // (archive/broken-python-scrapers/) and replaced by the Rust CDP driver
+    // (rust/crates/travel-scraper) + Turso parser_rules. Do not validate file paths
+    // here, and do not require a scraper_script for "supported" sources.
 
     // Check currency is valid
     const validCurrencies = ['TWD', 'JPY', 'USD', 'EUR'];
@@ -228,16 +223,8 @@ function validateClaudeMdConsistency(sources: OtaSourcesFile): void {
       addResult('consistency', 'error', `${entry.sourceId}: Turso ota_sources says supported=false but CLAUDE.md shows ✅`, 'CLAUDE.md');
     }
 
-    // Check scraper status
-    const hasScraper = !!source.scraper_script;
-    const mdHasScraper = entry.scraper.includes('✅');
-
-    if (hasScraper && !mdHasScraper) {
-      addResult('consistency', 'warning', `${entry.sourceId}: has scraper_script but CLAUDE.md shows ❌`, 'CLAUDE.md');
-    }
-    if (!hasScraper && mdHasScraper) {
-      addResult('consistency', 'error', `${entry.sourceId}: no scraper_script but CLAUDE.md shows ✅`, 'CLAUDE.md');
-    }
+    // scraper_script vs CLAUDE.md consistency is DECOMMISSIONED — per-source Python
+    // scrapers are archived; scraping is the Rust CDP driver + parser_rules now.
   }
 
   // Check for sources in JSON not in CLAUDE.md

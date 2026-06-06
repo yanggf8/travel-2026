@@ -192,15 +192,19 @@ User provides booking confirmation   → npm run travel -- set-activity-booking
 ```
 
 ### URL Routing
-**Do not use WebFetch for OTA sites** (they require JavaScript):
+**Do not use WebFetch for OTA sites** (they require JavaScript). **The Python scrapers are
+DECOMMISSIONED and archived** (`archive/broken-python-scrapers/`) — their constructed
+URLs 404 / hit the wrong page. Scrape via the Rust CDP driver against real Chrome:
 
 | URL Contains | Action |
 |-------------|--------|
-| `besttour.com.tw` | `python scripts/scrape_package.py "<url>" scrapes/besttour-<code>.json` |
-| `liontravel.com` | `python scripts/scrape_liontravel_dated.py` or `scrape_package.py` |
-| `lifetour.com.tw` | `python scripts/scrape_package.py "<url>" scrapes/lifetour-<code>.json` |
-| Other travel OTA | Try `scrape_package.py` first (generic Playwright scraper) |
+| Any OTA (besttour / liontravel / lifetour / settour / …) | Drive the real page in Chrome, then capture + parse: <br>`./rust/target/debug/travel-scraper scrape interact "<url>" --source <id> --step ...` (or `browser snapshot` on an open tab) <br>→ `./rust/target/debug/travel-scraper parse capture <capture-id> --source <id>` (parses via `parser_rules`, imports to Turso) |
 | Non-OTA URL | Use WebFetch as normal |
+
+The driver navigates/clicks the actual UI (no fragile URL templates). Captures live in the
+Turso `captures` table; offers go to the `offers` table. Parser rules per OTA: `parser_rules` table.
+NOTE: flight/hotel-only OTAs (tigerair, google_flights, trip, agoda, eztravel) are seeded
+`has_custom_parser=1` and currently fail loud — they need a flight/hotel rule shape first.
 
 Full skill reference: `src/skills/scrape-ota/SKILL.md`
 
@@ -260,18 +264,13 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 - **Agoda**: Direct hotel URLs most reliable. city_ids: Osaka=14811, Tokyo=5765, Kyoto=5814
 - **Google Flights**: `google.com/travel/flights?q=Flights+to+{DEST}+from+{ORIGIN}+on+{date}+through+{date}&curr=TWD&hl=zh-TW`
 
-### Scraper Scripts
-| Script | Purpose | OTA |
-|--------|---------|-----|
-| `scrape_package.py` | Detail scraper | BestTour, LionTravel, Lifetour, Settour, Travel4U |
-| `scrape_listings.py` | Fast listing scraper | BestTour, LionTravel, Lifetour, Settour, Travel4U |
-| `scrape_eztravel.py` | EzTravel FIT | EzTravel |
-| `filter_packages.py` | Filter by criteria | All |
-| `scrape_liontravel_dated.py` | Date-specific | Lion Travel |
-| `scrape_tigerair.py` | Flight prices | Tigerair |
-| `scrape_date_range.py` | Multi-date flights | Trip.com |
-
-Requires: `pip install playwright && playwright install chromium`
+### Scrapers — DECOMMISSIONED (use the Rust CDP driver)
+All Python scrapers (`scrape_package.py`, `scrape_listings.py`, the `scrapers/` package, etc.) are
+**archived under `archive/broken-python-scrapers/`** and must NOT be run — their URL/region/template
+construction 404s or lands on the wrong page. The replacement is the Rust CDP driver
+(`rust/crates/travel-scraper`): drive the real OTA page in Chrome (`scrape interact` / `browser
+snapshot`) → `parse capture <id>` (rule-driven, `parser_rules` table) → Turso. No `pip install
+playwright`, no Python. See `docs/plans/2026-06-05-rust-cdp-scraper-migration.md`.
 
 ## Current Status
 

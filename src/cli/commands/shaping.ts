@@ -127,7 +127,14 @@ const shapingInitCommand: CommandHandler = {
       console.error('   Check for prior shaping: db:exec "SELECT run_id FROM shaping_research_runs ORDER BY run_id DESC;"');
     }
 
-    console.log(`\nNext: python scripts/shaping_research.py --run ${runId}`);
+    // The Python aggregator (scripts/shaping_research.py) is archived — its
+    // flight-candidate scraping relied on the broken URL/template scrapers.
+    // Gather candidates by driving the real OTA pages with the Rust CDP driver,
+    // then parse/import to Turso; tie them to this run via shaping-* commands.
+    console.log(`\nRun created: ${runId}`);
+    console.log('Next: drive the real OTA pages with the Rust CDP scraper');
+    console.log('  ./rust/target/debug/travel-scraper scrape interact <url> --source <id> --step ...');
+    console.log('  ./rust/target/debug/travel-scraper parse capture <capture-id> --source <id>');
   },
 };
 

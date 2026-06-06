@@ -10,8 +10,7 @@
     "test:watch": "vitest --config vitest.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "hooks:install": "cp scripts/hooks/* .git/hooks/ && chmod +x .git/hooks/*",
-    "postinstall": "npm run hooks:install && python scripts/check_playwright.py -q || echo '⚠️ Playwright not installed. Run: npm run scraper:setup'",
-    "scraper:setup": "python scripts/check_playwright.py --install",
+    "postinstall": "npm run hooks:install",
     "status": "ts-node src/cli/travel-update.ts status --full",
     "status:json": "ts-node src/cli/travel-update.ts status --json",
     "status:ascii": "ts-node src/cli/travel-update.ts status",
@@ -38,10 +37,7 @@
     "db:sync:events": "ts-node scripts/turso-sync-events.ts",
     "db:seed:plans": "ts-node scripts/seed-plans-current.ts",
     "db:fetch:holidays:tw": "ts-node scripts/fetch-taiwan-holidays.ts",
-    "db:exec": "npx tsx scripts/turso-exec.ts",
-    "scraper:doctor": "python scripts/scraper_doctor.py",
-    "scraper:batch": "python scripts/scrape_batch.py",
-    "scraper:pipeline": "npm run scraper:doctor && npm run scraper:batch && npm run db:import:turso && echo '✅ Pipeline complete. Run: npm run travel -- compare-offers --region <name>'"
+    "db:exec": "npx tsx scripts/turso-exec.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
