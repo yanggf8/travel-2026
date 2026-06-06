@@ -79,7 +79,7 @@ pub async fn load_holiday_calendar(
     })
 }
 
-async fn connect_read() -> Result<libsql::Connection, String> {
+pub(crate) async fn connect_read() -> Result<libsql::Connection, String> {
     let credential = resolve_travel_token(TokenTier::Read)?;
     let db = libsql::Builder::new_remote(credential.url, credential.token)
         .build()
