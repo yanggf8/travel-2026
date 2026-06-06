@@ -3,8 +3,9 @@
 **Status:** In progress — full pipeline DONE (browser/CDP → capture → interactive click/fill →
 rule-driven parser → Turso import), no-JSON/plain-text, native Rust→Turso. 10 OTA `parser_rules`
 seeded; settour + liontravel real-scrape-verified and their Python parsers deleted. Remaining:
-real-scrape-gate the other package OTAs (besttour/lifetour/travel4u) then delete their Python; design
-a flight/hotel rule shape for the 5 flight/hotel sources (currently `has_custom_parser=1`, fail-loud).
+real-scrape-gate the other package OTAs (besttour/lifetour/travel4u) and the flight/hotel-only OTAs
+before advancing decommission status. Flight/hotel rule shape is implemented and seeded; live capture
+parity is still required per source.
 See Progress.  
 **Decision:** Replace Python OTA scrapers with a Rust scraper CLI.  
 **Do not edit `package.json` yet:** preserve the current TS fallback rule until the Rust scraper path is complete and tested.
@@ -331,12 +332,18 @@ Success criteria:
 ### Rule-driven parser engine — DONE and verified
 - Added Turso table `parser_rules` plus `parser rules seed-defaults`. Rules are regex/marker rows
   (`date_range_rx`, `nights_rx`, `price_marker`, `price_amount_rx`, `flight_rx`,
-  `hotel_anchor_rx`, price basis, pax divisor, product kind), not per-OTA Rust files.
+  `hotel_anchor_rx`, `airline_rx`, `hotel_name_rx`, price basis, pax divisor, product kind), not
+  per-OTA Rust files.
 - `parse capture` now loads the `parser_rules` row for `--source`. `has_custom_parser=0` routes through
   the generic engine; `has_custom_parser=1` is reserved for rare Rust override functions. Missing row,
   invalid regex, or unextractable required fields fail loud.
-- Seeded live Turso rows for `settour`, `liontravel`, and `lifetour`, all with
-  `has_custom_parser=0`. Provenance is stored as `source_url=repo:scripts/scrapers/parsers/<source>.py`.
+- Product-kind required fields are now kind-aware:
+  - `fit`/`group`: dates, nights, price, hotel; flight optional.
+  - `flight`: depart date, price, and flight number or airline; no hotel/nights required.
+  - `hotel`: check-in/out dates, nights, price, hotel; no flight required.
+- Seeded rows for all 10 OTA sources now use the generic path (`has_custom_parser=0`) unless a future
+  real scrape proves a custom override is genuinely required. Provenance is stored as
+  `source_url=repo:scripts/scrapers/parsers/<source>.py` or the archived equivalent.
 - **Verified generic path:** `cargo test -- --nocapture` parsed settour and liontravel through Turso
   rules and matched live `shaping_tour_group_offers` records:
   - settour: 2026-06-20→2026-06-24, 4 nights, IT212/IT211, TWD 36,587 total / 18,294 pp,
@@ -369,47 +376,42 @@ Success criteria:
     `lifetour-okinawa-20260621-2n-mpnpatpt` using a representative rendered-text capture row
     (`2026-06-21→2026-06-24`, 2 nights, TWD 15,130 pp, 沖繩那霸旭橋托麗芙特酒店). It is not
     decommissioned yet because it still needs a real Rust+CDP scrape gate.
-- Remaining seeded package sources:
-  - `besttour`: seeded generic FIT-style row from `scripts/scrapers/parsers/besttour.py`; needs real
-    capture parity. Caveat: source has both FIT and group-tour shapes, but current `parser_rules` is one
-    row per source, so product-kind classification may need a rule extension before deletion.
-  - `travel4u`: seeded generic group-style row from `scripts/scrapers/parsers/travel4u.py`; needs real
-    capture parity. Caveat: Travel4U can expose FIT and group pages; one source-level `product_kind` is
-    not enough for all captures.
-- Seeded but flagged custom (`has_custom_parser=1`) because the current generic engine is package-shaped
-  and requires date/night/hotel fields:
-  `tigerair`, `google_flights`, `trip`, `eztravel` (flight-only) and `agoda` (hotel-only).
-  Recommendation: add a smaller flight/hotel rule shape or targeted override before attempting deletion.
+  - `besttour`: representative rendered-text parity test added against
+    `besttour-okinawa-20260612-3n-mpnnpolq`; needs real Rust+CDP scrape gate before status advances.
+  - `travel4u`: representative rendered-text parity test added against
+    `travel4u-okinawa-20260621-3n-mpnp86ot`; needs real Rust+CDP scrape gate before status advances.
+  - `tigerair`: flight-only rule shape test added (`product_kind=flight`; no hotel/nights required).
+  - `agoda`: hotel-only rule shape test added (`product_kind=hotel`; no flight required).
+- `google_flights`, `trip`, and `eztravel` are seeded with flight rules and `has_custom_parser=0`, but
+  still need live or representative parity cases before being considered verified.
 - Deleted verified Python parser modules:
   `scripts/scrapers/parsers/settour.py`, `scripts/scrapers/parsers/liontravel.py`.
   `scripts/scrapers/parsers/__init__.py` no longer imports them, `scripts/scrapers/registry.py` no
   longer advertises missing parser modules, and the legacy `scripts/scrape_liontravel_dated.py` is now a
   loud decommission stub.
 
-### Rust→Turso CLI — DONE and verified
-- Added a native `libsql` Turso module for `travel-scraper`. It reads `TURSO_URL`/`TURSO_TOKEN` from
-  the process environment or the repo `.env`, and fails loud if credentials are missing.
+### Rust→Turso CLI — DONE
+- Added a native `libsql` Turso module for `travel-scraper`. It now resolves credentials through the
+  vendored `rust/crates/turso-util` broker, using tiered token minting (`read`, `write`, `secrets`) and
+  a safe token cache. The code no longer hunts for repo-local `.env` credentials.
+- Env overrides are scoped to `TRAVEL_TURSO_<TIER>_TOKEN` plus `TRAVEL_TURSO_URL`; generic shell
+  `TURSO_<TIER>_TOKEN` variables are intentionally ignored by this travel CLI so unrelated tokens cannot
+  hijack resolution. Default bootstrap is an authenticated Turso CLI (`turso auth login`).
 - Added `db query <sql>` and `db exec <sql>` so Rust can inspect/mutate Turso without npm.
-- Added `import offers <offers.json> [--dry-run]`, mapping parser output into the legacy `offers`
-  table with parameterized writes for Unicode-safe values. Live schema note: the cloud `offers` table
-  still has `id TEXT PRIMARY KEY`, so Rust uses a date-aware stable id plus idempotent
-  `ON CONFLICT(id) DO UPDATE`; this avoids the old `settour_v2` collision while preserving the legacy
-  columns.
-- **Verified:** `db query "SELECT offer_id FROM shaping_tour_group_offers LIMIT 3"` returned live cloud
-  rows; `parse capture ...settour-20260605T174023Z.json` → `import offers ...` wrote
-  `settour_v2_20260620_4n` to Turso with 6/20→6/24, 4 nights, TWD 18,294 pp, 微笑飯店京都烏丸五條, 台灣虎航.
-- **Turso-backed round-trip test** (`tests/turso_import.rs`, `cargo test` ✓): builds an offer in memory,
-  imports it through the Rust binary, queries it back, asserts equality, then cleans up. No committed JSON
-  fixture is used.
-- Evaluated `/home/yanggf/b/gwebcdb/crates/turso-util`: useful, but finance-registry oriented and coupled
-  to its own token/cache model. The travel scraper keeps a thin local Turso module for now; gwebcdb remains
-  untouched.
+- `parse capture` imports directly into `offers` with append-only conflict handling
+  (`ON CONFLICT(id, scraped_at) DO NOTHING`) and no JSON file boundary.
+- Added `db token-status <read|write|secrets>` as a plain-text credential probe.
+- Current local verification note: this shell's Turso CLI is not authenticated, so live cloud parity
+  tests skip-not-fail and `db token-status read` fails loud with the `turso auth login` instruction.
 
 ### Remaining (next milestones, in order)
-- Real-scrape the newly seeded OTAs, starting with `lifetour`, `besttour`, and `travel4u`; then delete
-  their Python parser only after the Rust+CDP scrape + Turso parity gate passes.
-- Extend the generic rule shape for flight-only and hotel-only sources, or implement explicit custom
-  overrides for rows with `has_custom_parser=1`.
+- Authenticate the local Turso CLI (`turso auth login`) or provide `TRAVEL_TURSO_<TIER>_TOKEN` plus
+  `TRAVEL_TURSO_URL`, then re-run live `parser rules seed-defaults`, `db query`, and parity tests.
+- Real-scrape the newly seeded OTAs, starting with `lifetour`, `besttour`, and `travel4u`; then advance
+  status only after the Rust+CDP scrape + Turso parity gate passes.
+- Real-scrape flight/hotel-only sources (`tigerair`, `google_flights`, `trip`, `agoda`, `eztravel`) and
+  add parity checks. Keep `has_custom_parser=0` unless a real capture proves regex rules cannot express
+  the source.
 - Python decommission per source: delete-verified-now, port-rest-lazily. Only `settour` + `liontravel`
   are deleted so far.
   - **DECOMMISSION PACE (user, 2026-06):** delete-verified-now, port-rest-lazily. Delete the Python
@@ -428,17 +430,10 @@ Success criteria:
   every `npm run travel` / `scripts/*.ts` Turso path to the Rust binary; delete `package.json`, the TS
   importer, and the npm scripts once parity is proven. (User deferred writing this plan.)
 
-- **Credentials are cloud-native, not a local `.env`.** This is a cloud-based (Turso) project, yet
-  Turso creds (`TURSO_URL`/`TURSO_TOKEN`) are read from a **local `.env` file** in ~10 places
-  (`rust/.../turso.rs`, both Rust tests, `main.rs`, `scripts/turso-pipeline.ts`,
-  `scripts/import-offers-to-turso.ts`, other TS scripts, `workers/trip-dashboard/src/turso.ts`). That
-  local-file dependency contradicts the no-local-data direction and already caused breakage (the
-  `db query` CWD failure; the `../../.env` path walk-up in the test). Requirement: stop depending on a
-  local `.env` as the source of cred truth — resolve credentials in a cloud-native way (e.g. a single
-  documented env-injection at process start, an OS keychain/secret store, or a token broker like
-  `gwebcdb/crates/turso-util`'s tiered resolution), so no command needs to locate a repo-relative file.
-  Decide the mechanism in its own plan; until then, env-var injection at the shell is the interim
-  contract, and code must FAIL LOUD (not hunt paths) when creds are absent.
+- **Credentials are cloud-native, not a local `.env`.** The Rust scraper now uses vendored
+  `turso-util` token minting and no longer reads repo-local `.env` credentials. Remaining TS/dashboard
+  paths may still use their existing credential mechanisms until the separate npm-kill migration replaces
+  them. Requirement stays: scraper commands must FAIL LOUD (not hunt paths) when credentials are absent.
 
   **Research finding (2026-06): Turso has NO secrets-vault product** — only DB auth tokens. A vault
   *inside* Turso would be circular anyway (need a token to read the secret that holds the token). The

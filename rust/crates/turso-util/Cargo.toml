@@ -1,0 +1,11 @@
+[package]
+name = "turso-util"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libsql = "0.6"
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

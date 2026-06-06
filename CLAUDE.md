@@ -204,7 +204,8 @@ URLs 404 / hit the wrong page. Scrape via the Rust CDP driver against real Chrom
 The driver navigates/clicks the actual UI (no fragile URL templates). Captures live in the
 Turso `captures` table; offers go to the `offers` table. Parser rules per OTA: `parser_rules` table.
 NOTE: flight/hotel-only OTAs (tigerair, google_flights, trip, agoda, eztravel) are seeded
-`has_custom_parser=1` and currently fail loud — they need a flight/hotel rule shape first.
+with `has_custom_parser=0`. The generic parser has flight/hotel-specific required fields now; each
+source still needs a real live Chrome scrape before decommission status can advance.
 
 Full skill reference: `src/skills/scrape-ota/SKILL.md`
 

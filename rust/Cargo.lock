@@ -2278,6 +2278,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "turso-util",
 ]
 
 [[package]]
@@ -2301,6 +2302,15 @@ dependencies = [
  "sha1",
  "thiserror 2.0.18",
  "utf-8",
+]
+
+[[package]]
+name = "turso-util"
+version = "0.1.0"
+dependencies = [
+ "libsql",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
