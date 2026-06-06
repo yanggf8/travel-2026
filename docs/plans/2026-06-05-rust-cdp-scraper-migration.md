@@ -2,12 +2,16 @@
 
 **Status:** In progress — full pipeline DONE (browser/CDP → capture → interactive click/fill →
 rule-driven parser → Turso import), no-JSON/plain-text, native Rust→Turso. 10 OTA `parser_rules`
-seeded; settour + liontravel real-scrape-verified and their Python parsers deleted. Added
-`verify <source> <capture-id>` for live regex close-out; current stored real rendered capture verifies
-settour only. Remaining:
-real-scrape-gate the other package OTAs (besttour/lifetour/travel4u) and the flight/hotel-only OTAs
-before advancing decommission status. Flight/hotel rule shape is implemented and seeded; live capture
-parity is still required per source.
+seeded (all `has_custom_parser=0`); settour + liontravel real-scrape-verified and their Python parsers
+deleted. Added `verify <source> <capture-id>` for live regex close-out; current stored real rendered
+capture verifies settour only. **Credentials: turso-util tiered token minting is LIVE and verified
+(2026-06-07) — `turso auth login` done, `db token-status read` shows source=minted (scoped, 24h
+expiry); the static `.env` token path is removed; all Turso-backed tests pass against the live DB via
+minted tokens.** Tooling is complete; remaining work is OPERATIONAL: per-OTA live capture →
+`verify` → fix regex if needed → delete that OTA's archived Python. Needs the human-in-the-loop
+capture (user drives real Chrome) for besttour/lifetour/travel4u and the flight/hotel-only OTAs before
+advancing decommission status. Flight/hotel rule shape is implemented, seeded, and snippet-verified;
+live capture parity still required per source.
 See Progress.  
 **Decision:** Replace Python OTA scrapers with a Rust scraper CLI.  
 **Do not edit `package.json` yet:** preserve the current TS fallback rule until the Rust scraper path is complete and tested.
