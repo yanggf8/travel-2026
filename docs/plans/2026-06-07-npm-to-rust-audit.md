@@ -241,6 +241,20 @@ Deliverables:
 
 Estimate: 1-2 weeks.
 
+**Phase 2 progress (in progress):**
+- ✅ `travel plans` — Rust-built, BYTE-IDENTICAL parity with `npm run travel -- plans` (incl. the
+  `window=` suffix). Establishes the Rust read-repository pattern (`db::connect_read` via turso-util
+  read-tier minting + per-command module + plain-text formatter). Commit d7a188a.
+- ✅ `travel query-offers` — Rust-built, format byte-parity with TS `printTursoOfferTable`, full-count
+  parity (16=16). Reads raw `offers` table (NOT the dropped `raw_data` column). `--limit` correctly
+  caps rows (TS's didn't). Commit f2d09c0.
+- ⏳ Remaining simple reads (same pattern, mechanical): `query-bookings`, `check-freshness`,
+  `query-destination-ref`. Then DB-read comparisons: `compare-dates`, `compare-true-cost`.
+- ⚠️ The assembled-plan views (`status`, `view:itinerary`, `view:transport`, `view:bookings`) depend on
+  StateManager/plan-assembler — they are effectively **Phase 4 work**, not pure reads. Phase 2 here is
+  scoped to the genuinely read-only, single-table-ish commands; the StateManager-backed views move to
+  Phase 4. TS for all Phase 2 commands kept (parity-verified, deletion pending).
+
 ### Phase 3 — DB Scripts and One-Shots
 
 Scope:
@@ -324,7 +338,17 @@ Suggested tracking table per command:
 
 | Command/script | Rust command | cargo parity | real run | TS deleted | Notes |
 |---|---|---:|---:|---:|---|
-| `status` | `travel status` | pending | pending | no | Phase 2 |
+| `leave-calc` | `travel leave calc` | done | done | no | Phase 1, byte-parity |
+| `compare-trips` | `travel compare trips` | done | done | no | Phase 1, text-spec input |
+| `normalize-flights` | `travel normalize flights` | done | done | no | Phase 1, rendered-text input |
+| `plans` | `travel plans` | done | done | no | Phase 2, byte-parity |
+| `query-offers` | `travel query-offers` | done | done | no | Phase 2, count-parity (16=16) |
+| `query-bookings` | `travel query-bookings` | pending | pending | no | Phase 2 (simple read) |
+| `check-freshness` | `travel check-freshness` | pending | pending | no | Phase 2 (simple read) |
+| `query-destination-ref` | `travel query-destination-ref` | pending | pending | no | Phase 2 (simple read) |
+| `compare-dates` | `travel compare dates` | pending | pending | no | Phase 2 (DB-read) |
+| `compare-true-cost` | `travel compare true-cost` | pending | pending | no | Phase 2 (DB-read) |
+| `status` | `travel status` | pending | pending | no | Phase 4 (StateManager-backed) |
 | `set-dates` | `travel set-dates` | pending | pending | no | Phase 4 |
 
 ## Verification Method
