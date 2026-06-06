@@ -454,12 +454,18 @@ Success criteria:
 
 ### TODO — deferred, tracked (write a dedicated plan for each)
 
-- **Kill npm — pure Rust + Turso end-state.** User goal: NO npm, NO Python, NO JSON files. Migrate
-  every `npm run travel` / `scripts/*.ts` Turso path to the Rust binary; delete `package.json`, the TS
-  importer, and the npm scripts once parity is proven. (User deferred writing this plan.)
+- **Kill npm — ON HOLD (user decision 2026-06-07).** Not pursued, because the **Cloudflare Worker
+  dashboard (`workers/trip-dashboard`) requires a JS/TS runtime** — CF Workers run JavaScript natively;
+  a Rust binary can't serve the dashboard the normal way. So "pure Rust, no TypeScript anywhere" is
+  incompatible with the live dashboard the project needs. The **scraper** is already npm/Python/JSON-free
+  with native Rust→Turso minting; the broader npm-kill (porting the 33-command TS `travel` CLI +
+  StateManager/cascade to Rust, deleting package.json) is intentionally NOT scheduled. Revisit only if
+  the Worker is rebuilt (e.g. Rust→WASM on Workers) or dropped. Until then, npm/TS stays for the CLI +
+  Worker; that is an accepted state, not debt to clear.
 
-- **Credentials are cloud-native, not a local `.env`.** The Rust scraper now uses vendored
-  `turso-util` token minting and no longer reads repo-local `.env` credentials. Remaining TS/dashboard
+- **Credentials cloud-native — DONE (verified 2026-06-07).** The Rust scraper uses vendored
+  `turso-util` tiered token minting (verified live: `db token-status read` → source=minted, scoped 24h;
+  `turso auth login` bootstraps; no static `.env` token). Remaining TS/dashboard
   paths may still use their existing credential mechanisms until the separate npm-kill migration replaces
   them. Requirement stays: scraper commands must FAIL LOUD (not hunt paths) when credentials are absent.
 
