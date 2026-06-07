@@ -96,6 +96,10 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM plan_offer_best_value WHERE plan_id = ${pid}`,                                  // 37
       `SELECT * FROM day_route_segments WHERE plan_id = ${pid} ORDER BY destination, day_number, sort_order`, // 38
       `SELECT * FROM session_activities_zh WHERE plan_id = ${pid} ORDER BY destination, day_number, session_type, sort_order`, // 39
+      `SELECT * FROM plan_offer_includes WHERE plan_id = ${pid} ORDER BY destination, offer_id, sort_order`,                   // 40
+      `SELECT * FROM plan_offer_hotel_access WHERE plan_id = ${pid} ORDER BY destination, offer_id, sort_order`,              // 41
+      `SELECT * FROM location_zone_candidates WHERE plan_id = ${pid} ORDER BY destination, sort_order`,                       // 42
+      `SELECT * FROM transport_extra_candidates WHERE plan_id = ${pid} ORDER BY destination, direction, sort_order`,          // 43
     ];
 
     // Execute all queries in a single HTTP round-trip
@@ -111,6 +115,7 @@ export class TursoRepository implements StateRepository {
       mealRows, tagRows, eventLogStateRows, eventLogGlobalRows, eventLogDestRows,
       eventLogDestProcRows, eventLogEvtRows, versionRows, bestValueRows,
       routeSegmentRows, activitiesZhRows,
+      offerIncludesRows, offerHotelAccessRows, locZoneCandRows, transportExtraCandRows,
     ] = responses;
 
     if (metaRows.length === 0) {
@@ -125,6 +130,7 @@ export class TursoRepository implements StateRepository {
       dayRows, sessionRows, activityRows, flightLegRows, hotelRows, transferRows,
       locZoneRows, transportExtraRows, itinMetaRows, transferCandRows, accessLineRows,
       mealRows, tagRows, bestValueRows, routeSegmentRows, activitiesZhRows,
+      offerIncludesRows, offerHotelAccessRows, locZoneCandRows, transportExtraCandRows,
     );
 
     const eventLog = assembleEventLog(

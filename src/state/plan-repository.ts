@@ -940,10 +940,19 @@ export class PlanRepository implements StateRepository {
         for (const dir of ['arrival', 'departure'] as const) {
           const segment = transfers[dir] as Record<string, unknown> | undefined;
           if (segment) {
+            const sel = (segment.selected && typeof segment.selected === 'object') ? segment.selected as Record<string, unknown> : null;
             statements.push(
-              `INSERT OR REPLACE INTO airport_transfers (plan_id, destination, direction, status, selected_json, candidates_json, updated_at)
-               VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(dir)}, ${sqlText((segment.status as string) || 'planned')}, ${sqlText(segment.selected ? JSON.stringify(segment.selected) : null)}, ${sqlText(segment.candidates ? JSON.stringify(segment.candidates) : null)}, datetime('now'))`
+              `INSERT OR REPLACE INTO airport_transfers (plan_id, destination, direction, status, selected_id, selected_title, selected_route, selected_duration_min, selected_price_yen, selected_schedule, selected_booking_url, selected_notes, updated_at)
+               VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(dir)}, ${sqlText((segment.status as string) || 'planned')}, ${sqlText(sel?.id as string)}, ${sqlText(sel?.title as string)}, ${sqlText(sel?.route as string)}, ${sqlInt(sel?.duration_min as number)}, ${sqlInt(sel?.price_yen as number)}, ${sqlText(sel?.schedule as string)}, ${sqlText(sel?.booking_url as string)}, ${sqlText(sel?.notes as string)}, datetime('now'))`
             );
+            // candidates → airport_transfer_candidates child rows
+            const cands = Array.isArray(segment.candidates) ? segment.candidates as Array<Record<string, unknown>> : [];
+            statements.push(`DELETE FROM airport_transfer_candidates WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText(destSlug)} AND direction = ${sqlText(dir)}`);
+            cands.forEach((c, i) => {
+              statements.push(
+                `INSERT INTO airport_transfer_candidates (plan_id, destination, direction, candidate_id, title, route, duration_min, price_yen, schedule, booking_url, notes, sort_order) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(dir)}, ${sqlText((c.id as string) || `cand_${i}`)}, ${sqlText((c.title as string) || '')}, ${sqlText(c.route as string)}, ${sqlInt(c.duration_min as number)}, ${sqlInt(c.price_yen as number)}, ${sqlText(c.schedule as string)}, ${sqlText(c.booking_url as string)}, ${sqlText(c.notes as string)}, ${sqlInt(i)})`
+              );
+            });
           }
         }
       }
@@ -966,9 +975,15 @@ export class PlanRepository implements StateRepository {
       if (p4?.hotel && typeof p4.hotel === 'object') {
         const hotel = p4.hotel as Record<string, unknown>;
         statements.push(
-          `INSERT OR REPLACE INTO hotels (plan_id, destination, populated_from, name, access_json, check_in, notes, updated_at)
-           VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p4.populated_from as string)}, ${sqlText(hotel.name as string)}, ${sqlText(hotel.access ? JSON.stringify(hotel.access) : null)}, ${sqlText(hotel.check_in as string)}, ${sqlText(hotel.notes as string)}, datetime('now'))`
+          `INSERT OR REPLACE INTO hotels (plan_id, destination, populated_from, name, check_in, notes, updated_at)
+           VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p4.populated_from as string)}, ${sqlText(hotel.name as string)}, ${sqlText(hotel.check_in as string)}, ${sqlText(hotel.notes as string)}, datetime('now'))`
         );
+        // access → hotel_access_lines child rows
+        const access = Array.isArray(hotel.access) ? hotel.access as string[] : [];
+        statements.push(`DELETE FROM hotel_access_lines WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText(destSlug)}`);
+        access.forEach((line, i) => {
+          statements.push(`INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(i)}, ${sqlText(line)})`);
+        });
       }
 
       // cascade_dirty_flags
@@ -1006,7 +1021,12 @@ export class PlanRepository implements StateRepository {
       const results34 = p34?.results as Record<string, unknown> | undefined;
       const offers = (results34?.offers || (p34 as any)?.offers || []) as Array<Record<string, unknown>>;
       for (const o of offers) {
-        statements.push(`INSERT INTO plan_offers (plan_id, destination, id, source_id, type, title, price_per_person, currency, availability, url, scraped_at, product_code, duration_days, price_total, seats_remaining, includes_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(o.source_id as string)}, ${sqlText(o.type as string)}, ${sqlText(o.title as string)}, ${sqlInt(o.price_per_person as number)}, ${sqlText((o.currency as string) ?? 'TWD')}, ${sqlText(o.availability as string)}, ${sqlText(o.url as string)}, ${sqlText(o.scraped_at as string)}, ${sqlText(o.product_code as string)}, ${sqlInt(o.duration_days as number)}, ${sqlInt(o.price_total as number)}, ${sqlInt(o.seats_remaining as number)}, ${sqlText(o.includes ? JSON.stringify(o.includes) : null)})`);
+        statements.push(`INSERT INTO plan_offers (plan_id, destination, id, source_id, type, title, price_per_person, currency, availability, url, scraped_at, product_code, duration_days, price_total, seats_remaining) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(o.source_id as string)}, ${sqlText(o.type as string)}, ${sqlText(o.title as string)}, ${sqlInt(o.price_per_person as number)}, ${sqlText((o.currency as string) ?? 'TWD')}, ${sqlText(o.availability as string)}, ${sqlText(o.url as string)}, ${sqlText(o.scraped_at as string)}, ${sqlText(o.product_code as string)}, ${sqlInt(o.duration_days as number)}, ${sqlInt(o.price_total as number)}, ${sqlInt(o.seats_remaining as number)})`);
+        // includes → plan_offer_includes child rows
+        const includes = Array.isArray(o.includes) ? o.includes as string[] : [];
+        includes.forEach((item, ii) => {
+          statements.push(`INSERT INTO plan_offer_includes (plan_id, destination, offer_id, sort_order, item) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlInt(ii)}, ${sqlText(item)})`);
+        });
         const oflight = o.flight as Record<string, unknown> | undefined;
         if (oflight) {
           for (const dir of ['outbound', 'return'] as const) {
@@ -1017,7 +1037,12 @@ export class PlanRepository implements StateRepository {
         }
         const ohotel = o.hotel as Record<string, unknown> | undefined;
         if (ohotel) {
-          statements.push(`INSERT INTO plan_offer_hotels (plan_id, destination, offer_id, name, slug, area, star_rating, access_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(ohotel.name as string)}, ${sqlText(ohotel.slug as string)}, ${sqlText(ohotel.area as string)}, ${sqlInt(ohotel.star_rating as number)}, ${sqlText(ohotel.access ? JSON.stringify(ohotel.access) : null)})`);
+          statements.push(`INSERT INTO plan_offer_hotels (plan_id, destination, offer_id, name, slug, area, star_rating) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(ohotel.name as string)}, ${sqlText(ohotel.slug as string)}, ${sqlText(ohotel.area as string)}, ${sqlInt(ohotel.star_rating as number)})`);
+          // access → plan_offer_hotel_access child rows
+          const ohAccess = Array.isArray(ohotel.access) ? ohotel.access as string[] : [];
+          ohAccess.forEach((line, ai) => {
+            statements.push(`INSERT INTO plan_offer_hotel_access (plan_id, destination, offer_id, sort_order, line) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlInt(ai)}, ${sqlText(line)})`);
+          });
         }
         const dp = o.date_pricing as Record<string, Record<string, unknown>> | undefined;
         if (dp) {
@@ -1045,13 +1070,35 @@ export class PlanRepository implements StateRepository {
       if (p4) {
         const lz = (p4 as any).location_zone;
         if (lz) {
-          statements.push(`INSERT INTO accommodation_location_zone (plan_id, destination, selected_area, source, candidates_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(lz.selected_area)}, ${sqlText(lz.source)}, ${sqlText(lz.candidates ? JSON.stringify(lz.candidates) : null)})`);
+          statements.push(`INSERT INTO accommodation_location_zone (plan_id, destination, selected_area, source) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(lz.selected_area)}, ${sqlText(lz.source)})`);
+          // candidates → location_zone_candidates child rows (known cols + pros/cons text)
+          const lzCands = Array.isArray(lz.candidates) ? lz.candidates as Array<Record<string, unknown>> : [];
+          statements.push(`DELETE FROM location_zone_candidates WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText(destSlug)}`);
+          lzCands.forEach((c, ci) => {
+            const pros = Array.isArray(c.pros) ? (c.pros as string[]).join('; ') : null;
+            const cons = Array.isArray(c.cons) ? (c.cons as string[]).join('; ') : null;
+            statements.push(`INSERT INTO location_zone_candidates (plan_id, destination, sort_order, slug, display_name, pros_text, cons_text) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(ci)}, ${sqlText((c.slug as string) || `zone_${ci}`)}, ${sqlText(c.display_name as string)}, ${sqlText(pros)}, ${sqlText(cons)})`);
+          });
         }
       }
 
-      // transportation_extras
+      // transportation_extras (status scalars + candidate child rows; no JSON)
       if (p3) {
-        statements.push(`INSERT INTO transportation_extras (plan_id, destination, source, populated_from, home_to_airport_json, airport_to_hotel_json) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p3.source as string)}, ${sqlText(p3.populated_from as string)}, ${sqlText((p3 as any).home_to_airport ? JSON.stringify((p3 as any).home_to_airport) : null)}, ${sqlText((p3 as any).airport_to_hotel ? JSON.stringify((p3 as any).airport_to_hotel) : null)})`);
+        const h2a = (p3 as any).home_to_airport as Record<string, unknown> | undefined;
+        const a2h = (p3 as any).airport_to_hotel as Record<string, unknown> | undefined;
+        statements.push(`INSERT INTO transportation_extras (plan_id, destination, source, populated_from, home_to_airport_status, airport_to_hotel_status) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p3.source as string)}, ${sqlText(p3.populated_from as string)}, ${sqlText(h2a?.status as string)}, ${sqlText(a2h?.status as string)})`);
+        for (const [obj, direction] of [[h2a, 'home_to_airport'], [a2h, 'airport_to_hotel']] as const) {
+          statements.push(`DELETE FROM transport_extra_candidates WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText(destSlug)} AND direction = ${sqlText(direction)}`);
+          const cands = (obj && Array.isArray(obj.candidates)) ? obj.candidates as Array<Record<string, unknown>> : [];
+          cands.forEach((c, ci) => {
+            const extraParts: string[] = [];
+            if (Array.isArray(c.amenities) && c.amenities.length) extraParts.push(`amenities: ${(c.amenities as string[]).join(', ')}`);
+            if (Array.isArray(c.pros) && c.pros.length) extraParts.push(`pros: ${(c.pros as string[]).join('; ')}`);
+            if (Array.isArray(c.cons) && c.cons.length) extraParts.push(`cons: ${(c.cons as string[]).join('; ')}`);
+            const extraText = extraParts.length ? extraParts.join(' | ') : null;
+            statements.push(`INSERT INTO transport_extra_candidates (plan_id, destination, direction, sort_order, candidate_id, method, route, departure_time, arrival_time, duration_min, cost_jpy, transfers, extra_text) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(direction)}, ${sqlInt(ci)}, ${sqlText(c.id as string)}, ${sqlText(c.method as string)}, ${sqlText(c.route as string)}, ${sqlText(c.departure_time as string)}, ${sqlText(c.arrival_time as string)}, ${sqlInt(c.duration_min as number)}, ${sqlInt(c.cost_jpy as number)}, ${sqlInt(c.transfers as number)}, ${sqlText(extraText)})`);
+          });
+        }
       }
 
       // airport_transfer_candidates + selected_* scalars

@@ -137,6 +137,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     /* 18 */ `SELECT * FROM session_meals WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
     /* 19 */ `SELECT * FROM session_activities_zh WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
     /* 20 */ `SELECT at.activity_id, at.tag FROM activity_tags at INNER JOIN activities a ON at.activity_id = a.id WHERE a.plan_id = '${escaped}'`,
+    /* 21 */ `SELECT * FROM airport_transfer_candidates WHERE plan_id = '${escaped}' ORDER BY destination, direction, sort_order`,
   ]);
 
   const [
@@ -145,7 +146,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     flightLegRows, hotelRows, accessLineRows, transferRows,
     dayRows, sessionRows, activityRows, itinMetaRows,
     routeSegRows, landmarkRows, destConfigRows,
-    mealRows, activitiesZhRows, tagRows,
+    mealRows, activitiesZhRows, tagRows, transferCandRows,
   ] = results;
 
   if (metaRows.length === 0) return null;
@@ -216,6 +217,14 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     const d = r.destination!;
     if (!transferByDest.has(d)) transferByDest.set(d, []);
     transferByDest.get(d)!.push(r);
+  }
+
+  // Transfer candidates by dest:direction (no JSON column).
+  const transferCandByKey = new Map<string, Row[]>();
+  for (const r of transferCandRows) {
+    const k = `${r.destination}:${r.direction}`;
+    if (!transferCandByKey.has(k)) transferCandByKey.set(k, []);
+    transferCandByKey.get(k)!.push(r);
   }
 
   // Days by dest
@@ -335,16 +344,32 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
 
     // Hotel
     const hotelRow = hotelMap.get(dest);
-    const access = accessByDest.get(dest) || (hotelRow?.access_json ? tryParseJson(hotelRow.access_json) as string[] : null);
+    const access = accessByDest.get(dest) || null;
 
     // Airport transfers
     const transfers = transferByDest.get(dest) || [];
     const airportTransfers: Record<string, unknown> = {};
     for (const tr of transfers) {
+      const selected = (tr.selected_title || tr.selected_id) ? {
+        id: tr.selected_id ?? null,
+        title: tr.selected_title,
+        route: tr.selected_route,
+        duration_min: tr.selected_duration_min ? parseInt(tr.selected_duration_min, 10) : null,
+        price_yen: tr.selected_price_yen ? parseInt(tr.selected_price_yen, 10) : null,
+        schedule: tr.selected_schedule,
+        booking_url: tr.selected_booking_url,
+        notes: tr.selected_notes,
+      } : null;
+      const cands = (transferCandByKey.get(`${dest}:${tr.direction}`) || []).map((c) => ({
+        id: c.candidate_id, title: c.title, route: c.route,
+        duration_min: c.duration_min ? parseInt(c.duration_min, 10) : null,
+        price_yen: c.price_yen ? parseInt(c.price_yen, 10) : null,
+        schedule: c.schedule, booking_url: c.booking_url, notes: c.notes,
+      }));
       airportTransfers[tr.direction!] = {
         status: tr.status || 'planned',
-        selected: tryParseJson(tr.selected_json),
-        candidates: tryParseJson(tr.candidates_json) || [],
+        selected,
+        candidates: cands,
       };
     }
 

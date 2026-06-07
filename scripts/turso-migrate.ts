@@ -300,8 +300,9 @@ async function main() {
   destination TEXT NOT NULL,
   direction TEXT NOT NULL CHECK(direction IN ('arrival', 'departure')),
   status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned', 'booked')),
-  selected_json TEXT,
-  candidates_json TEXT,
+  selected_id TEXT, selected_title TEXT, selected_route TEXT,
+  selected_duration_min INTEGER, selected_price_yen INTEGER, selected_schedule TEXT,
+  selected_booking_url TEXT, selected_notes TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, direction)
 );`,
@@ -328,7 +329,6 @@ async function main() {
   destination TEXT NOT NULL,
   populated_from TEXT,
   name TEXT,
-  access_json TEXT,
   check_in TEXT,
   notes TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -568,7 +568,7 @@ async function main() {
   source_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT,
   price_per_person INTEGER, currency TEXT DEFAULT 'TWD', availability TEXT,
   url TEXT, scraped_at TEXT, product_code TEXT, duration_days INTEGER,
-  price_total INTEGER, seats_remaining INTEGER, includes_json TEXT,
+  price_total INTEGER, seats_remaining INTEGER,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, id)
 )`,
@@ -588,7 +588,7 @@ async function main() {
       name: 'plan_offer_hotels',
       sql: `CREATE TABLE IF NOT EXISTS plan_offer_hotels (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT NOT NULL,
-  name TEXT, slug TEXT, area TEXT, star_rating INTEGER, access_json TEXT,
+  name TEXT, slug TEXT, area TEXT, star_rating INTEGER,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, offer_id)
 )`,
@@ -706,7 +706,7 @@ async function main() {
       name: 'accommodation_location_zone',
       sql: `CREATE TABLE IF NOT EXISTS accommodation_location_zone (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
-  selected_area TEXT, source TEXT, candidates_json TEXT,
+  selected_area TEXT, source TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination)
 )`,
@@ -716,7 +716,7 @@ async function main() {
       sql: `CREATE TABLE IF NOT EXISTS transportation_extras (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
   source TEXT, populated_from TEXT, research_notes TEXT,
-  home_to_airport_json TEXT, airport_to_hotel_json TEXT,
+  home_to_airport_status TEXT, airport_to_hotel_status TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination)
 )`,
@@ -1770,8 +1770,243 @@ async function main() {
 
   await deJsonReferenceData(client);
   await deJsonItinerarySessions(client);
+  await deJsonPlanTransport(client);
 
   console.log('Done.');
+}
+
+// ---------------------------------------------------------------------------
+// Batch D — de-JSON plan offers / hotels / transfers / transport columns.
+//
+// Flat string arrays → child tables:
+//   plan_offers.includes_json       → plan_offer_includes
+//   plan_offer_hotels.access_json   → plan_offer_hotel_access
+//   hotels.access_json              → hotel_access_lines (existing)
+// One object → scalar columns:
+//   airport_transfers.selected_json → airport_transfers.selected_* columns
+// Array of objects → child tables (known attrs = columns, unknown = one text col):
+//   airport_transfers.candidates_json           → airport_transfer_candidates (existing)
+//   accommodation_location_zone.candidates_json → location_zone_candidates
+//   transportation_extras.{home_to_airport,airport_to_hotel}_json
+//       → transport_extra_candidates (+ status scalar on transportation_extras)
+//
+// Idempotent: guarded on includes_json existence; child writes DELETE then
+// re-INSERT; DROP ignores missing columns.
+// ---------------------------------------------------------------------------
+async function deJsonPlanTransport(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch D: de-JSON plan offer/hotel/transfer/transport columns...');
+
+  // Child tables.
+  await client.execute(`CREATE TABLE IF NOT EXISTS plan_offer_includes (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL, item TEXT NOT NULL,
+    PRIMARY KEY (plan_id, destination, offer_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS plan_offer_hotel_access (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL, offer_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL, line TEXT NOT NULL,
+    PRIMARY KEY (plan_id, destination, offer_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS hotel_access_lines (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+    sort_order INTEGER NOT NULL, line TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (plan_id, destination, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS airport_transfer_candidates (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK(direction IN ('arrival', 'departure')),
+    candidate_id TEXT NOT NULL,
+    title TEXT NOT NULL, route TEXT, duration_min INTEGER, price_yen INTEGER,
+    schedule TEXT, booking_url TEXT, notes TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (plan_id, destination, direction, candidate_id)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS location_zone_candidates (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+    sort_order INTEGER NOT NULL, slug TEXT NOT NULL, display_name TEXT,
+    pros_text TEXT, cons_text TEXT,
+    PRIMARY KEY (plan_id, destination, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS transport_extra_candidates (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+    direction TEXT NOT NULL,  -- 'home_to_airport' | 'airport_to_hotel'
+    sort_order INTEGER NOT NULL, candidate_id TEXT,
+    method TEXT, route TEXT, departure_time TEXT, arrival_time TEXT,
+    duration_min INTEGER, cost_jpy INTEGER, transfers INTEGER,
+    extra_text TEXT,  -- joined amenities/pros/cons (open/variable fields)
+    PRIMARY KEY (plan_id, destination, direction, sort_order)
+  );`);
+  // status scalar for transportation_extras (was the object's top-level status).
+  for (const col of ['home_to_airport_status', 'airport_to_hotel_status']) {
+    try { await client.execute(`ALTER TABLE transportation_extras ADD COLUMN ${col} TEXT;`); }
+    catch (e: any) { if (!/duplicate column/i.test(String(e?.message || ''))) throw e; }
+  }
+  // selected_* scalar columns on airport_transfers (was the selected_json object).
+  const selCols = [
+    'selected_id TEXT', 'selected_title TEXT', 'selected_route TEXT',
+    'selected_duration_min INTEGER', 'selected_price_yen INTEGER', 'selected_schedule TEXT',
+    'selected_booking_url TEXT', 'selected_notes TEXT',
+  ];
+  for (const col of selCols) {
+    try { await client.execute(`ALTER TABLE airport_transfers ADD COLUMN ${col};`); }
+    catch (e: any) { if (!/duplicate column/i.test(String(e?.message || ''))) throw e; }
+  }
+
+  const offCols = rowsAt(await client.executeBatch([`PRAGMA table_info(plan_offers);`]), 0).map((r) => String(r.name));
+  if (!offCols.includes('includes_json')) {
+    console.log('  plan/transport JSON columns already dropped; skipping backfill.');
+  } else {
+    const resp = await client.executeBatch([
+      `SELECT plan_id, destination, id, includes_json FROM plan_offers;`,
+      `SELECT plan_id, destination, offer_id, access_json FROM plan_offer_hotels;`,
+      `SELECT plan_id, destination, access_json FROM hotels;`,
+      `SELECT plan_id, destination, direction, candidates_json, selected_json FROM airport_transfers;`,
+      `SELECT plan_id, destination, candidates_json FROM accommodation_location_zone;`,
+      `SELECT plan_id, destination, home_to_airport_json, airport_to_hotel_json FROM transportation_extras;`,
+    ]);
+    const offers = rowsAt(resp, 0);
+    const offerHotels = rowsAt(resp, 1);
+    const hotels = rowsAt(resp, 2);
+    const transfers = rowsAt(resp, 3);
+    const locZones = rowsAt(resp, 4);
+    const transportExtras = rowsAt(resp, 5);
+
+    const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+
+    // plan_offers.includes_json → plan_offer_includes
+    for (const o of offers) {
+      stmts.push({ sql: `DELETE FROM plan_offer_includes WHERE plan_id = ? AND destination = ? AND offer_id = ?;`, args: [tursoText(o.plan_id), tursoText(o.destination), tursoText(o.id)] });
+      parseJsonArray(o.includes_json).forEach((item, i) => {
+        stmts.push({ sql: `INSERT INTO plan_offer_includes (plan_id, destination, offer_id, sort_order, item) VALUES (?, ?, ?, ?, ?);`, args: [tursoText(o.plan_id), tursoText(o.destination), tursoText(o.id), tursoInt(i), tursoText(item)] });
+      });
+    }
+
+    // plan_offer_hotels.access_json → plan_offer_hotel_access
+    for (const h of offerHotels) {
+      stmts.push({ sql: `DELETE FROM plan_offer_hotel_access WHERE plan_id = ? AND destination = ? AND offer_id = ?;`, args: [tursoText(h.plan_id), tursoText(h.destination), tursoText(h.offer_id)] });
+      parseJsonArray(h.access_json).forEach((line, i) => {
+        stmts.push({ sql: `INSERT INTO plan_offer_hotel_access (plan_id, destination, offer_id, sort_order, line) VALUES (?, ?, ?, ?, ?);`, args: [tursoText(h.plan_id), tursoText(h.destination), tursoText(h.offer_id), tursoInt(i), tursoText(line)] });
+      });
+    }
+
+    // hotels.access_json → hotel_access_lines (only if not already populated)
+    for (const h of hotels) {
+      const lines = parseJsonArray(h.access_json);
+      if (lines.length === 0) continue;
+      stmts.push({ sql: `DELETE FROM hotel_access_lines WHERE plan_id = ? AND destination = ?;`, args: [tursoText(h.plan_id), tursoText(h.destination)] });
+      lines.forEach((line, i) => {
+        stmts.push({ sql: `INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line) VALUES (?, ?, ?, ?);`, args: [tursoText(h.plan_id), tursoText(h.destination), tursoInt(i), tursoText(line)] });
+      });
+    }
+
+    // airport_transfers.candidates_json → airport_transfer_candidates; selected_json → scalar cols
+    for (const t of transfers) {
+      const cands = parseJsonObjArray(t.candidates_json);
+      stmts.push({ sql: `DELETE FROM airport_transfer_candidates WHERE plan_id = ? AND destination = ? AND direction = ?;`, args: [tursoText(t.plan_id), tursoText(t.destination), tursoText(t.direction)] });
+      cands.forEach((c, i) => {
+        stmts.push({
+          sql: `INSERT INTO airport_transfer_candidates (plan_id, destination, direction, candidate_id, title, route, duration_min, price_yen, schedule, booking_url, notes, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          args: [tursoText(t.plan_id), tursoText(t.destination), tursoText(t.direction), tursoText(String(c.id ?? `cand_${i}`)), tursoText(String(c.title ?? '')), tursoText(c.route != null ? String(c.route) : null), tursoInt(c.duration_min ?? null), tursoInt(c.price_yen ?? null), tursoText(c.schedule != null ? String(c.schedule) : null), tursoText(c.booking_url != null ? String(c.booking_url) : null), tursoText(c.notes != null ? String(c.notes) : null), tursoInt(i)],
+        });
+      });
+      const sel = parseJsonObj(t.selected_json);
+      stmts.push({
+        sql: `UPDATE airport_transfers SET selected_id = ?, selected_title = ?, selected_route = ?, selected_duration_min = ?, selected_price_yen = ?, selected_schedule = ?, selected_booking_url = ?, selected_notes = ? WHERE plan_id = ? AND destination = ? AND direction = ?;`,
+        args: [
+          tursoText(sel?.id != null ? String(sel.id) : null), tursoText(sel?.title != null ? String(sel.title) : null), tursoText(sel?.route != null ? String(sel.route) : null), tursoInt(sel?.duration_min ?? null), tursoInt(sel?.price_yen ?? null), tursoText(sel?.schedule != null ? String(sel.schedule) : null), tursoText(sel?.booking_url != null ? String(sel.booking_url) : null), tursoText(sel?.notes != null ? String(sel.notes) : null),
+          tursoText(t.plan_id), tursoText(t.destination), tursoText(t.direction),
+        ],
+      });
+    }
+
+    // accommodation_location_zone.candidates_json → location_zone_candidates
+    for (const lz of locZones) {
+      stmts.push({ sql: `DELETE FROM location_zone_candidates WHERE plan_id = ? AND destination = ?;`, args: [tursoText(lz.plan_id), tursoText(lz.destination)] });
+      parseJsonObjArray(lz.candidates_json).forEach((c, i) => {
+        stmts.push({
+          sql: `INSERT INTO location_zone_candidates (plan_id, destination, sort_order, slug, display_name, pros_text, cons_text) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+          args: [tursoText(lz.plan_id), tursoText(lz.destination), tursoInt(i), tursoText(String(c.slug ?? `zone_${i}`)), tursoText(c.display_name != null ? String(c.display_name) : null), tursoText(joinTextList(c.pros)), tursoText(joinTextList(c.cons))],
+        });
+      });
+    }
+
+    // transportation_extras.{home_to_airport,airport_to_hotel}_json → transport_extra_candidates + status
+    for (const te of transportExtras) {
+      for (const [col, direction] of [['home_to_airport_json', 'home_to_airport'], ['airport_to_hotel_json', 'airport_to_hotel']] as const) {
+        const obj = parseJsonObj(te[col]);
+        stmts.push({ sql: `DELETE FROM transport_extra_candidates WHERE plan_id = ? AND destination = ? AND direction = ?;`, args: [tursoText(te.plan_id), tursoText(te.destination), tursoText(direction)] });
+        if (!obj) continue;
+        const statusCol = direction === 'home_to_airport' ? 'home_to_airport_status' : 'airport_to_hotel_status';
+        stmts.push({ sql: `UPDATE transportation_extras SET ${statusCol} = ? WHERE plan_id = ? AND destination = ?;`, args: [tursoText(obj.status != null ? String(obj.status) : null), tursoText(te.plan_id), tursoText(te.destination)] });
+        const cands = Array.isArray(obj.candidates) ? obj.candidates : [];
+        cands.forEach((c: any, i: number) => {
+          const extraParts: string[] = [];
+          if (Array.isArray(c.amenities) && c.amenities.length) extraParts.push(`amenities: ${c.amenities.join(', ')}`);
+          if (Array.isArray(c.pros) && c.pros.length) extraParts.push(`pros: ${c.pros.join('; ')}`);
+          if (Array.isArray(c.cons) && c.cons.length) extraParts.push(`cons: ${c.cons.join('; ')}`);
+          stmts.push({
+            sql: `INSERT INTO transport_extra_candidates (plan_id, destination, direction, sort_order, candidate_id, method, route, departure_time, arrival_time, duration_min, cost_jpy, transfers, extra_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            args: [tursoText(te.plan_id), tursoText(te.destination), tursoText(direction), tursoInt(i), tursoText(c.id != null ? String(c.id) : null), tursoText(c.method != null ? String(c.method) : null), tursoText(c.route != null ? String(c.route) : null), tursoText(c.departure_time != null ? String(c.departure_time) : null), tursoText(c.arrival_time != null ? String(c.arrival_time) : null), tursoInt(c.duration_min ?? null), tursoInt(c.cost_jpy ?? null), tursoInt(c.transfers ?? null), tursoText(extraParts.length ? extraParts.join(' | ') : null)],
+          });
+        });
+      }
+    }
+
+    await client.executeManyParams(stmts);
+    console.log(`✅ Batch D backfilled: ${offers.length} offers, ${offerHotels.length} offer-hotels, ${hotels.length} hotels, ${transfers.length} transfers, ${locZones.length} loc-zones, ${transportExtras.length} transport-extras → child rows + scalars.`);
+  }
+
+  // selected_* scalar columns on airport_transfers (add before backfill uses them).
+  // (Added here defensively; ALTER is idempotent via duplicate-column guard.)
+
+  const dropCols: Array<[string, string]> = [
+    ['plan_offers', 'includes_json'],
+    ['plan_offer_hotels', 'access_json'],
+    ['hotels', 'access_json'],
+    ['airport_transfers', 'candidates_json'],
+    ['airport_transfers', 'selected_json'],
+    ['accommodation_location_zone', 'candidates_json'],
+    ['transportation_extras', 'home_to_airport_json'],
+    ['transportation_extras', 'airport_to_hotel_json'],
+  ];
+  for (const [table, col] of dropCols) {
+    try {
+      await client.execute(`ALTER TABLE ${table} DROP COLUMN ${col};`);
+      console.log(`  dropped ${table}.${col}`);
+    } catch (e: any) {
+      if (!/no such column|has no column/i.test(String(e?.message || ''))) {
+        console.warn(`⚠️  Could not drop ${table}.${col}:`, e.message);
+      }
+    }
+  }
+  console.log('✅ Batch D legacy JSON columns dropped.');
+}
+
+// One-shot legacy-JSON object decode for the migration only.
+function parseJsonObj(v: any): Record<string, any> | null {
+  if (v === null || v === undefined || v === '') return null;
+  try {
+    const parsed = JSON.parse(String(v));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonObjArray(v: any): Record<string, any>[] {
+  if (v === null || v === undefined || v === '') return [];
+  try {
+    const parsed = JSON.parse(String(v));
+    return Array.isArray(parsed) ? parsed.filter((x) => x && typeof x === 'object') : [];
+  } catch {
+    return [];
+  }
+}
+
+function joinTextList(v: any): string | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  return v.map((x) => String(x)).join('; ');
 }
 
 // ---------------------------------------------------------------------------

@@ -39,6 +39,8 @@ export function assemblePlan(
   locZoneRows: R[], transportExtraRows: R[], itinMetaRows: R[],
   transferCandRows: R[], accessLineRows: R[], mealRows: R[], tagRows: R[],
   bestValueRows: R[], routeSegmentRows: R[] = [], activitiesZhRows: R[] = [],
+  offerIncludesRows: R[] = [], offerHotelAccessRows: R[] = [],
+  locZoneCandRows: R[] = [], transportExtraCandRows: R[] = [],
 ): TravelPlanMinimal {
   const meta = metaRows[0];
 
@@ -117,6 +119,11 @@ export function assemblePlan(
   const itinMetaByDest = new Map(itinMetaRows.map(r => [r.destination, r]));
   const candsByDest = groupBy(transferCandRows, 'destination');
   const accessByDest = groupBy(accessLineRows, 'destination');
+  // Batch D child-row maps (no JSON columns).
+  const offerIncludesByOffer = groupBy(offerIncludesRows, 'offer_id');
+  const offerHotelAccessByOffer = groupBy(offerHotelAccessRows, 'offer_id');
+  const locZoneCandsByDest = groupBy(locZoneCandRows, 'destination');
+  const transportExtraCandsByDest = groupBy(transportExtraCandRows, 'destination');
   const daysByDest = groupBy(dayRows, 'destination');
   const sKey = (dest: string, day: any, sess: string) => compositeKey(dest, day, sess);
   const sessionMap = new Map<string, R>();
@@ -174,7 +181,7 @@ export function assemblePlan(
             duration_days: num(o.duration_days), currency: o.currency,
             price_per_person: num(o.price_per_person), price_total: num(o.price_total),
             availability: o.availability, seats_remaining: num(o.seats_remaining),
-            includes: tryJson(o.includes_json) || [],
+            includes: (offerIncludesByOffer.get(o.id) || []).map((r: R) => r.item),
           };
           if (flights.length > 0) {
             offer.flight = { airline: flights[0].airline, airline_code: flights[0].airline_code, outbound: null, return: null };
@@ -183,7 +190,7 @@ export function assemblePlan(
             }
           }
           if (hotel) {
-            offer.hotel = { name: hotel.name, ...(hotel.slug != null ? { slug: hotel.slug } : {}), area: hotel.area, star_rating: num(hotel.star_rating), access: tryJson(hotel.access_json) || [] };
+            offer.hotel = { name: hotel.name, ...(hotel.slug != null ? { slug: hotel.slug } : {}), area: hotel.area, star_rating: num(hotel.star_rating), access: (offerHotelAccessByOffer.get(o.id) || []).map((r: R) => r.line) };
           }
           if (dp.length > 0) {
             offer.date_pricing = {};
@@ -224,12 +231,12 @@ export function assemblePlan(
       for (const tr of transfers) {
         const dir = tr.direction;
         const dirCands = cands.filter(c => c.direction === dir);
-        const selected = tr.selected_title ? {
-          id: tr.selected_json ? tryJson(tr.selected_json)?.id : null,
+        const selected = (tr.selected_title || tr.selected_id) ? {
+          id: tr.selected_id ?? null,
           title: tr.selected_title, route: tr.selected_route,
           duration_min: num(tr.selected_duration_min), price_yen: num(tr.selected_price_yen),
           schedule: tr.selected_schedule, booking_url: tr.selected_booking_url, notes: tr.selected_notes,
-        } : (tr.selected_json ? tryJson(tr.selected_json) : null);
+        } : null;
         p3.airport_transfers[dir] = {
           status: tr.status || 'planned', selected,
           candidates: dirCands.map(c => ({
@@ -241,9 +248,25 @@ export function assemblePlan(
       }
     }
 
-    // home_to_airport / airport_to_hotel (legacy transport extras)
-    if (txExtra?.home_to_airport_json) p3.home_to_airport = tryJson(txExtra.home_to_airport_json);
-    if (txExtra?.airport_to_hotel_json) p3.airport_to_hotel = tryJson(txExtra.airport_to_hotel_json);
+    // home_to_airport / airport_to_hotel (legacy transport extras) — from child rows
+    const teCands = transportExtraCandsByDest.get(slug) || [];
+    const buildExtra = (direction: string, status: string | null) => {
+      const dirCands = teCands.filter((c: R) => c.direction === direction);
+      if (!status && dirCands.length === 0) return undefined;
+      return {
+        status: status || 'planned',
+        candidates: dirCands.map((c: R) => ({
+          id: c.candidate_id, method: c.method, route: c.route,
+          departure_time: c.departure_time, arrival_time: c.arrival_time,
+          duration_min: num(c.duration_min), cost_jpy: num(c.cost_jpy), transfers: num(c.transfers),
+          ...(c.extra_text ? { notes: c.extra_text } : {}),
+        })),
+      };
+    };
+    const h2a = buildExtra('home_to_airport', txExtra?.home_to_airport_status ?? null);
+    const a2h = buildExtra('airport_to_hotel', txExtra?.airport_to_hotel_status ?? null);
+    if (h2a) p3.home_to_airport = h2a;
+    if (a2h) p3.airport_to_hotel = a2h;
 
     dest.process_3_transportation = p3;
 
@@ -253,13 +276,18 @@ export function assemblePlan(
     const lz = locZoneByDest.get(slug);
     const p4: any = { status: p4Status, source: null, populated_from: hotelRow?.populated_from || null };
     if (lz) {
-      p4.location_zone = { status: lz.selected_area ? 'selected' : 'pending', selected_area: lz.selected_area, candidates: tryJson(lz.candidates_json) || [] };
+      const lzCands = (locZoneCandsByDest.get(slug) || []).map((c: R) => ({
+        slug: c.slug, display_name: c.display_name,
+        ...(c.pros_text ? { pros: String(c.pros_text).split('; ') } : {}),
+        ...(c.cons_text ? { cons: String(c.cons_text).split('; ') } : {}),
+      }));
+      p4.location_zone = { status: lz.selected_area ? 'selected' : 'pending', selected_area: lz.selected_area, candidates: lzCands };
     }
     if (hotelRow) {
       const hotel = coerceRow(hotelRow);
       const accessLines = accessByDest.get(slug) || [];
       p4.hotel = {
-        name: hotel.name, access: accessLines.length > 0 ? accessLines.map((a: R) => a.line) : (hotel.access_json ? tryJson(hotel.access_json) : []),
+        name: hotel.name, access: accessLines.map((a: R) => a.line),
         check_in: hotel.check_in, notes: hotel.notes,
       };
     }
