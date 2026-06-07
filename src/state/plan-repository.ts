@@ -834,7 +834,10 @@ export class PlanRepository implements StateRepository {
       `DELETE FROM plan_budget WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM cascade_triggers WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM plan_schema_contract WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_schema_contract_nodes WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM plan_process_precedence WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_process_precedence_entries WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_date_anchor_flex_dates WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM cascade_global_state WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM plan_root_date_anchor WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM itinerary_metadata WHERE plan_id = '${escapedPlanId}'`,
@@ -865,19 +868,55 @@ export class PlanRepository implements StateRepository {
     }
     if (plan.schema_contract) {
       const sc = plan.schema_contract;
-      statements.push(`INSERT INTO plan_schema_contract (plan_id, id_convention, currency, process_nodes_json) VALUES (${sqlText(planId)}, ${sqlText(sc.id_convention)}, ${sqlText(sc.currency ?? 'TWD')}, ${sqlText(JSON.stringify(sc.process_nodes))})`);
+      statements.push(`INSERT INTO plan_schema_contract (plan_id, id_convention, currency) VALUES (${sqlText(planId)}, ${sqlText(sc.id_convention)}, ${sqlText(sc.currency ?? 'TWD')})`);
+      // process_nodes → plan_schema_contract_nodes child rows
+      const nodes = Array.isArray(sc.process_nodes) ? sc.process_nodes as string[] : [];
+      nodes.forEach((node, i) => {
+        statements.push(`INSERT INTO plan_schema_contract_nodes (plan_id, sort_order, node) VALUES (${sqlText(planId)}, ${sqlInt(i)}, ${sqlText(node)})`);
+      });
     }
-    if (plan.process_precedence) {
-      statements.push(`INSERT INTO plan_process_precedence (plan_id, precedence_json) VALUES (${sqlText(planId)}, ${sqlText(JSON.stringify(plan.process_precedence))})`);
+    if (plan.process_precedence && typeof plan.process_precedence === 'object') {
+      statements.push(`INSERT INTO plan_process_precedence (plan_id) VALUES (${sqlText(planId)})`);
+      // entries → plan_process_precedence_entries (known cols + text for nested arrays)
+      for (const [name, v] of Object.entries(plan.process_precedence as Record<string, unknown>)) {
+        const e = (v && typeof v === 'object') ? v as Record<string, unknown> : {};
+        const fallback = Array.isArray(e.fallback) ? (e.fallback as string[]).join('; ') : null;
+        const rules = Array.isArray(e.rules) ? (e.rules as string[]).join('; ') : null;
+        statements.push(`INSERT INTO plan_process_precedence_entries (plan_id, name, primary_process, mode, fallback_text, rules_text) VALUES (${sqlText(planId)}, ${sqlText(name)}, ${sqlText(e.primary as string)}, ${sqlText(e.mode as string)}, ${sqlText(fallback)}, ${sqlText(rules)})`);
+      }
     }
     if (plan.cascade_rules?.triggers) {
       for (const t of plan.cascade_rules.triggers) {
-        statements.push(`INSERT INTO cascade_triggers (plan_id, trigger_id, event, reset_json, scope, condition_json, action, populate_map_json, set_source) VALUES (${sqlText(planId)}, ${sqlText(t.id)}, ${sqlText(t.trigger)}, ${sqlText(JSON.stringify(t.reset))}, ${sqlText(t.scope)}, ${sqlText(t.condition ? JSON.stringify(t.condition) : null)}, ${sqlText(t.action)}, ${sqlText(t.populate_map ? JSON.stringify(t.populate_map) : null)}, ${sqlText(t.set_source)})`);
+        const cond = (t.condition && typeof t.condition === 'object') ? t.condition as Record<string, unknown> : null;
+        statements.push(`INSERT INTO cascade_triggers (plan_id, trigger_id, event, scope, condition_field, condition_changed, action, set_source) VALUES (${sqlText(planId)}, ${sqlText(t.id)}, ${sqlText(t.trigger)}, ${sqlText(t.scope)}, ${sqlText(cond?.field as string)}, ${cond?.changed === true ? 1 : (cond?.changed === false ? 0 : 'NULL')}, ${sqlText(t.action)}, ${sqlText(t.set_source)})`);
+        // reset → cascade_trigger_resets (trigger-scoped; replace)
+        statements.push(`DELETE FROM cascade_trigger_resets WHERE trigger_id = ${sqlText(t.id)}`);
+        const reset = Array.isArray(t.reset) ? t.reset as string[] : [];
+        reset.forEach((target, i) => {
+          statements.push(`INSERT INTO cascade_trigger_resets (trigger_id, sort_order, target) VALUES (${sqlText(t.id)}, ${sqlInt(i)}, ${sqlText(target)})`);
+        });
+        // populate_map → cascade_trigger_populate_map (trigger-scoped; replace)
+        statements.push(`DELETE FROM cascade_trigger_populate_map WHERE trigger_id = ${sqlText(t.id)}`);
+        if (t.populate_map && typeof t.populate_map === 'object') {
+          for (const [src, tgt] of Object.entries(t.populate_map as Record<string, unknown>)) {
+            statements.push(`INSERT INTO cascade_trigger_populate_map (trigger_id, source_path, target_path) VALUES (${sqlText(t.id)}, ${sqlText(src)}, ${sqlText(String(tgt))})`);
+          }
+        }
       }
     }
     if (plan.process_1_date_anchor) {
       const p1r = plan.process_1_date_anchor;
-      statements.push(`INSERT INTO plan_root_date_anchor (plan_id, status, set_out_date, duration_days, return_date, flexibility_json) VALUES (${sqlText(planId)}, ${sqlText(p1r.status)}, ${sqlText(p1r.set_out_date)}, ${sqlInt(p1r.duration_days)}, ${sqlText(p1r.return_date)}, ${sqlText(p1r.flexibility ? JSON.stringify(p1r.flexibility) : null)})`);
+      const flex = (p1r.flexibility && typeof p1r.flexibility === 'object') ? p1r.flexibility as Record<string, unknown> : null;
+      statements.push(`INSERT INTO plan_root_date_anchor (plan_id, status, set_out_date, duration_days, return_date, flex_date_flexible, flex_reason) VALUES (${sqlText(planId)}, ${sqlText(p1r.status)}, ${sqlText(p1r.set_out_date)}, ${sqlInt(p1r.duration_days)}, ${sqlText(p1r.return_date)}, ${flex?.date_flexible === true ? 1 : (flex?.date_flexible === false ? 0 : 'NULL')}, ${sqlText(flex?.reason as string)})`);
+      // flex preferred/avoid dates → plan_date_anchor_flex_dates child rows
+      if (flex) {
+        for (const kind of ['preferred', 'avoid'] as const) {
+          const arr = kind === 'preferred' ? flex.preferred_dates : flex.avoid_dates;
+          (Array.isArray(arr) ? arr as string[] : []).forEach((date, i) => {
+            statements.push(`INSERT INTO plan_date_anchor_flex_dates (plan_id, kind, sort_order, date) VALUES (${sqlText(planId)}, ${sqlText(kind)}, ${sqlInt(i)}, ${sqlText(date)})`);
+          });
+        }
+      }
     }
     if (plan.cascade_state) {
       const cs = plan.cascade_state;

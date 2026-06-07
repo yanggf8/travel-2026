@@ -69,8 +69,7 @@ export async function listPlans(): Promise<PlanSummary[]> {
       p1.status AS p1_status,
       p1.set_out_date AS p1_set_out_date,
       p1.return_date AS p1_return_date,
-      p1.duration_days AS p1_duration_days,
-      p1.flexibility_json AS p1_flexibility_json
+      p1.duration_days AS p1_duration_days
     FROM plan_metadata pm
     LEFT JOIN date_anchors da ON da.plan_id = pm.plan_id
     LEFT JOIN plan_root_date_anchor p1 ON p1.plan_id = pm.plan_id
@@ -95,19 +94,8 @@ export function groupPlanRows(rows: Record<string, any>[]): PlanSummary[] {
       byId.set(planId, summary);
     }
     if (!summary.planningWindow && row.p1_status) {
-      const flexibility = parseJson(row.p1_flexibility_json);
-      const windowStart = stringValue(
-        flexibility?.window_start
-        ?? flexibility?.travel_start
-        ?? flexibility?.start_date
-        ?? row.p1_set_out_date,
-      );
-      const windowEnd = stringValue(
-        flexibility?.window_end
-        ?? flexibility?.travel_end
-        ?? flexibility?.end_date
-        ?? row.p1_return_date,
-      );
+      const windowStart = stringValue(row.p1_set_out_date);
+      const windowEnd = stringValue(row.p1_return_date);
       summary.planningWindow = {
         status: String(row.p1_status),
         startDate: windowStart,
@@ -246,15 +234,6 @@ function planStatus(plan: PlanSummary, today: string): string {
   if (window?.startDate && window?.endDate && window.startDate <= today && window.endDate >= today) return 'planning';
   if (window?.endDate && window.endDate >= today) return 'candidate';
   return 'past';
-}
-
-function parseJson(value: unknown): any {
-  if (typeof value !== 'string' || !value) return null;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
 }
 
 function stringValue(value: unknown): string | undefined {

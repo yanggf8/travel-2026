@@ -100,6 +100,11 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM plan_offer_hotel_access WHERE plan_id = ${pid} ORDER BY destination, offer_id, sort_order`,              // 41
       `SELECT * FROM location_zone_candidates WHERE plan_id = ${pid} ORDER BY destination, sort_order`,                       // 42
       `SELECT * FROM transport_extra_candidates WHERE plan_id = ${pid} ORDER BY destination, direction, sort_order`,          // 43
+      `SELECT * FROM cascade_trigger_resets ORDER BY trigger_id, sort_order`,                                                // 44
+      `SELECT * FROM cascade_trigger_populate_map ORDER BY trigger_id, source_path`,                                         // 45
+      `SELECT * FROM plan_schema_contract_nodes WHERE plan_id = ${pid} ORDER BY sort_order`,                                 // 46
+      `SELECT * FROM plan_process_precedence_entries WHERE plan_id = ${pid} ORDER BY name`,                                  // 47
+      `SELECT * FROM plan_date_anchor_flex_dates WHERE plan_id = ${pid} ORDER BY kind, sort_order`,                          // 48
     ];
 
     // Execute all queries in a single HTTP round-trip
@@ -116,6 +121,7 @@ export class TursoRepository implements StateRepository {
       eventLogDestProcRows, eventLogEvtRows, versionRows, bestValueRows,
       routeSegmentRows, activitiesZhRows,
       offerIncludesRows, offerHotelAccessRows, locZoneCandRows, transportExtraCandRows,
+      triggerResetRows, triggerPopulateMapRows, schemaNodeRows, precedenceEntryRows, flexDateRows,
     ] = responses;
 
     if (metaRows.length === 0) {
@@ -131,6 +137,7 @@ export class TursoRepository implements StateRepository {
       locZoneRows, transportExtraRows, itinMetaRows, transferCandRows, accessLineRows,
       mealRows, tagRows, bestValueRows, routeSegmentRows, activitiesZhRows,
       offerIncludesRows, offerHotelAccessRows, locZoneCandRows, transportExtraCandRows,
+      triggerResetRows, triggerPopulateMapRows, schemaNodeRows, precedenceEntryRows, flexDateRows,
     );
 
     const eventLog = assembleEventLog(

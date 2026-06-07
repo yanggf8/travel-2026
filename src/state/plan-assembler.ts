@@ -41,6 +41,8 @@ export function assemblePlan(
   bestValueRows: R[], routeSegmentRows: R[] = [], activitiesZhRows: R[] = [],
   offerIncludesRows: R[] = [], offerHotelAccessRows: R[] = [],
   locZoneCandRows: R[] = [], transportExtraCandRows: R[] = [],
+  triggerResetRows: R[] = [], triggerPopulateMapRows: R[] = [],
+  schemaNodeRows: R[] = [], precedenceEntryRows: R[] = [], flexDateRows: R[] = [],
 ): TravelPlanMinimal {
   const meta = metaRows[0];
 
@@ -58,35 +60,69 @@ export function assemblePlan(
     plan.budget = { total_cap: num(b.total_cap), flight_cap: num(b.flight_cap), accommodation_cap: num(b.accommodation_cap), daily_cap: num(b.daily_cap), pax: num(b.pax) ?? 2, currency: b.currency || 'TWD' };
   }
 
-  // schema_contract
+  // schema_contract — process_nodes from child rows (no JSON column)
   if (contractRows.length > 0) {
     const sc = contractRows[0];
-    plan.schema_contract = { id_convention: sc.id_convention, currency: sc.currency, process_nodes: tryJson(sc.process_nodes_json) || [] };
+    const nodes = (schemaNodeRows || []).map((r: R) => r.node);
+    plan.schema_contract = { id_convention: sc.id_convention, currency: sc.currency, process_nodes: nodes };
   }
 
-  // process_precedence
-  if (precedenceRows.length > 0) {
-    plan.process_precedence = tryJson(precedenceRows[0].precedence_json);
+  // process_precedence — reconstruct keyed object from entry rows (no JSON column)
+  if (precedenceEntryRows && precedenceEntryRows.length > 0) {
+    const prec: Record<string, unknown> = {};
+    for (const e of precedenceEntryRows) {
+      prec[e.name] = {
+        ...(e.primary_process != null ? { primary: e.primary_process } : {}),
+        ...(e.mode != null ? { mode: e.mode } : {}),
+        ...(e.fallback_text ? { fallback: String(e.fallback_text).split('; ') } : {}),
+        ...(e.rules_text ? { rules: String(e.rules_text).split('; ') } : {}),
+      };
+    }
+    plan.process_precedence = prec;
   }
 
-  // cascade_rules
+  // cascade_rules — reset/condition/populate_map from child rows + scalar cols
   if (triggerRows.length > 0) {
+    const resetByTrigger = groupBy(triggerResetRows, 'trigger_id');
+    const populateByTrigger = groupBy(triggerPopulateMapRows, 'trigger_id');
     plan.cascade_rules = {
-      triggers: triggerRows.map(t => ({
-        id: t.trigger_id, trigger: t.event, reset: tryJson(t.reset_json) || [],
-        scope: t.scope, condition: tryJson(t.condition_json),
-        action: t.action, populate_map: tryJson(t.populate_map_json), set_source: t.set_source,
-      })),
+      triggers: triggerRows.map(t => {
+        const condition = t.condition_field != null
+          ? { field: t.condition_field, ...(t.condition_changed != null ? { changed: num(t.condition_changed) === 1 } : {}) }
+          : null;
+        const pmRows = populateByTrigger.get(t.trigger_id) || [];
+        const populate_map = pmRows.length > 0
+          ? Object.fromEntries(pmRows.map((r: R) => [r.source_path, r.target_path]))
+          : null;
+        return {
+          id: t.trigger_id, trigger: t.event,
+          reset: (resetByTrigger.get(t.trigger_id) || []).map((r: R) => r.target),
+          scope: t.scope, condition,
+          action: t.action, populate_map, set_source: t.set_source,
+        };
+      }),
     };
   }
 
   // root P1
   if (rootP1Rows.length > 0) {
     const p1 = rootP1Rows[0];
+    // flexibility from scalar cols + flex-date child rows (no JSON column)
+    let flexibility: Record<string, unknown> | null = null;
+    if (p1.flex_date_flexible != null || p1.flex_reason != null || (flexDateRows && flexDateRows.length > 0)) {
+      const preferred = (flexDateRows || []).filter((r: R) => r.kind === 'preferred').map((r: R) => r.date);
+      const avoid = (flexDateRows || []).filter((r: R) => r.kind === 'avoid').map((r: R) => r.date);
+      flexibility = {
+        ...(p1.flex_date_flexible != null ? { date_flexible: num(p1.flex_date_flexible) === 1 } : {}),
+        preferred_dates: preferred,
+        avoid_dates: avoid,
+        ...(p1.flex_reason != null ? { reason: p1.flex_reason } : {}),
+      };
+    }
     plan.process_1_date_anchor = {
       status: p1.status, set_out_date: p1.set_out_date,
       duration_days: num(p1.duration_days), return_date: p1.return_date,
-      flexibility: tryJson(p1.flexibility_json),
+      flexibility,
     };
   }
 

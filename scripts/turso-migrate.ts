@@ -653,8 +653,8 @@ async function main() {
       name: 'cascade_triggers',
       sql: `CREATE TABLE IF NOT EXISTS cascade_triggers (
   plan_id TEXT NOT NULL, trigger_id TEXT NOT NULL,
-  event TEXT NOT NULL, reset_json TEXT NOT NULL, scope TEXT NOT NULL,
-  condition_json TEXT, action TEXT, populate_map_json TEXT, set_source TEXT,
+  event TEXT NOT NULL, scope TEXT NOT NULL,
+  condition_field TEXT, condition_changed INTEGER, action TEXT, set_source TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, trigger_id)
 )`,
@@ -664,7 +664,6 @@ async function main() {
       sql: `CREATE TABLE IF NOT EXISTS plan_schema_contract (
   plan_id TEXT PRIMARY KEY,
   id_convention TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'TWD',
-  process_nodes_json TEXT NOT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`,
     },
@@ -672,7 +671,6 @@ async function main() {
       name: 'plan_process_precedence',
       sql: `CREATE TABLE IF NOT EXISTS plan_process_precedence (
   plan_id TEXT PRIMARY KEY,
-  precedence_json TEXT NOT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`,
     },
@@ -689,7 +687,7 @@ async function main() {
       sql: `CREATE TABLE IF NOT EXISTS plan_root_date_anchor (
   plan_id TEXT PRIMARY KEY,
   status TEXT NOT NULL, set_out_date TEXT, duration_days INTEGER, return_date TEXT,
-  flexibility_json TEXT,
+  flex_date_flexible INTEGER, flex_reason TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`,
     },
@@ -1771,8 +1769,161 @@ async function main() {
   await deJsonReferenceData(client);
   await deJsonItinerarySessions(client);
   await deJsonPlanTransport(client);
+  await deJsonCascadeSchema(client);
 
   console.log('Done.');
+}
+
+// ---------------------------------------------------------------------------
+// Batch E (part 1) — de-JSON schema / cascade config columns.
+//
+// Flat arrays → child tables:
+//   cascade_triggers.reset_json          → cascade_trigger_resets
+//   plan_schema_contract.process_nodes_json → plan_schema_contract_nodes
+// Object → scalar columns:
+//   cascade_triggers.condition_json {field,changed} → condition_field/condition_changed
+// Map → child table:
+//   cascade_triggers.populate_map_json   → cascade_trigger_populate_map
+// Keyed object → child table (known cols + text for nested arrays):
+//   plan_process_precedence.precedence_json → plan_process_precedence_entries
+// Object + arrays → scalars + child:
+//   plan_root_date_anchor.flexibility_json → flex_* scalars + plan_date_anchor_flex_dates
+//
+// The event-store columns (event_log_*) are handled separately in the
+// plan_events unification (Batch E part 2) — they need round-trip-safe KV
+// storage, not lossy text, so they are NOT touched here.
+//
+// NOTE the cascade RUNNER reads the assembled plan object, not these columns
+// directly — behavior is preserved as long as plan-assembler reconstructs the
+// same trigger.reset / trigger.condition / trigger.populate_map shapes.
+// ---------------------------------------------------------------------------
+async function deJsonCascadeSchema(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch E: de-JSON schema/cascade config columns...');
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS cascade_trigger_resets (
+    trigger_id TEXT NOT NULL, sort_order INTEGER NOT NULL, target TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS cascade_trigger_populate_map (
+    trigger_id TEXT NOT NULL, source_path TEXT NOT NULL, target_path TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, source_path)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS plan_schema_contract_nodes (
+    plan_id TEXT NOT NULL, sort_order INTEGER NOT NULL, node TEXT NOT NULL,
+    PRIMARY KEY (plan_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS plan_process_precedence_entries (
+    plan_id TEXT NOT NULL, name TEXT NOT NULL,
+    primary_process TEXT, mode TEXT, fallback_text TEXT, rules_text TEXT,
+    PRIMARY KEY (plan_id, name)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS plan_date_anchor_flex_dates (
+    plan_id TEXT NOT NULL, kind TEXT NOT NULL, sort_order INTEGER NOT NULL, date TEXT NOT NULL,
+    PRIMARY KEY (plan_id, kind, sort_order)
+  );`);
+  // condition → scalar columns on cascade_triggers; flex scalars on plan_root_date_anchor.
+  for (const col of ['condition_field TEXT', 'condition_changed INTEGER']) {
+    try { await client.execute(`ALTER TABLE cascade_triggers ADD COLUMN ${col};`); }
+    catch (e: any) { if (!/duplicate column/i.test(String(e?.message || ''))) throw e; }
+  }
+  for (const col of ['flex_date_flexible INTEGER', 'flex_reason TEXT']) {
+    try { await client.execute(`ALTER TABLE plan_root_date_anchor ADD COLUMN ${col};`); }
+    catch (e: any) { if (!/duplicate column/i.test(String(e?.message || ''))) throw e; }
+  }
+
+  const trgCols = rowsAt(await client.executeBatch([`PRAGMA table_info(cascade_triggers);`]), 0).map((r) => String(r.name));
+  if (!trgCols.includes('reset_json')) {
+    console.log('  cascade/schema JSON columns already dropped; skipping backfill.');
+  } else {
+    const resp = await client.executeBatch([
+      `SELECT trigger_id, reset_json, condition_json, populate_map_json FROM cascade_triggers;`,
+      `SELECT plan_id, process_nodes_json FROM plan_schema_contract;`,
+      `SELECT plan_id, precedence_json FROM plan_process_precedence;`,
+      `SELECT plan_id, flexibility_json FROM plan_root_date_anchor;`,
+    ]);
+    const triggers = rowsAt(resp, 0);
+    const contracts = rowsAt(resp, 1);
+    const precedences = rowsAt(resp, 2);
+    const anchors = rowsAt(resp, 3);
+
+    const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+
+    // cascade_triggers: reset → child, condition → scalars, populate_map → child
+    for (const t of triggers) {
+      stmts.push({ sql: `DELETE FROM cascade_trigger_resets WHERE trigger_id = ?;`, args: [tursoText(t.trigger_id)] });
+      parseJsonArray(t.reset_json).forEach((target, i) => {
+        stmts.push({ sql: `INSERT INTO cascade_trigger_resets (trigger_id, sort_order, target) VALUES (?, ?, ?);`, args: [tursoText(t.trigger_id), tursoInt(i), tursoText(target)] });
+      });
+      const cond = parseJsonObj(t.condition_json);
+      stmts.push({ sql: `UPDATE cascade_triggers SET condition_field = ?, condition_changed = ? WHERE trigger_id = ?;`, args: [tursoText(cond?.field != null ? String(cond.field) : null), tursoInt(cond?.changed === true ? 1 : (cond?.changed === false ? 0 : null)), tursoText(t.trigger_id)] });
+      stmts.push({ sql: `DELETE FROM cascade_trigger_populate_map WHERE trigger_id = ?;`, args: [tursoText(t.trigger_id)] });
+      const pm = parseJsonObj(t.populate_map_json);
+      if (pm) {
+        for (const [src, tgt] of Object.entries(pm)) {
+          stmts.push({ sql: `INSERT INTO cascade_trigger_populate_map (trigger_id, source_path, target_path) VALUES (?, ?, ?);`, args: [tursoText(t.trigger_id), tursoText(src), tursoText(String(tgt))] });
+        }
+      }
+    }
+
+    // plan_schema_contract.process_nodes → child
+    for (const c of contracts) {
+      stmts.push({ sql: `DELETE FROM plan_schema_contract_nodes WHERE plan_id = ?;`, args: [tursoText(c.plan_id)] });
+      parseJsonArray(c.process_nodes_json).forEach((node, i) => {
+        stmts.push({ sql: `INSERT INTO plan_schema_contract_nodes (plan_id, sort_order, node) VALUES (?, ?, ?);`, args: [tursoText(c.plan_id), tursoInt(i), tursoText(node)] });
+      });
+    }
+
+    // plan_process_precedence → entries (known cols + text for nested arrays)
+    for (const p of precedences) {
+      stmts.push({ sql: `DELETE FROM plan_process_precedence_entries WHERE plan_id = ?;`, args: [tursoText(p.plan_id)] });
+      const obj = parseJsonObj(p.precedence_json);
+      if (obj) {
+        for (const [name, v] of Object.entries(obj)) {
+          const e = (v && typeof v === 'object') ? v as Record<string, any> : {};
+          stmts.push({
+            sql: `INSERT INTO plan_process_precedence_entries (plan_id, name, primary_process, mode, fallback_text, rules_text) VALUES (?, ?, ?, ?, ?, ?);`,
+            args: [tursoText(p.plan_id), tursoText(name), tursoText(e.primary != null ? String(e.primary) : null), tursoText(e.mode != null ? String(e.mode) : null), tursoText(joinTextList(e.fallback)), tursoText(joinTextList(e.rules))],
+          });
+        }
+      }
+    }
+
+    // plan_root_date_anchor.flexibility → scalars + flex dates child
+    for (const a of anchors) {
+      const flex = parseJsonObj(a.flexibility_json);
+      stmts.push({ sql: `UPDATE plan_root_date_anchor SET flex_date_flexible = ?, flex_reason = ? WHERE plan_id = ?;`, args: [tursoInt(flex?.date_flexible === true ? 1 : (flex?.date_flexible === false ? 0 : null)), tursoText(flex?.reason != null ? String(flex.reason) : null), tursoText(a.plan_id)] });
+      stmts.push({ sql: `DELETE FROM plan_date_anchor_flex_dates WHERE plan_id = ?;`, args: [tursoText(a.plan_id)] });
+      for (const kind of ['preferred', 'avoid'] as const) {
+        const arr = flex ? (kind === 'preferred' ? flex.preferred_dates : flex.avoid_dates) : null;
+        (Array.isArray(arr) ? arr : []).forEach((date: any, i: number) => {
+          stmts.push({ sql: `INSERT INTO plan_date_anchor_flex_dates (plan_id, kind, sort_order, date) VALUES (?, ?, ?, ?);`, args: [tursoText(a.plan_id), tursoText(kind), tursoInt(i), tursoText(String(date))] });
+        });
+      }
+    }
+
+    await client.executeManyParams(stmts);
+    console.log(`✅ Batch E backfilled: ${triggers.length} triggers, ${contracts.length} contracts, ${precedences.length} precedence, ${anchors.length} anchors → child rows + scalars.`);
+  }
+
+  const dropCols: Array<[string, string]> = [
+    ['cascade_triggers', 'reset_json'],
+    ['cascade_triggers', 'condition_json'],
+    ['cascade_triggers', 'populate_map_json'],
+    ['plan_schema_contract', 'process_nodes_json'],
+    ['plan_process_precedence', 'precedence_json'],
+    ['plan_root_date_anchor', 'flexibility_json'],
+  ];
+  for (const [table, col] of dropCols) {
+    try {
+      await client.execute(`ALTER TABLE ${table} DROP COLUMN ${col};`);
+      console.log(`  dropped ${table}.${col}`);
+    } catch (e: any) {
+      if (!/no such column|has no column/i.test(String(e?.message || ''))) {
+        console.warn(`⚠️  Could not drop ${table}.${col}:`, e.message);
+      }
+    }
+  }
+  console.log('✅ Batch E (cascade/schema) legacy JSON columns dropped.');
 }
 
 // ---------------------------------------------------------------------------
