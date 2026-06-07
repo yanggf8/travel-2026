@@ -534,28 +534,30 @@ export async function adoptCandidateToNewPlan(input: AdoptToNewPlanInput): Promi
     `INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
      VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_5_daily_itinerary')},
        ${sqlText('pending')}, datetime('now'));`,
-    `INSERT INTO event_log_state (plan_id, session, project, version, current_focus, active_destination, next_actions_json)
+    `INSERT INTO event_log_state (plan_id, session, project, version, current_focus, active_destination)
      VALUES (${sqlText(input.planId)}, ${sqlText(ts.slice(0, 10))}, ${sqlText('japan-travel')},
-       ${sqlText('3.0')}, ${sqlText('')}, ${sqlText(input.destinationSlug)}, NULL);`,
+       ${sqlText('3.0')}, ${sqlText('')}, ${sqlText(input.destinationSlug)});`,
     `INSERT INTO event_log_destinations (plan_id, destination, status)
      VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('active')});`,
-    `INSERT INTO event_log_process_events (plan_id, destination, process_id, event_type, event_data, event_at)
-     VALUES (${sqlText(input.planId)}, ${sqlText(input.destinationSlug)}, ${sqlText('process_1_date_anchor')},
-       ${sqlText('shaping_candidate_adopted')},
-       ${sqlText(JSON.stringify({
-         candidate_id: input.candidateId,
-         run_id: runId,
-         depart_date: startDate,
-         return_date: endDate,
-         dest_code: primaryAirport,
-         shaping_count: shapingRows.length,
-         shaping_summary: shapingRows.map((s: any) => ({
-           aspect: s.aspect,
-           role: s.role,
-           kind: s.kind,
-           value: s.value_date || s.value_text || s.value_integer,
-         })),
-       }))}, ${sqlText(ts)});`,
+    // shaping_candidate_adopted event → plan_events (timeline) + plan_event_data KV
+    // (no JSON column). The nested shaping_summary is flattened to a text value.
+    `INSERT INTO plan_events (plan_id, scope, destination, process_id, sort_order, event, event_at)
+     VALUES (${sqlText(input.planId)}, ${sqlText('timeline')}, ${sqlText('')}, ${sqlText('')}, 0,
+       ${sqlText('shaping_candidate_adopted')}, ${sqlText(ts)});`,
+    ...([
+      ['candidate_id', input.candidateId],
+      ['run_id', runId],
+      ['depart_date', startDate],
+      ['return_date', endDate],
+      ['dest_code', primaryAirport],
+      ['shaping_count', String(shapingRows.length)],
+      ['shaping_summary', shapingRows.map((s: any) =>
+        `${s.aspect}/${s.role}/${s.kind}=${s.value_date || s.value_text || s.value_integer}`
+      ).join('; ')],
+    ] as Array<[string, string]>).map(([k, v]) =>
+      `INSERT INTO plan_event_data (plan_id, scope, destination, process_id, sort_order, key, value)
+       VALUES (${sqlText(input.planId)}, ${sqlText('timeline')}, ${sqlText('')}, ${sqlText('')}, 0, ${sqlText(k)}, ${sqlText(v)});`
+    ),
     `UPDATE shaping_candidates SET adopted_plan_id = ${sqlText(input.planId)}
       WHERE candidate_id = ${sqlText(input.candidateId)};`,
     `UPDATE shaping_research_runs SET status = ${sqlText('adopted')},

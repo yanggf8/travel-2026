@@ -32,6 +32,28 @@ import {
 } from './schemas';
 import { sqlText, sqlInt, sqlReal, sqlBool } from './sql-helpers';
 
+/**
+ * Open event `data` object → KV pairs for plan_event_data (no JSON in column).
+ * Must mirror dataToKv in scripts/turso-migrate.ts so read→memory→save is stable.
+ * Scalars pass through; arrays join with ', '; nested objects flatten to 'k=v, k=v';
+ * a primitive (non-object) data becomes the single key '_value'.
+ */
+function eventDataToKv(data: unknown): Array<[string, string]> {
+  if (data == null) return [];
+  if (typeof data !== 'object' || Array.isArray(data)) {
+    const v = Array.isArray(data) ? (data as unknown[]).map((x) => String(x)).join(', ') : String(data);
+    return [['_value', v]];
+  }
+  const out: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+    const val = Array.isArray(v)
+      ? (v as unknown[]).map((x) => String(x)).join(', ')
+      : (v && typeof v === 'object' ? Object.entries(v as Record<string, unknown>).map(([kk, vv]) => `${kk}=${vv}`).join(', ') : String(v));
+    out.push([k, val]);
+  }
+  return out;
+}
+
 export class PlanRepository implements StateRepository {
   private version: number;
 
@@ -847,7 +869,9 @@ export class PlanRepository implements StateRepository {
       `DELETE FROM event_log_global_processes WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM event_log_destinations WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM event_log_dest_processes WHERE plan_id = '${escapedPlanId}'`,
-      `DELETE FROM event_log_process_events WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM event_log_next_actions WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_events WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_event_data WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM airport_transfer_candidates WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM hotel_access_lines WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM session_meals WHERE plan_id = '${escapedPlanId}'`,
@@ -923,20 +947,34 @@ export class PlanRepository implements StateRepository {
       statements.push(`INSERT INTO cascade_global_state (plan_id, last_cascade_run, active_dest_last, p1_dirty) VALUES (${sqlText(planId)}, ${sqlText(cs.last_cascade_run)}, ${sqlText(cs.global?.active_destination_last)}, ${sqlBool(cs.global?.process_1_date_anchor?.dirty)})`);
     }
 
-    // Event log
+    // Event store (plan_events + plan_event_data; no JSON columns)
     const el = this.eventLog;
-    statements.push(`INSERT INTO event_log_state (plan_id, session, project, version, current_focus, active_destination, next_actions_json) VALUES (${sqlText(planId)}, ${sqlText(el.session)}, ${sqlText(el.project)}, ${sqlText(el.version)}, ${sqlText(el.current_focus)}, ${sqlText(el.active_destination)}, ${sqlText(el.next_actions ? JSON.stringify(el.next_actions) : null)})`);
+    statements.push(`INSERT INTO event_log_state (plan_id, session, project, version, current_focus, active_destination) VALUES (${sqlText(planId)}, ${sqlText(el.session)}, ${sqlText(el.project)}, ${sqlText(el.version)}, ${sqlText(el.current_focus)}, ${sqlText(el.active_destination)})`);
+    (el.next_actions || []).forEach((action, i) => {
+      statements.push(`INSERT INTO event_log_next_actions (plan_id, sort_order, action) VALUES (${sqlText(planId)}, ${sqlInt(i)}, ${sqlText(action)})`);
+    });
+
+    // Write one event row + its open `data` as plan_event_data KV rows (natural key).
+    const writeEvent = (scope: string, destination: string, processId: string, sortOrder: number, evt: Record<string, unknown>) => {
+      statements.push(`INSERT INTO plan_events (plan_id, scope, destination, process_id, sort_order, event, event_at, from_state, to_state) VALUES (${sqlText(planId)}, ${sqlText(scope)}, ${sqlText(destination)}, ${sqlText(processId)}, ${sqlInt(sortOrder)}, ${sqlText(evt.event as string)}, ${sqlText(evt.at as string)}, ${sqlText(evt.from as string)}, ${sqlText(evt.to as string)})`);
+      for (const [k, v] of eventDataToKv(evt.data)) {
+        statements.push(`INSERT INTO plan_event_data (plan_id, scope, destination, process_id, sort_order, key, value) VALUES (${sqlText(planId)}, ${sqlText(scope)}, ${sqlText(destination)}, ${sqlText(processId)}, ${sqlInt(sortOrder)}, ${sqlText(k)}, ${sqlText(v)})`);
+      }
+    };
+
+    (el.event_log || []).forEach((evt, i) => {
+      writeEvent('timeline', '', (evt.process && evt.process !== 'global') ? String(evt.process) : '', i, evt as unknown as Record<string, unknown>);
+    });
     for (const [pid, pobj] of Object.entries(el.global_processes || {})) {
-      statements.push(`INSERT INTO event_log_global_processes (plan_id, process_id, status, events_json) VALUES (${sqlText(planId)}, ${sqlText(pid)}, ${sqlText(pobj.state)}, ${sqlText(JSON.stringify(pobj.events))})`);
+      statements.push(`INSERT INTO event_log_global_processes (plan_id, process_id, status) VALUES (${sqlText(planId)}, ${sqlText(pid)}, ${sqlText(pobj.state)})`);
+      (pobj.events || []).forEach((evt, i) => writeEvent('global_process', '', pid, i, evt as unknown as Record<string, unknown>));
     }
     for (const [dest, dobj] of Object.entries(el.destinations || {})) {
       statements.push(`INSERT INTO event_log_destinations (plan_id, destination, status) VALUES (${sqlText(planId)}, ${sqlText(dest)}, ${sqlText(dobj.status)})`);
       for (const [pid, pobj] of Object.entries(dobj.processes || {})) {
-        statements.push(`INSERT INTO event_log_dest_processes (plan_id, destination, process_id, status, events_json) VALUES (${sqlText(planId)}, ${sqlText(dest)}, ${sqlText(pid)}, ${sqlText(pobj.state)}, ${sqlText(JSON.stringify(pobj.events))})`);
+        statements.push(`INSERT INTO event_log_dest_processes (plan_id, destination, process_id, status) VALUES (${sqlText(planId)}, ${sqlText(dest)}, ${sqlText(pid)}, ${sqlText(pobj.state)})`);
+        (pobj.events || []).forEach((evt, i) => writeEvent('dest_process', dest, pid, i, evt as unknown as Record<string, unknown>));
       }
-    }
-    for (const evt of el.event_log || []) {
-      statements.push(`INSERT INTO event_log_process_events (plan_id, destination, process_id, event_type, event_data, event_at) VALUES (${sqlText(planId)}, ${sqlText(evt.destination)}, ${sqlText(evt.process ?? 'global')}, ${sqlText(evt.event)}, ${sqlText(evt.data ? JSON.stringify(evt.data) : null)}, ${sqlText(evt.at)})`);
     }
 
     const destinations = this.plan.destinations;

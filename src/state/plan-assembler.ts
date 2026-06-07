@@ -2,13 +2,12 @@
  * Plan Assembly — reconstruct TravelPlanMinimal + EventLogState from normalized table rows.
  * Used by TursoRepository.create() and dashboard.
  */
-import type { TravelPlanMinimal, EventLogState, CascadeState } from './types';
+import type { TravelPlanMinimal, EventLogState, CascadeState, TravelEvent } from './types';
 
 type R = Record<string, any>;
 
 function num(v: any): number | null { return v != null ? Number(v) : null; }
 function bool(v: any): boolean { return v === 1 || v === '1' || v === true; }
-function tryJson(v: any): any { if (!v) return null; try { return JSON.parse(v); } catch { return null; } }
 
 /** Strip null values from a DB row — Zod optional() accepts undefined but not null. */
 function coerceRow<T extends Record<string, unknown>>(row: T): T {
@@ -405,22 +404,63 @@ export function assemblePlan(
 }
 
 export function assembleEventLog(
-  stateRows: R[], globalRows: R[], destRows: R[], destProcRows: R[], evtRows: R[],
+  stateRows: R[], globalRows: R[], destRows: R[], destProcRows: R[],
+  planEventRows: R[], eventDataRows: R[] = [], nextActionRows: R[] = [],
 ): EventLogState {
   if (stateRows.length === 0) {
     return { session: new Date().toISOString().split('T')[0], project: 'japan-travel', version: '3.0', active_destination: '', current_focus: '', event_log: [], global_processes: {}, destinations: {} };
   }
   const s = stateRows[0];
+
+  // plan_event_data KV → { natural-key → {key: value} } (rebuild open `data` object).
+  // Key = scope:destination:process_id:sort_order (matches plan_events PK).
+  const evKey = (r: R) => `${r.scope}:${r.destination ?? ''}:${r.process_id ?? ''}:${r.sort_order}`;
+  const dataByEvent = new Map<string, Record<string, unknown> | string>();
+  for (const r of eventDataRows) {
+    const k = evKey(r);
+    if (r.key === '_value') { dataByEvent.set(k, r.value); continue; }
+    let bucket = dataByEvent.get(k);
+    if (bucket == null || typeof bucket === 'string') { bucket = {}; dataByEvent.set(k, bucket); }
+    (bucket as Record<string, unknown>)[r.key] = r.value;
+  }
+  const toEvent = (e: R): TravelEvent => {
+    const data = dataByEvent.get(evKey(e));
+    return {
+      event: e.event, at: e.event_at,
+      ...(e.destination != null ? { destination: e.destination } : {}),
+      ...(e.process_id != null ? { process: e.process_id } : {}),
+      ...(e.from_state != null ? { from: e.from_state } : {}),
+      ...(e.to_state != null ? { to: e.to_state } : {}),
+      ...(data != null ? { data } : {}),
+    } as TravelEvent;
+  };
+
+  // Split plan_events by scope.
+  const timeline: R[] = [];
+  const globalEvByProc = new Map<string, R[]>();
+  const destEvByKey = new Map<string, R[]>();
+  for (const e of planEventRows) {
+    if (e.scope === 'timeline') timeline.push(e);
+    else if (e.scope === 'global_process') {
+      if (!globalEvByProc.has(e.process_id)) globalEvByProc.set(e.process_id, []);
+      globalEvByProc.get(e.process_id)!.push(e);
+    } else if (e.scope === 'dest_process') {
+      const k = `${e.destination}:${e.process_id}`;
+      if (!destEvByKey.has(k)) destEvByKey.set(k, []);
+      destEvByKey.get(k)!.push(e);
+    }
+  }
+
   const log: EventLogState = {
     session: s.session, project: s.project, version: s.version,
     active_destination: s.active_destination || '', current_focus: s.current_focus || '',
-    next_actions: tryJson(s.next_actions_json) || [],
-    event_log: evtRows.map(e => { const ev = coerceRow(e); const d = tryJson(ev.event_data); return { event: ev.event_type, at: ev.event_at, destination: ev.destination, process: ev.process_id !== 'global' ? ev.process_id : undefined, ...(d != null ? { data: d } : {}) }; }),
+    next_actions: nextActionRows.map(r => r.action),
+    event_log: timeline.map(toEvent),
     global_processes: {},
     destinations: {},
   };
   for (const g of globalRows) {
-    log.global_processes[g.process_id] = { state: g.status, events: tryJson(g.events_json) || [] };
+    log.global_processes[g.process_id] = { state: g.status, events: (globalEvByProc.get(g.process_id) || []).map(toEvent) };
   }
   const destProcByDest = new Map<string, R[]>();
   for (const r of destProcRows) { if (!destProcByDest.has(r.destination)) destProcByDest.set(r.destination, []); destProcByDest.get(r.destination)!.push(r); }
@@ -428,7 +468,7 @@ export function assembleEventLog(
     const procs = destProcByDest.get(d.destination) || [];
     log.destinations[d.destination] = {
       status: d.status as 'active' | 'archived',
-      processes: Object.fromEntries(procs.map(p => [p.process_id, { state: p.status, events: tryJson(p.events_json) || [] }])),
+      processes: Object.fromEntries(procs.map(p => [p.process_id, { state: p.status, events: (destEvByKey.get(`${d.destination}:${p.process_id}`) || []).map(toEvent) }])),
     };
   }
   return log;

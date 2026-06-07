@@ -42,7 +42,9 @@ async function deletePlanRows(planId: string): Promise<void> {
   const client = newClient();
   const p = sqlText(planId);
   await client.executeMany([
-    `DELETE FROM event_log_process_events WHERE plan_id = ${p};`,
+    `DELETE FROM plan_event_data WHERE plan_id = ${p};`,
+    `DELETE FROM plan_events WHERE plan_id = ${p};`,
+    `DELETE FROM event_log_next_actions WHERE plan_id = ${p};`,
     `DELETE FROM event_log_dest_processes WHERE plan_id = ${p};`,
     `DELETE FROM event_log_destinations WHERE plan_id = ${p};`,
     `DELETE FROM event_log_state WHERE plan_id = ${p};`,

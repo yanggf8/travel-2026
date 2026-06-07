@@ -724,7 +724,7 @@ async function main() {
       sql: `CREATE TABLE IF NOT EXISTS event_log_state (
   plan_id TEXT PRIMARY KEY,
   session TEXT NOT NULL, project TEXT NOT NULL, version TEXT NOT NULL,
-  current_focus TEXT, active_destination TEXT, next_actions_json TEXT,
+  current_focus TEXT, active_destination TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`,
     },
@@ -732,7 +732,7 @@ async function main() {
       name: 'event_log_global_processes',
       sql: `CREATE TABLE IF NOT EXISTS event_log_global_processes (
   plan_id TEXT NOT NULL, process_id TEXT NOT NULL,
-  status TEXT NOT NULL, events_json TEXT,
+  status TEXT NOT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, process_id)
 )`,
@@ -750,20 +750,13 @@ async function main() {
       name: 'event_log_dest_processes',
       sql: `CREATE TABLE IF NOT EXISTS event_log_dest_processes (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL, process_id TEXT NOT NULL,
-  status TEXT NOT NULL, events_json TEXT,
+  status TEXT NOT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, process_id)
 )`,
     },
-    {
-      name: 'event_log_process_events',
-      sql: `CREATE TABLE IF NOT EXISTS event_log_process_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  plan_id TEXT NOT NULL, destination TEXT, process_id TEXT NOT NULL,
-  event_type TEXT NOT NULL, event_data TEXT,
-  event_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)`,
-    },
+    // NOTE: event_log_process_events removed — superseded by plan_events
+    // (scope='timeline'). See deJsonPlanEvents().
     {
       name: 'airport_transfer_candidates',
       sql: `CREATE TABLE IF NOT EXISTS airport_transfer_candidates (
@@ -1770,8 +1763,154 @@ async function main() {
   await deJsonItinerarySessions(client);
   await deJsonPlanTransport(client);
   await deJsonCascadeSchema(client);
+  await deJsonPlanEvents(client);
 
   console.log('Done.');
+}
+
+// ---------------------------------------------------------------------------
+// Batch E (part 2) — unify the domain event store into plan_events.
+//
+// The old "event_log" was a misnamed domain EVENT STORE (business events like
+// user_confirmed_dates / package_found, replayed into state — not app logging).
+// It kept events in THREE JSON places:
+//   event_log_process_events.event_data         (flat session timeline)
+//   event_log_global_processes.events_json       (per global-process history)
+//   event_log_dest_processes.events_json         (per dest-process history)
+// plus event_log_state.next_actions_json.
+//
+// New normalized, round-trip-safe (no JSON) event store:
+//   plan_events(id, plan_id, scope, destination, process_id, sort_order,
+//               event, event_at, from_state, to_state)
+//     scope ∈ 'timeline' | 'global_process' | 'dest_process'
+//   plan_event_data(event_id, key, value)   -- open `data` payload as KV rows
+//   event_log_next_actions(plan_id, sort_order, action)
+//
+// KV storage keeps the open `data` object round-trippable through save()
+// (read → memory → save reproduces the same keys/values) — unlike lossy text.
+// ---------------------------------------------------------------------------
+async function deJsonPlanEvents(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch E pt2: unify event store → plan_events (no JSON)...');
+
+  // Natural key (plan_id, scope, destination, process_id, sort_order) so the
+  // KV data table can reference an event without needing an autoincrement id
+  // mid-batch (save() builds one statement array). destination/process_id use
+  // '' sentinel in the key (NULLs don't compare in composite PKs).
+  await client.execute(`CREATE TABLE IF NOT EXISTS plan_events (
+    plan_id TEXT NOT NULL,
+    scope TEXT NOT NULL,           -- 'timeline' | 'global_process' | 'dest_process'
+    destination TEXT NOT NULL DEFAULT '',  -- '' for timeline + global_process
+    process_id TEXT NOT NULL DEFAULT '',   -- '' for timeline-without-process
+    sort_order INTEGER NOT NULL,
+    event TEXT, event_at TEXT, from_state TEXT, to_state TEXT,
+    PRIMARY KEY (plan_id, scope, destination, process_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS plan_event_data (
+    plan_id TEXT NOT NULL, scope TEXT NOT NULL, destination TEXT NOT NULL DEFAULT '',
+    process_id TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT,
+    PRIMARY KEY (plan_id, scope, destination, process_id, sort_order, key)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS event_log_next_actions (
+    plan_id TEXT NOT NULL, sort_order INTEGER NOT NULL, action TEXT NOT NULL,
+    PRIMARY KEY (plan_id, sort_order)
+  );`);
+
+  // Guard: if plan_events already populated and legacy JSON cols gone, skip.
+  const peCols = rowsAt(await client.executeBatch([`PRAGMA table_info(event_log_state);`]), 0).map((r) => String(r.name));
+  if (!peCols.includes('next_actions_json')) {
+    console.log('  event-store JSON columns already migrated; skipping backfill.');
+  } else {
+    const resp = await client.executeBatch([
+      `SELECT plan_id, next_actions_json FROM event_log_state;`,
+      `SELECT plan_id, destination, process_id, event_type, event_data, event_at FROM event_log_process_events ORDER BY plan_id, event_at, id;`,
+      `SELECT plan_id, process_id, events_json FROM event_log_global_processes;`,
+      `SELECT plan_id, destination, process_id, events_json FROM event_log_dest_processes;`,
+    ]);
+    const states = rowsAt(resp, 0);
+    const flat = rowsAt(resp, 1);
+    const globals = rowsAt(resp, 2);
+    const dests = rowsAt(resp, 3);
+
+    const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+
+    // Fresh start for the plans being migrated (idempotent reseed).
+    const planIds = new Set<string>([...states, ...flat, ...globals, ...dests].map((r) => String(r.plan_id)));
+    for (const pid of planIds) {
+      stmts.push({ sql: `DELETE FROM plan_event_data WHERE plan_id = ?;`, args: [tursoText(pid)] });
+      stmts.push({ sql: `DELETE FROM plan_events WHERE plan_id = ?;`, args: [tursoText(pid)] });
+      stmts.push({ sql: `DELETE FROM event_log_next_actions WHERE plan_id = ?;`, args: [tursoText(pid)] });
+    }
+
+    // next_actions → child rows
+    for (const s of states) {
+      parseJsonArray(s.next_actions_json).forEach((action, i) => {
+        stmts.push({ sql: `INSERT INTO event_log_next_actions (plan_id, sort_order, action) VALUES (?, ?, ?);`, args: [tursoText(s.plan_id), tursoInt(i), tursoText(action)] });
+      });
+    }
+
+    let evCount = 0, kvCount = 0;
+    const pushEvent = (
+      planId: string, scope: string, destination: string, processId: string,
+      sortOrder: number, event: string | null, at: string | null, from: string | null, to: string | null,
+      data: any,
+    ) => {
+      stmts.push({
+        sql: `INSERT INTO plan_events (plan_id, scope, destination, process_id, sort_order, event, event_at, from_state, to_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        args: [tursoText(planId), tursoText(scope), tursoText(destination), tursoText(processId), tursoInt(sortOrder), tursoText(event), tursoText(at), tursoText(from), tursoText(to)],
+      });
+      evCount++;
+      const kv = dataToKv(data);
+      for (const [k, v] of kv) {
+        stmts.push({
+          sql: `INSERT INTO plan_event_data (plan_id, scope, destination, process_id, sort_order, key, value) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+          args: [tursoText(planId), tursoText(scope), tursoText(destination), tursoText(processId), tursoInt(sortOrder), tursoText(k), tursoText(v)],
+        });
+        kvCount++;
+      }
+    };
+
+    // 1. flat timeline (event_log[])
+    let i = 0;
+    for (const e of flat) {
+      pushEvent(String(e.plan_id), 'timeline', '', (e.process_id && e.process_id !== 'global') ? String(e.process_id) : '', i++, e.event_type ?? null, e.event_at ?? null, null, null, parseJsonObj(e.event_data));
+    }
+    // 2. global process events
+    for (const g of globals) {
+      let j = 0;
+      for (const ev of parseJsonObjArray(g.events_json)) {
+        pushEvent(String(g.plan_id), 'global_process', '', String(g.process_id), j++, ev.event ?? null, ev.at ?? null, ev.from ?? null, ev.to ?? null, ev.data);
+      }
+    }
+    // 3. dest process events
+    for (const d of dests) {
+      let j = 0;
+      for (const ev of parseJsonObjArray(d.events_json)) {
+        pushEvent(String(d.plan_id), 'dest_process', String(d.destination), String(d.process_id), j++, ev.event ?? null, ev.at ?? null, ev.from ?? null, ev.to ?? null, ev.data);
+      }
+    }
+
+    await client.executeManyParams(stmts);
+    console.log(`✅ Batch E pt2 backfilled: ${evCount} events, ${kvCount} data-kv rows, ${states.length} states (next_actions).`);
+  }
+
+  // Drop legacy JSON columns + the redundant flat table (now in plan_events).
+  const dropCols: Array<[string, string]> = [
+    ['event_log_state', 'next_actions_json'],
+    ['event_log_global_processes', 'events_json'],
+    ['event_log_dest_processes', 'events_json'],
+  ];
+  for (const [table, col] of dropCols) {
+    try {
+      await client.execute(`ALTER TABLE ${table} DROP COLUMN ${col};`);
+      console.log(`  dropped ${table}.${col}`);
+    } catch (e: any) {
+      if (!/no such column|has no column/i.test(String(e?.message || ''))) console.warn(`⚠️  Could not drop ${table}.${col}:`, e.message);
+    }
+  }
+  // event_log_process_events fully superseded by plan_events (scope='timeline').
+  await client.execute(`DROP TABLE IF EXISTS event_log_process_events;`);
+  console.log('✅ Batch E pt2: event store unified into plan_events (legacy JSON + flat table dropped).');
 }
 
 // ---------------------------------------------------------------------------
@@ -2143,6 +2282,23 @@ function parseJsonObj(v: any): Record<string, any> | null {
   } catch {
     return null;
   }
+}
+
+// Open event `data` object → KV pairs (round-trip-safe; no JSON in column).
+// Scalars pass through; arrays join with ', '; nested objects flatten to
+// 'k=v, k=v'. A primitive (non-object) data becomes the single key '_value'.
+function dataToKv(data: any): Array<[string, string]> {
+  if (data == null) return [];
+  if (typeof data !== 'object' || Array.isArray(data)) {
+    const v = Array.isArray(data) ? data.map((x) => String(x)).join(', ') : String(data);
+    return [['_value', v]];
+  }
+  const out: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(data)) {
+    const val = Array.isArray(v) ? v.map((x) => String(x)).join(', ') : (v && typeof v === 'object' ? Object.entries(v).map(([kk, vv]) => `${kk}=${vv}`).join(', ') : String(v));
+    out.push([k, val]);
+  }
+  return out;
 }
 
 function parseJsonObjArray(v: any): Record<string, any>[] {

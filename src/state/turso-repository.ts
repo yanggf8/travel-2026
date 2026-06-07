@@ -91,7 +91,7 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM event_log_global_processes WHERE plan_id = ${pid}`,                             // 32
       `SELECT * FROM event_log_destinations WHERE plan_id = ${pid}`,                                 // 33
       `SELECT * FROM event_log_dest_processes WHERE plan_id = ${pid}`,                               // 34
-      `SELECT * FROM event_log_process_events WHERE plan_id = ${pid} ORDER BY event_at`,             // 35
+      `SELECT * FROM plan_events WHERE plan_id = ${pid} ORDER BY scope, destination, process_id, sort_order`, // 35 (event store)
       `SELECT COALESCE(version, 0) as version FROM plans WHERE plan_id = ${pid}`,                    // 36
       `SELECT * FROM plan_offer_best_value WHERE plan_id = ${pid}`,                                  // 37
       `SELECT * FROM day_route_segments WHERE plan_id = ${pid} ORDER BY destination, day_number, sort_order`, // 38
@@ -105,6 +105,8 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM plan_schema_contract_nodes WHERE plan_id = ${pid} ORDER BY sort_order`,                                 // 46
       `SELECT * FROM plan_process_precedence_entries WHERE plan_id = ${pid} ORDER BY name`,                                  // 47
       `SELECT * FROM plan_date_anchor_flex_dates WHERE plan_id = ${pid} ORDER BY kind, sort_order`,                          // 48
+      `SELECT scope, destination, process_id, sort_order, key, value FROM plan_event_data WHERE plan_id = ${pid}`, // 49 (event payload KV)
+      `SELECT * FROM event_log_next_actions WHERE plan_id = ${pid} ORDER BY sort_order`,                                     // 50
     ];
 
     // Execute all queries in a single HTTP round-trip
@@ -122,6 +124,7 @@ export class TursoRepository implements StateRepository {
       routeSegmentRows, activitiesZhRows,
       offerIncludesRows, offerHotelAccessRows, locZoneCandRows, transportExtraCandRows,
       triggerResetRows, triggerPopulateMapRows, schemaNodeRows, precedenceEntryRows, flexDateRows,
+      eventDataRows, nextActionRows,
     ] = responses;
 
     if (metaRows.length === 0) {
@@ -142,6 +145,7 @@ export class TursoRepository implements StateRepository {
 
     const eventLog = assembleEventLog(
       eventLogStateRows, eventLogGlobalRows, eventLogDestRows, eventLogDestProcRows, eventLogEvtRows,
+      eventDataRows, nextActionRows,
     );
 
     const version = versionRows[0]?.version ? parseInt(versionRows[0].version, 10) : 0;
