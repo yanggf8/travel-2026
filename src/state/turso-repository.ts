@@ -95,6 +95,7 @@ export class TursoRepository implements StateRepository {
       `SELECT COALESCE(version, 0) as version FROM plans WHERE plan_id = ${pid}`,                    // 36
       `SELECT * FROM plan_offer_best_value WHERE plan_id = ${pid}`,                                  // 37
       `SELECT * FROM day_route_segments WHERE plan_id = ${pid} ORDER BY destination, day_number, sort_order`, // 38
+      `SELECT * FROM session_activities_zh WHERE plan_id = ${pid} ORDER BY destination, day_number, session_type, sort_order`, // 39
     ];
 
     // Execute all queries in a single HTTP round-trip
@@ -109,7 +110,7 @@ export class TursoRepository implements StateRepository {
       locZoneRows, transportExtraRows, itinMetaRows, transferCandRows, accessLineRows,
       mealRows, tagRows, eventLogStateRows, eventLogGlobalRows, eventLogDestRows,
       eventLogDestProcRows, eventLogEvtRows, versionRows, bestValueRows,
-      routeSegmentRows,
+      routeSegmentRows, activitiesZhRows,
     ] = responses;
 
     if (metaRows.length === 0) {
@@ -123,7 +124,7 @@ export class TursoRepository implements StateRepository {
       budgetRows, triggerRows, contractRows, precedenceRows, cascadeGlobalRows, rootP1Rows,
       dayRows, sessionRows, activityRows, flightLegRows, hotelRows, transferRows,
       locZoneRows, transportExtraRows, itinMetaRows, transferCandRows, accessLineRows,
-      mealRows, tagRows, bestValueRows, routeSegmentRows,
+      mealRows, tagRows, bestValueRows, routeSegmentRows, activitiesZhRows,
     );
 
     const eventLog = assembleEventLog(

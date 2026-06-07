@@ -1108,13 +1108,20 @@ export class PlanRepository implements StateRepository {
 
             const timeRange = session.time_range as { start: string; end: string } | undefined;
             const meals = session.meals as string[] | undefined;
-            const mealsZh = session.meals_zh as string[] | undefined | null;
 
             const activitiesZh = session.activities_zh as string[] | undefined | null;
+            // No JSON columns: meals → session_meals, activities_zh →
+            // session_activities_zh (written below); meals_zh dropped (Batch C).
             statements.push(
-              `INSERT OR REPLACE INTO timesofday (plan_id, destination, day_number, session_type, focus, focus_zh, transit_notes, transit_notes_zh, activities_zh_json, booking_notes, meals_json, meals_zh_json, time_range_start, time_range_end, updated_at)
-               VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlText(session.focus as string)}, ${sqlText(session.focus_zh as string)}, ${sqlText(session.transit_notes as string)}, ${sqlText(session.transit_notes_zh as string)}, ${sqlText(activitiesZh ? JSON.stringify(activitiesZh) : null)}, ${sqlText(session.booking_notes as string)}, ${sqlText(meals ? JSON.stringify(meals) : null)}, ${sqlText(mealsZh ? JSON.stringify(mealsZh) : null)}, ${sqlText(timeRange?.start)}, ${sqlText(timeRange?.end)}, datetime('now'))`
+              `INSERT OR REPLACE INTO timesofday (plan_id, destination, day_number, session_type, focus, focus_zh, transit_notes, transit_notes_zh, booking_notes, time_range_start, time_range_end, updated_at)
+               VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlText(session.focus as string)}, ${sqlText(session.focus_zh as string)}, ${sqlText(session.transit_notes as string)}, ${sqlText(session.transit_notes_zh as string)}, ${sqlText(session.booking_notes as string)}, ${sqlText(timeRange?.start)}, ${sqlText(timeRange?.end)}, datetime('now'))`
             );
+            // session_activities_zh (one row per ZH activity item)
+            if (activitiesZh && Array.isArray(activitiesZh)) {
+              for (let ai = 0; ai < activitiesZh.length; ai++) {
+                statements.push(`INSERT OR REPLACE INTO session_activities_zh (plan_id, destination, day_number, session_type, sort_order, activity) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlInt(ai)}, ${sqlText(activitiesZh[ai])})`);
+              }
+            }
 
             const activities = session.activities as Array<string | Record<string, unknown>> | undefined;
             if (activities) {
@@ -1130,8 +1137,8 @@ export class PlanRepository implements StateRepository {
                 } else {
                   const actId = (act.id as string) || `migrated_${planId}_${destSlug}_d${dayNumber}_${sessionType}_${i}`;
                   statements.push(
-                    `INSERT OR REPLACE INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title, area, nearest_station, duration_min, booking_required, booking_url, booking_status, booking_ref, book_by, start_time, end_time, is_fixed_time, cost_estimate, tags_json, notes, priority, updated_at)
-                     VALUES (${sqlText(actId)}, ${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlInt(i)}, ${sqlText(act.title as string)}, ${sqlText(act.area as string)}, ${sqlText(act.nearest_station as string)}, ${sqlInt(act.duration_min as number)}, ${sqlBool(act.booking_required as boolean)}, ${sqlText(act.booking_url as string)}, ${sqlText(act.booking_status as string)}, ${sqlText(act.booking_ref as string)}, ${sqlText(act.book_by as string)}, ${sqlText(act.start_time as string)}, ${sqlText(act.end_time as string)}, ${sqlBool(act.is_fixed_time as boolean)}, ${sqlInt(act.cost_estimate as number)}, ${sqlText(act.tags ? JSON.stringify(act.tags) : null)}, ${sqlText(act.notes as string)}, ${sqlText((act.priority as string) || 'want')}, datetime('now'))`
+                    `INSERT OR REPLACE INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title, area, nearest_station, duration_min, booking_required, booking_url, booking_status, booking_ref, book_by, start_time, end_time, is_fixed_time, cost_estimate, notes, priority, updated_at)
+                     VALUES (${sqlText(actId)}, ${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(dayNumber)}, ${sqlText(sessionType)}, ${sqlInt(i)}, ${sqlText(act.title as string)}, ${sqlText(act.area as string)}, ${sqlText(act.nearest_station as string)}, ${sqlInt(act.duration_min as number)}, ${sqlBool(act.booking_required as boolean)}, ${sqlText(act.booking_url as string)}, ${sqlText(act.booking_status as string)}, ${sqlText(act.booking_ref as string)}, ${sqlText(act.book_by as string)}, ${sqlText(act.start_time as string)}, ${sqlText(act.end_time as string)}, ${sqlBool(act.is_fixed_time as boolean)}, ${sqlInt(act.cost_estimate as number)}, ${sqlText(act.notes as string)}, ${sqlText((act.priority as string) || 'want')}, datetime('now'))`
                   );
                   // activity_tags
                   const tags = act.tags as string[] | undefined;

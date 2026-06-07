@@ -217,7 +217,6 @@ async function main() {
   focus TEXT,
   transit_notes TEXT,
   booking_notes TEXT,
-  meals_json TEXT,
   time_range_start TEXT,
   time_range_end TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -246,7 +245,6 @@ async function main() {
   end_time TEXT,
   is_fixed_time INTEGER NOT NULL DEFAULT 0,
   cost_estimate INTEGER,
-  tags_json TEXT,
   notes TEXT,
   priority TEXT NOT NULL DEFAULT 'want' CHECK(priority IN ('must', 'want', 'optional')),
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -866,8 +864,8 @@ async function main() {
     { table: 'days', col: 'theme_zh TEXT' },
     { table: 'timesofday', col: 'focus_zh TEXT' },
     { table: 'timesofday', col: 'transit_notes_zh TEXT' },
-    { table: 'timesofday', col: 'meals_zh_json TEXT' },
-    { table: 'timesofday', col: 'activities_zh_json TEXT' },
+    // meals_zh_json / activities_zh_json removed — Batch C de-JSON:
+    // activities_zh → session_activities_zh; meals_zh_json was dead transit text.
     { table: 'hotels', col: 'name_zh TEXT' },
     { table: 'itinerary_metadata', col: 'transit_summary_zh TEXT' },
     { table: 'plan_destinations', col: 'home_address TEXT' },
@@ -1771,8 +1769,94 @@ async function main() {
   console.log('✅ Normalized destination reference tables ready (blob table dropped).');
 
   await deJsonReferenceData(client);
+  await deJsonItinerarySessions(client);
 
   console.log('Done.');
+}
+
+// ---------------------------------------------------------------------------
+// Batch C — de-JSON itinerary session/activity list columns.
+//
+//   timesofday.activities_zh_json → session_activities_zh (one row per item)
+//   activities.tags_json          → activity_tags (existing table)
+//   timesofday.meals_json         → DROP (already mirrored in session_meals)
+//   timesofday.meals_zh_json      → DROP (dead: held non-JSON transit text the
+//                                   reader discarded via tryJson→null; the real
+//                                   transit text lives in transit_notes_zh)
+//
+// Idempotent: guarded on activities_zh_json existence; child writes DELETE then
+// re-INSERT; column DROP ignores "no such column" on re-run.
+// ---------------------------------------------------------------------------
+async function deJsonItinerarySessions(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch C: de-JSON itinerary session/activity columns...');
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS session_activities_zh (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+    day_number INTEGER NOT NULL, session_type TEXT NOT NULL,
+    sort_order INTEGER NOT NULL, activity TEXT NOT NULL,
+    PRIMARY KEY (plan_id, destination, day_number, session_type, sort_order)
+  );`);
+  // activity_tags already exists (CLAUDE.md); ensure for fresh DBs.
+  await client.execute(`CREATE TABLE IF NOT EXISTS activity_tags (
+    activity_id TEXT NOT NULL, tag TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (activity_id, tag)
+  );`);
+
+  const todCols = rowsAt(await client.executeBatch([`PRAGMA table_info(timesofday);`]), 0).map((r) => String(r.name));
+  if (!todCols.includes('activities_zh_json')) {
+    console.log('  itinerary JSON columns already dropped; skipping backfill.');
+  } else {
+    const resp = await client.executeBatch([
+      `SELECT plan_id, destination, day_number, session_type, activities_zh_json FROM timesofday;`,
+      `SELECT id, tags_json FROM activities;`,
+    ]);
+    const sessions = rowsAt(resp, 0);
+    const acts = rowsAt(resp, 1);
+
+    const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+
+    for (const s of sessions) {
+      stmts.push({
+        sql: `DELETE FROM session_activities_zh WHERE plan_id = ? AND destination = ? AND day_number = ? AND session_type = ?;`,
+        args: [tursoText(s.plan_id), tursoText(s.destination), tursoInt(s.day_number), tursoText(s.session_type)],
+      });
+      parseJsonArray(s.activities_zh_json).forEach((activity, i) => {
+        stmts.push({
+          sql: `INSERT INTO session_activities_zh (plan_id, destination, day_number, session_type, sort_order, activity) VALUES (?, ?, ?, ?, ?, ?);`,
+          args: [tursoText(s.plan_id), tursoText(s.destination), tursoInt(s.day_number), tursoText(s.session_type), tursoInt(i), tursoText(activity)],
+        });
+      });
+    }
+
+    for (const a of acts) {
+      stmts.push({ sql: `DELETE FROM activity_tags WHERE activity_id = ?;`, args: [tursoText(a.id)] });
+      parseJsonArray(a.tags_json).forEach((tag) => {
+        stmts.push({ sql: `INSERT OR IGNORE INTO activity_tags (activity_id, tag) VALUES (?, ?);`, args: [tursoText(a.id), tursoText(tag)] });
+      });
+    }
+
+    await client.executeManyParams(stmts);
+    console.log(`✅ Batch C backfilled: ${sessions.length} sessions (activities_zh), ${acts.length} activities (tags) → child rows.`);
+  }
+
+  const dropCols: Array<[string, string]> = [
+    ['timesofday', 'activities_zh_json'],
+    ['timesofday', 'meals_json'],
+    ['timesofday', 'meals_zh_json'],
+    ['activities', 'tags_json'],
+  ];
+  for (const [table, col] of dropCols) {
+    try {
+      await client.execute(`ALTER TABLE ${table} DROP COLUMN ${col};`);
+      console.log(`  dropped ${table}.${col}`);
+    } catch (e: any) {
+      if (!/no such column|has no column/i.test(String(e?.message || ''))) {
+        console.warn(`⚠️  Could not drop ${table}.${col}:`, e.message);
+      }
+    }
+  }
+  console.log('✅ Batch C legacy JSON columns dropped.');
 }
 
 // ---------------------------------------------------------------------------

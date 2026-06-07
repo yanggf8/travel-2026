@@ -134,6 +134,9 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     /* 15 */ `SELECT * FROM day_route_segments WHERE plan_id = '${escaped}' ORDER BY destination, day_number, sort_order`,
     /* 16 */ `SELECT * FROM day_landmarks WHERE plan_id = '${escaped}' ORDER BY destination, day_number, sort_order`,
     /* 17 */ `SELECT slug, currency FROM destination_config`,
+    /* 18 */ `SELECT * FROM session_meals WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
+    /* 19 */ `SELECT * FROM session_activities_zh WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
+    /* 20 */ `SELECT at.activity_id, at.tag FROM activity_tags at INNER JOIN activities a ON at.activity_id = a.id WHERE a.plan_id = '${escaped}'`,
   ]);
 
   const [
@@ -142,6 +145,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     flightLegRows, hotelRows, accessLineRows, transferRows,
     dayRows, sessionRows, activityRows, itinMetaRows,
     routeSegRows, landmarkRows, destConfigRows,
+    mealRows, activitiesZhRows, tagRows,
   ] = results;
 
   if (metaRows.length === 0) return null;
@@ -233,6 +237,25 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     const key = sKey(r.destination!, r.day_number!, r.session_type!);
     if (!activityMap.has(key)) activityMap.set(key, []);
     activityMap.get(key)!.push(r);
+  }
+
+  // Normalized list child rows (no JSON columns).
+  const mealMap = new Map<string, string[]>();
+  for (const r of mealRows) {
+    const key = sKey(r.destination!, r.day_number!, r.session_type!);
+    if (!mealMap.has(key)) mealMap.set(key, []);
+    mealMap.get(key)!.push(r.meal!);
+  }
+  const activitiesZhMap = new Map<string, string[]>();
+  for (const r of activitiesZhRows) {
+    const key = sKey(r.destination!, r.day_number!, r.session_type!);
+    if (!activitiesZhMap.has(key)) activitiesZhMap.set(key, []);
+    activitiesZhMap.get(key)!.push(r.activity!);
+  }
+  const tagMap = new Map<string, string[]>();
+  for (const r of tagRows) {
+    if (!tagMap.has(r.activity_id!)) tagMap.set(r.activity_id!, []);
+    tagMap.get(r.activity_id!)!.push(r.tag!);
   }
 
   // Itinerary metadata by dest
@@ -366,12 +389,13 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
           activities: [],
           focus_zh: sRow?.focus_zh || null,
           transit_notes_zh: sRow?.transit_notes_zh || null,
-          meals_zh: sRow?.meals_zh_json ? tryParseJson(sRow.meals_zh_json) : null,
-          activities_zh: sRow?.activities_zh_json ? tryParseJson(sRow.activities_zh_json) : null,
+          meals_zh: null, // meals_zh_json removed (Batch C de-JSON)
+          activities_zh: activitiesZhMap.has(key) ? activitiesZhMap.get(key)! : null,
         };
 
-        if (sRow?.meals_json) {
-          try { session.meals = JSON.parse(sRow.meals_json); } catch { /* ignore */ }
+        const sessionMeals = mealMap.get(key);
+        if (sessionMeals && sessionMeals.length > 0) {
+          session.meals = sessionMeals;
         }
         if (sRow?.time_range_start || sRow?.time_range_end) {
           session.time_range = { start: sRow?.time_range_start, end: sRow?.time_range_end };
@@ -393,7 +417,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
           end_time: a.end_time || undefined,
           is_fixed_time: a.is_fixed_time === '1',
           cost_estimate: a.cost_estimate ? parseInt(a.cost_estimate, 10) : null,
-          tags: a.tags_json ? (() => { try { return JSON.parse(a.tags_json); } catch { return []; } })() : [],
+          tags: tagMap.get(a.id!) || [],
           notes: a.notes || null,
           priority: a.priority || 'want',
         }));
@@ -546,12 +570,17 @@ export async function getBookings(
 // ============================================================================
 
 const DAY_EDITABLE_FIELDS = new Set(['theme', 'theme_zh']);
-const SESSION_EDITABLE_FIELDS = new Set([
+// Scalar columns updated directly on timesofday.
+const SESSION_SCALAR_FIELDS = new Set([
   'focus', 'focus_zh',
-  'activities_zh_json', 'meals_zh_json',
   'transit_notes_zh', 'transit_notes',
-  'meals_json',
 ]);
+// List fields backed by child tables (no JSON columns): client sends a JSON
+// array string; we replace the child rows.
+const SESSION_LIST_FIELDS: Record<string, { table: string; col: string }> = {
+  activities_zh: { table: 'session_activities_zh', col: 'activity' },
+  meals: { table: 'session_meals', col: 'meal' },
+};
 
 interface TursoArg {
   type: string;
@@ -596,6 +625,37 @@ async function executeTursoWrite(
   }
 }
 
+// Execute several statements in one pipeline request (used for child-row replace).
+async function executeTursoWriteBatch(
+  env: Env,
+  statements: Array<{ sql: string; args: TursoArg[] }>
+): Promise<void> {
+  if (!env.TURSO_URL || !env.TURSO_TOKEN) {
+    throw new Error('TURSO_URL and TURSO_TOKEN secrets are not configured.');
+  }
+  const pipelineUrl = env.TURSO_URL.replace('libsql://', 'https://') + '/v2/pipeline';
+  const body = {
+    requests: [
+      ...statements.map((s) => ({ type: 'execute', stmt: { sql: s.sql, args: s.args } })),
+      { type: 'close' },
+    ],
+  };
+  const res = await fetch(pipelineUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.TURSO_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Turso write HTTP ${res.status}: ${text || res.statusText}`);
+  }
+  const json = (await res.json()) as TursoPipelineResponse;
+  const failed = json.results?.find((r) => r?.response?.error);
+  if (failed?.response?.error) {
+    throw new Error(`Turso write error: ${JSON.stringify(failed.response.error)}`);
+  }
+}
+
 export async function updateDayField(
   env: Env,
   planId: string,
@@ -625,11 +685,42 @@ export async function updateSessionField(
   field: string,
   value: string
 ): Promise<void> {
-  if (!SESSION_EDITABLE_FIELDS.has(field)) {
-    throw new Error(`Field "${field}" is not editable on timesofday`);
-  }
   if (!['morning', 'noon', 'afternoon', 'evening'].includes(sessionType)) {
     throw new Error(`Invalid session type "${sessionType}"`);
+  }
+
+  // List fields → replace child rows (client sends a JSON array string).
+  const listField = SESSION_LIST_FIELDS[field];
+  if (listField) {
+    let items: string[];
+    try {
+      const parsed = JSON.parse(value);
+      items = Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
+    } catch {
+      throw new Error(`Field "${field}" expects a JSON array value`);
+    }
+    const keyArgs: TursoArg[] = [
+      { type: 'text', value: planId },
+      { type: 'text', value: dest },
+      { type: 'integer', value: String(dayNumber) },
+      { type: 'text', value: sessionType },
+    ];
+    const statements: Array<{ sql: string; args: TursoArg[] }> = [
+      {
+        sql: `DELETE FROM ${listField.table} WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4`,
+        args: keyArgs,
+      },
+      ...items.map((item, i) => ({
+        sql: `INSERT INTO ${listField.table} (plan_id, destination, day_number, session_type, sort_order, ${listField.col}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+        args: [...keyArgs, { type: 'integer', value: String(i) }, { type: 'text', value: item }] as TursoArg[],
+      })),
+    ];
+    await executeTursoWriteBatch(env, statements);
+    return;
+  }
+
+  if (!SESSION_SCALAR_FIELDS.has(field)) {
+    throw new Error(`Field "${field}" is not editable on timesofday`);
   }
   const sql = `UPDATE timesofday SET ${field} = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4 AND session_type = ?5`;
   await executeTursoWrite(env, sql, [

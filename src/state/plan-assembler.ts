@@ -38,7 +38,7 @@ export function assemblePlan(
   flightLegRows: R[], hotelRows: R[], transferRows: R[],
   locZoneRows: R[], transportExtraRows: R[], itinMetaRows: R[],
   transferCandRows: R[], accessLineRows: R[], mealRows: R[], tagRows: R[],
-  bestValueRows: R[], routeSegmentRows: R[] = [],
+  bestValueRows: R[], routeSegmentRows: R[] = [], activitiesZhRows: R[] = [],
 ): TravelPlanMinimal {
   const meta = metaRows[0];
 
@@ -127,6 +127,8 @@ export function assemblePlan(
   for (const r of mealRows) { const k = sKey(r.destination, r.day_number, r.session_type); if (!mealMap.has(k)) mealMap.set(k, []); mealMap.get(k)!.push(r); }
   const tagMap = new Map<string, string[]>();
   for (const r of tagRows) { if (!tagMap.has(r.activity_id)) tagMap.set(r.activity_id, []); tagMap.get(r.activity_id)!.push(r.tag); }
+  const activitiesZhMap = new Map<string, string[]>();
+  for (const r of activitiesZhRows) { const k = sKey(r.destination, r.day_number, r.session_type); if (!activitiesZhMap.has(k)) activitiesZhMap.set(k, []); activitiesZhMap.get(k)!.push(r.activity); }
   const bestValueByOffer = new Map(bestValueRows.map(r => [r.offer_id, r]));
   const routeSegsByDest = groupBy(routeSegmentRows, 'destination');
 
@@ -289,8 +291,8 @@ export function assemblePlan(
           focus: sRow?.focus || null, focus_zh: sRow?.focus_zh || null,
           transit_notes: sRow?.transit_notes || null, transit_notes_zh: sRow?.transit_notes_zh || null,
           booking_notes: sRow?.booking_notes || null,
-          activities_zh: sRow?.activities_zh_json ? tryJson(sRow.activities_zh_json) : null,
-          meals_zh: sRow?.meals_zh_json ? tryJson(sRow.meals_zh_json) : null,
+          activities_zh: activitiesZhMap.has(sk) ? activitiesZhMap.get(sk)! : null,
+          meals_zh: null, // meals_zh_json removed (Batch C): was dead non-JSON transit text
           meals: meals.map(m => m.meal),
           time_range: (sRow?.time_range_start || sRow?.time_range_end) ? { start: sRow?.time_range_start, end: sRow?.time_range_end } : undefined,
           activities: acts.map(a => ({
@@ -300,7 +302,7 @@ export function assemblePlan(
             booking_ref: a.booking_ref || undefined, book_by: a.book_by || undefined,
             start_time: a.start_time || undefined, end_time: a.end_time || undefined,
             is_fixed_time: bool(a.is_fixed_time), cost_estimate: num(a.cost_estimate),
-            tags: tagMap.get(a.id) || (a.tags_json ? tryJson(a.tags_json) : []) || [],
+            tags: tagMap.get(a.id) || [],
             notes: a.notes || null, priority: a.priority || 'want',
           })),
         };

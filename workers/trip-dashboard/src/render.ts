@@ -340,8 +340,8 @@ function renderSession(
 
   const em = sessionEditMeta;
   const focusFieldId = em ? `day-${em.day}-${sessionKey}-focus_zh` : '';
-  const activitiesFieldId = em ? `day-${em.day}-${sessionKey}-activities_zh_json` : '';
-  const mealsFieldId = em ? `day-${em.day}-${sessionKey}-meals_zh_json` : '';
+  const activitiesFieldId = em ? `day-${em.day}-${sessionKey}-activities_zh` : '';
+  const mealsFieldId = em ? `day-${em.day}-${sessionKey}-meals` : '';
   const transitFieldId = em ? `day-${em.day}-${sessionKey}-transit_notes_zh` : '';
 
   return `
@@ -364,7 +364,7 @@ function renderSession(
       </ul>
       ${em ? editableField(activitiesFieldId, activities.join('\n'), {
         table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
-        day: em.day, session: sessionKey, field: 'activities_zh_json', isJsonArray: true,
+        day: em.day, session: sessionKey, field: 'activities_zh', isJsonArray: true,
       }) : ''}
       <div class="info-pills">
         ${transit ? renderTransitPill(transit, mapCity || '') : ''}
@@ -372,7 +372,7 @@ function renderSession(
       </div>
       ${em ? editableField(mealsFieldId, meals.join('\n'), {
         table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
-        day: em.day, session: sessionKey, field: 'meals_zh_json', isJsonArray: true,
+        day: em.day, session: sessionKey, field: 'meals', isJsonArray: true,
       }) : ''}
       ${em ? editableField(transitFieldId, transit, {
         table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
