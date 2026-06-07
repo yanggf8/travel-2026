@@ -268,7 +268,7 @@ async function upsertTourOffers(client: TursoPipelineClient, offers: any[]): Pro
       sql: `INSERT OR REPLACE INTO stage0_tour_group_offers
         (run_id, offer_id, source_id, dest_region, depart_date, return_date, nights, price_per_person_twd,
          title, url, scraped_at, hotel_name, hotel_star_rating, meals_included_count, departure_status,
-         seats_available, min_group_size, group_size_cap, raw_json, parse_warnings_json, product_kind)
+         seats_available, min_group_size, group_size_cap, raw_text, parse_warnings_text, product_kind)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       args: [
         tursoText(o.run_id),
@@ -302,7 +302,7 @@ async function upsertTourOffers(client: TursoPipelineClient, offers: any[]): Pro
         sql: `INSERT OR REPLACE INTO shaping_selected_offers
           (selection_id, run_id, destination_slug, source_id, source_offer_id, selected_depart_date,
            selected_return_date, nights, price_per_person_twd, price_total_twd, hotel_name,
-           observed_by, observed_at, selected_by, selected_at, provenance_json, raw_json, imported_at)
+           observed_by, observed_at, selected_by, selected_at, provenance_text, raw_text, imported_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         args: [
           tursoText(selectionId),
@@ -363,7 +363,7 @@ async function backfillResearch(client: TursoPipelineClient): Promise<{ artifact
 
     await client.executeParams(
       `INSERT OR REPLACE INTO shaping_research_artifacts
-        (artifact_id, run_id, destination_slug, artifact_kind, original_filename, payload_json, raw_text,
+        (artifact_id, run_id, destination_slug, artifact_kind, original_filename, payload_text, raw_text,
          observed_by, observed_at, imported_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [

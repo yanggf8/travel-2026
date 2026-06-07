@@ -33,7 +33,20 @@ export interface BookingRow {
   price_amount: number | null;
   price_currency: string;
   origin_path: string;
-  payload_json: string | null;
+  payload_text: string | null;
+}
+
+// Flatten an open payload object to readable "k: v | k: v" text (no JSON in column).
+function payloadToText(payload: Record<string, unknown>): string | null {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(payload)) {
+    if (v == null) continue;
+    const val = Array.isArray(v)
+      ? v.map((x) => String(x)).join(', ')
+      : (typeof v === 'object' ? Object.entries(v as Record<string, unknown>).map(([kk, vv]) => `${kk}=${vv}`).join(', ') : String(v));
+    parts.push(`${k}: ${val}`);
+  }
+  return parts.length ? parts.join(' | ') : null;
 }
 
 export interface ExtractionResult {
@@ -174,7 +187,7 @@ export function extractPackageBookings(
     price_amount: pricePerPerson != null ? Math.trunc(pricePerPerson) : null,
     price_currency: priceCurrency,
     origin_path: `destinations.${dest}.process_3_4_packages`,
-    payload_json: Object.keys(payload).length > 0 ? JSON.stringify(payload) : null,
+    payload_text: Object.keys(payload).length > 0 ? payloadToText(payload) : null,
   });
 
   return rows;
@@ -234,7 +247,7 @@ export function extractTransferBookings(
       price_amount: priceYen != null ? Math.trunc(priceYen) : null,
       price_currency: 'JPY',
       origin_path: `destinations.${dest}.process_3_transportation.airport_transfers.${direction}`,
-      payload_json: JSON.stringify(payload),
+      payload_text: payloadToText(payload),
     });
   }
 
@@ -301,7 +314,7 @@ export function extractActivityBookings(
           price_amount: costEstimate != null ? Math.trunc(costEstimate) : null,
           price_currency: 'JPY',
           origin_path: `destinations.${dest}.process_5_daily_itinerary.days[${dayNumber - 1}].${session}`,
-          payload_json: JSON.stringify({
+          payload_text: payloadToText({
             area: activity.area,
             booking_url: activity.booking_url,
             tags: activity.tags,
@@ -371,7 +384,7 @@ export function extractAllBookings(
 // ---------------------------------------------------------------------------
 
 export function toUpsertSql(row: BookingRow): string {
-  return `INSERT INTO bookings_current (booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, payload_json, updated_at) VALUES (${sqlText(row.booking_key)}, ${sqlText(row.trip_id)}, ${sqlText(row.destination)}, ${sqlText(row.category)}, ${sqlText(row.subtype)}, ${sqlText(row.title)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlText(row.booked_at)}, ${sqlText(row.source_id)}, ${sqlText(row.offer_id)}, ${sqlText(row.selected_date)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, ${sqlText(row.origin_path)}, ${sqlText(row.payload_json)}, datetime('now')) ON CONFLICT(booking_key) DO UPDATE SET status = ${sqlText(row.status)}, reference = ${sqlText(row.reference)}, book_by = ${sqlText(row.book_by)}, booked_at = ${sqlText(row.booked_at)}, price_amount = ${sqlInt(row.price_amount)}, payload_json = ${sqlText(row.payload_json)}, updated_at = datetime('now');`;
+  return `INSERT INTO bookings_current (booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, payload_text, updated_at) VALUES (${sqlText(row.booking_key)}, ${sqlText(row.trip_id)}, ${sqlText(row.destination)}, ${sqlText(row.category)}, ${sqlText(row.subtype)}, ${sqlText(row.title)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlText(row.booked_at)}, ${sqlText(row.source_id)}, ${sqlText(row.offer_id)}, ${sqlText(row.selected_date)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, ${sqlText(row.origin_path)}, ${sqlText(row.payload_text)}, datetime('now')) ON CONFLICT(booking_key) DO UPDATE SET status = ${sqlText(row.status)}, reference = ${sqlText(row.reference)}, book_by = ${sqlText(row.book_by)}, booked_at = ${sqlText(row.booked_at)}, price_amount = ${sqlInt(row.price_amount)}, payload_text = ${sqlText(row.payload_text)}, updated_at = datetime('now');`;
 }
 
 export function toEventSql(
@@ -379,7 +392,7 @@ export function toEventSql(
   eventType: string,
   row: BookingRow
 ): string {
-  return `INSERT INTO bookings_events (booking_key, event_type, new_status, reference, book_by, amount, currency, event_data, event_at) VALUES (${sqlText(bookingKey)}, ${sqlText(eventType)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, ${sqlText(row.payload_json)}, datetime('now'));`;
+  return `INSERT INTO bookings_events (booking_key, event_type, new_status, reference, book_by, amount, currency, event_data_text, event_at) VALUES (${sqlText(bookingKey)}, ${sqlText(eventType)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, ${sqlText(row.payload_text)}, datetime('now'));`;
 }
 
 // ---------------------------------------------------------------------------

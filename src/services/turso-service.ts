@@ -236,18 +236,27 @@ export async function loadHolidayCalendarFromTurso(
 
 export async function loadHotelAreasFromTurso(): Promise<Record<string, Record<string, string[]>>> {
   const client = getClient();
-  const response = await client.execute(
-    `SELECT region, area_type, keywords_json FROM hotel_areas ORDER BY region, area_type;`
-  );
-  const rows = rowsToObjects(response);
+  const batch = await client.executeBatch([
+    `SELECT region, area_type FROM hotel_areas ORDER BY region, area_type;`,
+    `SELECT region, area_type, keyword FROM hotel_area_keywords ORDER BY region, area_type, sort_order;`,
+  ]);
+  const rows = rowsToObjectsAt(batch, 0);
   assertRows(rows, 'hotel_areas');
+
+  // keywords from normalized child rows (no JSON column).
+  const kwByKey = new Map<string, string[]>();
+  for (const r of rowsToObjectsAt(batch, 1)) {
+    const k = `${r.region}:${r.area_type}`;
+    if (!kwByKey.has(k)) kwByKey.set(k, []);
+    kwByKey.get(k)!.push(String(r.keyword));
+  }
 
   const out: Record<string, Record<string, string[]>> = {};
   for (const row of rows) {
     const region = String(row.region);
     const areaType = String(row.area_type);
     if (!out[region]) out[region] = {};
-    out[region][areaType] = row.keywords_json ? JSON.parse(String(row.keywords_json)) : [];
+    out[region][areaType] = kwByKey.get(`${region}:${areaType}`) ?? [];
   }
   return out;
 }
@@ -868,22 +877,24 @@ export async function syncEventsToDb(
   const sqlStatements: string[] = [];
 
   for (const ev of events) {
-    const payload = JSON.stringify({
-      at: ev.at,
-      event: ev.event,
-      destination: ev.destination,
-      process: ev.process,
-      data: ev.data,
-    });
-    const eid = crypto.createHash('sha1').update(payload).digest('hex');
+    // Stable identity hash (in-memory only, not stored).
+    const idInput = `${ev.at}|${ev.event}|${ev.destination}|${ev.process}|${ev.data ? JSON.stringify(ev.data) : ''}`;
+    const eid = crypto.createHash('sha1').update(idInput).digest('hex');
 
-    const cols = ['external_id', 'event_type', 'destination', 'process', 'data', 'created_at'];
+    // data → readable "k: v | k: v" text (no JSON in column).
+    const dataText = (ev.data && typeof ev.data === 'object')
+      ? Object.entries(ev.data as Record<string, unknown>).map(([k, v]) =>
+          `${k}: ${Array.isArray(v) ? (v as unknown[]).join(', ') : (v && typeof v === 'object' ? Object.entries(v as Record<string, unknown>).map(([kk, vv]) => `${kk}=${vv}`).join(', ') : String(v))}`
+        ).join(' | ') || null
+      : (ev.data != null ? String(ev.data) : null);
+
+    const cols = ['external_id', 'event_type', 'destination', 'process', 'data_text', 'created_at'];
     const values = [
       sqlText(eid),
       sqlText(ev.event),
       sqlText(ev.destination || null),
       sqlText(ev.process || null),
-      sqlText(ev.data ? JSON.stringify(ev.data) : null),
+      sqlText(dataText),
       sqlText(ev.at),
     ];
 
@@ -917,7 +928,7 @@ export interface BookingCurrentRow {
   price_amount: number | null;
   price_currency: string | null;
   origin_path: string | null;
-  payload_json: string | null;
+  payload_text: string | null;
   updated_at: string | null;
 }
 
@@ -1069,7 +1080,7 @@ export async function queryBookings(filters: {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = filters.limit ? `LIMIT ${Math.trunc(filters.limit)}` : 'LIMIT 100';
 
-  const sql = `SELECT booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, payload_json, updated_at FROM bookings_current ${where} ORDER BY category, destination, updated_at DESC ${limit};`;
+  const sql = `SELECT booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, payload_text, updated_at FROM bookings_current ${where} ORDER BY category, destination, updated_at DESC ${limit};`;
 
   const response = await client.execute(sql);
   return rowsToObjects(response) as BookingCurrentRow[];

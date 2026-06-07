@@ -138,6 +138,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     /* 19 */ `SELECT * FROM session_activities_zh WHERE plan_id = '${escaped}' ORDER BY destination, day_number, session_type, sort_order`,
     /* 20 */ `SELECT at.activity_id, at.tag FROM activity_tags at INNER JOIN activities a ON at.activity_id = a.id WHERE a.plan_id = '${escaped}'`,
     /* 21 */ `SELECT * FROM airport_transfer_candidates WHERE plan_id = '${escaped}' ORDER BY destination, direction, sort_order`,
+    /* 22 */ `SELECT * FROM itinerary_transit_key_lines WHERE plan_id = '${escaped}' ORDER BY destination, lang, sort_order`,
   ]);
 
   const [
@@ -147,6 +148,7 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
     dayRows, sessionRows, activityRows, itinMetaRows,
     routeSegRows, landmarkRows, destConfigRows,
     mealRows, activitiesZhRows, tagRows, transferCandRows,
+    transitKeyLineRows,
   ] = results;
 
   if (metaRows.length === 0) return null;
@@ -270,6 +272,14 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
   // Itinerary metadata by dest
   const itinMetaMap = new Map<string, Row>();
   for (const r of itinMetaRows) itinMetaMap.set(r.destination!, r);
+
+  // transit key lines by destination:lang (no JSON column)
+  const transitKeyLinesByDestLang = new Map<string, string[]>();
+  for (const r of transitKeyLineRows) {
+    const k = `${r.destination}:${r.lang}`;
+    if (!transitKeyLinesByDestLang.has(k)) transitKeyLinesByDestLang.set(k, []);
+    transitKeyLinesByDestLang.get(k)!.push(r.line!);
+  }
 
   // Route segments by dest:day
   const routesByDestDay = new Map<string, Row[]>();
@@ -464,10 +474,15 @@ export async function getDashboardPlan(env: Env, planId: string): Promise<PlanDa
       reconstructedDays.push(day);
     }
 
-    // Transit summary from itinerary_metadata
+    // Transit summary from itinerary_metadata scalar cols + key-line child rows (no JSON)
     const itinMeta = itinMetaMap.get(dest);
-    const transitSummary = itinMeta?.transit_summary ? tryParseJson(itinMeta.transit_summary) : undefined;
-    const transitSummaryZh = itinMeta?.transit_summary_zh ? tryParseJson(itinMeta.transit_summary_zh) : undefined;
+    const buildTransit = (lang: 'en' | 'zh', hotelStation: string | null | undefined) => {
+      const keyLines = transitKeyLinesByDestLang.get(`${dest}:${lang}`) || [];
+      if (!hotelStation && keyLines.length === 0) return undefined;
+      return { ...(hotelStation ? { hotel_station: hotelStation } : {}), key_lines: keyLines };
+    };
+    const transitSummary = buildTransit('en', itinMeta?.transit_hotel_station);
+    const transitSummaryZh = buildTransit('zh', itinMeta?.transit_hotel_station_zh);
 
     // Find home_address from destRows
     const destRow = destRows.find(r => r.slug === dest);
@@ -576,7 +591,7 @@ export interface BookingRow {
   book_by: string | null;
   price_amount: string | null;
   price_currency: string | null;
-  payload_json: string | null;
+  payload_text: string | null;
 }
 
 export async function getBookings(
@@ -585,7 +600,7 @@ export async function getBookings(
 ): Promise<BookingRow[]> {
   const escaped = destination.replace(/'/g, "''");
   const results = await queryTursoPipeline(env, [
-    `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency, payload_json FROM bookings_current WHERE destination = '${escaped}'`,
+    `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency, payload_text FROM bookings_current WHERE destination = '${escaped}'`,
   ]);
   return results[0] as unknown as BookingRow[];
 }

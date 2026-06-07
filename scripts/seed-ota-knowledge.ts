@@ -177,28 +177,33 @@ async function main(): Promise<void> {
   for (const b of BOOKING_TYPES) {
     stmts.push({
       sql: `INSERT OR REPLACE INTO booking_types
-        (slug, name_zh, description, rules_json, source_url, fetched_at, confidence)
-        VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        (slug, name_zh, description, source_url, fetched_at, confidence)
+        VALUES (?, ?, ?, ?, ?, ?);`,
       args: [
         tursoText(b.slug), tursoText(b.name_zh), tursoText(b.description),
-        tursoText(JSON.stringify(b.rules)),
         tursoText(SOURCE_URL), tursoText(FETCHED_AT), tursoText(CONFIDENCE),
       ],
     });
+    // rules → booking_type_rules child rows (no JSON column)
+    stmts.push({ sql: `DELETE FROM booking_type_rules WHERE booking_type = ?;`, args: [tursoText(b.slug)] });
+    (b.rules || []).forEach((rule: string, i: number) => stmts.push({ sql: `INSERT INTO booking_type_rules (booking_type, sort_order, rule) VALUES (?, ?, ?);`, args: [tursoText(b.slug), tursoInt(i), tursoText(rule)] }));
   }
 
   for (const p of PLATFORM_BEHAVIORS) {
     stmts.push({
       sql: `INSERT OR REPLACE INTO platform_behaviors
-        (platform, currency, price_display, baggage_labels_json, quirks_json,
-         source_url, fetched_at, confidence)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        (platform, currency, price_display, source_url, fetched_at, confidence)
+        VALUES (?, ?, ?, ?, ?, ?);`,
       args: [
         tursoText(p.platform), tursoText(p.currency), tursoText(p.price_display),
-        tursoText(JSON.stringify(p.baggage_labels)), tursoText(JSON.stringify(p.quirks)),
         tursoText(SOURCE_URL), tursoText(FETCHED_AT), tursoText(CONFIDENCE),
       ],
     });
+    // quirks → platform_behavior_quirks; baggage_labels → platform_behavior_baggage_labels
+    stmts.push({ sql: `DELETE FROM platform_behavior_quirks WHERE platform = ?;`, args: [tursoText(p.platform)] });
+    (p.quirks || []).forEach((q: string, i: number) => stmts.push({ sql: `INSERT INTO platform_behavior_quirks (platform, sort_order, quirk) VALUES (?, ?, ?);`, args: [tursoText(p.platform), tursoInt(i), tursoText(q)] }));
+    stmts.push({ sql: `DELETE FROM platform_behavior_baggage_labels WHERE platform = ?;`, args: [tursoText(p.platform)] });
+    for (const [label, desc] of Object.entries(p.baggage_labels || {})) stmts.push({ sql: `INSERT INTO platform_behavior_baggage_labels (platform, label, description) VALUES (?, ?, ?);`, args: [tursoText(p.platform), tursoText(label), tursoText(String(desc))] });
   }
 
   COMPARISON_RULES.forEach((rule, i) => {

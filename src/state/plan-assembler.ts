@@ -42,6 +42,7 @@ export function assemblePlan(
   locZoneCandRows: R[] = [], transportExtraCandRows: R[] = [],
   triggerResetRows: R[] = [], triggerPopulateMapRows: R[] = [],
   schemaNodeRows: R[] = [], precedenceEntryRows: R[] = [], flexDateRows: R[] = [],
+  transitKeyLineRows: R[] = [],
 ): TravelPlanMinimal {
   const meta = metaRows[0];
 
@@ -159,6 +160,13 @@ export function assemblePlan(
   const offerHotelAccessByOffer = groupBy(offerHotelAccessRows, 'offer_id');
   const locZoneCandsByDest = groupBy(locZoneCandRows, 'destination');
   const transportExtraCandsByDest = groupBy(transportExtraCandRows, 'destination');
+  // transit key lines by destination:lang (no JSON column)
+  const transitKeyLinesByDestLang = new Map<string, string[]>();
+  for (const r of transitKeyLineRows) {
+    const k = `${r.destination}:${r.lang}`;
+    if (!transitKeyLinesByDestLang.has(k)) transitKeyLinesByDestLang.set(k, []);
+    transitKeyLinesByDestLang.get(k)!.push(r.line);
+  }
   const daysByDest = groupBy(dayRows, 'destination');
   const sKey = (dest: string, day: any, sess: string) => compositeKey(dest, day, sess);
   const sessionMap = new Map<string, R>();
@@ -332,7 +340,17 @@ export function assemblePlan(
     const p5Status = statuses.find(s => s.process_id === 'process_5_daily_itinerary')?.status || 'pending';
     const itinMetaRaw = itinMetaByDest.get(slug);
     const itinMeta = itinMetaRaw ? coerceRow(itinMetaRaw) : undefined;
-    const p5: any = { status: p5Status, scaffolded_at: itinMeta?.scaffolded_at, populated_at: itinMeta?.populated_at, transit_summary: itinMeta?.transit_summary };
+    // transit_summary {hotel_station, key_lines[]} from scalar cols + child rows (no JSON)
+    const buildTransit = (lang: 'en' | 'zh', hotelStation: unknown) => {
+      const keyLines = transitKeyLinesByDestLang.get(`${slug}:${lang}`) || [];
+      if (!hotelStation && keyLines.length === 0) return undefined;
+      return { ...(hotelStation ? { hotel_station: hotelStation } : {}), key_lines: keyLines };
+    };
+    const p5: any = {
+      status: p5Status, scaffolded_at: itinMeta?.scaffolded_at, populated_at: itinMeta?.populated_at,
+      transit_summary: buildTransit('en', itinMeta?.transit_hotel_station),
+      transit_summary_zh: buildTransit('zh', itinMeta?.transit_hotel_station_zh),
+    };
     const days = daysByDest.get(slug) || [];
     p5.days = days.map(rawDayRow => {
       const dayRow = coerceRow(rawDayRow);

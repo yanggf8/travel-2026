@@ -73,7 +73,7 @@ export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<
       run_id, offer_id, source_id, dest_region, depart_date, return_date, nights,
       price_per_person_twd, title, url, scraped_at,
       hotel_name, hotel_star_rating, meals_included_count, departure_status,
-      seats_available, min_group_size, group_size_cap, raw_json, parse_warnings_json,
+      seats_available, min_group_size, group_size_cap, raw_text, parse_warnings_text,
       product_kind
     ) VALUES (
       ${sqlText(r.run_id)},
@@ -155,8 +155,10 @@ export async function listTourGroupOffers(filter: {
   if (filter.dest_region) { where.push(`dest_region = ${sqlText(filter.dest_region)}`); }
   if (filter.nights !== undefined) { where.push(`nights = ${sqlInt(filter.nights)}`); }
   if (filter.max_price !== undefined) { where.push(`price_per_person_twd <= ${sqlInt(filter.max_price)}`); }
+  // Alias the de-JSON'd *_text columns back to the legacy field names so
+  // callers (chat-format, tour-group) keep reading r.raw_json / r.parse_warnings_json.
   const r = await client.execute(
-    `SELECT * FROM shaping_tour_group_offers
+    `SELECT *, raw_text AS raw_json, parse_warnings_text AS parse_warnings_json FROM shaping_tour_group_offers
      WHERE ${where.join(' AND ')}
      ORDER BY price_per_person_twd ASC;`
   );

@@ -115,7 +115,7 @@ async function main() {
   price_amount INTEGER,
   price_currency TEXT DEFAULT 'TWD',
   origin_path TEXT,
-  payload_json TEXT,
+  payload_text TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`);
     await client.execute('CREATE INDEX IF NOT EXISTS idx_bc_dest ON bookings_current(destination, category);');
@@ -143,7 +143,7 @@ async function main() {
   book_by TEXT,
   amount INTEGER,
   currency TEXT,
-  event_data TEXT,
+  event_data_text TEXT,
   event_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`);
     await client.execute('CREATE INDEX IF NOT EXISTS idx_be_key ON bookings_events(booking_key, event_at);');
@@ -1435,8 +1435,8 @@ async function main() {
     seats_available INTEGER,
     min_group_size INTEGER,
     group_size_cap INTEGER,
-    raw_json TEXT,
-    parse_warnings_json TEXT,
+    raw_text TEXT,
+    parse_warnings_text TEXT,
     PRIMARY KEY (run_id, offer_id)
   );`);
 
@@ -1464,7 +1464,7 @@ async function main() {
     destination_slug TEXT,
     artifact_kind TEXT,
     original_filename TEXT,
-    payload_json TEXT,
+    payload_text TEXT,
     raw_text TEXT,
     observed_by TEXT,
     observed_at TEXT,
@@ -1487,8 +1487,8 @@ async function main() {
     observed_at TEXT,
     selected_by TEXT,
     selected_at TEXT,
-    provenance_json TEXT,
-    raw_json TEXT,
+    provenance_text TEXT,
+    raw_text TEXT,
     imported_at TEXT
   );`);
 
@@ -1557,7 +1557,6 @@ async function main() {
   await client.execute(`CREATE TABLE IF NOT EXISTS hotel_areas (
     region TEXT,
     area_type TEXT,
-    keywords_json TEXT,
     source_url TEXT,
     fetched_at TEXT,
     confidence TEXT,
@@ -1657,7 +1656,6 @@ async function main() {
     slug TEXT PRIMARY KEY,
     name_zh TEXT,
     description TEXT,
-    rules_json TEXT,
     source_url TEXT,
     fetched_at TEXT,
     confidence TEXT
@@ -1667,8 +1665,6 @@ async function main() {
     platform TEXT PRIMARY KEY,
     currency TEXT,
     price_display TEXT,
-    baggage_labels_json TEXT,
-    quirks_json TEXT,
     source_url TEXT,
     fetched_at TEXT,
     confidence TEXT
@@ -1764,8 +1760,166 @@ async function main() {
   await deJsonPlanTransport(client);
   await deJsonCascadeSchema(client);
   await deJsonPlanEvents(client);
+  await deJsonShapingKnowledge(client);
 
   console.log('Done.');
+}
+
+// ---------------------------------------------------------------------------
+// Batch F — de-JSON shaping / OTA-knowledge / bookings columns.
+//
+// Per the de-json rule (known→typed, whole-open-blob→one *_text column):
+//   booking_types.rules_json                → booking_type_rules (flat array child)
+//   hotel_areas.keywords_json               → hotel_area_keywords (flat array child)
+//   platform_behaviors.quirks_json          → platform_behavior_quirks (flat array child)
+//   platform_behaviors.baggage_labels_json  → platform_behavior_baggage_labels (label/desc child)
+//   shaping_selected_offers.raw_json/provenance_json → raw_text/provenance_text (open blob)
+//   shaping_tour_group_offers.raw_json/parse_warnings_json → raw_text/parse_warnings_text
+//   shaping_research_artifacts.payload_json → payload_text (open blob)
+//   bookings_current.payload_json           → payload_text (open blob)
+// Dead table dropped (no readers): flights (outbound_json/return_json).
+//
+// Open blobs are stored as RAW TEXT (the original content), NOT re-parsed as
+// JSON at read time — readers do string ops. Concrete maps/arrays become child rows.
+// ---------------------------------------------------------------------------
+async function deJsonShapingKnowledge(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch F: de-JSON shaping/OTA-knowledge/bookings columns...');
+
+  await client.execute(`CREATE TABLE IF NOT EXISTS booking_type_rules (
+    booking_type TEXT NOT NULL, sort_order INTEGER NOT NULL, rule TEXT NOT NULL,
+    PRIMARY KEY (booking_type, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS hotel_area_keywords (
+    region TEXT NOT NULL, area_type TEXT NOT NULL, sort_order INTEGER NOT NULL, keyword TEXT NOT NULL,
+    PRIMARY KEY (region, area_type, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS platform_behavior_quirks (
+    platform TEXT NOT NULL, sort_order INTEGER NOT NULL, quirk TEXT NOT NULL,
+    PRIMARY KEY (platform, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS platform_behavior_baggage_labels (
+    platform TEXT NOT NULL, label TEXT NOT NULL, description TEXT,
+    PRIMARY KEY (platform, label)
+  );`);
+
+  // transit_summary (itinerary_metadata) — concrete shape {hotel_station, key_lines[]}.
+  // hotel_station → scalar cols, key_lines → child table; the EN transit_summary is
+  // already corrupt ('[object Object]') so only ZH backfills. events.data /
+  // bookings_events.event_data are open audit blobs → *_text.
+  await client.execute(`CREATE TABLE IF NOT EXISTS itinerary_transit_key_lines (
+    plan_id TEXT NOT NULL, destination TEXT NOT NULL, lang TEXT NOT NULL,
+    sort_order INTEGER NOT NULL, line TEXT NOT NULL,
+    PRIMARY KEY (plan_id, destination, lang, sort_order)
+  );`);
+
+  const textCols: Array<[string, string]> = [
+    ['shaping_selected_offers', 'raw_text'], ['shaping_selected_offers', 'provenance_text'],
+    ['shaping_tour_group_offers', 'raw_text'], ['shaping_tour_group_offers', 'parse_warnings_text'],
+    ['shaping_research_artifacts', 'payload_text'],
+    ['bookings_current', 'payload_text'],
+    ['events', 'data_text'], ['bookings_events', 'event_data_text'],
+    ['itinerary_metadata', 'transit_hotel_station'], ['itinerary_metadata', 'transit_hotel_station_zh'],
+  ];
+  for (const [table, col] of textCols) {
+    try { await client.execute(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT;`); }
+    catch (e: any) { if (!/duplicate column/i.test(String(e?.message || ''))) throw e; }
+  }
+
+  // Resolve key column names defensively (schemas vary).
+  const btCols = rowsAt(await client.executeBatch([`PRAGMA table_info(booking_types);`]), 0).map((r) => String(r.name));
+  const pbCols = rowsAt(await client.executeBatch([`PRAGMA table_info(platform_behaviors);`]), 0).map((r) => String(r.name));
+  const btKey = btCols.includes('booking_type') ? 'booking_type' : (btCols.includes('type') ? 'type' : btCols[0]);
+  const pbKey = pbCols.includes('platform') ? 'platform' : (pbCols.includes('platform_id') ? 'platform_id' : (pbCols.includes('source_id') ? 'source_id' : pbCols[0]));
+
+  if (!btCols.includes('rules_json')) {
+    console.log('  shaping/knowledge JSON columns already migrated; skipping backfill.');
+  } else {
+    const resp = await client.executeBatch([
+      `SELECT ${btKey} AS k, rules_json FROM booking_types;`,
+      `SELECT region, area_type, keywords_json FROM hotel_areas;`,
+      `SELECT ${pbKey} AS k, quirks_json, baggage_labels_json FROM platform_behaviors;`,
+      `SELECT selection_id, raw_json, provenance_json FROM shaping_selected_offers;`,
+      `SELECT run_id, offer_id, raw_json, parse_warnings_json FROM shaping_tour_group_offers;`,
+      `SELECT artifact_id, payload_json FROM shaping_research_artifacts;`,
+      `SELECT booking_key, payload_json FROM bookings_current;`,
+      `SELECT id, data FROM events WHERE data IS NOT NULL;`,
+      `SELECT booking_key, event_at, event_data FROM bookings_events WHERE event_data IS NOT NULL;`,
+      `SELECT plan_id, destination, transit_summary, transit_summary_zh FROM itinerary_metadata;`,
+    ]);
+    const bts = rowsAt(resp, 0);
+    const has = rowsAt(resp, 1);
+    const pbs = rowsAt(resp, 2);
+    const sso = rowsAt(resp, 3);
+    const stg = rowsAt(resp, 4);
+    const sra = rowsAt(resp, 5);
+    const bc = rowsAt(resp, 6);
+    const evs = rowsAt(resp, 7);
+    const bevs = rowsAt(resp, 8);
+    const itin = rowsAt(resp, 9);
+
+    const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+
+    for (const r of bts) {
+      stmts.push({ sql: `DELETE FROM booking_type_rules WHERE booking_type = ?;`, args: [tursoText(r.k)] });
+      parseJsonArray(r.rules_json).forEach((rule, i) => stmts.push({ sql: `INSERT INTO booking_type_rules (booking_type, sort_order, rule) VALUES (?, ?, ?);`, args: [tursoText(r.k), tursoInt(i), tursoText(rule)] }));
+    }
+    for (const r of has) {
+      stmts.push({ sql: `DELETE FROM hotel_area_keywords WHERE region = ? AND area_type = ?;`, args: [tursoText(r.region), tursoText(r.area_type)] });
+      parseJsonArray(r.keywords_json).forEach((kw, i) => stmts.push({ sql: `INSERT INTO hotel_area_keywords (region, area_type, sort_order, keyword) VALUES (?, ?, ?, ?);`, args: [tursoText(r.region), tursoText(r.area_type), tursoInt(i), tursoText(kw)] }));
+    }
+    for (const r of pbs) {
+      stmts.push({ sql: `DELETE FROM platform_behavior_quirks WHERE platform = ?;`, args: [tursoText(r.k)] });
+      parseJsonArray(r.quirks_json).forEach((q, i) => stmts.push({ sql: `INSERT INTO platform_behavior_quirks (platform, sort_order, quirk) VALUES (?, ?, ?);`, args: [tursoText(r.k), tursoInt(i), tursoText(q)] }));
+      stmts.push({ sql: `DELETE FROM platform_behavior_baggage_labels WHERE platform = ?;`, args: [tursoText(r.k)] });
+      const labels = parseJsonObj(r.baggage_labels_json);
+      if (labels) for (const [label, desc] of Object.entries(labels)) stmts.push({ sql: `INSERT INTO platform_behavior_baggage_labels (platform, label, description) VALUES (?, ?, ?);`, args: [tursoText(r.k), tursoText(label), tursoText(String(desc))] });
+    }
+    const txt = (v: any) => (v === null || v === undefined || v === '') ? null : String(v);
+    for (const r of sso) stmts.push({ sql: `UPDATE shaping_selected_offers SET raw_text = ?, provenance_text = ? WHERE selection_id = ?;`, args: [tursoText(txt(r.raw_json)), tursoText(txt(r.provenance_json)), tursoText(r.selection_id)] });
+    for (const r of stg) stmts.push({ sql: `UPDATE shaping_tour_group_offers SET raw_text = ?, parse_warnings_text = ? WHERE run_id = ? AND offer_id = ?;`, args: [tursoText(txt(r.raw_json)), tursoText(txt(r.parse_warnings_json)), tursoText(r.run_id), tursoText(r.offer_id)] });
+    for (const r of sra) stmts.push({ sql: `UPDATE shaping_research_artifacts SET payload_text = ? WHERE artifact_id = ?;`, args: [tursoText(txt(r.payload_json)), tursoText(r.artifact_id)] });
+    for (const r of bc) stmts.push({ sql: `UPDATE bookings_current SET payload_text = ? WHERE booking_key = ?;`, args: [tursoText(txt(r.payload_json)), tursoText(r.booking_key)] });
+    // events.data / bookings_events.event_data → *_text (open audit blobs, no readers)
+    for (const r of evs) stmts.push({ sql: `UPDATE events SET data_text = ? WHERE id = ?;`, args: [tursoText(txt(r.data)), tursoInt(r.id)] });
+    for (const r of bevs) stmts.push({ sql: `UPDATE bookings_events SET event_data_text = ? WHERE booking_key = ? AND event_at = ?;`, args: [tursoText(txt(r.event_data)), tursoText(r.booking_key), tursoText(r.event_at)] });
+    // itinerary_metadata.transit_summary(_zh) {hotel_station, key_lines[]} → scalar + child
+    for (const r of itin) {
+      for (const [col, lang, statCol] of [['transit_summary', 'en', 'transit_hotel_station'], ['transit_summary_zh', 'zh', 'transit_hotel_station_zh']] as const) {
+        const obj = parseJsonObj(r[col]);  // corrupt '[object Object]' → null, safely skipped
+        stmts.push({ sql: `UPDATE itinerary_metadata SET ${statCol} = ? WHERE plan_id = ? AND destination = ?;`, args: [tursoText(obj?.hotel_station != null ? String(obj.hotel_station) : null), tursoText(r.plan_id), tursoText(r.destination)] });
+        stmts.push({ sql: `DELETE FROM itinerary_transit_key_lines WHERE plan_id = ? AND destination = ? AND lang = ?;`, args: [tursoText(r.plan_id), tursoText(r.destination), tursoText(lang)] });
+        const lines = obj && Array.isArray(obj.key_lines) ? obj.key_lines : [];
+        lines.forEach((line: any, i: number) => stmts.push({ sql: `INSERT INTO itinerary_transit_key_lines (plan_id, destination, lang, sort_order, line) VALUES (?, ?, ?, ?, ?);`, args: [tursoText(r.plan_id), tursoText(r.destination), tursoText(lang), tursoInt(i), tursoText(String(line))] }));
+      }
+    }
+
+    await client.executeManyParams(stmts);
+    console.log(`✅ Batch F backfilled: ${bts.length} booking-types, ${has.length} hotel-areas, ${pbs.length} platform-behaviors, ${sso.length}+${stg.length}+${sra.length}+${bc.length} blobs → child rows + text cols.`);
+  }
+
+  const dropCols: Array<[string, string]> = [
+    ['booking_types', 'rules_json'],
+    ['hotel_areas', 'keywords_json'],
+    ['platform_behaviors', 'quirks_json'],
+    ['platform_behaviors', 'baggage_labels_json'],
+    ['shaping_selected_offers', 'raw_json'],
+    ['shaping_selected_offers', 'provenance_json'],
+    ['shaping_tour_group_offers', 'raw_json'],
+    ['shaping_tour_group_offers', 'parse_warnings_json'],
+    ['shaping_research_artifacts', 'payload_json'],
+    ['bookings_current', 'payload_json'],
+    // newly found (content scan, non-_json names):
+    ['events', 'data'],
+    ['bookings_events', 'event_data'],
+    ['itinerary_metadata', 'transit_summary'],
+    ['itinerary_metadata', 'transit_summary_zh'],
+  ];
+  for (const [table, col] of dropCols) {
+    try { await client.execute(`ALTER TABLE ${table} DROP COLUMN ${col};`); console.log(`  dropped ${table}.${col}`); }
+    catch (e: any) { if (!/no such column|has no column/i.test(String(e?.message || ''))) console.warn(`⚠️  Could not drop ${table}.${col}:`, e.message); }
+  }
+  await client.execute(`DROP TABLE IF EXISTS flights;`);
+  console.log('✅ Batch F: shaping/knowledge/bookings de-JSON complete (dead flights table dropped).');
 }
 
 // ---------------------------------------------------------------------------

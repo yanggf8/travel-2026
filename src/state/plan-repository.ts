@@ -1208,10 +1208,18 @@ export class PlanRepository implements StateRepository {
         }
       }
 
-      // itinerary_metadata (must be after p5 declaration)
+      // itinerary_metadata (must be after p5 declaration). transit_summary
+      // {hotel_station, key_lines[]} → scalar cols + key-line child rows (no JSON).
       const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
       if (p5) {
-        statements.push(`INSERT INTO itinerary_metadata (plan_id, destination, scaffolded_at, populated_at, transit_summary) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p5.scaffolded_at as string)}, ${sqlText(p5.populated_at as string)}, ${sqlText(p5.transit_summary as string)})`);
+        const ts = (p5.transit_summary && typeof p5.transit_summary === 'object') ? p5.transit_summary as Record<string, unknown> : null;
+        const tsZh = (p5.transit_summary_zh && typeof p5.transit_summary_zh === 'object') ? p5.transit_summary_zh as Record<string, unknown> : null;
+        statements.push(`INSERT INTO itinerary_metadata (plan_id, destination, scaffolded_at, populated_at, transit_hotel_station, transit_hotel_station_zh) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(p5.scaffolded_at as string)}, ${sqlText(p5.populated_at as string)}, ${sqlText(ts?.hotel_station as string)}, ${sqlText(tsZh?.hotel_station as string)})`);
+        statements.push(`DELETE FROM itinerary_transit_key_lines WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText(destSlug)}`);
+        for (const [obj, lang] of [[ts, 'en'], [tsZh, 'zh']] as const) {
+          const lines = (obj && Array.isArray(obj.key_lines)) ? obj.key_lines as string[] : [];
+          lines.forEach((line, i) => statements.push(`INSERT INTO itinerary_transit_key_lines (plan_id, destination, lang, sort_order, line) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(lang)}, ${sqlInt(i)}, ${sqlText(line)})`));
+        }
       }
 
       // session_meals + activity_tags

@@ -107,6 +107,7 @@ export class TursoRepository implements StateRepository {
       `SELECT * FROM plan_date_anchor_flex_dates WHERE plan_id = ${pid} ORDER BY kind, sort_order`,                          // 48
       `SELECT scope, destination, process_id, sort_order, key, value FROM plan_event_data WHERE plan_id = ${pid}`, // 49 (event payload KV)
       `SELECT * FROM event_log_next_actions WHERE plan_id = ${pid} ORDER BY sort_order`,                                     // 50
+      `SELECT * FROM itinerary_transit_key_lines WHERE plan_id = ${pid} ORDER BY destination, lang, sort_order`,             // 51
     ];
 
     // Execute all queries in a single HTTP round-trip
@@ -124,7 +125,7 @@ export class TursoRepository implements StateRepository {
       routeSegmentRows, activitiesZhRows,
       offerIncludesRows, offerHotelAccessRows, locZoneCandRows, transportExtraCandRows,
       triggerResetRows, triggerPopulateMapRows, schemaNodeRows, precedenceEntryRows, flexDateRows,
-      eventDataRows, nextActionRows,
+      eventDataRows, nextActionRows, transitKeyLineRows,
     ] = responses;
 
     if (metaRows.length === 0) {
@@ -141,6 +142,7 @@ export class TursoRepository implements StateRepository {
       mealRows, tagRows, bestValueRows, routeSegmentRows, activitiesZhRows,
       offerIncludesRows, offerHotelAccessRows, locZoneCandRows, transportExtraCandRows,
       triggerResetRows, triggerPopulateMapRows, schemaNodeRows, precedenceEntryRows, flexDateRows,
+      transitKeyLineRows,
     );
 
     const eventLog = assembleEventLog(
