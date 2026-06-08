@@ -338,6 +338,30 @@ Deliverables:
 
 Estimate: 3-6 weeks depending on how many mutation commands are still actively used.
 
+**Phase 4 progress — read foundation started (2026-06-08):**
+- ✅ `travel status [--full]` (ports status / view:status) — BYTE-IDENTICAL on tokyo-2026
+  + kyoto-2026. Commit 288a01d. First full assembled-plan-style READ in Rust:
+  `rust/crates/travel-cli/src/plan.rs` (new) assembles a `PlanView` from the 14 tables
+  status touches (plan_metadata, process_statuses, cascade_dirty_flags, date_anchors,
+  flight_legs, airport_transfers + _candidates, hotels + hotel_access_lines,
+  plan_offer_selection, plan_offer_includes, days, timesofday, activities) — all from
+  de-JSON'd child tables/scalars, no JSON parsing. `status.rs` is the formatter.
+  Covers getters: ActiveDestination/DateAnchor/DirtyFlags/ProcessStatus/FlightInfo/
+  HotelInfo/AirportTransfers. Mirrors a TS quirk (Selected Offer / Includes not
+  rendered on a fresh read because chosen_offer is only set by setOfferSelection(),
+  not rehydrated by the assembler).
+- Plan resolution: TRAVEL_PLAN_ID env only for now; the full TS plan-resolver
+  (--plan-id / --travel-date / active-plan selection) is deferred to when `itinerary` lands.
+- ⏳ Next read views (reuse plan.rs): `itinerary` (largest; +~7 tables), `bookings`
+  (smallest; bookings_current/_events), `transport` (+transportation_extras/_candidates,
+  accommodation_location_zone/_candidates), `view-prices` (+the plan_offer_* cluster).
+- ⏳ NOT STARTED: all mutations + the cascade runner. Reads-before-writes,
+  cascade LAST, per the strategy above.
+
+> Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
+> parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
+> pre-existing db.rs/plans.rs warnings), working tree == pushed commit.
+
 ### Phase 5 — Test/Hook Replacement and Root npm Deletion
 
 Scope:
@@ -387,8 +411,8 @@ Suggested tracking table per command:
 | `db:query:turso` | `travel db query-offers` | done | done | no | Phase 3, row/order parity; fixed null-leak |
 | `validate:data` | `travel validate data` | done | done | no | Phase 3, byte-parity |
 | `doctor` | `travel doctor` | done | done | no | Phase 3, byte-parity |
-| `status` | `travel status` | pending | pending | no | Phase 4 (StateManager-backed) |
-| `set-dates` | `travel set-dates` | pending | pending | no | Phase 4 |
+| `status` | `travel status` | done | done | no | Phase 4 read foundation, byte-parity (tokyo+kyoto) |
+| `set-dates` | `travel set-dates` | pending | pending | no | Phase 4 (first mutation; triggers cascade) |
 
 ## Verification Method
 
