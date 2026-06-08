@@ -296,6 +296,24 @@ Deliverables:
 
 Estimate: 1-2 weeks. `turso-migrate.ts` is the largest single file here at 1,737 LOC and may dominate.
 
+**Phase 3 progress — easy subset ✅ DONE (2026-06-08):**
+The four low-risk admin/read DB commands are Rust-built and verified:
+- ✅ `travel db status` (ports db:status:turso) — byte-identical. Commit 766a179.
+- ✅ `travel db exec "<sql>"` (ports db:exec) — affected-count + multi-statement parity;
+  SELECT rows are plain `col: val` text (no JSON, per plan). Added `db::connect_write()`
+  (write-tier token: env → cache → mint, mirrors connect_read). Commit dd48e83.
+- ✅ `travel db query-offers` (ports db:query:turso) — same row set/ordering as TS; dropped
+  the `--json` flag and fixed a TS `{"type":"null"}` null-leak (null → `-`/empty). Commit 9dbc857.
+- ✅ `travel validate data` / `travel doctor` (ports validate:data + doctor) — byte-identical,
+  one module behind two entry points (`validate::Mode::{Validate,Doctor}`). `validateDependencies`
+  / `validateCliScripts` ported as no-op stubs (npm goes away in Phase 5). Commit 5bf759f.
+
+Verified: cargo build/clippy clean (only pre-existing db.rs/plans.rs warnings), 6+1 tests pass,
+byte-parity diffs on db-status + validate-data, db-exec write path resolves write-tier creds.
+
+⏳ **Deferred (larger / one-shot, out of the easy subset):** `db:migrate:turso` (1,737 LOC),
+`db:seed:plans`, `db:sync:destinations`, `db:sync:events`, `db:fetch:holidays:tw`, `db:import:turso`.
+
 ### Phase 4 — StateManager-Backed Mutation Commands and Cascade
 
 Scope:
@@ -364,6 +382,11 @@ Suggested tracking table per command:
 | `query-destination-ref` | `travel query-destination-ref` | done | done | no | Phase 2, byte-parity (de-JSON child rows) |
 | `compare-dates` | `travel compare dates` | done | done | no | Phase 2, byte-parity |
 | `compare-true-cost` | `travel compare true-cost` | done | done | no | Phase 2, byte-parity |
+| `db:status:turso` | `travel db status` | done | done | no | Phase 3, byte-parity |
+| `db:exec` | `travel db exec` | done | done | no | Phase 3, plain-text SELECT (no JSON) |
+| `db:query:turso` | `travel db query-offers` | done | done | no | Phase 3, row/order parity; fixed null-leak |
+| `validate:data` | `travel validate data` | done | done | no | Phase 3, byte-parity |
+| `doctor` | `travel doctor` | done | done | no | Phase 3, byte-parity |
 | `status` | `travel status` | pending | pending | no | Phase 4 (StateManager-backed) |
 | `set-dates` | `travel set-dates` | pending | pending | no | Phase 4 |
 
