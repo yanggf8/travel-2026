@@ -3,6 +3,7 @@ mod compare;
 mod compare_dates;
 mod compare_true_cost;
 mod db;
+mod db_status;
 mod destination_ref;
 mod flights;
 mod freshness;
@@ -69,6 +70,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "check-freshness" => {
             let opts = freshness::FreshnessArgs::parse(rest)?;
             freshness::run(&opts).await
+        }
+        [group, sub, rest @ ..] if group == "db" && sub == "status" => {
+            if !rest.is_empty() {
+                return Err(
+                    "Usage: travel db status\n  (no arguments; reads Turso via turso-util)"
+                        .to_string(),
+                );
+            }
+            db_status::run().await
         }
         _ => Err(format!(
             "unknown command: {}\nRun `travel --help` for usage.",
