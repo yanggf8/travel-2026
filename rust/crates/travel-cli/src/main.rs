@@ -20,6 +20,7 @@ mod set_dates;
 mod set_day_theme;
 mod set_flight;
 mod set_hotel;
+mod set_route_segment;
 mod status;
 mod validate;
 mod view_bookings;
@@ -152,6 +153,24 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
             set_airport_transfer::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-route-segment" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes \"...\"] [--start-time HH:MM] [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_route_segment::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-route-segments-bulk" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-route-segments-bulk <day> --json '[{{...}}]' [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_route_segment::run_bulk(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
