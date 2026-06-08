@@ -16,6 +16,7 @@ mod plan;
 mod plan_resolver;
 mod plans;
 mod set_dates;
+mod set_day_theme;
 mod status;
 mod validate;
 mod view_bookings;
@@ -112,6 +113,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             // Resolve plan_id (TRAVEL_PLAN_ID env for now, matching TS CLI)
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
             set_dates::run(start, end, reason, plan_id).await.map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-day-theme" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-day-theme <day> [theme] [--zh \"<chinese_title>\"] [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_day_theme::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
