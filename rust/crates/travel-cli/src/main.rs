@@ -17,6 +17,7 @@ mod plan_resolver;
 mod plans;
 mod set_dates;
 mod set_day_theme;
+mod set_flight;
 mod set_hotel;
 mod status;
 mod validate;
@@ -132,6 +133,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
             set_hotel::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-flight" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-flight <outbound|return> [--dest slug] [--flight SL396] [--airline \"...\"] [--airline-code SL] [--from TPE] [--dep HH:MM] [--dep-terminal T1] [--to KIX] [--arr HH:MM] [--arr-terminal T2] [--date YYYY-MM-DD] [--booked-date YYYY-MM-DD]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_flight::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
