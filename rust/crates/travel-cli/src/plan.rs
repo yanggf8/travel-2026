@@ -161,6 +161,10 @@ pub struct DayView {
     /// `days.date` — surfaced for the next view port (itinerary header).
     #[allow(dead_code)]
     pub date: String,
+    /// `days.theme` — surfaced for the next view port (transport view day
+    /// header `Day N (date) - <theme>` suffix).
+    #[allow(dead_code)]
+    pub theme: String,
     pub sessions: HashMap<String, SessionView>, // "morning"|"noon"|"afternoon"|"evening"
 }
 
@@ -168,6 +172,10 @@ pub struct DayView {
 pub struct SessionView {
     pub time_range_start: String,
     pub time_range_end: String,
+    /// `timesofday.transit_notes` — surfaced for the next view port
+    /// (transport view per-session transit lines).
+    #[allow(dead_code)]
+    pub transit_notes: String,
     pub activities: Vec<ActivityView>,
 }
 
@@ -546,7 +554,7 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let mut rows = conn
         .query(
             &format!(
-                "SELECT day_number, date FROM days \
+                "SELECT day_number, date, theme FROM days \
                  WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
                  ORDER BY day_number"
             ),
@@ -561,9 +569,11 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     {
         let day_number: i64 = r.get(0).unwrap_or(0);
         let date: String = r.get(1).unwrap_or_default();
+        let theme: String = r.get(2).unwrap_or_default();
         view.days.push(DayView {
             day_number,
             date,
+            theme,
             sessions: HashMap::new(),
         });
     }
@@ -572,7 +582,7 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let mut rows = conn
         .query(
             &format!(
-                "SELECT day_number, session_type, time_range_start, time_range_end \
+                "SELECT day_number, session_type, time_range_start, time_range_end, transit_notes \
                  FROM timesofday \
                  WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
             ),
@@ -593,6 +603,7 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
                 SessionView {
                     time_range_start: r.get(2).unwrap_or_default(),
                     time_range_end: r.get(3).unwrap_or_default(),
+                    transit_notes: r.get(4).unwrap_or_default(),
                     activities: Vec::new(),
                 },
             );

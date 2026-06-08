@@ -372,7 +372,7 @@ fn status_icon(status: &str) -> &'static str {
 /// Output: `Fri, Feb 13, 2026` (comma after weekday, regular space, abbreviated
 /// month, numeric day, comma+year). Built from a hand-rolled weekday map (the
 /// pure Rust equivalent of JS Intl with en-US locale for these 4 fields).
-fn format_date(date_str: &str) -> String {
+pub(crate) fn format_date(date_str: &str) -> String {
     use chrono::{Datelike, NaiveDate};
     let d = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
         .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch"));
@@ -406,7 +406,7 @@ fn format_date(date_str: &str) -> String {
 
 /// en-US thousands separator (matches `Number.toLocaleString()` for non-negative
 /// integers). `2720 -> "2,720"`, `450 -> "450"`, `1000000 -> "1,000,000"`.
-fn locale_i64(n: i64) -> String {
+pub(crate) fn locale_i64(n: i64) -> String {
     if n == 0 {
         return "0".to_string();
     }
