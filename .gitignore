@@ -48,3 +48,4 @@ research/
 
 # Temp analysis/debug files in data/
 data/tmp_*
+tmp/

@@ -905,3 +905,104 @@ fn format_loc(r: &Issue) -> String {
         _ => String::new(),
     }
 }
+
+// ============================================================================
+// Date Range Validation (for set-dates command)
+// ============================================================================
+// Mirrors src/types/validation.ts validateDateRange exactly.
+// Error messages must be byte-identical for CLI parity.
+
+use chrono::NaiveDate;
+
+/// Validate date range (start, end) and return days on success.
+/// Faithful port of validateDateRange (src/types/validation.ts), which calls
+/// validateIsoDate(field) for each date then checks start<=end. Error TEXT must be
+/// byte-identical to TS (verified against live `set-dates` output). NO max-days cap —
+/// TS has none (a 425-day range is valid).
+pub fn validate_date_range(start: &str, end: &str) -> Result<u32, String> {
+    validate_iso_date(start, "start date")?;
+    validate_iso_date(end, "end date")?;
+    // Both are valid ISO dates here.
+    let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
+    let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap();
+    if start_date > end_date {
+        return Err(format!(
+            "Start date ({start}) cannot be after end date ({end})"
+        ));
+    }
+    // TS: Math.ceil((end-start)/day) + 1. For midnight ISO dates this is the
+    // inclusive day count.
+    let days = (end_date - start_date).num_days() as u32 + 1;
+    Ok(days)
+}
+
+/// Port of validateIsoDate(input, fieldName): required → format (YYYY-MM-DD) →
+/// real-date validity. Matches the TS error strings exactly.
+fn validate_iso_date(input: &str, field: &str) -> Result<(), String> {
+    if input.is_empty() {
+        return Err(format!("{field} is required"));
+    }
+    // ^(\d{4})-(\d{2})-(\d{2})$
+    let bytes = input.as_bytes();
+    let well_formed = input.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && input[0..4].bytes().all(|b| b.is_ascii_digit())
+        && input[5..7].bytes().all(|b| b.is_ascii_digit())
+        && input[8..10].bytes().all(|b| b.is_ascii_digit());
+    if !well_formed {
+        return Err(format!(
+            "{field} must be YYYY-MM-DD format (got: \"{input}\")"
+        ));
+    }
+    // Real calendar date? (e.g. 2026-13-99 is well-formed but invalid.)
+    if NaiveDate::parse_from_str(input, "%Y-%m-%d").is_err() {
+        return Err(format!("{field} is not a valid date: \"{input}\""));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod date_range_tests {
+    use super::*;
+
+    #[test]
+    fn valid_ranges() {
+        assert_eq!(validate_date_range("2026-02-13", "2026-02-17").unwrap(), 5);
+        assert_eq!(validate_date_range("2026-06-15", "2026-06-20").unwrap(), 6);
+        // No 365 cap in TS — a 425-day range is valid.
+        assert_eq!(validate_date_range("2026-01-01", "2027-03-01").unwrap(), 425);
+    }
+
+    #[test]
+    fn start_after_end_has_dates_in_message() {
+        assert_eq!(
+            validate_date_range("2026-03-05", "2026-03-01"),
+            Err("Start date (2026-03-05) cannot be after end date (2026-03-01)".to_string())
+        );
+    }
+
+    #[test]
+    fn bad_format_message() {
+        assert_eq!(
+            validate_date_range("2026/03/01", "2026-03-05"),
+            Err("start date must be YYYY-MM-DD format (got: \"2026/03/01\")".to_string())
+        );
+    }
+
+    #[test]
+    fn invalid_date_message() {
+        assert_eq!(
+            validate_date_range("2026-13-99", "2026-03-05"),
+            Err("start date is not a valid date: \"2026-13-99\"".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_required_message() {
+        assert_eq!(
+            validate_date_range("", "2026-03-05"),
+            Err("start date is required".to_string())
+        );
+    }
+}

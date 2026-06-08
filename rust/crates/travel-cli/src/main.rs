@@ -14,6 +14,7 @@ mod offers;
 mod plan;
 mod plan_resolver;
 mod plans;
+mod set_dates;
 mod status;
 mod validate;
 mod view_bookings;
@@ -88,6 +89,29 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let full = rest.iter().any(|a| a == "--full");
             status::run(full).await
+        }
+        [cmd, rest @ ..] if cmd == "set-dates" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-dates <start> <end> [reason]");
+                return Ok(());
+            }
+            // Parse: set-dates <start> <end> [reason...]
+            if rest.len() < 2 {
+                eprintln!("Error: set-dates requires <start> and <end> dates");
+                eprintln!("Example: set-dates 2026-02-13 2026-02-17 \"Agent offered Feb 13\"");
+                std::process::exit(1);
+            }
+            let start = rest[0].clone();
+            let end = rest[1].clone();
+            let reason = if rest.len() > 2 {
+                Some(rest[2..].join(" "))
+            } else {
+                None
+            };
+            // Resolve plan_id (TRAVEL_PLAN_ID env for now, matching TS CLI)
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_dates::run(start, end, reason, plan_id).await.map_err(|e| e.to_string())?;
+            Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
         [cmd, rest @ ..] if cmd == "itinerary" => view_itinerary::run(rest).await,
