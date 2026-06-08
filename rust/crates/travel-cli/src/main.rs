@@ -3,6 +3,7 @@ mod compare;
 mod compare_dates;
 mod compare_true_cost;
 mod db;
+mod db_exec;
 mod db_status;
 mod destination_ref;
 mod flights;
@@ -80,6 +81,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             db_status::run().await
         }
+        [group, sub, rest @ ..] if group == "db" && sub == "exec" => db_exec::run(rest).await,
         _ => Err(format!(
             "unknown command: {}\nRun `travel --help` for usage.",
             args.join(" ")

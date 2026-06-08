@@ -89,6 +89,20 @@ pub(crate) async fn connect_read() -> Result<libsql::Connection, String> {
         .map_err(|err| format!("failed to open Turso connection: {err}"))
 }
 
+/// Write-tier connection for db:exec / db:migrate / sync commands. Same
+/// resolution path as read (env token → cache → mint) but with the
+/// `TRAVEL_TURSO_WRITE_TOKEN` env / write cache. Failures bubble up with a
+/// actionable message naming the write env var.
+pub(crate) async fn connect_write() -> Result<libsql::Connection, String> {
+    let credential = resolve_travel_token(TokenTier::Write)?;
+    let db = libsql::Builder::new_remote(credential.url, credential.token)
+        .build()
+        .await
+        .map_err(|err| format!("failed to connect to Turso: {err}"))?;
+    db.connect()
+        .map_err(|err| format!("failed to open Turso connection: {err}"))
+}
+
 fn normalize_country(country_or_market: &str) -> String {
     match country_or_market.to_ascii_lowercase().as_str() {
         "tw" => "taiwan".to_string(),
