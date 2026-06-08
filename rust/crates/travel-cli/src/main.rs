@@ -21,6 +21,7 @@ mod set_day_theme;
 mod set_flight;
 mod set_hotel;
 mod set_route_segment;
+mod set_tod;
 mod status;
 mod validate;
 mod view_bookings;
@@ -171,6 +172,33 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
             set_route_segment::run_bulk(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-tod-focus" || cmd == "set-session-focus" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-tod-focus <day> <session> \"<focus_text>\"");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_tod::run_focus(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-tod-time-range" || cmd == "set-session-time-range" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_tod::run_time_range(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-tod-zh" || cmd == "set-session-zh" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-tod-zh <day> <session> [--zh \"...\"] [--transit-zh \"...\"] [--activities-zh-json '[\"...\"]'] [--meals-zh-json '[\"...\"]'] [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_tod::run_zh(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
