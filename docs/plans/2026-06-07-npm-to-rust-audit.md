@@ -358,10 +358,25 @@ Estimate: 3-6 weeks depending on how many mutation commands are still actively u
   resolver). Port `src/cli/shared/plan-resolver.ts` (--plan-id/--travel-date/active-plan,
   ~200 LOC, pure DB read) when the first MUTATION lands — mutations need it.
 - plan.rs now reads 16 tables (~590 net lines).
-- ⏳ NOT STARTED: all mutations + the cascade runner. Reads-before-writes,
-  cascade LAST. **The first mutation (`set-dates`, which triggers cascade) should be
-  done with before/after Turso row diffs and a human-reviewed pass — byte-parity on
-  CLI output does NOT catch a wrong cascade dirty-flag or a missed child-row write.**
+- ✅ MUTATIONS started (2026-06-09): the plan-resolver is ported, and 8 mutations are done +
+  verified by before/after DB-row diff on the disposable `test-set-dates-2026` plan
+  (scripts/seed-test-plan.ts seeds/resets it; tokyo/kyoto never mutated):
+  `set-dates` (the cascade write — date_anchors + 4 dirty flags + event + operation_runs +
+  version, process_statuses/plan_root_date_anchor UNCHANGED) and the no-cascade setters
+  `set-day-theme`, `set-hotel`, `set-flight`, `set-airport-transfer`, `set-route-segment(s)`,
+  `set-tod-focus/time-range/zh`, `set-activity-time/title`. All byte-identical to TS (DB rows
+  + CLI stdout). The write pattern (db::connect_write + targeted UPDATE/INSERT +
+  operation_runs + version+1, mirroring syncNormalizedTables DELETE-then-reinsert) is the
+  template for remaining mutations.
+  > Verification caught (and fixed) parity bugs the handoff reports missed — the gate is the
+  > DB-row diff, NOT passing unit tests (tests can encode the bug): e.g. set-tod-zh wrote
+  > "null" vs TS "undefined" for omitted zh fields (fixed, commit 6112608); derive_plan_id,
+  > validate_date_range, format_date had similar caught-in-review divergences earlier.
+- ⏳ NOT STARTED: the CASCADE-triggering offer mutations + the rest. **`select-offer` /
+  `update-offer` fire the populate-P3+P4 cascade (the most complex side-effect in the
+  system) — me-led / closely-reviewed, NOT a pure handoff.** Then offer/tour-group ingestion,
+  shaping (6), itinerary builders (scaffold/populate), ops (sync-bookings, fetch-weather,
+  run-*), and ~10 remaining reads. Cascade runner generalization LAST.
 
 > Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
 > parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
@@ -421,7 +436,16 @@ Suggested tracking table per command:
 | `view:transport` | `travel transport` | done | done | no | Phase 4 read view, byte-parity (tokyo+kyoto) |
 | `view:itinerary` | `travel itinerary` | done | done | no | Phase 4 read view, byte-parity both formats |
 | `view:prices` | `travel view-prices` | deferred | n/a | no | Phase 4; no testable flight data (null departure_date) |
-| `set-dates` | `travel set-dates` | pending | pending | no | Phase 4 (first mutation; triggers cascade) |
+| `set-dates` | `travel set-dates` | done | done | no | Phase 4 first mutation; cascade write, DB-row parity (re-verified) |
+| `set-day-theme` | `travel set-day-theme` | done | done | no | Phase 4 setter; no-cascade, DB-row parity |
+| `set-hotel` | `travel set-hotel` | done | done | no | Phase 4 setter; hotels + hotel_access_lines, DB-row parity |
+| `set-flight` | `travel set-flight` | done | done | no | Phase 4 setter; flight_legs (shared airline fields), DB-row parity |
+| `set-airport-transfer` | `travel set-airport-transfer` | done | done | no | Phase 4 setter; transfers + candidates, djb2 int32 hash, DB-row parity |
+| `set-route-segment(s)` | `travel set-route-segment[-s-bulk]` | done | done | no | Phase 4 setter; day_route_segments, DB-row parity |
+| `set-tod-*` / `set-session-*` | `travel set-tod-focus/time-range/zh` | done | done | no | Phase 4 setter; timesofday + session_activities_zh, DB-row parity (set-tod-zh "undefined"-KV bug fixed in review) |
+| `set-activity-time/title` | `travel set-activity-time/title` | done | done | no | Phase 4 setter; activities, DB-row parity |
+| `select-offer` | `travel select-offer` | pending | pending | no | Phase 4; fires populate-P3+P4 cascade — me-led/closely-reviewed |
+| `update-offer` | `travel update-offer` | pending | pending | no | Phase 4; cascade — me-led/closely-reviewed |
 
 ## Verification Method
 
