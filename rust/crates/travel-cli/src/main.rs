@@ -1,5 +1,7 @@
 mod bookings;
 mod compare;
+mod compare_dates;
+mod compare_true_cost;
 mod db;
 mod destination_ref;
 mod flights;
@@ -31,6 +33,22 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [group, sub, rest @ ..] if group == "leave" && sub == "calc" => leave_calc(rest).await,
         [group, sub, rest @ ..] if group == "compare" && sub == "trips" => {
             compare_trips(rest).await
+        }
+        [group, sub, rest @ ..] if group == "compare" && sub == "dates" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel compare dates --start YYYY-MM-DD --end YYYY-MM-DD [--nights N] [--hotel-per-night TWD] [--market taiwan] [--region r] [--destination d] [--pax N] [--baggage-fee TWD]");
+                return Ok(());
+            }
+            let opts = compare_dates::CompareDatesArgs::parse(rest)?;
+            compare_dates::run(&opts).await
+        }
+        [group, sub, rest @ ..] if group == "compare" && (sub == "true-cost" || sub == "truecost") => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel compare true-cost --region <name> [--date YYYY-MM-DD] [--pax N] [--itinerary \"kyoto:1,osaka:2\"] [--jpy-rate N]");
+                return Ok(());
+            }
+            let opts = compare_true_cost::TrueCostArgs::parse(rest)?;
+            compare_true_cost::run(&opts).await
         }
         [group, sub, rest @ ..] if group == "normalize" && sub == "flights" => {
             normalize_flights(rest)
