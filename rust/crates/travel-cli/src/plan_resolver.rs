@@ -240,16 +240,62 @@ pub fn format_plan_list_for_resolver(plans: &[PlanSummary]) -> String {
 /// `slug.replace(/_/g, '-')`; we also strip a trailing file
 /// extension (the `--plan-path` source is typically a `.md` path).
 /// For full parity with `StateManager.derivePlanId()` see TODO below.
-fn derive_plan_id(path: &str) -> String {
-    // TODO: full toPlanId parity — TS uses path.basename then strips
-    // extensions. For the common case (--plan-path tokvo_2026.md)
-    // this is sufficient.
-    let basename = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    let stem = basename
-        .rsplit_once('.')
-        .map(|(s, _)| s)
-        .unwrap_or(basename);
-    stem.replace('_', "-")
+/// Faithful port of `StateManager.derivePlanId(planPath)` (src/state/state-manager.ts:171).
+/// `data/trips/<X>/...` → `<X>`; everything else → `path:<sha1(canonical_path)[:12]>`.
+/// Canonicalization mirrors TS: realpath (std::fs::canonicalize) of the resolved path,
+/// falling back to the plain absolute path when realpath fails (non-existent file).
+/// Backslashes normalized to '/'. NOTE: --plan-path is largely vestigial in the DB-only
+/// world; this exists for parity with the TS resolver's branch #3.
+fn derive_plan_id(plan_path: &str) -> String {
+    use sha1::{Digest, Sha1};
+    use std::path::Path;
+
+    let normalize = |p: &str| p.replace('\\', "/");
+    let canonical_abs = |p: &str| -> String {
+        let abs = std::path::absolute(p)
+            .unwrap_or_else(|_| Path::new(p).to_path_buf());
+        let canon = std::fs::canonicalize(&abs).unwrap_or(abs);
+        normalize(&canon.to_string_lossy())
+    };
+
+    let canonical_path = canonical_abs(plan_path);
+    let cwd = std::env::current_dir()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let cwd_canon = canonical_abs(&cwd);
+
+    // path.relative(cwd_canon, canonical_path), normalized.
+    let rel = path_relative(&cwd_canon, &canonical_path);
+
+    // ^data/trips/([^/]+)/
+    #[allow(clippy::collapsible_if)]
+    if let Some(rest) = rel.strip_prefix("data/trips/") {
+        if let Some((seg, tail)) = rest.split_once('/') {
+            if !seg.is_empty() && !tail.is_empty() {
+                return seg.to_string();
+            }
+        }
+    }
+
+    let hash = Sha1::digest(canonical_path.as_bytes());
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    format!("path:{}", &hex[..12])
+}
+
+/// Minimal POSIX `path.relative(from, to)` for already-normalized absolute paths
+/// (forward slashes). Matches Node's path.relative for the inputs derive_plan_id feeds it.
+fn path_relative(from: &str, to: &str) -> String {
+    let from_parts: Vec<&str> = from.split('/').filter(|s| !s.is_empty()).collect();
+    let to_parts: Vec<&str> = to.split('/').filter(|s| !s.is_empty()).collect();
+    let common = from_parts
+        .iter()
+        .zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let ups = from_parts.len() - common;
+    let mut out: Vec<String> = std::iter::repeat_n("..".to_string(), ups).collect();
+    out.extend(to_parts[common..].iter().map(|s| s.to_string()));
+    out.join("/")
 }
 
 /// Mirror of `todayIso()` plus the `TRAVEL_TODAY` env override. The
@@ -682,15 +728,26 @@ mod tests {
         assert_eq!(r.source, SRC_ENV);
     }
 
-    // 3. plan-path
+    // 3. plan-path — derive_plan_id mirrors StateManager.derivePlanId:
+    //    data/trips/<X>/ → <X>; anything else → path:<sha1[:12]>.
     #[test]
     fn plan_path_derives_id() {
         let plans = vec![fixture("tokyo-2026", vec![("tokyo", "2026-02-13", "2026-02-17")], None, "2026-01-01")];
+        // data/trips/<X>/ path → clean id <X>
         let mut input = empty_input();
-        input.plan_path = Some("docs/trips/tokyo_2026.md".to_string());
+        let cwd = std::env::current_dir().unwrap();
+        let trips = cwd.join("data/trips/tokyo-2026/plan.md");
+        input.plan_path = Some(trips.to_string_lossy().into_owned());
         let r = resolve_plan_from_summaries(&input, &plans).unwrap();
         assert_eq!(r.plan_id, "tokyo-2026");
         assert_eq!(r.source, SRC_PLAN_PATH);
+
+        // non-trips path → hashed id (NOT a slug transform), still source plan-path
+        let mut input2 = empty_input();
+        input2.plan_path = Some("docs/trips/tokyo_2026.md".to_string());
+        let r2 = resolve_plan_from_summaries(&input2, &plans).unwrap();
+        assert!(r2.plan_id.starts_with("path:"), "expected path:<hash>, got {}", r2.plan_id);
+        assert_eq!(r2.source, SRC_PLAN_PATH);
     }
 
     // 4. date hit
@@ -912,9 +969,21 @@ mod tests {
 
     // Bonus: derive_plan_id strips extension and swaps _ -> -
     #[test]
-    fn derive_plan_id_basic() {
-        assert_eq!(derive_plan_id("tokyo_2026.md"), "tokyo-2026");
-        assert_eq!(derive_plan_id("docs/trips/kyoto_2026.md"), "kyoto-2026");
-        assert_eq!(derive_plan_id("kansai_2026"), "kansai-2026");
+    fn derive_plan_id_data_trips_match() {
+        // ^data/trips/<X>/ → <X> (relative to cwd). Use an absolute cwd-rooted path
+        // so canonicalize-fallback yields a deterministic relative path.
+        let cwd = std::env::current_dir().unwrap();
+        let p = cwd.join("data/trips/tokyo-2026/plan.md");
+        assert_eq!(derive_plan_id(p.to_str().unwrap()), "tokyo-2026");
+    }
+
+    #[test]
+    fn derive_plan_id_non_trips_is_hashed() {
+        // Anything not under data/trips/<X>/ → path:<sha1[:12]>, NOT a slug transform.
+        let id = derive_plan_id("tokyo_2026.md");
+        assert!(id.starts_with("path:"), "expected path:<hash>, got {id}");
+        assert_eq!(id.len(), 5 + 12); // "path:" + 12 hex chars
+        // Deterministic for the same input.
+        assert_eq!(derive_plan_id("tokyo_2026.md"), id);
     }
 }
