@@ -21,9 +21,11 @@
 //   9.  hotel_access_lines           (child rows)
 //   10. plan_offer_selection
 //   11. plan_offer_includes           (child rows, joined via selection)
-//   12. days
-//   13. timesofday                   (time_range_start/end)
-//   14. activities
+//   12. days                         (incl. weather_* scalars, day_type)
+//   13. timesofday                   (incl. focus, transit_notes)
+//   14. activities                   (incl. book_by)
+//   15. session_meals                (child rows; ordered by sort_order)
+//   16. day_route_segments           (child rows; ordered by day_number, sort_order)
 //
 // Tables NOT covered (extensibility hooks for the next view port):
 //   plan_offers, plan_offer_flights, plan_offer_hotels, plan_offer_date_pricing,
@@ -34,8 +36,8 @@
 //   cascade_triggers, cascade_trigger_resets, cascade_trigger_populate_map,
 //   cascade_global_state, plan_root_date_anchor, plan_schema_contract (+_nodes),
 //   plan_process_precedence (+_entries), plan_date_anchor_flex_dates,
-//   plan_budget, day_route_segments, day_landmarks, session_activities_zh,
-//   session_meals, activity_tags, transportation_extras, transport_extra_candidates,
+//   plan_budget, day_landmarks, session_activities_zh,
+//   activity_tags, transportation_extras, transport_extra_candidates,
 //   accommodation_location_zone, location_zone_candidates, itinerary_metadata,
 //   itinerary_transit_key_lines, destination_*, plans (versions),
 //   offers, destinations, events, bookings_*, hotels extra cols (name_zh),
@@ -73,6 +75,11 @@ pub struct PlanView {
     #[allow(dead_code)]
     pub offer_includes: Vec<String>,
     pub days: Vec<DayView>,                                      // ordered by day_number
+    /// Per-day route segments from `day_route_segments` (keyed by
+    /// `day_number`). Consumed by the itinerary view (per-day ROUTE
+    /// block). `status.rs` does not surface it.
+    #[allow(dead_code)]
+    pub route_segments: HashMap<i32, Vec<RouteSegment>>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,10 +169,29 @@ pub struct DayView {
     #[allow(dead_code)]
     pub date: String,
     /// `days.theme` — surfaced for the next view port (transport view day
-    /// header `Day N (date) - <theme>` suffix).
+    /// header `Day N (date) - <theme>` suffix; itinerary `Theme: <theme>` line).
     #[allow(dead_code)]
     pub theme: String,
+    /// `days.day_type` — surfaced for the next view port (itinerary
+    /// `Day N (date) ✈️ ARRIVAL|DEPARTURE` suffix).
+    #[allow(dead_code)]
+    pub day_type: String,
+    /// `days.weather_*` scalars joined into a single struct. Surfaced for
+    /// the next view port (itinerary weather line).
+    #[allow(dead_code)]
+    pub weather: Option<DayWeather>,
     pub sessions: HashMap<String, SessionView>, // "morning"|"noon"|"afternoon"|"evening"
+}
+
+#[derive(Debug, Clone)]
+pub struct DayWeather {
+    pub weather_label: String,
+    pub temp_low_c: f64,
+    pub temp_high_c: f64,
+    pub precipitation_pct: f64,
+    pub weather_code: i64,
+    pub source_id: String,
+    pub sourced_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -173,9 +199,18 @@ pub struct SessionView {
     pub time_range_start: String,
     pub time_range_end: String,
     /// `timesofday.transit_notes` — surfaced for the next view port
-    /// (transport view per-session transit lines).
+    /// (transport view per-session transit lines, itinerary per-session
+    /// `    🚃 <notes>` line).
     #[allow(dead_code)]
     pub transit_notes: String,
+    /// `timesofday.focus` — surfaced for the next view port (itinerary
+    /// `【Session】 <focus>` line).
+    #[allow(dead_code)]
+    pub focus: String,
+    /// Items from `session_meals` child table, ordered by `sort_order`.
+    /// Surfaced for the next view port (itinerary `    🍽️  <meals>` line).
+    #[allow(dead_code)]
+    pub meals: Vec<String>,
     pub activities: Vec<ActivityView>,
 }
 
@@ -188,10 +223,29 @@ pub struct ActivityView {
     pub is_fixed_time: bool,
     pub start_time: String,
     pub end_time: String,
+    /// `activities.book_by` — surfaced for the next view port (itinerary
+    /// per-activity ` (book by <date>)` suffix when `booking_status` is
+    /// `pending`, and PENDING BOOKINGS section `(by <date>)` suffix).
+    #[allow(dead_code)]
+    pub book_by: String,
     /// `activities.sort_order` — surfaced for the next view port (itinerary
     /// preserves DB order without re-sorting on the client).
     #[allow(dead_code)]
     pub sort_order: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RouteSegment {
+    pub from_place: String,
+    pub to_place: String,
+    pub mode: String,
+    pub duration_min: Option<i64>,
+    pub notes: Option<String>,
+    /// `day_route_segments.start_time` — surfaced for the next view port
+    /// (e.g. itinerary segment with explicit start time). Not used by the
+    /// current itinerary view (we render by sort order).
+    #[allow(dead_code)]
+    pub start_time: Option<String>,
 }
 
 /// Load a `PlanView` for the given `plan_id`. Throws if `plan_metadata` has
@@ -554,7 +608,10 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let mut rows = conn
         .query(
             &format!(
-                "SELECT day_number, date, theme FROM days \
+                "SELECT day_number, date, theme, day_type, weather_label, temp_low_c, \
+                        temp_high_c, precipitation_pct, weather_code, weather_source_id, \
+                        weather_sourced_at \
+                 FROM days \
                  WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
                  ORDER BY day_number"
             ),
@@ -570,10 +627,27 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
         let day_number: i64 = r.get(0).unwrap_or(0);
         let date: String = r.get(1).unwrap_or_default();
         let theme: String = r.get(2).unwrap_or_default();
+        let day_type: String = r.get(3).unwrap_or_default();
+        let weather_label: String = r.get(4).unwrap_or_default();
+        let weather = if weather_label.is_empty() {
+            None
+        } else {
+            Some(DayWeather {
+                weather_label,
+                temp_low_c: r.get::<f64>(5).unwrap_or(0.0),
+                temp_high_c: r.get::<f64>(6).unwrap_or(0.0),
+                precipitation_pct: r.get::<f64>(7).unwrap_or(0.0),
+                weather_code: r.get::<i64>(8).unwrap_or(0),
+                source_id: r.get(9).unwrap_or_default(),
+                sourced_at: r.get(10).unwrap_or_default(),
+            })
+        };
         view.days.push(DayView {
             day_number,
             date,
             theme,
+            day_type,
+            weather,
             sessions: HashMap::new(),
         });
     }
@@ -582,7 +656,8 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let mut rows = conn
         .query(
             &format!(
-                "SELECT day_number, session_type, time_range_start, time_range_end, transit_notes \
+                "SELECT day_number, session_type, time_range_start, time_range_end, \
+                        transit_notes, focus \
                  FROM timesofday \
                  WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
             ),
@@ -604,6 +679,8 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
                     time_range_start: r.get(2).unwrap_or_default(),
                     time_range_end: r.get(3).unwrap_or_default(),
                     transit_notes: r.get(4).unwrap_or_default(),
+                    focus: r.get(5).unwrap_or_default(),
+                    meals: Vec::new(),
                     activities: Vec::new(),
                 },
             );
@@ -616,7 +693,7 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
         .query(
             &format!(
                 "SELECT day_number, session_type, sort_order, title, booking_required, \
-                        booking_status, booking_ref, is_fixed_time, start_time, end_time \
+                        booking_status, booking_ref, is_fixed_time, start_time, end_time, book_by \
                  FROM activities \
                  WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
                  ORDER BY day_number, session_type, sort_order"
@@ -641,6 +718,7 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
             is_fixed_time: r.get::<i64>(7).unwrap_or(0) != 0,
             start_time: r.get(8).unwrap_or_default(),
             end_time: r.get(9).unwrap_or_default(),
+            book_by: r.get(10).unwrap_or_default(),
             sort_order,
         };
         if let Some(d) = view.days.iter_mut().find(|d| d.day_number == day_number)
@@ -648,6 +726,72 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
         {
             s.activities.push(act);
         }
+    }
+
+    // 15. session_meals (child rows; ordered by sort_order). Grouped into
+    // SessionView.meals (Vec<String>) by (day_number, session_type).
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT day_number, session_type, sort_order, meal \
+                 FROM session_meals \
+                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
+                 ORDER BY day_number, session_type, sort_order"
+            ),
+            (),
+        )
+        .await
+        .map_err(|e| format!("session_meals: {e}"))?;
+    while let Some(r) = rows
+        .next()
+        .await
+        .map_err(|e| format!("session_meals row: {e}"))?
+    {
+        let day_number: i64 = r.get(0).unwrap_or(0);
+        let session_type: String = r.get(1).unwrap_or_default();
+        let meal: String = r.get(3).unwrap_or_default();
+        if meal.is_empty() {
+            continue;
+        }
+        if let Some(d) = view.days.iter_mut().find(|d| d.day_number == day_number)
+            && let Some(s) = d.sessions.get_mut(&session_type)
+        {
+            s.meals.push(meal);
+        }
+    }
+
+    // 16. day_route_segments (per-day ROUTE block). Grouped by day_number.
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT day_number, sort_order, from_place, to_place, mode, \
+                        duration_min, notes, start_time \
+                 FROM day_route_segments \
+                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
+                 ORDER BY day_number, sort_order"
+            ),
+            (),
+        )
+        .await
+        .map_err(|e| format!("day_route_segments: {e}"))?;
+    while let Some(r) = rows
+        .next()
+        .await
+        .map_err(|e| format!("day_route_segments row: {e}"))?
+    {
+        let day_number: i64 = r.get(0).unwrap_or(0);
+        let seg = RouteSegment {
+            from_place: r.get(2).unwrap_or_default(),
+            to_place: r.get(3).unwrap_or_default(),
+            mode: r.get(4).unwrap_or_default(),
+            duration_min: r.get::<Option<i64>>(5).ok().flatten(),
+            notes: r.get::<Option<String>>(6).ok().flatten(),
+            start_time: r.get::<Option<String>>(7).ok().flatten(),
+        };
+        view.route_segments
+            .entry(day_number as i32)
+            .or_default()
+            .push(seg);
     }
 
     Ok(view)
