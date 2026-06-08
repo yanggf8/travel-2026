@@ -301,19 +301,21 @@ pub async fn run_zh(
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
 
     // Event data: {day_number, session, focus_zh, transit_notes_zh,
-    // activities_zh, meals_zh} — all 6 keys present, with null for
-    // fields the user did not provide (TS eventDataToKv flattens
-    // null → "null" string).
+    // activities_zh, meals_zh} — all 6 keys present. The TS event `data`
+    // object carries the raw command fields, which are JS `undefined` when
+    // the user omits the flag; eventDataToKv does String(undefined) →
+    // "undefined" (verified against TS: omitted zh fields all serialize as
+    // the literal "undefined", NOT "null").
     let kv: Vec<(&str, String)> = vec![
         ("day_number", parsed.day.to_string()),
         ("session", parsed.session.clone()),
         (
             "focus_zh",
-            parsed.focus_zh.clone().unwrap_or_else(|| "null".to_string()),
+            parsed.focus_zh.clone().unwrap_or_else(|| "undefined".to_string()),
         ),
         (
             "transit_notes_zh",
-            parsed.transit_zh.clone().unwrap_or_else(|| "null".to_string()),
+            parsed.transit_zh.clone().unwrap_or_else(|| "undefined".to_string()),
         ),
         (
             "activities_zh",
@@ -321,7 +323,7 @@ pub async fn run_zh(
                 .activities_zh
                 .as_ref()
                 .map(|a| a.join(", "))
-                .unwrap_or_else(|| "null".to_string()),
+                .unwrap_or_else(|| "undefined".to_string()),
         ),
         (
             "meals_zh",
@@ -329,7 +331,7 @@ pub async fn run_zh(
                 .meals_zh
                 .as_ref()
                 .map(|m| m.join(", "))
-                .unwrap_or_else(|| "null".to_string()),
+                .unwrap_or_else(|| "undefined".to_string()),
         ),
     ];
 
