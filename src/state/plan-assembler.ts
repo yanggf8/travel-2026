@@ -8,6 +8,10 @@ type R = Record<string, any>;
 
 function num(v: any): number | null { return v != null ? Number(v) : null; }
 function bool(v: any): boolean { return v === 1 || v === '1' || v === true; }
+function finiteNum(v: any): number | null {
+  const n = num(v);
+  return n !== null && Number.isFinite(n) ? n : null;
+}
 
 /** Strip null values from a DB row — Zod optional() accepts undefined but not null. */
 function coerceRow<T extends Record<string, unknown>>(row: T): T {
@@ -239,7 +243,15 @@ export function assemblePlan(
             offer.date_pricing = {};
             for (const d of dp) offer.date_pricing[d.date] = { price: num(d.price), availability: d.availability, seats_remaining: num(d.seats_remaining) };
           }
-          if (bv) offer.best_value = { date: bv.best_date, price: num(bv.best_price) };
+          const bestPrice = finiteNum(bv?.best_price);
+          if (bv?.best_date && bestPrice !== null) {
+            const pax = finiteNum(plan.budget?.pax) ?? 2;
+            offer.best_value = {
+              date: bv.best_date,
+              price_per_person: bestPrice,
+              price_total: finiteNum(o.price_total) ?? bestPrice * pax,
+            };
+          }
           return offer;
         }),
         selection: sel ? { offer_id: sel.selected_offer_id, date: sel.selected_date, selected_at: sel.selected_at } : undefined,

@@ -1127,6 +1127,10 @@ export class PlanRepository implements StateRepository {
             statements.push(`INSERT INTO plan_offer_date_pricing (plan_id, destination, offer_id, date, price, availability, seats_remaining) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(date)}, ${sqlInt(d.price as number)}, ${sqlText(d.availability as string)}, ${sqlInt(d.seats_remaining as number)})`);
           }
         }
+        const bestValue = o.best_value as Record<string, unknown> | undefined;
+        if (bestValue?.date && bestValue.price_per_person !== undefined) {
+          statements.push(`INSERT INTO plan_offer_best_value (plan_id, destination, offer_id, best_date, best_price, currency) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(o.id as string)}, ${sqlText(bestValue.date as string)}, ${sqlInt(bestValue.price_per_person as number)}, ${sqlText((o.currency as string) ?? 'TWD')})`);
+        }
       }
 
       // offer selection
@@ -1351,5 +1355,4 @@ export class PlanRepository implements StateRepository {
     };
   }
 }
-
 
