@@ -1,0 +1,448 @@
+// `travel db query-offers` — read the raw `offers` table with trip-criteria
+// filters. Ports scripts/turso-query-offers.ts. Read-only, plain text.
+//
+// Differences from the TS original (intentional, per the migration plan):
+//   - `--json` flag removed; the migration removes user-facing JSON output
+//     in the root CLI. Plain table is the only output mode.
+//   - Null values render as `-` or empty (the TS unwrapTursoCell path leaked
+//     `{"type":"null"}` strings when the libsql cell wrapper slipped through;
+//     this port cleans that up).
+//   - Filters and column list are the same as TS.
+
+use crate::db;
+use libsql::Value;
+use std::process;
+
+const DEFAULT_LIMIT: i64 = 50;
+const NAME_TRUNCATE: usize = 40;
+const AGE_TRUNCATE: usize = 6;
+
+#[derive(Default)]
+pub struct QueryOffersArgs {
+    pub destination: Option<String>,
+    pub region: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub sources: Option<String>,
+    pub kind: Option<String>,
+    pub max_price: Option<i64>,
+    pub fresh_hours: Option<i64>,
+    pub limit: i64,
+    pub include_undated: bool,
+    pub show_sql: bool,
+}
+
+impl QueryOffersArgs {
+    pub fn parse(args: &[String]) -> Result<Self, String> {
+        let mut o = QueryOffersArgs {
+            limit: DEFAULT_LIMIT,
+            ..Default::default()
+        };
+        let mut i = 0;
+        while i < args.len() {
+            let key = args[i].as_str();
+            let val = || {
+                args.get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| format!("{key} requires a value"))
+            };
+            match key {
+                "--destination" => o.destination = Some(val()?),
+                "--region" => o.region = Some(val()?),
+                "--start" => o.start = Some(val()?),
+                "--end" => o.end = Some(val()?),
+                "--sources" => o.sources = Some(val()?),
+                "--type" => o.kind = Some(val()?),
+                "--max-price" => {
+                    o.max_price = Some(
+                        val()?
+                            .parse()
+                            .map_err(|_| "--max-price must be an integer".to_string())?,
+                    )
+                }
+                "--fresh-hours" => {
+                    o.fresh_hours = Some(
+                        val()?
+                            .parse()
+                            .map_err(|_| "--fresh-hours must be an integer".to_string())?,
+                    )
+                }
+                "--max" => {
+                    o.limit = val()?
+                        .parse()
+                        .map_err(|_| "--max must be an integer".to_string())?
+                }
+                "--include-undated" => o.include_undated = true,
+                "--sql" => o.show_sql = true,
+                "--help" | "-h" => {
+                    print_usage();
+                    process::exit(0);
+                }
+                other => return Err(format!("unknown flag for query-offers: {other}")),
+            }
+            i += 2;
+        }
+        validate(&o)?;
+        Ok(o)
+    }
+}
+
+fn validate(o: &QueryOffersArgs) -> Result<(), String> {
+    if let Some(s) = &o.start
+        && !is_iso_date(s)
+    {
+        return Err(format!("Invalid --start date format: {s} (expected YYYY-MM-DD)"));
+    }
+    if let Some(e) = &o.end
+        && !is_iso_date(e)
+    {
+        return Err(format!("Invalid --end date format: {e} (expected YYYY-MM-DD)"));
+    }
+    if let (Some(s), Some(e)) = (&o.start, &o.end)
+        && s > e
+    {
+        return Err(format!("Invalid date range: --start {s} is after --end {e}"));
+    }
+    if let Some(t) = &o.kind
+        && !matches!(t.as_str(), "package" | "flight" | "hotel")
+    {
+        return Err(format!("Invalid --type: {t} (expected package|flight|hotel)"));
+    }
+    if let Some(p) = o.max_price
+        && p < 0
+    {
+        return Err(format!("Invalid --max-price: {p} (must be >= 0)"));
+    }
+    if let Some(f) = o.fresh_hours
+        && f < 0
+    {
+        return Err(format!("Invalid --fresh-hours: {f} (must be >= 0)"));
+    }
+    if o.limit <= 0 {
+        return Err(format!("Invalid --max: {} (must be > 0)", o.limit));
+    }
+    Ok(())
+}
+
+fn is_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit)
+}
+
+fn sql_quote(v: &str) -> String {
+    v.replace('\'', "''")
+}
+
+fn sql_quote_literal(v: &str) -> String {
+    format!("'{}'", sql_quote(v))
+}
+
+fn build_where(o: &QueryOffersArgs) -> String {
+    let mut conds: Vec<String> = Vec::new();
+    if let Some(d) = &o.destination {
+        conds.push(format!("destination = {}", sql_quote_literal(d)));
+    }
+    if let Some(r) = &o.region {
+        conds.push(format!("region = {}", sql_quote_literal(r)));
+    }
+    if o.start.is_some() || o.end.is_some() {
+        if !o.include_undated {
+            conds.push("departure_date IS NOT NULL".to_string());
+        }
+        if let Some(s) = &o.start {
+            let cond = if o.include_undated {
+                format!(
+                    "(departure_date IS NULL OR departure_date >= {})",
+                    sql_quote_literal(s)
+                )
+            } else {
+                format!("departure_date >= {}", sql_quote_literal(s))
+            };
+            conds.push(cond);
+        }
+        if let Some(e) = &o.end {
+            let cond = if o.include_undated {
+                format!(
+                    "(departure_date IS NULL OR departure_date <= {})",
+                    sql_quote_literal(e)
+                )
+            } else {
+                format!("departure_date <= {}", sql_quote_literal(e))
+            };
+            conds.push(cond);
+        }
+    }
+    if let Some(csv) = &o.sources {
+        let list: Vec<String> = csv
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(sql_quote_literal)
+            .collect();
+        if !list.is_empty() {
+            conds.push(format!("source_id IN ({})", list.join(",")));
+        }
+    }
+    if let Some(t) = &o.kind {
+        conds.push(format!("type = {}", sql_quote_literal(t)));
+    }
+    if let Some(p) = o.max_price {
+        conds.push(format!("price_per_person <= {p}"));
+    }
+    if let Some(f) = o.fresh_hours {
+        conds.push("scraped_at IS NOT NULL".to_string());
+        conds.push(format!(
+            "julianday(scraped_at) >= (julianday('now') - ({} / 24.0))",
+            f
+        ));
+    }
+    if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conds.join(" AND "))
+    }
+}
+
+fn build_sql(o: &QueryOffersArgs) -> String {
+    let where_clause = build_where(o);
+    // Single-line SQL to match TS .trim().replace(/\s+/g, ' ') behavior.
+    let mut sql = String::from(
+        "SELECT id, source_id, type, name, price_per_person, currency, \
+         departure_date, return_date, airline, hotel_name, scraped_at, \
+         (julianday('now') - julianday(scraped_at)) * 24.0 AS age_hours \
+         FROM offers",
+    );
+    if !where_clause.is_empty() {
+        sql.push(' ');
+        sql.push_str(&where_clause);
+    }
+    sql.push_str(
+        " ORDER BY \
+         CASE WHEN price_per_person IS NULL THEN 1 ELSE 0 END, \
+         price_per_person ASC, \
+         scraped_at DESC \
+         LIMIT ",
+    );
+    sql.push_str(&o.limit.to_string());
+    sql
+}
+
+fn value_to_string(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::Integer(n) => n.to_string(),
+        Value::Real(f) => f.to_string(),
+        Value::Text(s) => s.clone(),
+        Value::Blob(b) => format!("<blob {} bytes>", b.len()),
+    }
+}
+
+fn dash(v: &str) -> &str {
+    if v.is_empty() { "-" } else { v }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+fn format_age(scraped_at: &str) -> String {
+    if scraped_at.is_empty() {
+        return "?".to_string();
+    }
+    // Parse "YYYY-MM-DDTHH:MM:SS[.fff][Z|+hh:mm]". For freshness the
+    // precision beyond hours doesn't matter, so we accept several shapes.
+    let ts = parse_iso_to_ms(scraped_at);
+    let Some(ts) = ts else {
+        return "?".to_string();
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let hours = ((now - ts) as f64) / (1000.0 * 60.0 * 60.0);
+    let hours = hours.round() as i64;
+    if hours < 1 {
+        "<1h".to_string()
+    } else if hours < 24 {
+        format!("{hours}h")
+    } else {
+        format!("{}d", hours / 24)
+    }
+}
+
+fn parse_iso_to_ms(raw: &str) -> Option<i64> {
+    use chrono::NaiveDateTime;
+    if (raw.contains('Z') || raw.contains('+'))
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw)
+    {
+        return Some(dt.timestamp_millis());
+    }
+    let normalized = raw.replace(' ', "T");
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&normalized, fmt) {
+            return Some(dt.and_utc().timestamp_millis());
+        }
+    }
+    None
+}
+
+pub async fn run(opts: &QueryOffersArgs) -> Result<(), String> {
+    let sql = build_sql(opts);
+    if opts.show_sql {
+        println!("SQL: {sql}\n");
+    }
+
+    let conn = db::connect_read().await?;
+    let mut rows = conn
+        .query(&sql, ())
+        .await
+        .map_err(|err| format!("failed to query offers from Turso: {err}"))?;
+
+    let mut collected: Vec<[String; 11]> = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|err| format!("failed to read offer row: {err}"))?
+    {
+        let mut vals: [String; 11] = std::array::from_fn(|_| String::new());
+        for (i, slot) in vals.iter_mut().enumerate() {
+            *slot = row
+                .get_value(i as i32)
+                .map(|v| value_to_string(&v))
+                .unwrap_or_default();
+        }
+        collected.push(vals);
+    }
+
+    if collected.is_empty() {
+        println!("No offers found matching criteria.\n");
+        print_applied_filters(opts);
+        return Ok(());
+    }
+
+    print_table(&collected, opts.limit);
+    Ok(())
+}
+
+fn print_table(rows: &[[String; 11]], limit: i64) {
+    let source_w = 12usize;
+    let type_w = 9usize;
+    let price_w = 10usize;
+    let date_w = 23usize;
+    let age_w = AGE_TRUNCATE;
+
+    println!("Found {} offer(s):\n", rows.len());
+    let header = format!(
+        "{:<sw$} {:<tw$} {:<pw$} {:<dw$} {:<aw$} {}",
+        "SOURCE",
+        "TYPE",
+        "PRICE",
+        "DATE",
+        "AGE",
+        "NAME",
+        sw = source_w,
+        tw = type_w,
+        pw = price_w,
+        dw = date_w,
+        aw = age_w,
+    );
+    println!("{header}");
+    println!("{}", "-".repeat(80));
+
+    for r in rows {
+        let source = dash(&r[1]);
+        let kind = dash(&r[2]);
+        let price_num = r[4].parse::<f64>().ok();
+        let currency = if r[5].is_empty() { "TWD" } else { &r[5] };
+        let price_str = match price_num {
+            Some(p) => format!("{currency} {p:.0}"),
+            None => "—".to_string(),
+        };
+        let depart = &r[6];
+        let ret = &r[7];
+        let date_str = if depart.is_empty() {
+            "—".to_string()
+        } else if ret.is_empty() {
+            depart.clone()
+        } else {
+            format!("{depart}→{ret}")
+        };
+        let age = format_age(&r[10]);
+        let name = truncate(dash(&r[3]), NAME_TRUNCATE);
+        println!(
+            "{:<sw$} {:<tw$} {:<pw$} {:<dw$} {:<aw$} {}",
+            source,
+            kind,
+            price_str,
+            date_str,
+            age,
+            name,
+            sw = source_w,
+            tw = type_w,
+            pw = price_w,
+            dw = date_w,
+            aw = age_w,
+        );
+    }
+    println!();
+    println!("Showing {} of max {} results.", rows.len(), limit);
+}
+
+fn print_applied_filters(o: &QueryOffersArgs) {
+    println!("Filters applied:");
+    if let Some(d) = &o.destination {
+        println!("  destination: {d}");
+    }
+    if let Some(r) = &o.region {
+        println!("  region: {r}");
+    }
+    if o.start.is_some() || o.end.is_some() {
+        let s = o.start.as_deref().unwrap_or("*");
+        let e = o.end.as_deref().unwrap_or("*");
+        println!("  dates: {s} to {e}");
+    }
+    if let Some(s) = &o.sources {
+        println!("  sources: {s}");
+    }
+    if let Some(p) = o.max_price {
+        println!("  max_price: {p}");
+    }
+    if let Some(f) = o.fresh_hours {
+        println!("  fresh_hours: {f}");
+    }
+}
+
+fn print_usage() {
+    println!(
+        "Query Turso for offers matching trip criteria.\n\
+         \n\
+         Usage:\n  \
+           travel db query-offers --destination osaka_2026 --start 2026-02-24 --end 2026-02-28\n  \
+           travel db query-offers --region kansai --sources besttour,liontravel --max 10\n  \
+           travel db query-offers --fresh-hours 24 --max 20\n\
+         \n\
+         Options:\n  \
+           --destination <slug>     Filter by destination (e.g. osaka_2026, tokyo_2026)\n  \
+           --region <name>          Filter by region (e.g. kansai, tokyo)\n  \
+           --start <YYYY-MM-DD>     Filter departure_date >= start\n  \
+           --end <YYYY-MM-DD>       Filter departure_date <= end\n  \
+           --sources <csv>          Filter by source_id (comma-separated)\n  \
+           --type <type>            Filter by type (package, flight, hotel)\n  \
+           --max-price <int>        Filter price_per_person <= max\n  \
+           --fresh-hours <int>      Only offers scraped within N hours\n  \
+           --max <int>              Limit results (default: 50)\n  \
+           --include-undated        When filtering by date, also include offers without departure_date\n  \
+           --sql                    Show generated SQL (for debugging)\n\
+         \n\
+         Output columns:\n  \
+           SOURCE, TYPE, PRICE, DATE, AGE, NAME"
+    );
+}
