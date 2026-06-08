@@ -832,6 +832,12 @@ export class PlanRepository implements StateRepository {
     // Delete stale rows first — prevents ghost data when days/activities are removed
     const escapedPlanId = planId.replace(/'/g, "''");
     statements.push(
+      `DELETE FROM activity_tags WHERE activity_id IN (SELECT id FROM activities WHERE plan_id = '${escapedPlanId}')`,
+      `DELETE FROM session_meals WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM session_activities_zh WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM day_route_segments WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM day_landmarks WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM itinerary_transit_key_lines WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM activities WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM timesofday WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM days WHERE plan_id = '${escapedPlanId}'`,
@@ -845,6 +851,8 @@ export class PlanRepository implements StateRepository {
       `DELETE FROM plan_destinations WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM destination_details WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM destination_cities WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_includes WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM plan_offer_hotel_access WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM plan_offers WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM plan_offer_flights WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM plan_offer_hotels WHERE plan_id = '${escapedPlanId}'`,
@@ -863,7 +871,9 @@ export class PlanRepository implements StateRepository {
       `DELETE FROM cascade_global_state WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM plan_root_date_anchor WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM itinerary_metadata WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM location_zone_candidates WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM accommodation_location_zone WHERE plan_id = '${escapedPlanId}'`,
+      `DELETE FROM transport_extra_candidates WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM transportation_extras WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM event_log_state WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM event_log_global_processes WHERE plan_id = '${escapedPlanId}'`,
@@ -874,8 +884,6 @@ export class PlanRepository implements StateRepository {
       `DELETE FROM plan_event_data WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM airport_transfer_candidates WHERE plan_id = '${escapedPlanId}'`,
       `DELETE FROM hotel_access_lines WHERE plan_id = '${escapedPlanId}'`,
-      `DELETE FROM session_meals WHERE plan_id = '${escapedPlanId}'`,
-      `DELETE FROM day_route_segments WHERE plan_id = '${escapedPlanId}'`,
     );
 
     // plan_metadata
@@ -1182,36 +1190,6 @@ export class PlanRepository implements StateRepository {
         }
       }
 
-      // airport_transfer_candidates + selected_* scalars
-      if (p3?.airport_transfers && typeof p3.airport_transfers === 'object') {
-        const transfers = p3.airport_transfers as Record<string, unknown>;
-        for (const dir of ['arrival', 'departure'] as const) {
-          const seg = transfers[dir] as Record<string, unknown> | undefined;
-          if (!seg) continue;
-          const sel = seg.selected as Record<string, unknown> | undefined;
-          if (sel) {
-            statements.push(`UPDATE airport_transfers SET selected_title = ${sqlText(sel.title as string)}, selected_route = ${sqlText(sel.route as string)}, selected_duration_min = ${sqlInt(sel.duration_min as number)}, selected_price_yen = ${sqlInt(sel.price_yen as number)}, selected_schedule = ${sqlText(sel.schedule as string)}, selected_booking_url = ${sqlText(sel.booking_url as string)}, selected_notes = ${sqlText(sel.notes as string)} WHERE plan_id = ${sqlText(planId)} AND destination = ${sqlText(destSlug)} AND direction = ${sqlText(dir)}`);
-          }
-          const cands = seg.candidates as Array<Record<string, unknown>> | undefined;
-          if (cands) {
-            for (let ci = 0; ci < cands.length; ci++) {
-              const c = cands[ci];
-              statements.push(`INSERT INTO airport_transfer_candidates (plan_id, destination, direction, candidate_id, title, route, duration_min, price_yen, schedule, booking_url, notes, sort_order) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlText(dir)}, ${sqlText(c.id as string)}, ${sqlText((c.title || c.method) as string)}, ${sqlText(c.route as string)}, ${sqlInt(c.duration_min as number)}, ${sqlInt((c.price_yen ?? c.cost_jpy) as number)}, ${sqlText(c.schedule as string)}, ${sqlText(c.booking_url as string)}, ${sqlText(c.notes as string)}, ${sqlInt(ci)})`);
-            }
-          }
-        }
-      }
-
-      // hotel_access_lines
-      if (p4?.hotel && typeof p4.hotel === 'object') {
-        const access = (p4.hotel as any).access;
-        if (Array.isArray(access)) {
-          for (let ai = 0; ai < access.length; ai++) {
-            statements.push(`INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line) VALUES (${sqlText(planId)}, ${sqlText(destSlug)}, ${sqlInt(ai)}, ${sqlText(access[ai])})`);
-          }
-        }
-      }
-
       // itinerary_metadata (must be after p5 declaration). transit_summary
       // {hotel_station, key_lines[]} → scalar cols + key-line child rows (no JSON).
       const p5 = destObj.process_5_daily_itinerary as Record<string, unknown> | undefined;
@@ -1355,4 +1333,3 @@ export class PlanRepository implements StateRepository {
     };
   }
 }
-
