@@ -11,7 +11,9 @@ mod flights;
 mod freshness;
 mod leave;
 mod offers;
+mod plan;
 mod plans;
+mod status;
 mod validate;
 
 use std::{env, io::Read, process};
@@ -73,6 +75,14 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "check-freshness" => {
             let opts = freshness::FreshnessArgs::parse(rest)?;
             freshness::run(&opts).await
+        }
+        [cmd, rest @ ..] if cmd == "status" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel status [--full]\n  (plan resolution: TRAVEL_PLAN_ID env var only for now)");
+                return Ok(());
+            }
+            let full = rest.iter().any(|a| a == "--full");
+            status::run(full).await
         }
         [group, sub, rest @ ..] if group == "db" && sub == "status" => {
             if !rest.is_empty() {
@@ -155,6 +165,6 @@ fn normalize_flights(args: &[String]) -> Result<(), String> {
 
 fn print_usage() {
     println!(
-        "Travel CLI\n\nUsage:\n  travel plans\n  travel query-offers [--source a,b] [--region r] [--dest d] [--max-price N] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--limit N]\n  travel query-destination-ref --slug <destination_slug>\n  travel query-bookings [--trip-id id] [--dest slug] [--category c] [--status s] [--max N]\n  travel check-freshness --source <id> [--region r] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--max-age N] [--plan-id id] [--dest slug]\n  travel compare trips --trip '<key=value;...>' [--trip '<key=value;...>'] [--market taiwan] [--detailed]\n  travel normalize flights --text '<rendered flight text>' --url '<source url>' [--label name]\n  travel normalize flights --stdin --url '<source url>' [--label name]\n  travel leave calc <start-date> <end-date> [country]\n  travel validate data\n  travel doctor\n\nRules:\n  plain-text input and output; no JSON files or JSON output"
+        "Travel CLI\n\nUsage:\n  travel plans\n  travel status [--full]\n  travel query-offers [--source a,b] [--region r] [--dest d] [--max-price N] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--limit N]\n  travel query-destination-ref --slug <destination_slug>\n  travel query-bookings [--trip-id id] [--dest slug] [--category c] [--status s] [--max N]\n  travel check-freshness --source <id> [--region r] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--max-age N] [--plan-id id] [--dest slug]\n  travel compare trips --trip '<key=value;...>' [--trip '<key=value;...>'] [--market taiwan] [--detailed]\n  travel normalize flights --text '<rendered flight text>' --url '<source url>' [--label name]\n  travel normalize flights --stdin --url '<source url>' [--label name]\n  travel leave calc <start-date> <end-date> [country]\n  travel validate data\n  travel doctor\n\nRules:\n  plain-text input and output; no JSON files or JSON output"
     );
 }
