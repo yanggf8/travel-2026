@@ -350,13 +350,18 @@ Estimate: 3-6 weeks depending on how many mutation commands are still actively u
   HotelInfo/AirportTransfers. Mirrors a TS quirk (Selected Offer / Includes not
   rendered on a fresh read because chosen_offer is only set by setOfferSelection(),
   not rehydrated by the assembler).
-- Plan resolution: TRAVEL_PLAN_ID env only for now; the full TS plan-resolver
-  (--plan-id / --travel-date / active-plan selection) is deferred to when `itinerary` lands.
-- ⏳ Next read views (reuse plan.rs): `itinerary` (largest; +~7 tables), `bookings`
-  (smallest; bookings_current/_events), `transport` (+transportation_extras/_candidates,
-  accommodation_location_zone/_candidates), `view-prices` (+the plan_offer_* cluster).
+- ✅ `travel bookings` (ports view:bookings) — BYTE-IDENTICAL tokyo+kyoto. Commit b2d157e. Reuses plan.rs (0 new tables).
+- ✅ `travel transport` (ports view:transport) — BYTE-IDENTICAL tokyo+kyoto. Commit 06e8c61. Extended plan.rs (DayView.theme + SessionView.transit_notes).
+- ✅ `travel itinerary` (ports view:itinerary) — BYTE-IDENTICAL tokyo+kyoto, incl. BOTH itinerary formats (session-based Tokyo + schedule-based Kyoto). Commit e284f4d. Added day_route_segments; session_meals reused. (A latent TS flight-line bug was caught by parity: outbound+return must be ONE line, not two console.logs.)
+- ⏭️ `travel view-prices` — DEFERRED. The TS command needs `--start`/`--end` and then filters out flight offers with null departure_date; the current dataset's 4 flight offers ALL have null departure_date, so TS produces no verifiable output. No code blocker — when dated flight offers land it's a thin wrapper over the already-ported `queryOffers`/`db query-offers`.
+- Plan resolution: still TRAVEL_PLAN_ID env only (read views don't need the full
+  resolver). Port `src/cli/shared/plan-resolver.ts` (--plan-id/--travel-date/active-plan,
+  ~200 LOC, pure DB read) when the first MUTATION lands — mutations need it.
+- plan.rs now reads 16 tables (~590 net lines).
 - ⏳ NOT STARTED: all mutations + the cascade runner. Reads-before-writes,
-  cascade LAST, per the strategy above.
+  cascade LAST. **The first mutation (`set-dates`, which triggers cascade) should be
+  done with before/after Turso row diffs and a human-reviewed pass — byte-parity on
+  CLI output does NOT catch a wrong cascade dirty-flag or a missed child-row write.**
 
 > Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
 > parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
@@ -412,6 +417,10 @@ Suggested tracking table per command:
 | `validate:data` | `travel validate data` | done | done | no | Phase 3, byte-parity |
 | `doctor` | `travel doctor` | done | done | no | Phase 3, byte-parity |
 | `status` | `travel status` | done | done | no | Phase 4 read foundation, byte-parity (tokyo+kyoto) |
+| `view:bookings` | `travel bookings` | done | done | no | Phase 4 read view, byte-parity (tokyo+kyoto) |
+| `view:transport` | `travel transport` | done | done | no | Phase 4 read view, byte-parity (tokyo+kyoto) |
+| `view:itinerary` | `travel itinerary` | done | done | no | Phase 4 read view, byte-parity both formats |
+| `view:prices` | `travel view-prices` | deferred | n/a | no | Phase 4; no testable flight data (null departure_date) |
 | `set-dates` | `travel set-dates` | pending | pending | no | Phase 4 (first mutation; triggers cascade) |
 
 ## Verification Method
