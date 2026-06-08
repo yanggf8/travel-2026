@@ -241,19 +241,35 @@ Deliverables:
 
 Estimate: 1-2 weeks.
 
-**Phase 2 progress (in progress):**
-- ✅ `travel plans` — Rust-built, BYTE-IDENTICAL parity with `npm run travel -- plans` (incl. the
-  `window=` suffix). Establishes the Rust read-repository pattern (`db::connect_read` via turso-util
-  read-tier minting + per-command module + plain-text formatter). Commit d7a188a.
-- ✅ `travel query-offers` — Rust-built, format byte-parity with TS `printTursoOfferTable`, full-count
-  parity (16=16). Reads raw `offers` table (NOT the dropped `raw_data` column). `--limit` correctly
-  caps rows (TS's didn't). Commit f2d09c0.
-- ⏳ Remaining simple reads (same pattern, mechanical): `query-bookings`, `check-freshness`,
-  `query-destination-ref`. Then DB-read comparisons: `compare-dates`, `compare-true-cost`.
+**Phase 2 progress — ✅ COMPLETE (2026-06-08):**
+All 7 read commands are Rust-built with **byte-identical parity** vs the TS originals.
+The Rust read-repository pattern is `db::connect_read` (turso-util read-tier minting) +
+per-command module + plain-text formatter.
+- ✅ `travel plans` — byte-parity incl. `window=` suffix. Commit d7a188a.
+- ✅ `travel query-offers` — byte-parity with `printTursoOfferTable`, count-parity. Commit f2d09c0.
+- ✅ `travel query-destination-ref` — byte-parity; reads de-JSON'd child rows (no serde_json). Commit 7f86763.
+- ✅ `travel query-bookings` — byte-parity with `printBookingsTable`. Commit a184ad0.
+- ✅ `travel check-freshness` — byte-parity (plan-provenance + legacy-offers paths). Commit a184ad0.
+- ✅ `travel compare dates` — byte-parity (offers + holiday calendar + leave math). Commit eca4395.
+- ✅ `travel compare true-cost` — byte-parity (offers + transport routes/hubs + hotel_area_keywords). Commit eca4395.
 - ⚠️ The assembled-plan views (`status`, `view:itinerary`, `view:transport`, `view:bookings`) depend on
-  StateManager/plan-assembler — they are effectively **Phase 4 work**, not pure reads. Phase 2 here is
-  scoped to the genuinely read-only, single-table-ish commands; the StateManager-backed views move to
-  Phase 4. TS for all Phase 2 commands kept (parity-verified, deletion pending).
+  StateManager/plan-assembler — they are **Phase 4 work**, not pure reads. Out of Phase 2 scope.
+- TS for all 7 kept (parity-verified, deletion pending the package.json → Rust cutover). A non-destructive
+  snapshot lives in `archive/ts-ported-phase2/`.
+
+> **Bugs found & fixed during the port** (faithful parity surfaced latent TS bugs):
+> `queryOffers` returned numeric fields as strings (`number | null` type lied), causing string-concat
+> (`"17999"+409 → "17999409"`) and broken `.toLocaleString()`. Fixed at the source with `mapTursoOfferRow`
+> numeric coercion (commit 51115cc); Rust quirk-replication removed. Also fixed the long-standing
+> `best_value` shape mismatch + save write-back gap (c59e7a7) and the save-path child-table cleanup +
+> duplicate-writer removal (ecfe501) — `StateManager.save()` for tokyo-2026 now returns SAVE_OK.
+
+> **Prerequisite done — the RDB de-JSON program (6 batches A–F, 2026-06):** before/alongside this port,
+> every JSON-encoded value was removed from Turso (44 `*_json` columns + 4 content-scan-found non-`*_json`
+> ones) → child tables / typed columns / `*_text` fields. Whole-DB scan confirms 0 JSON values in 601 text
+> columns. The misnamed event "log" was unified+renamed to the `plan_events` event store. `scripts/schema.sql`
+> regenerated from the live DB (`scripts/gen-schema-sql.ts`). See memory `no-json-in-rdb`,
+> `de-json-unknown-to-text-column`. Commits 7f86763, 941c39b, e7ec642, 46ac837, ef899f8, 2fcf56e, cf560ba.
 
 ### Phase 3 — DB Scripts and One-Shots
 
@@ -343,11 +359,11 @@ Suggested tracking table per command:
 | `normalize-flights` | `travel normalize flights` | done | done | no | Phase 1, rendered-text input |
 | `plans` | `travel plans` | done | done | no | Phase 2, byte-parity |
 | `query-offers` | `travel query-offers` | done | done | no | Phase 2, count-parity (16=16) |
-| `query-bookings` | `travel query-bookings` | pending | pending | no | Phase 2 (simple read) |
-| `check-freshness` | `travel check-freshness` | pending | pending | no | Phase 2 (simple read) |
-| `query-destination-ref` | `travel query-destination-ref` | pending | pending | no | Phase 2 (simple read) |
-| `compare-dates` | `travel compare dates` | pending | pending | no | Phase 2 (DB-read) |
-| `compare-true-cost` | `travel compare true-cost` | pending | pending | no | Phase 2 (DB-read) |
+| `query-bookings` | `travel query-bookings` | done | done | no | Phase 2, byte-parity |
+| `check-freshness` | `travel check-freshness` | done | done | no | Phase 2, byte-parity |
+| `query-destination-ref` | `travel query-destination-ref` | done | done | no | Phase 2, byte-parity (de-JSON child rows) |
+| `compare-dates` | `travel compare dates` | done | done | no | Phase 2, byte-parity |
+| `compare-true-cost` | `travel compare true-cost` | done | done | no | Phase 2, byte-parity |
 | `status` | `travel status` | pending | pending | no | Phase 4 (StateManager-backed) |
 | `set-dates` | `travel set-dates` | pending | pending | no | Phase 4 |
 

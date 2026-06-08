@@ -394,7 +394,7 @@ Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI u
 
 Config: `src/config/constants.ts` (defaults/exchange rates). OTA baggage/booking rules: Turso tables `airlines`, `booking_types`, `platform_behaviors`, `comparison_rules` (seeded by `scripts/seed-ota-knowledge.ts` — no JSON file).
 Destination/OTA config: stored in Turso (`destination_config`, `ota_sources`, `origin_config`, `global_config` tables — no JSON files).
-Destination reference data (areas/POIs/clusters/transit/tips): Turso tables `destination_areas`, `destination_pois`, `destination_clusters`, `destination_transit`, `destination_config.tips_json` (seeded by `scripts/seed-destination-refs.ts`; read via `query-destination-ref` — no JSON file, no blob).
+Destination reference data (areas/POIs/clusters/transit/tips): Turso tables `destination_areas` (+ `destination_area_stations`/`destination_area_best_for`), `destination_pois` (+ `destination_poi_tags`), `destination_clusters` (+ `destination_cluster_pois`), `destination_transit`, `destination_tips` (seeded by `scripts/seed-destination-refs.ts`; read via `query-destination-ref` — no JSON file, no blob, no JSON columns).
 Note: `ref_path`/`scraper_script` must be repo-relative paths.
 
 ## Turso DB
@@ -406,19 +406,23 @@ Tables:
 - **Plan core**: `plans` (PK=plan_id, `version` monotonic counter — no JSON blobs), `plan_metadata`, `plan_destinations`, `destination_details`, `destination_cities`
 - **Dates/Status**: `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `plan_root_date_anchor`
 - **Offers**: `plan_offers`, `plan_offer_flights`, `plan_offer_hotels`, `plan_offer_date_pricing`, `plan_offer_selection`, `plan_offer_best_value`, `plan_offer_provenance` (source audit trail), `plan_offer_warnings`
-- **Itinerary**: `days` (+ weather + `theme_zh`), `timesofday` (+ `focus_zh`, `transit_notes_zh`, `meals_zh_json`, `activities_zh_json`), `activities`, `itinerary_metadata` (+ `transit_summary_zh`), `day_route_segments` (+ `duration_min`, `notes`, `start_time`), `day_landmarks`, `session_meals`, `activity_tags`
-- **Transport**: `flight_legs` (PK: plan_id+destination+direction+leg_order), `airport_transfers`, `airport_transfer_candidates`, `transportation_extras`
-- **Accommodation**: `hotels` (+ `name_zh`), `hotel_access_lines`, `accommodation_location_zone`
-- **Cascade**: `cascade_triggers`, `cascade_global_state`, `plan_schema_contract`, `plan_process_precedence`, `plan_budget`
-- **Event log**: `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`, `event_log_process_events`
+- **Itinerary**: `days` (+ weather + `theme_zh`), `timesofday` (+ `focus_zh`, `transit_notes_zh`), `activities`, `itinerary_metadata` (+ `transit_hotel_station`/`transit_hotel_station_zh` scalars; transit key lines in `itinerary_transit_key_lines`), `day_route_segments` (+ `duration_min`, `notes`, `start_time`), `day_landmarks`, `session_meals`, `session_activities_zh`, `activity_tags`
+- **Transport**: `flight_legs` (PK: plan_id+destination+direction+leg_order), `airport_transfers` (+ `selected_*` scalar cols), `airport_transfer_candidates`, `transportation_extras` (+ `*_status` scalars), `transport_extra_candidates`
+- **Accommodation**: `hotels` (+ `name_zh`), `hotel_access_lines`, `accommodation_location_zone`, `location_zone_candidates`
+- **Offer child rows**: `plan_offer_includes`, `plan_offer_hotel_access`
+- **Cascade**: `cascade_triggers` (+ `condition_*` scalars), `cascade_trigger_resets`, `cascade_trigger_populate_map`, `cascade_global_state`, `plan_schema_contract` (+ `plan_schema_contract_nodes`), `plan_process_precedence` (+ `plan_process_precedence_entries`), `plan_root_date_anchor` (+ `flex_*` scalars + `plan_date_anchor_flex_dates`), `plan_budget`
+- **Event store** (`plan_events`): unified domain event store — `plan_events` (scope ∈ timeline|global_process|dest_process) + `plan_event_data` (open payload as KV rows) + `event_log_next_actions`; status tables `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`. (Renamed/unified from the old "event_log"; the flat `event_log_process_events` table was dropped.)
 - **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
 - **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
 - **Shaping Stage** (formerly "Stage 0"; unscoped, keyed by `run_id`): `shaping_research_runs`, `shaping_research_destinations`, `shaping_research_durations`, `shaping_rules` (hard/soft shaping constraints), `shaping_candidates`, `shaping_candidate_flights`, `shaping_scrape_attempts`, `shaping_tour_group_offers`, `shaping_tour_group_scrape_attempts`, `shaping_research_artifacts`, `shaping_selected_offers` — pre-plan triangle-research + constraint-shaping domain. Commands: `shaping-init/compare/adopt/baseline/export/import`; skill `/shaping-research`. (see `docs/superpowers/specs/2026-05-22-stage0-shaping.md`)
 - **Global config** (not plan-scoped): `destination_config` (slug PK, coordinates/timezone/airports), `origin_config` (taiwan origin), `global_config` (default_destination, default_origin), `ota_sources` (OTA registry — replaces ota-sources.json)
+- **OTA knowledge** (de-JSON'd into child rows): `booking_types` + `booking_type_rules`, `platform_behaviors` + `platform_behavior_quirks`/`platform_behavior_baggage_labels`, `hotel_areas` + `hotel_area_keywords`, `airlines`, `transport_routes`, `transport_hubs`, `ota_sources` + `ota_source_types`/`ota_source_regions`
+- **Reference data** (de-JSON'd): `destination_areas` + `destination_area_stations`/`destination_area_best_for`, `destination_pois` + `destination_poi_tags`, `destination_clusters` + `destination_cluster_pois`, `destination_transit`, `destination_config` + `destination_tips`/`destination_airports`/`destination_markets`, `origin_airports`
 - **Other**: `offers`, `destinations`, `events`, `bookings`
-- **Dead**: `flights` (old JSON blob table — no writes, kept for reference only)
 
-Schema reference: `scripts/schema.sql` (read-only DDL reference, extracted from migration script)
+> **No JSON in the RDB (de-JSON program, 2026-06):** every former `*_json` column was re-normalized — flat lists → child tables (one row per element), small objects → typed scalar columns, open/variable blobs → a single `*_text` column. A whole-DB content scan confirms zero JSON-encoded values in any column. The dead `flights` table (old JSON-blob flight store) was dropped. Don't reintroduce `*_json` columns or `JSON.parse`/`JSON.stringify` against DB column data.
+
+Schema reference: `scripts/schema.sql` (read-only DDL reference, AUTO-GENERATED from the live DB via `npx ts-node scripts/gen-schema-sql.ts` — do not hand-edit; regenerate after migrations)
 Schema/migration: `npm run db:migrate:turso` (creates all tables idempotently)
 Seed: `npm run db:seed:plans` (one-time, already run)
 
@@ -444,7 +448,7 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 - **Edit mode** — `?edit=TOKEN` activates inline editing when TOKEN matches `ADMIN_TOKEN` secret. Pencil icons appear next to editable fields (theme, focus, activities, meals, transit notes). POSTs to `/api/edit` with token in JSON body. Set token: `wrangler secret put ADMIN_TOKEN`
 - **Mobile-first** — phone-optimized day cards with weather (including feels-like temperature), transit, meals
 - **Default ZH** — Traditional Chinese by default; `?lang=en` for English
-- **ZH content** — All Chinese content stored in DB (`theme_zh`, `focus_zh`, `activities_zh_json`, `meals_zh_json`, `transit_notes_zh` on normalized tables). No hardcoded content in Worker code. Content updates take effect instantly without redeploy. Use `set-day-theme --zh` for day themes, `set-tod-zh` (alias: `set-session-zh`) for session focus/transit/activities, `set-route-segment` for Chinese place names. For bulk new-destination ZH population: copy `scripts/set-kyoto-zh-sessions-v2.ts` pattern (parameterized Turso pipeline queries — required for Unicode/emoji content).
+- **ZH content** — All Chinese content stored in DB (`theme_zh`, `focus_zh`, `transit_notes_zh` scalars; ZH activities in `session_activities_zh`; meals in `session_meals`). No hardcoded content in Worker code. Content updates take effect instantly without redeploy. Use `set-day-theme --zh` for day themes, `set-tod-zh` (alias: `set-session-zh`) for session focus/transit/activities, `set-route-segment` for Chinese place names. For bulk new-destination ZH population: copy `scripts/set-kyoto-zh-sessions-v2.ts` pattern (parameterized Turso pipeline queries — required for Unicode/emoji content).
 - **Anti-translate** — `lang="zh-TW"` + `<meta name="google" content="notranslate">` prevents browser auto-translation of the ZH page.
 - **Multi-plan** — each plan accessed via `?plan=<slug>` (e.g., `tokyo-2026`, `kyoto-2026`). Slug derived from `active_destination` (underscores → hyphens). Root `/` shows plan index page listing all plans.
 - **Plan nav** — hidden by default for privacy (shareable links show single plan only); add `&nav=1` to show pill-style plan switcher (plan list from DB via `listPlans()`)
