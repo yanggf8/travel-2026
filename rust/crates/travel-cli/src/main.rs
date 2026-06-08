@@ -15,6 +15,7 @@ mod offers;
 mod plan;
 mod plan_resolver;
 mod plans;
+mod set_activity;
 mod set_airport_transfer;
 mod set_dates;
 mod set_day_theme;
@@ -199,6 +200,24 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
             set_tod::run_zh(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-activity-time" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-activity-time <day> <session> <activity> [--start HH:MM] [--end HH:MM] [--fixed true|false] [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_activity::run_time(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-activity-title" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-activity-title <day> <session> <activity> <new_title> [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_activity::run_title(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
