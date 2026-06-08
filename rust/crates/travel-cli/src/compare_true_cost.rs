@@ -176,11 +176,7 @@ pub async fn run(opts: &TrueCostArgs) -> Result<(), String> {
         let baggage = calc_baggage_cost();
         let (transport_cost, transport_time) = calc_transport_cost(&hotel_hub, &itinerary, &opts.region, opts.pax, &regions, opts.jpy_rate);
         let surcharge = js_round((baggage + transport_cost) as f64 / opts.pax as f64);
-        // JS string concat: String(price) + String(round) (when surcharge >= 0;
-        // for a negative surcharge JS would still concat the '-' which can't occur
-        // here since costs are non-negative).
-        let true_total_str = format!("{}{}", o.price_per_person, surcharge);
-        let true_total_sort = true_total_str.parse::<i64>().unwrap_or(0);
+        let true_total = o.price_per_person + surcharge;
         results.push(TrueCostOffer {
             file: o.file.clone(),
             source_name: o.source_id.clone(),
@@ -192,12 +188,11 @@ pub async fn run(opts: &TrueCostArgs) -> Result<(), String> {
             baggage_cost: baggage,
             transport_cost,
             transport_time_min: transport_time,
-            true_total_str,
-            true_total_sort,
+            true_total,
             breakdown: format!("pkg:{} bag:{} xport:{}", o.price_per_person, baggage, transport_cost),
         });
     }
-    results.sort_by_key(|r| r.true_total_sort);
+    results.sort_by_key(|r| r.true_total);
 
     print_results(&results, opts);
     Ok(())
@@ -223,11 +218,7 @@ struct TrueCostOffer {
     baggage_cost: i64,
     transport_cost: i64,
     transport_time_min: i64,
-    // TS quirk: o.price_per_person is a STRING from Turso, so
-    // `price + Math.round(surcharge)` is JS string concatenation, not addition
-    // (e.g. "17999" + 409 → "17999409"). Rendered byte-for-byte as the concat string.
-    true_total_str: String,
-    true_total_sort: i64, // Number(true_total_str) — JS sort coerces back to number
+    true_total: i64,
     breakdown: String,
 }
 
@@ -329,12 +320,10 @@ fn print_results(results: &[TrueCostOffer], opts: &TrueCostArgs) {
     println!("├──────────┼──────────┼─────────┼───────────┼────────────┼──────────┼──────────────────────┤");
     for r in results {
         let src = pad_end(&truncate(&r.source_name, 8), 8);
-        // TS: r.price_per_person.toLocaleString() on the raw DB STRING → no commas.
-        let pkg = pad_start(&r.price_per_person.to_string(), 8);
+        let pkg = pad_start(&locale(r.price_per_person), 8);
         let bag = if r.baggage_cost > 0 { pad_start(&locale(r.baggage_cost), 7) } else { "      0".to_string() };
         let xport = if r.transport_cost > 0 { pad_start(&locale(r.transport_cost), 9) } else { "        0".to_string() };
-        // TS: r.true_total is the concatenated STRING → .toLocaleString() no-op.
-        let total = pad_start(&r.true_total_str, 10);
+        let total = pad_start(&locale(r.true_total), 10);
         let time_diff = r.transport_time_min - best_time;
         let time_str = if time_diff == 0 { "optimal ".to_string() } else { pad_end(&format!("+{time_diff}min"), 8) };
         let hotel = pad_end(&truncate(if r.hotel.is_empty() { "-" } else { &r.hotel }, 20), 20);
@@ -343,8 +332,7 @@ fn print_results(results: &[TrueCostOffer], opts: &TrueCostArgs) {
     println!("└──────────┴──────────┴─────────┴───────────┴────────────┴──────────┴──────────────────────┘");
 
     if let Some(best) = results.first() {
-        // true_total is a string (TS quirk) → toLocaleString no-op.
-        println!("\n💡 Best true value: {} at {} {}/person", best.source_name, best.currency, best.true_total_str);
+        println!("\n💡 Best true value: {} at {} {}/person", best.source_name, best.currency, locale(best.true_total));
         println!("   {}", best.breakdown);
         if !best.hotel.is_empty() {
             println!("   Hotel: {} ({})", best.hotel, best.hotel_area_type);
@@ -355,8 +343,7 @@ fn print_results(results: &[TrueCostOffer], opts: &TrueCostArgs) {
         // cheapest by package price (TS: [...results].sort((a,b)=>a.ppp-b.ppp)[0])
         let cheapest_pkg = results.iter().min_by_key(|r| r.price_per_person).unwrap();
         if cheapest_pkg.file != best.file {
-            // price_per_person.toLocaleString() on raw DB string → no commas.
-            println!("\n⚠️  Cheapest package ({} {}) is NOT the best true value!", cheapest_pkg.source_name, cheapest_pkg.price_per_person);
+            println!("\n⚠️  Cheapest package ({} {}) is NOT the best true value!", cheapest_pkg.source_name, locale(cheapest_pkg.price_per_person));
             println!("   Hidden costs: baggage {} + transport {}", locale(cheapest_pkg.baggage_cost), locale(cheapest_pkg.transport_cost));
         }
     }

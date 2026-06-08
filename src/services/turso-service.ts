@@ -71,14 +71,18 @@ export interface TursoOfferResult {
   type: string;
   name: string | null;
   price_per_person: number | null;
+  price_total: number | null;
   currency: string | null;
   region: string | null;
   destination: string | null;
   departure_date: string | null;
   return_date: string | null;
   nights: number | null;
+  duration_days: number | null;
+  seats_remaining: number | null;
   availability: string | null;
   hotel_name: string | null;
+  star_rating: number | null;
   airline: string | null;
   scraped_at: string | null;
   source_file: string | null;
@@ -170,6 +174,35 @@ function rowsToObjectsAt(response: any, idx: number): Record<string, any>[] {
     });
     return obj;
   });
+}
+
+function nullableNumber(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : null;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function mapTursoOfferRow<T extends Record<string, any>>(row: T): T {
+  const numericFields = [
+    'price_per_person',
+    'price_total',
+    'nights',
+    'duration_days',
+    'seats_remaining',
+    'star_rating',
+  ];
+  const mapped: Record<string, any> = { ...row };
+  for (const field of numericFields) {
+    if (field in mapped) mapped[field] = nullableNumber(mapped[field]);
+  }
+  return mapped as T;
 }
 
 function normalizeCountry(countryOrMarket: string): string {
@@ -596,9 +629,10 @@ export async function queryOffers(
     const limit = filters.limit ? `LIMIT ${Math.trunc(filters.limit)}` : 'LIMIT 100';
 
     const sql = `SELECT po.id, po.source_id, po.type, po.title AS name,
-      po.price_per_person, po.currency, NULL AS region, po.destination,
+      po.price_per_person, po.price_total, po.currency, NULL AS region, po.destination,
       pob.best_date AS departure_date, NULL AS return_date, NULL AS nights,
-      po.availability, poh.name AS hotel_name,
+      po.duration_days, po.seats_remaining,
+      po.availability, poh.name AS hotel_name, poh.star_rating,
       pof.airline, po.scraped_at, po.url AS source_file
     FROM plan_offers po
     LEFT JOIN plan_offer_hotels poh ON poh.offer_id = po.id AND poh.plan_id = po.plan_id AND poh.destination = po.destination
@@ -607,7 +641,7 @@ export async function queryOffers(
     ${where} ORDER BY po.scraped_at DESC, po.price_per_person ASC ${limit};`;
 
     const response = await client.execute(sql);
-    return rowsToObjects(response) as TursoOfferResult[];
+    return rowsToObjects(response).map(mapTursoOfferRow) as TursoOfferResult[];
   }
 
   // Legacy path: query offers table
@@ -644,10 +678,10 @@ export async function queryOffers(
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = filters.limit ? `LIMIT ${Math.trunc(filters.limit)}` : 'LIMIT 100';
 
-  const sql = `SELECT id, source_id, type, name, price_per_person, currency, region, destination, departure_date, return_date, nights, availability, hotel_name, airline, scraped_at, source_file FROM offers ${where} ORDER BY scraped_at DESC, price_per_person ASC ${limit};`;
+  const sql = `SELECT id, source_id, type, name, price_per_person, NULL AS price_total, currency, region, destination, departure_date, return_date, nights, NULL AS duration_days, NULL AS seats_remaining, availability, hotel_name, NULL AS star_rating, airline, scraped_at, source_file FROM offers ${where} ORDER BY scraped_at DESC, price_per_person ASC ${limit};`;
 
   const response = await client.execute(sql);
-  return rowsToObjects(response) as TursoOfferResult[];
+  return rowsToObjects(response).map(mapTursoOfferRow) as TursoOfferResult[];
 }
 
 export async function queryRawOffers(
@@ -681,10 +715,10 @@ export async function queryRawOffers(
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = filters.limit ? `LIMIT ${Math.trunc(filters.limit)}` : 'LIMIT 500';
-  const sql = `SELECT id, source_id, type, name, price_per_person, currency, region, destination, departure_date, return_date, nights, availability, hotel_name, airline, scraped_at, source_file, raw_data FROM offers ${where} ORDER BY scraped_at DESC, price_per_person ASC ${limit};`;
+  const sql = `SELECT id, source_id, type, name, price_per_person, NULL AS price_total, currency, region, destination, departure_date, return_date, nights, NULL AS duration_days, NULL AS seats_remaining, availability, hotel_name, NULL AS star_rating, airline, scraped_at, source_file, raw_data FROM offers ${where} ORDER BY scraped_at DESC, price_per_person ASC ${limit};`;
 
   const response = await client.execute(sql);
-  const rows = rowsToObjects(response) as TursoRawOfferResult[];
+  const rows = rowsToObjects(response).map(mapTursoOfferRow) as TursoRawOfferResult[];
   if (rows.length === 0) {
     throw new Error(`Missing Turso offers for filters ${JSON.stringify(filters)}. Import scraper output with npm run db:import:turso before running this command.`);
   }

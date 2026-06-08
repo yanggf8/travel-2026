@@ -356,10 +356,7 @@ fn format_comparisons(comparisons: &[Comparison], opts: &CompareDatesArgs) -> St
         let dep = format!("{}({})", &c.depart_date[5..], c.dow_zh);
         match &c.fit {
             None => lines.push(format!("| {} | (無資料) | - | - | - | - |", dep)),
-            // NB: TS renders pricePerPerson via .toLocaleString() on the RAW DB
-            // string (no comma); priceTotalTWD is a computed number (comma).
-            // Match that quirk: per-person without separators.
-            Some(f) => lines.push(format!("| {} | {} | {} | {} | {} | 含20kg |", dep, locale(f.price_total_twd), f.price_per_person, f.airline, f.hotel)),
+            Some(f) => lines.push(format!("| {} | {} | {} | {} | {} | 含20kg |", dep, locale(f.price_total_twd), locale(f.price_per_person), f.airline, f.hotel)),
         }
     }
 
