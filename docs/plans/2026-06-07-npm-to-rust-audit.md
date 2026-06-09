@@ -381,10 +381,19 @@ Estimate: 3-6 weeks depending on how many mutation commands are still actively u
   insert_event/insert_kv_rows, timestamps, run_id). Verified by before/after DB-row diff on
   `test-set-dates-2026`: full row parity (happy path), `--no-populate` parity, and guard-failure
   all-or-nothing (invalid `booked → selected` persists nothing, matching TS). 70 unit tests pass.
-- ⏳ NOT STARTED: **`update-offer`** (also cascade — me-led / closely-reviewed). Then
-  offer/tour-group ingestion, shaping (6), itinerary builders (scaffold/populate), ops
-  (sync-bookings, fetch-weather, run-*), and ~10 remaining reads. Cascade runner
-  generalization LAST.
+- ✅ DONE (2026-06-09): **`update-offer`** — per-date availability/pricing update, me-led.
+  Despite sitting next to select-offer it does NOT fire the populate cascade: it UPSERTs the
+  one `plan_offer_date_pricing` row (omitted price/seats PRESERVE existing values, mirroring
+  TS `{...prev, ...data}`; `note` is in-memory only, never persisted), emits one
+  `offer_availability_updated` event (P3_4, dest_process + timeline; KV
+  date/from/offer_id/price/seats_remaining/source/to, omitted price/seats → "undefined",
+  omitted source → "cli"), operation_runs, plans.version+1. No process_statuses change, top-level
+  `plan_offers.availability` untouched. Verified by DB-row diff on 3 scenarios (full args,
+  availability-only, price-only) + header parity (conditional `Source:` line) + invalid-availability
+  error parity. 71 unit tests pass. Reuses cascade/common.rs helpers.
+- ⏳ NOT STARTED: offer/tour-group ingestion, shaping (6), itinerary builders
+  (scaffold/populate), ops (sync-bookings, fetch-weather, run-*), and ~10 remaining reads.
+  Cascade runner generalization LAST.
 
 > Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
 > parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
@@ -453,7 +462,7 @@ Suggested tracking table per command:
 | `set-tod-*` / `set-session-*` | `travel set-tod-focus/time-range/zh` | done | done | no | Phase 4 setter; timesofday + session_activities_zh, DB-row parity (set-tod-zh "undefined"-KV bug fixed in review) |
 | `set-activity-time/title` | `travel set-activity-time/title` | done | done | no | Phase 4 setter; activities, DB-row parity |
 | `select-offer` | `travel select-offer` | done | done | no | Phase 4; populate-P3+P4 cascade — DB-row parity (happy + --no-populate + guard-failure all-or-nothing); shared helpers → cascade/common.rs |
-| `update-offer` | `travel update-offer` | pending | pending | no | Phase 4; cascade — me-led/closely-reviewed |
+| `update-offer` | `travel update-offer` | done | done | no | Phase 4; per-date pricing update (NO cascade) — DB-row parity (full/availability-only/price-only) + header + error parity |
 
 ## Verification Method
 

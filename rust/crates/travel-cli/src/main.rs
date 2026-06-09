@@ -24,6 +24,7 @@ mod set_hotel;
 mod set_route_segment;
 mod set_tod;
 mod status;
+mod update_offer;
 mod validate;
 mod view_bookings;
 mod view_itinerary;
@@ -119,6 +120,30 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             // Resolve plan_id (TRAVEL_PLAN_ID env for now, matching TS CLI)
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
             set_dates::run(start, end, reason, plan_id).await.map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "update-offer" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel update-offer <offer-id> <date> <availability> [price] [seats] [source]");
+                return Ok(());
+            }
+            let pos: Vec<&String> = rest.iter().filter(|a| !a.starts_with("--")).collect();
+            if pos.len() < 3 {
+                eprintln!("Error: update-offer requires <offer-id> <date> <availability>");
+                eprintln!("Example: update-offer besttour_TYO05MM260211AM 2026-02-13 available 27888 2 agent");
+                std::process::exit(1);
+            }
+            let offer_id = pos[0].clone();
+            let date = pos[1].clone();
+            let availability = pos[2].clone();
+            let price = pos.get(3).and_then(|s| s.parse::<i64>().ok());
+            let seats = pos.get(4).and_then(|s| s.parse::<i64>().ok());
+            let source_arg = pos.get(5).map(|s| (*s).clone());
+            let plan_id =
+                env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            update_offer::run(offer_id, date, availability, price, seats, source_arg, plan_id)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "select-offer" => {
