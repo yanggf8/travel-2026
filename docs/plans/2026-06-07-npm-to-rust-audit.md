@@ -372,11 +372,19 @@ Estimate: 3-6 weeks depending on how many mutation commands are still actively u
   > DB-row diff, NOT passing unit tests (tests can encode the bug): e.g. set-tod-zh wrote
   > "null" vs TS "undefined" for omitted zh fields (fixed, commit 6112608); derive_plan_id,
   > validate_date_range, format_date had similar caught-in-review divergences earlier.
-- ⏳ NOT STARTED: the CASCADE-triggering offer mutations + the rest. **`select-offer` /
-  `update-offer` fire the populate-P3+P4 cascade (the most complex side-effect in the
-  system) — me-led / closely-reviewed, NOT a pure handoff.** Then offer/tour-group ingestion,
-  shaping (6), itinerary builders (scaffold/populate), ops (sync-bookings, fetch-weather,
-  run-*), and ~10 remaining reads. Cascade runner generalization LAST.
+- ✅ DONE (2026-06-09): **`select-offer`** — the populate-P3+P4 cascade (the most complex
+  side-effect in the system), me-led. Writes plan_offer_selection (selected_date=NULL quirk),
+  P3_4 researched→selected + P3/P4 pending→populated, rewrites flight_legs + hotels +
+  hotel_access_lines from the chosen offer, emits status_changed/offer_selected/cascade_populated
+  events (dest_process + timeline buckets), operation_runs, plans.version+1. Reusable write
+  helpers extracted from date_change.rs into **`cascade/common.rs`** (read_version, sort-order,
+  insert_event/insert_kv_rows, timestamps, run_id). Verified by before/after DB-row diff on
+  `test-set-dates-2026`: full row parity (happy path), `--no-populate` parity, and guard-failure
+  all-or-nothing (invalid `booked → selected` persists nothing, matching TS). 70 unit tests pass.
+- ⏳ NOT STARTED: **`update-offer`** (also cascade — me-led / closely-reviewed). Then
+  offer/tour-group ingestion, shaping (6), itinerary builders (scaffold/populate), ops
+  (sync-bookings, fetch-weather, run-*), and ~10 remaining reads. Cascade runner
+  generalization LAST.
 
 > Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
 > parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
@@ -444,7 +452,7 @@ Suggested tracking table per command:
 | `set-route-segment(s)` | `travel set-route-segment[-s-bulk]` | done | done | no | Phase 4 setter; day_route_segments, DB-row parity |
 | `set-tod-*` / `set-session-*` | `travel set-tod-focus/time-range/zh` | done | done | no | Phase 4 setter; timesofday + session_activities_zh, DB-row parity (set-tod-zh "undefined"-KV bug fixed in review) |
 | `set-activity-time/title` | `travel set-activity-time/title` | done | done | no | Phase 4 setter; activities, DB-row parity |
-| `select-offer` | `travel select-offer` | pending | pending | no | Phase 4; fires populate-P3+P4 cascade — me-led/closely-reviewed |
+| `select-offer` | `travel select-offer` | done | done | no | Phase 4; populate-P3+P4 cascade — DB-row parity (happy + --no-populate + guard-failure all-or-nothing); shared helpers → cascade/common.rs |
 | `update-offer` | `travel update-offer` | pending | pending | no | Phase 4; cascade — me-led/closely-reviewed |
 
 ## Verification Method

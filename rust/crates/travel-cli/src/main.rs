@@ -121,6 +121,29 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             set_dates::run(start, end, reason, plan_id).await.map_err(|e| e.to_string())?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "select-offer" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel select-offer <offer-id> <date> [--no-populate]");
+                return Ok(());
+            }
+            // Positional args (skip flags): <offer-id> <date>.
+            let positional: Vec<&String> =
+                rest.iter().filter(|a| !a.starts_with("--")).collect();
+            if positional.len() < 2 {
+                eprintln!("Error: select-offer requires <offer-id> <date>");
+                eprintln!("Example: select-offer besttour_TYO05MM260211AM 2026-02-13");
+                std::process::exit(1);
+            }
+            let offer_id = positional[0].clone();
+            let date = positional[1].clone();
+            let populate = !rest.iter().any(|a| a == "--no-populate");
+            let plan_id =
+                env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            cascade::select_offer::run(offer_id, date, populate, plan_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "set-day-theme" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
                 println!("Usage:\n  travel set-day-theme <day> [theme] [--zh \"<chinese_title>\"] [--dest <slug>]");

@@ -45,6 +45,10 @@
 //     emission order. TS does the same because timeline events share one
 //     in-memory array indexed by append position.
 
+use super::common::{
+    insert_event, insert_kv_rows, new_run_id, next_dest_process_sort_order,
+    next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version,
+};
 use libsql::Connection;
 
 /// The 4 date-dependent processes that get cascade-marked dirty on
@@ -183,6 +187,8 @@ pub async fn execute(
         dest_process_p1_so,
         "date_anchor_changed",
         &now_iso,
+        None,
+        None,
     )
     .await.map_err(|e| e.to_string())?;
     insert_kv_rows(
@@ -224,6 +230,8 @@ pub async fn execute(
             *so,
             "marked_dirty",
             &now_iso,
+            None,
+            None,
         )
         .await.map_err(|e| e.to_string())?;
         insert_kv_rows(
@@ -258,6 +266,8 @@ pub async fn execute(
             so,
             evt,
             &now_iso,
+            None,
+            None,
         )
         .await.map_err(|e| e.to_string())?;
         let kv: &[(&str, String)] = match *evt {
@@ -315,238 +325,6 @@ pub async fn execute(
     Ok(version_after)
 }
 
-/// Read the current `plans.version` for a plan. THROWS if the plan row
-/// is missing — there is no local-data fallback.
-async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {
-    let mut rows = conn
-        .query(
-            "SELECT version FROM plans WHERE plan_id = ?1",
-            libsql::params![plan_id.to_string()],
-        )
-        .await.map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let v: i64 = row.get(0).map_err(|e| e.to_string())?;
-        return Ok(v);
-    }
-    Err(format!("plans row missing for plan_id={plan_id}"))
-}
-
-/// Compute the next sort_order for a new event in a (scope='dest_process',
-/// destination, process_id) bucket. Returns `MAX(existing) + 1`.
-async fn next_dest_process_sort_order(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<i64, String> {
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(MAX(sort_order), -1) AS m FROM plan_events \
-             WHERE plan_id = ?1 AND scope = 'dest_process' \
-               AND destination = ?2 AND process_id = ?3",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                process_id.to_string()
-            ],
-        )
-        .await.map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let m: i64 = row.get(0).map_err(|e| e.to_string())?;
-        return Ok(m + 1);
-    }
-    Ok(0)
-}
-
-/// Compute the next sort_order for a new event in the GLOBAL timeline
-/// bucket. Timeline events share one index across all process_ids —
-/// they correspond to the in-memory `eventLog.event_log` array
-/// position. Returns `MAX(existing) + 1`.
-async fn next_timeline_sort_order(conn: &Connection, plan_id: &str) -> Result<i64, String> {
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(MAX(sort_order), -1) AS m FROM plan_events \
-             WHERE plan_id = ?1 AND scope = 'timeline'",
-            libsql::params![plan_id.to_string()],
-        )
-        .await.map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let m: i64 = row.get(0).map_err(|e| e.to_string())?;
-        return Ok(m + 1);
-    }
-    Ok(0)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn insert_event(
-    conn: &Connection,
-    plan_id: &str,
-    scope: &str,
-    destination: &str,
-    process_id: &str,
-    sort_order: i64,
-    event: &str,
-    event_at: &str,
-) -> Result<(), String> {
-    // The PK is (plan_id, scope, destination, process_id, sort_order).
-    // DELETE-then-reinsert is unnecessary for a brand-new event_id, but
-    // is kept for safety (matches the spec's "defensive" rule on event_data).
-    conn.execute(
-        "DELETE FROM plan_events \
-         WHERE plan_id = ?1 AND scope = ?2 AND destination = ?3 \
-           AND process_id = ?4 AND sort_order = ?5",
-        libsql::params![
-            plan_id.to_string(),
-            scope.to_string(),
-            destination.to_string(),
-            process_id.to_string(),
-            sort_order
-        ],
-    )
-    .await.map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO plan_events \
-            (plan_id, scope, destination, process_id, sort_order, \
-             event, event_at, from_state, to_state) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL)",
-        libsql::params![
-            plan_id.to_string(),
-            scope.to_string(),
-            destination.to_string(),
-            process_id.to_string(),
-            sort_order,
-            event.to_string(),
-            event_at.to_string()
-        ],
-    )
-    .await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn insert_kv_rows(
-    conn: &Connection,
-    plan_id: &str,
-    scope: &str,
-    destination: &str,
-    process_id: &str,
-    sort_order: i64,
-    kv: &[(&str, String)],
-) -> Result<(), String> {
-    // DELETE-then-reinsert for the KV child rows (defensive — even for
-    // a fresh event_id, mirrors syncNormalizedTables' discipline).
-    conn.execute(
-        "DELETE FROM plan_event_data \
-         WHERE plan_id = ?1 AND scope = ?2 AND destination = ?3 \
-           AND process_id = ?4 AND sort_order = ?5",
-        libsql::params![
-            plan_id.to_string(),
-            scope.to_string(),
-            destination.to_string(),
-            process_id.to_string(),
-            sort_order
-        ],
-    )
-    .await.map_err(|e| e.to_string())?;
-    for (k, v) in kv {
-        conn.execute(
-            "INSERT INTO plan_event_data \
-                (plan_id, scope, destination, process_id, sort_order, key, value) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            libsql::params![
-                plan_id.to_string(),
-                scope.to_string(),
-                destination.to_string(),
-                process_id.to_string(),
-                sort_order,
-                k.to_string(),
-                v.clone()
-            ],
-        )
-        .await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// ISO-8601 / RFC 3339 timestamp for the `event_at` / `last_changed`
-/// columns (which the TS path sets to `new Date().toISOString()`).
-fn now_rfc3339() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    // Render as YYYY-MM-DDTHH:MM:SS.sssZ (matches JS Date.toISOString()).
-    let (year, month, day, hour, min, sec) = civil_from_unix(secs);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}.{:03}Z",
-        nanos / 1_000_000
-    )
-}
-
-/// SQLite-friendly `YYYY-MM-DD HH:MM:SS` UTC timestamp (matches
-/// `datetime('now')` but computed in Rust so we use one consistent
-/// timestamp across the writes in this command).
-fn now_db_datetime() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let (year, month, day, hour, min, sec) = civil_from_unix(secs);
-    format!(
-        "{year:04}-{month:02}-{day:02} {hour:02}:{min:02}:{sec:02}"
-    )
-}
-
-/// Howard Hinnant's civil-from-days algorithm. Returns
-/// (year, month, day, hour, min, sec) for a unix epoch in seconds.
-fn civil_from_unix(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
-    let days = secs.div_euclid(86_400);
-    let secs_of_day = secs.rem_euclid(86_400) as u32;
-    let hour = secs_of_day / 3600;
-    let min = (secs_of_day % 3600) / 60;
-    let sec = secs_of_day % 60;
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m as u32, d as u32, hour, min, sec)
-}
-
-/// Generate a fresh `operation_runs.run_id`. The TS path uses
-/// `crypto.randomUUID()`; this is an equivalent 36-char UUIDv4-shaped
-/// string (8-4-4-4-12 hex groups) derived from the system clock + a
-/// static mix. The value is VOLATILE — the diff normalizes run_id out.
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        p1, p2, p3, p4, p5
-    )
-}
 
 #[cfg(test)]
 mod tests {
@@ -567,30 +345,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn civil_from_unix_epoch() {
-        // 1970-01-01 00:00:00 UTC
-        assert_eq!(civil_from_unix(0), (1970, 1, 1, 0, 0, 0));
-        // 2026-02-17 12:00:00 UTC = 1771329600 (verified)
-        assert_eq!(civil_from_unix(1_771_329_600), (2026, 2, 17, 12, 0, 0));
-        // 2026-06-08 00:00:00 UTC = 1780876800 (verified)
-        assert_eq!(civil_from_unix(1_780_876_800), (2026, 6, 8, 0, 0, 0));
-    }
-
-    #[test]
-    fn rfc3339_format() {
-        // Fixed seed: 2026-06-08 12:34:56.789Z
-        // 2026-06-08 12:34:56 UTC = 1770438896
-        let s = now_rfc3339();
-        // Just assert it has the YYYY-MM-DDTHH:MM:SS.sssZ shape.
-        assert!(s.len() >= 24, "got: {s}");
-        let bytes = s.as_bytes();
-        assert_eq!(bytes[4], b'-');
-        assert_eq!(bytes[7], b'-');
-        assert_eq!(bytes[10], b'T');
-        assert_eq!(bytes[13], b':');
-        assert_eq!(bytes[16], b':');
-        assert_eq!(bytes[19], b'.');
-        assert_eq!(s.as_bytes()[s.len() - 1], b'Z');
-    }
 }
