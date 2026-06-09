@@ -11,9 +11,11 @@ path = "src/main.rs"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libsql = "0.6"
 regex = "1"
+serde_json = "1"
 sha1 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 turso-util = { path = "../turso-util" }
+url = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

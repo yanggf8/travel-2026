@@ -391,9 +391,29 @@ Estimate: 3-6 weeks depending on how many mutation commands are still actively u
   `plan_offers.availability` untouched. Verified by DB-row diff on 3 scenarios (full args,
   availability-only, price-only) + header parity (conditional `Source:` line) + invalid-availability
   error parity. 71 unit tests pass. Reuses cascade/common.rs helpers.
-- ⏳ NOT STARTED: offer/tour-group ingestion, shaping (6), itinerary builders
-  (scaffold/populate), ops (sync-bookings, fetch-weather, run-*), and ~10 remaining reads.
-  Cascade runner generalization LAST.
+- ✅ DONE (2026-06-09): **`import-offers`** — scrape-file → normalized `plan_offers` import.
+  Handed off (GLM 5.1 via Claude Code after GLM/Grok outages), then **I re-verified + fixed**.
+  Full port of `scrape-file-parser.ts` (469 LOC: Format A/B, `stableHash8`=SHA-1[:8], all
+  inference/mapping helpers) → `scrape_parser.rs`; write path (`plan_offers` + 6 child tables +
+  provenance/warnings, P3_4→researched, `package_offers_imported` event, operation_runs,
+  version) → `import_offers.rs`, merge-by-id (DELETE-then-insert per offer id, never wiping
+  other sources), reusing cascade/common.rs. Deps: serde_json + url (parse scrape landing-zone
+  + URLs — NOT DB JSON, rule-compliant). **KEY FINDING (independently verified): the TS
+  import-offers is broken end-to-end** — camelCase parser vs snake_case OfferSchema → save()
+  throws Zod, AND the flush dies on `NOT NULL plan_offers.source_id`; it writes nothing but a
+  half-finished `started` op_run. So a literal TS-vs-Rust diff is impossible; the Rust is the
+  *fixed* intended behavior. See [[ts-import-offers-broken]]. **Verification:** no real scrape
+  file yields an offer (wrong-shape envelopes / missing `per_person`), so I synthesized a valid
+  Format-B offer and confirmed the Rust writes correct snake_case rows + op_run completed +
+  version bump; dry-run/no-files/all-filtered stdout+exit parity. **2 handoff bugs I caught +
+  fixed:** `airline_code:""`→NULL (TS keeps ""; added `get_str_keep_empty`) and hotel
+  `slug` absent→"" (TS writes NULL; bind Option). 82 unit tests pass, clippy clean on new files.
+- ⏳ NOT STARTED: **tour-group ingestion** (`add-offer`/`add-besttour-offer`/`add-lifetour-offer`/
+  `import-tour-group-offers`) — BLOCKED: these still `JSON.stringify` a blob into the `raw_text`
+  column (de-JSON program renamed the column but not the content). Needs a me-led raw_text
+  de-JSON design (typed cols / child rows) FIRST, else a port reintroduces JSON-in-RDB. Then
+  shaping (6), itinerary builders (scaffold/populate), ops (sync-bookings, fetch-weather,
+  run-*), and ~10 remaining reads. Cascade runner generalization LAST.
 
 > Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
 > parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
@@ -463,6 +483,7 @@ Suggested tracking table per command:
 | `set-activity-time/title` | `travel set-activity-time/title` | done | done | no | Phase 4 setter; activities, DB-row parity |
 | `select-offer` | `travel select-offer` | done | done | no | Phase 4; populate-P3+P4 cascade — DB-row parity (happy + --no-populate + guard-failure all-or-nothing); shared helpers → cascade/common.rs |
 | `update-offer` | `travel update-offer` | done | done | no | Phase 4; per-date pricing update (NO cascade) — DB-row parity (full/availability-only/price-only) + header + error parity |
+| `import-offers` | `travel import-offers` | done | done | no | Phase 4; scrape→plan_offers (469-LOC parser ported). TS is BROKEN (camelCase vs snake_case Zod+flush) so no literal diff; verified via synthesized offer; fixed 2 handoff bugs (airline_code ""→NULL, slug NULL→""). serde_json/url for scrape parse only |
 
 ## Verification Method
 

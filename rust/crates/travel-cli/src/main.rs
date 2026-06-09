@@ -10,11 +10,13 @@ mod db_status;
 mod destination_ref;
 mod flights;
 mod freshness;
+mod import_offers;
 mod leave;
 mod offers;
 mod plan;
 mod plan_resolver;
 mod plans;
+mod scrape_parser;
 mod set_activity;
 mod set_airport_transfer;
 mod set_dates;
@@ -90,6 +92,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "check-freshness" => {
             let opts = freshness::FreshnessArgs::parse(rest)?;
             freshness::run(&opts).await
+        }
+        [cmd, rest @ ..] if cmd == "import-offers" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel import-offers [--dest <slug>] [--dir <path>] [--files <csv>] [--start <date>] [--end <date>] [--pax N] [--note <text>] [--dry-run]");
+                return Ok(());
+            }
+            let opts = import_offers::parse_args(rest)?;
+            import_offers::run(opts).await.map_err(|e| e.to_string())?;
+            Ok(())
         }
         [cmd, rest @ ..] if cmd == "status" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {

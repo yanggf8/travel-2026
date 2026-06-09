@@ -2273,9 +2273,11 @@ dependencies = [
  "chrono",
  "libsql",
  "regex",
+ "serde_json",
  "sha1",
  "tokio",
  "turso-util",
+ "url",
 ]
 
 [[package]]
