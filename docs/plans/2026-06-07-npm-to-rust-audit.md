@@ -408,12 +408,27 @@ Estimate: 3-6 weeks depending on how many mutation commands are still actively u
   version bump; dry-run/no-files/all-filtered stdout+exit parity. **2 handoff bugs I caught +
   fixed:** `airline_code:""`→NULL (TS keeps ""; added `get_str_keep_empty`) and hotel
   `slug` absent→"" (TS writes NULL; bind Option). 82 unit tests pass, clippy clean on new files.
-- ⏳ NOT STARTED: **tour-group ingestion** (`add-offer`/`add-besttour-offer`/`add-lifetour-offer`/
-  `import-tour-group-offers`) — BLOCKED: these still `JSON.stringify` a blob into the `raw_text`
-  column (de-JSON program renamed the column but not the content). Needs a me-led raw_text
-  de-JSON design (typed cols / child rows) FIRST, else a port reintroduces JSON-in-RDB. Then
-  shaping (6), itinerary builders (scaffold/populate), ops (sync-bookings, fetch-weather,
-  run-*), and ~10 remaining reads. Cascade runner generalization LAST.
+- ✅ DONE (2026-06-09): **raw_text de-JSON** (unblocker) — `shaping_tour_group_offers.raw_text`
+  + the other 6 open-blob `*_text` columns normalized into typed cols + key/value child tables;
+  RDB is now 100% JSON-free (whole-DB scan = 0). See [[no-json-in-rdb]].
+- ✅ DONE (2026-06-09): **tour-group ingestion batch** (`add-offer`, `add-besttour-offer`,
+  `add-lifetour-offer`, `import-tour-group-offers`) — handed off (Claude Code) then me-reviewed +
+  fixed. New Rust: `tour_group_offers.rs` (shared row struct + insert + scrape-attempt helpers),
+  `add_offer.rs`, `add_besttour_offer.rs`, `add_lifetour_offer.rs`, `import_tour_group_offers.rs`.
+  Run-scoped (NO operation_runs / plans.version / events). Writes typed cols + notes child rows,
+  no JSON. **Caught + fixed 4 handoff bugs the "84 tests pass" claim hid (verification was NOT
+  run by the agent):** (1) add-offer offer_id concatenated depart+return instead of depart only;
+  (2) import's `normalize_legacy_raw_json` was a no-op stub → legacy `raw_json` in envelope offers
+  silently dropped (lost confidence/flight/notes) — implemented the decomposition inline in
+  parse_offer_row; (3) skip-validation listed only the first missing field, not all (TS lists all)
+  → upfront collect-all-missing in TS canonical order; (4) file-not-found used canonicalize()
+  → wrong error msg, switched to std::path::absolute to match TS `Error: file not found: <path>`.
+  **One intentional divergence:** scrape-attempt `error` is plain text (`skipped N: id (missing: ...)`)
+  not the TS JSON substring — honors no-json-in-rdb. Verified: DB-row parity on a disposable run_id
+  across all 4 commands (full/minimal/group_tour, URL date+region inference, ok/partial/failed
+  import paths, legacy raw_json decomposition) + every error-path message; 84 tests, clippy clean.
+- ⏳ NOT STARTED: shaping (6), itinerary builders (scaffold/populate), ops (sync-bookings,
+  fetch-weather, run-*), and ~10 remaining reads. Cascade runner generalization LAST.
 
 > Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
 > parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
@@ -484,6 +499,10 @@ Suggested tracking table per command:
 | `select-offer` | `travel select-offer` | done | done | no | Phase 4; populate-P3+P4 cascade — DB-row parity (happy + --no-populate + guard-failure all-or-nothing); shared helpers → cascade/common.rs |
 | `update-offer` | `travel update-offer` | done | done | no | Phase 4; per-date pricing update (NO cascade) — DB-row parity (full/availability-only/price-only) + header + error parity |
 | `import-offers` | `travel import-offers` | done | done | no | Phase 4; scrape→plan_offers (469-LOC parser ported). TS is BROKEN (camelCase vs snake_case Zod+flush) so no literal diff; verified via synthesized offer; fixed 2 handoff bugs (airline_code ""→NULL, slug NULL→""). serde_json/url for scrape parse only |
+| `add-offer` | `travel add-offer` | done | done | no | Phase 4; run-scoped shaping_tour_group_offers + notes. DB-row parity; fixed offer_id depart+return bug |
+| `add-besttour-offer` | `travel add-besttour-offer` | done | done | no | Phase 4; URL date inference, generated title, hardcoded flight/baggage/star. DB-row parity |
+| `add-lifetour-offer` | `travel add-lifetour-offer` | done | done | no | Phase 4; URL region inference, nights-from-dates. DB-row parity |
+| `import-tour-group-offers` | `travel import-tour-group-offers` | done | done | no | Phase 4; envelope file → offers+notes+scrape-attempt. DB-row parity (ok/partial/failed); error field is plain text (intentional no-JSON divergence); fixed legacy-raw_json drop + missing-fields-list + file-not-found bugs |
 
 ## Verification Method
 

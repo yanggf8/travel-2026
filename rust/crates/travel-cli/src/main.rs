@@ -26,6 +26,11 @@ mod set_hotel;
 mod set_route_segment;
 mod set_tod;
 mod status;
+mod tour_group_offers;
+mod add_offer;
+mod add_besttour_offer;
+mod add_lifetour_offer;
+mod import_tour_group_offers;
 mod update_offer;
 mod validate;
 mod view_bookings;
@@ -101,6 +106,18 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             let opts = import_offers::parse_args(rest)?;
             import_offers::run(opts).await.map_err(|e| e.to_string())?;
             Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "add-offer" => {
+            add_offer::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "add-besttour-offer" => {
+            add_besttour_offer::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "add-lifetour-offer" => {
+            add_lifetour_offer::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "import-tour-group-offers" => {
+            import_tour_group_offers::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "status" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
