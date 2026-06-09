@@ -591,7 +591,6 @@ export interface BookingRow {
   book_by: string | null;
   price_amount: string | null;
   price_currency: string | null;
-  payload_text: string | null;
 }
 
 export async function getBookings(
@@ -600,7 +599,7 @@ export async function getBookings(
 ): Promise<BookingRow[]> {
   const escaped = destination.replace(/'/g, "''");
   const results = await queryTursoPipeline(env, [
-    `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency, payload_text FROM bookings_current WHERE destination = '${escaped}'`,
+    `SELECT booking_key, trip_id, destination, category, title, status, reference, book_by, price_amount, price_currency FROM bookings_current WHERE destination = '${escaped}'`,
   ]);
   return results[0] as unknown as BookingRow[];
 }

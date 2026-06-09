@@ -4,7 +4,7 @@
 -- Regenerate: npx ts-node scripts/gen-schema-sql.ts  (do NOT hand-edit)
 -- Source of truth = scripts/turso-migrate.ts; this mirrors the applied schema.
 -- Generated: 2026-06-09
--- Tables: 107 | Indexes: 21
+-- Tables: 111 | Indexes: 21
 -- =============================================================================
 --
 -- Naming conventions:
@@ -138,7 +138,19 @@ CREATE TABLE bookings_current (
   price_currency TEXT DEFAULT 'TWD',
   origin_path TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-, payload_text TEXT);
+);
+
+CREATE TABLE bookings_current_payload (
+    booking_key TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (booking_key, sort_order)
+  );
+
+CREATE TABLE bookings_event_data (
+    booking_key TEXT NOT NULL, event_at TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (booking_key, event_at, sort_order)
+  );
 
 CREATE TABLE bookings_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -802,10 +814,16 @@ CREATE TABLE shaping_candidates (
       adopted_plan_id TEXT
     );
 
+CREATE TABLE shaping_research_artifact_notes (
+    artifact_id TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (artifact_id, sort_order)
+  );
+
 CREATE TABLE shaping_research_artifacts (
   artifact_id TEXT PRIMARY KEY, run_id TEXT, destination_slug TEXT, artifact_kind TEXT,
   original_filename TEXT, raw_text TEXT, observed_by TEXT, observed_at TEXT, imported_at TEXT
-, payload_text TEXT);
+);
 
 CREATE TABLE shaping_research_destinations (
       run_id TEXT NOT NULL,
@@ -859,12 +877,18 @@ CREATE TABLE shaping_scrape_attempts (
       PRIMARY KEY (run_id, dest_code, nights)
     );
 
+CREATE TABLE shaping_selected_offer_notes (
+    selection_id TEXT NOT NULL, source TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (selection_id, source, sort_order)
+  );
+
 CREATE TABLE shaping_selected_offers (
   selection_id TEXT PRIMARY KEY, run_id TEXT, destination_slug TEXT, source_id TEXT, source_offer_id TEXT,
   selected_depart_date TEXT, selected_return_date TEXT, nights INTEGER, price_per_person_twd INTEGER,
   price_total_twd INTEGER, hotel_name TEXT, observed_by TEXT, observed_at TEXT, selected_by TEXT,
   selected_at TEXT, imported_at TEXT
-, raw_text TEXT, provenance_text TEXT);
+);
 
 CREATE TABLE shaping_tour_group_offer_notes (
     run_id TEXT NOT NULL, offer_id TEXT NOT NULL, sort_order INTEGER NOT NULL,

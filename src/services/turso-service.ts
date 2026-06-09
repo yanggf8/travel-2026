@@ -32,8 +32,8 @@ function requireExtractor(): {
   extractPackageBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
   extractTransferBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
   extractActivityBookings: (plan: Record<string, unknown>, tripId: string, dest: string) => any[];
-  toUpsertSql: (row: any) => string;
-  toEventSql: (bookingKey: string, eventType: string, row: any) => string;
+  toUpsertSql: (row: any) => string[];
+  toEventSql: (bookingKey: string, eventType: string, row: any) => string[];
   BookingRow: any;
 } {
   return require(path.join(getProjectRoot(), 'scripts', 'extract-bookings'));
@@ -962,7 +962,6 @@ export interface BookingCurrentRow {
   price_amount: number | null;
   price_currency: string | null;
   origin_path: string | null;
-  payload_text: string | null;
   updated_at: string | null;
 }
 
@@ -1050,19 +1049,22 @@ export async function syncBookingsFromPlanJson(
   // Transaction: DELETE stale rows, then upsert current bookings
   sqlStatements.push('BEGIN;');
 
-  // Delete all rows for these trip IDs (prevents stale ghost rows)
+  // Delete all rows for these trip IDs (prevents stale ghost rows). Also clear
+  // the payload child rows for those bookings (FK-less, so delete by join).
   for (const tid of tripIds) {
+    sqlStatements.push(`DELETE FROM bookings_current_payload WHERE booking_key IN (SELECT booking_key FROM bookings_current WHERE trip_id = '${sqlEscape(tid)}');`);
     sqlStatements.push(`DELETE FROM bookings_current WHERE trip_id = '${sqlEscape(tid)}';`);
   }
 
-  // Upsert current bookings + diff-based events
+  // Upsert current bookings + diff-based events. toUpsertSql/toEventSql each
+  // return MULTIPLE statements (main row + flat payload child rows) — spread them.
   for (const row of bookings) {
-    sqlStatements.push(extractor.toUpsertSql(row));
+    sqlStatements.push(...extractor.toUpsertSql(row));
 
     // Only emit event if something actually changed
     const prev = existingMap.get(row.booking_key);
     if (!prev) {
-      sqlStatements.push(extractor.toEventSql(row.booking_key, 'created', row));
+      sqlStatements.push(...extractor.toEventSql(row.booking_key, 'created', row));
     } else if (
       prev.status !== row.status ||
       prev.reference !== row.reference ||
@@ -1070,7 +1072,7 @@ export async function syncBookingsFromPlanJson(
       prev.price_amount !== row.price_amount ||
       prev.title !== row.title
     ) {
-      sqlStatements.push(extractor.toEventSql(row.booking_key, 'updated', row));
+      sqlStatements.push(...extractor.toEventSql(row.booking_key, 'updated', row));
     }
     // No event if nothing changed
   }
@@ -1114,7 +1116,7 @@ export async function queryBookings(filters: {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = filters.limit ? `LIMIT ${Math.trunc(filters.limit)}` : 'LIMIT 100';
 
-  const sql = `SELECT booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, payload_text, updated_at FROM bookings_current ${where} ORDER BY category, destination, updated_at DESC ${limit};`;
+  const sql = `SELECT booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, updated_at FROM bookings_current ${where} ORDER BY category, destination, updated_at DESC ${limit};`;
 
   const response = await client.execute(sql);
   return rowsToObjects(response) as BookingCurrentRow[];

@@ -33,20 +33,10 @@ export interface BookingRow {
   price_amount: number | null;
   price_currency: string;
   origin_path: string;
-  payload_text: string | null;
-}
-
-// Flatten an open payload object to readable "k: v | k: v" text (no JSON in column).
-function payloadToText(payload: Record<string, unknown>): string | null {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(payload)) {
-    if (v == null) continue;
-    const val = Array.isArray(v)
-      ? v.map((x) => String(x)).join(', ')
-      : (typeof v === 'object' ? Object.entries(v as Record<string, unknown>).map(([kk, vv]) => `${kk}=${vv}`).join(', ') : String(v));
-    parts.push(`${k}: ${val}`);
-  }
-  return parts.length ? parts.join(' | ') : null;
+  // Open booking payload as a structured object. Persisted as flat key/value
+  // child rows (bookings_current_payload / bookings_event_data) — NEVER as JSON
+  // and no longer as a single payload_text column (de-JSON'd 2026-06-09).
+  payload: Record<string, unknown>;
 }
 
 export interface ExtractionResult {
@@ -187,7 +177,7 @@ export function extractPackageBookings(
     price_amount: pricePerPerson != null ? Math.trunc(pricePerPerson) : null,
     price_currency: priceCurrency,
     origin_path: `destinations.${dest}.process_3_4_packages`,
-    payload_text: Object.keys(payload).length > 0 ? payloadToText(payload) : null,
+    payload,
   });
 
   return rows;
@@ -247,7 +237,7 @@ export function extractTransferBookings(
       price_amount: priceYen != null ? Math.trunc(priceYen) : null,
       price_currency: 'JPY',
       origin_path: `destinations.${dest}.process_3_transportation.airport_transfers.${direction}`,
-      payload_text: payloadToText(payload),
+      payload,
     });
   }
 
@@ -314,11 +304,11 @@ export function extractActivityBookings(
           price_amount: costEstimate != null ? Math.trunc(costEstimate) : null,
           price_currency: 'JPY',
           origin_path: `destinations.${dest}.process_5_daily_itinerary.days[${dayNumber - 1}].${session}`,
-          payload_text: payloadToText({
+          payload: {
             area: activity.area,
             booking_url: activity.booking_url,
             tags: activity.tags,
-          }),
+          },
         });
       }
     }
@@ -383,16 +373,51 @@ export function extractAllBookings(
 // SQL generators
 // ---------------------------------------------------------------------------
 
-export function toUpsertSql(row: BookingRow): string {
-  return `INSERT INTO bookings_current (booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, payload_text, updated_at) VALUES (${sqlText(row.booking_key)}, ${sqlText(row.trip_id)}, ${sqlText(row.destination)}, ${sqlText(row.category)}, ${sqlText(row.subtype)}, ${sqlText(row.title)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlText(row.booked_at)}, ${sqlText(row.source_id)}, ${sqlText(row.offer_id)}, ${sqlText(row.selected_date)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, ${sqlText(row.origin_path)}, ${sqlText(row.payload_text)}, datetime('now')) ON CONFLICT(booking_key) DO UPDATE SET status = ${sqlText(row.status)}, reference = ${sqlText(row.reference)}, book_by = ${sqlText(row.book_by)}, booked_at = ${sqlText(row.booked_at)}, price_amount = ${sqlInt(row.price_amount)}, payload_text = ${sqlText(row.payload_text)}, updated_at = datetime('now');`;
+// Flatten an open payload object to [key, value] pairs (value rendered as
+// readable text, NOT JSON) for the flat child tables. Null/empty entries skipped.
+function payloadToKv(payload: Record<string, unknown>): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(payload)) {
+    if (v == null) continue;
+    const val = Array.isArray(v)
+      ? v.map((x) => String(x)).join(', ')
+      : (typeof v === 'object' ? Object.entries(v as Record<string, unknown>).map(([kk, vv]) => `${kk}=${vv}`).join(', ') : String(v));
+    if (val === '') continue;
+    out.push([k, val]);
+  }
+  return out;
 }
 
+// Returns the bookings_current upsert PLUS one bookings_current_payload child
+// row per payload entry (replacing the offer's prior payload rows). No JSON.
+export function toUpsertSql(row: BookingRow): string[] {
+  const stmts: string[] = [
+    `INSERT INTO bookings_current (booking_key, trip_id, destination, category, subtype, title, status, reference, book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, origin_path, updated_at) VALUES (${sqlText(row.booking_key)}, ${sqlText(row.trip_id)}, ${sqlText(row.destination)}, ${sqlText(row.category)}, ${sqlText(row.subtype)}, ${sqlText(row.title)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlText(row.booked_at)}, ${sqlText(row.source_id)}, ${sqlText(row.offer_id)}, ${sqlText(row.selected_date)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, ${sqlText(row.origin_path)}, datetime('now')) ON CONFLICT(booking_key) DO UPDATE SET status = ${sqlText(row.status)}, reference = ${sqlText(row.reference)}, book_by = ${sqlText(row.book_by)}, booked_at = ${sqlText(row.booked_at)}, price_amount = ${sqlInt(row.price_amount)}, updated_at = datetime('now');`,
+    `DELETE FROM bookings_current_payload WHERE booking_key = ${sqlText(row.booking_key)};`,
+  ];
+  payloadToKv(row.payload).forEach(([k, v], i) => {
+    stmts.push(`INSERT INTO bookings_current_payload (booking_key, sort_order, key, value) VALUES (${sqlText(row.booking_key)}, ${sqlInt(i)}, ${sqlText(k)}, ${sqlText(v)});`);
+  });
+  return stmts;
+}
+
+// Returns the bookings_events insert PLUS one bookings_event_data child row per
+// payload entry. event_at is datetime('now') in the insert; we reuse a single
+// per-call timestamp so the event row and its data rows share the same event_at.
 export function toEventSql(
   bookingKey: string,
   eventType: string,
   row: BookingRow
-): string {
-  return `INSERT INTO bookings_events (booking_key, event_type, new_status, reference, book_by, amount, currency, event_data_text, event_at) VALUES (${sqlText(bookingKey)}, ${sqlText(eventType)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, ${sqlText(row.payload_text)}, datetime('now'));`;
+): string[] {
+  // Same wall-clock instant for the event row and its child data rows.
+  const stmts: string[] = [
+    `INSERT INTO bookings_events (booking_key, event_type, new_status, reference, book_by, amount, currency, event_at) VALUES (${sqlText(bookingKey)}, ${sqlText(eventType)}, ${sqlText(row.status)}, ${sqlText(row.reference)}, ${sqlText(row.book_by)}, ${sqlInt(row.price_amount)}, ${sqlText(row.price_currency)}, datetime('now'));`,
+  ];
+  payloadToKv(row.payload).forEach(([k, v], i) => {
+    // Correlate child rows to the just-inserted event via the same instant.
+    stmts.push(`INSERT INTO bookings_event_data (booking_key, event_at, sort_order, key, value) SELECT ${sqlText(bookingKey)}, event_at, ${sqlInt(i)}, ${sqlText(k)}, ${sqlText(v)} FROM bookings_events WHERE booking_key = ${sqlText(bookingKey)} ORDER BY event_at DESC LIMIT 1;`);
+  });
+  return stmts;
 }
 
 // ---------------------------------------------------------------------------

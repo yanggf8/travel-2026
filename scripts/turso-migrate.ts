@@ -1762,6 +1762,7 @@ async function main() {
   await deJsonPlanEvents(client);
   await deJsonShapingKnowledge(client);
   await deJsonTourGroupRawText(client);
+  await deJsonRemainingBlobs(client);
 
   console.log('Done.');
 }
@@ -2028,6 +2029,164 @@ async function deJsonTourGroupRawText(client: TursoPipelineClient): Promise<void
   try { await client.execute(`ALTER TABLE shaping_tour_group_offers DROP COLUMN raw_text;`); console.log('  dropped shaping_tour_group_offers.raw_text'); }
   catch (e: any) { if (!/no such column|has no column/i.test(String(e?.message || ''))) console.warn('⚠️  Could not drop raw_text:', e.message); }
   console.log('✅ Batch F.2: tour-group raw_text de-JSON complete.');
+}
+
+// ---------------------------------------------------------------------------
+// Batch F.3 — finish de-JSONing the remaining "open blob" *_text columns that
+// the first Batch F pass left holding raw JSON (whole-DB scan, 2026-06-09):
+//   shaping_selected_offers.raw_text / provenance_text  → shaping_selected_offer_notes
+//   shaping_research_artifacts.payload_text             → shaping_research_artifact_notes
+//   bookings_current.payload_text                       → bookings_current_payload (+ drop col)
+//   bookings_events.event_data_text                     → bookings_event_data
+//   events.data_text                                    → backfill legacy JSON rows to
+//                                                          the writer's "k: v | k: v" text
+//                                                          (turso-service already writes that;
+//                                                           no child table, keep the column)
+//
+// NONE of these columns has a runtime reader that extracts named keys
+// (verified: payload_text is SELECTed but unused by CLI + Worker; raw/provenance/
+// event_data have no readers; events.data_text writer already emits readable text).
+// So every blob → a flat key/value child table (one row per annotation), nested
+// values flattened to readable text (NOT JSON, NOT '[object Object]'). Lossless.
+// Idempotent: guarded per-column on the source column still existing.
+// ---------------------------------------------------------------------------
+function flattenBlobValue(v: any): string {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map(flattenBlobValue).filter((s) => s !== '').join('; ');
+  if (typeof v === 'object') return Object.entries(v).map(([k, vv]) => `${k}=${flattenBlobValue(vv)}`).join('; ');
+  return String(v);
+}
+
+// Convert an open `data` object/value to the writer's "k: v | k: v" text form
+// (mirrors turso-service.ts buildEventDataText), used to backfill legacy
+// events.data_text rows that still hold JSON.
+function blobToReadableText(v: any): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) return String(v);
+  const parts = Object.entries(v).map(([k, vv]) =>
+    `${k}: ${Array.isArray(vv) ? (vv as unknown[]).join(', ') : (vv && typeof vv === 'object' ? Object.entries(vv as Record<string, unknown>).map(([kk, vvv]) => `${kk}=${vvv}`).join(', ') : String(vv))}`
+  );
+  return parts.join(' | ') || null;
+}
+
+async function deJsonRemainingBlobs(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch F.3: de-JSON remaining open-blob *_text columns...');
+
+  // Child tables (flat key/value rows; one per annotation — no JSON).
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_selected_offer_notes (
+    selection_id TEXT NOT NULL, source TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (selection_id, source, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_research_artifact_notes (
+    artifact_id TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (artifact_id, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS bookings_current_payload (
+    booking_key TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (booking_key, sort_order)
+  );`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS bookings_event_data (
+    booking_key TEXT NOT NULL, event_at TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (booking_key, event_at, sort_order)
+  );`);
+
+  const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+
+  // Generic: parse an object blob → flat key/value child rows.
+  const blobToNotes = (
+    obj: Record<string, any>,
+    insertSql: (i: number, key: string, value: string) => { sql: string; args: ReturnType<typeof tursoText>[] }
+  ) => {
+    let i = 0;
+    for (const [k, v] of Object.entries(obj)) {
+      const val = flattenBlobValue(v);
+      if (val === '' || val === 'null' || val === 'undefined') continue;
+      stmts.push(insertSql(i, k, val));
+      i++;
+    }
+  };
+
+  const hasCol = async (table: string): Promise<Set<string>> =>
+    new Set(rowsAt(await client.executeBatch([`PRAGMA table_info(${table});`]), 0).map((r) => String(r.name)));
+
+  // 1. shaping_selected_offers.raw_text / provenance_text
+  const ssoCols = await hasCol('shaping_selected_offers');
+  if (ssoCols.has('raw_text') || ssoCols.has('provenance_text')) {
+    const rows = rowsAt(await client.executeBatch([`SELECT selection_id, raw_text, provenance_text FROM shaping_selected_offers;`]), 0);
+    for (const r of rows) {
+      for (const [src, col] of [['raw', 'raw_text'], ['provenance', 'provenance_text']] as const) {
+        const obj = parseJsonObj(r[col]);
+        if (!obj) continue;
+        stmts.push({ sql: `DELETE FROM shaping_selected_offer_notes WHERE selection_id = ? AND source = ?;`, args: [tursoText(r.selection_id), tursoText(src)] });
+        blobToNotes(obj, (i, key, value) => ({ sql: `INSERT INTO shaping_selected_offer_notes (selection_id, source, sort_order, key, value) VALUES (?, ?, ?, ?, ?);`, args: [tursoText(r.selection_id), tursoText(src), tursoInt(i), tursoText(key), tursoText(value)] }));
+      }
+    }
+  }
+
+  // 2. shaping_research_artifacts.payload_text
+  const sraCols = await hasCol('shaping_research_artifacts');
+  if (sraCols.has('payload_text')) {
+    const rows = rowsAt(await client.executeBatch([`SELECT artifact_id, payload_text FROM shaping_research_artifacts;`]), 0);
+    for (const r of rows) {
+      const obj = parseJsonObj(r.payload_text);
+      if (!obj) continue;
+      stmts.push({ sql: `DELETE FROM shaping_research_artifact_notes WHERE artifact_id = ?;`, args: [tursoText(r.artifact_id)] });
+      blobToNotes(obj, (i, key, value) => ({ sql: `INSERT INTO shaping_research_artifact_notes (artifact_id, sort_order, key, value) VALUES (?, ?, ?, ?);`, args: [tursoText(r.artifact_id), tursoInt(i), tursoText(key), tursoText(value)] }));
+    }
+  }
+
+  // 3. bookings_current.payload_text  (+ drop the column — unused by readers)
+  const bcCols = await hasCol('bookings_current');
+  if (bcCols.has('payload_text')) {
+    const rows = rowsAt(await client.executeBatch([`SELECT booking_key, payload_text FROM bookings_current;`]), 0);
+    for (const r of rows) {
+      const obj = parseJsonObj(r.payload_text);
+      if (!obj) continue; // no JSON object → nothing to migrate; do NOT wipe existing child rows
+      stmts.push({ sql: `DELETE FROM bookings_current_payload WHERE booking_key = ?;`, args: [tursoText(r.booking_key)] });
+      blobToNotes(obj, (i, key, value) => ({ sql: `INSERT INTO bookings_current_payload (booking_key, sort_order, key, value) VALUES (?, ?, ?, ?);`, args: [tursoText(r.booking_key), tursoInt(i), tursoText(key), tursoText(value)] }));
+    }
+  }
+
+  // 4. bookings_events.event_data_text
+  const beCols = await hasCol('bookings_events');
+  if (beCols.has('event_data_text')) {
+    const rows = rowsAt(await client.executeBatch([`SELECT booking_key, event_at, event_data_text FROM bookings_events;`]), 0);
+    for (const r of rows) {
+      const obj = parseJsonObj(r.event_data_text);
+      if (!obj) continue; // no JSON object → leave existing child rows intact
+      stmts.push({ sql: `DELETE FROM bookings_event_data WHERE booking_key = ? AND event_at = ?;`, args: [tursoText(r.booking_key), tursoText(r.event_at)] });
+      blobToNotes(obj, (i, key, value) => ({ sql: `INSERT INTO bookings_event_data (booking_key, event_at, sort_order, key, value) VALUES (?, ?, ?, ?, ?);`, args: [tursoText(r.booking_key), tursoText(r.event_at), tursoInt(i), tursoText(key), tursoText(value)] }));
+    }
+  }
+
+  // 5. events.data_text — backfill legacy JSON rows to the writer's "k: v" text.
+  //    (No child table; the column stays — its contract is readable text.)
+  const evRows = rowsAt(await client.executeBatch([`SELECT id, data_text FROM events WHERE data_text LIKE '{%' OR data_text LIKE '[%';`]), 0);
+  for (const r of evRows) {
+    const obj = parseJsonObj(r.data_text);
+    if (!obj) continue; // not actually JSON object → leave as-is
+    stmts.push({ sql: `UPDATE events SET data_text = ? WHERE id = ?;`, args: [tursoText(blobToReadableText(obj)), tursoInt(r.id)] });
+  }
+
+  if (stmts.length > 0) await client.executeManyParams(stmts);
+  console.log(`✅ Batch F.3 backfilled ${stmts.length} statements (notes child rows + events.data_text text).`);
+
+  // Drop the now-normalized blob columns. events.data_text stays (text contract).
+  for (const [table, col] of [
+    ['shaping_selected_offers', 'raw_text'],
+    ['shaping_selected_offers', 'provenance_text'],
+    ['shaping_research_artifacts', 'payload_text'],
+    ['bookings_current', 'payload_text'],
+    ['bookings_events', 'event_data_text'],
+  ] as const) {
+    try { await client.execute(`ALTER TABLE ${table} DROP COLUMN ${col};`); console.log(`  dropped ${table}.${col}`); }
+    catch (e: any) { if (!/no such column|has no column/i.test(String(e?.message || ''))) console.warn(`⚠️  Could not drop ${table}.${col}:`, e.message); }
+  }
+  console.log('✅ Batch F.3: remaining open-blob de-JSON complete.');
 }
 
 // ---------------------------------------------------------------------------
