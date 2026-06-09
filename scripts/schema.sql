@@ -3,8 +3,8 @@
 -- AUTO-GENERATED from the live DB via scripts/turso-migrate.ts's output.
 -- Regenerate: npx ts-node scripts/gen-schema-sql.ts  (do NOT hand-edit)
 -- Source of truth = scripts/turso-migrate.ts; this mirrors the applied schema.
--- Generated: 2026-06-08
--- Tables: 106 | Indexes: 21
+-- Generated: 2026-06-09
+-- Tables: 107 | Indexes: 21
 -- =============================================================================
 --
 -- Naming conventions:
@@ -866,6 +866,12 @@ CREATE TABLE shaping_selected_offers (
   selected_at TEXT, imported_at TEXT
 , raw_text TEXT, provenance_text TEXT);
 
+CREATE TABLE shaping_tour_group_offer_notes (
+    run_id TEXT NOT NULL, offer_id TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (run_id, offer_id, sort_order)
+  );
+
 CREATE TABLE shaping_tour_group_offers (
     run_id TEXT NOT NULL,
     offer_id TEXT NOT NULL,
@@ -885,7 +891,7 @@ CREATE TABLE shaping_tour_group_offers (
     seats_available INTEGER,
     min_group_size INTEGER,
     group_size_cap INTEGER,
-    product_kind TEXT NOT NULL DEFAULT 'group_tour', raw_text TEXT, parse_warnings_text TEXT,
+    product_kind TEXT NOT NULL DEFAULT 'group_tour', parse_warnings_text TEXT, raw_confidence TEXT, raw_note TEXT, raw_flight TEXT, raw_flight_outbound TEXT, raw_flight_return TEXT,
     PRIMARY KEY (run_id, offer_id)
   );
 

@@ -39,14 +39,16 @@ const addOfferCommand: CommandHandler = {
 
     const now = new Date().toISOString();
 
+    const flight = args.optionValue('--flight') || null;
     const rawNote = args.optionValue('--note') || args.optionValue('--flight') || '';
-    const rawJson = JSON.stringify({
-      source: 'manual_cli',
-      flight: args.optionValue('--flight') || null,
-      baggage_kg: args.optionValue('--baggage') ? parseInt(args.optionValue('--baggage')!) : null,
-      note: rawNote || null,
-      observed_at: now,
-    });
+    const baggage = args.optionValue('--baggage') ? parseInt(args.optionValue('--baggage')!) : null;
+
+    // De-JSON'd: typed columns for the read fields, plus flat notes (no JSON blob).
+    const notes: Array<{ key: string; value: string }> = [
+      { key: 'source', value: 'manual_cli' },
+      { key: 'observed_at', value: now },
+    ];
+    if (baggage != null) notes.push({ key: 'baggage_kg', value: String(baggage) });
 
     const row = {
       run_id: runId,
@@ -67,8 +69,9 @@ const addOfferCommand: CommandHandler = {
       seats_available: seats,
       min_group_size: 2,
       group_size_cap: null,
-      raw_json: rawJson,
-      parse_warnings_json: null,
+      raw_flight: flight,
+      raw_note: rawNote || null,
+      notes,
       product_kind: kind,
     };
 

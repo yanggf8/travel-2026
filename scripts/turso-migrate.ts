@@ -1761,6 +1761,7 @@ async function main() {
   await deJsonCascadeSchema(client);
   await deJsonPlanEvents(client);
   await deJsonShapingKnowledge(client);
+  await deJsonTourGroupRawText(client);
 
   console.log('Done.');
 }
@@ -1920,6 +1921,113 @@ async function deJsonShapingKnowledge(client: TursoPipelineClient): Promise<void
   }
   await client.execute(`DROP TABLE IF EXISTS flights;`);
   console.log('✅ Batch F: shaping/knowledge/bookings de-JSON complete (dead flights table dropped).');
+}
+
+// ---------------------------------------------------------------------------
+// Batch F (part 2) — finish de-JSONing shaping_tour_group_offers.raw_text.
+//
+// The first Batch F pass only RENAMED raw_json → raw_text and dumped the whole
+// JSON STRING into that TEXT column — i.e. JSON is still smuggled in a column
+// (74 rows). This finishes the job per the de-json rule:
+//   - keys the CODE reads (tour-group.ts extractConfidence; chat-format.ts) →
+//     TYPED COLUMNS: raw_confidence, raw_note, raw_flight, raw_flight_outbound,
+//     raw_flight_return.
+//   - EVERY other key (132 distinct across the data; 537 one-off manual research
+//     annotations: critical_lesson, deselection_reason, verified_total_twd,
+//     order_status, room_options_*, …) → a flat KEY/VALUE CHILD TABLE
+//     shaping_tour_group_offer_notes (one row per annotation). Nested values are
+//     flattened to text via dataToKv (NOT stored as JSON). No data is dropped.
+//   - parse_warnings_text: 0 rows populated in the data; keep the (empty) text
+//     column semantics by moving any future warnings to the notes table is NOT
+//     needed — it's already a plain text column and never held JSON. We simply
+//     drop raw_text after normalizing; parse_warnings_text is left as-is (it is a
+//     plain text column, not a JSON blob — confirmed empty).
+//
+// Idempotent: guarded on raw_text existing; re-running after the drop is a no-op.
+// ---------------------------------------------------------------------------
+// Render any JSON value as compact READABLE text for the notes child table.
+// No data loss, no JSON, no '[object Object]':
+//   - primitive → String(v)
+//   - array     → elements joined by '; ' (each recursively flattened)
+//   - object    → 'k=v; k=v' (values recursively flattened)
+function flattenNoteValue(v: any): string {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map((x) => flattenNoteValue(x)).filter((s) => s !== '').join('; ');
+  if (typeof v === 'object') return Object.entries(v).map(([k, vv]) => `${k}=${flattenNoteValue(vv)}`).join('; ');
+  return String(v);
+}
+
+async function deJsonTourGroupRawText(client: TursoPipelineClient): Promise<void> {
+  console.log('Batch F.2: de-JSON shaping_tour_group_offers.raw_text → typed cols + notes child...');
+
+  // 1. Typed columns for the keys code actually reads.
+  const typedCols = [
+    'raw_confidence', 'raw_note', 'raw_flight', 'raw_flight_outbound', 'raw_flight_return',
+  ];
+  for (const col of typedCols) {
+    try { await client.execute(`ALTER TABLE shaping_tour_group_offers ADD COLUMN ${col} TEXT;`); }
+    catch (e: any) { if (!/duplicate column/i.test(String(e?.message || ''))) throw e; }
+  }
+
+  // 2. Flat key/value child table for every other (unread) annotation.
+  await client.execute(`CREATE TABLE IF NOT EXISTS shaping_tour_group_offer_notes (
+    run_id TEXT NOT NULL, offer_id TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    key TEXT NOT NULL, value TEXT NOT NULL,
+    PRIMARY KEY (run_id, offer_id, sort_order)
+  );`);
+
+  // 3. Backfill — only while raw_text still exists (sentinel for idempotency).
+  const cols = rowsAt(await client.executeBatch([`PRAGMA table_info(shaping_tour_group_offers);`]), 0)
+    .map((r) => String(r.name));
+  if (!cols.includes('raw_text')) {
+    console.log('  raw_text already migrated; skipping backfill.');
+  } else {
+    const rows = rowsAt(
+      await client.executeBatch([`SELECT run_id, offer_id, raw_text FROM shaping_tour_group_offers WHERE raw_text IS NOT NULL;`]),
+      0
+    );
+    // Keys promoted to typed columns (read by tour-group.ts / chat-format.ts).
+    const READ = new Set(['confidence', 'note', 'flight', 'flight_outbound', 'flight_return']);
+    const stmts: Array<{ sql: string; args: ReturnType<typeof tursoText>[] }> = [];
+    let noteRows = 0;
+    for (const r of rows) {
+      const obj = parseJsonObj(r.raw_text);
+      if (!obj) continue; // non-JSON / unparseable raw_text → leave for the text fallback below
+      const colVal = (k: string) => (obj[k] != null && obj[k] !== '' ? String(obj[k]) : null);
+      stmts.push({
+        sql: `UPDATE shaping_tour_group_offers SET raw_confidence = ?, raw_note = ?, raw_flight = ?, raw_flight_outbound = ?, raw_flight_return = ? WHERE run_id = ? AND offer_id = ?;`,
+        args: [
+          tursoText(colVal('confidence')), tursoText(colVal('note')), tursoText(colVal('flight')),
+          tursoText(colVal('flight_outbound')), tursoText(colVal('flight_return')),
+          tursoText(r.run_id), tursoText(r.offer_id),
+        ],
+      });
+      // Every non-read key → a notes child row. Flatten nested values to
+      // READABLE text (NOT JSON, NOT '[object Object]'): scalars pass through,
+      // arrays/objects render as 'k=v; k=v' recursively so no data is lost.
+      stmts.push({ sql: `DELETE FROM shaping_tour_group_offer_notes WHERE run_id = ? AND offer_id = ?;`, args: [tursoText(r.run_id), tursoText(r.offer_id)] });
+      let i = 0;
+      for (const [k, raw] of Object.entries(obj)) {
+        if (READ.has(k)) continue;
+        const v = flattenNoteValue(raw);
+        if (v === '' || v === 'null' || v === 'undefined') continue; // skip empty/placeholder
+        stmts.push({
+          sql: `INSERT INTO shaping_tour_group_offer_notes (run_id, offer_id, sort_order, key, value) VALUES (?, ?, ?, ?, ?);`,
+          args: [tursoText(r.run_id), tursoText(r.offer_id), tursoInt(i), tursoText(k), tursoText(v)],
+        });
+        i++;
+        noteRows++;
+      }
+    }
+    await client.executeManyParams(stmts);
+    console.log(`✅ Batch F.2 backfilled: ${rows.length} raw_text blobs → typed cols + ${noteRows} notes rows.`);
+  }
+
+  // 4. Drop raw_text (the JSON-bearing column). parse_warnings_text stays — it is
+  //    a plain text column that never held JSON (0 populated rows).
+  try { await client.execute(`ALTER TABLE shaping_tour_group_offers DROP COLUMN raw_text;`); console.log('  dropped shaping_tour_group_offers.raw_text'); }
+  catch (e: any) { if (!/no such column|has no column/i.test(String(e?.message || ''))) console.warn('⚠️  Could not drop raw_text:', e.message); }
+  console.log('✅ Batch F.2: tour-group raw_text de-JSON complete.');
 }
 
 // ---------------------------------------------------------------------------

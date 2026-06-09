@@ -33,8 +33,15 @@ export interface TourGroupOfferRow {
   seats_available?: number | null;
   min_group_size?: number | null;
   group_size_cap?: number | null;
-  raw_json?: string | null;
-  parse_warnings_json?: string | null;
+  // De-JSON'd: the former raw_json blob is now typed columns (the keys code
+  // reads) plus a flat notes child table (every other annotation). No JSON.
+  raw_confidence?: string | null;
+  raw_note?: string | null;
+  raw_flight?: string | null;
+  raw_flight_outbound?: string | null;
+  raw_flight_return?: string | null;
+  // Free-form research annotations (one per key) from shaping_tour_group_offer_notes.
+  notes?: Array<{ key: string; value: string }>;
   product_kind?: 'group_tour' | 'fit' | null;
 }
 
@@ -65,15 +72,59 @@ export function validateOfferRow(row: Partial<TourGroupOfferRow>): { ok: true } 
   return { ok: true };
 }
 
-export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<void> {
-  if (rows.length === 0) return;
+// Read keys that map to typed columns when decomposing a legacy raw_json blob
+// that arrives via the scraper-file import envelope (the JSON landing-zone
+// boundary). Everything else in the blob becomes a flat notes row — no JSON
+// ever reaches a column.
+const RAW_TYPED_KEYS: Record<string, keyof TourGroupOfferRow> = {
+  confidence: 'raw_confidence',
+  note: 'raw_note',
+  flight: 'raw_flight',
+  flight_outbound: 'raw_flight_outbound',
+  flight_return: 'raw_flight_return',
+};
+
+function flattenNoteValue(v: any): string {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map(flattenNoteValue).filter(s => s !== '').join('; ');
+  if (typeof v === 'object') return Object.entries(v).map(([k, vv]) => `${k}=${flattenNoteValue(vv)}`).join('; ');
+  return String(v);
+}
+
+/** If an incoming row carries a legacy `raw_json` string (scraper import path),
+ * decompose it into typed columns + notes so nothing is stored as JSON. */
+function normalizeLegacyRawJson(r: any): TourGroupOfferRow {
+  const raw = (r as any).raw_json;
+  if (!raw || typeof raw !== 'string') return r as TourGroupOfferRow;
+  let obj: Record<string, any> | null = null;
+  try { const p = JSON.parse(raw); if (p && typeof p === 'object' && !Array.isArray(p)) obj = p; } catch { /* not JSON → ignore */ }
+  if (!obj) return r as TourGroupOfferRow;
+  const out: any = { ...r };
+  delete out.raw_json;
+  delete out.parse_warnings_json;
+  const notes: Array<{ key: string; value: string }> = [...(r.notes ?? [])];
+  for (const [k, v] of Object.entries(obj)) {
+    const col = RAW_TYPED_KEYS[k];
+    if (col) { if (out[col] == null) out[col] = v != null && v !== '' ? String(v) : null; continue; }
+    const val = flattenNoteValue(v);
+    if (val !== '' && val !== 'null' && val !== 'undefined') notes.push({ key: k, value: val });
+  }
+  out.notes = notes;
+  return out as TourGroupOfferRow;
+}
+
+export async function insertTourGroupOffers(rowsIn: TourGroupOfferRow[]): Promise<void> {
+  if (rowsIn.length === 0) return;
+  const rows = rowsIn.map(normalizeLegacyRawJson);
   const client = getTursoClient();
-  const stmts = rows.map(r => {
-    return `INSERT OR REPLACE INTO shaping_tour_group_offers (
+  const stmts: string[] = [];
+  for (const r of rows) {
+    stmts.push(`INSERT OR REPLACE INTO shaping_tour_group_offers (
       run_id, offer_id, source_id, dest_region, depart_date, return_date, nights,
       price_per_person_twd, title, url, scraped_at,
       hotel_name, hotel_star_rating, meals_included_count, departure_status,
-      seats_available, min_group_size, group_size_cap, raw_text, parse_warnings_text,
+      seats_available, min_group_size, group_size_cap,
+      raw_confidence, raw_note, raw_flight, raw_flight_outbound, raw_flight_return,
       product_kind
     ) VALUES (
       ${sqlText(r.run_id)},
@@ -94,11 +145,20 @@ export async function insertTourGroupOffers(rows: TourGroupOfferRow[]): Promise<
       ${sqlInt(r.seats_available)},
       ${sqlInt(r.min_group_size)},
       ${sqlInt(r.group_size_cap)},
-      ${sqlText(r.raw_json)},
-      ${sqlText(r.parse_warnings_json)},
+      ${sqlText(r.raw_confidence)},
+      ${sqlText(r.raw_note)},
+      ${sqlText(r.raw_flight)},
+      ${sqlText(r.raw_flight_outbound)},
+      ${sqlText(r.raw_flight_return)},
       ${sqlText(r.product_kind ?? 'group_tour')}
-    );`;
-  });
+    );`);
+    // Replace this offer's notes, then insert one row per annotation (no JSON).
+    stmts.push(`DELETE FROM shaping_tour_group_offer_notes WHERE run_id = ${sqlText(r.run_id)} AND offer_id = ${sqlText(r.offer_id)};`);
+    (r.notes ?? []).forEach((n, i) => {
+      if (n.value === '' || n.value == null) return;
+      stmts.push(`INSERT INTO shaping_tour_group_offer_notes (run_id, offer_id, sort_order, key, value) VALUES (${sqlText(r.run_id)}, ${sqlText(r.offer_id)}, ${sqlInt(i)}, ${sqlText(n.key)}, ${sqlText(n.value)});`);
+    });
+  }
   await client.executeMany(stmts);
 }
 
@@ -155,14 +215,29 @@ export async function listTourGroupOffers(filter: {
   if (filter.dest_region) { where.push(`dest_region = ${sqlText(filter.dest_region)}`); }
   if (filter.nights !== undefined) { where.push(`nights = ${sqlInt(filter.nights)}`); }
   if (filter.max_price !== undefined) { where.push(`price_per_person_twd <= ${sqlInt(filter.max_price)}`); }
-  // Alias the de-JSON'd *_text columns back to the legacy field names so
-  // callers (chat-format, tour-group) keep reading r.raw_json / r.parse_warnings_json.
   const r = await client.execute(
-    `SELECT *, raw_text AS raw_json, parse_warnings_text AS parse_warnings_json FROM shaping_tour_group_offers
+    `SELECT * FROM shaping_tour_group_offers
      WHERE ${where.join(' AND ')}
      ORDER BY price_per_person_twd ASC;`
   );
-  return rowsToObjects(r) as TourGroupOfferRow[];
+  const offers = rowsToObjects(r) as TourGroupOfferRow[];
+  if (offers.length === 0) return offers;
+
+  // Attach the flat notes child rows (one query, grouped in memory) — no JSON.
+  const keys = offers.map(o => `(${sqlText(o.run_id)}, ${sqlText(o.offer_id)})`).join(', ');
+  const nr = await client.execute(
+    `SELECT run_id, offer_id, key, value FROM shaping_tour_group_offer_notes
+     WHERE (run_id, offer_id) IN (${keys}) ORDER BY run_id, offer_id, sort_order;`
+  );
+  const noteRows = rowsToObjects(nr) as Array<{ run_id: string; offer_id: string; key: string; value: string }>;
+  const byOffer = new Map<string, Array<{ key: string; value: string }>>();
+  for (const n of noteRows) {
+    const k = `${n.run_id}|${n.offer_id}`;
+    if (!byOffer.has(k)) byOffer.set(k, []);
+    byOffer.get(k)!.push({ key: n.key, value: n.value });
+  }
+  for (const o of offers) o.notes = byOffer.get(`${o.run_id}|${o.offer_id}`) ?? [];
+  return offers;
 }
 
 /**

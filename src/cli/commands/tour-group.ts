@@ -199,15 +199,9 @@ const shapingBaselineCommand: CommandHandler = {
       groups.get(key)!.push(r);
     }
 
-    const extractConfidence = (raw: string | null | undefined): string | null => {
-      if (!raw) return null;
-      try {
-        const parsed = JSON.parse(raw);
-        return parsed.confidence ?? null;
-      } catch {
-        return null;
-      }
-    };
+    // raw_confidence is now a typed column (de-JSON'd from the old raw_json blob).
+    const extractConfidence = (row: { raw_confidence?: string | null } | null | undefined): string | null =>
+      row?.raw_confidence ?? null;
 
     const baselineRows: BaselineRow[] = [];
     for (const [, groupRows] of groups) {
@@ -231,11 +225,11 @@ const shapingBaselineCommand: CommandHandler = {
         nights: Number(first.nights),
         cheapest_group_tour_twd: gtPrice,
         cheapest_group_tour_source: cheapestGroup?.source_id ?? null,
-        cheapest_group_tour_confidence: extractConfidence(cheapestGroup?.raw_json),
+        cheapest_group_tour_confidence: extractConfidence(cheapestGroup),
         group_tour_count: groupTours.length,
         cheapest_fit_twd: fitPrice,
         cheapest_fit_source: cheapestFit?.source_id ?? null,
-        cheapest_fit_confidence: extractConfidence(cheapestFit?.raw_json),
+        cheapest_fit_confidence: extractConfidence(cheapestFit),
         fit_count: fits.length,
         fit_savings_vs_group_tour_twd: savings,
         fit_savings_pct: pct,
@@ -307,7 +301,7 @@ const shapingBaselineCommand: CommandHandler = {
     }
     console.log('');
     console.log('Methodology: GROUP_TOUR = ceiling (the "I gave up shopping" upper bound). FIT = comparable; DIY must beat the FIT floor.');
-    console.log('Confidence tags in [brackets] from raw_json: high = bookable verified; medium = listing-shown; low = teaser/inferred.');
+    console.log('Confidence tags in [brackets] from raw_confidence: high = bookable verified; medium = listing-shown; low = teaser/inferred.');
     console.log('');
   },
 };

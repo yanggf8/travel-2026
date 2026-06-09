@@ -57,32 +57,28 @@ const chatFormatCommand: CommandHandler = {
       const price = r.price_per_person_twd.toLocaleString();
       const total = (r.price_per_person_twd * 2).toLocaleString();
 
-      // Try to extract flight from raw_json if available
+      // Flight line — from the de-JSON'd typed columns (was JSON.parse(raw_json)).
       let flightLine = '待確認';
-      try {
-        const raw = r.raw_json ? JSON.parse(r.raw_json) : {};
-        if (raw.flight) flightLine = raw.flight;
-        if (raw.flight_outbound && raw.flight_return) {
-          flightLine = `${raw.flight_outbound} / ${raw.flight_return}`;
-        }
-      } catch {}
+      if (r.raw_flight) flightLine = r.raw_flight;
+      if (r.raw_flight_outbound && r.raw_flight_return) {
+        flightLine = `${r.raw_flight_outbound} / ${r.raw_flight_return}`;
+      }
 
       const baggage = '7kg + 20kg'; // default for most FIT we see
 
-      const location = r.raw_json?.includes('美栄橋') || r.hotel_name.includes('水之都') 
-        ? '美栄橋站附近，國際通走路方便' 
+      // 美栄橋 mention check — previously scanned the whole raw_json string; now
+      // scan the typed note + every annotation value (the same text, normalized).
+      const annotationText = [r.raw_note ?? '', ...(r.notes ?? []).map((n: { key: string; value: string }) => n.value)].join(' ');
+      const location = annotationText.includes('美栄橋') || r.hotel_name.includes('水之都')
+        ? '美栄橋站附近，國際通走路方便'
         : '中央那霸';
 
       const seats = r.seats_available ? r.seats_available : '待確認';
 
-      // Simple rating extraction (if present in raw_json)
-      let rating = '';
-      try {
-        const raw = r.raw_json ? JSON.parse(r.raw_json) : {};
-        if (raw.rating) rating = raw.rating;
-      } catch {}
+      // Rating — was raw.rating from the JSON; now a notes annotation (key 'rating').
+      const rating = (r.notes ?? []).find((n: { key: string; value: string }) => n.key === 'rating')?.value || '';
 
-      const note = r.raw_json?.note || r.title || '';
+      const note = r.raw_note || r.title || '';
 
       console.log(`${agent} | ${hotel}`);
       console.log(`日期: ${r.depart_date} → ${r.return_date} (${nights}晚)`);

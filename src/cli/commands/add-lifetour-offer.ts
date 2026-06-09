@@ -71,12 +71,12 @@ const addLifetourOfferCommand: CommandHandler = {
     const now = new Date().toISOString();
     const offerId = `lifetour-okinawa-${depart.replace(/-/g, '')}-${nights}n-${Date.now().toString(36)}`;
 
-    const rawJson = JSON.stringify({
-      source: 'lifetour_manual',
-      url,
-      note: note || null,
-      observed_at: now,
-    });
+    // De-JSON'd: typed columns for read fields, flat notes for the rest (no JSON).
+    const notes: Array<{ key: string; value: string }> = [
+      { key: 'source', value: 'lifetour_manual' },
+      { key: 'url', value: url },
+      { key: 'observed_at', value: now },
+    ];
 
     const svc = require('../../services/tour-group-service');
 
@@ -99,8 +99,8 @@ const addLifetourOfferCommand: CommandHandler = {
       seats_available: seats,
       min_group_size: 2,
       group_size_cap: null,
-      raw_json: rawJson,
-      parse_warnings_json: null,
+      raw_note: note || null,
+      notes,
       product_kind: 'fit',
     };
 
