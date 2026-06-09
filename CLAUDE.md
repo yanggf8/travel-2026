@@ -273,6 +273,25 @@ construction 404s or lands on the wrong page. The replacement is the Rust CDP dr
 snapshot`) → `parse capture <id>` (rule-driven, `parser_rules` table) → Turso. No `pip install
 playwright`, no Python. See `docs/plans/2026-06-05-rust-cdp-scraper-migration.md`.
 
+> **"Scrape" terminology — three distinct things, don't conflate them:**
+> 1. **`rust/crates/travel-scraper`** (THE live scraper) — a Rust CDP driver (`chromiumoxide`)
+>    that ATTACHES to a real Windows Chrome at `127.0.0.1:9222`, navigates/clicks/fills, and
+>    writes **plain-text captures → Turso `captures` table**, then `parse capture` rule-parses
+>    them (`parser_rules`) into the Turso **`offers`** table. This is the source-of-truth path.
+> 2. **`scrapes/*.json`** — a LEGACY, gitignored landing zone of raw captured JSON that the
+>    `import-offers` / `import-tour-group-offers` commands parse into `plan_offers` /
+>    `shaping_tour_group_offers`. Being phased out in favor of (1)'s `captures`→`offers` path;
+>    its only legal next step is import→Turso. It is NOT live scraping.
+> 3. **Python scrapers** — DEAD (archived above). Never run.
+>
+> **Relationship to `gwebcdb`** (`/home/yanggf/b/gwebcdb`): travel-2026 shares **only**
+> `crates/turso-util` (the Turso token-minting library that `travel-cli` + `travel-scraper`
+> vendor). gwebcdb's `bridge/` (Python Playwright, read-only finance/decision inspection with
+> deny-by-default click guardrails, writes to local files only — NEVER Turso) is a SEPARATE tool;
+> it is deliberately NOT the OTA scraper and is not used by travel-2026. Both happen to attach to
+> the same Chrome `:9222`, but `travel-scraper` is the write-capable OTA pipeline, gwebcdb's bridge
+> is not. Do not try to route OTA scraping through gwebcdb's bridge.
+
 ## Current Status
 
 Completed trips — full bookings, itinerary, and weather notes archived:
@@ -349,7 +368,7 @@ Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI u
 │   ├── holidays/taiwan-2026.json  # Holiday calendar
 │   ├── hotel-areas.json           # Zone categorization (used by compare-true-cost)
 │   └── transport-routes.json      # Transit routes (used by compare-true-cost)
-├── scrapes/                       # Ephemeral scraper outputs (gitignored)
+├── scrapes/                       # LEGACY raw-capture JSON landing zone (gitignored) — import→Turso only; not live scraping (see "Scrape terminology")
 ├── scripts/                       # Python scrapers + migration tools
 │   └── hooks/pre-commit           # Runs typecheck + validate:data
 ├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard
