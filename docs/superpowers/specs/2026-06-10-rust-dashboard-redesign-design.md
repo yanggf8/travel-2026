@@ -191,10 +191,33 @@ database*, not *the data-access code*.
   (schedule-based) plans on the staging URL before cutover — confirm no regression on either
   itinerary format.
 
-## 12. Open items to resolve during planning
+## 12. Token-expiry countdown banner
+
+The worker authenticates to Turso with a single static `TURSO_TOKEN` secret (the HTTP-pipeline
+path; there is no D1 and no in-worker token minting — minting is CLI-only via `turso-util`). The
+one silent failure mode is **token expiry**: when it lapses, every request starts throwing a
+pipeline error with no prior warning. Surface that as a visible countdown so it can be refreshed
+*before* it breaks.
+
+- **Banner** in the header/top-of-body: "🔑 Token refresh in N days", N computed at request time
+  (`Date.now()` is available in the worker runtime) from the token's expiry date.
+- **Escalation by styling:** >30d → muted/hidden, ≤30d → amber warning, ≤7d → red alert, past
+  expiry → "TOKEN EXPIRED — refresh now" (render this state even on the pipeline-error path if
+  feasible, since reads are already failing by then).
+- **Visibility:** operational info — gate behind owner/edit scope (§5), not on public share links.
+- **Source of the expiry date — prefer auto:** Turso DB tokens are JWTs with an `exp` claim. Decode
+  the token payload (base64 of the middle segment; no signature check needed just to read `exp`)
+  and derive expiry automatically — no second secret to keep in sync. Fallback: if the issued
+  token's `exp` is effectively non-expiring, treat the countdown as a self-imposed rotation
+  reminder against a configured date (annual) stored alongside the token. See Open Items.
+
+## 13. Open items to resolve during planning
 
 - Final crate/worker name and R2 bucket/binding name.
 - Exact `plan_share_tokens` lifecycle (generate, list, revoke) and the CLI command surface.
 - chromeport map-capture mechanics: which map UI to drive, zoom/extent per level, image naming
   convention in R2 keyed by `(plan, day?, session?)`.
 - Whether the JSON API (`/api/plan/<id>`) stays (handy) or is dropped (smaller surface).
+- Token-countdown source (§12): decode the live `TURSO_TOKEN`'s JWT `exp` once during planning —
+  if it's a real near-term date, build the auto-from-JWT path; if effectively non-expiring, add a
+  `TURSO_TOKEN_EXPIRES` (or `app_config` row) self-rotation date instead.
