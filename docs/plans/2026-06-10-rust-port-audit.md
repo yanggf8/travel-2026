@@ -4,6 +4,8 @@
 **Goal:** Eliminate all JavaScript/TypeScript outside the Cloudflare Worker. Everything → Rust, CLI first.
 **Excluded by design:** `workers/trip-dashboard/` (CF Worker — stays TS/JS, reads Turso directly, needs a JS runtime).
 
+> **STATUS UPDATE (later 2026-06-10): the §3 command gap is CLOSED.** `main.rs` now has **60 dispatch arms** — all 27 gap commands ported or alias-wired (incl. `delete-activity`, all `shaping-*`, `fetch-weather`, `sync-bookings`, `mark-booked`, `swap-days`, `chat-format`); `scrape-package` dropped by design (superseded by chromeport). Steps 1–2 of §5 are done. The **active roadmap** for the remaining steps 3–6 (tests → scripts port → cutover → archive) is **`docs/plans/2026-06-10-roadmap-v2-rust.md`**, which also subsumes StateManagerV2/ADR-001 and sets the end state to zero npm at the repo root (Worker keeps its own self-contained package.json; its workers-rs port is parked on the agenda). The numbers below are the morning-of-2026-06-10 snapshot — kept for history.
+
 ---
 
 ## 1. Headline numbers

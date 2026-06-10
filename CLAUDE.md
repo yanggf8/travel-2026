@@ -91,26 +91,28 @@ READ:   await StateManager.create() → TursoRepository.create() → executeBatc
 
 ## Development
 
-### CLI Execution Priority (Future Design — Pending Rust Migration)
+### CLI Execution Priority (Target — Root npm Retirement)
 ```
-npm script (CLI entrypoint)
-  ├── Rust binary first  → ./bin/<tool>          (if -x exists)
-  └── TypeScript fallback → ts-node src/...      (always available)
-Python/other → explicit `scraper:*` namespace only (forced, never default)
+End state: Rust binaries invoked directly — no npm at the repo root
+  ./bin/travel <cmd>        (built from rust/crates/travel-cli)
+  ./bin/travel-validate     (validate:data + doctor)
+  ./bin/travel-db           (migrate/seed/status/exec)
+Worker (workers/trip-dashboard/) keeps its own self-contained package.json (wrangler).
+Python/other → none (Python scrapers archived; chromeport is Rust)
 ```
 
-**Current state:** `package.json` uses pure `ts-node` only. **Do not modify `package.json`** until Rust migration is complete and all tests pass.
+**Current state:** `package.json` still runs 100% via `ts-node` — the TS V1 write path (full-table flush) is live until cutover. **Do not modify `package.json`** until the Rust integration tests (cutover gate) pass. **Do not mix Rust mutation commands with TS saves on the same plan** — a TS flush can overwrite Rust targeted writes.
 
-**Rust binary naming convention (planned):**
+**Rust binary naming convention:**
 - `travel` → main CLI (`travel`, `status`, `view:*`, `db:sync:*`)
 - `travel-validate` → validation commands (`validate:data`, `doctor`)
 - `travel-compare` → comparison commands (`compare-trips`, `compare-dates`, `compare-true-cost`)
 - `travel-utils` → utility commands (`normalize-flights`, `leave-calc`)
 - `travel-db` → DB operations (`db:import`, `db:migrate`, `db:*`)
 
-**Build Rust binaries to:** `./bin/` (gitignored). CLI falls back to TypeScript when binary missing.
+**Build Rust binaries to:** `./bin/` (gitignored).
 
-**Reference:** `docs/plans/2026-06-05-rust-cli-migration.md` (agent spec — read before any Rust work)
+**Reference:** `docs/plans/2026-06-10-roadmap-v2-rust.md` (active roadmap: tests → scripts port → cutover → archive TS; read before any Rust work). Historical: `docs/plans/2026-06-05-rust-cli-migration.md`, `docs/plans/2026-06-10-rust-port-audit.md`.
 
 ### Setup
 ```bash
