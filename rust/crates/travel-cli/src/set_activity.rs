@@ -935,6 +935,14 @@ struct ActivityBooking {
 }
 
 #[derive(Default, Debug)]
+struct ActivityReorder {
+    day: i64,
+    session: String,
+    tokens: Vec<String>,
+    dest: Option<String>,
+}
+
+#[derive(Default, Debug)]
 struct ActivityAdd {
     day: i64,
     session: String,
@@ -1405,6 +1413,217 @@ fn new_activity_id() -> String {
     new_run_id()
 }
 
+// ── reorder-activities ─────────────────────────────────────────────
+//
+// Rewrite the sort_order of every activity in a (day, session) to match a
+// caller-supplied ordering. Since add-activity only appends (sort_order =
+// max+1), this is the primitive for inserting in the middle, moving, or
+// fully resequencing without a delete-and-re-add dance.
+//
+//   travel reorder-activities <day> <session> <id|title> <id|title> ... [--dest]
+//
+// The token list MUST name every current activity in the session exactly
+// once (resolved by id, else case-insensitive title substring). Any
+// missing/extra/duplicate/ambiguous token is a hard error — we refuse to
+// silently drop or duplicate a row. All UPDATEs run in one pass and then a
+// single audit event fires.
+pub async fn run_reorder(args: &[String], plan_id: String) -> Result<(), String> {
+    let parsed = parse_reorder(args)?;
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+
+    // Current activities in the session, in existing order.
+    let current = list_session_activities(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
+    if current.is_empty() {
+        return Err(format!(
+            "No activities in Day {} {} to reorder",
+            parsed.day, parsed.session
+        ));
+    }
+    if parsed.tokens.len() != current.len() {
+        return Err(format!(
+            "reorder-activities must list all {} activities in Day {} {} exactly once (got {} token(s))",
+            current.len(),
+            parsed.day,
+            parsed.session,
+            parsed.tokens.len()
+        ));
+    }
+
+    // Resolve each token to a current activity id, enforcing a bijection.
+    let mut resolved: Vec<String> = Vec::with_capacity(parsed.tokens.len());
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for token in &parsed.tokens {
+        let id = resolve_token(&current, token)?;
+        if !used.insert(id.clone()) {
+            return Err(format!(
+                "Activity \"{token}\" resolves to one already listed — each activity must appear exactly once"
+            ));
+        }
+        resolved.push(id);
+    }
+
+    // Apply the new order. Two-phase to avoid transient PK-ish collisions on
+    // (plan,dest,day,session,sort_order) is unnecessary (sort_order isn't part
+    // of the PK — id is), so a direct rewrite per id is safe.
+    for (new_order, id) in resolved.iter().enumerate() {
+        conn.execute(
+            "UPDATE activities SET sort_order = ?1, updated_at = ?2 \
+             WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+               AND session_type = ?6 AND id = ?7",
+            libsql::params![
+                new_order as i64,
+                now_db_datetime(),
+                plan_id.to_string(),
+                destination.to_string(),
+                parsed.day,
+                parsed.session.clone(),
+                id.clone()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities reorder UPDATE failed: {e}"))?;
+    }
+    touch_day(&conn, &plan_id, &destination, parsed.day).await?;
+
+    let order_summary = resolved.join(",");
+    let kv: Vec<(&str, String)> = vec![
+        ("day_number", parsed.day.to_string()),
+        ("session", parsed.session.clone()),
+        ("count", resolved.len().to_string()),
+        ("new_order", order_summary),
+    ];
+
+    // Audit event is session-scoped; pass the first activity id as the
+    // representative entity (execute_event ignores it beyond logging).
+    execute_event(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &resolved[0],
+        "activities_reordered",
+        "reorder-activities",
+        &format!("D{} {} ({} items)", parsed.day, parsed.session, resolved.len()),
+        &kv,
+    )
+    .await?;
+
+    println!(
+        "\n🔀 Reordering activities:\n   Destination: {destination}\n   Day {} {} — {} activities",
+        parsed.day, parsed.session, resolved.len()
+    );
+    // Re-list in the new order for confirmation.
+    let after = list_session_activities(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
+    for (i, (_, title)) in after.iter().enumerate() {
+        println!("   {}. {}", i, first_line(title));
+    }
+    println!("✅ Activities reordered");
+    Ok(())
+}
+
+// All activities in a (day, session), ordered by current sort_order.
+// Returns (id, title) pairs.
+async fn list_session_activities(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT id, title FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4 \
+             ORDER BY sort_order",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities list query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("activities list row read failed: {e}"))?
+    {
+        let id: String = row.get(0).map_err(|e| format!("id col read failed: {e}"))?;
+        let title: Option<String> = row.get(1).ok();
+        out.push((id, title.unwrap_or_default()));
+    }
+    Ok(out)
+}
+
+// Resolve a token to exactly one activity id from `current`: exact id match
+// first, else case-insensitive title substring with a UNIQUE hit.
+fn resolve_token(current: &[(String, String)], token: &str) -> Result<String, String> {
+    if let Some((id, _)) = current.iter().find(|(id, _)| id == token) {
+        return Ok(id.clone());
+    }
+    let needle = token.to_lowercase();
+    let mut matches = current
+        .iter()
+        .filter(|(_, title)| title.to_lowercase().contains(&needle));
+    let first = matches.next();
+    match (first, matches.next()) {
+        (None, _) => Err(format!("Activity not found for token: \"{token}\"")),
+        (Some(_), Some(_)) => Err(format!(
+            "Activity token \"{token}\" is ambiguous (matches multiple) — use a longer title or the id"
+        )),
+        (Some((id, _)), None) => Ok(id.clone()),
+    }
+}
+
+fn first_line(s: &str) -> &str {
+    s.split('\n').next().unwrap_or(s)
+}
+
+fn parse_reorder(args: &[String]) -> Result<ActivityReorder, String> {
+    let mut p = ActivityReorder::default();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                p.dest = Some(arg_value(args, i, "--dest")?);
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() < 3 {
+        return Err(
+            "Usage: reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest <slug>]\n  (list ALL activities in the session, in the desired order)"
+                .to_string(),
+        );
+    }
+    p.day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    if p.day < 1 {
+        return Err("<day> must be a positive integer".to_string());
+    }
+    p.session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    p.tokens = positional[2..].to_vec();
+    Ok(p)
+}
+
 fn parse_delete(args: &[String]) -> Result<ActivityDelete, String> {
     let mut p = ActivityDelete::default();
     let mut positional: Vec<String> = Vec::new();
@@ -1653,5 +1872,54 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert!(parse_add(&args).is_err());
+    }
+
+    #[test]
+    fn parse_reorder_ok() {
+        let args: Vec<String> = ["1", "morning", "abc", "Drive home", "CI120", "--dest", "okinawa_2026"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let p = parse_reorder(&args).unwrap();
+        assert_eq!(p.day, 1);
+        assert_eq!(p.session, "morning");
+        assert_eq!(p.tokens, vec!["abc", "Drive home", "CI120"]);
+        assert_eq!(p.dest.as_deref(), Some("okinawa_2026"));
+    }
+
+    #[test]
+    fn parse_reorder_needs_tokens() {
+        // day + session but no activity tokens
+        let args: Vec<String> = ["1", "morning"].iter().map(|s| s.to_string()).collect();
+        assert!(parse_reorder(&args).is_err());
+    }
+
+    #[test]
+    fn parse_reorder_bad_session() {
+        let args: Vec<String> = ["1", "lunch", "a", "b"].iter().map(|s| s.to_string()).collect();
+        assert!(parse_reorder(&args).is_err());
+    }
+
+    #[test]
+    fn resolve_token_by_id_and_title() {
+        let cur = vec![
+            ("id-1".to_string(), "Drive home to parking".to_string()),
+            ("id-2".to_string(), "CI120 to Okinawa".to_string()),
+        ];
+        // exact id
+        assert_eq!(resolve_token(&cur, "id-2").unwrap(), "id-2");
+        // case-insensitive substring
+        assert_eq!(resolve_token(&cur, "drive home").unwrap(), "id-1");
+        // not found
+        assert!(resolve_token(&cur, "shuttle").is_err());
+    }
+
+    #[test]
+    fn resolve_token_ambiguous_is_error() {
+        let cur = vec![
+            ("id-1".to_string(), "Lunch at market".to_string()),
+            ("id-2".to_string(), "Lunch at hotel".to_string()),
+        ];
+        assert!(resolve_token(&cur, "lunch").is_err());
     }
 }

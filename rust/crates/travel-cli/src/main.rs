@@ -326,8 +326,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel add-activity <day> <session> <title> [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_add(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "reorder-activities" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest <slug>]\n  (list ALL activities in the session, in the desired order)");
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_activity::run_reorder(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
