@@ -249,8 +249,11 @@ fn parse_claude_ota_table(content: &str, issues: &mut Vec<Issue>) -> Vec<ClaudeO
     // section break; the Rust `regex` crate does not support look-around, so
     // we consume the terminator (an extra non-pipe line is harmless because
     // the row filter below only keeps lines starting with `|`).
+    // 4-column table: Source ID | Name | Type | Status (Status merges the old
+    // Supported+Scraper columns; the ✅/scrape-only signal lives in Status text).
+    // Mirrors the TS fix in scripts/validate-data.ts.
     let re = match regex::Regex::new(
-        r"\| Source ID \| Name \| Type \| Supported \| Scraper \|[\s\S]*?(?:\n\n|\n###|\n##|\z)",
+        r"\| Source ID \| Name \| Type \| Status \|[\s\S]*?(?:\n\n|\n###|\n##|\z)",
     ) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
@@ -280,7 +283,7 @@ fn parse_claude_ota_table(content: &str, issues: &mut Vec<Issue>) -> Vec<ClaudeO
             .map(|c| c.trim().to_string())
             .filter(|c| !c.is_empty())
             .collect();
-        if cells.len() < 5 {
+        if cells.len() < 4 {
             continue;
         }
         // Skip header row + separator row.
@@ -289,7 +292,7 @@ fn parse_claude_ota_table(content: &str, issues: &mut Vec<Issue>) -> Vec<ClaudeO
         }
         entries.push(ClaudeOtaEntry {
             source_id: cells[0].replace('`', ""),
-            supported: cells[3].clone(),
+            supported: cells[3].clone(), // Status column ("✅ scraper" / "⚠️ scrape-only" / "❌ ...")
         });
     }
     entries
