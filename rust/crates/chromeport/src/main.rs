@@ -23,7 +23,7 @@ fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("travel-scraper: {err}");
+            eprintln!("chromeport: {err}");
             ExitCode::from(err.exit_code())
         }
     }
@@ -46,20 +46,20 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             out,
             include_html,
         )),
-        Command::Scrape(ScrapeCommand::Url {
+        Command::Fetch(FetchCommand::Url {
             url,
             source_id,
             out,
             include_html,
-        }) => run_async(scrape_url(&cli.endpoint, url, source_id, out, include_html)),
-        Command::Scrape(ScrapeCommand::Interact {
+        }) => run_async(fetch_url(&cli.endpoint, url, source_id, out, include_html)),
+        Command::Fetch(FetchCommand::Interact {
             url,
             source_id,
             out,
             include_html,
             steps,
             profile_override,
-        }) => run_async(scrape_interact(
+        }) => run_async(fetch_interact(
             &cli.endpoint,
             url,
             source_id,
@@ -93,7 +93,7 @@ struct Cli {
 
 enum Command {
     Browser(BrowserCommand),
-    Scrape(ScrapeCommand),
+    Fetch(FetchCommand),
     Parse(ParseCommand),
     Verify {
         source_id: String,
@@ -132,7 +132,7 @@ enum BrowserCommand {
     },
 }
 
-enum ScrapeCommand {
+enum FetchCommand {
     Url {
         url: String,
         source_id: String,
@@ -158,7 +158,7 @@ enum InteractionStep {
 
 impl Cli {
     fn parse(args: Vec<String>) -> Result<Self, CliError> {
-        let mut endpoint = env::var("TRAVEL_SCRAPER_CDP_ENDPOINT")
+        let mut endpoint = env::var("CHROMEPORT_CDP_ENDPOINT")
             .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
         let mut positional = Vec::new();
         let mut i = 0;
@@ -202,13 +202,13 @@ impl Cli {
                     }),
                 })
             }
-            [group, cmd, url, rest @ ..] if group == "scrape" && cmd == "url" => {
+            [group, cmd, url, rest @ ..] if group == "fetch" && cmd == "url" => {
                 let source_id = option_value(rest, "--source")
-                    .ok_or_else(|| CliError::usage("scrape url requires --source <id>"))?
+                    .ok_or_else(|| CliError::usage("fetch url requires --source <id>"))?
                     .to_string();
                 Ok(Self {
                     endpoint,
-                    command: Command::Scrape(ScrapeCommand::Url {
+                    command: Command::Fetch(FetchCommand::Url {
                         url: url.to_string(),
                         source_id,
                         out: option_value(rest, "--out").map(PathBuf::from),
@@ -216,9 +216,9 @@ impl Cli {
                     }),
                 })
             }
-            [group, cmd, url, rest @ ..] if group == "scrape" && cmd == "interact" => {
+            [group, cmd, url, rest @ ..] if group == "fetch" && cmd == "interact" => {
                 let source_id = option_value(rest, "--source")
-                    .ok_or_else(|| CliError::usage("scrape interact requires --source <id>"))?
+                    .ok_or_else(|| CliError::usage("fetch interact requires --source <id>"))?
                     .to_string();
                 let steps = option_values(rest, "--step")
                     .into_iter()
@@ -226,7 +226,7 @@ impl Cli {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Self {
                     endpoint,
-                    command: Command::Scrape(ScrapeCommand::Interact {
+                    command: Command::Fetch(FetchCommand::Interact {
                         url: url.to_string(),
                         source_id,
                         out: option_value(rest, "--out").map(PathBuf::from),
@@ -288,7 +288,7 @@ impl Cli {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser doctor\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser pages\n  travel-scraper [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape url <url> --source <id> [--html]\n  travel-scraper [--endpoint http://127.0.0.1:9222] scrape interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  travel-scraper parse capture <capture-id> --source <id> [--dry-run]\n  travel-scraper verify <source-id> <capture-id>\n  travel-scraper parser rules seed-defaults\n  travel-scraper db query <sql>\n  travel-scraper db exec <sql>\n  travel-scraper db token-status <read|write|secrets>\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n`parse capture <capture-id>` reads raw_text from Turso, parses via parser_rules, and\nimports offers straight to Turso (`--dry-run` prints plain text instead).\n`verify <source-id> <capture-id>` is read-only: it prints rule regexes and extracted field status.\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  TRAVEL_SCRAPER_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
+    "Usage:\n  chromeport [--endpoint http://127.0.0.1:9222] browser doctor\n  chromeport [--endpoint http://127.0.0.1:9222] browser pages\n  chromeport [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch url <url> --source <id> [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  chromeport parse capture <capture-id> --source <id> [--dry-run]\n  chromeport verify <source-id> <capture-id>\n  chromeport parser rules seed-defaults\n  chromeport db query <sql>\n  chromeport db exec <sql>\n  chromeport db token-status <read|write|secrets>\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n`parse capture <capture-id>` reads raw_text from Turso, parses via parser_rules, and\nimports offers straight to Turso (`--dry-run` prints plain text instead).\n`verify <source-id> <capture-id>` is read-only: it prints rule regexes and extracted field status.\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  CHROMEPORT_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
 }
 
 fn parse_token_tier(raw: &str) -> Result<TokenTier, CliError> {
@@ -444,7 +444,7 @@ async fn capture_snapshot(
     write_capture_and_report(capture, out.as_deref()).await
 }
 
-async fn scrape_url(
+async fn fetch_url(
     endpoint: &str,
     url: String,
     source_id: String,
@@ -474,7 +474,7 @@ async fn scrape_url(
     write_capture_and_report(capture, out.as_deref()).await
 }
 
-async fn scrape_interact(
+async fn fetch_interact(
     endpoint: &str,
     url: String,
     source_id: String,
@@ -696,7 +696,7 @@ async fn set_control_value(
     let function = format!(
         r#"() => {{
   const el = document.querySelector({selector_json});
-  if (!el) return "__TRAVEL_SCRAPER_MISSING__";
+  if (!el) return "__CHROMEPORT_MISSING__";
   const value = {value_json};
   const tag = (el.tagName || "").toLowerCase();
   const oldValue = el.value;
@@ -715,7 +715,7 @@ async fn set_control_value(
   }} else if (el.isContentEditable) {{
     el.textContent = value;
   }} else {{
-    return "__TRAVEL_SCRAPER_UNSUPPORTED__:" + tag;
+    return "__CHROMEPORT_UNSUPPORTED__:" + tag;
   }}
   if (el._valueTracker) {{
     el._valueTracker.setValue(oldValue);
@@ -726,12 +726,12 @@ async fn set_control_value(
 }}"#
     );
     let result = evaluate_string(page, &function).await?;
-    if result == "__TRAVEL_SCRAPER_MISSING__" {
+    if result == "__CHROMEPORT_MISSING__" {
         return Err(CliError::runtime(format!(
             "step {step_index} failed: selector disappeared before fill '{selector}'"
         )));
     }
-    if let Some(tag) = result.strip_prefix("__TRAVEL_SCRAPER_UNSUPPORTED__:") {
+    if let Some(tag) = result.strip_prefix("__CHROMEPORT_UNSUPPORTED__:") {
         return Err(CliError::runtime(format!(
             "step {step_index} failed: selector '{selector}' resolved to unsupported fill target '{tag}'"
         )));
@@ -778,7 +778,7 @@ async fn guard_interactive_profile(
             } else {
                 let user_data_dir = browser_user_data_dir(&arguments).unwrap_or_else(|| "-".into());
                 Err(CliError::runtime(format!(
-                    "interactive scrape refused: connected Chrome is not confirmed as the dedicated automation profile (user-data-dir={user_data_dir}). Relaunch Chrome with C:\\chrome-profiles\\travel-browser or pass --i-understand-profile to override for this run."
+                    "interactive fetch refused: connected Chrome is not confirmed as the dedicated automation profile (user-data-dir={user_data_dir}). Relaunch Chrome with C:\\chrome-profiles\\travel-browser or pass --i-understand-profile to override for this run."
                 )))
             }
         }
@@ -789,7 +789,7 @@ async fn guard_interactive_profile(
             Ok(())
         }
         Err(err) => Err(CliError::runtime(format!(
-            "interactive scrape refused: could not confirm the dedicated automation profile: {err}. Relaunch Chrome with --enable-automation and --user-data-dir=C:\\chrome-profiles\\travel-browser, or pass --i-understand-profile to override for this run."
+            "interactive fetch refused: could not confirm the dedicated automation profile: {err}. Relaunch Chrome with --enable-automation and --user-data-dir=C:\\chrome-profiles\\travel-browser, or pass --i-understand-profile to override for this run."
         ))),
     }
 }
@@ -1637,7 +1637,7 @@ async fn parse_capture(
         .map_err(CliError::runtime)?
         .ok_or_else(|| {
             CliError::runtime(format!(
-                "no capture with capture_id='{capture_id}' in Turso; run a scrape/snapshot first"
+                "no capture with capture_id='{capture_id}' in Turso; run a fetch/snapshot first"
             ))
         })?;
     let capture = TravelCapture {
@@ -1659,7 +1659,7 @@ async fn parse_capture(
         .map_err(CliError::runtime)?
         .ok_or_else(|| {
             CliError::runtime(format!(
-                "missing parser_rules row for source_id='{source_id}'; run `travel-scraper parser rules seed-defaults` or insert a rule row"
+                "missing parser_rules row for source_id='{source_id}'; run `chromeport parser rules seed-defaults` or insert a rule row"
             ))
         })?;
 
@@ -1726,7 +1726,7 @@ async fn verify_capture(source_id: String, capture_id: String) -> Result<(), Cli
         .map_err(CliError::runtime)?
         .ok_or_else(|| {
             CliError::runtime(format!(
-                "no capture with capture_id='{capture_id}' in Turso; run a scrape/snapshot first"
+                "no capture with capture_id='{capture_id}' in Turso; run a fetch/snapshot first"
             ))
         })?;
     if stored_source != source_id {
@@ -1738,7 +1738,7 @@ async fn verify_capture(source_id: String, capture_id: String) -> Result<(), Cli
         .map_err(CliError::runtime)?
         .ok_or_else(|| {
             CliError::runtime(format!(
-                "missing parser_rules row for source_id='{source_id}'; run `travel-scraper parser rules seed-defaults` or insert a rule row"
+                "missing parser_rules row for source_id='{source_id}'; run `chromeport parser rules seed-defaults` or insert a rule row"
             ))
         })?;
     let capture = TravelCapture {

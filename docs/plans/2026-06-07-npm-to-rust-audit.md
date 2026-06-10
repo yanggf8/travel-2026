@@ -1,5 +1,7 @@
 # Root npm to Rust Audit and Conversion Plan
 
+> **Note:** the `travel-scraper` crate was later renamed to `chromeport`.
+
 **Date:** 2026-06-07  
 **Decision:** Convert all root-level npm/TypeScript surfaces to Rust. Delete the root `package.json`
 only after every in-scope script has a parity-proven Rust path.  

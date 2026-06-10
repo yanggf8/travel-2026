@@ -292,6 +292,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "chromeport"
+version = "0.1.0"
+dependencies = [
+ "chromiumoxide",
+ "chrono",
+ "futures-util",
+ "libsql",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "turso-util",
+]
+
+[[package]]
 name = "chromiumoxide"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2278,21 +2293,6 @@ dependencies = [
  "tokio",
  "turso-util",
  "url",
-]
-
-[[package]]
-name = "travel-scraper"
-version = "0.1.0"
-dependencies = [
- "chromiumoxide",
- "chrono",
- "futures-util",
- "libsql",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "turso-util",
 ]
 
 [[package]]

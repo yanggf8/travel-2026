@@ -1,5 +1,7 @@
 # Rust CDP Scraper Migration Plan
 
+> **Note:** the `travel-scraper` crate was later renamed to `chromeport` (the crate is a CDP driver, not a scraper).
+
 **Status:** In progress — full pipeline DONE (browser/CDP → capture → interactive click/fill →
 rule-driven parser → Turso import), no-JSON/plain-text, native Rust→Turso. 10 OTA `parser_rules`
 seeded (all `has_custom_parser=0`); settour + liontravel real-scrape-verified and their Python parsers

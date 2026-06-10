@@ -4,11 +4,11 @@ import { registerCommand } from './registry';
 // DECOMMISSIONED. The Python URL-construction scrapers it shelled
 // (scripts/scrape_package.py) are archived under archive/broken-python-scrapers/
 // because their template/region-code URLs 404 or land on the wrong page.
-// Use the Rust CDP driver instead: drive the real page with travel-scraper
-// (browser snapshot / scrape interact), then `parse capture <id>` → Turso.
+// Use the Rust CDP driver instead: drive the real page with chromeport
+// (browser snapshot / fetch interact), then `parse capture <id>` → Turso.
 const scrapePackageCommand: CommandHandler = {
   names: ['scrape-package'],
-  description: '[DECOMMISSIONED] use the Rust CDP travel-scraper instead.',
+  description: '[DECOMMISSIONED] use the Rust CDP chromeport instead.',
   usage: 'scrape-package — DECOMMISSIONED',
   requiresState: false,
   async execute(_ctx: CliContext): Promise<void> {

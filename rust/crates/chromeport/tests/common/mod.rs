@@ -4,14 +4,14 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 pub fn binary_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_travel-scraper"))
+    PathBuf::from(env!("CARGO_BIN_EXE_chromeport"))
 }
 
 pub fn run(args: &[&str]) -> Output {
     Command::new(binary_path())
         .args(args)
         .output()
-        .expect("run travel-scraper")
+        .expect("run chromeport")
 }
 
 pub fn can_access_turso() -> bool {

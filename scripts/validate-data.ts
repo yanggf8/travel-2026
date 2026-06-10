@@ -146,7 +146,7 @@ async function validateOtaSources(client: TursoPipelineClient): Promise<OtaSourc
 
     // scraper_script is DECOMMISSIONED: the Python per-source scrapers are archived
     // (archive/broken-python-scrapers/) and replaced by the Rust CDP driver
-    // (rust/crates/travel-scraper) + Turso parser_rules. Do not validate file paths
+    // (rust/crates/chromeport) + Turso parser_rules. Do not validate file paths
     // here, and do not require a scraper_script for "supported" sources.
 
     // Check currency is valid

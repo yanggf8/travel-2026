@@ -452,14 +452,14 @@ fn resolve_travel_token(tier: TokenTier) -> Result<turso_util::CachedCredential,
             resolve_token(&mint_cfg, tier, opts()).map_err(|mint_err| {
                 format!(
                     "{}; run `turso auth login` or set TRAVEL_TURSO_{}_TOKEN plus TRAVEL_TURSO_URL",
-                    mint_err.formatted("travel-scraper"),
+                    mint_err.formatted("chromeport"),
                     tier.as_str().to_ascii_uppercase()
                 )
             })
         }
         Err(err) => Err(format!(
             "{}; run `turso auth login` or set TRAVEL_TURSO_{}_TOKEN plus TRAVEL_TURSO_URL",
-            err.formatted("travel-scraper"),
+            err.formatted("chromeport"),
             tier.as_str().to_ascii_uppercase()
         )),
     }

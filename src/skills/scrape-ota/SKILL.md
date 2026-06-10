@@ -14,11 +14,11 @@ provides_processes: []
 > constructed URLs 404 / land on the wrong page. **Use the Rust CDP driver instead:**
 > ```
 > # 1) drive the real OTA page in Chrome (clicks/fills the actual UI — no URL templates)
-> ./rust/target/debug/travel-scraper scrape interact "<url>" --source <id> --step 'click:SEL' --step 'fill:SEL=VALUE'
+> ./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step 'click:SEL' --step 'fill:SEL=VALUE'
 > #    (or, if you've already navigated the tab manually:)
-> ./rust/target/debug/travel-scraper browser snapshot --page <N> --source <id>
+> ./rust/target/debug/chromeport browser snapshot --page <N> --source <id>
 > # 2) parse the captured page (rule-driven via the parser_rules Turso table) + import to Turso
-> ./rust/target/debug/travel-scraper parse capture <capture-id> --source <id>
+> ./rust/target/debug/chromeport parse capture <capture-id> --source <id>
 > ```
 > Captures → Turso `captures` table; offers → `offers` table. Per-OTA rules → `parser_rules`.
 > Flight/hotel-only OTAs (tigerair, google_flights, trip, agoda, eztravel) are seeded

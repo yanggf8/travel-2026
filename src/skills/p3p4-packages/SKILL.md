@@ -11,7 +11,7 @@ provides_processes: [process_3_4_packages, process_3_transportation, process_4_a
 
 > **⚠️ Python scrapers DECOMMISSIONED** (archived in `archive/broken-python-scrapers/`; constructed
 > URLs 404). Do NOT run `python scripts/scrape_*.py`. Get OTA offers via the Rust CDP driver:
-> `./rust/target/debug/travel-scraper scrape interact "<url>" --source <id> --step ...` (or
+> `./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step ...` (or
 > `browser snapshot`) → `parse capture <id> --source <id>` (imports to Turso). Python commands below
 > are historical reference only.
 
