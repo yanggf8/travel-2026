@@ -1,5 +1,7 @@
 use worker::*;
 
+mod turso;
+
 // === WORKING OUTBOUND-POST SIGNATURE (worker 0.8.4) — Task 1 must copy verbatim ===
 //
 // RequestInit's builder methods (`with_method`/`with_headers`/`with_body`) take
