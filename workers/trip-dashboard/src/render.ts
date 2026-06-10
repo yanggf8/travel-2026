@@ -322,7 +322,11 @@ function renderSession(
   const activities = zhOverride
     ? (zhOverride.activities.length > 0 ? zhOverride.activities : enActivities)
     : enActivities;
-  const meals = zhOverride?.meals ?? ((session.meals as string[]) || []);
+  // Fall back to the base session meals when the ZH override has none. meals_zh
+  // was de-JSON'd away, so a zhOverride always carries an empty meals[]; using ??
+  // would let that [] mask the real session.meals and drop every lunch/dinner pill.
+  const baseMeals = (session.meals as string[]) || [];
+  const meals = (zhOverride?.meals && zhOverride.meals.length > 0) ? zhOverride.meals : baseMeals;
   const transit = zhOverride?.transit_notes ?? ((session.transit_notes as string) || '');
 
   // For ZH override, check if original session has pending booking activities
