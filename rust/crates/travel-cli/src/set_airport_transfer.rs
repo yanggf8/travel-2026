@@ -168,6 +168,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                     .ok_or_else(|| "missing value for --dest".to_string())?;
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }

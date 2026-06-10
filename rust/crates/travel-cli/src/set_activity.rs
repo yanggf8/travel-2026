@@ -292,6 +292,10 @@ fn parse_time(args: &[String]) -> Result<ActivityTime, String> {
                 p.is_fixed_time = Some(parse_bool(&v)?);
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -327,6 +331,10 @@ fn parse_title(args: &[String]) -> Result<ActivityTitle, String> {
         match a.as_str() {
             "--dest" => {
                 p.dest = Some(arg_value(args, i, "--dest")?);
+                i += 2;
+            }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -1322,6 +1330,10 @@ fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
                 p.notes = Some(arg_value(args, i, "--notes")?);
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -1595,6 +1607,10 @@ fn parse_reorder(args: &[String]) -> Result<ActivityReorder, String> {
                 p.dest = Some(arg_value(args, i, "--dest")?);
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -1633,6 +1649,10 @@ fn parse_delete(args: &[String]) -> Result<ActivityDelete, String> {
         match a.as_str() {
             "--dest" => {
                 p.dest = Some(arg_value(args, i, "--dest")?);
+                i += 2;
+            }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -1681,6 +1701,10 @@ fn parse_booking(args: &[String]) -> Result<ActivityBooking, String> {
             }
             "--book-by" => {
                 p.book_by = Some(arg_value(args, i, "--book-by")?);
+                i += 2;
+            }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {

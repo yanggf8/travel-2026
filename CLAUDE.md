@@ -315,7 +315,10 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 # Shaping Stage (pre-plan triangle research)
 ./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2]
-python scripts/shaping_research.py --run <run_id>
+# After shaping-init: scrape offers via chromeport, then import + compare:
+#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
+#   → ./bin/chromeport parse capture <capture-id> --source <id>
+#   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id>
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
 
@@ -501,8 +504,6 @@ Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install h
 
 Remaining agenda (none blocking — the project is between trips and the live DB is fully seeded):
 
-- **Fresh-DB seeders** (small/medium) — `seed-destination-refs`, `seed-ota-knowledge`, `seed-test-plan` exist only under `archive/ts-cli-retired/scripts/`; only `db seed plans` is wired. Fresh/empty-DB bootstrap has no in-repo seeder, and `validate`/`doctor` still tell users to run the archived `ts-node` seed scripts. Add `db seed destination-refs|ota-knowledge|test-plan` (mirror `db_seed_plans.rs` + the inline `seed_*` in `db_migrate.rs`), then fix those validator messages.
-- **Shaping aggregator gap** (docs, unless auto-aggregation wanted) — several docs still say `python scripts/shaping_research.py --run <id>`; that script is archived and there's no live "scrape flights → rank into `shaping_candidates`" binary (only `shaping-export`/`shaping-import`). Either reword the docs to the manual chromeport-scrape → `shaping-import --file <handoff>` flow, or build `shaping-aggregate` if auto-ranking is explicitly desired. **Don't invent a command silently.**
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **PARKED (on agenda, now unblocked)** — Worker → `workers-rs` port (~2.9k LOC in `workers/trip-dashboard/src`). wrangler/npm stays for deploy regardless and the read-mostly dashboard gains no data-integrity benefit, so low priority. Revisit per `docs/plans/2026-06-10-roadmap-v2-rust.md`.
 - **OTA decommission gate** (user-driven) — only `settour` is live-verified; the rest have snippet fixtures only. Their archived Python parsers can't be deleted until each passes a real `chromeport verify` against a live capture — needs human browser sessions, not code.

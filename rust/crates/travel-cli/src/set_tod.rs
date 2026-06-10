@@ -378,6 +378,10 @@ fn parse_focus(args: &[String]) -> Result<ParsedFocus, String> {
                 );
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -438,6 +442,10 @@ fn parse_time_range(args: &[String]) -> Result<ParsedTimeRange, String> {
                         .ok_or_else(|| "missing value for --end".to_string())?
                         .clone(),
                 );
+                i += 2;
+            }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -512,6 +520,10 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
                 let arr = parse_string_array(v)
                     .map_err(|e| format!("--meals-zh-json: {e}"))?;
                 p.meals_zh = Some(arr);
+                i += 2;
+            }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {

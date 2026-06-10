@@ -100,6 +100,23 @@ fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
     )
 }
 
+/// Run a `travel` subcommand with TRAVEL_PLAN_ID explicitly UNSET — used to
+/// prove `--plan-id` is honored on its own (Bug C: mutation commands must
+/// resolve the plan via the resolver ladder, not a hardcoded env-or-test-plan
+/// default). Returns (ok, stdout, stderr).
+fn run_cmd_no_env(args: &[&str]) -> (bool, String, String) {
+    let out = bin()
+        .args(args)
+        .env_remove("TRAVEL_PLAN_ID")
+        .output()
+        .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// COUNT(*) helper. Returns the integer count, or None on a credless skip.
 fn count(sql: &str) -> Option<i64> {
     let out = db_exec(sql)?;
@@ -396,5 +413,131 @@ fn set_activity_time_fails_loud_when_activity_missing() {
         audit,
         Some(0),
         "no completed set-activity-time audit row may be written when nothing matched"
+    );
+}
+
+// ── Bug C: `--plan-id` is honored by mutation commands (no env var needed) ────
+// Mutation dispatch previously read only `$TRAVEL_PLAN_ID`, defaulting to the
+// real `test-set-dates-2026` plan, and ignored/rejected `--plan-id`. A write
+// with `--plan-id <x>` and NO env var must land under `<x>`.
+#[test]
+fn set_flight_honors_plan_id_flag() {
+    let tag = nanos();
+    let plan_id = format!("test-setbug-planid-{tag}");
+    let dest = format!("setbugplanid_{tag}");
+    if !seed_bare(&plan_id, &dest) {
+        return;
+    }
+
+    let (ok, stdout, stderr) = run_cmd_no_env(&[
+        "set-flight", "outbound", "--plan-id", &plan_id, "--dest", &dest,
+        "--flight", "CI120", "--from", "TPE", "--to", "OKA", "--date", "2026-06-12",
+    ]);
+
+    let row_count = count(&format!(
+        "SELECT COUNT(*) AS n FROM flight_legs WHERE plan_id = '{plan_id}' AND direction = 'outbound'"
+    ));
+    teardown(&plan_id);
+
+    assert!(
+        ok && !stderr.contains("unknown argument: --plan-id"),
+        "set-flight must honor --plan-id with no TRAVEL_PLAN_ID set; stdout={stdout} stderr={stderr}"
+    );
+    assert_eq!(
+        row_count,
+        Some(1),
+        "the flight leg must be persisted under the --plan-id plan, not the hardcoded test plan"
+    );
+}
+
+// ── Bug C: set-route-segment honors --plan-id (the command that triggered this) ─
+// Seed a real `days` row so the write can succeed, then prove it lands under the
+// `--plan-id` plan rather than the env/test-plan default.
+#[test]
+fn set_route_segment_honors_plan_id_flag() {
+    let tag = nanos();
+    let plan_id = format!("test-setbug-rsegplanid-{tag}");
+    let dest = format!("setbugrsegplanid_{tag}");
+    if !seed_bare(&plan_id, &dest) {
+        return;
+    }
+    // Scaffold a single days row so the route-segment write isn't a no-op.
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type) \
+         VALUES ('{plan_id}', '{dest}', 1, '2026-06-12', 'full');"
+    ))
+    .is_none()
+    {
+        teardown(&plan_id);
+        return;
+    }
+
+    let (ok, stdout, stderr) = run_cmd_no_env(&[
+        "set-route-segment", "1", "0", "Naha Airport", "Hotel", "transit",
+        "--duration", "24", "--plan-id", &plan_id, "--dest", &dest,
+    ]);
+
+    let seg = count(&format!(
+        "SELECT COUNT(*) AS n FROM day_route_segments WHERE plan_id = '{plan_id}' AND day_number = 1"
+    ));
+    teardown(&plan_id);
+
+    assert!(
+        ok && !stderr.contains("unknown argument: --plan-id"),
+        "set-route-segment must honor --plan-id with no TRAVEL_PLAN_ID set; stdout={stdout} stderr={stderr}"
+    );
+    assert_eq!(
+        seg,
+        Some(1),
+        "the route segment must be persisted under the --plan-id plan"
+    );
+}
+
+// ── Bug C fail-loud: an unknown --plan-id must NOT silently hit the test plan ─
+// With the old hardcoded `unwrap_or_else(|_| "test-set-dates-2026")` default a
+// bogus/unresolvable plan could silently write to a real plan. A mutation
+// against a plan that does not exist must fail loudly.
+#[test]
+fn set_flight_fails_loud_for_unknown_plan_id() {
+    let tag = nanos();
+    let missing = format!("test-setbug-nope-{tag}");
+    // Note: deliberately NOT seeded — this plan does not exist.
+
+    let (ok, _stdout, stderr) = run_cmd_no_env(&[
+        "set-flight", "outbound", "--plan-id", &missing,
+        "--flight", "CI120", "--from", "TPE", "--to", "OKA",
+    ]);
+
+    // Skip cleanly if creds are absent (resolver can't reach Turso).
+    if is_credless(&stderr) {
+        eprintln!("skipping unknown-plan-id test: {}", stderr.trim());
+        return;
+    }
+
+    // Make sure we left nothing behind under the would-be default test plan.
+    let leaked = count(&format!(
+        "SELECT COUNT(*) AS n FROM flight_legs WHERE plan_id = 'test-set-dates-2026' \
+         AND flight_number = 'CI120' AND departure_airport = 'TPE'"
+    ));
+    if let Some(n) = leaked {
+        if n > 0 {
+            // Clean up any stray write so the assertion failure doesn't poison the real test plan.
+            let _ = bin()
+                .args([
+                    "db", "exec",
+                    "DELETE FROM flight_legs WHERE plan_id = 'test-set-dates-2026' \
+                     AND flight_number = 'CI120' AND departure_airport = 'TPE' AND arrival_airport = 'OKA'",
+                ])
+                .output();
+        }
+        assert_eq!(
+            n, 0,
+            "a mutation with an unknown --plan-id must not fall back to the test plan"
+        );
+    }
+
+    assert!(
+        !ok,
+        "set-flight must fail loudly for an unknown --plan-id, not silently default to the test plan; stderr={stderr}"
     );
 }

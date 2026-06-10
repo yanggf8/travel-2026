@@ -58,6 +58,9 @@ mod chat_format;        // batch 5
 // dispatch + stubs for collision-free fan-out (same method as P1).
 mod db_migrate;         // db migrate (port of scripts/turso-migrate.ts inline DDL)
 mod db_seed_plans;      // db seed plans (scripts/seed-plans-current.ts)
+mod db_seed_destination_refs; // db seed destination-refs (scripts/seed-destination-refs.ts)
+mod db_seed_ota_knowledge;    // db seed ota-knowledge (scripts/seed-ota-knowledge.ts)
+mod db_seed_test_plan;        // db seed test-plan (scripts/seed-test-plan.ts)
 mod db_sync_destinations; // db sync destinations (scripts/turso-sync-destinations.ts)
 mod db_sync_events;     // db sync events (scripts/turso-sync-events.ts)
 mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
@@ -171,7 +174,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 None
             };
             // Resolve plan_id (TRAVEL_PLAN_ID env for now, matching TS CLI)
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_dates::run(start, end, reason, plan_id).await.map_err(|e| e.to_string())?;
             Ok(())
         }
@@ -192,8 +195,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             let price = pos.get(3).and_then(|s| s.parse::<i64>().ok());
             let seats = pos.get(4).and_then(|s| s.parse::<i64>().ok());
             let source_arg = pos.get(5).map(|s| (*s).clone());
-            let plan_id =
-                env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             update_offer::run(offer_id, date, availability, price, seats, source_arg, plan_id)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -215,8 +217,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             let offer_id = positional[0].clone();
             let date = positional[1].clone();
             let populate = !rest.iter().any(|a| a == "--no-populate");
-            let plan_id =
-                env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             cascade::select_offer::run(offer_id, date, populate, plan_id)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -227,7 +228,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-day-theme <day> [theme] [--zh \"<chinese_title>\"] [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_day_theme::run(rest, plan_id).await?;
             Ok(())
         }
@@ -236,7 +237,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-hotel [--dest slug] [--name \"Hotel Name\"] [--check-in YYYY-MM-DD] [--access \"route1 | route2\"] [--note \"...\"]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_hotel::run(rest, plan_id).await?;
             Ok(())
         }
@@ -245,7 +246,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-flight <outbound|return> [--dest slug] [--flight SL396] [--airline \"...\"] [--airline-code SL] [--from TPE] [--dep HH:MM] [--dep-terminal T1] [--to KIX] [--arr HH:MM] [--arr-terminal T2] [--date YYYY-MM-DD] [--booked-date YYYY-MM-DD]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_flight::run(rest, plan_id).await?;
             Ok(())
         }
@@ -254,7 +255,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-airport-transfer <arrival|departure> <planned|booked> --selected \"<title|route|...>\" [--candidate \"<...>\"]...");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_airport_transfer::run(rest, plan_id).await?;
             Ok(())
         }
@@ -263,7 +264,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes \"...\"] [--start-time HH:MM] [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_route_segment::run(rest, plan_id).await?;
             Ok(())
         }
@@ -272,7 +273,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-route-segments-bulk <day> --json '[{{...}}]' [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_route_segment::run_bulk(rest, plan_id).await?;
             Ok(())
         }
@@ -281,7 +282,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-tod-focus <day> <session> \"<focus_text>\"");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_tod::run_focus(rest, plan_id).await?;
             Ok(())
         }
@@ -290,7 +291,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_tod::run_time_range(rest, plan_id).await?;
             Ok(())
         }
@@ -299,7 +300,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-tod-zh <day> <session> [--zh \"...\"] [--transit-zh \"...\"] [--activities-zh-json '[\"...\"]'] [--meals-zh-json '[\"...\"]'] [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_tod::run_zh(rest, plan_id).await?;
             Ok(())
         }
@@ -308,7 +309,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-activity-time <day> <session> <activity> [--start HH:MM] [--end HH:MM] [--fixed true|false] [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_time(rest, plan_id).await?;
             Ok(())
         }
@@ -317,7 +318,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-activity-title <day> <session> <activity> <new_title> [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_title(rest, plan_id).await?;
             Ok(())
         }
@@ -363,6 +364,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "plans" => {
             db_seed_plans::run(rest).await
         }
+        [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "destination-refs" => {
+            db_seed_destination_refs::run(rest).await
+        }
+        [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "ota-knowledge" => {
+            db_seed_ota_knowledge::run(rest).await
+        }
+        [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "test-plan" => {
+            db_seed_test_plan::run(rest).await
+        }
         [group, sub, action, rest @ ..] if group == "db" && sub == "sync" && action == "destinations" => {
             db_sync_destinations::run(rest).await
         }
@@ -388,7 +398,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel delete-activity <day> <session> <activity_id_or_title> [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_delete(rest, plan_id).await?;
             Ok(())
         }
@@ -397,56 +407,56 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 println!("Usage:\n  travel set-activity-booking <day> <session> <activity> <status> [--ref \"...\"] [--book-by YYYY-MM-DD] [--dest <slug>]");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_booking(rest, plan_id).await?;
             Ok(())
         }
 
         // batch 2: itinerary structure
         [cmd, rest @ ..] if cmd == "scaffold-itinerary" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             scaffold_itinerary::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "populate-itinerary" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             populate_itinerary::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "swap-days" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             swap_days::run(rest, plan_id).await?;
             Ok(())
         }
 
         // batch 3: bookings / status
         [cmd, rest @ ..] if cmd == "mark-booked" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             mark_booked::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "sync-bookings" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             sync_bookings::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "check-booking-integrity" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             booking_integrity::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "run-status" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             ops::run_status(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "run-list" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             ops::run_list(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "validate-itinerary" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             validate_itinerary::run(rest, plan_id).await?;
             Ok(())
         }
@@ -462,7 +472,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
 
         // batch 5: weather / prices / compare / chat
         [cmd, rest @ ..] if cmd == "fetch-weather" => {
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             weather::run(rest, plan_id).await?;
             Ok(())
         }

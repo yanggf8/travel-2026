@@ -557,7 +557,7 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
                 category: "destinations".to_string(),
                 severity: Severity::Warning,
                 message: format!(
-                    "{slug}: no rows in destination_areas. Run npx ts-node scripts/seed-destination-refs.ts."
+                    "{slug}: no rows in destination_areas. Run ./bin/travel db seed destination-refs."
                 ),
                 file: Some("turso:destination_areas".to_string()),
                 line: None,
@@ -586,7 +586,7 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
         issues.push(Issue {
             category: "destinations".to_string(),
             severity: Severity::Error,
-            message: "airlines table is empty. Run npx ts-node scripts/seed-ota-knowledge.ts.".to_string(),
+            message: "airlines table is empty. Run ./bin/travel db seed ota-knowledge.".to_string(),
             file: Some("turso:airlines".to_string()),
             line: None,
         });
@@ -709,18 +709,18 @@ async fn validate_reference_tables(issues: &mut Vec<Issue>) {
     };
 
     let checks: [(&str, &str); 7] = [
-        ("hotel_areas", "scripts/backfill-local-reference-data.ts"),
-        ("transport_routes", "scripts/backfill-local-reference-data.ts"),
-        ("transport_hubs", "scripts/backfill-local-reference-data.ts"),
-        ("destination_areas", "scripts/seed-destination-refs.ts"),
-        ("airlines", "scripts/seed-ota-knowledge.ts"),
+        ("hotel_areas", "no live seeder (archived backfill-local-reference-data.ts)"),
+        ("transport_routes", "no live seeder (archived backfill-local-reference-data.ts)"),
+        ("transport_hubs", "no live seeder (archived backfill-local-reference-data.ts)"),
+        ("destination_areas", "./bin/travel db seed destination-refs"),
+        ("airlines", "./bin/travel db seed ota-knowledge"),
         (
             "shaping_research_artifacts",
-            "scripts/backfill-local-reference-data.ts",
+            "populated by shaping-import (no standalone seeder)",
         ),
         (
             "shaping_selected_offers",
-            "scripts/backfill-local-reference-data.ts",
+            "populated by shaping-adopt (no standalone seeder)",
         ),
     ];
 
@@ -744,11 +744,16 @@ async fn validate_reference_tables(issues: &mut Vec<Issue>) {
             _ => 0,
         };
         if n == 0 {
+            let action = if seed.starts_with("./bin/") {
+                format!("Run {seed}.")
+            } else {
+                format!("{seed}.")
+            };
             issues.push(Issue {
                 category: "turso-reference".to_string(),
                 severity: Severity::Error,
                 message: format!(
-                    "Turso {label} has no rows. Run npx ts-node {seed}."
+                    "Turso {label} has no rows. {action}"
                 ),
                 file: Some(format!("turso:{label}")),
                 line: None,

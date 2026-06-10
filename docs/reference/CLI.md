@@ -111,7 +111,10 @@ Explore departure date × destination × flight price together before any plan e
 ./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32] \
   [--shaping ASPECT:ROLE:KIND:VALUE[:NOTES] ...]   # e.g. date:hard_constraint:return_no_later_than:2026-06-27
-python scripts/shaping_research.py --run <run_id>          # aggregator (no Turso I/O of its own)
+# After shaping-init: scrape via chromeport, then import + compare:
+#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
+#   → ./bin/chromeport parse capture <capture-id> --source <id>
+#   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id> [--json] [--limit N]
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>   # seed new plan with P1/P2
 ./bin/travel shaping-adopt <candidate_id> <plan_id>   # link to an existing plan only
