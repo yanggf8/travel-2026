@@ -62,35 +62,30 @@ process_3_4_packages: {
 ## CLI Commands
 
 ```bash
-# Scrape OTA packages (batch — all sources for a region)
-npm run scraper:batch -- --dest kansai [--sources besttour,liontravel] [--date 2026-02-24 --type fit]
+# Capture OTA packages via the chromeport CDP driver (Python scrapers decommissioned — see /scrape-ota)
+#   ./rust/target/debug/chromeport fetch interact "<url>" --source besttour --step ...
+#   ./rust/target/debug/chromeport parse capture <id> --source besttour   # imports directly to Turso offers
 
-# Scrape a specific package URL
-python scripts/scrape_package.py "<url>" scrapes/besttour-<code>.json
-
-# Scrape package listings page
-python scripts/scrape_listings.py --source besttour --dest kansai
-
-# Import scraped JSON files into Turso
-npm run travel -- import-offers --dir scrapes --dest <slug>
+# Import scraped JSON files into Turso (legacy scrapes/ landing zone)
+./bin/travel import-offers --dir scrapes --dest <slug>
 
 # Query available offers in DB
-npm run travel -- query-offers --plan-id <id> --dest <slug> [--max-price 25000] [--json]
+./bin/travel query-offers --plan-id <id> --dest <slug> [--max-price 25000]
 
 # Check if data is fresh
-npm run travel -- check-freshness --source besttour --region kansai
+./bin/travel check-freshness --source besttour --region kansai
 
 # Select a package (populates P3+P4 via cascade)
-npm run travel -- select-offer <offer-id> <date>
+./bin/travel select-offer <offer-id> <date>
 ```
 
 ### Command Reference
 
 | Command | Description | Required Args | Optional Args |
 |---------|-------------|---------------|---------------|
-| `scraper:batch` | Scrape all OTAs for a region | `--dest` | `--sources`, `--date`, `--type` |
+| chromeport CDP capture | Capture an OTA page → Turso (see /scrape-ota) | `<url>`, `--source` | `--step` |
 | `import-offers` | Import scraped JSON into DB | `--dir`, `--dest` | `--start`, `--end`, `--dry-run` |
-| `query-offers` | List offers from DB | `--plan-id`, `--dest` | `--max-price`, `--json` |
+| `query-offers` | List offers from DB | `--plan-id`, `--dest` | `--max-price` |
 | `check-freshness` | Check if scraped data is stale | `--source`, `--region` | `--plan-id` |
 | `select-offer` | Select package for booking | `<offer-id>`, `<date>` | None |
 
@@ -100,36 +95,33 @@ npm run travel -- select-offer <offer-id> <date>
 
 ```bash
 # 1. Set travel dates
-npm run travel -- set-dates 2026-02-24 2026-02-28
+./bin/travel set-dates 2026-02-24 2026-02-28
 
-# 2. Scrape packages from OTAs
-npm run scraper:batch -- --dest kansai --type fit
+# 2. Capture packages from OTAs via the chromeport CDP driver (see /scrape-ota)
+#   ./rust/target/debug/chromeport fetch interact "<url>" --source besttour --step ...
+#   ./rust/target/debug/chromeport parse capture <id> --source besttour
 
-# 3. Import scraped files into DB
-npm run travel -- import-offers --dir scrapes --dest kyoto_2026
+# 3. Import scraped files into DB (legacy scrapes/ landing zone)
+./bin/travel import-offers --dir scrapes --dest kyoto_2026
 
 # 4. Review available offers
-npm run travel -- query-offers --plan-id kyoto-2026 --dest kyoto_2026
+./bin/travel query-offers --plan-id kyoto-2026 --dest kyoto_2026
 
 # 5. Select package (auto-populates P3+P4 via cascade)
-npm run travel -- select-offer liontravel_190620015 2026-02-24
+./bin/travel select-offer liontravel_190620015 2026-02-24
 
 # 6. Verify P3/P4 populated
-npm run view:transport
+./bin/travel transport
 ```
 
 ### Example 2: Budget-Constrained Search
 
 ```bash
-# Scrape with budget filter
-npm run scraper:batch -- --dest kansai --type fit
+# Capture with the chromeport CDP driver (see /scrape-ota), then:
 
 # Import and query with max-price filter
-npm run travel -- import-offers --dir scrapes --dest kyoto_2026
-npm run travel -- query-offers --plan-id kyoto-2026 --dest kyoto_2026 --max-price 20000
-
-# Or filter scraped JSON directly
-python scripts/filter_packages.py scrapes/*-scrape.json --max-price 20000 --type fit
+./bin/travel import-offers --dir scrapes --dest kyoto_2026
+./bin/travel query-offers --plan-id kyoto-2026 --dest kyoto_2026 --max-price 20000
 ```
 
 ## Error Handling
@@ -158,39 +150,39 @@ python scripts/filter_packages.py scrapes/*-scrape.json --max-price 20000 --type
 
 - **Required processes**: P1 (dates), P2 (destination)
 - **Required skills**: `/scrape-ota` for OTA integration
-- **External tools**: Python scrapers (`scripts/scrape_package.py`, `scripts/scrape_listings.py`)
+- **External tools**: chromeport CDP driver (`rust/crates/chromeport`) — Python scrapers decommissioned (see `/scrape-ota`)
 - **Required DB**: `ota_sources` table in Turso (OTA registry — replaces removed `data/ota-sources.json`)
 
 ## Data Acquisition
 
 ### Supported OTAs
 
-| OTA | Type | Status | Scraper |
+| OTA | Type | Status | Capture |
 |-----|------|--------|---------|
-| BestTour (喜鴻假期) | Package | ✅ Full | `scrape_package.py` |
-| Lion Travel (雄獅旅遊) | Package | ✅ Base | `scrape_package.py` |
-| ezTravel (易遊網) | Package | ⚠️ Limited | `scrape_listings.py` |
+| BestTour (喜鴻假期) | Package | ✅ Full | chromeport `--source besttour` |
+| Lion Travel (雄獅旅遊) | Package | ✅ Base | chromeport `--source liontravel` |
+| ezTravel (易遊網) | Package | ⚠️ Limited | chromeport `--source eztravel` |
 
-### Scraping Commands
+### Capture Commands
+
+Python scrapers are decommissioned. Drive the real OTA page in Chrome via the chromeport
+CDP driver, then parse the capture into Turso (full flow in `/scrape-ota`):
 
 ```bash
-# Scrape specific package URL
-python scripts/scrape_package.py <url>
+# Drive + capture a package page (clicks/fills the actual UI — no URL templates)
+./rust/target/debug/chromeport fetch interact "<url>" --source besttour --step 'click:SEL' --step 'fill:SEL=VALUE'
 
-# Scrape listings page
-python scripts/scrape_listings.py --source besttour --dest kansai
-
-# Filter results
-python scripts/filter_packages.py scrapes/*.json --type fit --date 2026-02-24
+# Parse the capture (rule-driven via parser_rules) → Turso offers
+./rust/target/debug/chromeport parse capture <capture-id> --source besttour
 ```
 
 ## DB Integration
 
 After package selection, bookings are automatically synced to Turso:
 - `StateManager.save()` writes to normalized tables (no JSON)
-- Query bookings: `npm run travel -- query-bookings --category package`
+- Query bookings: `./bin/travel query-bookings --category package`
 - The agent should use `query-bookings` to check status, not read JSON paths
-- Manual sync: `npm run travel -- sync-bookings`
+- Manual sync: `./bin/travel sync-bookings`
 
 ## Notes
 

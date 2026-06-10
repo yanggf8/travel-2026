@@ -120,7 +120,7 @@ To convert schedule-based to session-based:
 ## Validation
 
 ```bash
-npm run travel -- validate-itinerary [--format session|schedule]
+./bin/travel validate-itinerary [--format session|schedule]
 ```
 
 Checks:

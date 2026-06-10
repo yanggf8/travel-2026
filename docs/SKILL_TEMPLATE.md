@@ -26,10 +26,10 @@ interface SkillOutput {
 
 ```bash
 # Primary command
-npm run skill -- <command> [options]
+./bin/travel <command> [options]
 
 # Examples
-npm run skill -- example-command --param value
+./bin/travel example-command --param value
 ```
 
 ### Command Reference
@@ -44,17 +44,17 @@ npm run skill -- example-command --param value
 
 ```bash
 # Step 1: Do something
-npm run skill -- step1
+./bin/travel step1
 
 # Step 2: Do something else
-npm run skill -- step2
+./bin/travel step2
 ```
 
 ### Example 2: Alternative Flow
 
 ```bash
 # Alternative approach
-npm run skill -- alternative
+./bin/travel alternative
 ```
 
 ## Error Handling

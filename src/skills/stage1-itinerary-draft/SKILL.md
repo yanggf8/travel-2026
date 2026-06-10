@@ -36,7 +36,7 @@ still comparing dates, destinations, or flight prices, use `/shaping-research`.
 
 1. **Verify plan state**
    ```bash
-   npm run view:status -- --plan-id <plan_id>
+   ./bin/travel status --full --plan-id <plan_id>
    ```
    Confirm:
    - P1 dates are confirmed.
@@ -48,7 +48,7 @@ still comparing dates, destinations, or flight prices, use `/shaping-research`.
 
 2. **Create the day skeleton**
    ```bash
-   npm run travel -- scaffold-itinerary --plan-id <plan_id> --dest <destination_slug>
+   ./bin/travel scaffold-itinerary --plan-id <plan_id> --dest <destination_slug>
    ```
    Use `--force` only when the user explicitly wants to replace an existing
    rough draft.

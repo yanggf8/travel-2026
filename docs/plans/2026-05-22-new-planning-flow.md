@@ -58,7 +58,7 @@ User picks a candidate OR asks to explore another date/destination
 **Tools:**
 ```bash
 # Create an immutable run over destination × duration.
-npm run travel -- shaping-init --origin TPE \
+./bin/travel shaping-init --origin TPE \
   --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka/Kyoto (KIX)" --dest NRT:"Tokyo (NRT)" \
   --nights 6 --nights 7 --pax 2 --rate 32
@@ -68,7 +68,7 @@ npm run travel -- shaping-init --origin TPE \
 python scripts/shaping_research.py --run <run_id>
 
 # Compare top candidates.
-npm run travel -- shaping-compare --run <run_id>
+./bin/travel shaping-compare --run <run_id>
 ```
 
 **Aggregation is DB-backed:** Shaping Stage stores immutable runs in unscoped `shaping_*` tables and ranks all imported candidates across destinations and durations.
@@ -76,7 +76,7 @@ npm run travel -- shaping-compare --run <run_id>
 **Exit condition:** User says "let's lock this date and destination." Adopt the candidate into a new plan and move to Stage 1:
 
 ```bash
-npm run travel -- shaping-adopt <candidate_id> <new_plan_id> --create-plan --dest <destination_slug>
+./bin/travel shaping-adopt <candidate_id> <new_plan_id> --create-plan --dest <destination_slug>
 ```
 
 This seeds the minimal normalized plan rows, sets P1 dates from the candidate's depart/return dates, sets P2 destination from `--dest`, and links `shaping_candidates.adopted_plan_id`.
@@ -95,14 +95,14 @@ This seeds the minimal normalized plan rows, sets P1 dates from the candidate's 
 ```bash
 # If coming from Shaping Stage with `shaping-adopt --create-plan`, the plan,
 # destination, and P1/P2 rows already exist.
-npm run travel -- plans
-npm run view:status -- --plan-id <plan-id>
+./bin/travel plans
+./bin/travel status --full --plan-id <plan-id>
 
 # Orchestrate the rough draft with /stage1-itinerary-draft, which runs the
 # scaffold command below and validates whether the plan should move to Stage 2.
-npm run travel -- scaffold-itinerary --plan-id <plan-id> --dest <destination-slug>
+./bin/travel scaffold-itinerary --plan-id <plan-id> --dest <destination-slug>
 # Example dest slug: for Kansai use the slug from destination_config table
-# (e.g., osaka_kyoto, kansai_2026, etc. — check with npm run view:status)
+# (e.g., osaka_kyoto, kansai_2026, etc. — check with ./bin/travel status --full)
 ```
 
 If Stage 1 starts without a Shaping Stage handoff, first ensure the plan and destination
@@ -152,7 +152,7 @@ python scripts/scrape_date_range.py \
   -o scrapes/june18-outbound.json
 
 # Compare with package prices (Path B must run first to populate DB)
-npm run travel -- query-offers --region kansai --start 2026-06-18 --end 2026-06-25 --max-price 30000 --json
+./bin/travel query-offers --region kansai --start 2026-06-18 --end 2026-06-25 --max-price 30000 --json
 ```
 
 **Note:** Shaping Stage only researches flights. To compare direct vs package, run Path B below first to scrape and import package data, then return to Path A results.
@@ -160,12 +160,14 @@ npm run travel -- query-offers --region kansai --start 2026-06-18 --end 2026-06-
 ### Path B: Package (Flight + Hotel)
 ```bash
 # IMPORTANT: Run this BEFORE comparing direct vs package — Shaping Stage only has flight data
-# Search packages for the locked dates
-npm run scraper:batch -- --dest kansai --date 2026-06-18 --type fit
+# Search packages for the locked dates via the chromeport CDP driver (Python scrapers decommissioned):
+#   ./rust/target/debug/chromeport fetch interact "<ota-url>" --source <id> --step ...
+#   ./rust/target/debug/chromeport parse capture <capture-id> --source <id>   # imports to Turso
+# See src/skills/scrape-ota/SKILL.md and CLAUDE.md → URL Routing
 
 # Import and query
-npm run travel -- import-offers --dir scrapes --dest <slug>
-npm run travel -- query-offers --plan-id <id> --dest <slug> --max-price 30000 --json
+./bin/travel import-offers --dir scrapes --dest <slug>
+./bin/travel query-offers --plan-id <id> --dest <slug> --max-price 30000 --json
 ```
 
 **Decision:** Direct flight only OR package?
@@ -191,24 +193,24 @@ validation against real transport and lodging.
 **What to do:**
 ```bash
 # Set the confirmed flight details (both legs)
-npm run travel -- set-flight outbound --dest <slug> \
+./bin/travel set-flight outbound --dest <slug> \
   --flight SL396 --airline "Thai Lion Air" --airline-code SL \
   --from TPE --dep 09:00 --to KIX --arr 12:30 --date 2026-06-18
-npm run travel -- set-flight return --dest <slug> \
+./bin/travel set-flight return --dest <slug> \
   --flight SL397 --airline "Thai Lion Air" --airline-code SL \
   --from KIX --dep 13:30 --to TPE --arr 15:40 --date 2026-06-25
 
 # Validate the itinerary fits with actual flight times (--severity error|warning|info)
-npm run travel -- validate-itinerary --dest <slug> --severity warning
+./bin/travel validate-itinerary --dest <slug> --severity warning
 
 # For each day, set activities with timing (--fixed REQUIRES a value: true|false)
-npm run travel -- set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed true
+./bin/travel set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed true
 
 # Set day themes
-npm run travel -- set-day-theme <day> "Dotonbori Food Walk" --zh "道頓堀美食"
+./bin/travel set-day-theme <day> "Dotonbori Food Walk" --zh "道頓堀美食"
 
 # Set session focus and transit
-npm run travel -- set-tod-zh <day> <session> \
+./bin/travel set-tod-zh <day> <session> \
   --zh "午餐：美國村特色料理" \
   --transit-zh "地下鐵御堂筋線 難波→心齋橋 5分鐘"
 ```
@@ -236,8 +238,8 @@ explicit deployment, and post-deploy verification.
 # Bulk populate pattern from scripts/set-kyoto-zh-sessions-v2.ts
 
 # Set all day themes in ZH
-npm run travel -- set-day-theme 1 arrival --zh "大阪抵達" --dest <slug>
-npm run travel -- set-day-theme 2 full --zh "道頓堀+美國村" --dest <slug>
+./bin/travel set-day-theme 1 arrival --zh "大阪抵達" --dest <slug>
+./bin/travel set-day-theme 2 full --zh "道頓堀+美國村" --dest <slug>
 ...
 
 # Transit summary for the whole trip

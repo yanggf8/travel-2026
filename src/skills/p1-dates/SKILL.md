@@ -151,5 +151,5 @@ Which do you prefer?"
 ## CLI equivalent
 
 ```bash
-npm run travel -- set-dates 2026-02-25 2026-03-01
+./bin/travel set-dates 2026-02-25 2026-03-01
 ```

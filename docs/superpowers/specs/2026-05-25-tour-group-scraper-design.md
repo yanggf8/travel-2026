@@ -186,13 +186,13 @@ Scraper writes one JSON file per `(source_id, dest_region, nights)` attempt:
 
 ```bash
 # Import a single scrape output file into stage0_tour_group_offers + update the attempt row
-npm run travel -- import-tour-group-offers --run <run_id> --file scrapes/besttour-kansai-5n.json
+./bin/travel import-tour-group-offers --run <run_id> --file scrapes/besttour-kansai-5n.json
 
 # Import all matching scrape files from a directory
-npm run travel -- import-tour-group-offers --run <run_id> --dir scrapes/
+./bin/travel import-tour-group-offers --run <run_id> --dir scrapes/
 
 # Show what's been collected for a run (read-only, debugging)
-npm run travel -- query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--max-price <twd>]
+./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--max-price <twd>]
 ```
 
 `requiresState: false` for all three (Stage 0 commands are pre-plan).

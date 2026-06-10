@@ -17,7 +17,7 @@ Read these first unless the request is extremely narrow:
 - `../travel-shared/references/state-manager.md`
 - `../travel-shared/references/cascade-triggers.md`
 - `../travel-shared/references/itinerary-formats.md` — **Session vs Schedule formats, dashboard compatibility**
-- destination reference (POI, areas, clusters, transit) — from Turso, via `npm run travel -- query-destination-ref --slug {destination}`
+- destination reference (POI, areas, clusters, transit) — from Turso, via `./bin/travel query-destination-ref --slug {destination}`
 
 ## Agent-First Defaults
 
@@ -102,7 +102,7 @@ Activities can be strings (simple) or objects (rich):
 ### Step 1: Create Day Skeletons
 
 ```bash
-npm run travel -- scaffold-itinerary --dest <destination>
+./bin/travel scaffold-itinerary --dest <destination>
 ```
 
 Generates empty days based on date anchor:
@@ -123,7 +123,7 @@ Map user goals to destination clusters, then assign clusters to days.
 4. Respect day type constraints (no clusters on arrival/departure days)
 
 ```bash
-npm run travel -- populate-itinerary --goals "cluster1,cluster2" --pace balanced
+./bin/travel populate-itinerary --goals "cluster1,cluster2" --pace balanced
 ```
 
 ### Step 3: Time Constraint Solving
@@ -162,7 +162,7 @@ Validate that each day minimizes unnecessary travel:
 ### Step 5: Validation
 
 ```bash
-npm run travel -- validate-itinerary --severity warning
+./bin/travel validate-itinerary --severity warning
 ```
 
 Checks for:
@@ -230,23 +230,23 @@ Lifetour example:
 
 ```bash
 # Scaffold empty days
-npm run travel -- scaffold-itinerary [--force]
+./bin/travel scaffold-itinerary [--force]
 
 # Populate with clusters
-npm run travel -- populate-itinerary --goals "cluster1,cluster2" --pace balanced
+./bin/travel populate-itinerary --goals "cluster1,cluster2" --pace balanced
 
 # Reorder days
-npm run travel -- swap-days <dayA> <dayB>  # Swap all activities between two days
+./bin/travel swap-days <dayA> <dayB>  # Swap all activities between two days
 
 # Set activity details
-npm run travel -- set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM [--fixed true]
-npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
+./bin/travel set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM [--fixed true]
+./bin/travel set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
 
 # Set session boundaries
-npm run travel -- set-tod-time-range <day> <session> --start HH:MM --end HH:MM
+./bin/travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM
 
 # Validate
-npm run travel -- validate-itinerary [--severity warning]
+./bin/travel validate-itinerary [--severity warning]
 ```
 
 ## Traditional Chinese (ZH) Content
@@ -255,14 +255,14 @@ All ZH content lives in DB columns — never hardcoded in Worker. After scaffold
 
 ```bash
 # Per-session (focus + transit + activities)
-npm run travel -- set-tod-zh <day> <morning|noon|afternoon|evening> \
+./bin/travel set-tod-zh <day> <morning|noon|afternoon|evening> \
   --zh "中文焦點標題" \
   --transit-zh "中文交通說明" \
   --activities-zh-json '["活動一","活動二 https://maps.link"]' \
   [--plan-id kyoto-2026]
 
 # Day theme
-npm run travel -- set-day-theme <day> [en_theme] --zh "中文主題" [--plan-id kyoto-2026]
+./bin/travel set-day-theme <day> [en_theme] --zh "中文主題" [--plan-id kyoto-2026]
 ```
 
 **Bulk population (new destination):** Copy `scripts/set-kyoto-zh-sessions-v2.ts` — uses Turso parameterized pipeline API to update all 15 sessions in one HTTP request. Required for Unicode/emoji; inline SQL silently fails.

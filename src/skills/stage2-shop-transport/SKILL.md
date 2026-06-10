@@ -31,7 +31,7 @@ flights on adjacent dates would change the trip, return to `/shaping-research`.
 
 1. **Verify inputs**
    ```bash
-   npm run view:status -- --plan-id <plan_id>
+   ./bin/travel status --full --plan-id <plan_id>
    ```
    Confirm:
    - P1 dates are confirmed.
@@ -40,17 +40,18 @@ flights on adjacent dates would change the trip, return to `/shaping-research`.
 
 2. **Check package data freshness**
    ```bash
-   npm run travel -- check-freshness --source <source_id> --region <region>
+   ./bin/travel check-freshness --source <source_id> --region <region>
    ```
-   If data is stale or missing, use `/p3p4-packages` to scrape and import:
+   If data is stale or missing, use `/p3p4-packages` to capture and import. Capture
+   live via the chromeport CDP driver (Python scrapers are decommissioned — see
+   `/scrape-ota`), then import:
    ```bash
-   npm run scraper:batch -- --dest <region> --date <YYYY-MM-DD> --type fit
-   npm run travel -- import-offers --dir scrapes --dest <destination_slug>
+   ./bin/travel import-offers --dir scrapes --dest <destination_slug>
    ```
 
 3. **Query package options**
    ```bash
-   npm run travel -- query-offers --plan-id <plan_id> --dest <destination_slug> --json
+   ./bin/travel query-offers --plan-id <plan_id> --dest <destination_slug>
    ```
    Shortlist only offers whose flight times, hotel location, room type,
    cancellation terms, and lodging topology match the Stage 1 draft.
@@ -80,18 +81,18 @@ flights on adjacent dates would change the trip, return to `/shaping-research`.
 
    Package path:
    ```bash
-   npm run travel -- select-offer <offer_id> <YYYY-MM-DD>
-   npm run view:transport
-   npm run travel -- query-bookings --category package
+   ./bin/travel select-offer <offer_id> <YYYY-MM-DD>
+   ./bin/travel transport
+   ./bin/travel query-bookings --category package
    ```
 
    Separate path:
    ```bash
-   npm run travel -- set-flight outbound --dest <destination_slug> ...
-   npm run travel -- set-flight return --dest <destination_slug> ...
-   npm run travel -- set-hotel --dest <destination_slug> ...
-   npm run view:transport
-   npm run travel -- query-bookings
+   ./bin/travel set-flight outbound --dest <destination_slug> ...
+   ./bin/travel set-flight return --dest <destination_slug> ...
+   ./bin/travel set-hotel --dest <destination_slug> ...
+   ./bin/travel transport
+   ./bin/travel query-bookings
    ```
 
 ## Output

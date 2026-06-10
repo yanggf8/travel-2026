@@ -91,26 +91,25 @@ READ:   await StateManager.create() → TursoRepository.create() → executeBatc
 
 ## Development
 
-### CLI Execution Priority (Target — Root npm Retirement)
+### CLI Execution (Root npm Retired — 2026-06-10)
 ```
-End state: Rust binaries invoked directly — no npm at the repo root
+Rust binary invoked directly — no npm at the repo root:
   ./bin/travel <cmd>        (built from rust/crates/travel-cli)
-  ./bin/travel-validate     (validate:data + doctor)
-  ./bin/travel-db           (migrate/seed/status/exec)
+  ./bin/chromeport <cmd>    (the CDP OTA capture driver)
 Worker (workers/trip-dashboard/) keeps its own self-contained package.json (wrangler).
 Python/other → none (Python scrapers archived; chromeport is Rust)
 ```
 
-**Current state:** `package.json` still runs 100% via `ts-node` — the TS V1 write path (full-table flush) is live until cutover. **Do not modify `package.json`** until the Rust integration tests (cutover gate) pass. **Do not mix Rust mutation commands with TS saves on the same plan** — a TS flush can overwrite Rust targeted writes.
+**Current state:** the root `package.json` is gone — the npm→Rust cutover is **done**. The Rust CLI is the sole write path (each command = targeted SELECT + UPDATE/INSERT). The old TS CLI is read-only under `archive/ts-cli-retired/`. Build with `make build`; the Makefile is the build/dev entry.
 
-**Rust binary naming convention:**
-- `travel` → main CLI (`travel`, `status`, `view:*`, `db:sync:*`)
-- `travel-validate` → validation commands (`validate:data`, `doctor`)
-- `travel-compare` → comparison commands (`compare-trips`, `compare-dates`, `compare-true-cost`)
-- `travel-utils` → utility commands (`normalize-flights`, `leave-calc`)
-- `travel-db` → DB operations (`db:import`, `db:migrate`, `db:*`)
+**Single-binary CLI:** there is ONE binary, `travel`, with subcommands (no per-area binaries). Examples:
+- views/status → `travel status --full`, `travel itinerary`, `travel transport`, `travel bookings`
+- validation → `travel validate data`, `travel doctor`
+- comparison → `travel compare trips ...`, `travel compare dates ...`, `travel compare true-cost ...`
+- utilities → `travel normalize flights ...`, `travel leave calc`
+- DB ops → `travel db migrate`, `travel db status`, `travel db seed plans`, `travel db exec "<sql>"`
 
-**Build Rust binaries to:** `./bin/` (gitignored).
+**Build the binaries to:** `./bin/` (gitignored) via `make build`.
 
 **Reference:** `docs/plans/2026-06-10-roadmap-v2-rust.md` (active roadmap: tests → scripts port → cutover → archive TS; read before any Rust work). Historical: `docs/plans/2026-06-05-rust-cli-migration.md`, `docs/plans/2026-06-10-rust-port-audit.md`.
 
@@ -173,26 +172,26 @@ User intent                          → Skill / Action
 "what dates are cheapest"            → /shaping-research
 "set dates" / "change dates"         → /p1-dates
 "which city" / "how many nights"     → /p2-destination
-"lock this Shaping Stage candidate"        → npm run travel -- shaping-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
+"lock this Shaping Stage candidate"        → ./bin/travel shaping-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
 "draft the trip" / "rough itinerary" → /stage1-itinerary-draft
 "find packages" / "search OTA"       → /stage2-shop-transport (check freshness first)
   fresh data in Turso?                  → query-offers (show existing)
   stale/no data?                        → /p3p4-packages (scrape + auto-import)
 "find flights only"                  → /stage2-shop-transport (uses /p3-flights)
 "compare offers"                     → /stage2-shop-transport
-"query offers"                       → npm run travel -- query-offers --plan-id <id> --dest <slug>
-"import scraped files"               → npm run travel -- import-offers --dir scrapes --dest <slug>
-"is data fresh"                      → npm run travel -- check-freshness --source <s>
+"query offers"                       → ./bin/travel query-offers --plan-id <id> --dest <slug>
+"import scraped files"               → ./bin/travel import-offers --dir scrapes --dest <slug>
+"is data fresh"                      → ./bin/travel check-freshness --source <s>
 "book separately"                    → /stage2-shop-transport (uses /separate-bookings)
-"how many leave days"                → npm run leave-calc
-"book this" / "select offer"         → npm run travel -- select-offer
+"how many leave days"                → ./bin/travel leave calc
+"book this" / "select offer"         → ./bin/travel select-offer
 "plan the days" / "itinerary"        → /stage3-expand-itinerary
-"show bookings"                      → npm run travel -- query-bookings (from DB)
-"show status"                        → npm run view:status
-"show schedule"                      → npm run view:itinerary
-"weather" / "forecast"               → npm run travel -- fetch-weather [--dest slug] [--all]
+"show bookings"                      → ./bin/travel query-bookings (from DB)
+"show status"                        → ./bin/travel status --full
+"show schedule"                      → ./bin/travel itinerary
+"weather" / "forecast"               → ./bin/travel fetch-weather [--dest slug] [--all]
 User provides OTA URL                → /scrape-ota (see URL Routing)
-User provides booking confirmation   → npm run travel -- set-activity-booking
+User provides booking confirmation   → ./bin/travel set-activity-booking
 "deploy dashboard" / "publish trip"  → /stage4-publish-dashboard
 ```
 
@@ -303,65 +302,59 @@ Completed trips — full bookings, itinerary, and weather notes archived:
 - **Tokyo Feb 13-17** → `docs/trips/2026-tokyo.md`
 - **Kyoto Feb 24-28** → `docs/trips/2026-kyoto.md`
 
-No upcoming trip locked. Plan status for any active plan: `npm run view:status`.
+No upcoming trip locked. Plan status for any active plan: `./bin/travel status --full`.
 
 ## CLI Quick Reference
 
 Most-used commands inline; the **canonical full reference** (every mutation, comparison view, scraping flag, Shaping Stage aggregator handoff) lives in **`docs/reference/CLI.md`**. Add new commands there, not here.
 
-> **npm retired — command translation.** The examples below still show the old
-> `npm run …` forms (mechanical doc cleanup pending). Read them as the Rust
-> binary: `npm run travel -- <cmd>` → `./bin/travel <cmd>`; `npm run view:status`
-> → `./bin/travel status --full`; `npm run view:itinerary` → `./bin/travel
-> itinerary`; `npm run compare-dates -- …` → `./bin/travel compare dates …`;
-> `npm run db:migrate:turso` → `./bin/travel db migrate`; `npm run validate:data`
-> → `./bin/travel validate data`. Build the binary with `make build`.
-
 ```bash
 # Views (run any one)
-npm run travel -- plans                          # list DB plans and date anchors
-npm run view:status                              # booking overview
-npm run view:itinerary                           # daily plan
-npm run view:transport                           # transport summary
-npm run view:bookings                            # booking ledger
-npm run travel -- status --travel-date 2026-06-20
+./bin/travel plans                               # list DB plans and date anchors
+./bin/travel status --full                       # booking overview
+./bin/travel itinerary                           # daily plan
+./bin/travel transport                           # transport summary
+./bin/travel bookings                            # booking ledger
+./bin/travel status --travel-date 2026-06-20
 
 # Shaping Stage (pre-plan triangle research)
-npm run travel -- shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2]
 python scripts/shaping_research.py --run <run_id>
-npm run travel -- shaping-compare --run <run_id>
-npm run travel -- shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
+./bin/travel shaping-compare --run <run_id>
+./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
 
 # Offers (Turso)
-npm run travel -- import-offers --dir scrapes --dest tokyo_2026 [--start ... --end ...] [--dry-run]
-npm run travel -- query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
-npm run travel -- check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
+./bin/travel import-offers --dir scrapes --dest tokyo_2026 [--start ... --end ...] [--dry-run]
+./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
+./bin/travel check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
 
 # Bookings
-npm run travel -- sync-bookings [--dry-run]
-npm run travel -- query-bookings --dest tokyo_2026 [--category activity --status pending]
-npm run travel -- validate-itinerary --dest tokyo_2026
+./bin/travel sync-bookings [--dry-run]
+./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
+./bin/travel validate-itinerary --dest tokyo_2026
 
-# Scraping
-npm run scraper:pipeline                         # doctor + batch + import (end-to-end)
-npm run scraper:batch -- --dest kansai [--sources besttour,settour]
+# Scraping — Python scrapers DECOMMISSIONED; use the chromeport CDP driver:
+#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
+#   → ./bin/chromeport verify <source-id> <capture-id>
+#   → ./bin/chromeport parse capture <capture-id> --source <id>   # imports to Turso
+# See URL Routing + src/skills/scrape-ota/SKILL.md.
 
 # Tour-group / FIT offers (manual entry for sources without a full scraper)
-npm run travel -- import-tour-group-offers --run <run_id> --file <path>
-npm run travel -- query-tour-group-offers --run <run_id> [--source <id>] [--nights N] [--max-price TWD] [--json]
-npm run travel -- shaping-baseline --run <run_id>           # methodology comparison view
-npm run travel -- add-besttour-offer --url <url> --price <twd> --hotel "<name>"
-npm run travel -- add-lifetour-offer --url <url> --price <twd> --hotel "<name>"
+./bin/travel import-tour-group-offers --run <run_id> --file <path>
+./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--nights N] [--max-price TWD] [--json]
+./bin/travel shaping-baseline --run <run_id>                # methodology comparison view
+./bin/travel add-besttour-offer --url <url> --price <twd> --hotel "<name>"
+./bin/travel add-lifetour-offer --url <url> --price <twd> --hotel "<name>"
 
 # Mutations — only the 4 most common shown here.
 # Full list (set-airport-transfer, set-activity-time, set-day-theme, set-route-segment,
 # set-tod-zh, delete-activity, swap-days, run-status, check-booking-integrity, …)
 # lives in docs/reference/CLI.md. Add new mutation examples THERE, not here.
-npm run travel -- set-dates 2026-02-13 2026-02-17
-npm run travel -- select-offer <offer-id> <date>
-npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--ref "..."]
-npm run travel -- fetch-weather [--dest slug] [--all]
+./bin/travel set-dates 2026-02-13 2026-02-17
+./bin/travel select-offer <offer-id> <date>
+./bin/travel set-activity-booking <day> <session> "<activity>" <status> [--ref "..."]
+./bin/travel fetch-weather [--dest slug] [--all]
 
 # DB + tests (run any one)
 ./bin/travel db status                           # show DB state
@@ -369,7 +362,7 @@ npm run travel -- fetch-weather [--dest slug] [--all]
 ./bin/travel db seed plans                       # one-time plan seed
 make test                                        # full Rust test suite
 ./bin/travel validate data                       # data integrity check
-npm run doctor                                   # full system health check
+./bin/travel doctor                              # full system health check
 ```
 
 Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI uses `--travel-date`, `--travel-start/--travel-end`, or exactly one active or upcoming DB date anchor/planning window. Use `--travel-*` for plan selection; plain `--start/--end` are command-specific filters (e.g. offer search ranges). If several plans match, the CLI fails with a plan list instead of silently loading a legacy default.
@@ -454,9 +447,9 @@ Tables:
 
 > **No JSON in the RDB (de-JSON program, 2026-06):** every former `*_json` column was re-normalized — flat lists → child tables (one row per element), small objects → typed scalar columns, open/variable blobs → a single `*_text` column. A whole-DB content scan confirms zero JSON-encoded values in any column. The dead `flights` table (old JSON-blob flight store) was dropped. Don't reintroduce `*_json` columns or `JSON.parse`/`JSON.stringify` against DB column data.
 
-Schema reference: `scripts/schema.sql` (read-only DDL reference, AUTO-GENERATED from the live DB via `npx ts-node scripts/gen-schema-sql.ts` — do not hand-edit; regenerate after migrations)
-Schema/migration: `npm run db:migrate:turso` (creates all tables idempotently)
-Seed: `npm run db:seed:plans` (one-time, already run)
+Schema reference: `scripts/schema.sql` (read-only DDL reference, auto-generated from the live DB; the `gen-schema-sql.ts` generator is retired — see `archive/ts-cli-retired/`. Do not hand-edit; regenerate after migrations)
+Schema/migration: `./bin/travel db migrate` (creates all tables idempotently)
+Seed: `./bin/travel db seed plans` (one-time, already run)
 
 ### DB Operation Decision
 - **Reusable operation** (editing itinerary content, updating themes, managing activities) → build a UI/CLI interface
@@ -499,11 +492,11 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 norm
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Itinerary shows blank/empty | Schedule-based format not converted | Check `render.ts` handles both formats |
-| Wrong plan content | Plan not synced to Turso | Run `npm run db:seed:plans` |
+| Wrong plan content | Plan not synced to Turso | Run `./bin/travel db seed plans` |
 | "Plan not found" error | Plan ID mismatch (underscore vs hyphen) | URL uses `tokyo-2026`, DB uses `tokyo_2026` |
 | ZH content not showing | Missing `_zh` columns in DB | Run `set-tod-zh` CLI per session, or bulk-populate via `scripts/set-kyoto-zh-sessions-v2.ts` pattern |
 | ZH UPDATE silently fails (rows_affected=0) | Inline SQL with Unicode/emoji fails encoding | Use parameterized Turso queries: `args:[{type:"text",value:"..."},{type:"integer",value:"1"}]` — integer value must be a string |
-| Weather missing | Weather not fetched | Run `npm run travel -- fetch-weather --dest <slug>` |
+| Weather missing | Weather not fetched | Run `./bin/travel fetch-weather --dest <slug>` |
 | Maps embed not showing | No `GOOGLE_MAPS_KEY` secret | `wrangler secret put GOOGLE_MAPS_KEY` (restrict key to Maps Embed API + referrer in GCP Console) |
 
 ```bash

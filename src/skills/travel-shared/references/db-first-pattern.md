@@ -27,20 +27,20 @@ await sm.saveWithTracking('select-transport', 'tokyo_2026');
 
 ```bash
 # RIGHT — Via CLI
-npm run travel -- mark-booked --dest tokyo_2026
-npm run travel -- set-activity-booking 2 morning "teamLab" booked --ref "TLB-12345"
+./bin/travel mark-booked --dest tokyo_2026
+./bin/travel set-activity-booking 2 morning "teamLab" booked --ref "TLB-12345"
 ```
 
 ### Common Scenarios
 
 | Task | Wrong | Right |
 |------|-------|-------|
-| Change dates | Edit JSON directly | `npm run travel -- set-dates <start> <end>` |
-| Select package | Edit `selected_offer_id` | `npm run travel -- select-offer <id> <date>` |
-| Mark booked | Edit `status: "booked"` | `npm run travel -- mark-booked` |
+| Change dates | Edit JSON directly | `./bin/travel set-dates <start> <end>` |
+| Select package | Edit `selected_offer_id` | `./bin/travel select-offer <id> <date>` |
+| Mark booked | Edit `status: "booked"` | `./bin/travel mark-booked` |
 | Add activity | Push to `activities[]` | `sm.addActivity(dest, day, session, {...})` |
-| Update booking | Edit `booking_status` | `npm run travel -- set-activity-booking ...` |
-| Swap days | Rewrite day arrays | `npm run travel -- swap-days <A> <B>` |
+| Update booking | Edit `booking_status` | `./bin/travel set-activity-booking ...` |
+| Swap days | Rewrite day arrays | `./bin/travel swap-days <A> <B>` |
 
 ### Read-Only Operations
 
@@ -57,7 +57,7 @@ If you must edit data directly (system broken, migration, etc.):
 1. Document why in commit message
 2. Manually emit event: `sm.emitEvent({event: 'manual_edit', ...})`
 3. Mark affected processes dirty: `sm.markDirty(dest, process)`
-4. Run cascade: `npx ts-node src/cli/cascade.ts --apply`
+4. Re-run the affected mutation via `./bin/travel` so cascade fires inside dispatch (no standalone cascade entry point)
 
 ### Quick Reference
 

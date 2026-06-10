@@ -23,7 +23,7 @@ Catch overdue bookings, missing data, and unfinished tasks before departure.
 ### 1. Check booking deadlines
 
 ```bash
-npm run travel -- validate-itinerary --severity warning
+./bin/travel validate-itinerary --severity warning
 ```
 
 Look for activities with `book_by` dates in the past and status still `pending`.
@@ -31,7 +31,7 @@ Look for activities with `book_by` dates in the past and status still `pending`.
 ### 2. Check pending bookings
 
 ```bash
-npm run travel -- query-bookings --dest <slug> --status pending
+./bin/travel query-bookings --dest <slug> --status pending
 ```
 
 Package, flight, and hotel should all be `booked` (not `selected` or `booking`).
@@ -39,7 +39,7 @@ Package, flight, and hotel should all be `booked` (not `selected` or `booking`).
 ### 3. Check booking references
 
 ```bash
-npm run travel -- query-bookings --dest <slug> --category activity --status booked
+./bin/travel query-bookings --dest <slug> --category activity --status booked
 ```
 
 Verify all booked activities have confirmation numbers recorded.
@@ -47,12 +47,12 @@ Verify all booked activities have confirmation numbers recorded.
 ### 4. Check weather data
 
 ```bash
-npm run view:itinerary
+./bin/travel itinerary
 ```
 
 Each day should have a `weather` object. If missing:
 ```bash
-npm run travel -- fetch-weather --dest <slug>
+./bin/travel fetch-weather --dest <slug>
 ```
 
 ### 5. Check dashboard deployment
@@ -66,7 +66,7 @@ Should return HTML dashboard. If 404 or error, run `/stage4-publish-dashboard`.
 ### 6. Verify transport details
 
 ```bash
-npm run view:transport
+./bin/travel transport
 ```
 
 Check flight times match confirmation email, airport transfer plan set.

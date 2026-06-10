@@ -19,16 +19,16 @@ After `git pull`, `git merge`, or switching branches.
 
 ## Workflow
 
-### 1. Install dependencies
+### 1. Install / build
 
 ```bash
-npm install
+make setup
 ```
 
 ### 2. Type check
 
 ```bash
-npm run typecheck
+make check
 ```
 
 ### 3. Check for merge artifacts
@@ -40,19 +40,19 @@ grep -rn "<<<<<<< HEAD" src/ data/ --include="*.ts" --include="*.json" || echo "
 ### 4. Smoke test CLI
 
 ```bash
-npm run view:status
+./bin/travel status --full
 ```
 
-### 5. Check Python environment (if scrapers used)
+### 5. Scraping environment
 
-```bash
-python scripts/check_playwright.py --quiet && echo "Playwright ready" || echo "Run: python scripts/check_playwright.py --install"
-```
+The Python scrapers are decommissioned. OTA capture now runs through the chromeport
+CDP driver (`rust/crates/chromeport`) attaching to a real Chrome — no Playwright/Python
+setup. See `/scrape-ota` for the capture flow.
 
 ## Quick Command
 
 ```bash
-npm install && npm run typecheck && npm run view:status && echo "Post-pull checks complete"
+make setup && make check && ./bin/travel status --full && echo "Post-pull checks complete"
 ```
 
 ## Common Issues
@@ -62,9 +62,9 @@ npm install && npm run typecheck && npm run view:status && echo "Post-pull check
 | 17 type errors | API signature changed | Check git diff, update call sites |
 | Cannot find module | File moved/renamed | Search for old import paths |
 | Duplicate keys in JSON | Merge conflict | Manually resolve, keep most recent |
-| CLI command not found | Command renamed | Check `npm run travel -- --help` |
+| CLI command not found | Command renamed | Check `./bin/travel --help` |
 
 ## See Also
 
 - `scripts/validate-data.ts` — Full data validation suite
-- `npm test` — Integration test suite
+- `make test` — Integration test suite

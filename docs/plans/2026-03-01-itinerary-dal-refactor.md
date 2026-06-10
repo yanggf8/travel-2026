@@ -50,7 +50,7 @@ export type SessionType = 'morning' | 'noon' | 'afternoon' | 'evening';
 **Step 2: Run typecheck**
 
 ```bash
-npm run typecheck 2>&1 | head -60
+make check 2>&1 | head -60
 ```
 Expected: errors in CLI and plan-repository (they hardcode the 3-session arrays — fix in next tasks).
 
@@ -101,7 +101,7 @@ function getSessionOrderForDayType(dayType: string): Array<SessionType> {
 **Step 3: Typecheck**
 
 ```bash
-npm run typecheck 2>&1 | grep 'noon\|session' | head -20
+make check 2>&1 | grep 'noon\|session' | head -20
 ```
 
 **Step 4: Commit**
@@ -132,7 +132,7 @@ Any CHECK constraint strings for session_type in INSERT SQL → add `'noon'`.
 **Step 3: Typecheck**
 
 ```bash
-npm run typecheck 2>&1 | head -30
+make check 2>&1 | head -30
 ```
 Expected: clean.
 
@@ -402,7 +402,7 @@ case 'remove-activity': {
 **Step 4: Typecheck**
 
 ```bash
-npm run typecheck 2>&1 | head -20
+make check 2>&1 | head -20
 ```
 Expected: clean.
 
@@ -410,7 +410,7 @@ Expected: clean.
 
 ```bash
 # First view current activities
-npm run view:itinerary -- --dest kyoto_2026
+./bin/travel itinerary --dest kyoto_2026
 # Find a test activity and verify delete works (use --dry-run if available, otherwise verify via view after)
 ```
 
@@ -469,7 +469,7 @@ case 'set-session-focus': {
 **Step 3: Typecheck + commit**
 
 ```bash
-npm run typecheck 2>&1 | head -10
+make check 2>&1 | head -10
 git add src/cli/travel-update.ts
 git commit -m "feat: add set-tod-focus CLI command"
 ```
@@ -508,7 +508,7 @@ case 'set-session-time-range': {
 **Step 4: Typecheck + commit**
 
 ```bash
-npm run typecheck 2>&1 | head -10
+make check 2>&1 | head -10
 git add src/cli/travel-update.ts
 git commit -m "feat: rename set-session-* CLI commands to set-tod-* (with backward-compat aliases)"
 ```
@@ -613,7 +613,7 @@ In `scripts/schema.sql` and `scripts/migrate-itinerary-tables.sql`:
 **Step 3: Typecheck**
 
 ```bash
-npm run typecheck 2>&1 | head -30
+make check 2>&1 | head -30
 ```
 Expected: clean.
 
@@ -652,7 +652,7 @@ Expected: same row counts as before migration (5 days, 15 sessions for kyoto-202
 **Step 3: Test CLI**
 
 ```bash
-npm run view:itinerary -- --plan-id kyoto-2026
+./bin/travel itinerary --plan-id kyoto-2026
 ```
 Expected: same itinerary output as before.
 

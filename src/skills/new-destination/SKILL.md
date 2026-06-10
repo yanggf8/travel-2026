@@ -13,7 +13,7 @@ provides_processes: []
 
 Read if adding OTA region mappings or destination POI data:
 - `../travel-shared/references/ota-registry.md` — OTA source IDs, region codes, scraper scripts
-- existing destination reference data (areas/POIs/clusters/transit) — in Turso; inspect a similar one with `npm run travel -- query-destination-ref --slug tokyo_2026` and copy its shape into `scripts/seed-destination-refs.ts`
+- existing destination reference data (areas/POIs/clusters/transit) — in Turso; inspect a similar one with `./bin/travel query-destination-ref --slug tokyo_2026` and copy its shape into the seed routine (retired TS seeder lives at `archive/ts-cli-retired/seed-destination-refs.ts`)
 
 ## Purpose
 
@@ -35,14 +35,14 @@ Run when:
 ### 1. Check existing destinations
 
 ```bash
-npm run travel -- query-bookings --dest tokyo_2026  # replace to see DB destinations
-npm run view:status
+./bin/travel query-bookings --dest tokyo_2026  # replace to see DB destinations
+./bin/travel status --full
 ```
 
 Or query the DB directly:
 
 ```bash
-npx ts-node scripts/turso-exec.ts "SELECT slug, display_name FROM destination_config"
+./bin/travel db exec "SELECT slug, display_name FROM destination_config"
 ```
 
 ### 2. Determine destination details
@@ -72,7 +72,7 @@ Add an `INSERT OR IGNORE` block to `scripts/turso-migrate.ts` inside the existin
 ```
 
 ```bash
-npm run db:migrate:turso
+./bin/travel db migrate
 ```
 
 **Validation**:
@@ -85,12 +85,15 @@ npm run db:migrate:turso
 
 Reference data (areas, POIs, clusters, transit, tips) lives in the normalized
 Turso tables `destination_areas`, `destination_pois`, `destination_clusters`,
-`destination_transit`, and `destination_config.tips_json` — **never in a local
-JSON file**. Add the new destination's data to the inline `DATA` constant in
-`scripts/seed-destination-refs.ts` (keyed by slug), then run it:
+`destination_transit`, and `destination_tips` — **never in a local JSON file**.
+Seed the new destination's rows directly into those tables. (The retired TS seeder
+at `archive/ts-cli-retired/seed-destination-refs.ts` has no Rust port yet, so seed via
+`./bin/travel db exec` INSERTs against the `destination_*` tables, or run the archived
+script directly if still needed):
 
 ```bash
-npx ts-node scripts/seed-destination-refs.ts
+# retired: see archive/ts-cli-retired/seed-destination-refs.ts
+# preferred: ./bin/travel db exec "INSERT INTO destination_areas (...) VALUES (...)"
 ```
 
 Per-table shape (one row per area / POI / cluster / transit pair):
@@ -99,12 +102,12 @@ Per-table shape (one row per area / POI / cluster / transit pair):
 - **destination_pois**: `poi_id, title, area, nearest_station, duration_min, booking_required, booking_url?, cost_estimate, tags[], notes?, hours?, address?`
 - **destination_clusters**: `cluster_id, name, description, pois[], duration_min, best_area`
 - **destination_transit**: `pair_key, kind('estimate'|'inter_city'), minutes, line, station_from?, station_to?`
-- **tips**: array of strings → `destination_config.tips_json`
+- **destination_tips**: one row per tip string (no JSON column)
 
 Verify with:
 
 ```bash
-npm run travel -- query-destination-ref --slug <slug>
+./bin/travel query-destination-ref --slug <slug>
 ```
 
 (throws if the destination has no reference rows — fail loud, no file fallback).
@@ -114,15 +117,15 @@ npm run travel -- query-destination-ref --slug <slug>
 After the config row exists in DB, use the standard CLI flow to initialize the plan:
 
 ```bash
-npm run travel -- set-dates 2026-02-24 2026-02-28 --plan-id kyoto-2026
-npm run view:status -- --plan-id kyoto-2026
+./bin/travel set-dates 2026-02-24 2026-02-28 --plan-id kyoto-2026
+./bin/travel status --full --plan-id kyoto-2026
 ```
 
 ### 6. Verify configuration
 
 ```bash
 # Should show destination loaded from DB
-npm run view:status -- --plan-id kyoto-2026
+./bin/travel status --full --plan-id kyoto-2026
 
 # Should show: Destination: Kyoto, Status: All processes pending
 ```
@@ -130,7 +133,7 @@ npm run view:status -- --plan-id kyoto-2026
 ### 7. Test weather fetch
 
 ```bash
-npm run travel -- fetch-weather --dest kyoto_2026
+./bin/travel fetch-weather --dest kyoto_2026
 # Should fetch without "destination not found" error
 ```
 
@@ -173,7 +176,7 @@ npm run travel -- fetch-weather --dest kyoto_2026
 
 **Cause**: Plan not initialized in Turso
 
-**Fix**: Run `npm run db:seed:plans` or use CLI to set dates for the new plan
+**Fix**: Run `./bin/travel db seed plans` or use CLI to set dates for the new plan
 
 ## Integration with Other Skills
 

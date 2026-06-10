@@ -32,7 +32,7 @@ The `travel` binary dispatches **55 subcommands** across **33 modules** imported
 | Scraping | `scrape-package`, `scaffold-itinerary`, `populate-itinerary` | ~4 |
 | Ops | `weather`, `ops`, `validate`, `chat-format`, `turso`, `query-destination-ref` | ~9 |
 
-**Exact list:** run `npm run travel -- --help` after registry loads all 33 modules. Each `CommandHandler` registers 1+ names via `registerCommand()`.
+**Exact list:** run `./bin/travel --help` after registry loads all 33 modules. Each `CommandHandler` registers 1+ names via `registerCommand()`.
 
 **Note:** `cascade.ts` and `calculate-leave.ts` in `src/cli/` are **not subcommands** — they are internal modules (`StateManager` cascade logic, leave calculator). `calculate-leave.ts` is exposed via the standalone `leave-calc` npm script (see §2).
 

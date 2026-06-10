@@ -57,22 +57,20 @@ process_3_transportation: {
 ## CLI Commands
 
 ```bash
-# Scrape flight prices (multi-date, Trip.com)
-python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
-  --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
-
-# Scrape Tigerair prices
-python scripts/scrape_tigerair.py
+# Capture flight prices via the chromeport CDP driver (Python scrapers decommissioned — see /scrape-ota)
+#   ./rust/target/debug/chromeport fetch interact "<trip.com url>" --source trip --step ...
+#   ./rust/target/debug/chromeport parse capture <id> --source trip
+# (Tigerair: same flow with --source tigerair)
 
 # Normalize and rank flight results
-npm run normalize-flights -- scrapes/trip-feb24-out.json --top 5
+./bin/travel normalize flights scrapes/trip-feb24-out.json --top 5
 
 # Manually record selected flight
-npm run travel -- set-flight outbound --dest <slug> \
+./bin/travel set-flight outbound --dest <slug> \
   --flight <number> --airline "<name>" --airline-code <code> \
   --from <IATA> --dep-terminal <T> --dep HH:MM \
   --to <IATA> --arr-terminal <T> --arr HH:MM --date YYYY-MM-DD
-npm run travel -- set-flight return --dest <slug> [same flags]
+./bin/travel set-flight return --dest <slug> [same flags]
 ```
 
 ## Workflow Examples
@@ -81,37 +79,38 @@ npm run travel -- set-flight return --dest <slug> [same flags]
 
 ```bash
 # 1. Ensure dates are set (P1)
-npm run travel -- set-dates 2026-02-24 2026-02-28
+./bin/travel set-dates 2026-02-24 2026-02-28
 
-# 2. Scrape flights from Trip.com
-python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
-  --origin tpe --dest kix --duration 5 --pax 2 -o scrapes/date-range-prices.json
+# 2. Capture flights from Trip.com via the chromeport CDP driver (see /scrape-ota)
+#   ./rust/target/debug/chromeport fetch interact "<trip.com url>" --source trip --step ...
+#   ./rust/target/debug/chromeport parse capture <id> --source trip
 
 # 3. Review ranked results
-npm run normalize-flights -- scrapes/date-range-prices.json --top 5
+./bin/travel normalize flights scrapes/date-range-prices.json --top 5
 
 # 4. Record selected flight in DB
-npm run travel -- set-flight outbound --dest kyoto_2026 \
+./bin/travel set-flight outbound --dest kyoto_2026 \
   --flight SL396 --airline "Thai Lion Air" --airline-code SL \
   --from TPE --dep-terminal T1 --dep 09:00 \
   --to KIX --arr-terminal T1 --arr 12:30 --date 2026-02-24
-npm run travel -- set-flight return --dest kyoto_2026 \
+./bin/travel set-flight return --dest kyoto_2026 \
   --flight SL397 --airline "Thai Lion Air" --airline-code SL \
   --from KIX --dep-terminal T1 --dep 13:30 \
   --to TPE --arr-terminal T1 --arr 15:40 --date 2026-02-28
 
 # 5. Verify
-npm run view:transport
+./bin/travel transport
 ```
 
 ### Example 2: Tigerair LCC Search
 
 ```bash
-# Scrape Tigerair prices
-python scripts/scrape_tigerair.py
+# Capture Tigerair prices via the chromeport CDP driver (see /scrape-ota)
+#   ./rust/target/debug/chromeport fetch interact "<tigerair url>" --source tigerair --step ...
+#   ./rust/target/debug/chromeport parse capture <id> --source tigerair
 
 # Review output, then record best option
-npm run travel -- set-flight outbound --dest <slug> --flight IT201 --airline "Tigerair" ...
+./bin/travel set-flight outbound --dest <slug> --flight IT201 --airline "Tigerair" ...
 ```
 
 ## Error Handling

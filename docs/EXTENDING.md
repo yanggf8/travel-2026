@@ -46,8 +46,8 @@ destination to the inline `DATA` constant in `scripts/seed-destination-refs.ts`
 (keyed by slug), then run:
 
 ```bash
-npx ts-node scripts/seed-destination-refs.ts
-npm run travel -- query-destination-ref --slug kyoto_2026   # verify
+# (seed-destination-refs.ts retired; see archive/ts-cli-retired/)
+./bin/travel query-destination-ref --slug kyoto_2026   # verify
 ```
 
 ### Step 3: Reference Data Shape
@@ -120,26 +120,27 @@ Logical groupings for trip planning:
 >
 > ```bash
 > # 1. Seed pending flight-scrape attempts for the date/destination matrix
-> npm run travel -- shaping-init --origin TPE --start 2026-04-01 --end 2026-04-05 \
+> ./bin/travel shaping-init --origin TPE --start 2026-04-01 --end 2026-04-05 \
 >   --dest KIX:"Kyoto via KIX" --nights 4
 >
 > # 2. Run the aggregator
 > python scripts/shaping_research.py --run <run_id>
 >
 > # 3. Pick a candidate
-> npm run travel -- shaping-compare --run <run_id>
+> ./bin/travel shaping-compare --run <run_id>
 >
 > # 4. Adopt → creates the plan in Turso, seeds P1 dates + P2 destination
-> npm run travel -- shaping-adopt <candidate_id> kyoto-2026 --create-plan --dest kyoto_2026
+> ./bin/travel shaping-adopt <candidate_id> kyoto-2026 --create-plan --dest kyoto_2026
 > ```
 >
 > The block below is preserved only for historical reference and no longer reflects how plans are created.
 
 ```bash
-npx ts-node src/templates/project-init.ts \
-  --dest kyoto_2026 \
-  --start 2026-04-01 \
-  --end 2026-04-05
+# (project-init.ts retired; see archive/ts-cli-retired/)
+#   project-init.ts \
+#     --dest kyoto_2026 \
+#     --start 2026-04-01 \
+#     --end 2026-04-05
 ```
 
 ---
@@ -383,7 +384,7 @@ export const SKILL_CONTRACTS: Record<string, SkillContract> = {
     ],
     output: { type: 'string', description: 'Formatted comparison table' },
     mutates: [],
-    example: 'npm run travel -- compare-offers --sort price --limit 5',
+    example: './bin/travel compare-offers --sort price --limit 5',
   },
 };
 ```

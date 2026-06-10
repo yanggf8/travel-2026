@@ -27,7 +27,7 @@ After package booking confirmed, separate flight+hotel bookings confirmed, or re
 ### 1. Verify package selection
 
 ```bash
-npm run view:status
+./bin/travel status --full
 ```
 
 Check: correct offer selected, date matches booking, price matches what you paid.
@@ -37,7 +37,7 @@ If wrong: use `select-offer` to fix before marking booked.
 ### 2. Verify flight details
 
 ```bash
-npm run view:transport
+./bin/travel transport
 ```
 
 Compare confirmation email against displayed flights. Common issues:
@@ -54,7 +54,7 @@ Check hotel name, check-in/check-out dates, and room type match confirmation.
 ### 4. Update actual price paid
 
 ```bash
-npm run travel -- update-offer <offer-id> <date> available <actual-price>
+./bin/travel update-offer <offer-id> <date> available <actual-price>
 ```
 
 Offer prices are estimates; actual price may differ (discounts, surcharges, currency conversion).
@@ -63,7 +63,7 @@ Signature: `update-offer <offer-id> <date> <availability> [price] [seats] [sourc
 ### 5. Mark as booked
 
 ```bash
-npm run travel -- mark-booked --dest <slug>
+./bin/travel mark-booked --dest <slug>
 ```
 
 Sets package/flight/hotel status to `booked`, emits booking event.
@@ -71,29 +71,29 @@ Sets package/flight/hotel status to `booked`, emits booking event.
 ### 6. Add booking references
 
 ```bash
-npm run travel -- set-activity-booking 2 morning "teamLab Borderless" booked --ref "TLB-20260214-001"
+./bin/travel set-activity-booking 2 morning "teamLab Borderless" booked --ref "TLB-20260214-001"
 ```
 
 ### 7. Sync to Turso (optional)
 
 ```bash
-npm run travel -- sync-bookings
+./bin/travel sync-bookings
 ```
 
 ## Verification Checklist
 
 ```bash
 # Status shows "booked"
-npm run view:status
+./bin/travel status --full
 
 # Flight details match confirmation email
-npm run view:transport
+./bin/travel transport
 
 # Booking references recorded
-npm run travel -- query-bookings --dest <slug> --status booked
+./bin/travel query-bookings --dest <slug> --status booked
 
 # No overdue book_by dates
-npm run travel -- validate-itinerary --severity warning
+./bin/travel validate-itinerary --severity warning
 ```
 
 ## Common Mistakes

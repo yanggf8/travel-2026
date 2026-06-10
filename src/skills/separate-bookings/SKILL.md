@@ -33,21 +33,21 @@ produce a side-by-side comparison.
 
 | Command | Purpose |
 |---------|---------|
-| `npm run compare-trips -- --input <file>` | Compare package vs separate from JSON input |
-| `npm run compare-dates -- --start <date> --end <date> --nights <n>` | FIT vs separate across date range |
-| `npm run view:prices -- --flights <file> --hotel-per-night <n> --nights <n> --package <n>` | Package vs separate price matrix |
+| `./bin/travel compare trips --input <file>` | Compare package vs separate from JSON input |
+| `./bin/travel compare dates --start <date> --end <date> --nights <n>` | FIT vs separate across date range |
+| `./bin/travel view-prices --flights <file> --hotel-per-night <n> --nights <n> --package <n>` | Package vs separate price matrix |
 
 ## Data Sources
 
 ### Flights (Trip.com)
 - Scrape outbound and return as separate one-way searches (`flighttype=ow`)
 - Prices in USD; convert to TWD using `src/config/constants.ts` exchange rate
-- Use `scripts/scrape_date_range.py` for multi-date comparison
+- Capture multi-date prices via the chromeport CDP driver (see `/scrape-ota`); Python scrapers are decommissioned
 
 ### Hotels (Booking.com)
 - Use `zh-tw` locale, `selected_currency=TWD`
 - Requires `dest_id` parameter (not city name)
-- Use `scripts/scrape_package.py` for scraping
+- Capture hotel pages via the chromeport CDP driver (see `/scrape-ota`); Python scrapers are decommissioned
 
 ### Packages (OTA)
 - Use scraped data from `/p3p4-packages` or `/scrape-ota`

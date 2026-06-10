@@ -33,9 +33,9 @@ Do **not** auto-run this just because itinerary data changed.
 
 1. **Verify publish readiness**
    ```bash
-   npm run view:status -- --plan-id <plan_id>
-   npm run view:itinerary -- --plan-id <plan_id>
-   npm run travel -- validate-itinerary --dest <destination_slug> --severity warning
+   ./bin/travel status --full --plan-id <plan_id>
+   ./bin/travel itinerary --plan-id <plan_id>
+   ./bin/travel validate-itinerary --dest <destination_slug> --severity warning
    ```
    Confirm:
    - P5 itinerary exists.
@@ -47,7 +47,7 @@ Do **not** auto-run this just because itinerary data changed.
 
    Weather is useful only near travel dates:
    ```bash
-   npm run travel -- fetch-weather --dest <destination_slug>
+   ./bin/travel fetch-weather --dest <destination_slug>
    ```
    Use `/weather-update` if destination or date-window pre-checks are needed.
 
@@ -55,8 +55,8 @@ Do **not** auto-run this just because itinerary data changed.
 
    If needed, update DB-backed dashboard fields before deploy:
    ```bash
-   npm run travel -- set-day-theme <day> "<theme>" --zh "<zh_title>" --dest <destination_slug>
-   npm run travel -- set-tod-zh <day> <session> --zh "<focus_zh>" --transit-zh "<transit_zh>"
+   ./bin/travel set-day-theme <day> "<theme>" --zh "<zh_title>" --dest <destination_slug>
+   ./bin/travel set-tod-zh <day> <session> --zh "<focus_zh>" --transit-zh "<transit_zh>"
    ```
    Keep all display content in Turso-backed CLI paths. Do not hardcode trip
    content in Worker code.

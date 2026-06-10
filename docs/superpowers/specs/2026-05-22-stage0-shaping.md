@@ -141,7 +141,7 @@ Example rows for a real research run with Liko-style rules (Okinawa June 2026):
 
 CLI usage:
 ```bash
-npm run travel -- stage0-init ... \
+./bin/travel stage0-init ... \
   --shaping date:hard_constraint:return_no_later_than:2026-06-27 \
   --shaping date:hard_constraint:exclude_depart:2026-06-28:Liko 馬偕 commitment \
   --shaping channel:hard_constraint:exclude_source:kkday:prior bad experience
@@ -257,7 +257,7 @@ New command module `src/cli/commands/stage0.ts`, registered in `travel-update.ts
 `requiresState: false` — Stage 0 is pre-plan, so it must not go through plan resolution.
 
 ```
-npm run travel -- stage0-compare --run <run_id> [--json] [--limit N]
+./bin/travel stage0-compare --run <run_id> [--json] [--limit N]
 ```
 
 `--run` must be added to `OPTIONS_WITH_VALUES` in `src/cli/shared/args.ts` — otherwise the

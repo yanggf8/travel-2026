@@ -204,7 +204,7 @@ Find the existing `plan_offers` DDL in `schema.sql` and add the `package_subtype
 
 - [ ] **Step 4: Run the migration**
 
-Run: `npm run db:migrate:turso`
+Run: `./bin/travel db migrate`
 Expected output (last 4 lines):
 ```
 ✅ Stage 0 research tables ready.
@@ -215,13 +215,13 @@ Done.
 
 - [ ] **Step 5: Verify the tables exist in Turso**
 
-Run: `npm run db:exec -- "SELECT name FROM sqlite_master WHERE name LIKE 'stage0_tour%' OR name = 'plan_offer_group_meta'"`
+Run: `./bin/travel db exec "SELECT name FROM sqlite_master WHERE name LIKE 'stage0_tour%' OR name = 'plan_offer_group_meta'"`
 Expected: 3 rows — `stage0_tour_group_offers`, `stage0_tour_group_scrape_attempts`, `plan_offer_group_meta`.
 
-Run: `npm run db:exec -- "SELECT name FROM pragma_table_info('plan_offers') WHERE name = 'package_subtype'"`
+Run: `./bin/travel db exec "SELECT name FROM pragma_table_info('plan_offers') WHERE name = 'package_subtype'"`
 Expected: 1 row.
 
-Run: `npm run db:exec -- "SELECT COUNT(*) AS n FROM plan_offers WHERE package_subtype = 'fit'"`
+Run: `./bin/travel db exec "SELECT COUNT(*) AS n FROM plan_offers WHERE package_subtype = 'fit'"`
 Expected: equal to total plan_offers count (backfill ran).
 
 - [ ] **Step 6: Commit**
@@ -262,7 +262,7 @@ describe('tour-group-service', () => {
 
 - [ ] **Step 2: Run the test (will fail — module not found)**
 
-Run: `npm test -- tour-group-service`
+Run: `make test`
 Expected: FAIL with `Cannot find module ../../src/services/tour-group-service`.
 
 - [ ] **Step 3: Implement the service**
@@ -459,12 +459,12 @@ export async function findAuditSet(
 
 - [ ] **Step 4: Run the test**
 
-Run: `npm test -- tour-group-service`
+Run: `make test`
 Expected: PASS (existence test only).
 
 - [ ] **Step 5: Typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: 0 errors.
 
 - [ ] **Step 6: Commit**
@@ -615,10 +615,10 @@ import { rowsToObjects, sqlInt, sqlText } from '../../src/state/sql-helpers';
 import { getTursoClient } from '../../src/services/tour-group-service';
 
 const FIXTURE_DIR = path.resolve(__dirname, '../fixtures/tour-group');
-const CLI = ['ts-node', 'src/cli/travel-update.ts'];
+const CLI = './bin/travel';
 
 function runCli(args: string[]): { stdout: string; stderr: string; code: number } {
-  const r = spawnSync('npx', [...CLI, ...args], { encoding: 'utf-8' });
+  const r = spawnSync(CLI, args, { encoding: 'utf-8' });
   return { stdout: r.stdout, stderr: r.stderr, code: r.status ?? -1 };
 }
 
@@ -715,7 +715,7 @@ describe('import-tour-group-offers', () => {
 
 - [ ] **Step 3: Run the tests (will fail — command doesn't exist)**
 
-Run: `npm test -- tour-group-import`
+Run: `make test`
 Expected: All three tests FAIL with "Unknown command: import-tour-group-offers" or similar.
 
 - [ ] **Step 4: Implement the command**
@@ -880,12 +880,12 @@ This prevents `kansai` from being retained in `cleanArgs` as a positional argume
 
 - [ ] **Step 7: Run the tests**
 
-Run: `npm test -- tour-group-import`
+Run: `make test`
 Expected: 3 PASSED.
 
 - [ ] **Step 8: Typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: 0 errors.
 
 - [ ] **Step 9: Commit**
@@ -990,7 +990,7 @@ describe('tour-group adopt-time bridge', () => {
 
 - [ ] **Step 2: Run the test (fails — bridge doesn't exist)**
 
-Run: `npm test -- tour-group-bridge`
+Run: `make test`
 Expected: FAIL with `Cannot find module ../../src/services/tour-group-bridge`.
 
 - [ ] **Step 3: Implement the bridge**
@@ -1054,7 +1054,7 @@ export async function bridgeAuditSet(input: BridgeInput): Promise<TourGroupOffer
 
 - [ ] **Step 4: Run the test**
 
-Run: `npm test -- tour-group-bridge`
+Run: `make test`
 Expected: 2 PASSED.
 
 - [ ] **Step 5: Wire the bridge into stage0-adopt**
@@ -1111,15 +1111,15 @@ Update the `usage` string on that command to mention the optional flag:
 
 - [ ] **Step 7: Typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: 0 errors.
 
 - [ ] **Step 8: Run all tour-group tests + the existing stage0 tests**
 
-Run: `npm test -- tour-group`
+Run: `make test`
 Expected: all PASS.
 
-Run: `npm test -- stage0-service`
+Run: `make test`
 Expected: all PASS (no regressions).
 
 - [ ] **Step 9: Commit**
@@ -1423,19 +1423,19 @@ Expected: top-level keys `run_id`, `scraped_at`, `source_id`, `dest_region`, `ni
 
 Seed the attempt row:
 ```bash
-npm run db:exec -- "INSERT OR REPLACE INTO stage0_tour_group_scrape_attempts (run_id, source_id, dest_region, nights, status) VALUES ('test-besttour-manual', 'besttour', 'kansai', 5, 'pending')"
+./bin/travel db exec "INSERT OR REPLACE INTO stage0_tour_group_scrape_attempts (run_id, source_id, dest_region, nights, status) VALUES ('test-besttour-manual', 'besttour', 'kansai', 5, 'pending')"
 ```
 
 Import:
 ```bash
-npm run travel -- import-tour-group-offers --run test-besttour-manual --file scrapes/besttour-kansai-5n-manual.json
+./bin/travel import-tour-group-offers --run test-besttour-manual --file scrapes/besttour-kansai-5n-manual.json
 ```
 
 Expected: `✅ Imported N offers (skipped X). Attempt status: ok` (or `partial`).
 
 Query:
 ```bash
-npm run travel -- query-tour-group-offers --run test-besttour-manual
+./bin/travel query-tour-group-offers --run test-besttour-manual
 ```
 
 Expected: tabular output showing the imported offers, sorted ascending by price.
@@ -1443,8 +1443,8 @@ Expected: tabular output showing the imported offers, sorted ascending by price.
 - [ ] **Step 6: Clean up the test run**
 
 ```bash
-npm run db:exec -- "DELETE FROM stage0_tour_group_offers WHERE run_id = 'test-besttour-manual'"
-npm run db:exec -- "DELETE FROM stage0_tour_group_scrape_attempts WHERE run_id = 'test-besttour-manual'"
+./bin/travel db exec "DELETE FROM stage0_tour_group_offers WHERE run_id = 'test-besttour-manual'"
+./bin/travel db exec "DELETE FROM stage0_tour_group_scrape_attempts WHERE run_id = 'test-besttour-manual'"
 rm scrapes/besttour-kansai-5n-manual.json
 ```
 
@@ -1780,15 +1780,15 @@ git commit -m "feat(tour-group): Settour 東南 group-tour listing scraper"
 
 - [ ] **Step 1: Add the two new commands to `CLAUDE.md` CLI Quick Reference**
 
-Open `CLAUDE.md`. Find the `# Bookings` section in the CLI Quick Reference (around the `npm run travel -- sync-bookings` line). After the `validate-itinerary` line, add a new subsection:
+Open `CLAUDE.md`. Find the `# Bookings` section in the CLI Quick Reference (around the `./bin/travel sync-bookings` line). After the `validate-itinerary` line, add a new subsection:
 
 ```bash
 # Tour-group baseline (new — see docs/superpowers/specs/2026-05-25-tour-group-scraper-design.md)
 python scripts/scrape_tour_groups.py --source besttour --dest-region kansai --nights 5 \
   --depart-start 2026-06-14 --depart-end 2026-06-28 \
   --run-id <run_id> --output scrapes/besttour-kansai-5n.json
-npm run travel -- import-tour-group-offers --run <run_id> --file <path>
-npm run travel -- query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--max-price <twd>]
+./bin/travel import-tour-group-offers --run <run_id> --file <path>
+./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--max-price <twd>]
 ```
 
 Also update the Skill Decision Tree if "tour group" / "baseline" / "ceiling" routing is missing — add a row:
@@ -1815,10 +1815,10 @@ python scripts/scrape_tour_groups.py \
   --output scrapes/besttour-kansai-5n.json
 
 # 2. Import the JSON into stage0_tour_group_offers + update the attempt row
-npm run travel -- import-tour-group-offers --run <run_id> --file <path>
+./bin/travel import-tour-group-offers --run <run_id> --file <path>
 
 # 3. List what's been collected
-npm run travel -- query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--nights N] [--max-price TWD] [--json]
+./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--nights N] [--max-price TWD] [--json]
 ```
 
 Supported sources: `besttour`, `lifetour`, `settour`. LionTravel group and Travel4U deferred.
@@ -1828,7 +1828,7 @@ At `stage0-adopt --create-plan --dest-region <region>`, the curated audit set (r
 
 - [ ] **Step 3: Run typecheck (sanity)**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: 0 errors.
 
 - [ ] **Step 4: Commit**
@@ -1848,12 +1848,12 @@ This is a sanity check, not a code change. The June 2026 Stage 0 run is the real
 
 - [ ] **Step 1: Run the full test suite**
 
-Run: `npm test`
+Run: `make test`
 Expected: all tests PASS. Compare to baseline before this work; no regressions.
 
 - [ ] **Step 2: Run typecheck + validator**
 
-Run: `npm run typecheck && npm run validate:data`
+Run: `make check && ./bin/travel validate data`
 Expected: 0 errors in both.
 
 - [ ] **Step 3: Live scrape — BestTour Kansai 5 nights for the existing June 2026 run**
@@ -1863,7 +1863,7 @@ This uses the already-seeded `stage0-20260525-093508` run (KIX/SDJ/FUK × 3,4 ni
 First, seed an attempt:
 
 ```bash
-npm run db:exec -- "INSERT OR REPLACE INTO stage0_tour_group_scrape_attempts (run_id, source_id, dest_region, nights, status) VALUES ('stage0-20260525-093508', 'besttour', 'kansai', 4, 'pending')"
+./bin/travel db exec "INSERT OR REPLACE INTO stage0_tour_group_scrape_attempts (run_id, source_id, dest_region, nights, status) VALUES ('stage0-20260525-093508', 'besttour', 'kansai', 4, 'pending')"
 ```
 
 Then scrape + import:
@@ -1875,7 +1875,7 @@ python scripts/scrape_tour_groups.py \
   --run-id stage0-20260525-093508 \
   --output scrapes/besttour-kansai-4n.json
 
-npm run travel -- import-tour-group-offers \
+./bin/travel import-tour-group-offers \
   --run stage0-20260525-093508 \
   --file scrapes/besttour-kansai-4n.json
 ```
@@ -1885,7 +1885,7 @@ Expected: `✅ Imported N offers (skipped X). Attempt status: ok` (or `partial`)
 - [ ] **Step 4: Query the baseline**
 
 ```bash
-npm run travel -- query-tour-group-offers --run stage0-20260525-093508 --max-price 50000
+./bin/travel query-tour-group-offers --run stage0-20260525-093508 --max-price 50000
 ```
 
 Expected: tabular output showing tour groups ranked cheapest-first. The cheapest row is the baseline ceiling for Kansai 4n in this window.

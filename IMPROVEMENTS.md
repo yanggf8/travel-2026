@@ -157,12 +157,12 @@ Target: 60%+ coverage (currently ~5%)
 ## Verification
 
 ```bash
-# TypeScript compilation
-npx tsc --noEmit
+# Compile check
+make check
 # ✅ 0 errors
 
 # Tests
-npm test
+make test
 # ✅ 15/15 passing
 
 # File structure

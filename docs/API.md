@@ -12,17 +12,18 @@ This skill pack provides a complete framework for travel planning automation:
 ## Quick Start
 
 ```bash
-# Install dependencies
-npm install
+# Build the CLI binary + install git hooks
+make setup
 
 # Initialize a new trip
-npx ts-node src/templates/project-init.ts --dest tokyo_2026 --start 2026-04-01 --end 2026-04-05
+# (retired; see archive/ts-cli-retired/) — start trips via the Shaping Stage flow:
+#   ./bin/travel shaping-init ... → shaping-compare → shaping-adopt --create-plan
 
 # View status
-npm run view:status
+./bin/travel status --full
 
 # Validate itinerary
-npm run travel -- validate-itinerary
+./bin/travel validate-itinerary
 ```
 
 ---
@@ -361,7 +362,7 @@ const config = getDestinationConfig('tokyo_2026');
 // Get POI / area / cluster reference data (assembled from normalized Turso tables)
 const ref = await loadDestinationReferenceFromTurso('tokyo_2026');
 // { destination_id, display_name, areas, pois, clusters, transit_estimates, tips, ... }
-// CLI equivalent: npm run travel -- query-destination-ref --slug tokyo_2026
+// CLI equivalent: ./bin/travel query-destination-ref --slug tokyo_2026
 ```
 
 ### OTA Sources
@@ -409,19 +410,19 @@ console.log(contract.example);
 
 ```bash
 # View status
-npm run view:status
+./bin/travel status --full
 
 # Set dates
-npm run travel -- set-dates 2026-02-13 2026-02-17
+./bin/travel set-dates 2026-02-13 2026-02-17
 
 # Select offer
-npm run travel -- select-offer besttour_TYO05MM260211AM 2026-02-13
+./bin/travel select-offer besttour_TYO05MM260211AM 2026-02-13
 
 # Validate itinerary
-npm run travel -- validate-itinerary
+./bin/travel validate-itinerary
 
 # Set activity booking
-npm run travel -- set-activity-booking 2 morning "teamLab Borderless" booked --ref "TLB-12345"
+./bin/travel set-activity-booking 2 morning "teamLab Borderless" booked --ref "TLB-12345"
 ```
 
 ---
@@ -452,7 +453,7 @@ if (isOk(result)) {
 
 1. Add an `INSERT OR IGNORE` row to the destinations backfill in `scripts/turso-migrate.ts`
    (`ref_path` stays empty — reference data is in normalized tables, not a file), then
-   `npm run db:migrate:turso`:
+   `./bin/travel db migrate`:
 ```typescript
 {
   slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto', ref_path: '',
@@ -465,8 +466,8 @@ if (isOk(result)) {
 2. Seed POIs / areas / clusters / transit into Turso (no JSON file):
 ```bash
 # add the slug's data to the DATA constant in scripts/seed-destination-refs.ts, then:
-npx ts-node scripts/seed-destination-refs.ts
-npm run travel -- query-destination-ref --slug kyoto_2026   # verify
+# (seed-destination-refs.ts retired; see archive/ts-cli-retired/)
+./bin/travel query-destination-ref --slug kyoto_2026   # verify
 ```
 
 ### Adding a New OTA

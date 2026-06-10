@@ -34,8 +34,8 @@ Do **not** use this for the first coarse draft before shopping; use
 
 1. **Verify prerequisites**
    ```bash
-   npm run view:status -- --plan-id <plan_id>
-   npm run view:transport
+   ./bin/travel status --full --plan-id <plan_id>
+   ./bin/travel transport
    ```
    Confirm:
    - Dates and destination are confirmed.
@@ -46,14 +46,14 @@ Do **not** use this for the first coarse draft before shopping; use
 
 2. **Refresh or create day skeletons**
    ```bash
-   npm run travel -- scaffold-itinerary --plan-id <plan_id> --dest <destination_slug>
+   ./bin/travel scaffold-itinerary --plan-id <plan_id> --dest <destination_slug>
    ```
    Use `--force` only when the user explicitly approves replacing existing
    days. If Stage 1 already scaffolded days, continue from the existing draft.
 
 3. **Assign clusters and must-do activities**
    ```bash
-   npm run travel -- populate-itinerary --goals "<cluster1,cluster2>" --pace balanced --dest <destination_slug>
+   ./bin/travel populate-itinerary --goals "<cluster1,cluster2>" --pace balanced --dest <destination_slug>
    ```
    Scheduling order:
    - Fixed-time bookings.
@@ -64,16 +64,16 @@ Do **not** use this for the first coarse draft before shopping; use
 
 4. **Set timing, themes, and transit**
    ```bash
-   npm run travel -- set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed true
-   npm run travel -- set-day-theme <day> "<theme>" --zh "<zh_title>" --dest <destination_slug>
-   npm run travel -- set-tod-zh <day> <session> --zh "<focus_zh>" --transit-zh "<transit_zh>"
+   ./bin/travel set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed true
+   ./bin/travel set-day-theme <day> "<theme>" --zh "<zh_title>" --dest <destination_slug>
+   ./bin/travel set-tod-zh <day> <session> --zh "<focus_zh>" --transit-zh "<transit_zh>"
    ```
    Default meals are lunch and dinner only. Add breakfast only when hotel or
    package terms include it, or when the user asks for it.
 
 5. **Validate and rebalance**
    ```bash
-   npm run travel -- validate-itinerary --dest <destination_slug> --severity warning
+   ./bin/travel validate-itinerary --dest <destination_slug> --severity warning
    ```
    Fix:
    - Time conflicts.

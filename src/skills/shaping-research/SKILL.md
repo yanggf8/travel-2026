@@ -62,8 +62,8 @@ on (or that have since changed). Query first:
 
 ```bash
 # List existing runs, then inspect the most relevant one's shaping
-npm run travel -- db:exec "SELECT run_id, origin_code, window_start, window_end FROM shaping_research_runs ORDER BY run_id DESC;"
-npm run travel -- shaping-compare --run <prior_run_id>
+./bin/travel db exec "SELECT run_id, origin_code, window_start, window_end FROM shaping_research_runs ORDER BY run_id DESC;"
+./bin/travel shaping-compare --run <prior_run_id>
 ```
 
 Reconcile old vs. new out loud: which rules **carry forward**, which are
@@ -86,7 +86,7 @@ If the user gave no explicit constraints, ask for at least the binding ones
 ### Step 3 — Create the run (carrying the shaping)
 
 ```bash
-npm run travel -- shaping-init --origin TPE \
+./bin/travel shaping-init --origin TPE \
   --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" \
   --nights 6 --nights 7 --pax 2 --rate 32 \
@@ -107,8 +107,8 @@ python scripts/shaping_research.py --run <run_id>            # flight candidates
 ### Step 5 — Show the ranking against the shaping
 
 ```bash
-npm run travel -- shaping-compare --run <run_id>             # candidates + shaping recap
-npm run travel -- shaping-baseline --run <run_id>            # FIT-vs-group methodology view
+./bin/travel shaping-compare --run <run_id>             # candidates + shaping recap
+./bin/travel shaping-baseline --run <run_id>            # FIT-vs-group methodology view
 ```
 Present the ranked table; judge every option against the HARD constraints.
 
@@ -121,17 +121,17 @@ candidates stay intact and comparable.
 ### Step 7 — Hand off on lock
 
 ```bash
-npm run travel -- shaping-adopt <candidate_id> <new_plan_id> \
+./bin/travel shaping-adopt <candidate_id> <new_plan_id> \
   --create-plan --dest <destination_slug>
 ```
 Creates minimal normalized plan rows, sets P1 dates from the candidate's
 depart/return, sets P2 destination from `--dest`, links `adopted_plan_id`.
 If the plan already exists, use the link-only form:
-`npm run travel -- shaping-adopt <candidate_id> <existing_plan_id>`.
+`./bin/travel shaping-adopt <candidate_id> <existing_plan_id>`.
 
 After a new-plan handoff, continue with `/stage1-itinerary-draft`:
 ```bash
-npm run travel -- scaffold-itinerary --plan-id <new_plan_id> --dest <destination_slug>
+./bin/travel scaffold-itinerary --plan-id <new_plan_id> --dest <destination_slug>
 ```
 
 ## Notes

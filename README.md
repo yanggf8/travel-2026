@@ -13,31 +13,31 @@ A reusable skill pack for AI-assisted travel planning. Provides StateManager, OT
 ## Quick Start
 
 ```bash
-# Install dependencies (postinstall installs git hooks; warns if Playwright missing)
-npm install
+# Build the Rust CLI binary + install git hooks
+make setup
 
-# Optional: Playwright browsers for scrapers
-npm run scraper:setup
+# OTA capture uses the chromeport CDP driver (attaches to real Chrome :9222).
+#   See: src/skills/scrape-ota/SKILL.md and CLAUDE.md → URL Routing
 
 # See what's in the DB
-npm run travel -- plans
-npm run view:status
+./bin/travel plans
+./bin/travel status --full
 
 # Start a new trip — full Shaping Stage flow: research → compare → adopt → seeded plan
 #   See: src/skills/shaping-research/SKILL.md and CLAUDE.md → Skill Decision Tree
 
 # 1. Seed pending flight-scrape attempts for the date/destination matrix → prints <run_id>
-npm run travel -- shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7
 
 # 2. Run the aggregator (zero Turso I/O of its own — reads/writes via the CLI)
 python scripts/shaping_research.py --run <run_id>
 
 # 3. Compare candidates
-npm run travel -- shaping-compare --run <run_id>
+./bin/travel shaping-compare --run <run_id>
 
 # 4. Adopt one → creates the plan in Turso and seeds P1 dates + P2 destination
-npm run travel -- shaping-adopt <candidate_id> osaka-2026 --create-plan --dest osaka_2026
+./bin/travel shaping-adopt <candidate_id> osaka-2026 --create-plan --dest osaka_2026
 ```
 
 Plan state lives in Turso (no JSON state files). For the full command list see `docs/reference/CLI.md`.
@@ -136,7 +136,7 @@ See [Extension Guide](docs/EXTENDING.md) for adding new OTAs.
 Validate your itinerary for common issues:
 
 ```bash
-npm run travel -- validate-itinerary
+./bin/travel validate-itinerary
 ```
 
 Checks for:
@@ -150,20 +150,20 @@ Checks for:
 
 ```bash
 # Views (read-only)
-npm run view:status         # Booking overview
-npm run view:itinerary      # Daily plan
-npm run view:transport      # Transport summary
+./bin/travel status --full  # Booking overview
+./bin/travel itinerary      # Daily plan
+./bin/travel transport      # Transport summary
 
 # Mutations
-npm run travel -- set-dates 2026-02-13 2026-02-17
-npm run travel -- select-offer <offer-id> <date>
-npm run travel -- validate-itinerary
-npm run travel -- set-activity-booking <day> <session> "<activity>" <status>
+./bin/travel set-dates 2026-02-13 2026-02-17
+./bin/travel select-offer <offer-id> <date>
+./bin/travel validate-itinerary
+./bin/travel set-activity-booking <day> <session> "<activity>" <status>
 
-# Scraping (Python)
-python scripts/scrape_listings.py --source besttour --dest kansai
-python scripts/scrape_package.py <url> [--refresh]
-python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max-price 25000
+# OTA capture (chromeport CDP driver — attaches to real Chrome :9222; Python scrapers are decommissioned)
+./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step ...
+./rust/target/debug/chromeport verify <source-id> <capture-id>
+./rust/target/debug/chromeport parse capture <capture-id> --source <id>   # imports to Turso
 ```
 
 ## Tests
@@ -171,7 +171,7 @@ python scripts/filter_packages.py data/*.json --type fit --date 2026-02-24 --max
 This repo uses cost-effective integration/regression tests (no unit test suite).
 
 ```bash
-npm test
+make test
 ```
 
 ## Data Schema
@@ -190,10 +190,10 @@ See `CLAUDE.md` for detailed schema documentation.
 
 **Common commands**
 ```bash
-npm run db:status:turso
-npm run db:migrate:turso
-npm run db:query:turso -- --region kansai --start 2026-02-24 --end 2026-02-28
-npm run db:exec -- "SELECT source_id, offer_count FROM plan_offer_provenance WHERE plan_id='tokyo-2026'"
+./bin/travel db status
+./bin/travel db migrate
+./bin/travel db query-offers --region kansai --start 2026-02-24 --end 2026-02-28
+./bin/travel db exec "SELECT source_id, offer_count FROM plan_offer_provenance WHERE plan_id='tokyo-2026'"
 ```
 
 ## License

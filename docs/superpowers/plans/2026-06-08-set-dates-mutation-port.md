@@ -56,7 +56,7 @@ Expected: `Finished release [optimized] target(s) in ...s` with only the 2 pre-e
 The test plan `test-set-dates-2026` is created by cloning `tokyo-2026` (530 rows / 49 tables — structurally real, every child row + cascade table + event). The seed is idempotent (DELETEs target first) and doubles as your RESET.
 
 ```bash
-npx ts-node scripts/seed-test-plan.ts
+npx ts-node scripts/seed-test-plan.ts   # (retired; see archive/ts-cli-retired/)
 ```
 
 Baseline state after seed (verified):
@@ -125,7 +125,7 @@ Expected: All 9 tables captured with current state. Note the `plans.version` val
 - [ ] **Step 2.1: Run TS set-dates mutation**
 
 ```bash
-TRAVEL_PLAN_ID=test-set-dates-2026 npm run travel -- set-dates 2026-06-15 2026-06-20 "Test date change via TS" 2>&1 | tee tmp/set-dates-verify/test-set-dates-2026/TS_STDOUT.txt
+TRAVEL_PLAN_ID=test-set-dates-2026 npm run travel -- set-dates 2026-06-15 2026-06-20 "Test date change via TS" 2>&1 | tee tmp/set-dates-verify/test-set-dates-2026/TS_STDOUT.txt   # (TS baseline path retired post-cutover; see archive/ts-cli-retired/ — this captures the historical pre-Rust baseline)
 ```
 
 Expected CLI output (byte-exact):

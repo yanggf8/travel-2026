@@ -23,13 +23,13 @@ provides_processes: []
 > Captures → Turso `captures` table; offers → `offers` table. Per-OTA rules → `parser_rules`.
 > Flight/hotel-only OTAs (tigerair, google_flights, trip, agoda, eztravel) are seeded
 > `has_custom_parser=1` and currently fail loud — they need a flight/hotel rule shape first.
-> The Python tables/paths below are historical reference only.
+> Everything below describes this chromeport CDP flow (the Python pipeline is fully retired).
 
 ## Shared references
 
 Read first unless request is a single known-URL scrape:
 - `../travel-shared/references/ota-registry.md` — source IDs, region codes, rate limits
-- OTA baggage rules / booking notes — from Turso tables `airlines`, `booking_types`, `platform_behaviors`, `comparison_rules` (query directly, e.g. `npm run travel -- turso "SELECT * FROM airlines"`)
+- OTA baggage rules / booking notes — from Turso tables `airlines`, `booking_types`, `platform_behaviors`, `comparison_rules` (query directly, e.g. `./bin/travel db exec "SELECT * FROM airlines"`)
 - `references/adding-ota.md` — step-by-step guide for registering a new OTA parser (read only when adding new OTA support)
 
 ## Role in Process Flow
@@ -54,16 +54,19 @@ Other skills reference this skill instead of duplicating scraper commands.
 
 ## Supported OTAs
 
-| OTA | Display Name | URL Pattern | Parser Module | Entry Script |
-|-----|--------------|-------------|---------------|-------------|
-| `besttour` | 喜鴻假期 | `besttour.com.tw/itinerary/*` | `parsers/besttour.py` | `scrape_package.py` |
-| `liontravel` | 雄獅旅遊 | `liontravel.com/*`, `vacation.liontravel.com/*` | `parsers/liontravel.py` | `scrape_liontravel_dated.py` |
-| `lifetour` | 五福旅遊 | `tour.lifetour.com.tw/detail*` | `parsers/lifetour.py` | `scrape_package.py` |
-| `settour` | 東南旅遊 | `tour.settour.com.tw/product/*` | `parsers/settour.py` | `scrape_package.py` |
-| `tigerair` | 台灣虎航 | `booking.tigerairtw.com/*` | `parsers/tigerair.py` | `scrape_tigerair.py` |
-| `trip` | Trip.com | `trip.com/flights/*` | `parsers/trip_com.py` | `scrape_date_range.py` |
-| `google_flights` | Google Flights | `google.com/travel/flights*` | `parsers/google_flights.py` | `scrape_package.py` |
-| `agoda` | Agoda | `agoda.com/*` | `parsers/agoda.py` | `scrape_package.py` |
+Capture every OTA via the chromeport CDP driver (`--source <id>`); parsing is rule-driven
+from the `parser_rules` Turso table (no per-OTA Python module).
+
+| OTA | Display Name | URL Pattern | chromeport `--source` |
+|-----|--------------|-------------|-----------------------|
+| `besttour` | 喜鴻假期 | `besttour.com.tw/itinerary/*` | `besttour` |
+| `liontravel` | 雄獅旅遊 | `liontravel.com/*`, `vacation.liontravel.com/*` | `liontravel` |
+| `lifetour` | 五福旅遊 | `tour.lifetour.com.tw/detail*` | `lifetour` |
+| `settour` | 東南旅遊 | `tour.settour.com.tw/product/*` | `settour` |
+| `tigerair` | 台灣虎航 | `booking.tigerairtw.com/*` | `tigerair` |
+| `trip` | Trip.com | `trip.com/flights/*` | `trip` |
+| `google_flights` | Google Flights | `google.com/travel/flights*` | `google_flights` |
+| `agoda` | Agoda | `agoda.com/*` | `agoda` |
 
 ### Unsupported OTAs
 
@@ -74,155 +77,118 @@ Other skills reference this skill instead of duplicating scraper commands.
 ## Module Architecture
 
 ```
-scripts/
-  scrapers/                    # Python package
-    __init__.py                # Public API exports
-    schema.py                  # Unified ScrapeResult schema + validation
-    base.py                    # BaseScraper class, retry logic, browser helpers
-    registry.py                # URL → parser lookup (detect_ota / get_parser)
-    parsers/
-      __init__.py
-      besttour.py              # BestTour: flights, hotel, calendar pricing
-      lifetour.py              # Lifetour: flights, hotel, price, itinerary
-      settour.py               # Settour: flights, hotel, price, itinerary
-      liontravel.py            # Lion Travel: search + detail page scraping
-      tigerair.py              # Tigerair: form-based flight search
-      trip_com.py              # Trip.com: flight price comparison
-      google_flights.py        # Google Flights: multi-airline flight search
-      agoda.py                 # Agoda: hotel details and pricing
-  scrape_package.py            # Entry point: auto-detects OTA, delegates to parser
-  scrape_liontravel_dated.py   # Entry point: Lion Travel dated search
-  scrape_tigerair.py           # Entry point: Tigerair form-based search
-  scrape_date_range.py         # Entry point: Trip.com multi-date comparison
+rust/crates/chromeport/        # Rust CDP driver (attaches to real Chrome :9222)
+  src/                         # fetch interact / browser snapshot / verify / parse capture
+captures (Turso table)         # plain-text captures landed by the driver
+parser_rules (Turso table)     # per-OTA parse rules (keyed by source_id) — drives `parse capture`
+offers (Turso table)           # rule-parsed offers (the source-of-truth output)
 ```
 
 ### Key Design Principles
 
-- **Pure parsing separated from browser interaction**: Each parser has `parse_raw_text()` (testable without Playwright) and `scrape()` (needs browser)
-- **Unified output schema**: All parsers produce `ScrapeResult` with validation
-- **Retry with exponential backoff**: `navigate_with_retry()` handles transient failures
-- **Backward compatible**: Entry scripts preserve existing CLI interfaces
+- **Drives the real UI**: the driver navigates/clicks/fills the actual OTA page in Chrome — no fragile URL templates
+- **Capture/parse separated**: `fetch interact` / `browser snapshot` land a plain-text capture; `parse capture` rule-parses it (no browser needed)
+- **Rule-driven parsing**: per-OTA rules live in the `parser_rules` Turso table, not in code
+- **Turso source of truth**: captures → `captures`, offers → `offers`; no JSON files in the pipeline
 
-## URL Pattern Detection
+## URL → source_id
 
-```python
-from scrapers import detect_ota, get_parser
-
-source_id = detect_ota(url)  # Returns "besttour", "liontravel", etc.
-parser = get_parser(source_id)
-result = parser.parse_raw_text(raw_text)  # Pure parsing, no browser
-```
+`--source <id>` selects the OTA. Match the URL against the **Supported OTAs** table above to
+pick the `source_id` (e.g. a `trip.com/flights/*` URL → `--source trip`), then pass it to both
+`fetch interact` and `parse capture`. Parse rules for that source are looked up in `parser_rules`.
 
 ## Workflow
 
 ### 0. Pre-flight checks (REQUIRED)
 
-Before any scraping operation, verify environment health:
+Before any capture, confirm the driver is built and a real Chrome is listening on CDP:
 
 ```bash
-# Check Playwright installation and browser availability
-python scripts/check_playwright.py
+# Build the chromeport CDP driver if needed
+cd rust && cargo build -p chromeport
 
-# Auto-install if missing
-python scripts/check_playwright.py --install
-
-# Test all OTA scrapers (connectivity + CSS selectors)
-npm run scraper:doctor
+# A real Chrome must be reachable at 127.0.0.1:9222 (the driver attaches to it)
+./rust/target/debug/chromeport browser tabs   # lists open tabs — fails loud if Chrome :9222 is down
 ```
 
 **Why this matters:**
-- Playwright missing → Silent failures with cryptic errors
-- Outdated CSS selectors → Empty results or parse errors
-- OTA site changes → Scraper returns stale/wrong data
+- No Chrome on :9222 → the driver fails loud (it attaches, it does not launch a hidden browser)
+- OTA site changes → update the source's rows in the `parser_rules` Turso table, not code
+- Captures are plain text landed in the `captures` table — inspect there if a parse looks wrong
 
-**Integration with skills:**
-- `/scrape-ota` should run `scraper:doctor` before batch operations
-- Single URL scrapes can skip (faster feedback loop)
-- CI/CD should run `scraper:doctor` on schedule to detect breakage
+### 1. Detect OTA and capture the page
 
-### 1. Detect OTA and run scraper
+Pick `--source <id>` from the Supported OTAs table, drive the real page, then parse the capture:
 
 ```bash
-# Generic scraper (auto-detects OTA from URL)
-python scripts/scrape_package.py "<url>" scrapes/<ota>-<code>.json
+# Drive + capture (clicks/fills the actual UI — no URL templates)
+./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step 'click:SEL' --step 'fill:SEL=VALUE'
 
-# Lion Travel dated search
-python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 scrapes/liontravel-search.json
+# Or, if you already navigated the tab manually, snapshot the open page:
+./rust/target/debug/chromeport browser snapshot --page <N> --source <id>
 
-# Tigerair flight search
-python scripts/scrape_tigerair.py --origin TPE --dest NRT --date 2026-02-13 --pax 2
+# Read-only regex diagnostics on a capture (optional)
+./rust/target/debug/chromeport verify <id> <capture-id>
 
-# Trip.com date range comparison
-python scripts/scrape_date_range.py --depart-start 2026-02-24 --depart-end 2026-02-27 \
-    --origin tpe --dest kix --duration 5 --pax 2
-
-# Google Flights (auto-detected from URL)
-python scripts/scrape_package.py "https://www.google.com/travel/flights?q=Flights+to+KIX+from+TPE+on+2026-02-26+through+2026-03-02&curr=TWD&hl=zh-TW" scrapes/gf-tpe-kix.json
-
-# Agoda hotel page (auto-detected from URL)
-python scripts/scrape_package.py "https://www.agoda.com/cross-hotel-osaka/hotel/osaka-jp.html?checkIn=2026-02-26&los=4&adults=2&rooms=1&currency=TWD" scrapes/agoda-cross-hotel.json
+# Parse the capture (rule-driven via parser_rules) → Turso offers
+./rust/target/debug/chromeport parse capture <capture-id> --source <id>
 ```
 
-### 2. Read and parse output
+Examples (same flow, different `--source`): `--source liontravel` for Lion Travel,
+`--source tigerair` for Tigerair, `--source trip` for Trip.com, `--source google_flights`
+for Google Flights, `--source agoda` for an Agoda hotel page.
+
+### 2. Read the parsed output
+
+`parse capture` writes rows into the Turso `offers` table. Inspect them with the CLI:
 
 ```bash
-cat scrapes/<ota>-<code>.json | jq '.extracted'
+./bin/travel query-offers --source <id>
+# or raw: ./bin/travel db exec "SELECT * FROM offers WHERE source_id='<id>' ORDER BY rowid DESC LIMIT 20"
 ```
+
+The raw plain-text capture stays in the `captures` table if you need to debug a parse rule.
 
 ### 3. Extract structured data
 
-The scraper returns:
-- `raw_text`: Full page text (for manual parsing if needed)
-- `extracted`: Structured data (flight, hotel, price, dates, inclusions, itinerary)
-- `extracted_elements`: CSS-selected elements (price_class, flight_class, hotel_class)
+Each parsed offer row carries the normalized fields (flight, hotel, price, dates,
+inclusions, date-pricing, itinerary). Per-source field extraction is governed by the
+`parser_rules` Turso table — adjust rules there, not in code.
 
-## Output Schema
+## Offer Fields (conceptual)
 
-```json
-{
-  "url": "https://...",
-  "scraped_at": "2026-02-04T...",
-  "title": "Tour name",
-  "raw_text": "Full page text...",
-  "extracted": {
-    "flight": {
-      "outbound": { "date", "flight_number", "airline", "departure_time", "arrival_time", "departure_code", "arrival_code" },
-      "return": { ... }
-    },
-    "hotel": { "name", "names", "area", "access", "room_type", "bed_width_cm" },
-    "price": { "per_person", "currency", "deposit", "seats_available", "min_travelers" },
-    "dates": { "duration_days", "duration_nights", "year", "departure_month", "departure_day" },
-    "inclusions": ["breakfast", "travel_insurance", "airport_tax"],
-    "date_pricing": { "2026-02-13": { "price": 27888, "availability": "available", "seats_remaining": 10 } },
-    "itinerary": [{ "day": 1, "content": "...", "is_free": false, "is_guided": true }]
-  }
-}
-```
+The `offers` table holds the normalized equivalents of:
+- **flight** — outbound/return: date, flight_number, airline, departure_time, arrival_time, departure_code, arrival_code
+- **hotel** — name, area, access, room_type, bed_width_cm
+- **price** — per_person, currency, deposit, seats_available, min_travelers
+- **dates** — duration_days, duration_nights, year, departure_month, departure_day
+- **inclusions** — breakfast, travel_insurance, airport_tax, …
+- **date_pricing** — per-date price / availability / seats_remaining
+- **itinerary** — per-day content (is_free / is_guided)
 
 ## Testing
 
+Parse rules are exercised against real captures in the `captures` table. To re-run a parse:
 ```bash
-# Run parser tests (no Playwright needed — pure parsing)
-python -m pytest tests/scrapers/ -v
+./rust/target/debug/chromeport parse capture <capture-id> --source <id>
 ```
 
 ## Requirements
 
-```bash
-pip install playwright
-playwright install chromium
-```
+- The chromeport CDP driver built: `cd rust && cargo build -p chromeport`
+- A real Chrome reachable at `127.0.0.1:9222` (the driver attaches; it does not launch its own)
+- No Python / Playwright — those scrapers are decommissioned
 
 ## Registry Reference
 
 OTA configuration lives in the `ota_sources` table in Turso (no JSON files):
 ```bash
-npx ts-node scripts/turso-exec.ts "SELECT source_id, display_name, scraper_script, supported, rate_limit FROM ota_sources"
+./bin/travel db exec "SELECT source_id, name, status, url_template FROM ota_sources"
 ```
-- `source_id`: Unique identifier
-- `scraper_script`: Path to scraper (repo-relative)
-- `supported`: Whether scraper is implemented
-- `rate_limit`: Requests per minute
+- `source_id`: Unique identifier (used as `--source <id>` for chromeport)
+- `name`: Display name
+- `status`: `active` once a live capture path exists
+- `url_template`: Base/listing URL for the source
 
 ## Adding New OTA Support
 

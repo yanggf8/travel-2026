@@ -62,7 +62,7 @@ Skim it once for context; the plan is what you execute.
    - You find a real bug in the plan code.
    - The migration step fails for any reason.
    - Any test in the existing suite (the 24 baseline tests) starts failing.
-5. **Do not invent commands or flags.** If a step says `npm run db:exec -- "..."`,
+5. **Do not invent commands or flags.** If a step says `./bin/travel db exec "..."`,
    use exactly that. The repo's CLI is sensitive — `--plan-id` and `--plan` are
    different, `cleanArgs` depends on `OPTIONS_WITH_VALUES`.
 6. **Keep SQL escaping in TypeScript.** All SQL writes go through
@@ -93,7 +93,7 @@ Skim it once for context; the plan is what you execute.
 | 7 | CLI: `stage0-export`, `stage0-import` (idempotent per pair) | `src/cli/commands/stage0.ts` |
 | 8 | `/stage0-research` orchestration skill | `src/skills/stage0-research/SKILL.md` |
 | 9 | Docs: CLAUDE.md skills table + Turso DB section; planning-flow Skill Mapping row | `CLAUDE.md`, `docs/plans/2026-05-22-new-planning-flow.md` |
-| 10 | Final verification: `npm test`, `npm run typecheck`, `npm run doctor`, help check | — |
+| 10 | Final verification: `make test`, `make check`, `./bin/travel doctor`, help check | — |
 
 **Final test count after Task 3:** the new `stage0-service.regression.test.ts`
 must have **6 passing tests** (2 from Task 2 + 4 from Task 3). Total project
@@ -129,8 +129,8 @@ After committing a task, before starting the next one:
 1. `git status` — must be clean (no untracked, no uncommitted).
 2. `git log --oneline -5` — confirm your commit landed with the expected
    message.
-3. `npm run typecheck` — must print `✅ Typecheck passed`.
-4. If the task wrote or touched tests, `npm test` must still be all green.
+3. `make check` — must print `✅ Typecheck passed`.
+4. If the task wrote or touched tests, `make test` must still be all green.
 
 If any of those fail, **stop and report** — do not start the next task.
 
@@ -146,7 +146,7 @@ and 7).
 
 When Task 10 is green, report:
 - The final commit log for this branch (`git log master..HEAD --oneline`).
-- `npm test` summary (test count + pass/fail).
+- `make test` summary (test count + pass/fail).
 - Anything you flagged as "stop and ask" but worked around with an explicit
   note (ideally nothing — prefer to stop and ask).
 

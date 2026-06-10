@@ -563,6 +563,18 @@ pub async fn list_plans_for_resolver() -> Result<Vec<PlanSummary>, String> {
 
 /// Parse CLI args (everything after the `resolve-plan` literal).
 fn parse_args(args: &[String]) -> Result<ResolveInput, String> {
+    parse_args_inner(args, true)
+}
+
+/// Lenient variant: ignores unrecognized flags instead of erroring. Used by
+/// `resolve_plan_id`, which receives a view command's FULL arg list (e.g.
+/// `status --full`, `bookings --dest x`) — flags it doesn't own belong to the
+/// caller, not a resolution error.
+fn parse_args_lenient(args: &[String]) -> Result<ResolveInput, String> {
+    parse_args_inner(args, false)
+}
+
+fn parse_args_inner(args: &[String], strict: bool) -> Result<ResolveInput, String> {
     let mut input = ResolveInput::default();
     let mut i = 0;
     while i < args.len() {
@@ -612,7 +624,12 @@ fn parse_args(args: &[String]) -> Result<ResolveInput, String> {
                 return Err("__help__".to_string());
             }
             other => {
-                return Err(format!("unknown argument: {other}"));
+                if strict {
+                    return Err(format!("unknown argument: {other}"));
+                }
+                // Lenient: skip a flag we don't own. Its value (if any) is left
+                // for the caller; we only advance past the flag token itself.
+                i += 1;
             }
         }
     }
@@ -660,7 +677,7 @@ pub fn print_usage() {
 /// — so the view commands behave like the TS CLI (no mandatory TRAVEL_PLAN_ID).
 /// Returns the resolved plan_id (hyphen form, e.g. "tokyo-2026").
 pub async fn resolve_plan_id(args: &[String]) -> Result<String, String> {
-    let mut input = parse_args(args)?;
+    let mut input = parse_args_lenient(args)?;
     if input.today.is_none() {
         input.today = Some(today_iso());
     }

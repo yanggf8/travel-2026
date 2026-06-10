@@ -122,17 +122,17 @@ In `scripts/turso-migrate.ts`, inside the `main()` `try` block, after the last e
 
 - [ ] **Step 2: Run the migration**
 
-Run: `npm run db:migrate:turso`
+Run: `./bin/travel db migrate`
 Expected: output includes `✅ Stage 0 research tables ready.` and exits 0.
 
 - [ ] **Step 3: Verify tables exist**
 
-Run: `npm run db:exec -- "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'stage0_%' ORDER BY name;"`
+Run: `./bin/travel db exec "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'stage0_%' ORDER BY name;"`
 Expected: lists all six — `stage0_candidate_flights`, `stage0_candidates`, `stage0_research_destinations`, `stage0_research_durations`, `stage0_research_runs`, `stage0_scrape_attempts`.
 
 - [ ] **Step 4: Verify idempotency**
 
-Run: `npm run db:migrate:turso`
+Run: `./bin/travel db migrate`
 Expected: re-runs cleanly, exits 0, no error (the `IF NOT EXISTS` clauses make it a no-op).
 
 - [ ] **Step 5: Mirror DDL into schema.sql**
@@ -232,7 +232,7 @@ describe('Stage 0 service — run creation', () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -- stage0-service`
+Run: `make test`
 Expected: FAIL — `Cannot find module '../../src/services/stage0-service'`.
 
 - [ ] **Step 3: Create the service with types and run creation**
@@ -418,7 +418,7 @@ export async function deleteResearchRun(runId: string): Promise<void> {
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npm test -- stage0-service`
+Run: `make test`
 Expected: PASS — 2 tests (run creation + pending scrape-attempt seeding).
 
 - [ ] **Step 5: Commit**
@@ -575,7 +575,7 @@ describe('Stage 0 service — candidates and ranking', () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -- stage0-service`
+Run: `make test`
 Expected: FAIL — `insertCandidate`/`rankRun`/etc. are not exported.
 
 - [ ] **Step 3: Add candidates, scrape-attempts, ranking, adopt to the service**
@@ -779,12 +779,12 @@ export async function adoptCandidate(candidateId: string, planId: string): Promi
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npm test -- stage0-service`
+Run: `make test`
 Expected: PASS — 6 tests (2 from Task 2 + 4 new).
 
 - [ ] **Step 5: Run typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: `✅ Typecheck passed`.
 
 - [ ] **Step 6: Commit**
@@ -818,7 +818,7 @@ In `src/cli/shared/args.ts`, append to the `OPTIONS_WITH_VALUES` set:
 
 - [ ] **Step 2: Run typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: `✅ Typecheck passed`.
 
 - [ ] **Step 3: Commit**
@@ -1003,21 +1003,21 @@ import './commands/stage0';
 
 - [ ] **Step 3: Run typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: `✅ Typecheck passed`.
 
 - [ ] **Step 4: Smoke-test the commands end-to-end**
 
 Run:
 ```bash
-npm run travel -- stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
+./bin/travel stage0-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --nights 6
 ```
 Expected: prints `✅ Stage 0 research run created: stage0-...` with a run id.
 
 Then, using that run id:
 ```bash
-npm run travel -- stage0-compare --run <run_id>
+./bin/travel stage0-compare --run <run_id>
 ```
 Expected: prints the run header and `(no candidates — run the aggregator first)`.
 
@@ -1028,13 +1028,13 @@ Expected: prints the run header and `(no candidates — run the aggregator first
 
 Run:
 ```bash
-npm run db:exec -- "DELETE FROM stage0_scrape_attempts WHERE run_id='<run_id>'; DELETE FROM stage0_research_durations WHERE run_id='<run_id>'; DELETE FROM stage0_research_destinations WHERE run_id='<run_id>'; DELETE FROM stage0_research_runs WHERE run_id='<run_id>';"
+./bin/travel db exec "DELETE FROM stage0_scrape_attempts WHERE run_id='<run_id>'; DELETE FROM stage0_research_durations WHERE run_id='<run_id>'; DELETE FROM stage0_research_destinations WHERE run_id='<run_id>'; DELETE FROM stage0_research_runs WHERE run_id='<run_id>';"
 ```
 Expected: 4 `[N/4]` lines, each `1 row(s) affected` (or `ok` if a table had no rows), exit 0.
 
 Then **verify** the run is gone — do not trust exit code alone:
 ```bash
-npm run db:exec -- "SELECT COUNT(*) AS n FROM stage0_research_runs WHERE run_id='<run_id>';"
+./bin/travel db exec "SELECT COUNT(*) AS n FROM stage0_research_runs WHERE run_id='<run_id>';"
 ```
 Expected: `{"n":"0"}`.
 
@@ -1066,7 +1066,7 @@ after the `run-status` / `run-list` block (the last command block), add:
 
 - [ ] **Step 7: Run typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: `✅ Typecheck passed`.
 
 - [ ] **Step 8: Commit**
@@ -1126,7 +1126,7 @@ via `stage0-import`. All SQL stays in TypeScript (sql-helpers.ts escaping).
 For each (destination, duration) pair it checks the seeded scrape-attempt
 status — 'ok' pairs are skipped (idempotent re-run), 'pending'/'failed' pairs
 are scraped via scrape_date_range.py into a temp file. Results are handed to
-`npm run travel -- stage0-import`, which performs all DB writes + ranking.
+`./bin/travel stage0-import`, which performs all DB writes + ranking.
 
 Temp files are transient implementation detail — not durable state.
 
@@ -1148,7 +1148,7 @@ def load_run(run_id):
     """Load the run + destinations + durations + scrape attempts via the
     stage0-export CLI command (all SQL stays in TypeScript)."""
     proc = subprocess.run(
-        ["npm", "run", "--silent", "travel", "--",
+        ["./bin/travel",
          "stage0-export", "--run", run_id, "--json"],
         check=True, cwd=PROJECT_ROOT, capture_output=True, text=True)
     try:
@@ -1275,7 +1275,7 @@ def main():
 
     if not all_candidates and not attempts:
         print("All pairs already scraped — nothing to do.")
-        print(f"View: npm run travel -- stage0-compare --run {run['run_id']}")
+        print(f"View: ./bin/travel stage0-compare --run {run['run_id']}")
         return
 
     # Hand off to the TS CLI for all DB writes + leave-days + ranking.
@@ -1286,14 +1286,14 @@ def main():
                   ensure_ascii=False)
     try:
         subprocess.run(
-            ["npm", "run", "travel", "--", "stage0-import",
+            ["./bin/travel", "stage0-import",
              "--run", run["run_id"], "--file", handoff_path],
             check=True, cwd=PROJECT_ROOT)
     finally:
         if os.path.exists(handoff_path):
             os.unlink(handoff_path)
 
-    print(f"Done. View: npm run travel -- stage0-compare --run {run['run_id']}")
+    print(f"Done. View: ./bin/travel stage0-compare --run {run['run_id']}")
 
 
 if __name__ == "__main__":
@@ -1449,7 +1449,7 @@ const stage0ImportCommand: CommandHandler = {
     await rankRun(runId);
     console.log(`✅ Imported ${candidates.length} candidates for ${runId} ` +
       `(${allCandidates.length} total), ranked.`);
-    console.log(`   View: npm run travel -- stage0-compare --run ${runId}`);
+    console.log(`   View: ./bin/travel stage0-compare --run ${runId}`);
   },
 };
 ```
@@ -1466,7 +1466,7 @@ registerCommand(stage0ImportCommand);
 
 - [ ] **Step 3: Run typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: `✅ Typecheck passed`.
 
 - [ ] **Step 4: Smoke-test export + import with a hand-built handoff file**
@@ -1474,19 +1474,19 @@ Expected: `✅ Typecheck passed`.
 Create a run, verify `stage0-export`, then import. The run id is needed in three places —
 capture it in a shell variable:
 ```bash
-RID=$(npm run --silent travel -- stage0-init --origin TPE \
+RID=$(./bin/travel stage0-init --origin TPE \
   --start 2026-06-18 --end 2026-06-18 --dest KIX:"Osaka (KIX)" --nights 6 \
   | grep -oE 'stage0-[0-9]+-[0-9]+')
 echo "run id: $RID"
 
 # stage0-export must emit one JSON line the aggregator can parse:
-npm run --silent travel -- stage0-export --run "$RID" --json | head -c 200
+./bin/travel stage0-export --run "$RID" --json | head -c 200
 
 # build a handoff file with the real run id substituted in:
 printf '{"candidates":[{"candidateId":"%s-KIX-2026-06-18-6n","runId":"%s","destCode":"KIX","departDate":"2026-06-18","returnDate":"2026-06-24","nights":6,"flightTotalTwd":18000,"flights":[]}],"attempts":[{"runId":"%s","destCode":"KIX","nights":6,"status":"ok","candidateCount":1,"error":null}]}' "$RID" "$RID" "$RID" > /tmp/s0-handoff.json
 
-npm run travel -- stage0-import --run "$RID" --file /tmp/s0-handoff.json
-npm run travel -- stage0-compare --run "$RID"
+./bin/travel stage0-import --run "$RID" --file /tmp/s0-handoff.json
+./bin/travel stage0-compare --run "$RID"
 ```
 Expected: `stage0-export` prints a JSON object starting `{"run_id":"stage0-...`; import prints `✅ Imported 1 candidates ... ranked`; compare shows one ranked row with a computed (non-null) leave-days value.
 
@@ -1494,7 +1494,7 @@ Expected: `stage0-export` prints a JSON object starting `{"run_id":"stage0-...`;
 
 Run the same import a second time:
 ```bash
-npm run travel -- stage0-import --run "$RID" --file /tmp/s0-handoff.json
+./bin/travel stage0-import --run "$RID" --file /tmp/s0-handoff.json
 ```
 Expected: succeeds again (no PK collision) — prints `✅ Imported 1 candidates (1 total), ranked`. The per-pair delete made it idempotent.
 
@@ -1504,8 +1504,8 @@ Expected: succeeds again (no PK collision) — prints `✅ Imported 1 candidates
 
 Run:
 ```bash
-npm run db:exec -- "DELETE FROM stage0_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM stage0_candidates WHERE run_id='$RID'); DELETE FROM stage0_candidates WHERE run_id='$RID'; DELETE FROM stage0_scrape_attempts WHERE run_id='$RID'; DELETE FROM stage0_research_durations WHERE run_id='$RID'; DELETE FROM stage0_research_destinations WHERE run_id='$RID'; DELETE FROM stage0_research_runs WHERE run_id='$RID';"
-npm run db:exec -- "SELECT COUNT(*) AS n FROM stage0_research_runs WHERE run_id='$RID';"
+./bin/travel db exec "DELETE FROM stage0_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM stage0_candidates WHERE run_id='$RID'); DELETE FROM stage0_candidates WHERE run_id='$RID'; DELETE FROM stage0_scrape_attempts WHERE run_id='$RID'; DELETE FROM stage0_research_durations WHERE run_id='$RID'; DELETE FROM stage0_research_destinations WHERE run_id='$RID'; DELETE FROM stage0_research_runs WHERE run_id='$RID';"
+./bin/travel db exec "SELECT COUNT(*) AS n FROM stage0_research_runs WHERE run_id='$RID';"
 ```
 Expected: 6 `[N/6]` lines from the DELETE chain, followed by `{"n":"0"}` from the verification SELECT.
 
@@ -1584,7 +1584,7 @@ destinations, and durations. Changing any of those = a new run.
 
 2. **Create the run:**
    ```bash
-   npm run travel -- stage0-init --origin TPE \
+   ./bin/travel stage0-init --origin TPE \
      --start 2026-06-18 --end 2026-06-20 \
      --dest KIX:"Osaka/Kyoto (KIX)" --dest NRT:"Tokyo (NRT)" \
      --nights 6 --nights 7 --pax 2 --rate 32
@@ -1598,7 +1598,7 @@ destinations, and durations. Changing any of those = a new run.
 
 4. **Show the ranking:**
    ```bash
-   npm run travel -- stage0-compare --run <run_id>
+   ./bin/travel stage0-compare --run <run_id>
    ```
    Present the ranked table. Candidates sort by flight price; leave-days is a
    shown column and a tie-breaker only.
@@ -1610,7 +1610,7 @@ destinations, and durations. Changing any of those = a new run.
 
 6. **Hand off on lock.** When the user picks a candidate:
    ```bash
-   npm run travel -- stage0-adopt <candidate_id> <new_plan_id> \
+   ./bin/travel stage0-adopt <candidate_id> <new_plan_id> \
      --create-plan --dest <destination_slug>
    ```
    This creates the minimal normalized plan rows, sets P1 dates from the
@@ -1620,13 +1620,13 @@ destinations, and durations. Changing any of those = a new run.
 
    If the plan already exists, use the legacy link-only form:
    ```bash
-   npm run travel -- stage0-adopt <candidate_id> <existing_plan_id>
+   ./bin/travel stage0-adopt <candidate_id> <existing_plan_id>
    ```
 
    After a new-plan handoff, continue with `/stage1-itinerary-draft`, whose
    first CLI step is:
    ```bash
-   npm run travel -- scaffold-itinerary --plan-id <new_plan_id> --dest <destination_slug>
+   ./bin/travel scaffold-itinerary --plan-id <new_plan_id> --dest <destination_slug>
    ```
 
 ## Notes
@@ -1680,7 +1680,7 @@ In `docs/plans/2026-05-22-new-planning-flow.md`, in the Skill Mapping table, rep
 
 - [ ] **Step 4: Run the doc/data validation**
 
-Run: `npm run validate:data`
+Run: `./bin/travel validate data`
 Expected: `✅ Data validation passed` (0 errors).
 
 - [ ] **Step 5: Commit**
@@ -1698,22 +1698,22 @@ git commit -m "docs: wire Stage 0 research into CLAUDE.md and planning-flow doc"
 
 - [ ] **Step 1: Run the full test suite**
 
-Run: `npm test`
+Run: `make test`
 Expected: all tests pass, including the 6 `stage0-service` tests.
 
 - [ ] **Step 2: Run typecheck**
 
-Run: `npm run typecheck`
+Run: `make check`
 Expected: `✅ Typecheck passed`.
 
 - [ ] **Step 3: Run the doctor**
 
-Run: `npm run doctor`
+Run: `./bin/travel doctor`
 Expected: full health check passes (0 errors).
 
 - [ ] **Step 4: Verify `stage0-init` appears in CLI help**
 
-Run: `npm run travel -- help`
+Run: `./bin/travel help`
 Expected: help text lists `stage0-init`, `stage0-export`, `stage0-import`, `stage0-compare`, `stage0-adopt`.
 
 - [ ] **Step 5: Final commit (if any uncommitted changes remain)**

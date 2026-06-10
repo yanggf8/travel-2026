@@ -22,7 +22,7 @@ After itinerary scaffolded and dates within 16 days of current date.
 ### 1. Pre-check destination config
 
 ```bash
-npm run travel -- query-bookings --dest all 2>/dev/null || npx tsx scripts/turso-exec.ts "SELECT slug FROM destination_config"
+./bin/travel query-bookings --dest all 2>/dev/null || ./bin/travel db exec "SELECT slug FROM destination_config"
 ```
 
 Common issue: trying to fetch weather for "kyoto" when only "kyoto_2026" exists.
@@ -30,12 +30,12 @@ Common issue: trying to fetch weather for "kyoto" when only "kyoto_2026" exists.
 ### 2. Pre-check itinerary status
 
 ```bash
-npm run view:status
+./bin/travel status --full
 ```
 
 P5 status must be `researching` or later (not `pending`). If pending, scaffold first:
 ```bash
-npm run travel -- scaffold-itinerary
+./bin/travel scaffold-itinerary
 ```
 
 ### 3. Pre-check date range
@@ -45,7 +45,7 @@ Weather API supports 16-day forecast. If trip is >16 days away, forecast may be 
 ### 4. Fetch weather
 
 ```bash
-npm run travel -- fetch-weather --dest <slug>
+./bin/travel fetch-weather --dest <slug>
 ```
 
 Adds `weather` field to each itinerary day (temp, feels_like, precipitation, weather_code). Data source: Open-Meteo API (free, no key required).
@@ -53,7 +53,7 @@ Adds `weather` field to each itinerary day (temp, feels_like, precipitation, wea
 ### 5. Verify
 
 ```bash
-npm run view:itinerary
+./bin/travel itinerary
 ```
 
 Each day should show weather data with `feels_like_max`. If missing, retry or check `src/services/weather-service.ts`.
@@ -68,7 +68,7 @@ user explicitly asks to deploy or refresh the live dashboard.
 | Error | Cause | Fix |
 |-------|-------|-----|
 | Destination not found | Slug not in `destination_config` table | Check exact slug via `turso-exec "SELECT slug FROM destination_config"` |
-| Itinerary not scaffolded | P5 status = pending | `npm run travel -- scaffold-itinerary` |
+| Itinerary not scaffolded | P5 status = pending | `./bin/travel scaffold-itinerary` |
 | Dates outside window | Trip >16 days away | Wait until closer to departure |
 | No feels_like data | API response changed | Check Open-Meteo status, retry |
 
