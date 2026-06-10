@@ -551,10 +551,26 @@ pub async fn list_plans_for_resolver() -> Result<Vec<PlanSummary>, String> {
         }
     }
 
-    Ok(order
+    let mut plans: Vec<PlanSummary> = order
         .into_iter()
         .filter_map(|id| by_id.remove(&id))
-        .collect())
+        .collect();
+
+    // Test-only isolation: `resolve-plan` reads EVERY plan in the shared live
+    // DB, so a real upcoming/active plan (e.g. an in-progress okinawa-2026)
+    // would pollute the precedence ladder of an integration test that seeded
+    // its own throwaway plans. When `TRAVEL_RESOLVER_ONLY_PREFIX` is set, scope
+    // the resolver to plan_ids carrying that prefix — giving those tests the
+    // isolated plan set they were designed around (mirrors the TS test's
+    // in-memory PlanSummary[]). Unset in production → no filtering. This is the
+    // same test-stub pattern as the `TRAVEL_TODAY` override.
+    if let Ok(prefix) = std::env::var("TRAVEL_RESOLVER_ONLY_PREFIX")
+        && !prefix.is_empty()
+    {
+        plans.retain(|p| p.plan_id.starts_with(&prefix));
+    }
+
+    Ok(plans)
 }
 
 // ---------------------------------------------------------------------------

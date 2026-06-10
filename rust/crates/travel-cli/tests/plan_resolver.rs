@@ -7,8 +7,11 @@
 //!
 //! We seed throwaway plans into Turso, drive `resolve-plan` with `TRAVEL_TODAY`
 //! pinned to 2026-05-22 (matching the TS fixtures), assert the chosen plan_id +
-//! source, then tear the rows down. Unique, namespaced plan ids keep parallel
-//! runs from colliding and keep real plans untouched.
+//! source, then tear the rows down. Each test uses a unique tag-first plan-id
+//! prefix and passes it via `TRAVEL_RESOLVER_ONLY_PREFIX`, which scopes the
+//! resolver to that test's own plans — so real plans in the shared live DB
+//! (including an upcoming/active one like okinawa-2026) can't perturb the
+//! ladder. This mirrors the TS test's isolated in-memory `PlanSummary[]`.
 //!
 //! Ported TS cases:
 //!   1. selects plan whose date anchor contains the requested travel date
@@ -116,16 +119,23 @@ fn teardown(plan_ids: &[&str]) {
     }
 }
 
-/// Run `resolve-plan` with the given extra args + TRAVEL_TODAY pinned.
-/// Returns (success, stdout, stderr).
-fn resolve(extra: &[&str]) -> (bool, String, String) {
-    let out = bin()
-        .arg("resolve-plan")
+/// Run `resolve-plan` with TRAVEL_TODAY pinned and, when `only_prefix` is set,
+/// the resolver scoped to plan_ids carrying that prefix (via
+/// TRAVEL_RESOLVER_ONLY_PREFIX). The live DB is shared and may hold real
+/// upcoming/active plans (e.g. an in-progress okinawa-2026) that would otherwise
+/// pollute the precedence ladder; scoping gives a test the isolated plan set it
+/// seeded — the same intent the in-binary RESOLVER_LOCK expresses, extended to
+/// real DB rows. Returns (success, stdout, stderr).
+fn resolve_scoped(only_prefix: Option<&str>, extra: &[&str]) -> (bool, String, String) {
+    let mut cmd = bin();
+    cmd.arg("resolve-plan")
         .args(extra)
         .env("TRAVEL_TODAY", TODAY)
-        .env_remove("TRAVEL_PLAN_ID")
-        .output()
-        .expect("run travel resolve-plan");
+        .env_remove("TRAVEL_PLAN_ID");
+    if let Some(prefix) = only_prefix {
+        cmd.env("TRAVEL_RESOLVER_ONLY_PREFIX", prefix);
+    }
+    let out = cmd.output().expect("run travel resolve-plan");
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -138,9 +148,12 @@ fn resolve(extra: &[&str]) -> (bool, String, String) {
 async fn selects_plan_whose_anchor_contains_travel_date() {
     let _guard = RESOLVER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
-    let p_tokyo = format!("test-resolver-tokyo-{tag}");
-    let p_kyoto = format!("test-resolver-kyoto-{tag}");
-    let p_june = format!("test-resolver-june-{tag}");
+    // Tag-first ids so `prefix` uniquely scopes the resolver to THIS test's
+    // plans, immune to real plans in the shared live DB.
+    let prefix = format!("test-resolver-date-{tag}-");
+    let p_tokyo = format!("{prefix}tokyo");
+    let p_kyoto = format!("{prefix}kyoto");
+    let p_june = format!("{prefix}june");
 
     // Match the TS fixtures (pastTokyo / pastKyoto / junePlan).
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
@@ -149,7 +162,7 @@ async fn selects_plan_whose_anchor_contains_travel_date() {
     seed_plan(&p_kyoto, "kyoto_2026", "2026-02-28 15:51:22", Some(("kyoto_2026", "2026-02-24", "2026-02-28", 5)));
     seed_plan(&p_june, "fukuoka_2026", "2026-05-22 10:00:00", Some(("fukuoka_2026", "2026-06-18", "2026-06-25", 8)));
 
-    let (ok, stdout, stderr) = resolve(&["--travel-date", "2026-06-20"]);
+    let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &["--travel-date", "2026-06-20"]);
     teardown(&[&p_tokyo, &p_kyoto, &p_june]);
 
     assert!(ok, "resolve-plan should succeed; stderr={stderr} stdout={stdout}");
@@ -162,9 +175,13 @@ async fn selects_plan_whose_anchor_contains_travel_date() {
 async fn selects_single_upcoming_plan_when_no_date() {
     let _guard = RESOLVER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
-    let p_tokyo = format!("test-resolver-up-tokyo-{tag}");
-    let p_kyoto = format!("test-resolver-up-kyoto-{tag}");
-    let p_june = format!("test-resolver-up-june-{tag}");
+    // Tag-first ids so `prefix` uniquely scopes the resolver to THIS test's
+    // three plans (the live DB may hold real upcoming plans like okinawa-2026
+    // that would otherwise make "exactly one upcoming" false).
+    let prefix = format!("test-resolver-up-{tag}-");
+    let p_tokyo = format!("{prefix}tokyo");
+    let p_kyoto = format!("{prefix}kyoto");
+    let p_june = format!("{prefix}june");
 
     // pastTokyo + pastKyoto are historical (end < today 2026-05-22); junePlan is upcoming.
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
@@ -173,7 +190,7 @@ async fn selects_single_upcoming_plan_when_no_date() {
     seed_plan(&p_kyoto, "kyoto_2026", "2026-02-28 15:51:22", Some(("kyoto_2026", "2026-02-24", "2026-02-28", 5)));
     seed_plan(&p_june, "fukuoka_2026", "2026-05-22 10:00:00", Some(("fukuoka_2026", "2026-06-18", "2026-06-25", 8)));
 
-    let (ok, stdout, stderr) = resolve(&[]);
+    let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &[]);
     teardown(&[&p_tokyo, &p_kyoto, &p_june]);
 
     assert!(ok, "resolve-plan should succeed; stderr={stderr} stdout={stdout}");
@@ -186,22 +203,23 @@ async fn selects_single_upcoming_plan_when_no_date() {
 async fn resolves_candidate_planning_window() {
     let _guard = RESOLVER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
-    let p_tokyo = format!("test-resolver-win-tokyo-{tag}");
-    let p_kyoto = format!("test-resolver-win-kyoto-{tag}");
-    let p_window = format!("test-resolver-window-{tag}");
+    // Tag-first ids so `prefix` uniquely scopes the resolver to THIS test's
+    // plans, immune to real plans in the shared live DB.
+    let prefix = format!("test-resolver-win-{tag}-");
+    let p_tokyo = format!("{prefix}tokyo");
+    let p_kyoto = format!("{prefix}kyoto");
+    let p_window = format!("{prefix}window");
 
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
         return;
     }
     seed_plan(&p_kyoto, "kyoto_2026", "2026-02-28 15:51:22", Some(("kyoto_2026", "2026-02-24", "2026-02-28", 5)));
-    // Candidate planning window. Use a distinctive far-future range that no other
-    // concurrently-running test seeds: resolve-plan reads ALL plans across this
-    // shared live DB, and a cross-binary mutex isn't possible, so window
-    // uniqueness is the only safe isolation against other suites' --create-plan
-    // adoptions (which cluster around 2026-06).
+    // Candidate planning window (TRAVEL_RESOLVER_ONLY_PREFIX scopes the resolver
+    // to this test's plans, so the window range no longer needs to be globally
+    // unique to dodge other suites' adoptions).
     seed_window_plan(&p_window, "undecided_japan_2026", "2026-05-22 12:00:00", "researching", "2027-09-13", "2027-09-20");
 
-    let (ok, stdout, stderr) = resolve(&["--travel-start", "2027-09-13", "--travel-end", "2027-09-20"]);
+    let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &["--travel-start", "2027-09-13", "--travel-end", "2027-09-20"]);
     teardown(&[&p_tokyo, &p_kyoto, &p_window]);
 
     assert!(ok, "resolve-plan should succeed; stderr={stderr} stdout={stdout}");
@@ -214,8 +232,12 @@ async fn resolves_candidate_planning_window() {
 async fn ambiguous_date_overlap_errors() {
     let _guard = RESOLVER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
-    let p_june = format!("test-resolver-amb-june-{tag}");
-    let p_osaka = format!("test-resolver-amb-osaka-{tag}");
+    // Tag-first ids so `prefix` uniquely scopes the resolver to THIS test's two
+    // overlapping plans (and excludes any real plan that might also contain
+    // 2026-06-21, which would otherwise change the ambiguity set).
+    let prefix = format!("test-resolver-amb-{tag}-");
+    let p_june = format!("{prefix}june");
+    let p_osaka = format!("{prefix}osaka");
 
     // junePlan + otherJunePlan both contain 2026-06-21.
     if !seed_plan(&p_june, "fukuoka_2026", "2026-05-22 10:00:00", Some(("fukuoka_2026", "2026-06-18", "2026-06-25", 8))) {
@@ -223,7 +245,7 @@ async fn ambiguous_date_overlap_errors() {
     }
     seed_plan(&p_osaka, "osaka_2026", "2026-05-22 10:00:00", Some(("osaka_2026", "2026-06-20", "2026-06-24", 5)));
 
-    let (ok, stdout, stderr) = resolve(&["--travel-date", "2026-06-21"]);
+    let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &["--travel-date", "2026-06-21"]);
     teardown(&[&p_june, &p_osaka]);
 
     assert!(!ok, "resolve-plan should fail on ambiguous overlap; stdout={stdout}");
@@ -249,8 +271,13 @@ async fn ambiguous_date_overlap_errors() {
 async fn falls_back_to_latest_when_all_historical() {
     let _guard = RESOLVER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
-    let p_tokyo = format!("test-resolver-lat-tokyo-{tag}");
-    let p_kyoto = format!("test-resolver-lat-kyoto-{tag}");
+    // Tag-first ids so `prefix` uniquely scopes the resolver to THIS test's two
+    // historical plans. Without scoping, a real upcoming plan in the shared DB
+    // (e.g. okinawa-2026) makes the ladder take the "upcoming" branch instead of
+    // the "latest" fallback this test asserts.
+    let prefix = format!("test-resolver-lat-{tag}-");
+    let p_tokyo = format!("{prefix}tokyo");
+    let p_kyoto = format!("{prefix}kyoto");
 
     // Two historical seeds (both end well before today 2026-05-22).
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
@@ -258,8 +285,8 @@ async fn falls_back_to_latest_when_all_historical() {
     }
     seed_plan(&p_kyoto, "kyoto_2026", "2026-02-28 15:51:22", Some(("kyoto_2026", "2026-02-24", "2026-02-28", 5)));
 
-    // No date, no env: with only historical plans, ladder falls to "latest".
-    let (ok, stdout, stderr) = resolve(&[]);
+    // No date, no env: with only THIS test's historical plans, ladder falls to "latest".
+    let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &[]);
 
     // Independently confirm kyoto is the newer of OUR seeded pair (load-bearing
     // input to the "most recently updated" rule).
