@@ -971,10 +971,23 @@ async fn adopt_candidate_to_new_plan(
     .map_err(|e| format!("update shaping_candidates failed: {e}"))?;
     conn.execute(
         "UPDATE shaping_research_runs SET status = 'adopted', updated_at = ?1 WHERE run_id = ?2",
-        params![ts, run_id],
+        params![ts, run_id.clone()],
     )
     .await
     .map_err(|e| format!("update shaping_research_runs failed: {e}"))?;
+
+    // Bridge the tour-group baseline audit set into the new plan (matches the TS
+    // adoptCandidateToNewPlan flow). Region = destination_config.ref_id. Non-fatal:
+    // if no tour-group offers were scraped for this run/region/nights, no-op.
+    match crate::tour_group_bridge::bridge_audit_set(
+        conn, &run_id, plan_id, dest_slug, &region, nights, None,
+    )
+    .await
+    {
+        Ok(n) if n > 0 => eprintln!("ℹ️  Bridged {n} tour-group baseline offers into {plan_id}."),
+        Ok(_) => {}
+        Err(e) => eprintln!("⚠️  Tour-group bridge skipped: {e}"),
+    }
 
     Ok(())
 }

@@ -49,6 +49,7 @@ mod ops;                // batch 3 (run-status / run-list)
 mod validate_itinerary; // batch 3
 mod shaping;            // batch 4 (shaping-init/compare/adopt/baseline/export/import)
 mod query_tour_group;   // batch 4 (query-tour-group-offers)
+mod tour_group_bridge;  // adopt-time audit-set bridge (used by shaping-adopt --create-plan)
 mod weather;            // batch 5 (fetch-weather)
 mod view_prices;        // batch 5
 mod search_compare;     // batch 5 (compare-offers / search-offers)
