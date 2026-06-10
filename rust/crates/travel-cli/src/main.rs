@@ -53,6 +53,13 @@ mod weather;            // batch 5 (fetch-weather)
 mod view_prices;        // batch 5
 mod search_compare;     // batch 5 (compare-offers / search-offers)
 mod chat_format;        // batch 5
+// P2 scripts/ port (docs/plans/2026-06-10-rust-port-audit.md §4). Pre-wired
+// dispatch + stubs for collision-free fan-out (same method as P1).
+mod db_migrate;         // db migrate (port of scripts/turso-migrate.ts inline DDL)
+mod db_seed_plans;      // db seed plans (scripts/seed-plans-current.ts)
+mod db_sync_destinations; // db sync destinations (scripts/turso-sync-destinations.ts)
+mod db_sync_events;     // db sync events (scripts/turso-sync-events.ts)
+mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
 
 use std::{env, io::Read, process};
 
@@ -329,6 +336,22 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [group, sub, rest @ ..] if group == "db" && sub == "query-offers" => {
             let opts = db_query_offers::QueryOffersArgs::parse(rest)?;
             db_query_offers::run(&opts).await
+        }
+        // ── P2 db subcommands (pre-wired; modules filled per batch) ──
+        [group, sub, rest @ ..] if group == "db" && sub == "migrate" => {
+            db_migrate::run(rest).await
+        }
+        [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "plans" => {
+            db_seed_plans::run(rest).await
+        }
+        [group, sub, action, rest @ ..] if group == "db" && sub == "sync" && action == "destinations" => {
+            db_sync_destinations::run(rest).await
+        }
+        [group, sub, action, rest @ ..] if group == "db" && sub == "sync" && action == "events" => {
+            db_sync_events::run(rest).await
+        }
+        [group, sub, action, rest @ ..] if group == "db" && sub == "fetch" && action == "holidays" => {
+            db_fetch_holidays::run(rest).await
         }
         [group, sub, rest @ ..] if group == "validate" && sub == "data" => {
             if !rest.is_empty() {
