@@ -50,7 +50,7 @@ Turso normalized tables (no JSON blobs)
 | `process_3_4_packages_selected` | populate P3+P4 from chosen offer | current destination |
 
 ### Data Flow
-`URL → scrape (Playwright) → normalize (CanonicalOffer[]) → Turso import → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)`
+`URL → chromeport (CDP capture) → parse capture (parser_rules) → Turso offers → normalize (CanonicalOffer[]) → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)`
 
 Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v2.0.0).
 
@@ -114,8 +114,8 @@ Python/other → explicit `scraper:*` namespace only (forced, never default)
 
 ### Setup
 ```bash
-npm install                   # also runs postinstall: git hooks + Playwright check
-npm run scraper:setup         # install Playwright browsers (if postinstall warned)
+npm install                   # also runs postinstall: git hooks install
+cd rust && cargo build -p chromeport   # build the CDP OTA capture driver (./rust/target/debug/chromeport)
 ```
 
 ### Tests
@@ -221,7 +221,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/p3-flights` | `src/skills/p3-flights/SKILL.md` | Search flights separately |
 | `/p3p4-packages` | `src/skills/p3p4-packages/SKILL.md` | Search OTA packages (flight+hotel) |
 | `/p5-itinerary` | `src/skills/p5-itinerary/SKILL.md` | Build daily itinerary |
-| `/scrape-ota` | `src/skills/scrape-ota/SKILL.md` | Scrape OTA sites (Playwright) |
+| `/scrape-ota` | `src/skills/scrape-ota/SKILL.md` | Scrape OTA sites (chromeport CDP driver) |
 | `/separate-bookings` | `src/skills/separate-bookings/SKILL.md` | Compare package vs split booking |
 | `/booking-confirmation` | `src/skills/booking-confirmation/SKILL.md` | Post-booking verification workflow |
 | `/post-pull-fix` | `src/skills/post-pull-fix/SKILL.md` | Health checks after git pull |

@@ -1,245 +1,130 @@
-# Scraper Quick Reference
+# chromeport Quick Reference
 
-## Available Parsers (9 total)
+`chromeport` (`rust/crates/chromeport`) is the live OTA capture tool — a Rust CDP driver
+(`chromiumoxide`) that **attaches to a real Windows Chrome at `127.0.0.1:9222`**, drives
+the actual page (navigate / click / fill), writes plain-text captures to the Turso
+`captures` table, then rule-parses them (`parser_rules` table) into the Turso `offers`
+table. There are no JSON files in this pipeline and no Python.
 
-| Source ID | Display Name | Type | Status | Notes |
-|-----------|--------------|------|--------|-------|
-| besttour | 喜鴻假期 | Package | ✅ | Full calendar pricing |
-| liontravel | 雄獅旅遊 | Package/Flight/Hotel | ✅ | Price-only (no flight/hotel extraction) |
-| lifetour | 五福旅遊 | Package | ✅ | Full extraction |
-| settour | 東南旅遊 | Package | ✅ | Full extraction |
-| tigerair | 台灣虎航 | Flight | ✅ | Form-based scraper |
-| trip | Trip.com | Flight | ✅ | USD pricing |
-| google_flights | Google Flights | Flight | ✅ | Multi-airline comparison |
-| agoda | Agoda | Hotel | ✅ | Direct hotel URLs work best |
-| eztravel | 易遊網 | Flight | ✅ | Flight search results |
+> The old Python scrapers (`scripts/scrape_package.py`, the `scrapers/` package, etc.) are
+> **DECOMMISSIONED and archived** under `archive/broken-python-scrapers/` — their
+> URL/region templates 404 or land on the wrong page. Do not run them. `chromeport` is the
+> replacement.
+
+Build: `cd rust && cargo build -p chromeport` → binary at `./rust/target/debug/chromeport`.
+
+## OTA Sources (parser_rules)
+
+| Source ID | Display Name | Type | Custom parser |
+|-----------|--------------|------|---------------|
+| besttour | 喜鴻假期 | Package | ✅ |
+| liontravel | 雄獅旅遊 | Package/Flight/Hotel | ✅ |
+| lifetour | 五福旅遊 | Package | ✅ |
+| settour | 東南旅遊 | Package | ✅ |
+| travel4u | 山富旅遊 | Package | ✅ |
+| tigerair | 台灣虎航 | Flight | ✅ |
+| google_flights | Google Flights | Flight | ✅ |
+| agoda | Agoda | Hotel | ✅ |
+| eztravel | 易遊網 | Flight | ✅ |
+| trip | Trip.com | Flight | ⚠️ scrape-only (no custom parser yet) |
+| booking | Booking.com | Hotel | ⚠️ scrape-only |
+
+Authoritative OTA registry: Turso `ota_sources` table (see `CLAUDE.md` → OTA Sources).
 
 ## CLI Commands
 
-### Generic Package Scraper
 ```bash
-python scripts/scrape_package.py <url> [output.json]
+# Pre-flight: confirm Chrome is reachable on the CDP port
+chromeport browser doctor
+chromeport browser pages                       # list open tabs
 
-# Examples
-python scripts/scrape_package.py "https://www.besttour.com.tw/itinerary/TYO05MM260211AM" scrapes/besttour.json
-python scripts/scrape_package.py "https://www.agoda.com/hotel/osaka" scrapes/agoda.json
-python scripts/scrape_package.py "https://flight.eztravel.com.tw/tickets-tpe-nrt?..." scrapes/eztravel.json
+# Passive capture of a single URL (no interaction)
+chromeport fetch url "<url>" --source <id> [--html]
+
+# Drive the real page (navigate/click/fill), then capture
+chromeport fetch interact "<url>" --source <id> \
+  --step 'fill:#dep=2026-02-13' \
+  --step 'click:.search-btn' \
+  --step 'waitfor:.result-list' [--html] [--i-understand-profile]
+
+# Capture an already-open tab instead of navigating
+chromeport browser snapshot --page <N> --source <id> [--html]
+
+# Read-only diagnostics: print rule regexes + per-field extraction status
+chromeport verify <source-id> <capture-id>
+
+# Parse a capture via parser_rules and import offers → Turso (--dry-run prints instead)
+chromeport parse capture <capture-id> --source <id> [--dry-run]
+
+# Seed / refresh the default parser_rules rows
+chromeport parser rules seed-defaults
 ```
 
-### Lion Travel (Date-Specific)
+### Interaction steps (`--step`)
+
+| Step | Meaning |
+|------|---------|
+| `fill:SEL=VALUE` | type VALUE into the element matching CSS selector SEL |
+| `click:SEL` | click the element matching SEL |
+| `wait:MS` | sleep MS milliseconds |
+| `waitfor:SEL` | block until SEL appears |
+
+### Endpoint / env
+
+- Default CDP endpoint: `http://127.0.0.1:9222`
+- Override per run: `--endpoint http://127.0.0.1:<port>`
+- Override via env: `CHROMEPORT_CDP_ENDPOINT=http://127.0.0.1:9222`
+- `--i-understand-profile` overrides the dedicated-automation-profile guard (only when you
+  know the attached Chrome is the `C:\chrome-profiles\travel-browser` profile).
+
+## End-to-end workflow
+
 ```bash
-python scripts/scrape_liontravel_dated.py search [dep_date] [ret_date] [output]
-python scripts/scrape_liontravel_dated.py detail [product_id] [dep_date] [days] [output]
+# 1. Confirm Chrome is up on the debug port
+chromeport browser doctor
 
-# Example
-python scripts/scrape_liontravel_dated.py search 2026-02-11 2026-02-15 scrapes/liontravel-feb11.json
+# 2. Drive the OTA page and capture it (writes a row to Turso `captures`)
+chromeport fetch interact "https://vacation.liontravel.com/search?..." \
+  --source liontravel --step 'waitfor:.product-card'
+
+# 3. Inspect what the parser will extract before committing
+chromeport verify liontravel <capture-id>
+
+# 4. Dry-run the parse, then import for real
+chromeport parse capture <capture-id> --source liontravel --dry-run
+chromeport parse capture <capture-id> --source liontravel
+
+# 5. Read the imported offers back from Turso (TS CLI)
+npm run travel -- query-offers --plan-id <id> --dest <slug>
 ```
 
-### Tigerair
+## DB access (chromeport)
+
 ```bash
-python scripts/scrape_tigerair.py --origin TPE --dest NRT --date 2026-02-13 --pax 2 -o scrapes/tigerair.json
-python scripts/scrape_tigerair.py --origin TPE --dest KIX --date 2026-02-13 --return-date 2026-02-17 --pax 2
+chromeport db query "<sql>"                    # read
+chromeport db exec "<sql>"                     # write
+chromeport db token-status <read|write|secrets>  # check minted tier token
 ```
 
-### Date Range Comparison
-```bash
-python scripts/scrape_date_range.py \
-  --depart-start 2026-02-24 \
-  --depart-end 2026-02-27 \
-  --origin tpe --dest kix \
-  --duration 5 --pax 2 \
-  --exchange-rate 32.0 \
-  -o scrapes/date-range-prices.json
-```
+Credentials are resolved through minted tier tokens via `turso-util` (no static `.env`
+token). If token resolution fails, run `turso auth login`.
 
-## Python API
+## Storage model
 
-### Basic Scraping
-```python
-from scrapers import get_parser, create_browser
-from playwright.async_api import async_playwright
-
-async with async_playwright() as p:
-    browser, context, page = await create_browser(p)
-    
-    parser = get_parser("besttour")
-    result = await parser.scrape(page, url)
-    
-    print(f"Price: {result.price.per_person} {result.price.currency}")
-    print(f"Flight: {result.flight.outbound.flight_number}")
-    
-    await browser.close()
-```
-
-### With Caching
-```python
-from scrapers import get_parser
-from scrapers.cache import get_cache
-
-parser = get_parser("besttour")
-cache = get_cache()
-
-# Check cache first
-result = cache.get("besttour", url, date="2026-02-11")
-if not result:
-    result = await parser.scrape(page, url, use_cache=True)
-    # Automatically cached by scrape()
-
-print(f"Warnings: {result.warnings}")  # Shows if from cache
-```
-
-### Schema Conversion
-```python
-from scrapers.converter import convert_to_canonical_offer, convert_scrape_result_file
-
-# In-memory conversion
-canonical = convert_to_canonical_offer(result, offer_id="besttour_001")
-
-# File conversion
-convert_scrape_result_file(
-    "scrapes/besttour-scrape.json",
-    "scrapes/besttour-canonical.json",
-    "besttour_tyo_feb13"
-)
-```
-
-### Pure Parsing (No Browser)
-```python
-from scrapers.parsers.besttour import BestTourParser
-
-parser = BestTourParser()
-result = parser.parse_raw_text(raw_text, url=url)
-
-# Useful for testing with fixture data
-```
-
-## Cache Management
-
-### Cache Location
-```
-scrapes/cache/
-  ├── a1b2c3d4e5f6g7h8.json  # SHA256 hash of source_id + url + params
-  └── ...
-```
-
-### Cache API
-```python
-from scrapers.cache import get_cache
-
-cache = get_cache()
-
-# Get (returns None if expired or missing)
-result = cache.get("besttour", url, date="2026-02-11")
-
-# Set
-cache.set(result, date="2026-02-11")
-
-# Invalidate
-cache.invalidate("besttour", url, date="2026-02-11")
-
-# Clear all
-cache.clear()
-```
-
-### Cache TTL
-- Default: 24 hours
-- Configurable: `ScrapeCache(cache_dir="scrapes/cache", default_ttl_hours=48)`
-- Age shown in warnings: "Loaded from cache (age: 2h)"
-
-## Schema Mapping
-
-### Python → TypeScript
-
-| Python (snake_case) | TypeScript (camelCase) |
-|---------------------|------------------------|
-| `departure_airport` | `departureAirport` |
-| `arrival_code` | `arrivalCode` |
-| `flight_number` | `flightNumber` |
-| `per_person` | `pricePerPerson` |
-| `price_total` | `priceTotal` |
-| `star_rating` | `starRating` |
-| `room_type` | `roomType` |
-| `return_` | `return` |
-| `date_pricing` (dict) | `datePricing` (array) |
-
-### Data Structure Changes
-
-**Python**:
-```python
-{
-  "date_pricing": {
-    "2026-02-11": {"price": 18000, "availability": "available"},
-    "2026-02-12": {"price": 19000, "availability": "limited"}
-  }
-}
-```
-
-**TypeScript**:
-```typescript
-{
-  "datePricing": [
-    {"date": "2026-02-11", "pricePerPerson": 18000, "availability": "available"},
-    {"date": "2026-02-12", "pricePerPerson": 19000, "availability": "limited"}
-  ]
-}
-```
-
-## Testing
-
-### Run All Parser Tests
-```bash
-pytest tests/scrapers/test_parsers.py -v
-```
-
-### Run Specific Parser Tests
-```bash
-pytest tests/scrapers/test_parsers.py::TestBestTourParser -v
-pytest tests/scrapers/test_parsers.py::TestEzTravelParser -v
-```
-
-### Test with Fixture Data
-```python
-# Add fixture to tests/scrapers/conftest.py
-@pytest.fixture
-def my_ota_data():
-    return _load_fixture("my-ota-scrape.json")
-
-# Use in test
-def test_my_parser(my_ota_data):
-    parser = MyOtaParser()
-    result = parser.parse_raw_text(my_ota_data["raw_text"])
-    assert result.price.per_person > 0
-```
+- **Captures** → Turso `captures` table (plain text, no JSON files).
+- **Offers** → Turso `offers` table, written by `parse capture`.
+- **Parser rules** → Turso `parser_rules` table (one rule row per source). A missing rule
+  row for a source makes `parse capture` fail with
+  `missing parser_rules row for source_id='<id>'; run chromeport parser rules seed-defaults`.
 
 ## Troubleshooting
 
-### Parser Returns Empty Results
-1. Check if page structure changed (inspect `result.raw_text`)
-2. Add debug prints in parsing functions
-3. Check for bot detection (Cloudflare, captcha)
-
-### Cache Not Working
-1. Check `scrapes/cache/` directory exists and is writable
-2. Verify cache key params match (case-sensitive)
-3. Check TTL hasn't expired
-
-### Schema Conversion Errors
-1. Ensure `scraped_at` field is valid ISO datetime
-2. Check for missing required fields (`source_id`, `url`)
-3. Verify `date_pricing` structure matches expected format
-
-## Rate Limits (from ota-sources.json)
-
-| Source | Requests/Minute |
-|--------|-----------------|
-| besttour | 10 |
-| liontravel | 5 |
-| lifetour | 5 |
-| settour | 5 |
-| tigerair | 10 |
-| trip | 5 |
-| google_flights | 5 |
-| agoda | 3 |
-| eztravel | 5 (estimated) |
-
-**Note**: Rate limiting not yet enforced - manual throttling recommended.
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `browser doctor` can't connect | Chrome not started with `--remote-debugging-port=9222` | Relaunch Chrome with the debug port on the dedicated profile |
+| "interactive fetch refused: … profile" | attached Chrome is not the dedicated automation profile | Relaunch with `--user-data-dir=C:\chrome-profiles\travel-browser`, or pass `--i-understand-profile` |
+| `no capture with capture_id=…` | parse run before any capture | run a `fetch`/`snapshot` first |
+| `missing parser_rules row …` | source has no rule | `chromeport parser rules seed-defaults` (or insert a rule row) |
+| `verify` shows empty fields | page structure changed / wrong selectors | re-capture with `--html` and inspect; adjust the source's `parser_rules` regexes |
+| Token resolution fails | minted tier token unavailable | `turso auth login`, then re-check with `chromeport db token-status read` |
+```
