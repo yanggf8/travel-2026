@@ -1,10 +1,10 @@
 // `travel query-tour-group-offers --run <run_id> [--source <id>]
-//   [--dest-region <region>] [--nights N] [--max-price TWD] [--json]`
+//   [--dest-region <region>] [--nights N] [--max-price TWD]`
 //
 // Port of the query-tour-group-offers command in src/cli/commands/tour-group.ts
 // (service: listTourGroupOffers in src/services/tour-group-service.ts).
 // Reads shaping_tour_group_offers, ordered by price_per_person_twd ASC.
-// Read-only, plain text (with optional --json mirroring the TS output).
+// Read-only, plain text only (agent-first; no user-facing JSON).
 
 use crate::db;
 
@@ -12,12 +12,16 @@ struct OfferRow {
     source_id: String,
     dest_region: String,
     depart_date: String,
+    // Selected from the DB and available, but not shown in the plain-text
+    // table (they were only emitted by the removed --json output).
+    #[allow(dead_code)]
     return_date: String,
     nights: i64,
     price_per_person_twd: i64,
     title: String,
     hotel_name: Option<String>,
     hotel_star_rating: Option<i64>,
+    #[allow(dead_code)]
     product_kind: Option<String>,
 }
 
@@ -25,7 +29,7 @@ pub async fn run(rest: &[String]) -> Result<(), String> {
     if rest.iter().any(|a| a == "--help" || a == "-h") {
         println!(
             "Usage:\n  travel query-tour-group-offers --run <run_id> [--source <id>] \
-             [--dest-region <region>] [--nights N] [--max-price TWD] [--json]"
+             [--dest-region <region>] [--nights N] [--max-price TWD]"
         );
         return Ok(());
     }
@@ -35,7 +39,6 @@ pub async fn run(rest: &[String]) -> Result<(), String> {
     let mut dest_region: Option<String> = None;
     let mut nights: Option<i64> = None;
     let mut max_price: Option<i64> = None;
-    let mut json = false;
 
     let mut i = 0;
     while i < rest.len() {
@@ -51,7 +54,6 @@ pub async fn run(rest: &[String]) -> Result<(), String> {
                 i += 1;
                 max_price = rest.get(i).and_then(|s| s.parse::<i64>().ok());
             }
-            "--json" => json = true,
             _ => {}
         }
         i += 1;
@@ -118,33 +120,6 @@ pub async fn run(rest: &[String]) -> Result<(), String> {
         });
     }
 
-    if json {
-        // Minimal structured echo (JSON only because --json was explicitly
-        // requested, mirroring the TS shape of the rows actually printed).
-        let items: Vec<String> = out
-            .iter()
-            .map(|r| {
-                format!(
-                    "{{\"source_id\":{},\"dest_region\":{},\"depart_date\":{},\"return_date\":{},\
-                     \"nights\":{},\"price_per_person_twd\":{},\"hotel_name\":{},\
-                     \"hotel_star_rating\":{},\"product_kind\":{},\"title\":{}}}",
-                    json_str(&r.source_id),
-                    json_str(&r.dest_region),
-                    json_str(&r.depart_date),
-                    json_str(&r.return_date),
-                    r.nights,
-                    r.price_per_person_twd,
-                    r.hotel_name.as_deref().map(json_str).unwrap_or_else(|| "null".into()),
-                    r.hotel_star_rating.map(|s| s.to_string()).unwrap_or_else(|| "null".into()),
-                    r.product_kind.as_deref().map(json_str).unwrap_or_else(|| "null".into()),
-                    json_str(&r.title),
-                )
-            })
-            .collect();
-        println!("[\n  {}\n]", items.join(",\n  "));
-        return Ok(());
-    }
-
     if out.is_empty() {
         println!("(no rows)");
         return Ok(());
@@ -184,21 +159,4 @@ fn pad_end(s: &str, width: usize) -> String {
 
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
-}
-
-fn json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }

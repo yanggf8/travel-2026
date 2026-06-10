@@ -24,7 +24,7 @@ Each view is a separate subcommand — pick one:
 
 ## Comparison
 ```bash
-./bin/travel compare-offers --region osaka [--json]
+./bin/travel compare-offers --region osaka
 ./bin/travel compare trips --input <your-comparison-file.json> [--detailed]   # input file is BYO
 ./bin/travel compare dates --start 2026-02-24 --end 2026-02-28 --nights 4
 ./bin/travel compare true-cost --region kansai --pax 2 --date 2026-02-24
@@ -50,8 +50,8 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ## Turso DB
 ```bash
 ./bin/travel import-offers --dir scrapes --dest tokyo_2026 [--start 2026-02-13 --end 2026-02-17] [--dry-run]
-./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000] [--json]
-./bin/travel query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000] [--json]
+./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
+./bin/travel query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000]
 ./bin/travel check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
 ./bin/travel check-freshness --source besttour --region kansai
 # (the old `db:import:turso` raw-offers loader is retired — the chromeport CDP path now
@@ -90,8 +90,8 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM    # (alias: set-session-time-range)
 ./bin/travel set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
 ./bin/travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
-./bin/travel set-route-segments-bulk <day> --json '[{"from":"A","to":"B","mode":"walking","duration":5},...]'
-./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]'] [--plan-id <id>]    # (alias: set-session-zh)
+./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...]    # plain-text; repeat --seg per segment
+./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activity-zh "<zh>" (repeatable)] [--plan-id <id>]    # (alias: set-session-zh)
 ./bin/travel set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]    # (alias: set-session-focus)
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
 ./bin/travel swap-days <dayA> <dayB> [--dest slug]
@@ -115,7 +115,7 @@ Explore departure date × destination × flight price together before any plan e
 #   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
 #   → ./bin/chromeport parse capture <capture-id> --source <id>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
-./bin/travel shaping-compare --run <run_id> [--json] [--limit N]
+./bin/travel shaping-compare --run <run_id> [--limit N]
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>   # seed new plan with P1/P2
 ./bin/travel shaping-adopt <candidate_id> <plan_id>   # link to an existing plan only
 # Internal (aggregator handoff — usually not run by hand):

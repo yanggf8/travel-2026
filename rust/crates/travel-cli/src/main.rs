@@ -270,7 +270,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-route-segments-bulk" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-route-segments-bulk <day> --json '[{{...}}]' [--dest <slug>]");
+                println!("Usage:\n  travel set-route-segments-bulk <day> --seg \"from|to|mode[|duration[|start_time[|notes]]]\" [--seg ...] [--dest <slug>]");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -297,7 +297,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-tod-zh" || cmd == "set-session-zh" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-tod-zh <day> <session> [--zh \"...\"] [--transit-zh \"...\"] [--activities-zh-json '[\"...\"]'] [--meals-zh-json '[\"...\"]'] [--dest <slug>]");
+                println!("Usage:\n  travel set-tod-zh <day> <session> [--zh \"...\"] [--transit-zh \"...\"] [--activity-zh \"...\" (repeatable)] [--dest <slug>]");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;

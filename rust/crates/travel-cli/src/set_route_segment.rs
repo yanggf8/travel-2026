@@ -107,9 +107,11 @@ pub async fn run_bulk(
     args: &[String],
     plan_id: String,
 ) -> Result<(), String> {
-    // set-route-segments-bulk <day> --json '[{...}, ...]' [--dest slug]
+    // set-route-segments-bulk <day> --seg "from|to|mode[|dur[|start[|notes]]]" ... [--dest slug]
+    // Plain-text, agent-first: repeat --seg once per segment (pipe-delimited,
+    // like set-airport-transfer's --selected). No JSON.
     if args.is_empty() {
-        eprintln!("Error: set-route-segments-bulk requires <day> --json '[...]'");
+        eprintln!("Error: set-route-segments-bulk requires <day> --seg \"from|to|mode\" [--seg ...]");
         std::process::exit(1);
     }
     let day_str = &args[0];
@@ -120,24 +122,19 @@ pub async fn run_bulk(
             std::process::exit(1);
         }
     };
-    let json_opt = match parse_optional_string_flag(&args[1..], "--json")? {
-        Some(j) => j,
-        None => {
-            eprintln!("Error: --json is required with a JSON array of route segments");
-            std::process::exit(1);
-        }
-    };
-    let segments: Vec<SegmentInput> = match parse_bulk_json(&json_opt) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Error: Invalid --json: {e}");
-            std::process::exit(1);
-        }
-    };
-    for (i, s) in segments.iter().enumerate() {
-        if s.mode != "transit" && s.mode != "walking" && s.mode != "driving" {
-            eprintln!("Error: Invalid mode in segment {i}: {}", s.mode);
-            std::process::exit(1);
+    let specs = collect_repeated_flag(&args[1..], "--seg");
+    if specs.is_empty() {
+        eprintln!("Error: at least one --seg \"from|to|mode[|duration[|start_time[|notes]]]\" is required");
+        std::process::exit(1);
+    }
+    let mut segments: Vec<SegmentInput> = Vec::with_capacity(specs.len());
+    for (i, spec) in specs.iter().enumerate() {
+        match parse_seg_spec(spec) {
+            Ok(s) => segments.push(s),
+            Err(e) => {
+                eprintln!("Error: --seg #{i} invalid ({spec:?}): {e}");
+                std::process::exit(1);
+            }
         }
     }
     let destination = match read_destination(&conn_write().await?, &plan_id, &args[1..]).await {
@@ -218,189 +215,64 @@ fn parse_optional_string_flag(
     Ok(None)
 }
 
-/// Hand-rolled minimal JSON parser for the bulk-segments format:
-///   `[{"from":"A","to":"B","mode":"walking","duration":5,"notes":"...","start_time":"HH:MM"}, ...]`
-/// Avoids adding a serde dep. Recognized keys: from, to, mode,
-/// duration, notes, start_time.
-fn parse_bulk_json(s: &str) -> Result<Vec<SegmentInput>, String> {
-    let s = s.trim();
-    if !s.starts_with('[') || !s.ends_with(']') {
-        return Err("expected JSON array".to_string());
-    }
-    let inner = &s[1..s.len() - 1];
-    if inner.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    // Split top-level objects (depth-0 commas). We don't need to
-    // handle nested arrays/objects beyond tracking `{` / `}` depth
-    // (none expected here, but defensive).
-    let objects = split_top_level_objects(inner)?;
-    let mut out: Vec<SegmentInput> = Vec::new();
-    for obj_str in objects {
-        let mut seg = SegmentInput {
-            from: String::new(),
-            to: String::new(),
-            mode: String::new(),
-            duration: None,
-            notes: None,
-            start_time: None,
-        };
-        let kv = parse_object_kv(obj_str.trim())?;
-        for (k, v) in kv {
-            match k.as_str() {
-                "from" => seg.from = v,
-                "to" => seg.to = v,
-                "mode" => seg.mode = v,
-                "duration" => {
-                    seg.duration = Some(
-                        v.parse::<i64>()
-                            .map_err(|_| format!("duration must be a number: {v}"))?,
-                    );
-                }
-                "notes" => seg.notes = Some(v),
-                "start_time" => seg.start_time = Some(v),
-                _ => {} // ignore unknown keys
-            }
-        }
-        if seg.from.is_empty() || seg.to.is_empty() || seg.mode.is_empty() {
-            return Err("each segment needs from, to, mode".to_string());
-        }
-        out.push(seg);
-    }
-    Ok(out)
-}
-
-fn split_top_level_objects(s: &str) -> Result<Vec<String>, String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut depth = 0i32;
-    let mut in_str = false;
-    let mut esc = false;
-    let mut start = 0usize;
-    let bytes = s.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        if in_str {
-            if esc {
-                esc = false;
-            } else if b == b'\\' {
-                esc = true;
-            } else if b == b'"' {
-                in_str = false;
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'{' => {
-                if depth == 0 {
-                    start = i;
-                }
-                depth += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    out.push(s[start..=i].to_string());
-                } else if depth < 0 {
-                    return Err("unbalanced braces".to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    if depth != 0 {
-        return Err("unbalanced braces".to_string());
-    }
-    Ok(out)
-}
-
-fn parse_object_kv(s: &str) -> Result<Vec<(String, String)>, String> {
-    let s = s.trim();
-    if !s.starts_with('{') || !s.ends_with('}') {
-        return Err("expected JSON object".to_string());
-    }
-    let inner = &s[1..s.len() - 1];
-    let mut out: Vec<(String, String)> = Vec::new();
-    let bytes = inner.as_bytes();
+/// Collect every value of a repeatable flag: `--seg X --seg Y` → ["X", "Y"].
+/// (Other flags like `--dest <v>` are skipped along with their value.)
+fn collect_repeated_flag(args: &[String], flag: &str) -> Vec<String> {
+    let mut out = Vec::new();
     let mut i = 0;
-    while i < inner.len() {
-        // Skip whitespace + comma
-        while i < inner.len() && (bytes[i] as char).is_whitespace() || bytes[i] == b',' {
-            i += 1;
-        }
-        if i >= inner.len() {
-            break;
-        }
-        // Parse key
-        if bytes[i] != b'"' {
-            return Err("expected string key".to_string());
-        }
-        i += 1;
-        let key_start = i;
-        let mut in_str = true;
-        while i < inner.len() && in_str {
-            if bytes[i] == b'\\' && i + 1 < inner.len() {
-                i += 2;
-                continue;
+    while i < args.len() {
+        if args[i] == flag {
+            if let Some(v) = args.get(i + 1) {
+                out.push(v.clone());
             }
-            if bytes[i] == b'"' {
-                in_str = false;
-            } else {
-                i += 1;
-            }
-        }
-        if in_str {
-            return Err("unterminated string".to_string());
-        }
-        let key = inner[key_start..i].to_string();
-        i += 1; // consume closing quote
-        // Skip ws + colon
-        while i < inner.len() && (bytes[i] as char).is_whitespace() {
-            i += 1;
-        }
-        if i >= inner.len() || bytes[i] != b':' {
-            return Err("expected ':'".to_string());
-        }
-        i += 1;
-        while i < inner.len() && (bytes[i] as char).is_whitespace() {
-            i += 1;
-        }
-        // Parse value (string or number)
-        if i >= inner.len() {
-            return Err("expected value".to_string());
-        }
-        if bytes[i] == b'"' {
-            i += 1;
-            let val_start = i;
-            while i < inner.len() {
-                if bytes[i] == b'\\' && i + 1 < inner.len() {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    break;
-                }
-                i += 1;
-            }
-            let val = inner[val_start..i].to_string();
-            i += 1; // closing quote
-            out.push((key, val));
-        } else if bytes[i] == b'-' || (bytes[i] as char).is_ascii_digit() {
-            let val_start = i;
-            while i < inner.len() {
-                let c = bytes[i] as char;
-                if c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' {
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            let val = inner[val_start..i].to_string();
-            out.push((key, val));
+            i += 2;
+        } else if args[i].starts_with("--") {
+            // skip an unrelated flag and its value (best-effort)
+            i += 2;
         } else {
-            return Err(format!("unexpected value at {i}"));
+            i += 1;
         }
     }
-    Ok(out)
+    out
+}
+
+/// Parse one plain-text segment spec:
+///   `from|to|mode[|duration[|start_time[|notes]]]`
+/// Pipe-delimited (same convention as set-airport-transfer's --selected).
+/// mode ∈ transit|walking|driving. Trailing fields are optional; an empty
+/// field means "omitted" (e.g. `a|b|walking||` → no duration, no start_time).
+fn parse_seg_spec(spec: &str) -> Result<SegmentInput, String> {
+    let parts: Vec<&str> = spec.split('|').collect();
+    if parts.len() < 3 {
+        return Err("expected at least from|to|mode".to_string());
+    }
+    let from = parts[0].trim().to_string();
+    let to = parts[1].trim().to_string();
+    let mode = parts[2].trim().to_string();
+    if from.is_empty() || to.is_empty() {
+        return Err("from and to must be non-empty".to_string());
+    }
+    if mode != "transit" && mode != "walking" && mode != "driving" {
+        return Err(format!("mode must be transit|walking|driving (got {mode:?})"));
+    }
+    let field = |idx: usize| -> Option<String> {
+        parts.get(idx).map(|s| s.trim()).filter(|s| !s.is_empty()).map(str::to_string)
+    };
+    let duration = match field(3) {
+        Some(d) => Some(
+            d.parse::<i64>()
+                .map_err(|_| format!("duration must be a number (got {d:?})"))?,
+        ),
+        None => None,
+    };
+    Ok(SegmentInput {
+        from,
+        to,
+        mode,
+        duration,
+        start_time: field(4),
+        notes: field(5),
+    })
 }
 
 async fn read_destination(
@@ -1008,15 +880,47 @@ mod tests {
     }
 
     #[test]
-    fn parse_bulk_json_basic() {
-        let s = r#"[{"from":"a","to":"b","mode":"walking"},{"from":"c","to":"d","mode":"transit","duration":12,"notes":"JR"}]"#;
-        let segs = parse_bulk_json(s).unwrap();
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0].from, "a");
-        assert_eq!(segs[0].to, "b");
-        assert_eq!(segs[0].mode, "walking");
-        assert!(segs[0].duration.is_none());
-        assert_eq!(segs[1].duration, Some(12));
-        assert_eq!(segs[1].notes.as_deref(), Some("JR"));
+    fn parse_seg_spec_minimal() {
+        // Plain-text, agent-first: "from|to|mode" — pipe-delimited, like
+        // set-airport-transfer's --selected. No JSON.
+        let s = parse_seg_spec("a|b|walking").unwrap();
+        assert_eq!(s.from, "a");
+        assert_eq!(s.to, "b");
+        assert_eq!(s.mode, "walking");
+        assert!(s.duration.is_none());
+        assert!(s.notes.is_none());
+        assert!(s.start_time.is_none());
+    }
+
+    #[test]
+    fn parse_seg_spec_full() {
+        // from|to|mode|duration|start_time|notes — trailing fields optional;
+        // empty field = omitted.
+        let s = parse_seg_spec("c|d|transit|12|09:30|JR").unwrap();
+        assert_eq!(s.from, "c");
+        assert_eq!(s.to, "d");
+        assert_eq!(s.mode, "transit");
+        assert_eq!(s.duration, Some(12));
+        assert_eq!(s.start_time.as_deref(), Some("09:30"));
+        assert_eq!(s.notes.as_deref(), Some("JR"));
+    }
+
+    #[test]
+    fn parse_seg_spec_empty_optional_fields() {
+        // "c|d|transit||" → duration & start_time omitted (empty), no notes.
+        let s = parse_seg_spec("c|d|transit||").unwrap();
+        assert_eq!(s.duration, None);
+        assert_eq!(s.start_time, None);
+        assert_eq!(s.notes, None);
+    }
+
+    #[test]
+    fn parse_seg_spec_rejects_bad_mode() {
+        assert!(parse_seg_spec("a|b|teleport").is_err());
+    }
+
+    #[test]
+    fn parse_seg_spec_rejects_missing_fields() {
+        assert!(parse_seg_spec("a|b").is_err());
     }
 }

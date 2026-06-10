@@ -258,7 +258,7 @@ All ZH content lives in DB columns — never hardcoded in Worker. After scaffold
 ./bin/travel set-tod-zh <day> <morning|noon|afternoon|evening> \
   --zh "中文焦點標題" \
   --transit-zh "中文交通說明" \
-  --activities-zh-json '["活動一","活動二 https://maps.link"]' \
+  --activity-zh "活動一" --activity-zh "活動二 https://maps.link" \
   [--plan-id kyoto-2026]
 
 # Day theme

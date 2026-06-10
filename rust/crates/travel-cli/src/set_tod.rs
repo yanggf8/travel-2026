@@ -36,7 +36,6 @@ struct ParsedZh {
     focus_zh: Option<String>,
     transit_zh: Option<String>,
     activities_zh: Option<Vec<String>>,
-    meals_zh: Option<Vec<String>>,
     dest: Option<String>,
 }
 
@@ -234,9 +233,6 @@ pub async fn run_zh(
     if let Some(a) = &parsed.activities_zh {
         println!("   activities_zh: {} items", a.len());
     }
-    if let Some(m) = &parsed.meals_zh {
-        println!("   meals_zh: {} items", m.len());
-    }
 
     // Apply scalar updates to timesofday.
     if let Some(z) = &parsed.focus_zh {
@@ -295,20 +291,19 @@ pub async fn run_zh(
             .map_err(|e| format!("session_activities_zh INSERT failed: {e}"))?;
         }
     }
-    // meals_zh: do NOT touch session_meals. The TS path's
-    // sync_normalized_tables only writes session_meals from the
-    // in-memory `meals` (EN) field, not from `meals_zh`. Since
-    // set-tod-zh only sets meals_zh (the Chinese variant), the EN
-    // meals row in session_meals is preserved.
-    let _ = &parsed.meals_zh; // explicitly unused
+    // No ZH meals: session_meals (the EN/display `meal` column) is the single
+    // meal source rendered for both languages — the ZH-meal path was dropped in
+    // the de-JSON program (no session_meals_zh table). set-tod-zh never touches
+    // session_meals; the EN meal row is preserved.
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
 
     // Event data: {day_number, session, focus_zh, transit_notes_zh,
-    // activities_zh, meals_zh} — all 6 keys present. The TS event `data`
-    // object carries the raw command fields, which are JS `undefined` when
-    // the user omits the flag; eventDataToKv does String(undefined) →
-    // "undefined" (verified against TS: omitted zh fields all serialize as
-    // the literal "undefined", NOT "null").
+    // activities_zh, meals_zh} — all 6 keys present for audit-schema parity.
+    // The TS event `data` object carried the raw command fields, JS `undefined`
+    // when omitted; eventDataToKv does String(undefined) → "undefined" (omitted
+    // zh fields all serialize as the literal "undefined", NOT "null"). meals_zh
+    // is now always "undefined" (the ZH-meal flag was removed) but the key is
+    // retained so the event shape is unchanged.
     let kv: Vec<(&str, String)> = vec![
         ("day_number", parsed.day.to_string()),
         ("session", parsed.session.clone()),
@@ -328,14 +323,8 @@ pub async fn run_zh(
                 .map(|a| a.join(", "))
                 .unwrap_or_else(|| "undefined".to_string()),
         ),
-        (
-            "meals_zh",
-            parsed
-                .meals_zh
-                .as_ref()
-                .map(|m| m.join(", "))
-                .unwrap_or_else(|| "undefined".to_string()),
-        ),
+        // meals_zh flag removed; key retained as "undefined" for event parity.
+        ("meals_zh", "undefined".to_string()),
     ];
 
     execute_tod(
@@ -504,22 +493,16 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
                 );
                 i += 2;
             }
-            "--activities-zh-json" => {
+            // Plain-text, agent-first: repeat the flag once per item instead of
+            // passing a JSON array. `--activity-zh "A" --activity-zh "B"` →
+            // ["A", "B"]. First occurrence starts the list (so it overwrites
+            // any prior value, matching the old set-then-replace semantics).
+            "--activity-zh" => {
                 let v = args
                     .get(i + 1)
-                    .ok_or_else(|| "missing value for --activities-zh-json".to_string())?;
-                let arr = parse_string_array(v)
-                    .map_err(|e| format!("--activities-zh-json: {e}"))?;
-                p.activities_zh = Some(arr);
-                i += 2;
-            }
-            "--meals-zh-json" => {
-                let v = args
-                    .get(i + 1)
-                    .ok_or_else(|| "missing value for --meals-zh-json".to_string())?;
-                let arr = parse_string_array(v)
-                    .map_err(|e| format!("--meals-zh-json: {e}"))?;
-                p.meals_zh = Some(arr);
+                    .ok_or_else(|| "missing value for --activity-zh".to_string())?
+                    .clone();
+                p.activities_zh.get_or_insert_with(Vec::new).push(v);
                 i += 2;
             }
             "--plan-id" => {
@@ -549,52 +532,6 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
         return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
     }
     Ok(p)
-}
-
-fn parse_string_array(s: &str) -> Result<Vec<String>, String> {
-    let s = s.trim();
-    if !s.starts_with('[') || !s.ends_with(']') {
-        return Err("expected JSON array".to_string());
-    }
-    let inner = &s[1..s.len() - 1];
-    if inner.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    // Split top-level strings. Same depth-tracker as the bulk
-    // segments parser.
-    let bytes = inner.as_bytes();
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < inner.len() {
-        while i < inner.len() && (bytes[i] as char).is_whitespace() {
-            i += 1;
-        }
-        if i >= inner.len() {
-            break;
-        }
-        if bytes[i] != b'"' {
-            return Err("expected string".to_string());
-        }
-        i += 1;
-        let val_start = i;
-        while i < inner.len() {
-            if bytes[i] == b'\\' && i + 1 < inner.len() {
-                i += 2;
-                continue;
-            }
-            if bytes[i] == b'"' {
-                break;
-            }
-            i += 1;
-        }
-        let v = inner[val_start..i].to_string();
-        i += 1;
-        out.push(v);
-        while i < inner.len() && ((bytes[i] as char).is_whitespace() || bytes[i] == b',') {
-            i += 1;
-        }
-    }
-    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1085,13 +1022,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_string_array_basic() {
-        let s = r#"["a","b","c"]"#;
-        assert_eq!(parse_string_array(s).unwrap(), vec!["a", "b", "c"]);
+    fn parse_zh_repeatable_activity_flags() {
+        // Plain-text, agent-first: --activity-zh repeats instead of a JSON array.
+        let p = parse_zh(&[
+            "1".to_string(),
+            "morning".to_string(),
+            "--activity-zh".to_string(),
+            "晴空塔".to_string(),
+            "--activity-zh".to_string(),
+            "淺草寺".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            p.activities_zh.as_deref(),
+            Some(["晴空塔".to_string(), "淺草寺".to_string()].as_slice())
+        );
     }
 
     #[test]
-    fn parse_string_array_empty() {
-        assert!(parse_string_array("[]").unwrap().is_empty());
+    fn parse_zh_rejects_legacy_json_flags() {
+        // Both JSON-array flags are gone; they must be reported as unknown,
+        // not parsed. (meals_zh had no live ZH-meal storage — session_meals
+        // is the single meal source rendered for both languages — so the
+        // meal ZH flag was dropped entirely rather than left half-working.)
+        for flag in ["--activities-zh-json", "--meals-zh-json", "--meal-zh"] {
+            let err = parse_zh(&[
+                "1".to_string(),
+                "morning".to_string(),
+                flag.to_string(),
+                r#"["a","b"]"#.to_string(),
+            ])
+            .unwrap_err();
+            assert!(err.contains("unknown argument"), "flag {flag} got: {err}");
+        }
     }
 }
