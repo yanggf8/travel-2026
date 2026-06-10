@@ -41,8 +41,6 @@ import type { StateRepository, FlightLegInput, HotelInput } from './repository';
 import { PlanRepository } from './plan-repository';
 import { TursoRepository } from './turso-repository';
 import type { Command, DispatchResult } from './commands';
-import type { DbClient } from './db-client';
-import { arg } from './db-client';
 
 // Default paths
 const DEFAULT_PLAN_PATH = process.env.TRAVEL_PLAN_PATH || PATHS.defaultPlan;
@@ -67,8 +65,6 @@ export interface StateManagerOptions {
   skipSave?: boolean;
   /** Pre-built repository (skips internal construction) */
   repo?: StateRepository;
-  /** Pre-built fine-grained DB client (StateManagerV2 / ADR-001; tests may inject). */
-  dbClient?: DbClient;
 }
 
 export class StateManager {
@@ -87,10 +83,6 @@ export class StateManager {
   private timestamp: string;
   private skipSave: boolean;
 
-  // StateManagerV2 (ADR-001): fine-grained DB client. Lazily constructed on
-  // first use so the legacy in-memory/test paths pay no cost. Tests may inject.
-  private _dbClient?: DbClient;
-
   constructor(options?: StateManagerOptions | string, statePath?: string) {
     if (typeof options === 'string' || options === undefined) {
       // Legacy string-based constructor — DB is sole source of truth, use StateManager.create() instead
@@ -102,7 +94,6 @@ export class StateManager {
     this.planId = StateManager.derivePlanId(this.planPath);
     this.skipSave = options.skipSave || false;
     this.timestamp = this.freshTimestamp();
-    this._dbClient = options.dbClient;
 
     if (options.repo) {
       // Pre-built repository (from factory methods)
@@ -267,64 +258,6 @@ export class StateManager {
   /** Get the underlying repository (for advanced callers). */
   getRepository(): StateRepository {
     return this.repo;
-  }
-
-  // ============================================================================
-  // StateManagerV2 — fine-grained DB operations (ADR-001)
-  // ============================================================================
-
-  /**
-   * Lazily-constructed fine-grained DB client. The V2 path uses this instead of
-   * the in-memory PlanRepository: each method does a targeted SELECT to validate
-   * then a parameterized UPDATE/INSERT writing exactly what changed.
-   */
-  private dbClient(): DbClient {
-    if (!this._dbClient) {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { TursoDbClient } = require('./turso-db-client');
-      this._dbClient = new TursoDbClient() as DbClient;
-    }
-    return this._dbClient;
-  }
-
-  /**
-   * Vertical-slice proof of the ADR-001 pattern: set a day's theme via a
-   * targeted SELECT-validate + targeted UPDATE, no in-memory plan, no flush.
-   *
-   * The legacy synchronous `setDayTheme()` / `dispatch({type:'set_day_theme'})`
-   * path is unchanged; this is the additive V2 path used to validate the
-   * migration approach before converting the remaining commands.
-   *
-   * @returns the number of `days` rows updated (1 on success).
-   */
-  async setDayThemeV2(
-    destination: string,
-    dayNumber: number,
-    theme: string | null,
-    themeZh?: string | null
-  ): Promise<number> {
-    const db = this.dbClient();
-
-    // validate: the day must exist for this plan + destination
-    const exists = await db.queryOne<{ one: number }>(
-      'SELECT 1 AS one FROM days WHERE plan_id = ? AND destination = ? AND day_number = ?',
-      [arg.text(this.planId), arg.text(destination), arg.int(dayNumber)]
-    );
-    if (!exists) {
-      throw new Error(`Day D${dayNumber} not found in ${destination} (plan ${this.planId})`);
-    }
-
-    // write exactly what changed. themeZh is optional: only touch it when provided.
-    const sql = themeZh === undefined
-      ? 'UPDATE days SET theme = ?, updated_at = CURRENT_TIMESTAMP WHERE plan_id = ? AND destination = ? AND day_number = ?'
-      : 'UPDATE days SET theme = ?, theme_zh = ?, updated_at = CURRENT_TIMESTAMP WHERE plan_id = ? AND destination = ? AND day_number = ?';
-
-    const args = themeZh === undefined
-      ? [arg.text(theme), arg.text(this.planId), arg.text(destination), arg.int(dayNumber)]
-      : [arg.text(theme), arg.text(themeZh), arg.text(this.planId), arg.text(destination), arg.int(dayNumber)];
-
-    const { affected } = await db.execute(sql, args);
-    return affected;
   }
 
   // ============================================================================
