@@ -64,6 +64,8 @@ pub struct Plan {
 }
 
 /// Assemble a Plan from the pipeline result vectors (query order defined in the router/loader).
+/// Row slices MUST be pre-sorted by their sort_order in the SQL query — this
+/// function preserves input order and does not re-sort.
 pub fn assemble(
     plan_rows: &[Row], day_rows: &[Row], session_rows: &[Row],
     activity_rows: &[Row], meal_rows: &[Row], flight_rows: &[Row],
@@ -108,7 +110,8 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
     for sess in sessions.iter_mut() {
         for a in acts.iter().filter(|r| s(r, "session_type") == sess.session_type) {
             let title = s(a, "title");
-            let poi = poi_rows.iter().find(|p| s(p, "title") == title);
+            let nt = norm_title(&title);
+            let poi = poi_rows.iter().find(|p| norm_title(&s(p, "title")) == nt);
             let lat = poi.and_then(|p| p.get("lat")).and_then(json_f64);
             let lon = poi.and_then(|p| p.get("lon")).and_then(json_f64);
             let maps_link = match (lat, lon) {
@@ -127,10 +130,12 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
 fn json_f64(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
+/// Normalize a title for tolerant POI matching (trim + lowercase).
+fn norm_title(t: &str) -> String { t.trim().to_lowercase() }
 fn urlencode(s: &str) -> String {
     s.bytes().map(|b| match b {
         b'A'..=b'Z'|b'a'..=b'z'|b'0'..=b'9'|b'-'|b'_'|b'.'|b'~' => (b as char).to_string(),
-        b' ' => "+".to_string(),
+        b' ' => "%20".to_string(),
         _ => format!("%{b:02X}"),
     }).collect()
 }
@@ -170,5 +175,26 @@ mod tests {
         let m = &sessions.iter().find(|s| s.session_type=="morning").unwrap().stops[0];
         assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.2156,127.6691");
         assert_eq!(m.address, "Naha");
+    }
+
+    #[test]
+    fn stop_without_poi_falls_back_to_search_link() {
+        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("Mystery Spot"))])];
+        let pois: Vec<Row> = vec![]; // no matching POI
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        assert!(m.maps_link.contains("/maps/search/"));
+        assert!(m.lat.is_none() && m.lon.is_none());
+    }
+
+    #[test]
+    fn poi_match_tolerates_whitespace_and_case() {
+        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("  Naminoue SHRINE "))])];
+        let pois = vec![row(&[("title", json!("Naminoue Shrine")), ("lat", json!("26.2")), ("lon", json!("127.6"))])];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.2,127.6");
     }
 }
