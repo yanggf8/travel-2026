@@ -14,13 +14,28 @@ pub enum AccessScope {
 /// `share_tokens` maps token -> plan_id (loaded from plan_share_tokens).
 pub fn resolve(token: Option<&str>, owner_token: &str, share_tokens: &HashMap<String, String>) -> AccessScope {
     match token {
-        Some(t) if !owner_token.is_empty() && t == owner_token => AccessScope::Owner,
+        Some(t) if !t.is_empty() && !owner_token.is_empty() && ct_eq(t, owner_token) => AccessScope::Owner,
         Some(t) => match share_tokens.get(t) {
             Some(plan) => AccessScope::Plan(plan.clone()),
             None => AccessScope::Denied,
         },
         None => AccessScope::Denied,
     }
+}
+
+/// Constant-time byte comparison for secret tokens. Returns false fast ONLY on
+/// length mismatch (length is not secret here); otherwise compares all bytes
+/// without short-circuiting, so timing does not leak how many leading bytes matched.
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut acc: u8 = 0;
+    for i in 0..a.len() {
+        acc |= a[i] ^ b[i];
+    }
+    acc == 0
 }
 
 /// Can this scope view the given plan slug?
@@ -67,5 +82,20 @@ mod tests {
     #[test]
     fn owner_views_any() {
         assert!(can_view_plan(&AccessScope::Owner, "anything"));
+    }
+    #[test]
+    fn ct_eq_matches_and_rejects() {
+        assert!(super::ct_eq("abc123", "abc123"));
+        assert!(!super::ct_eq("abc123", "abc124"));
+        assert!(!super::ct_eq("abc", "abcd"));       // length mismatch
+        assert!(!super::ct_eq("", "x"));
+    }
+    #[test]
+    fn empty_token_never_owner_even_with_empty_owner_secret() {
+        let m = std::collections::HashMap::new();
+        // empty owner secret + empty token must NOT be Owner
+        assert_eq!(resolve(Some(""), "", &m), AccessScope::Denied);
+        // empty token must never be Owner regardless
+        assert_eq!(resolve(Some(""), "OWNER", &m), AccessScope::Denied);
     }
 }
