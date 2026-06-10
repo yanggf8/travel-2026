@@ -1,7 +1,9 @@
 // `travel set-hotel ...` — port of src/cli/commands/set-hotel.ts. NO CASCADE.
 //
 // Mirrors the TS path:
-//   1. UPDATE hotels.name / check_in / notes (only fields passed)
+//   1. UPSERT hotels.name / check_in / notes (only fields passed) — upsert
+//      (not plain UPDATE) so a booking-first plan with no offer-cascade
+//      skeleton row still persists.
 //   2. DELETE-then-reinsert hotel_access_lines (the access list is
 //      pipe-delimited from --access; each non-empty segment becomes a
 //      sort_order=N row)
@@ -111,6 +113,13 @@ fn parse_args(args: &[String]) -> Result<HotelInput, String> {
                 input.notes = Some(arg_value(args, i, "--note")?);
                 i += 2;
             }
+            // `--dest <slug>` is advertised in the Example and consumed
+            // separately by read_destination(); accept-and-skip it here so
+            // the catch-all below doesn't reject the documented invocation.
+            "--dest" => {
+                let _ = arg_value(args, i, "--dest")?;
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -178,59 +187,16 @@ async fn execute(
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
-    // 1. UPDATE hotels — only fields the user provided (TS does this by
-    //    setting fields in the in-memory object and then INSERT OR
-    //    REPLACE writing only the present fields; SQL has no equivalent
-    //    for absent fields, but the column values are preserved because
-    //    we don't touch them).
-    //
-    //    For SQLite the cleanest mirror is: UPDATE only the columns
-    //    whose input was provided. If no field was provided, the row
-    //    is left untouched — but the user can never reach this path
-    //    (the caller rejects when no field is provided). If only
-    //    --access is provided, the hotels row is unchanged and only
-    //    hotel_access_lines is rewritten.
-    if input.name.is_some()
-        || input.check_in.is_some()
-        || input.notes.is_some()
-    {
-        let mut sets: Vec<String> = Vec::new();
-        let mut vals: Vec<String> = Vec::new();
-        let mut p: i32 = 1;
-        if let Some(n) = &input.name {
-            sets.push(format!("name = ?{p}"));
-            vals.push(n.clone());
-            p += 1;
-        }
-        if let Some(c) = &input.check_in {
-            sets.push(format!("check_in = ?{p}"));
-            vals.push(c.clone());
-            p += 1;
-        }
-        if let Some(no) = &input.notes {
-            sets.push(format!("notes = ?{p}"));
-            vals.push(no.clone());
-            p += 1;
-        }
-        sets.push(format!("updated_at = ?{p}"));
-        vals.push(now_db.clone());
-        p += 1;
-        let sql = format!(
-            "UPDATE hotels SET {} WHERE plan_id = ?{} AND destination = ?{}",
-            sets.join(", "),
-            p,
-            p + 1
-        );
-        vals.push(plan_id.to_string());
-        vals.push(destination.to_string());
-        let params: Vec<libsql::Value> = vals
-            .iter()
-            .map(|v| libsql::Value::Text(v.clone()))
-            .collect();
-        conn.execute(&sql, params)
-            .await
-            .map_err(|e| format!("hotels UPDATE failed: {e}"))?;
-    }
+    // 1. UPSERT hotels — write only the columns the user provided, keyed on
+    //    the (plan_id, destination) PK. A plain UPDATE silently no-ops when
+    //    the hotels row doesn't exist yet, which is exactly the booking-first
+    //    case: a hand-scaffolded plan that never adopted an offer (the offer
+    //    cascade is what normally seeds the skeleton hotels row). We INSERT
+    //    the row and, on conflict, apply the provided columns — so set-hotel
+    //    persists whether or not a skeleton row pre-exists. We always run the
+    //    upsert (even for an --access-only call) so the hotels row exists and
+    //    the access lines below are never orphaned.
+    upsert_hotel(conn, plan_id, destination, input, &now_db).await?;
 
     // 2. hotel_access_lines — DELETE-then-reinsert (mirrors sync).
     if !input.access.is_empty() {
@@ -369,6 +335,71 @@ async fn execute(
     .map_err(|e| format!("plans UPDATE failed: {e}"))?;
 
     Ok(version_after)
+}
+
+/// Upsert the hotels row keyed on (plan_id, destination). Writes only the
+/// scalar columns the user provided; on conflict re-applies them. When the
+/// user passed only `--access` (no scalar fields), this still ensures the
+/// hotels row exists (INSERT a bare row; on conflict just bump updated_at) so
+/// the access lines are never orphaned.
+async fn upsert_hotel(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    input: &HotelInput,
+    now_db: &str,
+) -> Result<(), String> {
+    // (column, value) pairs the user provided, plus updated_at.
+    let mut cols: Vec<&str> = Vec::new();
+    let mut vals: Vec<String> = Vec::new();
+    if let Some(n) = &input.name {
+        cols.push("name");
+        vals.push(n.clone());
+    }
+    if let Some(c) = &input.check_in {
+        cols.push("check_in");
+        vals.push(c.clone());
+    }
+    if let Some(no) = &input.notes {
+        cols.push("notes");
+        vals.push(no.clone());
+    }
+    cols.push("updated_at");
+    vals.push(now_db.to_string());
+
+    // INSERT columns = PK (plan_id, destination) + provided columns.
+    let mut insert_cols: Vec<String> = vec!["plan_id".into(), "destination".into()];
+    insert_cols.extend(cols.iter().map(|c| c.to_string()));
+
+    let mut params: Vec<libsql::Value> = vec![
+        libsql::Value::Text(plan_id.to_string()),
+        libsql::Value::Text(destination.to_string()),
+    ];
+    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
+
+    let insert_ph: Vec<String> = (1..=insert_cols.len()).map(|n| format!("?{n}")).collect();
+
+    // DO UPDATE SET re-applies the provided columns with a fresh copy of the
+    // values, numbered after the INSERT params.
+    let base = params.len();
+    let update_sets: Vec<String> = cols
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| format!("{c} = ?{}", base + 1 + idx))
+        .collect();
+    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
+
+    let sql = format!(
+        "INSERT INTO hotels ({}) VALUES ({}) \
+         ON CONFLICT(plan_id, destination) DO UPDATE SET {}",
+        insert_cols.join(", "),
+        insert_ph.join(", "),
+        update_sets.join(", "),
+    );
+    conn.execute(&sql, params)
+        .await
+        .map_err(|e| format!("hotels upsert failed: {e}"))?;
+    Ok(())
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {

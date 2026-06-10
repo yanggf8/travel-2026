@@ -2,8 +2,11 @@
 // src/cli/commands/set-flight.ts. NO CASCADE.
 //
 // Mirrors the TS path:
-//   1. UPDATE flight_legs for the given <direction>: sets leg-level
+//   1. UPSERT flight_legs for the given <direction>: sets leg-level
 //      fields (flight_number, departure_*, arrival_*, flight_date).
+//      Upsert (not plain UPDATE) so a booking-first plan with no
+//      offer-cascade skeleton row still persists — a plain UPDATE
+//      silently no-ops on a missing leg row.
 //      If the user provided airline / airlineCode / booked_date,
 //      those are SHARED flight-level fields — apply to BOTH legs
 //      (outbound + return) because the TS in-memory shape
@@ -169,6 +172,13 @@ fn parse_args(args: &[String]) -> Result<FlightInput, String> {
             }
             "--booked-date" => {
                 input.booked_date = Some(take(args, i, "--booked-date")?);
+                i += 2;
+            }
+            // `--dest <slug>` is advertised in the Example and consumed
+            // separately by read_destination(); accept-and-skip it here so
+            // the catch-all below doesn't reject the documented invocation.
+            "--dest" => {
+                let _ = take(args, i, "--dest")?;
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -441,26 +451,10 @@ async fn update_flight_leg(
     }
     sets.push(format!("updated_at = ?{p}"));
     vals.push(now_db.to_string());
-    p += 1;
-    let sql = format!(
-        "UPDATE flight_legs SET {} \
-         WHERE plan_id = ?{} AND destination = ?{} AND direction = ?{} AND leg_order = 0",
-        sets.join(", "),
-        p,
-        p + 1,
-        p + 2
-    );
-    vals.push(plan_id.to_string());
-    vals.push(destination.to_string());
-    vals.push(direction.to_string());
-    let params: Vec<libsql::Value> = vals
-        .iter()
-        .map(|v| libsql::Value::Text(v.clone()))
-        .collect();
-    conn.execute(&sql, params)
+
+    upsert_flight_leg(conn, plan_id, destination, direction, &sets, &vals)
         .await
-        .map_err(|e| format!("flight_legs UPDATE ({direction}) failed: {e}"))?;
-    Ok(())
+        .map_err(|e| format!("flight_legs upsert ({direction}) failed: {e}"))
 }
 
 async fn update_flight_shared(
@@ -491,25 +485,80 @@ async fn update_flight_shared(
     }
     sets.push(format!("updated_at = ?{p}"));
     vals.push(now_db.to_string());
-    p += 1;
-    let sql = format!(
-        "UPDATE flight_legs SET {} \
-         WHERE plan_id = ?{} AND destination = ?{} AND direction = ?{} AND leg_order = 0",
-        sets.join(", "),
-        p,
-        p + 1,
-        p + 2
-    );
-    vals.push(plan_id.to_string());
-    vals.push(destination.to_string());
-    vals.push(direction.to_string());
-    let params: Vec<libsql::Value> = vals
+
+    upsert_flight_leg(conn, plan_id, destination, direction, &sets, &vals)
+        .await
+        .map_err(|e| format!("flight_legs shared upsert ({direction}) failed: {e}"))
+}
+
+/// Upsert a single flight leg by its PK (plan_id, destination, direction,
+/// leg_order=0). `sets`/`vals` are the `col = ?N` assignment fragments and
+/// matching values (1-based, in order) produced by the caller, with the
+/// trailing `updated_at = ?` already appended.
+///
+/// A plain UPDATE silently no-ops when the leg row doesn't exist yet — which
+/// is exactly the case for a booking-first plan that never adopted an offer
+/// (the offer cascade is what normally seeds the skeleton legs). We instead
+/// INSERT the row keyed on its PK and, on conflict, apply the same assignments
+/// — so the command persists whether or not a skeleton row pre-exists.
+async fn upsert_flight_leg(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    direction: &str,
+    sets: &[String],
+    vals: &[String],
+) -> Result<(), String> {
+    // Column names the caller wants to write, parsed from the `col = ?N`
+    // fragments (the `?N` numbering in `sets` is the caller's UPDATE numbering;
+    // we re-number below, so only the column names matter here).
+    let cols: Vec<&str> = sets
         .iter()
-        .map(|v| libsql::Value::Text(v.clone()))
+        .filter_map(|s| s.split(" = ").next())
         .collect();
+
+    // INSERT row = PK columns (plan_id, destination, direction, leg_order=0)
+    // followed by every provided column. ON CONFLICT re-applies the provided
+    // columns with a second copy of the same values, numbered after the
+    // INSERT params.
+    let mut insert_cols: Vec<String> = vec![
+        "plan_id".into(),
+        "destination".into(),
+        "direction".into(),
+        "leg_order".into(),
+    ];
+    insert_cols.extend(cols.iter().map(|c| c.to_string()));
+
+    let mut params: Vec<libsql::Value> = vec![
+        libsql::Value::Text(plan_id.to_string()),
+        libsql::Value::Text(destination.to_string()),
+        libsql::Value::Text(direction.to_string()),
+        libsql::Value::Integer(0),
+    ];
+    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
+
+    let insert_ph: Vec<String> = (1..=insert_cols.len()).map(|n| format!("?{n}")).collect();
+
+    // DO UPDATE SET uses a fresh copy of the provided values, numbered after
+    // the INSERT params.
+    let base = params.len();
+    let update_sets: Vec<String> = cols
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| format!("{c} = ?{}", base + 1 + idx))
+        .collect();
+    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
+
+    let sql = format!(
+        "INSERT INTO flight_legs ({}) VALUES ({}) \
+         ON CONFLICT(plan_id, destination, direction, leg_order) DO UPDATE SET {}",
+        insert_cols.join(", "),
+        insert_ph.join(", "),
+        update_sets.join(", "),
+    );
     conn.execute(&sql, params)
         .await
-        .map_err(|e| format!("flight_legs shared UPDATE ({direction}) failed: {e}"))?;
+        .map_err(|e| format!("flight_legs upsert failed: {e}"))?;
     Ok(())
 }
 

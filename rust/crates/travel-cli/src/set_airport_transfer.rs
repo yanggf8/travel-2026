@@ -161,6 +161,13 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                     .push(parse_transfer_spec("?candidate", v));
                 i += 2;
             }
+            // `--dest <slug>` is consumed separately by read_destination();
+            // accept-and-skip it here so the catch-all below doesn't reject it.
+            "--dest" => {
+                args.get(i + 1)
+                    .ok_or_else(|| "missing value for --dest".to_string())?;
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -342,21 +349,34 @@ async fn execute(
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
-    // 1. UPDATE airport_transfers (selected_* columns + status).
+    // 1. UPSERT airport_transfers (selected_* columns + status).
+    //    A plain UPDATE silently no-ops when the (plan_id, destination,
+    //    direction) row doesn't exist yet — exactly the case for a booking-first
+    //    plan that never adopted an offer (the offer cascade is what normally
+    //    seeds the transfer row). Upsert keyed on the PK so the command persists
+    //    whether or not a skeleton row pre-exists, keeping the invariant: a
+    //    ✅/completed audit always implies a row actually changed.
     conn.execute(
-        "UPDATE airport_transfers SET \
-            status = ?1, \
-            selected_id = ?2, \
-            selected_title = ?3, \
-            selected_route = ?4, \
-            selected_duration_min = ?5, \
-            selected_price_yen = ?6, \
-            selected_schedule = ?7, \
+        "INSERT INTO airport_transfers \
+            (plan_id, destination, direction, status, selected_id, selected_title, \
+             selected_route, selected_duration_min, selected_price_yen, selected_schedule, \
+             selected_booking_url, selected_notes, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11) \
+         ON CONFLICT(plan_id, destination, direction) DO UPDATE SET \
+            status = ?4, \
+            selected_id = ?5, \
+            selected_title = ?6, \
+            selected_route = ?7, \
+            selected_duration_min = ?8, \
+            selected_price_yen = ?9, \
+            selected_schedule = ?10, \
             selected_booking_url = NULL, \
             selected_notes = NULL, \
-            updated_at = ?8 \
-         WHERE plan_id = ?9 AND destination = ?10 AND direction = ?11",
+            updated_at = ?11",
         libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            direction.to_string(),
             status.to_string(),
             selected.id.clone(),
             selected.title.clone(),
@@ -364,14 +384,11 @@ async fn execute(
             selected.duration_min,
             selected.price_yen,
             selected.schedule.clone(),
-            now_db.clone(),
-            plan_id.to_string(),
-            destination.to_string(),
-            direction.to_string()
+            now_db.clone()
         ],
     )
     .await
-    .map_err(|e| format!("airport_transfers UPDATE failed: {e}"))?;
+    .map_err(|e| format!("airport_transfers upsert failed: {e}"))?;
 
     // 2. DELETE-then-reinsert candidates.
     conn.execute(

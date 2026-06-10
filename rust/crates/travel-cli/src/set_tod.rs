@@ -54,6 +54,7 @@ pub async fn run_focus(
         Ok(d) => d,
         Err(e) => return Err(e),
     };
+    require_session(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
     let focus = parsed.focus.as_deref();
     let focus_zh = parsed.focus_zh.as_deref();
 
@@ -155,6 +156,7 @@ pub async fn run_time_range(
         Ok(d) => d,
         Err(e) => return Err(e),
     };
+    require_session(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
 
     println!(
         "\n🕒 Setting session time range:\n   Destination: {destination}\n   Day {} {}: {} → {}",
@@ -217,6 +219,7 @@ pub async fn run_zh(
         Ok(d) => d,
         Err(e) => return Err(e),
     };
+    require_session(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
 
     println!(
         "\n🌏 Setting session ZH content:\n   Destination: {}, Day {}, {}",
@@ -807,6 +810,46 @@ async fn touch_day(
     )
     .await
     .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
+    Ok(())
+}
+
+/// Fail loud unless the target `timesofday` session row pre-exists. These
+/// commands UPDATE an existing session (created by the itinerary scaffold);
+/// without this guard a missing session would silently no-op the field UPDATE
+/// while still writing a `completed` audit + events (and, for set-tod-zh,
+/// orphan `session_activities_zh` child rows). Called early in each run_*()
+/// before ANY write so a ✅/completed audit always implies a row changed.
+async fn require_session(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+) -> Result<(), String> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM timesofday \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("timesofday existence query failed: {e}"))?;
+    let exists = rows
+        .next()
+        .await
+        .map_err(|e| format!("timesofday existence row read failed: {e}"))?
+        .is_some();
+    if !exists {
+        return Err(format!(
+            "no timesofday row for plan={plan_id} destination={destination} day={day} \
+             session={session}; scaffold the itinerary first (travel scaffold-itinerary)"
+        ));
+    }
     Ok(())
 }
 

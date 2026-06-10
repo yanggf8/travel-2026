@@ -459,6 +459,18 @@ async fn execute_single(
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
 
+    // 0. The target `days` row MUST pre-exist (it's created by the itinerary
+    //    scaffold, not this command). Without this guard the segment INSERT
+    //    below would write an orphan row and still emit a `completed` audit —
+    //    fail loud instead so a ✅/completed audit always implies the parent
+    //    day was real.
+    if !day_exists(conn, plan_id, destination, day).await? {
+        return Err(format!(
+            "no days row for plan={plan_id} destination={destination} day={day}; \
+             scaffold the itinerary first (travel scaffold-itinerary)"
+        ));
+    }
+
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
@@ -613,6 +625,14 @@ async fn execute_bulk(
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
 
+    // 0. The target `days` row MUST pre-exist (see execute_single).
+    if !day_exists(conn, plan_id, destination, day).await? {
+        return Err(format!(
+            "no days row for plan={plan_id} destination={destination} day={day}; \
+             scaffold the itinerary first (travel scaffold-itinerary)"
+        ));
+    }
+
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
@@ -743,6 +763,26 @@ async fn execute_bulk(
     .map_err(|e| format!("plans UPDATE failed: {e}"))?;
 
     Ok(version_after)
+}
+
+async fn day_exists(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<bool, String> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM days WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
+            libsql::params![plan_id.to_string(), destination.to_string(), day],
+        )
+        .await
+        .map_err(|e| format!("days existence query failed: {e}"))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| format!("days existence row read failed: {e}"))?
+        .is_some())
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {
