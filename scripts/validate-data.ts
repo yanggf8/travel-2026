@@ -173,8 +173,8 @@ interface ClaudeOtaEntry {
 function parseClaudeOtaTable(content: string): ClaudeOtaEntry[] {
   const entries: ClaudeOtaEntry[] = [];
 
-  // Find OTA Sources table
-  const tableMatch = content.match(/\| Source ID \| Name \| Type \| Supported \| Scraper \|[\s\S]*?(?=\n\n|\n###|\n##|$)/);
+  // Find OTA Sources table (4-column: Source ID | Name | Type | Status)
+  const tableMatch = content.match(/\| Source ID \| Name \| Type \| Status \|[\s\S]*?(?=\n\n|\n###|\n##|$)/);
   if (!tableMatch) {
     addResult('claude-md', 'warning', 'Could not find OTA Sources table in CLAUDE.md', 'CLAUDE.md');
     return entries;
@@ -184,13 +184,13 @@ function parseClaudeOtaTable(content: string): ClaudeOtaEntry[] {
   // Skip header and separator
   for (let i = 2; i < lines.length; i++) {
     const cells = lines[i].split('|').map(c => c.trim()).filter(c => c);
-    if (cells.length >= 5) {
+    if (cells.length >= 4) {
       entries.push({
         sourceId: cells[0].replace(/`/g, ''),
         name: cells[1],
         types: cells[2],
-        supported: cells[3],
-        scraper: cells[4],
+        supported: cells[3], // Status column: "✅ scraper" / "⚠️ scrape-only" / "❌ ..."
+        scraper: cells[3],
       });
     }
   }
