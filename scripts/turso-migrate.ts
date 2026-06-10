@@ -1040,13 +1040,6 @@ async function main() {
       markets: ['TW', 'JP'], primary_airports: ['KIX'],
       language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
     },
-    {
-      slug: 'okinawa_2026', display_name: 'Okinawa', ref_id: 'okinawa',
-      ref_path: '',
-      timezone: 'Asia/Tokyo', currency: 'JPY',
-      markets: ['TW', 'JP'], primary_airports: ['OKA'],
-      language: 'ja', origin: 'taiwan', lat: 26.2124, lon: 127.6792,
-    },
   ];
 
   for (const d of destinations) {
