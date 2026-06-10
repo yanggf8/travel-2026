@@ -36,6 +36,23 @@ mod validate;
 mod view_bookings;
 mod view_itinerary;
 mod view_transport;
+// P1 Rust-port batches (docs/plans/2026-06-10-rust-port-audit.md).
+// Modules are filled in by per-batch work; dispatch arms below are pre-wired so
+// batches add their own file without touching main.rs (no merge collisions).
+mod scaffold_itinerary; // batch 2
+mod populate_itinerary; // batch 2
+mod swap_days;          // batch 2
+mod mark_booked;        // batch 3
+mod sync_bookings;      // batch 3
+mod booking_integrity;  // batch 3 (check-booking-integrity)
+mod ops;                // batch 3 (run-status / run-list)
+mod validate_itinerary; // batch 3
+mod shaping;            // batch 4 (shaping-init/compare/adopt/baseline/export/import)
+mod query_tour_group;   // batch 4 (query-tour-group-offers)
+mod weather;            // batch 5 (fetch-weather)
+mod view_prices;        // batch 5
+mod search_compare;     // batch 5 (compare-offers / search-offers)
+mod chat_format;        // batch 5
 
 use std::{env, io::Read, process};
 
@@ -320,6 +337,98 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             validate::run(validate::Mode::Validate).await
         }
         [cmd] if cmd == "doctor" => validate::run(validate::Mode::Doctor).await,
+
+        // ── P1 Rust-port dispatch (pre-wired; modules filled per batch) ──
+
+        // batch 1: activity mutations (extend set_activity module)
+        [cmd, rest @ ..] if cmd == "delete-activity" || cmd == "remove-activity" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel delete-activity <day> <session> <activity_id_or_title> [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_activity::run_delete(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-activity-booking" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-activity-booking <day> <session> <activity> <status> [--ref \"...\"] [--book-by YYYY-MM-DD] [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_activity::run_booking(rest, plan_id).await?;
+            Ok(())
+        }
+
+        // batch 2: itinerary structure
+        [cmd, rest @ ..] if cmd == "scaffold-itinerary" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            scaffold_itinerary::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "populate-itinerary" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            populate_itinerary::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "swap-days" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            swap_days::run(rest, plan_id).await?;
+            Ok(())
+        }
+
+        // batch 3: bookings / status
+        [cmd, rest @ ..] if cmd == "mark-booked" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            mark_booked::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "sync-bookings" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            sync_bookings::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "check-booking-integrity" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            booking_integrity::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "run-status" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            ops::run_status(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "run-list" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            ops::run_list(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "validate-itinerary" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            validate_itinerary::run(rest, plan_id).await?;
+            Ok(())
+        }
+
+        // batch 4: shaping + tour-group query
+        [cmd, rest @ ..] if cmd == "shaping-init" => shaping::run_init(rest).await,
+        [cmd, rest @ ..] if cmd == "shaping-compare" => shaping::run_compare(rest).await,
+        [cmd, rest @ ..] if cmd == "shaping-adopt" => shaping::run_adopt(rest).await,
+        [cmd, rest @ ..] if cmd == "shaping-baseline" => shaping::run_baseline(rest).await,
+        [cmd, rest @ ..] if cmd == "shaping-export" => shaping::run_export(rest).await,
+        [cmd, rest @ ..] if cmd == "shaping-import" => shaping::run_import(rest).await,
+        [cmd, rest @ ..] if cmd == "query-tour-group-offers" => query_tour_group::run(rest).await,
+
+        // batch 5: weather / prices / compare / chat
+        [cmd, rest @ ..] if cmd == "fetch-weather" => {
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            weather::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "view-prices" => view_prices::run(rest).await,
+        [cmd, rest @ ..] if cmd == "compare-offers" => search_compare::run_compare(rest).await,
+        [cmd, rest @ ..] if cmd == "search-offers" => search_compare::run_search(rest).await,
+        [cmd, rest @ ..] if cmd == "chat-format" => chat_format::run(rest).await,
+
         _ => Err(format!(
             "unknown command: {}\nRun `travel --help` for usage.",
             args.join(" ")

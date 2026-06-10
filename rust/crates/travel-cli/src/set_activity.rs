@@ -909,6 +909,24 @@ fn now_civil() -> (i32, u32, u32, u32, u32, u32, u32) {
     (y as i32, m as u32, d_ as u32, hour, min, sec, ms)
 }
 
+// ── P1 Rust-port STUBS (batch 1) — see docs/plans/2026-06-10-rust-port-audit.md ──
+// Port behavior from src/cli/commands/activity.ts. Signatures fixed by main.rs
+// dispatch (delete-activity/remove-activity → run_delete; set-activity-booking →
+// run_booking). Replace the bodies; reuse the helpers above (read_destination,
+// arg parsing, etc.). Writes/deletes against the `activities` table.
+
+#[allow(dead_code)]
+pub async fn run_delete(args: &[String], plan_id: String) -> Result<(), String> {
+    let _ = (args, plan_id);
+    Err("delete-activity: not yet implemented (P1 Rust port)".to_string())
+}
+
+#[allow(dead_code)]
+pub async fn run_booking(args: &[String], plan_id: String) -> Result<(), String> {
+    let _ = (args, plan_id);
+    Err("set-activity-booking: not yet implemented (P1 Rust port)".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
