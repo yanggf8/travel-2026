@@ -2,6 +2,8 @@
 
 ## ADR-001: StateManager must use fine-grained DB operations (no in-memory repo)
 
+> **Status (2026-06-10): Implemented in Rust.** The pattern below is realized natively by the Rust CLI (`rust/crates/travel-cli`) — every command does targeted SELECT + UPDATE/INSERT via `libsql`; cascades use targeted reads (`src/cascade/`). The TypeScript migration path in this document is **obsolete** — the TS V1 spine (`PlanRepository`, `plan-assembler.ts`, `syncNormalizedTables()`) is removed by retiring the TS code, not refactoring it. Roadmap: `docs/plans/2026-06-10-roadmap-v2-rust.md`. The TS code samples below are kept as the historical statement of the pattern.
+
 ### Decision
 
 **DB is the single source of truth. StateManager reads state from DB and writes changes back as targeted SQL — one command, one precise UPDATE or INSERT. No in-memory plan object. No coarse-grained flush.**

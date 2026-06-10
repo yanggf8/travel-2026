@@ -515,5 +515,6 @@ Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
 
 Active engineering roadmap (completed work is in `docs/plans/` and git history — not duplicated here):
 
-- **StateManagerV2** — fine-grained DB ops per ADR-001 (`src/skills/travel-shared/references/architecture-decisions.md`); remove `PlanRepository`, `syncNormalizedTables()` so each command = one targeted SELECT (validate) + one targeted UPDATE/INSERT. Reference plans: `docs/plans/2026-03-01-itinerary-dal-refactor.md`, `docs/plans/2026-05-22-stage0-triangle-research.md`.
-- **Integration tests** — seed / dispatch / SELECT / assert / teardown against a real Turso DB. No mocks. Reference: `vitest.config.ts` already constrains scope to `tests/integration/**/*.test.ts`; fill in the seed/assert pattern for the StateManagerV2 command set.
+- **Rust port = StateManagerV2** — ADR-001's fine-grained DB ops are already implemented natively by the Rust CLI (every command = targeted SELECT + UPDATE/INSERT via `libsql`); do NOT refactor the TS `StateManager`. Remaining phases (tests → scripts port → cutover → archive TS, ending with zero npm at repo root): `docs/plans/2026-06-10-roadmap-v2-rust.md`.
+- **Rust integration tests** (cutover gate) — port `tests/integration/*.test.ts` (8 files) to `rust/crates/travel-cli/tests/`: seed `plan_id='test-plan'` / run command / SELECT / assert / teardown against the real Turso DB. No mocks. Harness template: `rust/crates/travel-cli/tests/holiday_turso.rs`.
+- **PARKED (on the agenda)** — Worker → `workers-rs` port: feasible, but wrangler/npm stays for deploy either way; revisit after the CLI cutover lands (plan §3 Phase 6).
