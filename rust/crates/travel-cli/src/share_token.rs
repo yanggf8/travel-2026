@@ -1,5 +1,5 @@
-// `travel share-token [plan_id]` — mint an opaque, per-plan, view-scope share
-// token for the trip dashboard, store it, and print the token + a share URL.
+// `travel share-token` — mint an opaque, per-plan, view-scope share token for the
+// trip dashboard, store it, and print the token + a share URL.
 //
 // The Cloudflare Worker (dashboard read path) consumes the `plan_share_tokens`
 // table to gate access to a single plan's view; the CLI is the SOLE write path.
@@ -11,10 +11,10 @@
 // a share token does not. It is a single INSERT into a side channel, mirroring how
 // the neighbouring tables that the Worker reads are populated.
 //
-// Token generation reuses the crate's existing `sha1` dependency (no new RNG dep
-// was added — the repo has no `uuid`/`getrandom`/`rand`): a high-entropy seed
-// (monotonic-ish nanos + a process-local atomic counter + plan_id + pid) is hashed
-// and the first 32 hex chars are taken as the opaque token.
+// Token generation: because this token gates who may VIEW a plan on the dashboard,
+// it must be cryptographically unpredictable. It is therefore generated from a
+// CSPRNG via `getrandom` (128 random bits rendered as 32 lowercase hex chars) —
+// NOT derived from time/pid/counter, which an attacker could guess.
 
 use libsql::Connection;
 
@@ -26,7 +26,7 @@ const DASHBOARD_HOST: &str = "<dashboard-host>";
 /// crate; this command takes no required positional args.
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     // Accept-and-skip the flags the dispatcher / resolver own so the catch-all
-    // doesn't reject e.g. `--plan-id` / `--dest` that other commands tolerate.
+    // doesn't reject e.g. `--dest` that other commands tolerate.
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -73,7 +73,7 @@ async fn execute(conn: &Connection, plan_id: &str) -> Result<String, String> {
         return Err(format!("plans row missing for plan_id={plan_id}"));
     }
 
-    let token = mint_token(plan_id);
+    let token = mint_token();
 
     conn.execute(
         "INSERT INTO plan_share_tokens (plan_id, token, created_at) \
@@ -101,26 +101,18 @@ async fn plan_exists(conn: &Connection, plan_id: &str) -> Result<bool, String> {
         .is_some())
 }
 
-/// Mint an opaque 32-hex-char token. Reuses the existing `sha1` dependency over a
-/// high-entropy, per-call-unique seed (no new RNG dependency was introduced).
-fn mint_token(plan_id: &str) -> String {
-    use sha1::{Digest, Sha1};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-
-    let seed = format!("{plan_id}|{nanos}|{n}|{pid}");
-    let digest = Sha1::digest(seed.as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    // SHA-1 is 40 hex chars; take the first 32 for the opaque token.
-    hex[..32].to_string()
+/// Mint an opaque 32-hex-char (128-bit) bearer token from a CSPRNG.
+/// This token scopes who may view a plan on the dashboard, so it must be
+/// cryptographically unpredictable — do NOT derive it from time/pid/counter.
+fn mint_token() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("CSPRNG (getrandom) failed");
+    let mut s = String::with_capacity(32);
+    use std::fmt::Write;
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 #[cfg(test)]
@@ -129,7 +121,7 @@ mod tests {
 
     #[test]
     fn mint_token_is_32_hex_chars() {
-        let t = mint_token("tokyo-2026");
+        let t = mint_token();
         assert_eq!(t.len(), 32, "token must be 32 chars");
         assert!(
             t.chars().all(|c| c.is_ascii_hexdigit()),
@@ -139,8 +131,10 @@ mod tests {
 
     #[test]
     fn mint_token_is_unique_per_call() {
-        let a = mint_token("tokyo-2026");
-        let b = mint_token("tokyo-2026");
-        assert_ne!(a, b, "successive tokens for the same plan must differ");
+        assert_ne!(
+            mint_token(),
+            mint_token(),
+            "successive tokens must differ"
+        );
     }
 }

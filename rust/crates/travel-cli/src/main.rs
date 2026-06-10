@@ -243,7 +243,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "share-token" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel share-token [--plan-id <id>]\n  (mints an opaque per-plan view-scope token for the trip dashboard)");
+                println!("Usage:\n  travel share-token\n  (plan resolved from $TRAVEL_PLAN_ID; mints an opaque per-plan view-scope token for the trip dashboard)");
                 return Ok(());
             }
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
