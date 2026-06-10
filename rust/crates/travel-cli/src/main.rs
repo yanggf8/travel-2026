@@ -321,6 +321,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             set_activity::run_title(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "add-activity" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel add-activity <day> <session> <title> [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_activity::run_add(rest, plan_id).await?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
         [cmd, rest @ ..] if cmd == "itinerary" => view_itinerary::run(rest).await,
         [cmd, rest @ ..] if cmd == "transport" => view_transport::run(rest).await,

@@ -934,6 +934,22 @@ struct ActivityBooking {
     dest: Option<String>,
 }
 
+#[derive(Default, Debug)]
+struct ActivityAdd {
+    day: i64,
+    session: String,
+    title: String,
+    area: Option<String>,
+    nearest_station: Option<String>,
+    duration_min: Option<i64>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    is_fixed_time: bool,
+    priority: String,
+    notes: Option<String>,
+    dest: Option<String>,
+}
+
 // ── delete-activity / remove-activity ──────────────────────────────
 //
 // Port of deleteActivityCommand: resolve the activity within (day,
@@ -1161,6 +1177,234 @@ pub async fn run_booking(args: &[String], plan_id: String) -> Result<(), String>
     Ok(())
 }
 
+// ── add-activity ───────────────────────────────────────────────────
+//
+// Insert a brand-new activity row into a (day, session), assigning the
+// next sort_order and a fresh UUID, then emit an `activity_added`
+// plan_event (full audit triad via execute_event). This is the missing
+// create counterpart to set-activity-* / delete-activity, used to flesh
+// out an itinerary without raw SQL.
+pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
+    let parsed = parse_add(args)?;
+
+    if parsed.title.trim().is_empty() {
+        eprintln!("Error: <title> cannot be empty");
+        std::process::exit(1);
+    }
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+
+    // The day must already exist (scaffold-itinerary creates day rows).
+    if !day_exists(&conn, &plan_id, &destination, parsed.day).await? {
+        return Err(format!(
+            "Day {} does not exist for destination {destination} — scaffold the itinerary first",
+            parsed.day
+        ));
+    }
+
+    let activity_id = new_activity_id();
+    let sort_order =
+        next_activity_sort_order(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
+
+    conn.execute(
+        "INSERT INTO activities \
+            (id, plan_id, destination, day_number, session_type, sort_order, \
+             title, area, nearest_station, duration_min, start_time, end_time, \
+             is_fixed_time, priority, notes, booking_required, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16)",
+        libsql::params![
+            activity_id.clone(),
+            plan_id.to_string(),
+            destination.to_string(),
+            parsed.day,
+            parsed.session.clone(),
+            sort_order,
+            parsed.title.clone(),
+            parsed.area.clone(),
+            parsed.nearest_station.clone(),
+            parsed.duration_min,
+            parsed.start_time.clone(),
+            parsed.end_time.clone(),
+            if parsed.is_fixed_time { 1_i64 } else { 0_i64 },
+            parsed.priority.clone(),
+            parsed.notes.clone(),
+            now_db_datetime()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities INSERT failed: {e}"))?;
+    touch_day(&conn, &plan_id, &destination, parsed.day).await?;
+
+    let kv: Vec<(&str, String)> = vec![
+        ("day_number", parsed.day.to_string()),
+        ("session", parsed.session.clone()),
+        ("activity_id", activity_id.clone()),
+        ("title", parsed.title.clone()),
+        ("sort_order", sort_order.to_string()),
+    ];
+
+    execute_event(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+        "activity_added",
+        "add-activity",
+        &format!("D{} {} {}", parsed.day, parsed.session, parsed.title),
+        &kv,
+    )
+    .await?;
+
+    println!(
+        "\n➕ Adding activity:\n   Destination: {destination}\n   Day {} {}: \"{}\"\n   Sort order: {}\n✅ Activity added (id={})",
+        parsed.day, parsed.session, parsed.title, sort_order, activity_id
+    );
+    Ok(())
+}
+
+fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
+    let mut p = ActivityAdd::default();
+    p.priority = "want".to_string();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                p.dest = Some(arg_value(args, i, "--dest")?);
+                i += 2;
+            }
+            "--area" => {
+                p.area = Some(arg_value(args, i, "--area")?);
+                i += 2;
+            }
+            "--station" => {
+                p.nearest_station = Some(arg_value(args, i, "--station")?);
+                i += 2;
+            }
+            "--duration" => {
+                let v = arg_value(args, i, "--duration")?;
+                p.duration_min = Some(
+                    v.parse::<i64>()
+                        .map_err(|_| "--duration must be an integer (minutes)".to_string())?,
+                );
+                i += 2;
+            }
+            "--start" => {
+                p.start_time = Some(arg_value(args, i, "--start")?);
+                i += 2;
+            }
+            "--end" => {
+                p.end_time = Some(arg_value(args, i, "--end")?);
+                i += 2;
+            }
+            "--fixed" => {
+                let v = arg_value(args, i, "--fixed")?;
+                p.is_fixed_time = parse_bool(&v)?;
+                i += 2;
+            }
+            "--priority" => {
+                p.priority = arg_value(args, i, "--priority")?;
+                i += 2;
+            }
+            "--notes" => {
+                p.notes = Some(arg_value(args, i, "--notes")?);
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() < 3 {
+        return Err(
+            "Usage: add-activity <day> <session> <title> [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]"
+                .to_string(),
+        );
+    }
+    p.day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    if p.day < 1 {
+        return Err("<day> must be a positive integer".to_string());
+    }
+    p.session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    // Title is the remaining positionals joined (mirrors set-activity-title).
+    p.title = positional[2..].join(" ");
+    if !["must", "want", "optional"].contains(&p.priority.as_str()) {
+        return Err("--priority must be one of: must | want | optional".to_string());
+    }
+    Ok(p)
+}
+
+async fn day_exists(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<bool, String> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM days WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
+            libsql::params![plan_id.to_string(), destination.to_string(), day],
+        )
+        .await
+        .map_err(|e| format!("days existence query failed: {e}"))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| format!("days existence row read failed: {e}"))?
+        .is_some())
+}
+
+async fn next_activity_sort_order(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+) -> Result<i64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(sort_order), -1) AS m FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities MAX(sort_order) query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("activities MAX(sort_order) row read failed: {e}"))?
+    {
+        let m: i64 = row
+            .get(0)
+            .map_err(|e| format!("activities MAX(sort_order) col read failed: {e}"))?;
+        return Ok(m + 1);
+    }
+    Ok(0)
+}
+
+// UUIDv4-shaped id for a new activity (same generator the audit run_id uses).
+fn new_activity_id() -> String {
+    new_run_id()
+}
+
 fn parse_delete(args: &[String]) -> Result<ActivityDelete, String> {
     let mut p = ActivityDelete::default();
     let mut positional: Vec<String> = Vec::new();
@@ -1358,5 +1602,56 @@ mod tests {
     #[test]
     fn render_optional_empty() {
         assert_eq!(render_optional(&Some(String::new())), "undefined");
+    }
+
+    #[test]
+    fn parse_add_minimal() {
+        let args: Vec<String> = ["3", "evening", "Kokusai-dori", "evening", "stroll"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let p = parse_add(&args).unwrap();
+        assert_eq!(p.day, 3);
+        assert_eq!(p.session, "evening");
+        assert_eq!(p.title, "Kokusai-dori evening stroll");
+        assert_eq!(p.priority, "want"); // default
+        assert!(!p.is_fixed_time);
+    }
+
+    #[test]
+    fn parse_add_with_flags() {
+        let args: Vec<String> = [
+            "1", "afternoon", "Naha", "Main", "Place",
+            "--station", "Makishi",
+            "--duration", "90",
+            "--priority", "must",
+            "--fixed", "true",
+            "--dest", "okinawa_2026",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let p = parse_add(&args).unwrap();
+        assert_eq!(p.title, "Naha Main Place");
+        assert_eq!(p.nearest_station.as_deref(), Some("Makishi"));
+        assert_eq!(p.duration_min, Some(90));
+        assert_eq!(p.priority, "must");
+        assert!(p.is_fixed_time);
+        assert_eq!(p.dest.as_deref(), Some("okinawa_2026"));
+    }
+
+    #[test]
+    fn parse_add_bad_session() {
+        let args: Vec<String> = ["1", "lunchtime", "X"].iter().map(|s| s.to_string()).collect();
+        assert!(parse_add(&args).is_err());
+    }
+
+    #[test]
+    fn parse_add_bad_priority() {
+        let args: Vec<String> = ["1", "noon", "X", "--priority", "critical"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(parse_add(&args).is_err());
     }
 }
