@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Trip Details
 - **Schema**: `4.2.0` — destination-scoped with canonical offer model
 - **Completed**: Tokyo Feb 13-17, Kyoto Feb 24-28 (see `docs/trips/`)
-- **Active**: no upcoming trip locked; use `/shaping-research` to start a new one
-- **Package name caveat**: `package.json` `name` is `yokohama-travel-2026` (legacy, project is Japan-wide)
+- **Active**: no trip *plan* locked, but a paused Shaping run exists — `shaping-20260525-093508` (June 2026, Osaka/Sendai-Akita/Okinawa) with a selected LionTravel Okinawa offer. Resume it or `/shaping-research` for a new one (see Next Steps)
+- **Naming caveat**: legacy artifacts may say `yokohama-travel-2026`; the project is Japan-wide. (Root `package.json` is retired — see CLI Execution below.)
 
 ## Architecture
 
@@ -52,42 +52,37 @@ Turso normalized tables (no JSON blobs)
 ### Data Flow
 `URL → chromeport (CDP capture) → parse capture (parser_rules) → Turso offers → normalize (CanonicalOffer[]) → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)`
 
-Canonical offer schema: `src/state/types.ts`. Skill contracts: `src/contracts/skill-contracts.ts` (v2.0.0).
-
-### Repository Architecture (v4.1.0)
+### CLI Architecture (Rust, fine-grained SQL)
 ```
-CLI / Skills / Dashboard
-        ↓ commands
-   StateManager          ← state machine: validate, transition, cascade (DB-only, no file I/O)
-        ↓ repository calls
-   StateRepository       ← interface (abstract)
+./bin/travel <cmd> [args]              # single binary, subcommand dispatch
         ↓
-   TursoRepository       ← reads all data in one batch HTTP request (38 queries → 1 round-trip)
+   main.rs                             ← arg-slice match → one module per command
         ↓
-   PlanRepository        ← in-memory plan object + write-back via syncNormalizedTables()
+   <command>::run(args, plan_id)       ← targeted SELECT (validate) + targeted UPDATE/INSERT
+        ↓
+   crate::db::connect_read|write()     ← libsql connection; token via turso-util (env → cache → mint)
+        ↓
+   Turso (normalized tables)
 ```
 
-```
-WRITE:  mutate → await save() → write normalized tables (blocking) → sync bookings+events (fire-and-forget)
-READ:   await StateManager.create() → TursoRepository.create() → executeBatch(38 queries) → assemblePlan() → memory
-```
-
-> **Target pattern (ADR-001)**: each command = one targeted SELECT (validate) + one targeted UPDATE/INSERT. No assembled plan object. No flush. Dashboard reads Turso directly — StateManager internals have zero impact on web pages. See `src/skills/travel-shared/references/architecture-decisions.md`.
+Each command is a self-contained module under `rust/crates/travel-cli/src/` that opens its own
+libsql connection and runs exactly the SQL it needs — **one targeted SELECT to validate, one
+targeted UPDATE/INSERT to write**. There is no in-memory plan object, no assemble step, no
+coarse flush. Mutating commands also append a `plan_events` row, bump `plans.version`, and write
+an `operation_runs` audit row (the audit triad — mirror it in any new mutation). Cascade lives in
+`rust/crates/travel-cli/src/cascade/` (e.g. `select_offer` populates P3+P4). This is ADR-001's target pattern, achieved
+by construction in Rust — there is nothing left to refactor. (The retired TS `StateManager` /
+`PlanRepository` / `syncNormalizedTables()` flow is read-only under `archive/ts-cli-retired/`.)
 
 - **Turso cloud is sole source of truth** — fully normalized, no JSON blobs, no config JSON files
 - **No local data — fail loud, never fall back** — NO command may read trip/project data (destinations, shaping/constraints, research, ranked candidates, selected offers) from a local file as its source of truth. If a Turso table/row is missing, the command THROWS — it must not silently fall back to `research/*.json`, `data/*.json`, or any local export. A `if (!dbRow) readLocalJson()` path is the bug, not the fix. `scrapes/` is a raw landing zone whose only legal next step is import→Turso→read-from-Turso. A destination MUST be registered in `destination_config` (via `/new-destination`) **before** Shaping Stage researches it. "Is X saved?" → check Turso; local files existing ≠ saved.
-- **CLI agent first; plain text only** — Build the native CLI agent workflow first. User-facing CLI commands and scraper/importer pipeline output must be plain text/table lines, not JSON. Do not introduce JSON files, JSON fixtures, or JSON as the pipeline boundary. If structured data is needed, store it in normalized Turso tables and render a plain-text CLI view from Turso. JSON is allowed only where an external protocol/library requires it internally, not as a user-facing artifact or source of truth.
-- **No file-based state** — `StateManager` constructor throws without `repo` or `plan`; all legacy file I/O removed
-- **Destination config in DB** — `destination_config` table (replaces `data/destinations.json`); loaded at startup via `loadDestinationConfigFromDb()` into in-memory cache; all sync APIs (`getDestinationConfig()` etc.) read from cache
-- **28+ normalized tables** — see Data Model above
-- **`flight_legs` table** — fully normalized flight data with `departure_terminal`/`arrival_terminal` columns
-- `StateManager.createFromPlanId(planId)` is the async factory — reads normalized tables via `TursoRepository.create()`
-- `StateManager.saveWithTracking(cmd, summary)` wraps `save()` with operation audit trail in `operation_runs` table
-- `plans.version` is a monotonic counter bumped on each save (audit trail only)
-- `dispatch(command)` entry point — 25 command types as discriminated union
-- Plan ID: `"<trip-id>"` (e.g., `tokyo-2026`, `kyoto-2026`)
-- Tests use `skipSave: true` with `options.plan` passed in — DB calls skipped entirely
-- DB info messages use `console.error` (stderr) to avoid polluting JSON output
+- **CLI agent first; plain text only** — User-facing CLI command output must be plain text/table lines, not JSON. Do not introduce JSON files, JSON fixtures, or JSON as the pipeline boundary. If structured data is needed, store it in normalized Turso tables and render a plain-text CLI view from Turso. JSON is allowed only where an external protocol/library requires it internally (e.g. the chromeport capture envelope, the shaping export/import handoff) — never as a user-facing artifact or source of truth.
+- **No JSON in the RDB** — every former `*_json` column was re-normalized into child rows or typed scalar columns. Don't reintroduce `*_json` columns or parse JSON out of a DB column.
+- **Destination config in DB** — `destination_config` table (no `data/destinations.json`); loaded from Turso. **28+ normalized tables** (see Data Model above). `flight_legs` holds fully-normalized flight data incl. `departure_terminal`/`arrival_terminal`.
+- **Audit trail** — `plans.version` is a monotonic counter bumped per mutation; `operation_runs` records run_id/command/status/version_before-after; domain events go to `plan_events` (+ `plan_event_data` KV).
+- Plan ID: `"<trip-id>"` (e.g. `tokyo-2026`, `kyoto-2026`). CLI output is stdout plain text; diagnostics go to stderr.
+- **Plan resolution** — view/mutation commands resolve the plan via `plan_resolver::resolve_plan_id`: `--plan-id` > `$TRAVEL_PLAN_ID` > `--travel-date`/`--travel-start`/`--travel-end` > active-today > upcoming > most-recent. It ignores flags it doesn't own (so `status --full`, `bookings --dest x` pass through).
+- **Tests** — real-Turso integration tests in `rust/crates/travel-cli/tests/*.rs`: seed → run binary → SELECT → assert → teardown; skip cleanly if creds absent. Unit tests inline per module.
 
 ## Development
 
@@ -156,7 +151,7 @@ Pre-commit hook (installed by `make hooks`) runs the Rust build check + `validat
 ## Agent-First Workflow
 
 - Proactively run next logical step; only ask user when a preference materially changes the result
-- Prefer `StateManager` methods / CLI wrappers over direct JSON edits
+- Prefer `./bin/travel` subcommands over direct SQL for reusable content edits (raw `db exec` is fine for one-shot migrations/backfills — see "DB Operation Decision")
 - Every output: current status, what changed, single best next action
 
 ### Skill Decision Tree
@@ -375,51 +370,34 @@ Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI u
 │   ├── hotel-areas.json           # Zone categorization (used by compare-true-cost)
 │   └── transport-routes.json      # Transit routes (used by compare-true-cost)
 ├── scrapes/                       # LEGACY raw-capture JSON landing zone (gitignored) — import→Turso only; not live scraping (see "Scrape terminology")
-├── scripts/                       # Python scrapers + migration tools
-│   └── hooks/pre-commit           # Runs typecheck + validate:data
-├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard
-│   ├── wrangler.toml              # Worker config + secret bindings
+├── scripts/                       # NON-TS keepers only: hooks/, schema.sql, *.sql, *.ps1, *.sh, README
+│   └── hooks/pre-commit           # cargo build -p travel-cli + ./bin/travel validate data
+├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard (own package.json + wrangler)
 │   ├── src/index.ts               # Request handler + router + favicon
 │   ├── src/turso.ts               # Turso HTTP pipeline client (18-query pipeline)
 │   ├── src/render.ts              # SSR HTML renderer (ZH from DB, no hardcoded content)
 │   └── src/styles.ts              # Mobile-first inline CSS
-├── src/
-│   ├── cli/
-│   │   ├── travel-update.ts       # Thin CLI entry — loads command registry, resolves plan
-│   │   ├── commands/              # ~26 command modules (one per command) + registry.ts
-│   │   └── shared/                # args, output, plan-resolver, validation helpers
-│   ├── state/
-│   │   ├── state-manager.ts       # State machine: validate, transition, cascade, dispatch() (DB-only)
-│   │   ├── repository.ts          # StateRepository interface (StateReader + StateWriter)
-│   │   ├── turso-repository.ts    # Reads all data in single batch request; delegates writes to PlanRepository
-│   │   ├── plan-repository.ts     # In-memory plan + write-back via syncNormalizedTables()
-│   │   ├── plan-assembler.ts      # Assembles plan object from table row arrays
-│   │   ├── sql-helpers.ts         # Shared SQL helpers (rowsToObjects, sqlText/Int/Real/Bool)
-│   │   ├── commands.ts            # 25-type Command discriminated union
-│   │   ├── types.ts               # Domain types, status transitions
-│   │   ├── itinerary-manager.ts   # Itinerary domain logic
-│   │   ├── offer-manager.ts       # Offer domain logic
-│   │   ├── transport-manager.ts   # Transport domain logic
-│   │   └── event-query.ts         # Event log queries
-│   ├── config/                    # loader.ts, constants.ts
-│   ├── contracts/skill-contracts.ts
-│   ├── cascade/runner.ts          # Cascade logic (DB-only via runAsync)
-│   ├── services/turso-service.ts  # DB access layer (all Turso queries go through here)
-│   │   └── weather-service.ts
-│   ├── utils/                     # date-utils, flight-normalizer, holiday-calculator, leave-calculator, plan-id
-│   ├── skills/                    # Skill SKILL.md files + references
-│   ├── scrapers/                  # Registry + base classes + scrape-file-parser.ts
-│   ├── questionnaire/             # Trip questionnaire definitions
-│   ├── templates/                 # project-init.ts
-│   ├── validation/                # Itinerary validator
-│   └── types/result.ts            # Result<T,E>
-├── tests/integration/
-└── docs/                          # API.md, EXTENDING.md, SKILL_TEMPLATE.md, plans/
+├── Makefile                       # npm-free build/dev entry: build, dev, test, check, validate, hooks, setup
+├── bin/                           # built binaries (gitignored): travel, chromeport — via `make build`
+├── rust/crates/                   # the LIVE codebase (Cargo workspace)
+│   ├── travel-cli/                # the `travel` binary — ALL CLI commands
+│   │   ├── src/main.rs            #   arg-slice match dispatch → one module per command
+│   │   ├── src/<command>.rs       #   ~58 modules (set_dates, select_offer, shaping, weather,
+│   │   │                          #     view_{bookings,itinerary,transport}, db_*, validate, …)
+│   │   ├── src/db.rs              #   connect_read/connect_write (libsql via turso-util)
+│   │   ├── src/plan_resolver.rs   #   plan resolution ladder
+│   │   ├── src/db_migrate.rs      #   inline-DDL schema migrate (1:1 port of old turso-migrate.ts)
+│   │   ├── src/cascade/           #   cascade logic (date_change, select_offer → populate P3+P4)
+│   │   └── tests/                 #   real-Turso integration tests + fixtures/
+│   ├── chromeport/                # CDP OTA capture driver (the `chromeport` binary)
+│   └── turso-util/                # Turso token mint/cache + libsql connect + migrate runner
+├── src/skills/                    # LIVE skill defs (SKILL.md + references) — ONLY live part of src/
+├── archive/ts-cli-retired/        # retired TS CLI: src/ (minus skills), tests/, scripts/*.ts (read-only)
+├── data/                          # holiday calendar + zone/route reference JSON read by the binary
+└── docs/                          # API.md, EXTENDING.md, SKILL_TEMPLATE.md, reference/CLI.md, plans/
 ```
 
-Config: `src/config/constants.ts` (defaults/exchange rates). OTA baggage/booking rules: Turso tables `airlines`, `booking_types`, `platform_behaviors`, `comparison_rules` (seeded by `scripts/seed-ota-knowledge.ts` — no JSON file).
-Destination/OTA config: stored in Turso (`destination_config`, `ota_sources`, `origin_config`, `global_config` tables — no JSON files).
-Destination reference data (areas/POIs/clusters/transit/tips): Turso tables `destination_areas` (+ `destination_area_stations`/`destination_area_best_for`), `destination_pois` (+ `destination_poi_tags`), `destination_clusters` (+ `destination_cluster_pois`), `destination_transit`, `destination_tips` (seeded by `scripts/seed-destination-refs.ts`; read via `query-destination-ref` — no JSON file, no blob, no JSON columns).
+Config/reference data all live in Turso (no JSON files): `destination_config`, `ota_sources`, `origin_config`, `global_config`; OTA rules in `airlines`/`booking_types`/`platform_behaviors`/`comparison_rules`; destination reference (areas/POIs/clusters/transit/tips) in `destination_areas` (+ child tables), `destination_pois`, `destination_clusters`, `destination_transit`, `destination_tips` — read via `./bin/travel query-destination-ref`. Re-seeding a fresh/empty DB uses the seed pipeline (the original TS seed scripts are under `archive/ts-cli-retired/scripts/`; reusable seeders are `./bin/travel db seed …` + inline `seed_*` in `db_migrate.rs`).
 Note: `ref_path`/`scraper_script` must be repo-relative paths.
 
 ## Turso DB
@@ -458,7 +436,7 @@ Before running raw SQL for content edits, ask: "Will this be done again?" If yes
 
 ## Multi-Plan
 All plans live in the `plans` table in Turso (no local JSON files).
-`plan_id` uses hyphens (`tokyo-2026`), `destination` uses underscores (`tokyo_2026`). Converters: `toPlanId()` / `toDestSlug()` in `src/utils/plan-id.ts`.
+`plan_id` uses hyphens (`tokyo-2026`), `destination` uses underscores (`tokyo_2026`) — convert by swapping `-`↔`_`.
 CLI defaults to `tokyo-2026`; use `--plan-id <id>` for others.
 
 ## Trip Dashboard (Cloudflare Worker)
@@ -519,8 +497,13 @@ Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install h
 
 ## Next Steps
 
-Active engineering roadmap (completed work is in `docs/plans/` and git history — not duplicated here):
+**The Rust port is DONE** (commits through `88385fb`): P1 command parity, P2 scripts, P3 real-Turso integration tests, the `package.json` cutover (root npm retired), TS archived, and docs/skills converted to `./bin/travel`. ADR-001 / "StateManagerV2" is achieved by construction (the Rust CLI *is* the targeted-SQL model) — do NOT refactor the archived TS `StateManager`; that work is complete and the code is read-only under `archive/`. Don't re-port `import-offers-to-turso` (intentionally dropped; replaced by `import-offers` + chromeport `parse capture`).
 
-- **Rust port = StateManagerV2** — ADR-001's fine-grained DB ops are already implemented natively by the Rust CLI (every command = targeted SELECT + UPDATE/INSERT via `libsql`); do NOT refactor the TS `StateManager`. Remaining phases (tests → scripts port → cutover → archive TS, ending with zero npm at repo root): `docs/plans/2026-06-10-roadmap-v2-rust.md`.
-- **Rust integration tests** (cutover gate) — port `tests/integration/*.test.ts` (8 files) to `rust/crates/travel-cli/tests/`: seed `plan_id='test-plan'` / run command / SELECT / assert / teardown against the real Turso DB. No mocks. Harness template: `rust/crates/travel-cli/tests/holiday_turso.rs`.
-- **PARKED (on the agenda)** — Worker → `workers-rs` port: feasible, but wrangler/npm stays for deploy either way; revisit after the CLI cutover lands (plan §3 Phase 6).
+Remaining agenda (none blocking — the project is between trips and the live DB is fully seeded):
+
+- **Fresh-DB seeders** (small/medium) — `seed-destination-refs`, `seed-ota-knowledge`, `seed-test-plan` exist only under `archive/ts-cli-retired/scripts/`; only `db seed plans` is wired. Fresh/empty-DB bootstrap has no in-repo seeder, and `validate`/`doctor` still tell users to run the archived `ts-node` seed scripts. Add `db seed destination-refs|ota-knowledge|test-plan` (mirror `db_seed_plans.rs` + the inline `seed_*` in `db_migrate.rs`), then fix those validator messages.
+- **Shaping aggregator gap** (docs, unless auto-aggregation wanted) — several docs still say `python scripts/shaping_research.py --run <id>`; that script is archived and there's no live "scrape flights → rank into `shaping_candidates`" binary (only `shaping-export`/`shaping-import`). Either reword the docs to the manual chromeport-scrape → `shaping-import --file <handoff>` flow, or build `shaping-aggregate` if auto-ranking is explicitly desired. **Don't invent a command silently.**
+- **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
+- **PARKED (on agenda, now unblocked)** — Worker → `workers-rs` port (~2.9k LOC in `workers/trip-dashboard/src`). wrangler/npm stays for deploy regardless and the read-mostly dashboard gains no data-integrity benefit, so low priority. Revisit per `docs/plans/2026-06-10-roadmap-v2-rust.md`.
+- **OTA decommission gate** (user-driven) — only `settour` is live-verified; the rest have snippet fixtures only. Their archived Python parsers can't be deleted until each passes a real `chromeport verify` against a live capture — needs human browser sessions, not code.
+- **Product / paused run** — a real in-progress shaping run exists: `shaping-20260525-093508` (June 2026, Osaka/Sendai-Akita/Okinawa) with 90 ranked candidates and a **selected LionTravel offer** (Hotel Aqua Citta Naha, 2026-06-21 3n). `okinawa_2026` is NOT yet in `destination_config`. To resume: `/new-destination okinawa_2026`, then `shaping-adopt <candidate> okinawa-2026 --create-plan --dest okinawa_2026`. **User decides** dates/destination — don't pick autonomously.
