@@ -80,7 +80,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [group, sub, rest @ ..] if group == "normalize" && sub == "flights" => {
             normalize_flights(rest)
         }
-        [cmd] if cmd == "plans" => plans::run().await,
+        [cmd] if cmd == "plans" || cmd == "list-plans" => plans::run().await,
         [cmd, rest @ ..] if cmd == "resolve-plan" => plan_resolver::run_cli(rest).await,
         [cmd, rest @ ..] if cmd == "query-offers" => {
             let opts = offers::OffersArgs::parse(rest)?;
