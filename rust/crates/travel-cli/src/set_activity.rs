@@ -915,16 +915,417 @@ fn now_civil() -> (i32, u32, u32, u32, u32, u32, u32) {
 // run_booking). Replace the bodies; reuse the helpers above (read_destination,
 // arg parsing, etc.). Writes/deletes against the `activities` table.
 
-#[allow(dead_code)]
-pub async fn run_delete(args: &[String], plan_id: String) -> Result<(), String> {
-    let _ = (args, plan_id);
-    Err("delete-activity: not yet implemented (P1 Rust port)".to_string())
+#[derive(Default, Debug)]
+struct ActivityDelete {
+    day: i64,
+    session: String,
+    activity: String,
+    dest: Option<String>,
 }
 
-#[allow(dead_code)]
+#[derive(Default, Debug)]
+struct ActivityBooking {
+    day: i64,
+    session: String,
+    activity: String,
+    status: String,
+    booking_ref: Option<String>,
+    book_by: Option<String>,
+    dest: Option<String>,
+}
+
+// ── delete-activity / remove-activity ──────────────────────────────
+//
+// Port of deleteActivityCommand: resolve the activity within (day,
+// session) by id OR case-insensitive title substring, then DELETE the
+// row (mirrors the `remove_activity` dispatch) and emit an
+// `activity_removed` plan_event.
+pub async fn run_delete(args: &[String], plan_id: String) -> Result<(), String> {
+    let parsed = parse_delete(args)?;
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+
+    let activity_id = find_activity(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &parsed.activity,
+    )
+    .await?;
+
+    let title = read_activity_title(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+    )
+    .await?;
+
+    println!("\n🗑️  Deleting activity:");
+    println!("   Day {} {}: \"{}\"", parsed.day, parsed.session, title);
+
+    conn.execute(
+        "DELETE FROM activities \
+         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
+           AND session_type = ?4 AND id = ?5",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            parsed.day,
+            parsed.session.clone(),
+            activity_id.clone()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities DELETE failed: {e}"))?;
+    // Clean up any tag child rows for the removed activity.
+    conn.execute(
+        "DELETE FROM activity_tags WHERE activity_id = ?1",
+        libsql::params![activity_id.clone()],
+    )
+    .await
+    .map_err(|e| format!("activity_tags DELETE failed: {e}"))?;
+    touch_day(&conn, &plan_id, &destination, parsed.day).await?;
+
+    // event data mirrors removeActivity emitEvent:
+    //   { day_number, session, activity_id, title }
+    let kv: Vec<(&str, String)> = vec![
+        ("day_number", parsed.day.to_string()),
+        ("session", parsed.session.clone()),
+        ("activity_id", activity_id.clone()),
+        ("title", title.clone()),
+    ];
+
+    execute_event(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+        "activity_removed",
+        "delete-activity",
+        &format!("D{}/{}/{}", parsed.day, parsed.session, title),
+        &kv,
+    )
+    .await?;
+
+    println!("✅ Activity deleted");
+    Ok(())
+}
+
+// ── set-activity-booking ───────────────────────────────────────────
+//
+// Port of setActivityBookingCommand + setActivityBookingStatus:
+// resolve activity, UPDATE booking_status (+ booking_ref, book_by when
+// provided), force booking_required=1 for booked/pending/waitlist, and
+// emit an `activity_booking_updated` plan_event.
 pub async fn run_booking(args: &[String], plan_id: String) -> Result<(), String> {
-    let _ = (args, plan_id);
-    Err("set-activity-booking: not yet implemented (P1 Rust port)".to_string())
+    let parsed = parse_booking(args)?;
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+
+    let activity_id = find_activity(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &parsed.activity,
+    )
+    .await?;
+
+    let title = read_activity_title(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+    )
+    .await?;
+    let previous_status = read_booking_status(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+    )
+    .await?;
+
+    println!("\n🎫 Setting activity booking status:");
+    println!("   Destination: {destination}");
+    println!("   Day {} {}: \"{}\"", parsed.day, parsed.session, parsed.activity);
+    println!("   Status: {}", parsed.status);
+    if let Some(r) = &parsed.booking_ref {
+        println!("   Reference: {r}");
+    }
+    if let Some(b) = &parsed.book_by {
+        println!("   Book by: {b}");
+    }
+
+    // booking_status — always written.
+    update_field(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+        "booking_status",
+        Some(parsed.status.clone()),
+    )
+    .await?;
+    // booking_ref / book_by — only when provided (matches TS `!== undefined`).
+    if let Some(r) = &parsed.booking_ref {
+        update_field(
+            &conn,
+            &plan_id,
+            &destination,
+            parsed.day,
+            &parsed.session,
+            &activity_id,
+            "booking_ref",
+            Some(r.clone()),
+        )
+        .await?;
+    }
+    if let Some(b) = &parsed.book_by {
+        update_field(
+            &conn,
+            &plan_id,
+            &destination,
+            parsed.day,
+            &parsed.session,
+            &activity_id,
+            "book_by",
+            Some(b.clone()),
+        )
+        .await?;
+    }
+    // booked/pending/waitlist imply booking_required = true.
+    if matches!(parsed.status.as_str(), "booked" | "pending" | "waitlist") {
+        update_field(
+            &conn,
+            &plan_id,
+            &destination,
+            parsed.day,
+            &parsed.session,
+            &activity_id,
+            "booking_required",
+            Some("1".to_string()),
+        )
+        .await?;
+    }
+    touch_day(&conn, &plan_id, &destination, parsed.day).await?;
+
+    // event data mirrors setActivityBookingStatus emitEvent:
+    //   { day_number, session, activity_id, title, from_status,
+    //     to_status, booking_ref, book_by, upgraded_from_string }
+    let kv: Vec<(&str, String)> = vec![
+        ("day_number", parsed.day.to_string()),
+        ("session", parsed.session.clone()),
+        ("activity_id", activity_id.clone()),
+        ("title", title),
+        ("from_status", render_optional(&previous_status)),
+        ("to_status", parsed.status.clone()),
+        ("booking_ref", render_optional(&parsed.booking_ref)),
+        ("book_by", render_optional(&parsed.book_by)),
+        // Rust path always operates on a real row (never an upgraded
+        // string activity), so this is always false.
+        ("upgraded_from_string", "false".to_string()),
+    ];
+
+    execute_event(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+        "activity_booking_updated",
+        "set-activity-booking",
+        &format!("D{} {} {}", parsed.day, parsed.session, parsed.activity),
+        &kv,
+    )
+    .await?;
+
+    println!("✅ Activity booking status updated");
+    Ok(())
+}
+
+fn parse_delete(args: &[String]) -> Result<ActivityDelete, String> {
+    let mut p = ActivityDelete::default();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                p.dest = Some(arg_value(args, i, "--dest")?);
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() < 3 {
+        return Err(
+            "Usage: delete-activity <day> <session> <activity_id_or_title> [--dest <slug>]"
+                .to_string(),
+        );
+    }
+    p.day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    if p.day < 1 {
+        return Err("<day> must be a positive integer".to_string());
+    }
+    p.session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    p.activity = positional[2].clone();
+    Ok(p)
+}
+
+fn parse_booking(args: &[String]) -> Result<ActivityBooking, String> {
+    let mut p = ActivityBooking::default();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                p.dest = Some(arg_value(args, i, "--dest")?);
+                i += 2;
+            }
+            "--ref" => {
+                p.booking_ref = Some(arg_value(args, i, "--ref")?);
+                i += 2;
+            }
+            "--book-by" => {
+                p.book_by = Some(arg_value(args, i, "--book-by")?);
+                i += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() < 4 {
+        return Err(
+            "Usage: set-activity-booking <day> <session> <activity> <status> [--ref \"...\"] [--book-by YYYY-MM-DD] [--dest <slug>]"
+                .to_string(),
+        );
+    }
+    p.day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    if p.day < 1 {
+        return Err("<day> must be a positive integer".to_string());
+    }
+    p.session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    p.activity = positional[2].clone();
+    p.status = positional[3].clone();
+    if !["not_required", "pending", "booked", "waitlist"].contains(&p.status.as_str()) {
+        return Err(
+            "<status> must be one of: not_required | pending | booked | waitlist".to_string(),
+        );
+    }
+    if let Some(b) = &p.book_by {
+        validate_iso_date(b)?;
+    }
+    Ok(p)
+}
+
+// Mirrors validateIsoDate: strict YYYY-MM-DD with a real-date check.
+fn validate_iso_date(input: &str) -> Result<(), String> {
+    let bytes = input.as_bytes();
+    let valid_shape = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && input[0..4].chars().all(|c| c.is_ascii_digit())
+        && input[5..7].chars().all(|c| c.is_ascii_digit())
+        && input[8..10].chars().all(|c| c.is_ascii_digit());
+    if !valid_shape {
+        return Err(format!("--book-by must be YYYY-MM-DD format (got: \"{input}\")"));
+    }
+    let year: i32 = input[0..4].parse().unwrap();
+    let month: u32 = input[5..7].parse().unwrap();
+    let day: u32 = input[8..10].parse().unwrap();
+    if month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) {
+        return Err(format!("--book-by is not a valid date: \"{input}\""));
+    }
+    Ok(())
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
+async fn read_booking_status(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+) -> Result<Option<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT booking_status FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
+               AND session_type = ?4 AND id = ?5",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string(),
+                activity_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities booking_status query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("activities booking_status row read failed: {e}"))?
+    {
+        let s: Option<String> = row.get(0).ok();
+        return Ok(s);
+    }
+    Err(format!("activity row disappeared: id={activity_id}"))
 }
 
 #[cfg(test)]
