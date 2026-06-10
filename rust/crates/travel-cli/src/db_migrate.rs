@@ -1620,6 +1620,13 @@ const PHASE1_TABLES: &[&str] = &[
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (activity_id, tag)
 )"#,
+    // Per-plan dashboard share tokens (view scope). Worker reads this; the CLI
+    // `share-token` command is the sole write path. Opaque token is the PK.
+    r#"CREATE TABLE IF NOT EXISTS plan_share_tokens (
+  plan_id TEXT NOT NULL,
+  token TEXT NOT NULL PRIMARY KEY,
+  created_at TEXT NOT NULL
+)"#,
 ];
 
 const SHAPING_RESEARCH_TABLES: &[&str] = &[
