@@ -25,7 +25,7 @@
 
 use crate::db;
 use crate::plan::{self, PlanView, TransferDir};
-use std::{collections::HashMap, env};
+use std::collections::HashMap;
 
 const SESSIONS_IN_ORDER: &[&str] = &["morning", "noon", "afternoon", "evening"];
 
@@ -44,21 +44,13 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // override would require either an extra query or a thin wrapper around
     // plan::load() that re-keys transfers/days.
     let _dest_opt: Option<String> = parse_dest(args);
-    let plan_id = env::var("TRAVEL_PLAN_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            "travel bookings requires TRAVEL_PLAN_ID env var \
-             (e.g. TRAVEL_PLAN_ID=tokyo-2026). \
-             --plan-id and active/upcoming resolution will land with the next view port."
-                .to_string()
-        })?;
+    let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
     let view = plan::load(&plan_id).await?;
 
     // Fetch book_by deadlines for every activity on the active destination.
     // Keyed by (day_number, session_type, sort_order) — the same triple
     // plan.rs uses to position activities under their day/session.
-    let book_by = fetch_book_by(&view).await?;
+    let book_by = fetch_book_by(&view, &plan_id).await?;
 
     print!("{}", render(&view, &book_by));
     Ok(())
@@ -79,17 +71,13 @@ fn sql_quote(v: &str) -> String {
     v.replace('\'', "''")
 }
 
-async fn fetch_book_by(view: &PlanView) -> Result<HashMap<(i64, String, i64), String>, String> {
-    // The plan.rs reader does not expose plan_id directly on PlanView; we
-    // mirror the env-var pattern (this view is gated on TRAVEL_PLAN_ID).
-    // We re-derive it from the env so we don't have to plumb a new field
-    // through `plan::load()`.
-    let plan_id_esc = sql_quote(
-        &env::var("TRAVEL_PLAN_ID")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| "TRAVEL_PLAN_ID required".to_string())?,
-    );
+async fn fetch_book_by(
+    view: &PlanView,
+    plan_id: &str,
+) -> Result<HashMap<(i64, String, i64), String>, String> {
+    // Use the already-resolved plan_id (from --plan-id / $TRAVEL_PLAN_ID /
+    // active / upcoming / most-recent) for the book_by deadline query.
+    let plan_id_esc = sql_quote(plan_id);
     let dest_esc = sql_quote(&view.active_destination);
     let conn = db::connect_read().await?;
     let mut rows = conn

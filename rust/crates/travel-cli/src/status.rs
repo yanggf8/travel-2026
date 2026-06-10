@@ -23,15 +23,8 @@ const PROCESSES: &[(&str, &str)] = &[
 
 const SESSIONS_IN_ORDER: &[&str] = &["morning", "noon", "afternoon", "evening"];
 
-pub async fn run(full: bool) -> Result<(), String> {
-    let plan_id = std::env::var("TRAVEL_PLAN_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            "travel status requires TRAVEL_PLAN_ID env var (e.g. TRAVEL_PLAN_ID=tokyo-2026). \
-             --plan-id and active/upcoming resolution will land with the next view port."
-                .to_string()
-        })?;
+pub async fn run(args: &[String], full: bool) -> Result<(), String> {
+    let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
     let view = plan::load(&plan_id).await?;
     print!("{}", render(&view, full));
     Ok(())

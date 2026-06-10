@@ -146,11 +146,11 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "status" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel status [--full]\n  (plan resolution: TRAVEL_PLAN_ID env var only for now)");
+                println!("Usage:\n  travel status [--full] [--plan-id <id> | --travel-date YYYY-MM-DD]\n  (plan resolution: --plan-id > $TRAVEL_PLAN_ID > --travel-date > active > upcoming > most-recent)");
                 return Ok(());
             }
             let full = rest.iter().any(|a| a == "--full");
-            status::run(full).await
+            status::run(rest, full).await
         }
         [cmd, rest @ ..] if cmd == "set-dates" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {

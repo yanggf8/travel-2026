@@ -654,6 +654,21 @@ pub fn print_usage() {
     );
 }
 
+/// Shared plan-id resolution for view commands (status / itinerary / transport /
+/// bookings). Runs the full ladder — explicit --plan-id > $TRAVEL_PLAN_ID >
+/// --travel-date / --travel-start/--travel-end > active > upcoming > most-recent
+/// — so the view commands behave like the TS CLI (no mandatory TRAVEL_PLAN_ID).
+/// Returns the resolved plan_id (hyphen form, e.g. "tokyo-2026").
+pub async fn resolve_plan_id(args: &[String]) -> Result<String, String> {
+    let mut input = parse_args(args)?;
+    if input.today.is_none() {
+        input.today = Some(today_iso());
+    }
+    let plans = list_plans_for_resolver().await?;
+    let resolved = resolve_plan_from_summaries(&input, &plans)?;
+    Ok(resolved.plan_id)
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------

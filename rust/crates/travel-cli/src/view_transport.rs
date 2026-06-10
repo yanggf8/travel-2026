@@ -25,7 +25,6 @@
 
 use crate::plan::{self, PlanView, TransferDir};
 use crate::status::{format_date, locale_i64};
-use std::env;
 
 const SESSIONS_IN_ORDER: &[&str] = &["morning", "noon", "afternoon", "evening"];
 
@@ -44,15 +43,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // override would require either an extra query or a thin wrapper around
     // plan::load() that re-keys transfers/days.
     let _dest_opt: Option<String> = parse_dest(args);
-    let plan_id = env::var("TRAVEL_PLAN_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            "travel transport requires TRAVEL_PLAN_ID env var \
-             (e.g. TRAVEL_PLAN_ID=tokyo-2026). \
-             --plan-id and active/upcoming resolution will land with the next view port."
-                .to_string()
-        })?;
+    let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
     let view = plan::load(&plan_id).await?;
     print!("{}", render(&view));
     Ok(())
