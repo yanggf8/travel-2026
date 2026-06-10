@@ -115,33 +115,36 @@ Python/other → none (Python scrapers archived; chromeport is Rust)
 **Reference:** `docs/plans/2026-06-10-roadmap-v2-rust.md` (active roadmap: tests → scripts port → cutover → archive TS; read before any Rust work). Historical: `docs/plans/2026-06-05-rust-cli-migration.md`, `docs/plans/2026-06-10-rust-port-audit.md`.
 
 ### Setup
+> **npm RETIRED (2026-06-10):** the root `package.json` is gone. The CLI is the
+> Rust `travel` binary; the build/dev entry is the root **`Makefile`**. (The
+> Cloudflare Worker keeps its own self-contained `package.json` + wrangler.)
+> The old TS CLI lives read-only under `archive/ts-cli-retired/`.
 ```bash
-npm install                   # also runs postinstall: git hooks install
-cd rust && cargo build -p chromeport   # build the CDP OTA capture driver (./rust/target/debug/chromeport)
+make setup                    # build ./bin/{travel,chromeport} + install git hooks
+# or piecemeal:
+make build                    # release binaries → ./bin/ (gitignored)
+make dev                      # fast debug build of travel-cli
 ```
 
 ### Tests
 ```bash
-npm test                      # integration/regression tests only (vitest)
-npm run test:watch            # watch mode
-npm run test:coverage         # coverage report (focused on src/state/)
-
-# Single test
-npx vitest run tests/integration/shaping-service.regression.test.ts  # one file
-npx vitest run -t "cascade resets process_5"                         # one test by name (substring)
+make test                     # full Rust suite (real Turso; ported from the retired vitest suite)
+# or directly:
+cd rust && cargo test -p travel-cli
+cargo test -p travel-cli --test shaping_service           # one integration test file
+cargo test -p travel-cli ranks_candidates                 # one test by name (substring)
 ```
 
-- **Integration-only** — no unit test suite; tests live in `tests/integration/`
-- **`skipSave: true`** — tests pass `options.plan` to StateManager, skipping all DB calls
-- **Vitest config**: `vitest.config.ts` — node environment, only includes `tests/integration/**/*.test.ts`
+- **Real-Turso integration tests** — `rust/crates/travel-cli/tests/*.rs`; seed → run binary → SELECT → assert → teardown; skip cleanly if creds absent. Unit tests live inline in each `src/*.rs` module.
+- Fixtures: `rust/crates/travel-cli/tests/fixtures/`.
 
 ### Pre-commit
 ```bash
-npm run typecheck             # tsc --noEmit (runs automatically via git hook)
-npm run validate:data         # data integrity check
-npm run doctor                # full system health check
+make check                    # cargo build -p travel-cli (the old typecheck)
+make validate                 # ./bin/travel validate data
+make doctor                   # ./bin/travel doctor (full health check)
 ```
-Pre-commit hook (installed by `postinstall`) runs `typecheck` + `validate:data`.
+Pre-commit hook (installed by `make hooks`) runs the Rust build check + `validate data`.
 
 ### Docs
 - `docs/API.md` — complete API reference
@@ -306,6 +309,14 @@ No upcoming trip locked. Plan status for any active plan: `npm run view:status`.
 
 Most-used commands inline; the **canonical full reference** (every mutation, comparison view, scraping flag, Shaping Stage aggregator handoff) lives in **`docs/reference/CLI.md`**. Add new commands there, not here.
 
+> **npm retired — command translation.** The examples below still show the old
+> `npm run …` forms (mechanical doc cleanup pending). Read them as the Rust
+> binary: `npm run travel -- <cmd>` → `./bin/travel <cmd>`; `npm run view:status`
+> → `./bin/travel status --full`; `npm run view:itinerary` → `./bin/travel
+> itinerary`; `npm run compare-dates -- …` → `./bin/travel compare dates …`;
+> `npm run db:migrate:turso` → `./bin/travel db migrate`; `npm run validate:data`
+> → `./bin/travel validate data`. Build the binary with `make build`.
+
 ```bash
 # Views (run any one)
 npm run travel -- plans                          # list DB plans and date anchors
@@ -353,11 +364,11 @@ npm run travel -- set-activity-booking <day> <session> "<activity>" <status> [--
 npm run travel -- fetch-weather [--dest slug] [--all]
 
 # DB + tests (run any one)
-npm run db:status:turso                          # show DB state
-npm run db:migrate:turso                         # create/upgrade tables (idempotent)
-npm run db:seed:plans                            # one-time plan seed
-npm test
-npm run validate:data                            # data integrity check
+./bin/travel db status                           # show DB state
+./bin/travel db migrate                          # create/upgrade tables (idempotent)
+./bin/travel db seed plans                       # one-time plan seed
+make test                                        # full Rust test suite
+./bin/travel validate data                       # data integrity check
 npm run doctor                                   # full system health check
 ```
 
@@ -511,7 +522,7 @@ TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ../../.env | cut -d= -f2-) && unset CLOUDFLAR
 ```
 
 ## Build Gate
-Pre-commit: `npm run typecheck`. Install: `npm run hooks:install`
+Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install hooks: `make hooks`.
 
 ## Next Steps
 

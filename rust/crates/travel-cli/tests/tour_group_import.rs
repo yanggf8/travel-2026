@@ -17,16 +17,10 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_travel")
 }
 
-fn repo_root() -> PathBuf {
-    // tests run with CWD = crate dir (rust/crates/travel-cli); go up to repo root.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
-        .canonicalize()
-        .expect("resolve repo root")
-}
-
 fn fixture(name: &str) -> String {
-    repo_root()
+    // Fixtures live alongside the tests in the crate (moved here when the root
+    // TS tree was retired): rust/crates/travel-cli/tests/fixtures/tour-group/.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/tour-group")
         .join(name)
         .to_string_lossy()

@@ -1,24 +1,25 @@
 #!/bin/bash
-# Pre-commit hook: typecheck + data validation before commit
-# Install: npm run hooks:install
+# Pre-commit hook: Rust build check + data validation before commit.
+# (npm-free — the CLI is the Rust travel binary; root package.json is retired.)
+# Install: ./bin/travel-dev hooks-install   (or copy scripts/hooks/* to .git/hooks/)
 
-echo "Running typecheck..."
-npm run typecheck
+set -euo pipefail
 
-if [ $? -ne 0 ]; then
-  echo "❌ Typecheck failed. Fix errors before committing."
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT/rust"
+
+echo "Building travel-cli (compile check)..."
+if ! cargo build -p travel-cli --quiet; then
+  echo "❌ Rust build failed. Fix errors before committing."
   exit 1
 fi
-
-echo "✅ Typecheck passed"
+echo "✅ Build passed"
 
 echo ""
 echo "Running data validation..."
-npm run validate:data
-
-if [ $? -ne 0 ]; then
+cd "$REPO_ROOT"
+if ! ./rust/target/debug/travel validate data; then
   echo "❌ Data validation failed. Fix errors before committing."
   exit 1
 fi
-
 echo "✅ Data validation passed"
