@@ -279,23 +279,72 @@ interface SessionZhOverride {
   transit_notes: string;
 }
 
+function cleanStopLabel(s: string): string {
+  let out = s
+    .split(/[\uFF08(\u3002\u3001,]/)[0]                  // drop note after \uFF08 \u3002 \u3001 ,
+    .replace(/\d{1,2}:\d{2}/g, '')                        // drop clock times
+    .replace(/[\u2460-\u2473]\s*[.\uFF0E]?/g, '')          // drop \u2460\u2461\u2462\u2026 markers
+    .trim();
+  // If the segment is "<verb/mode-phrase>\u81F3|\u5230 <place>", keep the place after the last \u81F3/\u5230.
+  const m = out.match(/[\u81F3\u5230]([^\u81F3\u5230]+)$/); // \u81F3=\u81F3(to)  \u5230=\u5230(arrive)
+  if (m) out = m[1];
+  out = out
+    .replace(/^(?:\s*(?:\u958B\u8ECA|\u81EA\u99D5|\u81EA\u884C\u958B\u8ECA|\u8F49\u4E58|\u642D\u4E58|\u642D|\u4E58|\u6B65\u884C)\s*[:\uFF1A]?\s*)/, '') // strip leading verb (+ optional :)
+    .replace(/^(?:\u63A5\u99C1\u5DF4\u58EB|\u5DF4\u58EB|\u55AE\u8ECC\u96FB\u8ECA|\u55AE\u8ECC|\u96FB\u8ECA|\u706B\u8ECA|\u8A08\u7A0B\u8ECA)\s*/, '') // strip leading mode-noun (\u63A5\u99C1\u5DF4\u58EB/\u5DF4\u58EB/\u55AE\u8ECC\u96FB\u8ECA\u2026)
+    .replace(/\s*\u6B65\u884C\s*$/, '')                    // trailing \u6B65\u884C
+    .trim();
+  return out;
+}
+
+function legTravelMode(legText: string): 'walking' | 'driving' | 'transit' {
+  if (/\u958B\u8ECA|\u81EA\u99D5|\u81EA\u884C\u958B\u8ECA/.test(legText)) return 'driving'; // \u958B\u8ECA / \u81EA\u99D5
+  if (legText.includes('\u6B65\u884C') && !legText.includes('\u7DDA') && !legText.includes('\u5DF4\u58EB')) return 'walking';
+  return 'transit';
+}
+
+function mapsDirUrl(from: string, to: string, city: string, mode: string): string {
+  const o = city ? `${from} ${city}` : from;
+  const d = city ? `${to} ${city}` : to;
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}&travelmode=${mode}`;
+}
+
+const LEG_MODE_ICON: Record<string, string> = {
+  walking: '\uD83D\uDEB6', driving: '\uD83D\uDE97', transit: '\uD83D\uDE83',
+};
+
 function renderTransitPill(transit: string, city: string): string {
-  if (transit.includes('\u2192')) {
-    const parts = transit.split('\u2192');
-    if (parts.length >= 2) {
-      const from = parts[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
-      let to = parts[1].split(/[（。，,]/)[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
-      // Remove trailing 步行 from destination name
-      to = to.replace(/\s*\u6B65\u884C\s*$/, '').trim();
-      if (from && to) {
-        // Check travel mode only from the route description (before any period/sentence break), not trailing notes
-        const routePart = transit.split(/[。]/)[0];
-        const travelmode = (routePart.includes('\u6B65\u884C') && !routePart.includes('\u7DDA') && !routePart.includes('\u5DF4\u58EB')) ? 'walking' : 'transit';
-        const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from + ' ' + city)}&destination=${encodeURIComponent(to + ' ' + city)}&travelmode=${travelmode}`;
-        return `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
-      }
+  const stops = transit.split('\u2192');
+
+  // Single hop (2 stops): preserve original one-pill behavior (Tokyo/Kyoto).
+  if (stops.length === 2) {
+    const from = cleanStopLabel(stops[0]);
+    const to = cleanStopLabel(stops[1]);
+    if (from && to) {
+      const routePart = transit.split(/[\u3002]/)[0];
+      const travelmode = legTravelMode(routePart);
+      const url = mapsDirUrl(from, to, city, travelmode);
+      return `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
     }
   }
+
+  // Multi-leg chain (3+ stops): one clickable sub-pill per leg, each with its own
+  // inferred mode + a correct point-to-point Maps link. A single <a> can target
+  // only one route, so we split the chain rather than mislink the whole thing.
+  if (stops.length > 2) {
+    const subPills: string[] = [];
+    for (let i = 0; i < stops.length - 1; i++) {
+      const from = cleanStopLabel(stops[i]);
+      const to = cleanStopLabel(stops[i + 1]);
+      if (!from || !to) continue;
+      const mode = legTravelMode(stops[i + 1] + ' ' + stops[i]);
+      const url = mapsDirUrl(from, to, city, mode);
+      subPills.push(
+        `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">${LEG_MODE_ICON[mode]} ${esc(from)} \u2192 ${esc(to)} \uD83D\uDDFA\uFE0F</a>`
+      );
+    }
+    if (subPills.length > 0) return subPills.join('');
+  }
+
   return `<span class="pill pill-transit">\uD83D\uDE83 ${esc(transit)}</span>`;
 }
 
