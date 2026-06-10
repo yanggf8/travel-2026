@@ -296,9 +296,12 @@ function cleanStopLabel(s: string): string {
   return out;
 }
 
+const TRANSIT_KEYWORDS = /\u7DDA|\u5DF4\u58EB|\u55AE\u8ECC|\u96FB\u8ECA|\u5730\u9435|\u6377\u904B|\u706B\u8ECA|\u9435|JR|monorail|rail|bus|train/i; // \u7DDA \u5DF4\u58EB \u55AE\u8ECC \u96FB\u8ECA \u5730\u9435 \u6377\u904B \u706B\u8ECA \u9435 JR
+
 function legTravelMode(legText: string): 'walking' | 'driving' | 'transit' {
   if (/\u958B\u8ECA|\u81EA\u99D5|\u81EA\u884C\u958B\u8ECA/.test(legText)) return 'driving'; // \u958B\u8ECA / \u81EA\u99D5
-  if (legText.includes('\u6B65\u884C') && !legText.includes('\u7DDA') && !legText.includes('\u5DF4\u58EB')) return 'walking';
+  // walking only when 步行 AND no rail/bus keyword (so "\u55AE\u8ECC\u2026\u653E\u884C\u674E\u5F8C\u6B65\u884C" stays transit)
+  if (legText.includes('\u6B65\u884C') && !TRANSIT_KEYWORDS.test(legText)) return 'walking';
   return 'transit';
 }
 
