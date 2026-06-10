@@ -1,0 +1,278 @@
+//! Integration test — port of tests/integration/shaping-baseline-cli.regression.test.ts.
+//!
+//! Drives the built `travel` binary's `shaping-baseline` subcommand against a
+//! real Turso DB. Each case seeds throwaway shaping_tour_group_offers rows under
+//! a UNIQUE `shaping-test-<nanos>` run id, runs shaping-baseline, asserts on
+//! plain-text / --json stdout, then tears everything down. Real plans/runs are
+//! never touched.
+//!
+//! Skips cleanly when Turso creds/connection are absent.
+//!
+//! Parity note: the TS test seeds a `raw_json` column (legacy JSON blob). The
+//! RDB has been de-JSON'd — confidence lives in the typed `raw_confidence`
+//! column — so the seeds here set `raw_confidence` directly. Behavioral checks
+//! (cheapest-per-(date,kind), savings, region filter, --json fields) are ported
+//! unchanged.
+
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const BIN: &str = env!("CARGO_BIN_EXE_travel");
+
+fn is_credless(stderr: &str) -> bool {
+    stderr.contains("turso auth login")
+        || stderr.contains("Missing Turso")
+        || stderr.contains("failed to connect to Turso")
+        || stderr.contains("TRAVEL_TURSO")
+}
+
+/// Transient network blips when many tests open Turso connections at once.
+fn is_transient(stderr: &str) -> bool {
+    stderr.contains("Network is unreachable")
+        || stderr.contains("error trying to connect")
+        || stderr.contains("connection reset")
+        || stderr.contains("connection closed")
+}
+
+fn run(args: &[&str]) -> Option<(bool, String, String)> {
+    for attempt in 0..6 {
+        let out = Command::new(BIN).args(args).output().expect("spawn travel");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        if !out.status.success() && is_credless(&stderr) {
+            return None;
+        }
+        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
+            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
+            continue;
+        }
+        return Some((out.status.success(), stdout, stderr));
+    }
+    unreachable!()
+}
+
+fn db_exec(sql: &str) -> Option<String> {
+    for attempt in 0..6 {
+        let out = Command::new(BIN)
+            .args(["db", "exec", sql])
+            .output()
+            .expect("spawn travel db exec");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        if !out.status.success() && is_credless(&stderr) {
+            return None;
+        }
+        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
+            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
+            continue;
+        }
+        if !out.status.success() {
+            panic!("db exec failed: {sql}\n{stderr}");
+        }
+        return Some(String::from_utf8_lossy(&out.stdout).to_string());
+    }
+    unreachable!()
+}
+
+fn unique_run_id() -> String {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    format!("shaping-test-{nanos}")
+}
+
+fn sql_lit(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+fn cleanup(run_id: &str) {
+    let r = sql_lit(run_id);
+    let _ = db_exec(&format!(
+        "DELETE FROM shaping_tour_group_offers WHERE run_id = {r}; \
+         DELETE FROM shaping_research_runs WHERE run_id = {r};"
+    ));
+}
+
+/// Seed the minimal research run so shaping-baseline can resolve it.
+fn seed_run(run_id: &str) -> Option<()> {
+    db_exec(&format!(
+        "INSERT INTO shaping_research_runs \
+         (run_id, origin_code, pax, window_start, window_end, currency, exchange_rate_usd_twd, status, created_at, updated_at) \
+         VALUES ({}, 'TPE', 2, '2026-06-12', '2026-06-25', 'TWD', 32.0, 'started', '2026-05-27T00:00:00Z', '2026-05-27T00:00:00Z');",
+        sql_lit(run_id)
+    ))
+    .map(|_| ())
+}
+
+/// Seed one tour-group offer row. `confidence` → raw_confidence (de-JSON'd).
+#[allow(clippy::too_many_arguments)]
+fn seed_offer(
+    run_id: &str,
+    offer_id: &str,
+    dest_region: &str,
+    product_kind: &str,
+    price: i64,
+    depart: &str,
+    ret: &str,
+    confidence: Option<&str>,
+) -> Option<()> {
+    let conf = match confidence {
+        Some(c) => sql_lit(c),
+        None => "NULL".to_string(),
+    };
+    db_exec(&format!(
+        "INSERT INTO shaping_tour_group_offers \
+         (run_id, offer_id, source_id, dest_region, depart_date, return_date, nights, \
+          price_per_person_twd, title, url, scraped_at, product_kind, raw_confidence) \
+         VALUES ({}, {}, 'besttour', {}, {}, {}, 3, {price}, 'test', 'http://test/', \
+          '2026-05-27T00:00:00Z', {}, {conf});",
+        sql_lit(run_id),
+        sql_lit(offer_id),
+        sql_lit(dest_region),
+        sql_lit(depart),
+        sql_lit(ret),
+        sql_lit(product_kind),
+    ))
+    .map(|_| ())
+}
+
+// ── error cases ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn errors_when_run_id_is_missing() {
+    let Some((ok, _so, stderr)) = run(&["shaping-baseline"]) else {
+        eprintln!("skipping: no Turso credentials");
+        return;
+    };
+    assert!(!ok, "expected non-zero exit when --run missing");
+    assert!(
+        stderr.contains("--run") || stderr.to_lowercase().contains("requires"),
+        "expected --run error, got: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn errors_when_run_does_not_exist() {
+    let Some((ok, _so, stderr)) = run(&["shaping-baseline", "--run", "no-such-run-shaping-test-xyz"]) else {
+        eprintln!("skipping: no Turso credentials");
+        return;
+    };
+    assert!(!ok, "expected non-zero exit for missing run");
+    assert!(
+        stderr.to_lowercase().contains("not found"),
+        "expected 'not found', got: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn shows_empty_result_cleanly_when_no_offers_exist() {
+    let run_id = unique_run_id();
+    if seed_run(&run_id).is_none() {
+        eprintln!("skipping: no Turso credentials");
+        return;
+    }
+    let (ok, stdout, stderr) = run(&["shaping-baseline", "--run", &run_id]).unwrap();
+    assert!(ok, "expected success, stderr: {stderr}, stdout: {stdout}");
+    let lc = stdout.to_lowercase();
+    assert!(
+        lc.contains("no offers") || lc.contains("no tour-group"),
+        "expected empty message, got: {stdout}"
+    );
+    cleanup(&run_id);
+}
+
+// ── grouping / cheapest-per-(date,kind) ──────────────────────────────
+
+#[tokio::test]
+async fn groups_by_product_kind_and_shows_cheapest_per_date_kind() {
+    let run_id = unique_run_id();
+    if seed_run(&run_id).is_none() {
+        eprintln!("skipping: no Turso credentials");
+        return;
+    }
+    // group_tour rows
+    seed_offer(&run_id, "gt1", "okinawa", "group_tour", 21999, "2026-06-18", "2026-06-21", None).unwrap();
+    seed_offer(&run_id, "gt2", "okinawa", "group_tour", 26900, "2026-06-21", "2026-06-24", None).unwrap();
+    seed_offer(&run_id, "gt3", "okinawa", "group_tour", 25000, "2026-06-18", "2026-06-21", None).unwrap();
+    // fit rows
+    seed_offer(&run_id, "fit1", "okinawa", "fit", 11900, "2026-06-18", "2026-06-21", Some("high")).unwrap();
+    seed_offer(&run_id, "fit2", "okinawa", "fit", 12999, "2026-06-21", "2026-06-24", Some("high")).unwrap();
+
+    let (ok, stdout, stderr) = run(&["shaping-baseline", "--run", &run_id]).unwrap();
+    assert!(ok, "expected success, stderr: {stderr}");
+    assert!(stdout.to_lowercase().contains("baseline"), "got: {stdout}");
+    assert!(stdout.contains("11,900"), "cheapest FIT 6/18 missing: {stdout}");
+    assert!(stdout.contains("21,999"), "cheapest group_tour 6/18 missing: {stdout}");
+    assert!(stdout.contains("12,999"), "cheapest FIT 6/21 missing: {stdout}");
+    assert!(stdout.contains("26,900"), "cheapest group_tour 6/21 missing: {stdout}");
+    assert!(stdout.to_lowercase().contains("okinawa"), "region missing: {stdout}");
+
+    cleanup(&run_id);
+}
+
+#[tokio::test]
+async fn computes_savings_when_both_fit_and_group_tour_exist_same_date() {
+    let run_id = unique_run_id();
+    if seed_run(&run_id).is_none() {
+        eprintln!("skipping: no Turso credentials");
+        return;
+    }
+    seed_offer(&run_id, "gt1", "okinawa", "group_tour", 21999, "2026-06-18", "2026-06-21", None).unwrap();
+    seed_offer(&run_id, "fit1", "okinawa", "fit", 11900, "2026-06-18", "2026-06-21", Some("high")).unwrap();
+
+    let (_ok, stdout, _se) = run(&["shaping-baseline", "--run", &run_id]).unwrap();
+    // Savings = 21999 - 11900 = 10099
+    let lc = stdout.to_lowercase();
+    assert!(
+        stdout.contains("10,099") || lc.contains("savings") || lc.contains("cheaper"),
+        "expected savings, got: {stdout}"
+    );
+
+    cleanup(&run_id);
+}
+
+#[tokio::test]
+async fn filters_by_dest_region() {
+    let run_id = unique_run_id();
+    if seed_run(&run_id).is_none() {
+        eprintln!("skipping: no Turso credentials");
+        return;
+    }
+    seed_offer(&run_id, "oka1", "okinawa", "fit", 11900, "2026-06-18", "2026-06-21", None).unwrap();
+    seed_offer(&run_id, "kan1", "kansai", "fit", 22888, "2026-06-18", "2026-06-21", None).unwrap();
+
+    let (_ok, stdout, _se) = run(&["shaping-baseline", "--run", &run_id, "--dest-region", "okinawa"]).unwrap();
+    assert!(stdout.contains("11,900"), "okinawa price missing: {stdout}");
+    assert!(!stdout.contains("22,888"), "kansai price should be filtered out: {stdout}");
+
+    cleanup(&run_id);
+}
+
+#[tokio::test]
+async fn json_emits_structured_data() {
+    let run_id = unique_run_id();
+    if seed_run(&run_id).is_none() {
+        eprintln!("skipping: no Turso credentials");
+        return;
+    }
+    seed_offer(&run_id, "gt1", "okinawa", "group_tour", 21999, "2026-06-18", "2026-06-21", None).unwrap();
+    seed_offer(&run_id, "fit1", "okinawa", "fit", 11900, "2026-06-18", "2026-06-21", Some("high")).unwrap();
+
+    let (ok, stdout, stderr) = run(&["shaping-baseline", "--run", &run_id, "--json"]).unwrap();
+    assert!(ok, "expected success, stderr: {stderr}");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+    assert_eq!(parsed["run_id"], serde_json::json!(run_id), "run_id mismatch: {stdout}");
+    let rows = parsed["baseline_rows"].as_array().expect("baseline_rows array");
+    let row = rows
+        .iter()
+        .find(|r| r["depart_date"] == "2026-06-18" && r["dest_region"] == "okinawa")
+        .unwrap_or_else(|| panic!("no 6/18 okinawa row: {stdout}"));
+    assert_eq!(row["cheapest_group_tour_twd"].as_i64(), Some(21999), "gt price: {row}");
+    assert_eq!(row["cheapest_fit_twd"].as_i64(), Some(11900), "fit price: {row}");
+    assert_eq!(
+        row["fit_savings_vs_group_tour_twd"].as_i64(),
+        Some(10099),
+        "savings: {row}"
+    );
+
+    cleanup(&run_id);
+}
