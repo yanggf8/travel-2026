@@ -64,13 +64,21 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Render activity text: escape, convert \n to <br>, linkify https:// URLs. */
+/** Render activity text: escape, convert \n to <br>, linkify https:// URLs.
+ *  A "<label>：<url>" / "<label>: <url>" pair (e.g. "Google Maps 導航：https://…")
+ *  renders as a short labeled link instead of dumping the whole encoded URL. */
 function renderActivityText(text: string): string {
   if (text.includes('<span')) return text; // already HTML
+  const linkStyle = 'color:#2563eb;font-size:11px;word-break:break-all';
   return esc(text)
     .replace(/\n/g, '<br>')
-    .replace(/(https?:\/\/[^\s<&"，。、]+)/g,
-      (url) => `<a href="${url}" target="_blank" rel="noopener" style="color:#2563eb;font-size:11px;word-break:break-all">${url}</a>`);
+    // Labeled link: "Google Maps 導航：<url>" / "地圖：<url>" / "Map: <url>" → label is the clickable text.
+    .replace(/((?:Google Maps|地圖|地图|導航|导航|Map|Directions)[^:：<]*)[:：]\s*(https?:\/\/[^\s<&"，。、]+)/gi,
+      (_m, label, url) => `<a href="${url}" target="_blank" rel="noopener" style="${linkStyle}">🗺️ ${label.trim()}</a>`)
+    // Any remaining bare URL → linkify with the URL as text. The lookbehind
+    // skips URLs already wrapped by the labeled-link pass above (href="…").
+    .replace(/(?<!href=")(https?:\/\/[^\s<&"，。、]+)/g,
+      (url) => `<a href="${url}" target="_blank" rel="noopener" style="${linkStyle}">${url}</a>`);
 }
 
 function formatDate(dateStr: string, lang: Lang): string {
