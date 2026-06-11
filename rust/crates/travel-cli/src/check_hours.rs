@@ -305,15 +305,31 @@ fn extract_place_keywords(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Normalize common Traditional-Chinese ↔ Japanese-shinjitai character variants
+/// so themes written in 繁體 (e.g. "國際通り", "縣立") match activity titles
+/// written with Japanese forms (e.g. "国際通り", "県立"). Only folds variants
+/// that actually occur in this project's place names; everything else passes through.
+fn normalize_cjk(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '國' => '国', '縣' => '県', '灣' => '湾', '區' => '区',
+            '號' => '号', '關' => '関', '澤' => '沢', '驛' => '駅',
+            '櫻' => '桜', '龍' => '竜', '寶' => '宝', '舊' => '旧',
+            '濱' => '浜', '橫' => '横', '會' => '会', '廣' => '広',
+            other => other,
+        })
+        .collect()
+}
+
 /// Check label freshness: verify day themes match actual activities.
 /// Returns a list of stale label descriptions.
 fn check_label_freshness(days: &[DayCheck]) -> Vec<String> {
     let mut issues = Vec::new();
 
     for day in days {
-        // Collect all activity titles for this day (lowercase for matching)
+        // Collect all activity titles for this day (lowercase + CJK-normalized for matching)
         let day_titles_lower: Vec<String> = day.activities.iter()
-            .map(|a| a.title.to_lowercase())
+            .map(|a| normalize_cjk(&a.title.to_lowercase()))
             .collect();
 
         // Check if theme keywords appear in any activity
@@ -327,7 +343,7 @@ fn check_label_freshness(days: &[DayCheck]) -> Vec<String> {
             if kw.len() < 2 {
                 continue;
             }
-            let kw_lower = kw.to_lowercase();
+            let kw_lower = normalize_cjk(&kw.to_lowercase());
             let is_generic = ["購物", "漫步", "散步", "美食", "返程", "抵達", "搭單軌",
                              "紀念品", "晚餐", "午餐", "早餐", "住宿", "飯店"].iter()
                 .any(|g| kw_lower.contains(g));
