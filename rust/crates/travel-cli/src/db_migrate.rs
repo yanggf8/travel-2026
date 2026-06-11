@@ -298,6 +298,19 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // 12b. plan_map_snapshots — records when the dashboard's static map PNGs
+    //      were last snapshotted (by scripts/snapshot-maps.sh via chromeport→R2)
+    //      so the `check-maps-fresh` lint can flag maps that have gone stale
+    //      relative to the latest itinerary edit. Side table keyed by plan_id.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS plan_map_snapshots (
+  plan_id TEXT NOT NULL PRIMARY KEY,
+  snapshotted_at TEXT NOT NULL
+);"#,
+    )
+    .await;
+
     // 13. Rename plans_current → plans.
     if table_exists(&conn, "plans_current").await {
         exec_lenient(&conn, "ALTER TABLE plans_current RENAME TO plans").await;

@@ -67,6 +67,8 @@ mod db_sync_events;     // db sync events (scripts/turso-sync-events.ts)
 mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
 mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
+mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
+mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 
 use std::{env, io::Read, process};
 
@@ -410,6 +412,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             validate::run(validate::Mode::Validate).await
         }
         [cmd] if cmd == "doctor" => validate::run(validate::Mode::Doctor).await,
+
+        // Map-snapshot staleness lint + its timestamp-recording companion.
+        [cmd, rest @ ..] if cmd == "mark-maps-snapshotted" => {
+            let plan_id = plan_resolver::resolve_plan_id(rest).await.unwrap_or_default();
+            mark_maps_snapshotted::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "check-maps-fresh" => {
+            check_maps_fresh::run(rest).await?;
+            Ok(())
+        }
 
         // ── P1 Rust-port dispatch (pre-wired; modules filled per batch) ──
 

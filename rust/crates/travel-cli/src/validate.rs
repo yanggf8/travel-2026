@@ -70,6 +70,9 @@ pub async fn run(mode: Mode) -> Result<(), String> {
         // across all plans are doctor errors. Ambiguous-stop info/warnings stay
         // advisory (surfaced only by `validate-itinerary`, not doctor).
         validate_map_links_all_plans(&mut issues).await;
+        // Map-snapshot staleness: dashboard map PNGs that no longer match the
+        // itinerary (advisory warning, never an error — re-run snapshot-maps).
+        validate_maps_fresh_all_plans(&mut issues).await;
     }
 
     emit_report(&issues);
@@ -122,6 +125,63 @@ async fn validate_map_links_all_plans(issues: &mut Vec<Issue>) {
                 file: Some(format!("plan:{plan_id}")),
                 line: None,
             });
+        }
+    }
+}
+
+/// Doctor-only: surface plans whose static dashboard map PNGs are stale relative
+/// to the latest itinerary edit. Advisory only — emitted as warnings, never
+/// errors (a stale map doesn't break data integrity; it just needs a re-snapshot).
+/// Best-effort — skips silently if the plan list can't be read.
+async fn validate_maps_fresh_all_plans(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    let mut rows = match conn
+        .query(
+            "SELECT plan_id FROM plans WHERE deleted_at IS NULL ORDER BY plan_id",
+            (),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut plan_ids: Vec<String> = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(id) = row.get::<String>(0) {
+            plan_ids.push(id);
+        }
+    }
+    for plan_id in plan_ids {
+        let verdict = match crate::check_maps_fresh::evaluate(&conn, &plan_id).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match verdict {
+            crate::check_maps_fresh::Status::NeverSnapshotted => {
+                issues.push(Issue {
+                    category: "maps-fresh".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "maps never snapshotted — run scripts/snapshot-maps.sh {plan_id} <dest>"
+                    ),
+                    file: Some(format!("plan:{plan_id}")),
+                    line: None,
+                });
+            }
+            crate::check_maps_fresh::Status::Stale { snapshotted_at } => {
+                issues.push(Issue {
+                    category: "maps-fresh".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run scripts/snapshot-maps.sh"
+                    ),
+                    file: Some(format!("plan:{plan_id}")),
+                    line: None,
+                });
+            }
+            crate::check_maps_fresh::Status::Fresh { .. } => {}
         }
     }
 }
