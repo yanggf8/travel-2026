@@ -410,6 +410,28 @@ function extractActivityHours(activities: unknown[]): Map<string, string> {
   return map;
 }
 
+/**
+ * Extract an admission-fee label per activity title from `cost_estimate`.
+ * `0` → 免費/Free; a positive number → ¥N; null/undefined → no badge (unknown,
+ * not necessarily free — e.g. shopping/meals/transport where cost isn't a ticket).
+ */
+function extractActivityCost(activities: unknown[], lang: Lang): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of activities) {
+    if (typeof a === 'object' && a !== null && 'title' in a) {
+      const obj = a as Record<string, unknown>;
+      const title = obj.title as string;
+      const cost = obj.cost_estimate;
+      if (cost === 0) {
+        map.set(title, lang === 'zh' ? '免費' : 'Free');
+      } else if (typeof cost === 'number' && cost > 0) {
+        map.set(title, `¥${cost}`);
+      }
+    }
+  }
+  return map;
+}
+
 interface BackupVenue {
   /** Full label with surrounding context, e.g. "まーちぬ家（前島2-7-14，步行10分）". */
   label: string;
@@ -470,6 +492,7 @@ function renderSession(
     : enActivities;
   const activityHours = extractActivityHours((session.activities as unknown[]) || []);
   const activityBackup = extractActivityBackup((session.activities as unknown[]) || []);
+  const activityCost = extractActivityCost((session.activities as unknown[]) || [], lang);
   // Fall back to the base session meals when the ZH override has none. meals_zh
   // was de-JSON'd away, so a zhOverride always carries an empty meals[]; using ??
   // would let that [] mask the real session.meals and drop every lunch/dinner pill.
@@ -511,7 +534,12 @@ function renderSession(
           // Extract plain title for hours lookup (strip HTML wrappers)
           const plainTitle = a.replace(/<[^>]+>/g, '').trim();
           const hours = activityHours.get(plainTitle);
-          const hoursBadge = hours ? `<div class="activity-hours">${esc(hours)}</div>` : '';
+          const cost = activityCost.get(plainTitle);
+          // Ticket price sits on the same row as the hours badge when both exist.
+          const costPart = cost ? `🎫 ${esc(cost)}` : '';
+          const hoursPart = hours ? esc(hours) : '';
+          const hoursCostInner = [hoursPart, costPart].filter(Boolean).join(' · ');
+          const hoursBadge = hoursCostInner ? `<div class="activity-hours">${hoursCostInner}</div>` : '';
           const backup = activityBackup.get(plainTitle);
           let backupBadge = '';
           if (backup) {
