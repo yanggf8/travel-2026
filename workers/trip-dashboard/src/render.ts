@@ -991,6 +991,37 @@ function hotelMapsLink(name: string, city?: string): string {
 }
 
 /**
+ * Pull the hotel phone (Tel …) and booking reference (CFM/Order No.) out of the
+ * free-text hotel.notes so the booking summary can show a tappable tel: link and
+ * the confirmation number. Returns ready-to-embed HTML (already escaped), or ''
+ * when neither is present.
+ */
+function hotelContactHtml(notes: string | null, lang: Lang): string {
+  if (!notes) return '';
+  const parts: string[] = [];
+
+  // Phone: "Tel 81-098-8630888" / "電話 …". Keep digits/+/- for the tel: href.
+  const telMatch = notes.match(/(?:Tel|TEL|電話|Phone)[:\s]*([+\d][\d\s\-()]{6,})/);
+  if (telMatch) {
+    const raw = telMatch[1].trim();
+    const dialable = raw.replace(/[^\d+]/g, '');
+    const label = lang === 'zh' ? '電話' : 'Tel';
+    parts.push(`📞 ${label} <a href="tel:${esc(dialable)}" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${esc(raw)}</a>`);
+  }
+
+  // Booking reference: prefer CFM No.; fall back to Order No.
+  const cfm = notes.match(/CFM\s*No\.?\s*([A-Za-z0-9-]+)/i);
+  const order = notes.match(/Order\s*No\.?\s*([A-Za-z0-9-]+)/i);
+  const ref = cfm?.[1] || order?.[1];
+  if (ref) {
+    const label = lang === 'zh' ? '訂單編號' : 'Booking';
+    parts.push(`🎫 ${label} ${esc(ref)}`);
+  }
+
+  return parts.join(' &nbsp;·&nbsp; ');
+}
+
+/**
  * Compute "leave by" time for departure: flightTime minus offsetMinutes.
  * Returns HH:MM string or null if time cannot be parsed.
  */
@@ -1103,7 +1134,13 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
         const nameLink = hotelMapsLink(name, city);
         return zhName ? `${nameLink}<span style="color:var(--text-dim);font-size:12px"> / ${hotelMapsLink(zhName, city)}</span>` : nameLink;
       })() : '\u2014',
-      sub: hotel?.access ? (hotel.access as string[]).join(', ') : '',
+      sub: (() => {
+        const lines: string[] = [];
+        if (hotel?.access) lines.push(esc((hotel.access as string[]).join(', ')));
+        const contact = hotelContactHtml((hotel?.notes as string) || null, lang);
+        if (contact) lines.push(contact);
+        return lines.join('<br>');
+      })(),
       badge: accommodation?.status ? statusBadge(accommodation.status as string, lang) : '',
     },
     {
