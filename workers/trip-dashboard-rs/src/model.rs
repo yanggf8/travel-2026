@@ -3,7 +3,7 @@ use crate::turso::Row;
 use serde_json::Value;
 
 #[derive(Debug, Default, PartialEq)]
-pub struct Stop { pub title: String, pub address: String, pub lat: Option<f64>, pub lon: Option<f64>, pub maps_link: String }
+pub struct Stop { pub title: String, pub address: String, pub lat: Option<f64>, pub lon: Option<f64>, pub maps_link: String, pub cost_estimate: i64 }
 
 #[derive(Debug, Default, PartialEq)]
 pub struct RouteSegment {
@@ -33,6 +33,11 @@ pub struct Day {
     pub theme: String,
     pub theme_zh: String,
     pub weather_label: String,
+    pub temp_low_c: Option<f64>,
+    pub temp_high_c: Option<f64>,
+    pub precipitation_pct: Option<f64>,
+    pub feels_like_low_c: Option<f64>,
+    pub feels_like_high_c: Option<f64>,
     pub sessions: Vec<Session>, // ALWAYS 4: morning, noon, afternoon, evening
     pub route_segments: Vec<RouteSegment>,
 }
@@ -46,6 +51,11 @@ fn s(row: &Row, key: &str) -> String {
 fn i(row: &Row, key: &str) -> i64 {
     row.get(key).and_then(|v| v.as_str()).and_then(|s| s.parse().ok())
         .or_else(|| row.get(key).and_then(|v| v.as_i64())).unwrap_or(0)
+}
+/// Optional float column. Turso returns REALs as strings; accept either.
+/// Returns None when the column is absent or NULL.
+fn f(row: &Row, key: &str) -> Option<f64> {
+    row.get(key).and_then(json_f64)
 }
 
 /// Build the 4 sessions for one day from activity + meal rows already filtered to that day.
@@ -115,7 +125,13 @@ pub fn assemble(
         plan.days.push(Day {
             day_number: dn, date: s(d, "date"), day_type: s(d, "day_type"),
             theme: s(d, "theme"), theme_zh: s(d, "theme_zh"),
-            weather_label: s(d, "weather_label"), sessions, route_segments,
+            weather_label: s(d, "weather_label"),
+            temp_low_c: f(d, "temp_low_c"),
+            temp_high_c: f(d, "temp_high_c"),
+            precipitation_pct: f(d, "precipitation_pct"),
+            feels_like_low_c: f(d, "feels_like_low_c"),
+            feels_like_high_c: f(d, "feels_like_high_c"),
+            sessions, route_segments,
         });
     }
     plan
@@ -146,6 +162,7 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
                 title,
                 address: poi.map(|p| s(p, "address")).unwrap_or_default(),
                 lat, lon, maps_link,
+                cost_estimate: poi.map(|p| i(p, "cost_estimate")).unwrap_or(0),
             });
         }
     }
@@ -228,6 +245,56 @@ mod tests {
         assert_eq!(seg.to_place, "Naminoue");
         assert_eq!(seg.mode, "driving");
         assert_eq!(seg.duration_min, 12);
+    }
+
+    #[test]
+    fn assemble_populates_weather_detail_from_day_row() {
+        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
+        // Turso returns REALs as strings — assert we parse those.
+        let day_rows = vec![row(&[
+            ("day_number", json!("2")), ("date", json!("2026-06-13")),
+            ("temp_low_c", json!("26.4")), ("temp_high_c", json!("30.1")),
+            ("precipitation_pct", json!("73")),
+            ("feels_like_low_c", json!("28.0")), ("feels_like_high_c", json!("34.2")),
+        ])];
+        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[]);
+        let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
+        assert_eq!(day.temp_low_c, Some(26.4));
+        assert_eq!(day.temp_high_c, Some(30.1));
+        assert_eq!(day.precipitation_pct, Some(73.0));
+        assert_eq!(day.feels_like_low_c, Some(28.0));
+        assert_eq!(day.feels_like_high_c, Some(34.2));
+    }
+
+    #[test]
+    fn assemble_weather_detail_is_none_when_absent() {
+        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
+        let day_rows = vec![row(&[("day_number", json!("1")), ("date", json!("2026-06-12"))])];
+        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[]);
+        let day = plan.days.iter().find(|d| d.day_number == 1).unwrap();
+        assert_eq!(day.temp_low_c, None);
+        assert_eq!(day.precipitation_pct, None);
+        assert_eq!(day.feels_like_high_c, None);
+    }
+
+    #[test]
+    fn stop_carries_poi_cost_estimate() {
+        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("Shuri Castle"))])];
+        let pois = vec![row(&[("title", json!("Shuri Castle")), ("lat", json!("26.2")), ("lon", json!("127.7")), ("cost_estimate", json!("400"))])];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        assert_eq!(m.cost_estimate, 400);
+    }
+
+    #[test]
+    fn stop_cost_estimate_defaults_zero_without_poi() {
+        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("Free Beach"))])];
+        let pois: Vec<Row> = vec![];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        assert_eq!(m.cost_estimate, 0);
     }
 
     #[test]

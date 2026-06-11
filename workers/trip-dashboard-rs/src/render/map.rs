@@ -21,10 +21,15 @@ pub fn stop_list(stops: &[Stop]) -> String {
     if stops.is_empty() { return String::new(); }
     let mut h = String::from("<ul class=\"stoplist\">");
     for s in stops {
+        // Ticket price badge — shown only for paid POIs (cost_estimate > 0; 0 = free).
+        let price = if s.cost_estimate > 0 {
+            format!("<span class=\"stop-price\">🎫¥{}</span>", s.cost_estimate)
+        } else { String::new() };
         h.push_str(&format!(
-            "<li><a href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>{}</li>",
+            "<li><a href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>{}{}</li>",
             esc_url_attr(&s.maps_link), esc(&s.title),
-            if s.address.is_empty() { String::new() } else { format!("<span class=\"addr\">{}</span>", esc(&s.address)) }
+            if s.address.is_empty() { String::new() } else { format!("<span class=\"addr\">{}</span>", esc(&s.address)) },
+            price
         ));
     }
     h.push_str("</ul>");
@@ -53,5 +58,19 @@ mod tests {
     #[test]
     fn empty_stops_render_nothing() {
         assert_eq!(stop_list(&[]), "");
+    }
+    #[test]
+    fn stop_with_cost_shows_price_badge() {
+        let stops = vec![Stop{ title:"Shuri Castle".into(), maps_link:"https://www.google.com/maps?q=26.2,127.7".into(), cost_estimate:530, ..Default::default()}];
+        let h = stop_list(&stops);
+        assert!(h.contains("stop-price"), "got: {h}");
+        assert!(h.contains("¥530"), "got: {h}");
+    }
+    #[test]
+    fn free_stop_shows_no_price() {
+        let stops = vec![Stop{ title:"Free Beach".into(), maps_link:"https://www.google.com/maps?q=1,1".into(), cost_estimate:0, ..Default::default()}];
+        let h = stop_list(&stops);
+        assert!(!h.contains("stop-price"), "got: {h}");
+        assert!(!h.contains('¥'), "got: {h}");
     }
 }
