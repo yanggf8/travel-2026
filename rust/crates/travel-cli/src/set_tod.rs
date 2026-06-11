@@ -213,6 +213,27 @@ pub async fn run_zh(
     plan_id: String,
 ) -> Result<(), String> {
     let parsed = parse_zh(args)?;
+
+    // Write-time map-link guard for the transit pill. transit_notes_zh renders as
+    // a clickable Google-Maps "A → B → C" chain on the dashboard; every stop in
+    // the chain must form a valid Maps query. This is the SAME guard set-route-
+    // segment uses — closing the hole that let broken transit pills (the bug that
+    // recurred 3×) reach the dashboard through this writer.
+    if let Some(z) = &parsed.transit_zh {
+        for stop in z.split('\u{2192}') {
+            // Skip blank segments (a trailing/leading → produces an empty piece).
+            if stop.trim().is_empty() {
+                continue;
+            }
+            if let Err(reason) = crate::checks::check_stop_linkable(stop) {
+                return Err(format!(
+                    "transit_notes_zh stop \"{}\" {reason}.\nHint: write the pill as a clean place chain, e.g. \"安里駅 → 赤嶺駅 → iias 沖縄豊崎\" — no （…）notes, +步行, or clock times inside a stop.",
+                    stop.trim()
+                ));
+            }
+        }
+    }
+
     let conn = crate::db::connect_write().await?;
     let destination = match read_destination(&conn, &plan_id, &parsed.dest).await {
         Ok(d) => d,
