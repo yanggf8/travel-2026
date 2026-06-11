@@ -147,11 +147,10 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     }
 }
 
-/// Agent-first hook for `doctor`: run only the map-link checks for one plan's
-/// active destination and return the ERROR-level findings (cross-country legs —
-/// the ocean-spanning Maps routes). Returns (day, message) pairs. Best-effort:
-/// returns empty on any DB/resolution failure so doctor never hard-fails here.
-pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
+/// Run the map-link/meal checks for one plan's active destination and return ALL
+/// issues. Shared loader for the doctor hooks below. Best-effort: empty on any
+/// DB/resolution failure so doctor never hard-fails here.
+async fn collect_map_link_issues(plan_id: &str) -> Vec<Issue> {
     let Ok(conn) = db::connect_read().await else {
         return Vec::new();
     };
@@ -166,8 +165,33 @@ pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
         validate_map_links(day, &mut issues);
     }
     issues
+}
+
+/// Message prefix the reservation check emits — shared so the doctor hook can
+/// pick those findings back out of the issue list without re-deriving them.
+const RESERVATION_MSG_PREFIX: &str = "Restaurant may need a reservation";
+
+/// Agent-first hook for `doctor`: run only the map-link checks for one plan's
+/// active destination and return the ERROR-level findings (cross-country legs —
+/// the ocean-spanning Maps routes). Returns (day, message) pairs.
+pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
+    collect_map_link_issues(plan_id)
+        .await
         .into_iter()
         .filter(|i| matches!(i.severity, Severity::Error))
+        .map(|i| (i.day.unwrap_or(0), i.message))
+        .collect()
+}
+
+/// Agent-first hook for `doctor`: sit-down restaurants that may need a
+/// reservation and are NOT yet enrolled in the booking ledger (no booked/pending
+/// activity in their session). Self-clearing — once you `set-activity-booking …
+/// pending|booked`, the finding disappears. Returns (day, restaurant-label).
+pub async fn unbooked_reservations(plan_id: &str) -> Vec<(i64, String)> {
+    collect_map_link_issues(plan_id)
+        .await
+        .into_iter()
+        .filter(|i| i.message.starts_with(RESERVATION_MSG_PREFIX))
         .map(|i| (i.day.unwrap_or(0), i.message))
         .collect()
 }
@@ -334,8 +358,16 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
     // booking. Walk-in types (ramen, public-market food courts / 食堂, izakaya
     // street-stall villages, supermarkets, casual soba) can't be reserved, so skip
     // them. Breakfast is also skipped (hotel/conbini, never reserved).
+    //
+    // BOOKING-AWARE: once the restaurant is enrolled in the booking ledger — i.e.
+    // the same session already has an activity with booking_status booked/pending —
+    // the reservation is being tracked, so we stop flagging it. This makes the lint
+    // self-clearing: set-activity-booking … pending|booked silences it. (Path B:
+    // restaurant reservations reuse the activity booking lifecycle.)
     for meal in &day.meals {
-        if needs_reservation_check(&meal.session, &meal.text) {
+        if needs_reservation_check(&meal.session, &meal.text)
+            && !session_has_tracked_booking(day, &meal.session)
+        {
             out.push(Issue {
                 severity: Severity::Info,
                 day: Some(day.day_number),
@@ -345,11 +377,24 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
                     truncate(&meal.text, 50)
                 ),
                 suggestion: Some(
-                    "Confirm walk-in vs reservation; if booked, record it: set-activity-booking <day> <session> \"<restaurant>\" booked --ref \"<reservation>\".".to_string(),
+                    "Enroll it in the booking ledger so it's tracked: add-activity <day> <session> \"<restaurant>\" then set-activity-booking <day> <session> \"<restaurant>\" pending (→ booked once confirmed). Walk-in? Leave as-is.".to_string(),
                 ),
             });
         }
     }
+}
+
+/// True when the given day+session already has a booking-tracked activity
+/// (booking_status booked/pending). Used to suppress the reservation flag once a
+/// restaurant has been enrolled in the booking ledger.
+fn session_has_tracked_booking(day: &DaySummary, session: &str) -> bool {
+    day.activities.iter().any(|a| {
+        a.session == session
+            && matches!(
+                a.booking_status.as_deref(),
+                Some("booked") | Some("pending") | Some("waitlist")
+            )
+    })
 }
 
 /// True when a meal is a sit-down lunch/dinner restaurant that plausibly needs a
@@ -1340,6 +1385,64 @@ mod map_link_tests {
         assert!(!needs_reservation_check("noon", "\u{30EA}\u{30A6}\u{30DC}\u{30A6} \u{5B89}\u{91CC}\u{5E97}")); // リウボウ supermarket
         // Breakfast is always walk-in regardless of venue text.
         assert!(!needs_reservation_check("morning", "\u{65E9}\u{9910}\u{FF1A}\u{67D0}\u{9910}\u{5EF3}"));
+    }
+
+    // Build a minimal Activity for booking-aware tests.
+    fn act(session: &str, booking_status: Option<&str>) -> Activity {
+        Activity {
+            title: "restaurant".into(),
+            session: session.into(),
+            start_time: None,
+            end_time: None,
+            duration_min: 0,
+            area: None,
+            booking_required: booking_status.is_some(),
+            booking_status: booking_status.map(|s| s.to_string()),
+            book_by: None,
+            operating_hours: None,
+        }
+    }
+
+    #[test]
+    fn reservation_flag_clears_once_session_has_tracked_booking() {
+        // A sit-down dinner meal with NO tracked activity in the session → flagged.
+        let dinner = MealEntry {
+            session: "evening".into(),
+            text: "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}\u{FF5C}map:x".into(), // ゆうなんぎい
+        };
+        let base = DaySummary {
+            day_number: 1, date: "d".into(), theme: "x".into(),
+            activities: vec![], total_duration_min: 0,
+            transit_chains: vec![], route_legs: vec![], activity_map_urls: vec![],
+            meals: vec![dinner],
+        };
+        let mut out = Vec::new();
+        validate_map_links(&base, &mut out);
+        assert!(
+            out.iter().any(|i| i.message.starts_with("Restaurant may need a reservation")),
+            "unbooked sit-down restaurant should be flagged"
+        );
+
+        // Same meal, but the evening session now has a pending activity → suppressed.
+        let mut booked = DaySummary {
+            activities: vec![act("evening", Some("pending"))],
+            ..base
+        };
+        // (base was moved; rebuild the meal it carried)
+        booked.meals = vec![MealEntry {
+            session: "evening".into(),
+            text: "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}\u{FF5C}map:x".into(),
+        }];
+        let mut out2 = Vec::new();
+        validate_map_links(&booked, &mut out2);
+        assert!(
+            !out2.iter().any(|i| i.message.starts_with("Restaurant may need a reservation")),
+            "a pending booking in the session should clear the reservation flag"
+        );
+
+        // A booking in a DIFFERENT session must NOT clear it.
+        assert!(session_has_tracked_booking(&booked, "evening"));
+        assert!(!session_has_tracked_booking(&booked, "noon"));
     }
 
     #[test]

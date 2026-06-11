@@ -67,8 +67,10 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ./bin/travel sync-bookings [--dry-run]
 ./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
 ./bin/travel check-booking-integrity
-./bin/travel validate-itinerary --dest tokyo_2026 [--severity error|warning|info]  # also a MAP-LINK lint: cross-country legs (error), &-truncating URLs / walking-mode rail (warning), ambiguous bare stops + meals with no map pin (info). historical days skip booking-deadline failures
+./bin/travel validate-itinerary --dest tokyo_2026 [--severity error|warning|info]  # also a MAP-LINK lint: cross-country legs (error), &-truncating URLs / walking-mode rail (warning), ambiguous bare stops + meals with no map pin (info). Plus a RESERVATION lint (info): sit-down lunch/dinner restaurants not yet tracked in the booking ledger — walk-ins (ramen, 公設市場/食堂, 屋台村, supermarket, casual そば) are never flagged; self-clears once the session has a booked/pending activity. historical days skip booking-deadline failures
 ```
+
+**Restaurant reservations reuse the activity booking lifecycle** (no separate meal-booking subsystem): a sit-down restaurant that needs booking is enrolled as an `activity` with `add-activity`, then `set-activity-booking <day> <session> "<restaurant>" pending` (→ `booked --ref` once confirmed). It then flows into `sync-bookings` → `bookings_current` → `query-bookings`/`status`/`check-booking-integrity`, renders a 待訂/已訂 badge on the dashboard, and disappears from the reservation lint. Walk-in venues are simply left as `session_meals` lines (not enrolled). The booking extract includes the `noon` session, so bookable lunches are tracked too.
 
 ## Utilities
 ```bash
@@ -76,7 +78,7 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel leave calc 2026-02-24 2026-02-28
 ./bin/travel normalize flights scrapes/trip-feb24-out.json --top 5
 ./bin/travel validate data                       # data integrity check
-./bin/travel doctor                              # full system health check (also runs the map-link lint across all plans; cross-country/ocean-route legs fail as errors)
+./bin/travel doctor                              # full system health check (also runs the map-link lint across all plans; cross-country/ocean-route legs fail as errors). Emits a per-plan [reservations] info line for sit-down restaurants not yet tracked in the booking ledger (advisory — never fails the check)
 ```
 
 ## Mutations

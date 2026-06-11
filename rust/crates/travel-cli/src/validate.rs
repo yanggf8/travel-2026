@@ -105,6 +105,24 @@ async fn validate_map_links_all_plans(issues: &mut Vec<Issue>) {
                 line: None,
             });
         }
+        // Reservation gate (advisory, not pass/fail): sit-down restaurants not yet
+        // enrolled in the booking ledger. One concise actionable line per plan —
+        // self-clears as each is booked. Keeps doctor's error/warning counts clean.
+        let unbooked = crate::validate_itinerary::unbooked_reservations(&plan_id).await;
+        if !unbooked.is_empty() {
+            let days: Vec<String> = unbooked.iter().map(|(d, _)| format!("day {d}")).collect();
+            issues.push(Issue {
+                category: "reservations".to_string(),
+                severity: Severity::Info,
+                message: format!(
+                    "{} restaurant(s) may need a reservation, not yet tracked ({}). Enroll: add-activity + set-activity-booking … pending; walk-in spots can be left as-is.",
+                    unbooked.len(),
+                    days.join(", ")
+                ),
+                file: Some(format!("plan:{plan_id}")),
+                line: None,
+            });
+        }
     }
 }
 
