@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Trip Details
 - **Schema**: `4.2.0` — destination-scoped with canonical offer model
 - **Completed**: Tokyo Feb 13-17, Kyoto Feb 24-28 (see `docs/trips/`)
-- **Active**: no trip *plan* locked, but a paused Shaping run exists — `shaping-20260525-093508` (June 2026, Osaka/Sendai-Akita/Okinawa) with a selected LionTravel Okinawa offer. Resume it or `/shaping-research` for a new one (see Next Steps)
+- **Active**: `okinawa-2026` — Naha, **2026-06-12 → 06-16** (CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). `okinawa_2026` is registered in `destination_config`. Status: `./bin/travel status --full --plan-id okinawa-2026`. (Originated from the `shaping-20260525-093508` Shaping run.)
 - **Naming caveat**: legacy artifacts may say `yokohama-travel-2026`; the project is Japan-wide. (Root `package.json` is retired — see CLI Execution below.)
 
 ## Architecture
@@ -297,7 +297,7 @@ Completed trips — full bookings, itinerary, and weather notes archived:
 - **Tokyo Feb 13-17** → `docs/trips/2026-tokyo.md`
 - **Kyoto Feb 24-28** → `docs/trips/2026-kyoto.md`
 
-No upcoming trip locked. Plan status for any active plan: `./bin/travel status --full`.
+**Upcoming: Okinawa (Naha) 2026-06-12 → 06-16** — `okinawa-2026`, active and populated (flights CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary). Status: `./bin/travel status --full --plan-id okinawa-2026`.
 
 ## CLI Quick Reference
 
@@ -502,9 +502,11 @@ Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install h
 
 **The Rust port is DONE** (commits through `88385fb`): P1 command parity, P2 scripts, P3 real-Turso integration tests, the `package.json` cutover (root npm retired), TS archived, and docs/skills converted to `./bin/travel`. ADR-001 / "StateManagerV2" is achieved by construction (the Rust CLI *is* the targeted-SQL model) — do NOT refactor the archived TS `StateManager`; that work is complete and the code is read-only under `archive/`. Don't re-port `import-offers-to-turso` (intentionally dropped; replaced by `import-offers` + chromeport `parse capture`).
 
+Recently fixed (2026-06-11): mutation commands now honor `--plan-id` via the resolver (no more silent fallback to `test-set-dates-2026`); the `db seed destination-refs|ota-knowledge` commands' SQL was repaired (`fetched_at.clone()` had been mangled into the INSERT column lists); and all user-facing JSON flags were removed for a plain-text agent-first surface (`set-tod-zh` → repeatable `--activity-zh`; `set-route-segments-bulk` → repeatable `--seg "a|b|mode|..."`; `--json` output dropped from `shaping-compare`/`shaping-baseline`/`query-tour-group-offers`). Only `shaping-export --json` remains (the machine handoff). See `docs/handoff-cli-mutation-bugs.md`.
+
 Remaining agenda (none blocking — the project is between trips and the live DB is fully seeded):
 
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **PARKED (on agenda, now unblocked)** — Worker → `workers-rs` port (~2.9k LOC in `workers/trip-dashboard/src`). wrangler/npm stays for deploy regardless and the read-mostly dashboard gains no data-integrity benefit, so low priority. Revisit per `docs/plans/2026-06-10-roadmap-v2-rust.md`.
 - **OTA decommission gate** (user-driven) — only `settour` is live-verified; the rest have snippet fixtures only. Their archived Python parsers can't be deleted until each passes a real `chromeport verify` against a live capture — needs human browser sessions, not code.
-- **Product / paused run** — a real in-progress shaping run exists: `shaping-20260525-093508` (June 2026, Osaka/Sendai-Akita/Okinawa) with 90 ranked candidates and a **selected LionTravel offer** (Hotel Aqua Citta Naha, 2026-06-21 3n). `okinawa_2026` is NOT yet in `destination_config`. To resume: `/new-destination okinawa_2026`, then `shaping-adopt <candidate> okinawa-2026 --create-plan --dest okinawa_2026`. **User decides** dates/destination — don't pick autonomously.
+- **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.
