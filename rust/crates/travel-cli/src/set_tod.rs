@@ -348,9 +348,157 @@ pub async fn run_zh(
     Ok(())
 }
 
+// ── set-meals ──────────────────────────────────────────────────────
+//
+// Replace the session_meals (base, display) rows for a (day, session) with the
+// provided --meal values, in order. This is the missing write path for base
+// meals (set-tod-zh only ever touched the ZH activity list, never meals).
+//
+//   travel set-meals <day> <session> --meal "Lunch: …" [--meal "Dinner: …"] [--dest]
+//
+// A meal string may carry a map pin via the "<label>｜map:<query>" convention,
+// which the dashboard renders as a clickable place link.
+pub async fn run_meals(args: &[String], plan_id: String) -> Result<(), String> {
+    let parsed = parse_meals(args)?;
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+    require_session(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
+
+    println!(
+        "\n🍜 Setting meals:\n   Destination: {}, Day {}, {} — {} meal(s)",
+        destination,
+        parsed.day,
+        parsed.session,
+        parsed.meals.len()
+    );
+
+    conn.execute(
+        "DELETE FROM session_meals \
+         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            parsed.day,
+            parsed.session.clone()
+        ],
+    )
+    .await
+    .map_err(|e| format!("session_meals DELETE failed: {e}"))?;
+    for (i, meal) in parsed.meals.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO session_meals \
+                (plan_id, destination, day_number, session_type, sort_order, meal) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                parsed.day,
+                parsed.session.clone(),
+                i as i64,
+                meal.clone()
+            ],
+        )
+        .await
+        .map_err(|e| format!("session_meals INSERT failed: {e}"))?;
+        println!("   • {meal}");
+    }
+    touch_day(&conn, &plan_id, &destination, parsed.day).await?;
+
+    let kv: Vec<(&str, String)> = vec![
+        ("day_number", parsed.day.to_string()),
+        ("session", parsed.session.clone()),
+        ("count", parsed.meals.len().to_string()),
+        ("meals", parsed.meals.join(" | ")),
+    ];
+    execute_tod(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        None,
+        None,
+        None,
+        None,
+        &kv,
+        "itinerary_session_meals_set",
+        "set-meals",
+        &format!("D{}/{}", parsed.day, parsed.session),
+    )
+    .await?;
+
+    println!("✅ Meals updated");
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Arg parsing
 // ─────────────────────────────────────────────────────────────────
+
+#[derive(Default, Debug)]
+struct ParsedMeals {
+    day: i64,
+    session: String,
+    meals: Vec<String>,
+    dest: Option<String>,
+}
+
+fn parse_meals(args: &[String]) -> Result<ParsedMeals, String> {
+    let mut p = ParsedMeals::default();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                p.dest = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --dest".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--meal" => {
+                p.meals.push(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --meal".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--plan-id" => {
+                i += 2; // consumed by the top-level resolver
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() < 2 {
+        return Err(
+            "Usage: set-meals <day> <session> --meal \"<text>\" [--meal \"<text>\"...] [--dest <slug>]"
+                .to_string(),
+        );
+    }
+    p.day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    if p.day < 1 {
+        return Err("<day> must be a positive integer".to_string());
+    }
+    p.session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    if p.meals.is_empty() {
+        return Err("at least one --meal \"<text>\" is required".to_string());
+    }
+    Ok(p)
+}
 
 fn parse_focus(args: &[String]) -> Result<ParsedFocus, String> {
     let mut p = ParsedFocus::default();

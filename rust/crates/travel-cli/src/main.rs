@@ -304,6 +304,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             set_tod::run_zh(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "set-meals" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-meals <day> <session> --meal \"<text>\" [--meal \"<text>\"...] [--dest <slug>]\n  (a meal may carry a map pin: \"<label>｜map:<query>\")");
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_tod::run_meals(rest, plan_id).await?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "set-activity-time" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
                 println!("Usage:\n  travel set-activity-time <day> <session> <activity> [--start HH:MM] [--end HH:MM] [--fixed true|false] [--dest <slug>]");

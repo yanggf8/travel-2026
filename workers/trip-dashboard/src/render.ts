@@ -359,6 +359,22 @@ function renderTransitPill(transit: string, city: string): string {
   return `<span class="pill pill-transit">\uD83D\uDE83 ${esc(transit)}</span>`;
 }
 
+/** Render a meal as a clickable place pin when it carries a map target.
+ *  Convention: "<label>\uFF5Cmap:<query>" (full- or half-width pipe) renders <label>
+ *  linked to a Google Maps place search for <query> (+ city for disambiguation).
+ *  Without the marker it's a plain meal pill. */
+function renderMealPill(meal: string, city: string): string {
+  const m = meal.match(/^(.*?)\s*[\uFF5C|]\s*map:\s*(.+)$/i); // \uFF5Cmap:  or  |map:
+  if (m) {
+    const label = m[1].trim();
+    const query = m[2].trim();
+    const term = city ? `${query} ${city}` : query;
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(term)}`;
+    return `<a class="pill pill-meal" href="${esc(url)}" target="_blank" rel="noopener">\uD83C\uDF5C ${esc(label)} \uD83D\uDDFA\uFE0F</a>`;
+  }
+  return `<span class="pill pill-meal">\uD83C\uDF5C ${esc(meal)}</span>`;
+}
+
 interface SessionEditMeta {
   plan_id: string;
   dest: string;
@@ -432,7 +448,7 @@ function renderSession(
       }) : ''}
       <div class="info-pills">
         ${transit ? renderTransitPill(transit, mapCity || '') : ''}
-        ${meals.map((m) => `<span class="pill pill-meal">\uD83C\uDF5C ${esc(m)}</span>`).join('')}
+        ${meals.map((m) => renderMealPill(m, mapCity || '')).join('')}
       </div>
       ${em ? editableField(mealsFieldId, meals.join('\n'), {
         table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
