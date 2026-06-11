@@ -81,6 +81,23 @@ struct DaySummary {
     theme: String,
     activities: Vec<Activity>,
     total_duration_min: i64,
+    // Map-link lint inputs (see validate_map_links).
+    transit_chains: Vec<TransitChain>, // from timesofday.transit_notes(_zh), split on →
+    route_legs: Vec<RouteLeg>,         // from day_route_segments
+    activity_map_urls: Vec<String>,    // https://…maps… URLs embedded in activity titles
+}
+
+// One transit-pill string (e.g. "A→B→C") tied to its session, for link linting.
+struct TransitChain {
+    session: String,
+    text: String,
+}
+
+// One day_route_segments row.
+struct RouteLeg {
+    from: String,
+    to: String,
+    mode: String,
 }
 
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
@@ -147,9 +164,256 @@ fn validate(days: &[DaySummary]) -> Vec<Issue> {
         validate_booking_deadlines(day, &mut issues);
         validate_business_hours(day, &mut issues);
         validate_area_efficiency(day, &mut issues);
+        validate_map_links(day, &mut issues);
     }
     validate_logical_order(days, &mut issues);
     issues
+}
+
+// ── map-link lint ─────────────────────────────────────────────────────
+//
+// Catches the classes of broken Google-Maps links we kept finding by hand:
+//   1. activity-text map URL containing '&'  → the dashboard linkifier truncates
+//      at the first '&', so query-param URLs break. Use the path form. (warning)
+//   2. transit/route leg crossing countries (a Taiwan place + a Japan place in one
+//      leg) → Maps draws an ocean-spanning route. (error)
+//   3. a rail/bus leg (單軌/巴士/線/JR/電車…) that would be mode-detected as walking
+//      because of a trailing 步行 note. (warning)
+//   4. an ambiguous bare-name stop (e.g. 安里 with no 駅/站/Station and no spelled-out
+//      city) that Maps can't geolocate reliably. (info)
+fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
+    // (1) activity-text URLs with '&'
+    for url in &day.activity_map_urls {
+        if url.contains('&') {
+            out.push(Issue {
+                severity: Severity::Warning,
+                day: Some(day.day_number),
+                session: None,
+                message: format!(
+                    "Map URL contains '&' and will be truncated by the dashboard linkifier: {}",
+                    truncate(url, 60)
+                ),
+                suggestion: Some(
+                    "Use the path form https://www.google.com/maps/dir/<from>/<to> (no & query params)".to_string(),
+                ),
+            });
+        }
+    }
+
+    // Build the leg list from both transit chains and route segments.
+    // Each leg = (from_text, to_text, full_context_text, declared_mode_or_none).
+    let mut legs: Vec<(String, String, String, Option<String>, Option<String>)> = Vec::new();
+    for tc in &day.transit_chains {
+        let stops: Vec<&str> = tc.text.split('\u{2192}').collect(); // →
+        for w in stops.windows(2) {
+            legs.push((
+                clean_stop(w[0]),
+                clean_stop(w[1]),
+                tc.text.clone(),
+                None,
+                Some(tc.session.clone()),
+            ));
+        }
+    }
+    for rl in &day.route_legs {
+        legs.push((
+            clean_stop(&rl.from),
+            clean_stop(&rl.to),
+            format!("{} {}", rl.from, rl.to),
+            Some(rl.mode.clone()),
+            None,
+        ));
+    }
+
+    for (from, to, ctx, mode, session) in &legs {
+        if from.is_empty() || to.is_empty() {
+            continue;
+        }
+        // (2) cross-country leg
+        let cf = place_country(from);
+        let ct = place_country(to);
+        if let (Some(a), Some(b)) = (cf, ct) {
+            if a != b {
+                out.push(Issue {
+                    severity: Severity::Error,
+                    day: Some(day.day_number),
+                    session: session.clone(),
+                    message: format!(
+                        "Map leg crosses countries: \"{from}\" ({a}) → \"{to}\" ({b}) — will draw an ocean-spanning route"
+                    ),
+                    suggestion: Some(
+                        "Split into same-country legs, or this leg is a flight (don't render a ground route).".to_string(),
+                    ),
+                });
+            }
+        }
+        // (3) rail/bus route leg explicitly stored as walking
+        if let Some(m) = mode {
+            if m == "walking" && mentions_rail_or_bus(ctx) {
+                out.push(Issue {
+                    severity: Severity::Warning,
+                    day: Some(day.day_number),
+                    session: session.clone(),
+                    message: format!(
+                        "Route leg \"{from}\" → \"{to}\" is mode=walking but mentions rail/bus"
+                    ),
+                    suggestion: Some("Set mode to transit for a rail/bus leg.".to_string()),
+                });
+            }
+        }
+        // (4) ambiguous bare-name stop
+        for stop in [from, to] {
+            if is_ambiguous_stop(stop) {
+                out.push(Issue {
+                    severity: Severity::Info,
+                    day: Some(day.day_number),
+                    session: session.clone(),
+                    message: format!(
+                        "Map stop \"{stop}\" is a bare name without station/city context — may geolocate wrong"
+                    ),
+                    suggestion: Some(
+                        "Add a 駅/站/Station suffix or a city (e.g. \"安里駅 那覇\").".to_string(),
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Strip the same noise the dashboard's cleanStopLabel removes, so lint sees the
+/// same place string Maps will: drop note after （。、, clock times, ①②③ markers,
+/// leading verbs/mode-nouns, "…至/到<place>", trailing 步行.
+fn clean_stop(s: &str) -> String {
+    let mut out = s
+        .split(['\u{FF08}', '(', '\u{3002}', '\u{3001}', ','])
+        .next()
+        .unwrap_or("")
+        .to_string();
+    // drop clock times
+    out = strip_clock(&out);
+    // keep text after the last 至/到 (verb phrase → place)
+    if let Some(idx) = out.rfind(['\u{81F3}', '\u{5230}']) {
+        out = out[idx + '\u{81F3}'.len_utf8()..].to_string();
+    }
+    // strip leading ①②③ markers
+    out = out.trim_start_matches(|c: char| ('\u{2460}'..='\u{2473}').contains(&c) || c == '.' || c == '\u{FF0E}').to_string();
+    // strip leading verbs / mode-nouns
+    for p in [
+        "\u{958B}\u{8ECA}", "\u{81EA}\u{99D5}", "\u{8F49}\u{4E58}", "\u{642D}\u{4E58}", "\u{642D}", "\u{4E58}",
+        "\u{63A5}\u{99C1}\u{5DF4}\u{58EB}", "\u{5DF4}\u{58EB}", "\u{55AE}\u{8ECC}\u{96FB}\u{8ECA}", "\u{55AE}\u{8ECC}", "\u{96FB}\u{8ECA}",
+    ] {
+        if let Some(rest) = out.strip_prefix(p) {
+            out = rest.trim_start_matches([':', '\u{FF1A}']).to_string();
+        }
+    }
+    out.trim().trim_end_matches("\u{6B65}\u{884C}").trim().to_string()
+}
+
+fn strip_clock(s: &str) -> String {
+    // remove HH:MM occurrences
+    let bytes: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        // try to match D?D:DD
+        let rest: String = bytes[i..].iter().take(5).collect();
+        if regex_lite_clock(&rest) {
+            // skip the matched clock (4 or 5 chars)
+            let len = if bytes.get(i + 2) == Some(&':') { 5 } else { 4 };
+            i += len;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+// matches H:MM or HH:MM at start
+fn regex_lite_clock(s: &str) -> bool {
+    let c: Vec<char> = s.chars().collect();
+    if c.len() >= 5 && c[0].is_ascii_digit() && c[1].is_ascii_digit() && c[2] == ':' && c[3].is_ascii_digit() && c[4].is_ascii_digit() {
+        return true;
+    }
+    if c.len() >= 4 && c[0].is_ascii_digit() && c[1] == ':' && c[2].is_ascii_digit() && c[3].is_ascii_digit() {
+        return true;
+    }
+    false
+}
+
+// Country of a place by keyword. None = unknown (don't flag).
+fn place_country(s: &str) -> Option<&'static str> {
+    const TW: [&str; 9] = [
+        "\u{7D05}\u{6A39}\u{6797}", "\u{6DE1}\u{6C34}", "\u{65B0}\u{5317}", "\u{53F0}\u{5317}", "\u{6843}\u{5712}",
+        "\u{5927}\u{5712}", "TPE", "\u{53F0}\u{7063}", "\u{6A4B}",
+    ]; // 紅樹林 淡水 新北 台北 桃園 大園 TPE 台灣 橋(機場)
+    const JP: [&str; 10] = [
+        "\u{90A3}\u{8987}", "\u{5B89}\u{91CC}", "\u{6C96}\u{7E04}", "\u{9996}\u{91CC}", "\u{570B}\u{969B}\u{901A}",
+        "\u{725F}\u{6587}", "OKA", "\u{6771}\u{4EAC}", "\u{4EAC}\u{90FD}", "\u{5927}\u{962A}",
+    ]; // 那覇 安里 沖繩 首里 國際通 牧志 OKA 東京 京都 大阪
+    if TW.iter().any(|k| s.contains(k)) {
+        return Some("TW");
+    }
+    if JP.iter().any(|k| s.contains(k)) {
+        return Some("JP");
+    }
+    None
+}
+
+fn mentions_rail_or_bus(s: &str) -> bool {
+    ["\u{7DDA}", "\u{5DF4}\u{58EB}", "\u{55AE}\u{8ECC}", "\u{96FB}\u{8ECA}", "\u{5730}\u{9435}", "\u{6377}\u{904B}", "\u{706B}\u{8ECA}", "JR", "monorail", "rail", "bus", "train"]
+        .iter()
+        .any(|k| s.contains(k))
+}
+
+// A stop is "ambiguous" if it's a short CJK place name with no station/city marker.
+fn is_ambiguous_stop(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    // Has an explicit station/place marker → fine.
+    let markers = ["\u{99C5}", "\u{7AD9}", "Station", "\u{6A5F}\u{5834}", "Airport", "\u{6A4B}", "\u{516C}\u{5712}", "\u{5BAE}", "\u{5E02}\u{5834}", "\u{901A}"]; // 駅 站 機場 橋 公園 宮 市場 通
+    if markers.iter().any(|m| s.contains(m)) {
+        return false;
+    }
+    // Contains a space → likely already "<place> <city>" disambiguated.
+    if s.contains(' ') {
+        return false;
+    }
+    // Latin/ASCII name → Maps usually fine.
+    if s.is_ascii() {
+        return false;
+    }
+    // Short bare CJK name (≤4 chars) → ambiguous.
+    s.chars().count() <= 4
+}
+
+fn extract_map_urls(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(pos) = rest.find("http") {
+        let tail = &rest[pos..];
+        // take until whitespace
+        let end = tail.find(char::is_whitespace).unwrap_or(tail.len());
+        let url = &tail[..end];
+        if url.contains("google.com/maps") || url.contains("maps.google") || url.contains("/maps/") {
+            out.push(url.to_string());
+        }
+        rest = &tail[end.min(tail.len())..];
+        if rest.is_empty() {
+            break;
+        }
+    }
+    out
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        let t: String = s.chars().take(n).collect();
+        format!("{t}…")
+    }
 }
 
 fn validate_day_conflicts(day: &DaySummary, out: &mut Vec<Issue>) {
@@ -464,6 +728,9 @@ async fn load_day_summaries(
             theme,
             activities: Vec::new(),
             total_duration_min: 0,
+            transit_chains: Vec::new(),
+            route_legs: Vec::new(),
+            activity_map_urls: Vec::new(),
         });
     }
 
@@ -506,6 +773,9 @@ async fn load_day_summaries(
             // Activity for a day with no day row — skip (TS only iterates days).
             continue;
         };
+        for u in extract_map_urls(&title) {
+            summary.activity_map_urls.push(u);
+        }
         summary.total_duration_min += duration_min;
         summary.activities.push(Activity {
             title,
@@ -519,6 +789,54 @@ async fn load_day_summaries(
             book_by,
             operating_hours: parse_hours_from_notes(notes.as_deref()),
         });
+    }
+
+    // Transit chains (transit pills) — prefer ZH text, fall back to EN.
+    let mut tod_rows = conn
+        .query(
+            "SELECT day_number, session_type, \
+                    COALESCE(NULLIF(transit_notes_zh, ''), NULLIF(transit_notes, '')) AS transit \
+             FROM timesofday WHERE plan_id = ?1 AND destination = ?2",
+            params![plan_id.to_string(), dest.to_string()],
+        )
+        .await
+        .map_err(|e| format!("timesofday query failed: {e}"))?;
+    while let Some(r) = tod_rows
+        .next()
+        .await
+        .map_err(|e| format!("timesofday row read failed: {e}"))?
+    {
+        let day_number: i64 = r.get(0).unwrap_or(0);
+        let session: String = r.get(1).unwrap_or_default();
+        let transit: Option<String> = r.get(2).ok().flatten().filter(|s: &String| !s.is_empty());
+        if let (Some(text), Some(summary)) =
+            (transit, summaries.iter_mut().find(|d| d.day_number == day_number))
+        {
+            summary.transit_chains.push(TransitChain { session, text });
+        }
+    }
+
+    // Route segments.
+    let mut seg_rows = conn
+        .query(
+            "SELECT day_number, from_place, to_place, mode FROM day_route_segments \
+             WHERE plan_id = ?1 AND destination = ?2 ORDER BY day_number, sort_order",
+            params![plan_id.to_string(), dest.to_string()],
+        )
+        .await
+        .map_err(|e| format!("day_route_segments query failed: {e}"))?;
+    while let Some(r) = seg_rows
+        .next()
+        .await
+        .map_err(|e| format!("day_route_segments row read failed: {e}"))?
+    {
+        let day_number: i64 = r.get(0).unwrap_or(0);
+        let from: String = r.get(1).unwrap_or_default();
+        let to: String = r.get(2).unwrap_or_default();
+        let mode: String = r.get(3).unwrap_or_default();
+        if let Some(summary) = summaries.iter_mut().find(|d| d.day_number == day_number) {
+            summary.route_legs.push(RouteLeg { from, to, mode });
+        }
     }
 
     Ok(summaries)
@@ -783,4 +1101,94 @@ async fn read_destination(
         return Ok(dest);
     }
     Err(format!("plan_metadata row missing for plan_id={plan_id}"))
+}
+
+#[cfg(test)]
+mod map_link_tests {
+    use super::*;
+
+    #[test]
+    fn clean_stop_strips_noise() {
+        // verb + 至 + place（note）
+        assert_eq!(clean_stop("\u{8F49}\u{4E58}\u{63A5}\u{99C1}\u{5DF4}\u{58EB}\u{81F3}\u{6843}\u{6A5F}T2"), "\u{6843}\u{6A5F}T2"); // 轉乘接駁巴士至桃機T2 → 桃機T2
+        // ①marker + 開車：place
+        assert_eq!(clean_stop("\u{2460}\u{958B}\u{8ECA}\u{FF1A}\u{7D05}\u{6A39}\u{6797}"), "\u{7D05}\u{6A39}\u{6797}"); // ①開車：紅樹林 → 紅樹林
+        // place（note）
+        assert_eq!(clean_stop("\u{5B89}\u{91CC}\u{99C5}\u{FF08}\u{55AE}\u{8ECC}\u{FF09}"), "\u{5B89}\u{91CC}\u{99C5}"); // 安里駅（單軌）→ 安里駅
+        // clock time stripped
+        assert_eq!(clean_stop("05:00 \u{7D05}\u{6A39}\u{6797}").trim(), "\u{7D05}\u{6A39}\u{6797}");
+    }
+
+    #[test]
+    fn place_country_detects() {
+        assert_eq!(place_country("\u{7D05}\u{6A39}\u{6797}"), Some("TW")); // 紅樹林
+        assert_eq!(place_country("\u{5927}\u{5712}\u{51FA}\u{570B}\u{505C}\u{8ECA}\u{5834}"), Some("TW")); // 大園…
+        assert_eq!(place_country("\u{5B89}\u{91CC}"), Some("JP")); // 安里
+        assert_eq!(place_country("\u{90A3}\u{8987}\u{6A5F}\u{5834}"), Some("JP")); // 那覇機場
+        assert_eq!(place_country("Somewhere"), None);
+    }
+
+    #[test]
+    fn ambiguous_stop_rules() {
+        assert!(is_ambiguous_stop("\u{5B89}\u{91CC}")); // 安里 (bare, ≤4) → ambiguous
+        assert!(!is_ambiguous_stop("\u{5B89}\u{91CC}\u{99C5}")); // 安里駅 (has 駅)
+        assert!(!is_ambiguous_stop("\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}")); // has space (city ctx)
+        assert!(!is_ambiguous_stop("\u{90A3}\u{8987}\u{6A5F}\u{5834}")); // 那覇機場 (機場 marker)
+        assert!(!is_ambiguous_stop("Kokusai-dori")); // ascii
+    }
+
+    #[test]
+    fn extract_map_urls_finds_maps() {
+        let t = "drive\nGoogle: https://www.google.com/maps/dir/A/B then walk";
+        let u = extract_map_urls(t);
+        assert_eq!(u.len(), 1);
+        assert!(u[0].contains("/maps/dir/A/B"));
+    }
+
+    #[test]
+    fn cross_country_leg_flagged() {
+        let day = DaySummary {
+            day_number: 1, date: "2026-06-12".into(), theme: "x".into(),
+            activities: vec![], total_duration_min: 0,
+            transit_chains: vec![TransitChain {
+                session: "morning".into(),
+                // 紅樹林→安里 : TW → JP, should error
+                text: "\u{7D05}\u{6A39}\u{6797}\u{2192}\u{5B89}\u{91CC}".into(),
+            }],
+            route_legs: vec![], activity_map_urls: vec![],
+        };
+        let mut out = Vec::new();
+        validate_map_links(&day, &mut out);
+        assert!(out.iter().any(|i| matches!(i.severity, Severity::Error) && i.message.contains("crosses countries")));
+    }
+
+    #[test]
+    fn amp_url_flagged() {
+        let day = DaySummary {
+            day_number: 1, date: "d".into(), theme: "x".into(),
+            activities: vec![], total_duration_min: 0,
+            transit_chains: vec![], route_legs: vec![],
+            activity_map_urls: vec!["https://www.google.com/maps/dir/?api=1&origin=A&destination=B".into()],
+        };
+        let mut out = Vec::new();
+        validate_map_links(&day, &mut out);
+        assert!(out.iter().any(|i| i.message.contains("truncated")));
+    }
+
+    #[test]
+    fn clean_same_country_leg_ok() {
+        // 那霸機場→安里駅 那覇 : both JP, disambiguated → no error, no ambiguous-info
+        let day = DaySummary {
+            day_number: 1, date: "d".into(), theme: "x".into(),
+            activities: vec![], total_duration_min: 0,
+            transit_chains: vec![TransitChain {
+                session: "afternoon".into(),
+                text: "\u{90A3}\u{8987}\u{6A5F}\u{5834}\u{2192}\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}".into(),
+            }],
+            route_legs: vec![], activity_map_urls: vec![],
+        };
+        let mut out = Vec::new();
+        validate_map_links(&day, &mut out);
+        assert!(!out.iter().any(|i| matches!(i.severity, Severity::Error)));
+    }
 }
