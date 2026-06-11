@@ -68,6 +68,22 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             steps,
             profile_override,
         )),
+        Command::Screenshot {
+            url,
+            out,
+            width,
+            height,
+            wait_ms,
+            full_page,
+        } => run_async(screenshot_url(
+            &cli.endpoint,
+            url,
+            out,
+            width,
+            height,
+            wait_ms,
+            full_page,
+        )),
         Command::Parse(ParseCommand::Capture {
             capture_id,
             source_id,
@@ -94,6 +110,14 @@ struct Cli {
 enum Command {
     Browser(BrowserCommand),
     Fetch(FetchCommand),
+    Screenshot {
+        url: String,
+        out: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        wait_ms: Option<u64>,
+        full_page: bool,
+    },
     Parse(ParseCommand),
     Verify {
         source_id: String,
@@ -236,6 +260,39 @@ impl Cli {
                     }),
                 })
             }
+            [cmd, url, rest @ ..] if cmd == "screenshot" => {
+                let out = option_value(rest, "--out")
+                    .ok_or_else(|| CliError::usage("screenshot requires --out <path.png>"))?;
+                let width = match option_value(rest, "--width") {
+                    Some(raw) => Some(raw.parse::<u32>().map_err(|_| {
+                        CliError::usage("--width must be a non-negative integer")
+                    })?),
+                    None => None,
+                };
+                let height = match option_value(rest, "--height") {
+                    Some(raw) => Some(raw.parse::<u32>().map_err(|_| {
+                        CliError::usage("--height must be a non-negative integer")
+                    })?),
+                    None => None,
+                };
+                let wait_ms = match option_value(rest, "--wait") {
+                    Some(raw) => Some(raw.parse::<u64>().map_err(|_| {
+                        CliError::usage("--wait must be a non-negative integer (milliseconds)")
+                    })?),
+                    None => None,
+                };
+                Ok(Self {
+                    endpoint,
+                    command: Command::Screenshot {
+                        url: url.to_string(),
+                        out: PathBuf::from(out),
+                        width,
+                        height,
+                        wait_ms,
+                        full_page: has_flag(rest, "--full-page"),
+                    },
+                })
+            }
             [group, cmd, capture_id, rest @ ..] if group == "parse" && cmd == "capture" => {
                 let source_id = option_value(rest, "--source")
                     .ok_or_else(|| CliError::usage("parse capture requires --source <id>"))?
@@ -288,7 +345,7 @@ impl Cli {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  chromeport [--endpoint http://127.0.0.1:9222] browser doctor\n  chromeport [--endpoint http://127.0.0.1:9222] browser pages\n  chromeport [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch url <url> --source <id> [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  chromeport parse capture <capture-id> --source <id> [--dry-run]\n  chromeport verify <source-id> <capture-id>\n  chromeport parser rules seed-defaults\n  chromeport db query <sql>\n  chromeport db exec <sql>\n  chromeport db token-status <read|write|secrets>\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n`parse capture <capture-id>` reads raw_text from Turso, parses via parser_rules, and\nimports offers straight to Turso (`--dry-run` prints plain text instead).\n`verify <source-id> <capture-id>` is read-only: it prints rule regexes and extracted field status.\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  CHROMEPORT_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
+    "Usage:\n  chromeport [--endpoint http://127.0.0.1:9222] browser doctor\n  chromeport [--endpoint http://127.0.0.1:9222] browser pages\n  chromeport [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch url <url> --source <id> [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  chromeport [--endpoint http://127.0.0.1:9222] screenshot <url> --out <path.png> [--width <px>] [--height <px>] [--wait <ms>] [--full-page]\n  chromeport parse capture <capture-id> --source <id> [--dry-run]\n  chromeport verify <source-id> <capture-id>\n  chromeport parser rules seed-defaults\n  chromeport db query <sql>\n  chromeport db exec <sql>\n  chromeport db token-status <read|write|secrets>\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n`parse capture <capture-id>` reads raw_text from Turso, parses via parser_rules, and\nimports offers straight to Turso (`--dry-run` prints plain text instead).\n`verify <source-id> <capture-id>` is read-only: it prints rule regexes and extracted field status.\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  CHROMEPORT_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
 }
 
 fn parse_token_tier(raw: &str) -> Result<TokenTier, CliError> {
@@ -472,6 +529,87 @@ async fn fetch_url(
     settle_rendered_page(&page).await?;
     let capture = capture_page(&page, &source_id, include_html).await?;
     write_capture_and_report(capture, out.as_deref()).await
+}
+
+const DEFAULT_SCREENSHOT_WIDTH: u32 = 640;
+const DEFAULT_SCREENSHOT_HEIGHT: u32 = 440;
+const DEFAULT_SCREENSHOT_WAIT_MS: u64 = 3000;
+
+async fn screenshot_url(
+    endpoint: &str,
+    url: String,
+    out: PathBuf,
+    width: Option<u32>,
+    height: Option<u32>,
+    wait_ms: Option<u64>,
+    full_page: bool,
+) -> Result<(), CliError> {
+    use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
+    use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+    use chromiumoxide::page::ScreenshotParams;
+
+    if !is_loopback_endpoint(endpoint) {
+        println!(
+            "warning\tcdp endpoint is not localhost/127.0.0.1; do not expose CDP to LAN or internet"
+        );
+    }
+    let rest_pages = fetch_pages(endpoint)?;
+    let page_index = rest_pages
+        .iter()
+        .position(|page| page.kind == "page")
+        .ok_or_else(|| CliError::runtime("CDP is reachable, but no page target is open"))?;
+    let rest_page = rest_pages[page_index].clone();
+
+    let mut cdp = CdpSession::connect(endpoint).await?;
+    let page = cdp.page_for_rest_target(&rest_page).await?;
+
+    // Apply a viewport override so map tiles render at a deterministic size.
+    let view_w = width.unwrap_or(DEFAULT_SCREENSHOT_WIDTH);
+    let view_h = height.unwrap_or(DEFAULT_SCREENSHOT_HEIGHT);
+    println!("viewport\t{view_w}x{view_h}");
+    if let Err(err) = page
+        .execute(SetDeviceMetricsOverrideParams::new(
+            i64::from(view_w),
+            i64::from(view_h),
+            1.0,
+            false,
+        ))
+        .await
+    {
+        println!("warning\tEmulation.setDeviceMetricsOverride failed: {err}");
+    }
+
+    println!("navigating\t{url}");
+    if let Err(err) = page.goto(url).await {
+        println!("warning\tCDP Page.navigate did not complete cleanly: {err}");
+    }
+    settle_rendered_page(&page).await?;
+
+    // Map tiles lazy-load after settle; wait an extra beat before the shot.
+    let wait = wait_ms.unwrap_or(DEFAULT_SCREENSHOT_WAIT_MS);
+    if wait > 0 {
+        println!("waiting\t{wait}ms");
+        tokio::time::sleep(Duration::from_millis(wait)).await;
+    }
+
+    let params = ScreenshotParams::builder()
+        .format(CaptureScreenshotFormat::Png)
+        .full_page(full_page)
+        .build();
+    let bytes = page
+        .screenshot(params)
+        .await
+        .map_err(|err| CliError::runtime(format!("CDP Page.captureScreenshot failed: {err}")))?;
+
+    std::fs::write(&out, &bytes).map_err(|err| {
+        CliError::runtime(format!(
+            "failed to write screenshot to {}: {err}",
+            out.display()
+        ))
+    })?;
+
+    println!("screenshot\t{}\t{} bytes", out.display(), bytes.len());
+    Ok(())
 }
 
 async fn fetch_interact(
