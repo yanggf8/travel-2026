@@ -234,6 +234,30 @@ h1 {
   border: 1px solid #bfdbfe;
 }
 
+/* ---- Today's route (day_route_segments) ---- */
+.route-block {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+}
+.route-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0369a1;
+  margin-bottom: 4px;
+}
+.route-seg {
+  font-size: 12px;
+  color: #334155;
+  padding: 2px 0;
+  line-height: 1.4;
+}
+.route-mode {
+  margin-right: 2px;
+}
+
 /* ---- Stop list (per-session maps links) ---- */
 .stoplist {
   list-style: none;

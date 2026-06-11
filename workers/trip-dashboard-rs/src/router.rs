@@ -131,7 +131,7 @@ fn is_safe_slug(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// Load the full plan via a 9-statement Turso pipeline. Query order matches
+/// Load the full plan via a 10-statement Turso pipeline. Query order matches
 /// model::assemble()'s argument order exactly.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
@@ -179,13 +179,17 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             "SELECT title, lat, lon, address \
              FROM destination_pois WHERE slug = '{dest}'"
         ),
+        format!(
+            "SELECT day_number, from_place, to_place, mode, duration_min, notes, start_time \
+             FROM day_route_segments WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 9 {
-        return Err(Error::RustError("Turso pipeline returned fewer than 9 results".into()));
+    if r.len() < 10 {
+        return Err(Error::RustError("Turso pipeline returned fewer than 10 results".into()));
     }
     Ok(model::assemble(
-        &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8],
+        &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9],
     ))
 }
 

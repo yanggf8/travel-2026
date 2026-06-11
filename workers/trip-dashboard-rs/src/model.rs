@@ -6,6 +6,16 @@ use serde_json::Value;
 pub struct Stop { pub title: String, pub address: String, pub lat: Option<f64>, pub lon: Option<f64>, pub maps_link: String }
 
 #[derive(Debug, Default, PartialEq)]
+pub struct RouteSegment {
+    pub from_place: String,
+    pub to_place: String,
+    pub mode: String, // driving|transit|walking
+    pub duration_min: i64,
+    pub notes: String,
+    pub start_time: String,
+}
+
+#[derive(Debug, Default, PartialEq)]
 pub struct Session {
     pub session_type: String, // morning|noon|afternoon|evening
     pub focus_zh: String,
@@ -24,6 +34,7 @@ pub struct Day {
     pub theme_zh: String,
     pub weather_label: String,
     pub sessions: Vec<Session>, // ALWAYS 4: morning, noon, afternoon, evening
+    pub route_segments: Vec<RouteSegment>,
 }
 
 /// The canonical 4 sessions, in display order. This is what makes "noon" impossible to drop.
@@ -70,6 +81,7 @@ pub fn assemble(
     plan_rows: &[Row], day_rows: &[Row], session_rows: &[Row],
     activity_rows: &[Row], meal_rows: &[Row], flight_rows: &[Row],
     hotel_rows: &[Row], transfer_rows: &[Row], poi_rows: &[Row],
+    route_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -88,10 +100,22 @@ pub fn assemble(
         let mut sessions = build_sessions(&acts, &mls);
         merge_session_meta(&mut sessions, session_rows, dn);
         attach_stops(&mut sessions, &acts, poi_rows);
+        // Route rows arrive pre-sorted by sort_order; preserve that order.
+        let route_segments: Vec<RouteSegment> = route_rows.iter()
+            .filter(|r| i(r, "day_number") == dn)
+            .map(|r| RouteSegment {
+                from_place: s(r, "from_place"),
+                to_place: s(r, "to_place"),
+                mode: s(r, "mode"),
+                duration_min: i(r, "duration_min"),
+                notes: s(r, "notes"),
+                start_time: s(r, "start_time"),
+            })
+            .collect();
         plan.days.push(Day {
             day_number: dn, date: s(d, "date"), day_type: s(d, "day_type"),
             theme: s(d, "theme"), theme_zh: s(d, "theme_zh"),
-            weather_label: s(d, "weather_label"), sessions,
+            weather_label: s(d, "weather_label"), sessions, route_segments,
         });
     }
     plan
@@ -186,6 +210,24 @@ mod tests {
         let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
         assert!(m.maps_link.contains("/maps/search/"));
         assert!(m.lat.is_none() && m.lon.is_none());
+    }
+
+    #[test]
+    fn assemble_attaches_route_segments() {
+        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
+        let day_rows = vec![row(&[("day_number", json!("2")), ("date", json!("2026-06-13"))])];
+        let route_rows = vec![
+            row(&[("day_number", json!("2")), ("from_place", json!("Hotel")), ("to_place", json!("Naminoue")), ("mode", json!("driving")), ("duration_min", json!("12")), ("notes", json!("")), ("start_time", json!("09:00"))]),
+            row(&[("day_number", json!("1")), ("from_place", json!("Airport")), ("to_place", json!("Hotel")), ("mode", json!("transit")), ("duration_min", json!("30")), ("notes", json!("")), ("start_time", json!(""))]),
+        ];
+        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &route_rows);
+        let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
+        assert_eq!(day.route_segments.len(), 1);
+        let seg = &day.route_segments[0];
+        assert_eq!(seg.from_place, "Hotel");
+        assert_eq!(seg.to_place, "Naminoue");
+        assert_eq!(seg.mode, "driving");
+        assert_eq!(seg.duration_min, 12);
     }
 
     #[test]
