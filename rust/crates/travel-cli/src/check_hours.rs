@@ -239,8 +239,8 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
                 display_title.to_string()
             };
             println!("  {} [{:9}] {}", icon, a.session, truncated);
-            if !a.detail.is_empty() {
-                println!("           → {}", a.detail);
+            if !a.detail.is_empty() && a.status != Status::Unknown {
+                println!("             {}", a.detail);
             }
             if matches!(a.status, Status::Warning | Status::Closed) {
                 any_issue = true;
