@@ -109,14 +109,42 @@ Steps:
 ## Task 11 — Deploy staging, parity check, cut over
 **Needs:** wrangler deploy (Cloudflare auth) + your decision to flip production.
 
-1. `cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy` — note the `*.workers.dev` URL.
+1. `cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy` — note the `*.workers.dev` URL. This first deploy lands on the **separate** `trip-dashboard-rs.*.workers.dev` host (staging); you reclaim the original `trip-dashboard` URL at step 3.
 2. Parity check ALL THREE plans + BOTH itinerary formats (session-based okinawa/tokyo, schedule-based kyoto):
    ```bash
    for p in okinawa-2026 tokyo-2026 kyoto-2026; do
      curl -s "https://<rs-worker-url>/?plan=$p&token=$OWNER_TOKEN" -o /tmp/$p.html; done
    ```
    Strip tags; confirm: okinawa noon/meals/transfers present; tokyo (session) renders; kyoto (schedule) renders without a blank itinerary. Compare design/RWD against the (bug-fixed) TS dashboard.
-3. **Cutover decision (yours):** when the Rust worker is parity-or-better, point the production route/DNS at it and retire the TS worker.
+3. **Cutover — reclaim the ORIGINAL URL (yours to flip):**
+   While building, the Rust worker deploys to a **new, separate** URL because `wrangler.toml`
+   names it `trip-dashboard-rs`:
+   - TS (current live):  `https://trip-dashboard.yanggf.workers.dev/`
+   - Rust (staging):     `https://trip-dashboard-rs.yanggf.workers.dev/`
+
+   This split is intentional for the side-by-side parity check above. Once the Rust worker is
+   parity-or-better, **take over the original `trip-dashboard` URL** so existing bookmarks and the
+   per-plan share links you've handed out keep working unchanged (share tokens are `?token=...`,
+   host-agnostic — they work on whichever host serves the worker):
+
+   **Option A (recommended) — rename the Rust worker to the original name and retire the TS one:**
+   ```bash
+   # 1. retire/delete the old TS worker so the name frees up
+   cd workers/trip-dashboard && unset CLOUDFLARE_API_TOKEN && npx wrangler delete   # or rename it
+   # 2. rename the Rust worker to the original name, then deploy
+   #    edit workers/trip-dashboard-rs/wrangler.toml:  name = "trip-dashboard"
+   cd ../trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
+   # → now served at https://trip-dashboard.yanggf.workers.dev/  (original URL, Rust worker)
+   ```
+   Re-put the secrets (TURSO_URL/TURSO_TOKEN/OWNER_TOKEN) and re-bind the R2 bucket under the
+   renamed worker if Cloudflare scopes them per-worker-name (verify with `wrangler secret list`).
+
+   **Option B — keep the `-rs` URL permanently:** do nothing; the `-rs` host becomes primary. Not
+   recommended (you'd reshare links and the old TS URL lingers).
+
+   Either way: **after cutover you are back on the original URL**, not stuck on `-rs`. The TS
+   worker's bug-fix handoff (`docs/handoff-worker-noon-meals-transfers.md`) becomes moot once the
+   Rust worker owns the URL.
 4. Merge `dashboard-rs` → `master`. **MERGE CAVEAT:** Task 3 (`share-token`) was written against this branch's OLDER plan-resolution form (`env::var("TRAVEL_PLAN_ID")`). Master has since adopted `plan_resolver::resolve_plan_id(rest)` for all mutation arms (see master's `docs/handoff-cli-mutation-bugs.md`). When merging, reconcile the `share-token` dispatch arm in `main.rs` to use `plan_resolver::resolve_plan_id(rest)` like its neighbors, and confirm the `--plan-id`/`--dest` skip in `share_token.rs`'s parser stays consistent.
 
 ---
