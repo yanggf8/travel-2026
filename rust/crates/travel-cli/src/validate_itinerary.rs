@@ -329,6 +329,66 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
             });
         }
     }
+
+    // (6) reservation check: a sit-down lunch/dinner restaurant probably needs a
+    // booking. Walk-in types (ramen, public-market food courts / 食堂, izakaya
+    // street-stall villages, supermarkets, casual soba) can't be reserved, so skip
+    // them. Breakfast is also skipped (hotel/conbini, never reserved).
+    for meal in &day.meals {
+        if needs_reservation_check(&meal.session, &meal.text) {
+            out.push(Issue {
+                severity: Severity::Info,
+                day: Some(day.day_number),
+                session: Some(meal.session.clone()),
+                message: format!(
+                    "Restaurant may need a reservation: \"{}\"",
+                    truncate(&meal.text, 50)
+                ),
+                suggestion: Some(
+                    "Confirm walk-in vs reservation; if booked, record it: set-activity-booking <day> <session> \"<restaurant>\" booked --ref \"<reservation>\".".to_string(),
+                ),
+            });
+        }
+    }
+}
+
+/// True when a meal is a sit-down lunch/dinner restaurant that plausibly needs a
+/// reservation — i.e. NOT a walk-in venue type and NOT breakfast.
+///
+/// Walk-in types we never flag (you can't / needn't book them):
+///   - ramen: 拉麵 / ラーメン / ramen
+///   - public-market food courts & 食堂: 市場 / 公設市場 / 食堂 / フードコート / food court
+///   - izakaya street-stall villages: 屋台 / 屋台村
+///   - supermarkets / convenience: 超市 / スーパー / リウボウ / Ryubo / コンビニ
+///   - casual standalone soba shops: そば / 沖繩そば / 沖縄そば (counter-service)
+fn needs_reservation_check(session: &str, text: &str) -> bool {
+    let s = session.to_lowercase();
+    // Only lunch/dinner sit-down meals; breakfast is always walk-in.
+    let is_meal_out = s.contains("noon") || s.contains("afternoon") || s.contains("evening") || s.contains("lunch") || s.contains("dinner");
+    if !is_meal_out {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    // Walk-in markers (any present → no reservation needed).
+    const WALK_IN: &[&str] = &[
+        "\u{62C9}\u{9EBA}",          // 拉麵
+        "\u{30E9}\u{30FC}\u{30E1}\u{30F3}", // ラーメン
+        "ramen",
+        "\u{5E02}\u{5834}",          // 市場
+        "\u{516C}\u{8A2D}\u{5E02}\u{5834}", // 公設市場
+        "\u{98DF}\u{5802}",          // 食堂
+        "\u{30D5}\u{30FC}\u{30C9}\u{30B3}\u{30FC}\u{30C8}", // フードコート
+        "food court",
+        "\u{5C4B}\u{53F0}",          // 屋台 (covers 屋台村)
+        "\u{8D85}\u{5E02}",          // 超市
+        "\u{30B9}\u{30FC}\u{30D1}\u{30FC}", // スーパー
+        "\u{30EA}\u{30A6}\u{30DC}\u{30A6}", // リウボウ
+        "ryubo",
+        "\u{30B3}\u{30F3}\u{30D3}\u{30CB}", // コンビニ
+        "\u{305D}\u{3070}",          // そば
+        "soba",
+    ];
+    !WALK_IN.iter().any(|m| lower.contains(m))
 }
 
 /// A meal "has a pin" if it carries the ｜map:/|map: marker or an embedded URL.
@@ -1260,7 +1320,6 @@ mod map_link_tests {
     }
 
     #[test]
-    #[test]
     fn meal_has_pin_detects() {
         assert!(meal_has_pin("\u{5348}\u{9910}\u{FF1A}X\u{FF5C}map:\u{9996}\u{91CC}\u{6BBF}\u{5167}")); // ｜map:首里殿内
         assert!(meal_has_pin("Dinner |map: somewhere"));
@@ -1268,6 +1327,22 @@ mod map_link_tests {
         assert!(!meal_has_pin("Lunch: near Omoromachi / Shuri")); // generic, no pin
     }
 
+    #[test]
+    fn reservation_check_skips_walk_in_and_breakfast() {
+        // Sit-down restaurants (no walk-in marker) → flagged.
+        assert!(needs_reservation_check("evening", "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}")); // ゆうなんぎい dinner
+        assert!(needs_reservation_check("noon", "\u{5348}\u{9910}\u{FF1A}\u{9996}\u{91CC}\u{6BBF}\u{5167}")); // 首里殿内 lunch
+        // Walk-in types → never flagged.
+        assert!(!needs_reservation_check("noon", "\u{7B2C}\u{4E00}\u{7261}\u{5FD7}\u{516C}\u{8A2D}\u{5E02}\u{5834} 2F \u{98DF}\u{5802}")); // public market 食堂
+        assert!(!needs_reservation_check("evening", "\u{6804}\u{753A}\u{5E02}\u{5834} \u{5C4B}\u{53F0}\u{6751}")); // 栄町市場 屋台村
+        assert!(!needs_reservation_check("noon", "\u{6CE2}\u{4E4B}\u{4E0A}\u{5468}\u{908A}\u{FF08}\u{6C96}\u{7E69}\u{305D}\u{3070}\u{FF09}")); // 沖繩そば
+        assert!(!needs_reservation_check("noon", "Tonkotsu ramen counter"));
+        assert!(!needs_reservation_check("noon", "\u{30EA}\u{30A6}\u{30DC}\u{30A6} \u{5B89}\u{91CC}\u{5E97}")); // リウボウ supermarket
+        // Breakfast is always walk-in regardless of venue text.
+        assert!(!needs_reservation_check("morning", "\u{65E9}\u{9910}\u{FF1A}\u{67D0}\u{9910}\u{5EF3}"));
+    }
+
+    #[test]
     fn clean_same_country_leg_ok() {
         // 那霸機場→安里駅 那覇 : both JP, disambiguated → no error, no ambiguous-info
         let day = DaySummary {
