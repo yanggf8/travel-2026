@@ -314,6 +314,11 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // 14c. voucher_url on hotels (dashboard hotel-section PDF link → /voucher/* R2 route).
     add_column(&conn, "ALTER TABLE hotels ADD COLUMN voucher_url TEXT;").await;
 
+    // 14d. poi_id FK on activities — a durable activity→POI link so the dashboard
+    //      attaches ticket price + map pin by id, not fragile title equality
+    //      (set via `travel set-activity-poi`; title-match stays as a fallback).
+    add_column(&conn, "ALTER TABLE activities ADD COLUMN poi_id TEXT;").await;
+
     // 15. flight_legs (normalized — replaces JSON blobs in flights).
     exec_create(
         &conn,

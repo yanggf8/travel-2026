@@ -18,6 +18,7 @@ mod plan_resolver;
 mod plans;
 mod scrape_parser;
 mod set_activity;
+mod set_activity_poi;
 mod set_airport_transfer;
 mod set_dates;
 mod set_day_theme;
@@ -329,6 +330,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
             set_activity::run_title(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-activity-poi" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-activity-poi <day> <session> <poi_id> [--match \"<title substring>\"] [--dest <slug>]");
+                return Ok(());
+            }
+            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            set_activity_poi::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,

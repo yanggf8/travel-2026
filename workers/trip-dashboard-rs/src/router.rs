@@ -182,7 +182,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              FROM timesofday WHERE plan_id = '{slug}'"
         ),
         format!(
-            "SELECT day_number, session_type, title \
+            "SELECT day_number, session_type, title, poi_id \
              FROM activities WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
         ),
         format!(
@@ -203,7 +203,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              selected_price_yen FROM airport_transfers WHERE plan_id = '{slug}'"
         ),
         format!(
-            "SELECT title, lat, lon, address, cost_estimate \
+            "SELECT poi_id, title, lat, lon, address, cost_estimate \
              FROM destination_pois WHERE slug = '{dest}'"
         ),
         format!(

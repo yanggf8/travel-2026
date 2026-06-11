@@ -150,8 +150,17 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
     for sess in sessions.iter_mut() {
         for a in acts.iter().filter(|r| s(r, "session_type") == sess.session_type) {
             let title = s(a, "title");
-            let nt = norm_title(&title);
-            let poi = poi_rows.iter().find(|p| norm_title(&s(p, "title")) == nt);
+            // Prefer the durable poi_id FK; fall back to a normalized title
+            // match only when the activity has no poi_id set. This keeps
+            // unlinked activities working by title and makes linked ones robust
+            // to title drift (e.g. "Shurijo Castle Park" vs POI "Shuri Castle").
+            let act_poi_id = s(a, "poi_id");
+            let poi = if !act_poi_id.is_empty() {
+                poi_rows.iter().find(|p| s(p, "poi_id") == act_poi_id)
+            } else {
+                let nt = norm_title(&title);
+                poi_rows.iter().find(|p| norm_title(&s(p, "title")) == nt)
+            };
             let lat = poi.and_then(|p| p.get("lat")).and_then(json_f64);
             let lon = poi.and_then(|p| p.get("lon")).and_then(json_f64);
             let maps_link = match (lat, lon) {
@@ -305,5 +314,69 @@ mod tests {
         super::attach_stops(&mut sessions, &acts, &pois);
         let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
         assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.2,127.6");
+    }
+
+    // The core fix: an activity carrying poi_id matches the POI by ID and gets
+    // its ¥400 price + pin EVEN THOUGH its title diverges from the POI title.
+    #[test]
+    fn stop_matches_poi_by_id_despite_title_drift() {
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            // Title intentionally != POI title (the Shuri gap).
+            ("title", json!("Shurijo Castle Park (首里城公園) — reconstruction grounds")),
+            ("poi_id", json!("shuri_castle")),
+        ])];
+        let pois = vec![row(&[
+            ("poi_id", json!("shuri_castle")),
+            ("title", json!("Shuri Castle (首里城)")),
+            ("lat", json!("26.217")),
+            ("lon", json!("127.719")),
+            ("cost_estimate", json!("400")),
+        ])];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        assert_eq!(m.cost_estimate, 400, "linked activity must inherit the POI price by id");
+        assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.217,127.719");
+    }
+
+    // An activity with NO poi_id still matches by normalized title (fallback).
+    #[test]
+    fn stop_without_poi_id_falls_back_to_title_match() {
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Naminoue Shrine")),
+            // poi_id absent (NULL) → title fallback path.
+        ])];
+        let pois = vec![row(&[
+            ("poi_id", json!("naminoue")),
+            ("title", json!("Naminoue Shrine")),
+            ("cost_estimate", json!("0")),
+            ("address", json!("Naha")),
+        ])];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        assert_eq!(m.address, "Naha", "unlinked activity still matches by title");
+    }
+
+    // A wrong poi_id must NOT silently fall back to a title match — the id is
+    // authoritative once set (avoids attaching the wrong price).
+    #[test]
+    fn stop_with_poi_id_does_not_fall_back_to_title() {
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Naminoue Shrine")),
+            ("poi_id", json!("does_not_exist")),
+        ])];
+        let pois = vec![row(&[
+            ("poi_id", json!("naminoue")),
+            ("title", json!("Naminoue Shrine")),
+            ("cost_estimate", json!("999")),
+        ])];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        assert_eq!(m.cost_estimate, 0, "an unmatched poi_id must not borrow the title-match price");
     }
 }
