@@ -59,7 +59,7 @@ echo "== upload to R2 ($BUCKET) =="
 for f in "${OUT}"/*.png; do
   name=$(basename "$f")
   unset CLOUDFLARE_API_TOKEN
-  npx wrangler r2 object put "${BUCKET}/${PLAN}/${name}" --file "$f" --content-type image/png \
+  npx wrangler r2 object put "${BUCKET}/${PLAN}/${name}" --file "$f" --content-type image/png --remote \
     | grep -iE 'upload|creating' || true
 done
 
