@@ -554,26 +554,43 @@ function renderSession(
 function clothingTip(tempLow: number, tempHigh: number, rainPct: number, lang: Lang): string {
   const tips: string[] = [];
 
-  // Morning/evening tip based on low temp
+  // Primary "what to wear" tip, banded by temp so it works for both cold-season
+  // (Tokyo/Kyoto Feb) and hot-season (Okinawa Jun) trips.
   if (tempLow <= 0) {
     tips.push(lang === 'zh'
       ? '\uD83E\uDDE3 早晚接近0\u00B0C\u2014\u2014厚外套、圍巾、手套'
       : '\uD83E\uDDE3 Near 0\u00B0C morning/evening\u2014heavy coat, scarf, gloves');
   } else if (tempLow <= 5) {
     tips.push(lang === 'zh'
-      ? `\uD83E\uDDE5 早晚${tempLow}\u00B0C\u2014\u2014冬季外套+毛衣，下午可脫`
-      : `\uD83E\uDDE5 ${tempLow}\u00B0C morning/evening\u2014winter coat+sweater, lighter afternoon`);
+      ? `\uD83E\uDDE5 早晚${Math.round(tempLow)}\u00B0C\u2014\u2014冬季外套+毛衣，下午可脫`
+      : `\uD83E\uDDE5 ${Math.round(tempLow)}\u00B0C morning/evening\u2014winter coat+sweater, lighter afternoon`);
   } else if (tempLow <= 10) {
     tips.push(lang === 'zh'
       ? `\uD83E\uDDE5 早晚${Math.round(tempLow)}\u00B0C\u2014\u2014外套+薄毛衣`
       : `\uD83E\uDDE5 ${Math.round(tempLow)}\u00B0C morning/evening\u2014jacket+light sweater`);
+  } else if (tempHigh <= 18) {
+    tips.push(lang === 'zh'
+      ? `\uD83E\uDDE5 涼爽${Math.round(tempHigh)}\u00B0C\u2014\u2014長袖+薄外套`
+      : `\uD83E\uDDE5 Cool ${Math.round(tempHigh)}\u00B0C\u2014long sleeves + light jacket`);
+  } else if (tempHigh <= 24) {
+    tips.push(lang === 'zh'
+      ? `\uD83D\uDC55 舒適${Math.round(tempHigh)}\u00B0C\u2014\u2014長短袖皆可，早晚帶薄外套`
+      : `\uD83D\uDC55 Mild ${Math.round(tempHigh)}\u00B0C\u2014short or long sleeves, light layer for evening`);
+  } else if (tempHigh <= 29) {
+    tips.push(lang === 'zh'
+      ? `\uD83D\uDC55 溫暖${Math.round(tempHigh)}\u00B0C\u2014\u2014透氣短袖、好走的鞋`
+      : `\uD83D\uDC55 Warm ${Math.round(tempHigh)}\u00B0C\u2014breathable short sleeves, comfy shoes`);
+  } else {
+    tips.push(lang === 'zh'
+      ? `\u2600\uFE0F 炎熱${Math.round(tempHigh)}\u00B0C\u2014\u2014排汗短袖、防曬、帽子、多補水`
+      : `\u2600\uFE0F Hot ${Math.round(tempHigh)}\u00B0C\u2014moisture-wicking tee, sun protection, hat, hydrate`);
   }
 
   // Afternoon warmth note if big temp swing
   if (tempHigh - tempLow >= 10) {
     tips.push(lang === 'zh'
-      ? `\u2600\uFE0F 午後回暖到${tempHigh}\u00B0C\u2014\u2014穿脫方便的洋蔥式穿搭`
-      : `\u2600\uFE0F Warms to ${tempHigh}\u00B0C afternoon\u2014layer for easy removal`);
+      ? `\u2600\uFE0F 午後回暖到${Math.round(tempHigh)}\u00B0C\u2014\u2014穿脫方便的洋蔥式穿搭`
+      : `\u2600\uFE0F Warms to ${Math.round(tempHigh)}\u00B0C afternoon\u2014layer for easy removal`);
   }
 
   // Rain gear
