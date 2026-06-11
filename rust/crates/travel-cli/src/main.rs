@@ -65,6 +65,8 @@ mod db_seed_test_plan;        // db seed test-plan (scripts/seed-test-plan.ts)
 mod db_sync_destinations; // db sync destinations (scripts/turso-sync-destinations.ts)
 mod db_sync_events;     // db sync events (scripts/turso-sync-events.ts)
 mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
+mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
+mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 
 use std::{env, io::Read, process};
 
@@ -110,6 +112,12 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             normalize_flights(rest)
         }
         [cmd] if cmd == "plans" || cmd == "list-plans" => plans::run().await,
+        [cmd, rest @ ..] if cmd == "mark-plan-deleted" => {
+            // The target plan_id is a REQUIRED positional — do NOT route through
+            // the resolver ladder (which would pick a default plan if omitted).
+            // The command parses/validates the explicit target itself.
+            mark_plan_deleted::run(rest, String::new()).await
+        }
         [cmd, rest @ ..] if cmd == "resolve-plan" => plan_resolver::run_cli(rest).await,
         [cmd, rest @ ..] if cmd == "query-offers" => {
             let opts = offers::OffersArgs::parse(rest)?;
@@ -363,6 +371,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             db_status::run().await
         }
         [group, sub, rest @ ..] if group == "db" && sub == "exec" => db_exec::run(rest).await,
+        [group, sub, rest @ ..] if group == "db" && sub == "cleanup-deleted" => {
+            db_cleanup_deleted::run(rest).await
+        }
         [group, sub, rest @ ..] if group == "db" && sub == "query-offers" => {
             let opts = db_query_offers::QueryOffersArgs::parse(rest)?;
             db_query_offers::run(&opts).await

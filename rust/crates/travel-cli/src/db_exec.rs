@@ -45,6 +45,21 @@ fn split_statements(sql: &str) -> Vec<String> {
     out
 }
 
+/// True if the statement's first keyword (case-insensitive) is a DML mutation
+/// (DELETE / UPDATE / INSERT). Used to decide whether a 0-row result deserves a
+/// loud "nothing changed" warning. DDL (CREATE/ALTER/DROP) and SELECT-likes are
+/// intentionally excluded — only row-level mutations carry the silent-no-op
+/// footgun this guards against.
+fn is_mutation(stmt: &str) -> bool {
+    let head = stmt
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    matches!(head.as_str(), "DELETE" | "UPDATE" | "INSERT")
+}
+
 fn value_to_string(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
@@ -75,10 +90,19 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 
     // Single statement → keep the historical terse output (no [1/1] noise).
     if stmts.len() == 1 {
-        match exec_one(&conn, &stmts[0]).await {
+        let stmt = &stmts[0];
+        match exec_one(&conn, stmt).await {
             Ok(result) => {
-                if result.affected_row_count > 0 {
+                // A mutating statement (DELETE/UPDATE/INSERT and any other
+                // non-row-returning statement) ALWAYS reports its affected
+                // count — including `0 row(s) affected` — so an agent can never
+                // mistake a silent no-op for success. Row-returning SELECTs skip
+                // the count line and print rows (or "ok"-equivalent emptiness).
+                if !result.returns_rows {
                     println!("{} row(s) affected", result.affected_row_count);
+                    if result.affected_row_count == 0 && is_mutation(stmt) {
+                        eprintln!("⚠ no rows matched — nothing changed");
+                    }
                 }
                 if !result.rows.is_empty() {
                     print_result(None, &result);
@@ -102,12 +126,19 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             Ok(result) => {
                 let affected = result.affected_row_count;
                 let row_count = result.rows.len();
-                if affected > 0 {
-                    println!("{} {} row(s) affected", label, affected);
-                } else if row_count > 0 {
-                    println!("{} {} row(s) returned", label, row_count);
+                if result.returns_rows {
+                    if row_count > 0 {
+                        println!("{} {} row(s) returned", label, row_count);
+                    } else {
+                        println!("{} ok", label);
+                    }
                 } else {
-                    println!("{} ok", label);
+                    // Mutating statement: ALWAYS show the count, incl. 0, and
+                    // warn loudly on a 0-row DELETE/UPDATE/INSERT.
+                    println!("{} {} row(s) affected", label, affected);
+                    if affected == 0 && is_mutation(stmt) {
+                        eprintln!("{} ⚠ no rows matched — nothing changed", label);
+                    }
                 }
                 if row_count > 0 {
                     print_result(Some(&label), &result);
@@ -126,6 +157,11 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 }
 
 struct ExecResult {
+    /// True for SELECT / PRAGMA / WITH / RETURNING — statements run via
+    /// `query()` that yield rows. False for execute()-path statements
+    /// (DML + DDL), whose `affected_row_count` is meaningful and always
+    /// reported.
+    returns_rows: bool,
     affected_row_count: u64,
     cols: Vec<String>,
     rows: Vec<Vec<String>>,
@@ -149,6 +185,7 @@ async fn exec_one(conn: &libsql::Connection, stmt: &str) -> Result<ExecResult, S
             .await
             .map_err(|err| format!("{err}"))?;
         return Ok(ExecResult {
+            returns_rows: false,
             affected_row_count: affected,
             cols: Vec::new(),
             rows: Vec::new(),
@@ -187,6 +224,7 @@ async fn exec_one(conn: &libsql::Connection, stmt: &str) -> Result<ExecResult, S
         collected.push(out);
     }
     Ok(ExecResult {
+        returns_rows: true,
         affected_row_count: 0,
         cols,
         rows: collected,
@@ -205,5 +243,31 @@ fn print_result(label: Option<&str>, result: &ExecResult) {
                 .collect();
             println!("{prefix}{}", parts.join(", "));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_mutation_detects_dml_keywords() {
+        assert!(is_mutation("DELETE FROM plans WHERE plan_id='x'"));
+        assert!(is_mutation("delete from plans"));
+        assert!(is_mutation("  Update plans SET version=1"));
+        assert!(is_mutation("INSERT INTO plans VALUES (1)"));
+        // leading whitespace + lowercase still detected
+        assert!(is_mutation("\n\t  insert into a values (1)"));
+    }
+
+    #[test]
+    fn is_mutation_excludes_non_dml() {
+        assert!(!is_mutation("SELECT * FROM plans"));
+        assert!(!is_mutation("PRAGMA table_info(plans)"));
+        assert!(!is_mutation("CREATE TABLE x (a INT)"));
+        assert!(!is_mutation("ALTER TABLE x ADD COLUMN b TEXT"));
+        assert!(!is_mutation("DROP TABLE x"));
+        assert!(!is_mutation("WITH t AS (SELECT 1) SELECT * FROM t"));
+        assert!(!is_mutation(""));
     }
 }

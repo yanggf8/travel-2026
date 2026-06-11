@@ -34,6 +34,9 @@ async fn list_plans() -> Result<Vec<PlanSummary>, String> {
              FROM plan_metadata pm
              LEFT JOIN date_anchors da ON da.plan_id = pm.plan_id
              LEFT JOIN plan_root_date_anchor p1 ON p1.plan_id = pm.plan_id
+             WHERE pm.plan_id NOT IN (
+                 SELECT plan_id FROM plans WHERE deleted_at IS NOT NULL
+             )
              ORDER BY pm.updated_at DESC, da.start_date ASC",
             (),
         )

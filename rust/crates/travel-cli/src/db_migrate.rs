@@ -303,6 +303,11 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         exec_lenient(&conn, "ALTER TABLE plans_current RENAME TO plans").await;
     }
 
+    // 13b. Soft-delete flag on plans. NULL = live; a timestamp = soft-deleted
+    //      (set by `mark-plan-deleted`, wiped in batch by `db cleanup-deleted`).
+    //      Idempotent ADD COLUMN — tolerated "duplicate column" on re-run.
+    add_column(&conn, "ALTER TABLE plans ADD COLUMN deleted_at TEXT;").await;
+
     // 14. feels_like columns on days.
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_low_c REAL;").await;
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_high_c REAL;").await;
