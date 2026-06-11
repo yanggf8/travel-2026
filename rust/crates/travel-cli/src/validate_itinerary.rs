@@ -282,6 +282,33 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
     }
 
     for (from, to, ctx, mode, session) in &legs {
+        // (2a) MAP-LINK INTEGRITY: every transit/route leg renders a Google Maps
+        // link. If a stop cleans to nothing or carries junk that poisons the
+        // query, the link is broken. ERROR — must block the gate. (We do NOT try
+        // to judge whether the stop is the "right" place: a valid-but-stale name
+        // like 牧志 geocodes fine and can't be distinguished from a correct one
+        // without false positives. Staleness is prevented at write time and by
+        // re-running the review after edits, not by a fuzzy name match here.)
+        let raw_stops: Vec<&str> = ctx.split('\u{2192}').collect();
+        for (cleaned, idx) in [(from, 0usize), (to, raw_stops.len().saturating_sub(1))] {
+            let raw = raw_stops.get(idx).map(|s| s.trim()).unwrap_or("");
+            if let Some(reason) = stop_link_problem(cleaned, raw) {
+                out.push(Issue {
+                    severity: Severity::Error,
+                    day: Some(day.day_number),
+                    session: session.clone(),
+                    message: format!(
+                        "Broken map link: stop \"{}\" {} (leg: \"{}\")",
+                        truncate(if raw.is_empty() { cleaned } else { raw }, 30),
+                        reason,
+                        truncate(ctx, 50)
+                    ),
+                    suggestion: Some(
+                        "Use a clean place name as the stop (e.g. \"赤嶺駅\", \"iias 沖縄豊崎\") — no parenthetical notes, +步行, or clock times inside the stop itself.".to_string(),
+                    ),
+                });
+            }
+        }
         if from.is_empty() || to.is_empty() {
             continue;
         }
@@ -448,6 +475,46 @@ fn meal_has_pin(text: &str) -> bool {
 /// Strip the same noise the dashboard's cleanStopLabel removes, so lint sees the
 /// same place string Maps will: drop note after （。、, clock times, ①②③ markers,
 /// leading verbs/mode-nouns, "…至/到<place>", trailing 步行.
+/// Decide whether a transit/route stop will produce a BROKEN Google Maps link.
+/// `cleaned` is the output of [`clean_stop`]; `raw` is the original stop text.
+/// Returns `Some(reason)` when the link is broken, `None` when it's fine.
+///
+/// This is the guard that stops broken map links reaching the dashboard. The
+/// dashboard geocodes the cleaned stop name; if cleaning leaves nothing, or
+/// leaves residual junk (a stray paren, a `+步行` tail, a clock time, a pure
+/// mode word with no place), the resulting Maps query is wrong or empty.
+pub(crate) fn stop_link_problem(cleaned: &str, raw: &str) -> Option<String> {
+    let c = cleaned.trim();
+
+    // 1. Cleans to nothing → the stop was pure junk/mode text, no place at all.
+    //    (e.g. "（單軌約2分）+步行", "步行", "單軌" with nothing after it)
+    if c.is_empty() {
+        // Only flag if the raw text actually carried something (an empty raw
+        // stop is a malformed chain we report once via the empty-leg path).
+        if raw.trim().is_empty() {
+            return None;
+        }
+        return Some("has no usable place name — cleans to empty, so the map link can't geocode".to_string());
+    }
+
+    // 2. Residual structural junk survived cleaning → poisons the Maps query.
+    const JUNK: [char; 6] = ['\u{FF08}', '\u{FF09}', '(', ')', '+', '\u{FF0B}']; // （ ） ( ) + ＋
+    if let Some(bad) = c.chars().find(|ch| JUNK.contains(ch)) {
+        return Some(format!("contains stray '{bad}' after cleaning — malformed map query"));
+    }
+
+    // 3. A leftover mode tail/word with no real place (e.g. "步行", "單軌電車").
+    const MODE_ONLY: [&str; 6] = [
+        "\u{6B65}\u{884C}", "\u{55AE}\u{8ECC}", "\u{55AE}\u{8ECC}\u{96FB}\u{8ECA}",
+        "\u{5DF4}\u{58EB}", "\u{96FB}\u{8ECA}", "\u{63A5}\u{99C1}\u{5DF4}\u{58EB}",
+    ]; // 步行 單軌 單軌電車 巴士 電車 接駁巴士
+    if MODE_ONLY.contains(&c) {
+        return Some("is only a transport word, not a place — map link can't geocode".to_string());
+    }
+
+    None
+}
+
 fn clean_stop(s: &str) -> String {
     let mut out = s
         .split(['\u{FF08}', '(', '\u{3002}', '\u{3001}', ','])

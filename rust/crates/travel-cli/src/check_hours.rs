@@ -268,7 +268,14 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
     // ── meal-reservation lint ──────────────────────────────────────────────────
     let meal_issues = check_meal_reservations(&days);
 
-    if any_issue || !stale_labels.is_empty() || !meal_issues.is_empty() {
+    // ── map-link integrity ─────────────────────────────────────────────────────
+    // Reuse the single source of truth in validate_itinerary so this can't drift
+    // from the pre-commit gate. Catches broken Google Maps transit/route links
+    // (a stop that cleans to nothing or carries junk) — the bug that slipped
+    // through three times before this guard existed.
+    let map_link_issues = crate::validate_itinerary::map_link_errors(&plan_id).await;
+
+    if any_issue || !stale_labels.is_empty() || !meal_issues.is_empty() || !map_link_issues.is_empty() {
         if !stale_labels.is_empty() {
             println!();
             println!("Label freshness issues:");
@@ -283,6 +290,13 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
                 println!("  ⚠️  {}", m);
             }
         }
+        if !map_link_issues.is_empty() {
+            println!();
+            println!("Map-link issues (transit/route links that won't open correctly):");
+            for (day, msg) in &map_link_issues {
+                println!("  ❌ Day {}: {}", day, msg);
+            }
+        }
         println!();
         println!("Issues found — review ❌/⚠️  items above.");
         std::process::exit(1);
@@ -291,6 +305,7 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
         println!("All checked activities are open during planned visit windows.");
         println!("All labels match their activities.");
         println!("All meals are walk-in or meet the reservation bar (Google 4.8+ & online).");
+        println!("All transit/route map links are well-formed.");
     }
 
     Ok(())
