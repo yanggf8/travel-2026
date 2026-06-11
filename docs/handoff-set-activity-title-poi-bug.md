@@ -1,6 +1,12 @@
 # CLI bug — set-activity-title leaves poi_id stale (title↔poi_id inconsistency)
 
-**Found:** 2026-06-12, while reconciling Okinawa Day-3 map data. **Data fixed; CLI guard pending.**
+**Status: RESOLVED** (2026-06-12, commit `fix(cli): set-activity-title clears stale poi_id on title change`). The write-time clear-and-notify
+guard (option 1 below) is implemented in `set_activity.rs::run_title` and covered by
+`tests/set_activity_title_poi.rs` (3 real-Turso cases). `set-activity-title` now clears a
+stale `poi_id` and prints an agent-first re-link note whenever the title actually changes on
+a row that had a POI link; idempotent same-title runs and link-less rows are untouched/silent.
+
+**Found:** 2026-06-12, while reconciling Okinawa Day-3 map data. **Data fixed; CLI guard now landed.**
 
 ## The bug
 `set-activity-title` (`rust/crates/travel-cli/src/set_activity.rs`, `run_title`, the UPDATE at ~line 207) does:

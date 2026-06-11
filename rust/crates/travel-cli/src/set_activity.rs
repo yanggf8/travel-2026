@@ -209,11 +209,39 @@ pub async fn run_title(
         &activity_id,
     )
     .await?;
+    let previous_poi_id = read_activity_poi_id(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+    )
+    .await?;
 
-    conn.execute(
+    // Fail-proof title↔poi_id guard (clear-and-notify): re-theming an activity
+    // by editing its title leaves any existing poi_id pointing at the OLD place
+    // (the dashboard would then attach the wrong POI's coords/price/pin). When
+    // the title ACTUALLY changes and the row currently HAS a poi_id, clear the
+    // now-unverified link and print a plain agent-first note with a
+    // copy-pasteable re-link command. An idempotent re-run (same title) — or a
+    // row with no poi_id — clears nothing and is silent (prior behavior).
+    let title_changed = parsed.new_title != previous_title;
+    let stale_poi: Option<String> = previous_poi_id
+        .filter(|p| !p.is_empty())
+        .filter(|_| title_changed);
+
+    let update_sql = if stale_poi.is_some() {
+        "UPDATE activities SET title = ?1, poi_id = NULL, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+           AND session_type = ?6 AND id = ?7"
+    } else {
         "UPDATE activities SET title = ?1, updated_at = ?2 \
          WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-           AND session_type = ?6 AND id = ?7",
+           AND session_type = ?6 AND id = ?7"
+    };
+    conn.execute(
+        update_sql,
         libsql::params![
             parsed.new_title.clone(),
             now_db_datetime(),
@@ -268,6 +296,16 @@ pub async fn run_title(
         parsed.activity,
         parsed.new_title
     );
+    // Agent-first note (NOT an error — the write succeeded): the title changed
+    // and the POI link was cleared because it is no longer verified. Name the
+    // old poi_id and give the exact, copy-pasteable re-link command so the agent
+    // can restore it if the place is actually unchanged.
+    if let Some(old_poi) = stale_poi {
+        println!(
+            "note: cleared poi_id (was '{old_poi}') because the title changed — the POI link is no longer verified. If this is the same place, re-link with: travel set-activity-poi {} {} {old_poi}",
+            parsed.day, parsed.session
+        );
+    }
     Ok(())
 }
 
@@ -597,6 +635,43 @@ async fn read_activity_title(
             .get(0)
             .map_err(|e| format!("title col read failed: {e}"))?;
         return Ok(t);
+    }
+    Err(format!("activity row disappeared: id={activity_id}"))
+}
+
+// Read the current poi_id of an activity. Returns None when the column is NULL
+// (or an empty string — treated the same as "no link" by the title guard);
+// Some(id) when a non-empty link is present. Errs only if the row vanished.
+async fn read_activity_poi_id(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+) -> Result<Option<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT poi_id FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
+               AND session_type = ?4 AND id = ?5",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string(),
+                activity_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities poi_id query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("activities poi_id row read failed: {e}"))?
+    {
+        let p: Option<String> = row.get(0).ok();
+        return Ok(p.filter(|s| !s.is_empty()));
     }
     Err(format!("activity row disappeared: id={activity_id}"))
 }
