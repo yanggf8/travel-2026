@@ -402,6 +402,13 @@ body {
   font-weight: 500;
 }
 
+.activity-hours {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  margin-left: 2px;
+}
+
 /* Transit & meal pills */
 .info-pills {
   display: flex;

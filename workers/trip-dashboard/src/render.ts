@@ -381,6 +381,32 @@ interface SessionEditMeta {
   day: number;
 }
 
+/** Parse "Hours: HH:MM-HH:MM" and optional "Closed: Day,..." from activity notes */
+function parseHoursFromNotes(notes: string | null): string | null {
+  if (!notes) return null;
+  const hoursMatch = notes.match(/Hours:\s*(\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2})/i);
+  const closedMatch = notes.match(/Closed:\s*([A-Za-z,/\s]+)/i);
+  if (!hoursMatch && !closedMatch) return null;
+  const parts: string[] = [];
+  if (hoursMatch) parts.push(`🕐 ${hoursMatch[1]}`);
+  if (closedMatch) parts.push(`休 ${closedMatch[1].trim()}`);
+  return parts.join(' · ');
+}
+
+/** Extract activity hours map from raw session.activities array */
+function extractActivityHours(activities: unknown[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of activities) {
+    if (typeof a === 'object' && a !== null && 'title' in a) {
+      const obj = a as Record<string, unknown>;
+      const title = obj.title as string;
+      const hours = parseHoursFromNotes((obj.notes as string) || null);
+      if (hours) map.set(title, hours);
+    }
+  }
+  return map;
+}
+
 function renderSession(
   session: Record<string, unknown> | undefined,
   sessionKey: 'morning' | 'noon' | 'afternoon' | 'evening',
@@ -398,6 +424,7 @@ function renderSession(
   const activities = zhOverride
     ? (zhOverride.activities.length > 0 ? zhOverride.activities : enActivities)
     : enActivities;
+  const activityHours = extractActivityHours((session.activities as unknown[]) || []);
   // Fall back to the base session meals when the ZH override has none. meals_zh
   // was de-JSON'd away, so a zhOverride always carries an empty meals[]; using ??
   // would let that [] mask the real session.meals and drop every lunch/dinner pill.
@@ -436,10 +463,15 @@ function renderSession(
       <ul class="activity-list">
         ${activities.map((a) => {
           const isPending = pendingBookings.some((pb) => a.includes('teamLab') || a.includes('\u7121\u754C') || a.toLowerCase().includes(pb.toLowerCase()));
+          // Extract plain title for hours lookup (strip HTML wrappers)
+          const plainTitle = a.replace(/<[^>]+>/g, '').trim();
+          const hours = activityHours.get(plainTitle);
+          const hoursBadge = hours ? `<div class="activity-hours">${esc(hours)}</div>` : '';
+
           if (isPending && !a.includes('<span')) {
-            return `<li><span class="activity-booking">\u23F3 ${renderActivityText(a)}</span></li>`;
+            return `<li><span class="activity-booking">\u23F3 ${renderActivityText(a)}</span>${hoursBadge}</li>`;
           }
-          return `<li>${renderActivityText(a)}</li>`;
+          return `<li>${renderActivityText(a)}${hoursBadge}</li>`;
         }).join('')}
       </ul>
       ${em ? editableField(activitiesFieldId, activities.join('\n'), {
