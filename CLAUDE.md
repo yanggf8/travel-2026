@@ -17,29 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Architecture
 
 ### Data Model
-```
-Turso normalized tables (no JSON blobs)
-├── plan_metadata                  # plan_id, schema_version, active_destination
-├── plan_destinations              # slug, display_name per plan
-├── destination_details            # region, country, airport_code
-├── destination_cities             # city list per destination
-├── date_anchors                   # P1 confirmed dates (start, end, days)
-├── process_statuses               # per-destination process status
-├── cascade_dirty_flags            # per-destination dirty flags
-├── plan_offers                    # normalized offer records
-├── plan_offer_date_pricing        # price per date per offer
-├── plan_offer_selection           # chosen offer + date
-├── flight_legs                    # outbound/return per destination
-├── hotels                         # hotel name, access, check-in
-├── hotel_access_lines             # hotel access directions
-├── airport_transfers              # arrival/departure transfer info
-├── airport_transfer_candidates    # transfer options
-├── days                           # day cards + weather
-├── timesofday                     # morning/noon/afternoon/evening
-├── activities                     # per-session activities + booking info
-├── itinerary_metadata             # transit_summary, timestamps
-└── (+ supporting: budget, triggers, contracts, event_log_*)
-```
+Turso: 28+ fully-normalized tables, no JSON blobs. Schema: `scripts/schema.sql`; live state: `./bin/travel db status`.
 
 ### Cascade Rules
 | Trigger | Reset | Scope |
@@ -109,10 +87,6 @@ Python/other → none (Python scrapers archived; chromeport is Rust)
 **Reference:** `docs/plans/2026-06-10-roadmap-v2-rust.md` (active roadmap: tests → scripts port → cutover → archive TS; read before any Rust work). Historical: `docs/plans/2026-06-05-rust-cli-migration.md`, `docs/plans/2026-06-10-rust-port-audit.md`.
 
 ### Setup
-> **npm RETIRED (2026-06-10):** the root `package.json` is gone. The CLI is the
-> Rust `travel` binary; the build/dev entry is the root **`Makefile`**. (The
-> Cloudflare Worker keeps its own self-contained `package.json` + wrangler.)
-> The old TS CLI lives read-only under `archive/ts-cli-retired/`.
 ```bash
 make setup                    # build ./bin/{travel,chromeport} + install git hooks
 # or piecemeal:
@@ -253,43 +227,10 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `jalan` | じゃらん | hotel | ❌ unsupported |
 | `rakuten_travel` | 楽天トラベル | hotel, package | ❌ unsupported |
 
-### OTA URL Templates & Notes
-- **BestTour**: `/e_web/activity?v=japan_kansai` (NOT `/e_web/DOM/`)
-- **LionTravel FIT**: `vacation.liontravel.com/search?Destination={code}&FromDate={YYYYMMDD}&ToDate={YYYYMMDD}&Days={n}&roomlist={adults}-0-0`
-- **LionTravel codes**: JP_TYO_5/6 (Tokyo), JP_OSA_5 (Osaka). Promo: `FITPKG` TWD 400 off Thu (min 20k)
-- **Lifetour**: `tour.lifetour.com.tw/searchlist/tpe/{region}` (Kansai=`0001-0003`)
-- **Settour**: `tour.settour.com.tw/search?destinationCode={code}` (Kansai=`JX_3`)
-- **Trip.com**: One-way only (`flighttype=ow`), prices in USD (x32). URL: `trip.com/flights/{origin}-to-{dest}/tickets-{IATA}-{IATA}?ddate={date}&flighttype=ow&class=y&quantity={pax}`
-- **Booking.com**: `zh-tw` locale, `selected_currency=TWD`. dest_ids: Osaka=-240905, Tokyo=-246227, Kyoto=-235402
-- **Agoda**: Direct hotel URLs most reliable. city_ids: Osaka=14811, Tokyo=5765, Kyoto=5814
-- **Google Flights**: `google.com/travel/flights?q=Flights+to+{DEST}+from+{ORIGIN}+on+{date}+through+{date}&curr=TWD&hl=zh-TW`
+> OTA URL details and scraping patterns → `src/skills/scrape-ota/SKILL.md`
 
-### Scrapers — DECOMMISSIONED (use the Rust CDP driver)
-All Python scrapers (`scrape_package.py`, `scrape_listings.py`, the `scrapers/` package, etc.) are
-**archived under `archive/broken-python-scrapers/`** and must NOT be run — their URL/region/template
-construction 404s or lands on the wrong page. The replacement is the Rust CDP driver
-(`rust/crates/chromeport`): drive the real OTA page in Chrome (`fetch interact` / `browser
-snapshot`) → `parse capture <id>` (rule-driven, `parser_rules` table) → Turso. No `pip install
-playwright`, no Python. See `docs/plans/2026-06-05-rust-cdp-scraper-migration.md`.
-
-> **"Scrape" terminology — three distinct things, don't conflate them:**
-> 1. **`rust/crates/chromeport`** (THE live CDP driver) — a Rust CDP driver (`chromiumoxide`)
->    that ATTACHES to a real Windows Chrome at `127.0.0.1:9222`, navigates/clicks/fills, and
->    writes **plain-text captures → Turso `captures` table**, then `parse capture` rule-parses
->    them (`parser_rules`) into the Turso **`offers`** table. This is the source-of-truth path.
-> 2. **`scrapes/*.json`** — a LEGACY, gitignored landing zone of raw captured JSON that the
->    `import-offers` / `import-tour-group-offers` commands parse into `plan_offers` /
->    `shaping_tour_group_offers`. Being phased out in favor of (1)'s `captures`→`offers` path;
->    its only legal next step is import→Turso. It is NOT live scraping.
-> 3. **Python scrapers** — DEAD (archived above). Never run.
->
-> **Relationship to `gwebcdb`** (`/home/yanggf/b/gwebcdb`): travel-2026 shares **only**
-> `crates/turso-util` (the Turso token-minting library that `travel-cli` + `chromeport`
-> vendor). gwebcdb's `bridge/` (Python Playwright, read-only finance/decision inspection with
-> deny-by-default click guardrails, writes to local files only — NEVER Turso) is a SEPARATE tool;
-> it is deliberately NOT the OTA scraper and is not used by travel-2026. Both happen to attach to
-> the same Chrome `:9222`, but `chromeport` is the write-capable OTA pipeline, gwebcdb's bridge
-> is not. Do not try to route OTA scraping through gwebcdb's bridge.
+### Scrapers — DECOMMISSIONED
+Python scrapers archived under `archive/broken-python-scrapers/` — never run. Use `./bin/chromeport` (Rust CDP driver). `gwebcdb`'s bridge is a separate read-only finance tool — never route OTA scraping through it.
 
 ## Current Status
 
@@ -364,7 +305,7 @@ make test                                        # full Rust test suite
 ./bin/travel doctor                              # full system health check
 ```
 
-Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI uses `--travel-date`, `--travel-start/--travel-end`, or exactly one active or upcoming DB date anchor/planning window. Use `--travel-*` for plan selection; plain `--start/--end` are command-specific filters (e.g. offer search ranges). If several plans match, the CLI fails with a plan list instead of silently loading a legacy default.
+Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI uses `--travel-date`, `--travel-start/--travel-end`, or exactly one active or upcoming DB date anchor/planning window. Use `--travel-*` for plan selection; plain `--start/--end` are command-specific filters (e.g. offer search ranges). If several plans match, the CLI fails with a plan list instead of silently loading a legacy default. `plan_id` uses hyphens (`tokyo-2026`), `destination` uses underscores (`tokyo_2026`) — convert by swapping `-`↔`_`.
 
 ## Project Structure
 ```
@@ -408,40 +349,13 @@ Note: `ref_path`/`scraper_script` must be repo-relative paths.
 ```
 Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 ```
-
-Tables:
-- **Plan core**: `plans` (PK=plan_id, `version` monotonic counter — no JSON blobs), `plan_metadata`, `plan_destinations`, `destination_details`, `destination_cities`
-- **Dates/Status**: `date_anchors`, `process_statuses`, `cascade_dirty_flags`, `plan_root_date_anchor`
-- **Offers**: `plan_offers`, `plan_offer_flights`, `plan_offer_hotels`, `plan_offer_date_pricing`, `plan_offer_selection`, `plan_offer_best_value`, `plan_offer_provenance` (source audit trail), `plan_offer_warnings`
-- **Itinerary**: `days` (+ weather + `theme_zh`), `timesofday` (+ `focus_zh`, `transit_notes_zh`), `activities`, `itinerary_metadata` (+ `transit_hotel_station`/`transit_hotel_station_zh` scalars; transit key lines in `itinerary_transit_key_lines`), `day_route_segments` (+ `duration_min`, `notes`, `start_time`), `day_landmarks`, `session_meals`, `session_activities_zh`, `activity_tags`
-- **Transport**: `flight_legs` (PK: plan_id+destination+direction+leg_order), `airport_transfers` (+ `selected_*` scalar cols), `airport_transfer_candidates`, `transportation_extras` (+ `*_status` scalars), `transport_extra_candidates`
-- **Accommodation**: `hotels` (+ `name_zh`), `hotel_access_lines`, `accommodation_location_zone`, `location_zone_candidates`
-- **Offer child rows**: `plan_offer_includes`, `plan_offer_hotel_access`
-- **Cascade**: `cascade_triggers` (+ `condition_*` scalars), `cascade_trigger_resets`, `cascade_trigger_populate_map`, `cascade_global_state`, `plan_schema_contract` (+ `plan_schema_contract_nodes`), `plan_process_precedence` (+ `plan_process_precedence_entries`), `plan_root_date_anchor` (+ `flex_*` scalars + `plan_date_anchor_flex_dates`), `plan_budget`
-- **Event store** (`plan_events`): unified domain event store — `plan_events` (scope ∈ timeline|global_process|dest_process) + `plan_event_data` (open payload as KV rows) + `event_log_next_actions`; status tables `event_log_state`, `event_log_global_processes`, `event_log_destinations`, `event_log_dest_processes`. (Renamed/unified from the old "event_log"; the flat `event_log_process_events` table was dropped.)
-- **Bookings**: `bookings_current` (flat rows: package/transfer/activity), `bookings_events` (audit)
-- **Operation tracking**: `operation_runs` (audit trail: run_id, plan_id, command_type, status, version_before/after, timestamps)
-- **Shaping Stage** (formerly "Stage 0"; unscoped, keyed by `run_id`): `shaping_research_runs`, `shaping_research_destinations`, `shaping_research_durations`, `shaping_rules` (hard/soft shaping constraints), `shaping_candidates`, `shaping_candidate_flights`, `shaping_scrape_attempts`, `shaping_tour_group_offers` (+ `shaping_tour_group_offer_notes` — flat key/value child rows for free-form research annotations; the former `raw_json`/`raw_text` blob is now typed `raw_confidence`/`raw_note`/`raw_flight`/`raw_flight_outbound`/`raw_flight_return` columns + this notes table, NO JSON), `shaping_tour_group_scrape_attempts`, `shaping_research_artifacts`, `shaping_selected_offers` — pre-plan triangle-research + constraint-shaping domain. Commands: `shaping-init/compare/adopt/baseline/export/import`; skill `/shaping-research`. (see `docs/superpowers/specs/2026-05-22-stage0-shaping.md`)
-- **Global config** (not plan-scoped): `destination_config` (slug PK, coordinates/timezone/airports), `origin_config` (taiwan origin), `global_config` (default_destination, default_origin), `ota_sources` (OTA registry — replaces ota-sources.json)
-- **OTA knowledge** (de-JSON'd into child rows): `booking_types` + `booking_type_rules`, `platform_behaviors` + `platform_behavior_quirks`/`platform_behavior_baggage_labels`, `hotel_areas` + `hotel_area_keywords`, `airlines`, `transport_routes`, `transport_hubs`, `ota_sources` + `ota_source_types`/`ota_source_regions`
-- **Reference data** (de-JSON'd): `destination_areas` + `destination_area_stations`/`destination_area_best_for`, `destination_pois` + `destination_poi_tags`, `destination_clusters` + `destination_cluster_pois`, `destination_transit`, `destination_config` + `destination_tips`/`destination_airports`/`destination_markets`, `origin_airports`
-- **Other**: `offers`, `destinations`, `events`, `bookings`
-
-> **No JSON in the RDB (de-JSON program, 2026-06):** every former `*_json` column was re-normalized — flat lists → child tables (one row per element), small objects → typed scalar columns, open/variable blobs → a single `*_text` column. A whole-DB content scan confirms zero JSON-encoded values in any column. The dead `flights` table (old JSON-blob flight store) was dropped. Don't reintroduce `*_json` columns or `JSON.parse`/`JSON.stringify` against DB column data.
-
-Schema reference: `scripts/schema.sql` (read-only DDL reference, auto-generated from the live DB; the `gen-schema-sql.ts` generator is retired — see `archive/ts-cli-retired/`. Do not hand-edit; regenerate after migrations)
-Schema/migration: `./bin/travel db migrate` (creates all tables idempotently)
-Seed: `./bin/travel db seed plans` (one-time, already run)
+Schema: `scripts/schema.sql` (auto-generated DDL, read-only; do not hand-edit). No JSON in any column — `*_json` columns were re-normalized; don't reintroduce them.
+Migration: `./bin/travel db migrate` | Seed: `./bin/travel db seed plans` (one-time, already run)
 
 ### DB Operation Decision
 - **Reusable operation** (editing itinerary content, updating themes, managing activities) → build a UI/CLI interface
 - **One-shot operation** (migration, schema change, data backfill) → direct SQL via turso-exec is acceptable
 Before running raw SQL for content edits, ask: "Will this be done again?" If yes, build the interface first.
-
-## Multi-Plan
-All plans live in the `plans` table in Turso (no local JSON files).
-`plan_id` uses hyphens (`tokyo-2026`), `destination` uses underscores (`tokyo_2026`) — convert by swapping `-`↔`_`.
-CLI defaults to `tokyo-2026`; use `--plan-id <id>` for others.
 
 ## Trip Dashboard (Cloudflare Worker)
 
@@ -502,8 +416,6 @@ Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install h
 ## Next Steps
 
 **The Rust port is DONE** (commits through `88385fb`): P1 command parity, P2 scripts, P3 real-Turso integration tests, the `package.json` cutover (root npm retired), TS archived, and docs/skills converted to `./bin/travel`. ADR-001 / "StateManagerV2" is achieved by construction (the Rust CLI *is* the targeted-SQL model) — do NOT refactor the archived TS `StateManager`; that work is complete and the code is read-only under `archive/`. Don't re-port `import-offers-to-turso` (intentionally dropped; replaced by `import-offers` + chromeport `parse capture`).
-
-Recently fixed (2026-06-11): mutation commands now honor `--plan-id` via the resolver (no more silent fallback to `test-set-dates-2026`); the `db seed destination-refs|ota-knowledge` commands' SQL was repaired (`fetched_at.clone()` had been mangled into the INSERT column lists); and all user-facing JSON flags were removed for a plain-text agent-first surface (`set-tod-zh` → repeatable `--activity-zh`; `set-route-segments-bulk` → repeatable `--seg "a|b|mode|..."`; `--json` output dropped from `shaping-compare`/`shaping-baseline`/`query-tour-group-offers`). Only `shaping-export --json` remains (the machine handoff). See `docs/handoff-cli-mutation-bugs.md`.
 
 Remaining agenda (none blocking — the project is between trips and the live DB is fully seeded):
 

@@ -1063,7 +1063,13 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
     </div>`;
 }
 
-function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang): string {
+const MEAL_TITLE_RE = /^(早餐|午餐|晚餐|宵夜|breakfast|lunch|dinner|supper)/i;
+
+function isMealBooking(title: string): boolean {
+  return MEAL_TITLE_RE.test(title.trim());
+}
+
+function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang, mealOnly = false): string {
   const itinerary = dest.process_5_daily_itinerary as Record<string, unknown> | undefined;
   const days = (itinerary?.days as Record<string, unknown>[]) || [];
   const alerts: string[] = [];
@@ -1076,17 +1082,20 @@ function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang): string 
         if (typeof activity === 'object' && activity !== null) {
           const a = activity as Record<string, unknown>;
           if (a.booking_status === 'pending') {
+            const rawTitle = a.title as string;
+            if (isMealBooking(rawTitle) !== mealOnly) continue;
+            // Strip embedded "Google Maps：<url>" line; use it as a clean map link
+            const mapsMatch = rawTitle.match(/\nGoogle Maps[：:]\s*(https?:\/\/\S+)/i);
+            const mapsUrl = mapsMatch ? mapsMatch[1] : (a.booking_url as string | undefined);
+            const title = rawTitle.replace(/\nGoogle Maps[：:].*$/is, '').trim();
             const bookBy = a.book_by as string | undefined;
             const isUrgent = bookBy ? new Date(bookBy) <= new Date() : false;
-            const url = a.booking_url as string | undefined;
-            const title = a.title as string;
             alerts.push(`
               <div class="alert ${isUrgent ? 'alert-urgent' : ''}">
                 <span class="alert-icon">${isUrgent ? '\u26A0\uFE0F' : '\u23F3'}</span>
                 <div class="alert-text">
-                  <strong>${esc(title)}</strong>
+                  <strong>${esc(title)}</strong>${mapsUrl ? ` <a href="${esc(mapsUrl)}" target="_blank" rel="noopener" style="font-size:12px">\uD83D\uDDFA\uFE0F</a>` : ''}
                   ${bookBy ? ` \u2014 ${t('bookBy', lang)} ${esc(bookBy)}` : ''}
-                  ${url ? `<br><a href="${esc(url)}" target="_blank">${lang === 'zh' ? '立即預約' : 'Book now'} \u2192</a>` : ''}
                 </div>
               </div>`);
           }
@@ -1205,6 +1214,7 @@ export function renderDashboard(
 
   ${days.map((day) => renderDayCard(day, lang, hotelName, (dest.home_address as string) || null, mapsKey, editMeta)).join('')}
 
+  ${renderPendingAlerts(dest, lang, true)}
   ${renderTransitSummary(dest, lang)}
 
   <div class="footer">

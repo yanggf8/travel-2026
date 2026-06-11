@@ -47,6 +47,7 @@ mod sync_bookings;      // batch 3
 mod booking_integrity;  // batch 3 (check-booking-integrity)
 mod ops;                // batch 3 (run-status / run-list)
 mod validate_itinerary; // batch 3
+mod check_hours;        // pre-trip open-hours check
 mod shaping;            // batch 4 (shaping-init/compare/adopt/baseline/export/import)
 mod query_tour_group;   // batch 4 (query-tour-group-offers)
 mod tour_group_bridge;  // adopt-time audit-set bridge (used by shaping-adopt --create-plan)
@@ -467,6 +468,11 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "validate-itinerary" => {
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             validate_itinerary::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "check-hours" => {
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            check_hours::run(rest, plan_id).await?;
             Ok(())
         }
 
