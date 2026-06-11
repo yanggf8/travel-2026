@@ -1,7 +1,29 @@
 # Handoff — finish the Rust/WASM dashboard (Tasks 5, 9, 10, 11)
 
-Branch: **`dashboard-rs`** (worktree `/home/yanggf/b/travel-2026-dashboard-rs`).
-Spec: `docs/superpowers/specs/2026-06-10-rust-dashboard-redesign-design.md`.
+> ## ⚠️ READ FIRST — this work lives in a GIT WORKTREE, not the main checkout
+>
+> This branch and all the dashboard-rs code/docs exist ONLY in a separate git worktree.
+> They are **NOT on `master`** and **NOT in the main checkout** `/home/yanggf/b/travel-2026`.
+> If you look in the main checkout you will NOT find these files — that is expected, not an error.
+>
+> **Before doing anything, `cd` into the worktree and confirm the branch:**
+> ```bash
+> cd /home/yanggf/b/travel-2026-dashboard-rs
+> git branch --show-current        # must print: dashboard-rs
+> git log --oneline -1             # head of the dashboard-rs work
+> ls docs/handoff-dashboard-rs-finish.md   # this file
+> ls workers/trip-dashboard-rs/    # the Rust worker being built
+> ```
+> Run EVERY command in this handoff from `/home/yanggf/b/travel-2026-dashboard-rs`.
+> Do all git commits on the `dashboard-rs` branch (already checked out in this worktree).
+> The two sibling checkouts share one repo:
+> - `/home/yanggf/b/travel-2026`            → branch `master` (does NOT have this work)
+> - `/home/yanggf/b/travel-2026-dashboard-rs` → branch `dashboard-rs` (← YOU WORK HERE)
+>
+> The `dashboard-rs` branch is only merged into `master` at the very end (Task 11 step 4).
+
+Branch: **`dashboard-rs`** · Worktree: **`/home/yanggf/b/travel-2026-dashboard-rs`** (cd here first).
+Spec: `docs/superpowers/specs/2026-06-10-rust-dashboard-redesign-design.md` (paths in this doc are relative to the worktree root).
 Plan: `docs/superpowers/plans/2026-06-10-rust-dashboard-redesign.md`.
 
 ## State (done, all committed on `dashboard-rs`)
