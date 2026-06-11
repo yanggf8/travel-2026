@@ -37,6 +37,16 @@ pub async fn run(
         eprintln!("Error: <mode> must be one of: transit | walking | driving");
         std::process::exit(1);
     }
+    // Write-time map-link guard: a stop that won't form a valid Google Maps query
+    // is rejected here, before it reaches the DB / dashboard. This is the fix for
+    // the broken-transit-link bug — caught at creation, not in a late review.
+    for (label, stop) in [("from", &from), ("to", &to)] {
+        if let Err(reason) = crate::validate_itinerary::check_stop_linkable(stop) {
+            eprintln!("Error: <{label}> \"{stop}\" {reason}.");
+            eprintln!("Hint: use a clean place name (e.g. \"赤嶺駅\", \"iias 沖縄豊崎\") — no （…）notes, +步行, or clock times inside the stop.");
+            std::process::exit(1);
+        }
+    }
     let day: i64 = match day_str.parse() {
         Ok(n) if n >= 1 => n,
         _ => {
@@ -130,7 +140,17 @@ pub async fn run_bulk(
     let mut segments: Vec<SegmentInput> = Vec::with_capacity(specs.len());
     for (i, spec) in specs.iter().enumerate() {
         match parse_seg_spec(spec) {
-            Ok(s) => segments.push(s),
+            Ok(s) => {
+                // Write-time map-link guard (same as single-segment path).
+                for (label, stop) in [("from", &s.from), ("to", &s.to)] {
+                    if let Err(reason) = crate::validate_itinerary::check_stop_linkable(stop) {
+                        eprintln!("Error: --seg #{i} <{label}> \"{stop}\" {reason}.");
+                        eprintln!("Hint: use a clean place name — no （…）notes, +步行, or clock times inside the stop.");
+                        std::process::exit(1);
+                    }
+                }
+                segments.push(s);
+            }
             Err(e) => {
                 eprintln!("Error: --seg #{i} invalid ({spec:?}): {e}");
                 std::process::exit(1);

@@ -515,7 +515,18 @@ pub(crate) fn stop_link_problem(cleaned: &str, raw: &str) -> Option<String> {
     None
 }
 
-fn clean_stop(s: &str) -> String {
+/// Validate that a place string will produce a working Google Maps link as a
+/// transit/route stop. Returns `Err(reason)` for a broken stop, `Ok(())` when
+/// fine. This is the WRITE-TIME guard: `set-route-segment` / transit writers
+/// call it so a bad stop is rejected at creation, never reaching the dashboard.
+pub(crate) fn check_stop_linkable(stop: &str) -> Result<(), String> {
+    match stop_link_problem(&clean_stop(stop), stop.trim()) {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
+}
+
+pub(crate) fn clean_stop(s: &str) -> String {
     let mut out = s
         .split(['\u{FF08}', '(', '\u{3002}', '\u{3001}', ','])
         .next()
@@ -1372,6 +1383,22 @@ mod map_link_tests {
         assert_eq!(clean_stop("\u{5B89}\u{91CC}\u{99C5}\u{FF08}\u{55AE}\u{8ECC}\u{FF09}"), "\u{5B89}\u{91CC}\u{99C5}"); // 安里駅（單軌）→ 安里駅
         // clock time stripped
         assert_eq!(clean_stop("05:00 \u{7D05}\u{6A39}\u{6797}").trim(), "\u{7D05}\u{6A39}\u{6797}");
+    }
+
+    #[test]
+    fn stop_linkable_guard() {
+        // Clean places pass (the write-time guard accepts these).
+        assert!(check_stop_linkable("\u{8D64}\u{5DBA}\u{99C5}").is_ok());          // 赤嶺駅
+        assert!(check_stop_linkable("iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}").is_ok()); // iias 沖縄豊崎
+        assert!(check_stop_linkable("hotel").is_ok());
+
+        // Junk-only stops are rejected (this is the bug that broke 3×).
+        assert!(check_stop_linkable("\u{FF08}\u{55AE}\u{8ECC}\u{7D04}2\u{5206}\u{FF09}+\u{6B65}\u{884C}").is_err()); // （單軌約2分）+步行
+        assert!(check_stop_linkable("\u{6B65}\u{884C}").is_err());                 // 步行 (mode word only)
+        assert!(check_stop_linkable("\u{55AE}\u{8ECC}").is_err());                 // 單軌 (mode word only)
+        // A wholly-empty stop is caught by required-arg checks before the guard,
+        // so check_stop_linkable("") is intentionally Ok (nothing to geocode-flag).
+        assert!(check_stop_linkable("").is_ok());
     }
 
     #[test]
