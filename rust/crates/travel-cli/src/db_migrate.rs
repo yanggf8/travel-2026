@@ -311,6 +311,9 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     add_column(&conn, "ALTER TABLE destination_pois ADD COLUMN lat REAL;").await;
     add_column(&conn, "ALTER TABLE destination_pois ADD COLUMN lon REAL;").await;
 
+    // 14c. voucher_url on hotels (dashboard hotel-section PDF link → /voucher/* R2 route).
+    add_column(&conn, "ALTER TABLE hotels ADD COLUMN voucher_url TEXT;").await;
+
     // 15. flight_legs (normalized — replaces JSON blobs in flights).
     exec_create(
         &conn,

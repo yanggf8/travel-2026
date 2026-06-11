@@ -7,7 +7,7 @@
 
 use crate::model::Plan;
 use crate::turso::Row;
-use super::esc;
+use super::{esc, esc_url_attr};
 use crate::i18n::t;
 
 /// Read a Turso row field as an owned String (scalars come back as JSON strings).
@@ -18,6 +18,62 @@ fn rs(row: &Row, k: &str) -> String {
 /// Join non-empty parts with a single space (skips blanks so we don't emit "  ").
 fn join_parts(parts: &[String]) -> String {
     parts.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" ")
+}
+
+/// Render the hotel `notes` blob into grouped <ul> bullets.
+///
+/// Notes are newline-delimited. A line starting with `## ` opens a new group
+/// (label = the rest after the marker, rendered in `.hotel-group-label`); every
+/// following non-empty, non-`##` line becomes a `<li>` inside that group's
+/// `<ul>`. Blank lines are skipped. Lines before any `## ` header (or notes with
+/// no headers at all) fall into an implicit unlabeled leading group so legacy
+/// flat notes still render as a bullet list. Every label and line is esc()'d.
+fn render_notes(notes: &str) -> String {
+    let mut h = String::new();
+    let mut group_open = false; // a <ul> (with optional label div) is open
+    let mut wrapper_open = false; // the <div class="hotel-group"> is open
+
+    let close_group = |h: &mut String, group_open: &mut bool, wrapper_open: &mut bool| {
+        if *group_open {
+            h.push_str("</ul>");
+            *group_open = false;
+        }
+        if *wrapper_open {
+            h.push_str("</div>");
+            *wrapper_open = false;
+        }
+    };
+
+    for raw in notes.split('\n') {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(label) = line.strip_prefix("## ") {
+            close_group(&mut h, &mut group_open, &mut wrapper_open);
+            h.push_str("<div class=\"hotel-group\">");
+            wrapper_open = true;
+            h.push_str(&format!(
+                "<div class=\"hotel-group-label\">{}</div>",
+                esc(label.trim())
+            ));
+            h.push_str("<ul>");
+            group_open = true;
+        } else {
+            // A fact line before any header → open an unlabeled leading group.
+            if !group_open {
+                if !wrapper_open {
+                    h.push_str("<div class=\"hotel-group\">");
+                    wrapper_open = true;
+                }
+                h.push_str("<ul>");
+                group_open = true;
+            }
+            h.push_str(&format!("<li>{}</li>", esc(line)));
+        }
+    }
+    close_group(&mut h, &mut group_open, &mut wrapper_open);
+    h
 }
 
 pub fn render(plan: &Plan, lang: &str) -> String {
@@ -59,6 +115,7 @@ pub fn render(plan: &Plan, lang: &str) -> String {
         let name = if lang == "zh" && !name_zh.is_empty() { name_zh } else { rs(hotel, "name") };
         let check_in = rs(hotel, "check_in");
         let notes = rs(hotel, "notes");
+        let voucher_url = rs(hotel, "voucher_url");
         h.push_str(&format!("<h2>{}</h2>", esc(t("hotel", lang))));
         h.push_str("<div class=\"booking-grid\">");
         h.push_str("<div class=\"booking-item hotel\">");
@@ -68,11 +125,19 @@ pub fn render(plan: &Plan, lang: &str) -> String {
         if !check_in.is_empty() {
             h.push_str(&format!("<div class=\"booking-sub\">{}</div>", esc(&check_in)));
         }
-        // PNR / cancellation text behind native <details> (progressive disclosure, no JS).
+        // Voucher PDF link (own /voucher/* R2 route). 404s until the PDF is uploaded.
+        if !voucher_url.is_empty() {
+            h.push_str(&format!(
+                "<a class=\"voucher-link\" href=\"{}\" target=\"_blank\" rel=\"noopener\">📄 {}</a>",
+                esc_url_attr(&voucher_url), esc(t("voucher", lang))
+            ));
+        }
+        // PNR / cancellation text behind native <details> (progressive disclosure, no JS),
+        // reformatted into grouped bullets (## Group headers → labeled <ul> lists).
         if !notes.is_empty() {
             h.push_str(&format!(
                 "<details class=\"booking-notes\"><summary>{}</summary><div class=\"booking-notes-body\">{}</div></details>",
-                esc(t("details", lang)), esc(&notes)
+                esc(t("details", lang)), render_notes(&notes)
             ));
         }
         h.push_str("</div></div>");
@@ -164,6 +229,65 @@ mod tests {
         assert!(!html.contains("Hotel Aqua Citta Naha")); // en name not shown when zh present
         assert!(html.contains("<details"));
         assert!(html.contains("CFM 1234567")); // PNR present but collapsed
+    }
+
+    #[test]
+    fn hotel_grouped_notes_render_labels_and_bullets() {
+        let notes = "## 房型 Room\nStandard twin · non-smoking\n## 訂單 Booking\n4 nights: 2026-06-12 → 2026-06-16\n⚠ Non-refundable\n## 用餐 Dining\nBreakfast ONLY\n## 交通 Access\nYui Rail: Asato Station";
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        hotel.insert("notes".into(), serde_json::json!(notes));
+        let plan = Plan { hotel: Some(hotel), ..Default::default() };
+        let html = render(&plan, "zh");
+        // wrapper preserved
+        assert!(html.contains("<details"));
+        // group labels present (rendered without the "## " prefix)
+        assert!(html.contains("房型 Room"));
+        assert!(html.contains("訂單 Booking"));
+        assert!(html.contains("用餐 Dining"));
+        assert!(html.contains("交通 Access"));
+        assert!(!html.contains("## ")); // the marker prefix must be stripped
+        // fact lines become <li> items
+        assert!(html.contains("<li>Standard twin · non-smoking</li>"));
+        assert!(html.contains("<li>⚠ Non-refundable</li>"));
+        // 4 groups → 4 <ul> blocks
+        assert_eq!(html.matches("<ul").count(), 4);
+        assert_eq!(html.matches("hotel-group-label").count(), 4);
+    }
+
+    #[test]
+    fn hotel_notes_blank_lines_skipped() {
+        let notes = "## 房型 Room\n\nStandard twin\n\n";
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        hotel.insert("notes".into(), serde_json::json!(notes));
+        let plan = Plan { hotel: Some(hotel), ..Default::default() };
+        let html = render(&plan, "en");
+        assert!(html.contains("<li>Standard twin</li>"));
+        assert!(!html.contains("<li></li>")); // no empty bullets
+    }
+
+    #[test]
+    fn hotel_voucher_link_renders_with_href_and_target() {
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        hotel.insert("voucher_url".into(), serde_json::json!("/voucher/okinawa-2026/azat-voucher.pdf"));
+        let plan = Plan { hotel: Some(hotel), ..Default::default() };
+        let html = render(&plan, "en");
+        assert!(html.contains("class=\"voucher-link\""));
+        assert!(html.contains("href=\"/voucher/okinawa-2026/azat-voucher.pdf\""));
+        assert!(html.contains("target=\"_blank\""));
+        assert!(html.contains("rel=\"noopener\""));
+        assert!(html.contains("Hotel voucher (PDF)")); // en label
+    }
+
+    #[test]
+    fn hotel_without_voucher_url_renders_no_link() {
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        let plan = Plan { hotel: Some(hotel), ..Default::default() };
+        let html = render(&plan, "en");
+        assert!(!html.contains("voucher-link"));
     }
 
     #[test]

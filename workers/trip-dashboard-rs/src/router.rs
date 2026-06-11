@@ -76,6 +76,32 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
     }
     let scope = auth::resolve(query.get("token").map(|s| s.as_str()), &owner_token, &shares);
 
+    // /voucher/<plan>/<file> → R2 VOUCHERS bucket passthrough (PDF).
+    //
+    // GATED: unlike /map/* (low-stakes images, ungated), vouchers embed booking
+    // refs / guest names, so we require the same access scope as the plan view —
+    // the plan slug is the FIRST path segment, checked via can_view_plan. We also
+    // serve `Cache-Control: private, no-store` so intermediaries never cache it.
+    // (Placed after scope resolution because it needs the share-token table.)
+    if let Some(rest) = path.strip_prefix("/voucher/") {
+        let plan_slug = rest.split('/').next().unwrap_or("");
+        if !auth::can_view_plan(&scope, plan_slug) {
+            return Response::error("Forbidden", 403);
+        }
+        let bucket = env.bucket("VOUCHERS")?;
+        if let Some(obj) = bucket.get(rest).execute().await? {
+            if let Some(body) = obj.body() {
+                let bytes = body.bytes().await?;
+                let h = Headers::new();
+                h.set("Content-Type", "application/pdf")?;
+                h.set("Cache-Control", "private, no-store")?;
+                return Ok(Response::from_bytes(bytes)?.with_headers(h));
+            }
+        }
+        // R2 miss (PDF not uploaded yet) → 404, not a placeholder.
+        return Response::error("voucher not found", 404);
+    }
+
     // Index — owner only.
     if path == "/" && query.get("plan").is_none() {
         if scope != auth::AccessScope::Owner {
@@ -168,7 +194,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              FROM flight_legs WHERE plan_id = '{slug}' ORDER BY direction, leg_order"
         ),
         format!(
-            "SELECT name, name_zh, check_in, notes \
+            "SELECT name, name_zh, check_in, notes, voucher_url \
              FROM hotels WHERE plan_id = '{slug}'"
         ),
         format!(

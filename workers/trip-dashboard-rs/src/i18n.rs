@@ -16,6 +16,8 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("plans", true) => "行程",
         ("details", false) => "Booking details",
         ("details", true) => "訂位明細",
+        ("voucher", false) => "Hotel voucher (PDF)",
+        ("voucher", true) => "住宿券 PDF",
         _ => "",
     }
 }
@@ -33,5 +35,10 @@ mod tests {
     #[test]
     fn unknown_key_is_empty() {
         assert_eq!(t("nope", "en"), "");
+    }
+    #[test]
+    fn voucher_label_is_bilingual() {
+        assert_eq!(t("voucher", "en"), "Hotel voucher (PDF)");
+        assert_eq!(t("voucher", "zh"), "住宿券 PDF");
     }
 }

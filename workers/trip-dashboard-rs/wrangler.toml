@@ -12,3 +12,7 @@ command = "command -v worker-build >/dev/null || cargo install -q worker-build; 
 [[r2_buckets]]
 binding = "MAPS"
 bucket_name = "trip-dashboard-maps"
+
+[[r2_buckets]]
+binding = "VOUCHERS"
+bucket_name = "trip-dashboard-vouchers"
