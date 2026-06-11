@@ -1,63 +1,63 @@
 # Dashboard comparison — old TS worker vs. new Rust worker
 
-**Captured:** 2026-06-11 via `chromeport screenshot` (full-page, 480px-wide mobile viewport),
-plan `okinawa-2026`, both sites live.
+**Updated:** 2026-06-11 (CORRECTED). Captured via `chromeport fetch url` (full **rendered text**,
+settle-waited — NOT screenshots), plan `okinawa-2026`, both sites live.
 
-> **Caveat:** the OLD TS site was mid-fix when this was captured. Some gaps below (empty noon,
-> missing meals) are exactly the bugs tracked in `docs/handoff-worker-noon-meals-transfers.md`;
-> if those land, re-run the comparison (rerun steps at the bottom) for an apples-to-apples view.
-> This doc is the **baseline** to measure old-site fixes against.
+> **Correction note:** an earlier version of this doc concluded the old TS site was sparse/buggy
+> (empty noon, no meals). That was WRONG — caused by (a) a mis-timed full-page *screenshot* that
+> captured a partial render, and (b) grepping for the wrong meal emoji (`🍽️` vs the old site's
+> actual `🍜`). A fresh `chromeport fetch url` text capture shows the old site is content-RICH.
+> The real gaps are on the NEW Rust worker. Always compare via rendered-text capture, not screenshots.
 
-## URLs compared
-- OLD (TS):  `https://trip-dashboard.yanggf.workers.dev/?plan=okinawa-2026`  (no token required)
-- NEW (Rust): `https://trip-dashboard-rs.yanggf.workers.dev/?plan=okinawa-2026&token=<owner>`  (token-gated)
+## URLs
+- OLD (TS):  `https://trip-dashboard.yanggf.workers.dev/?plan=okinawa-2026`  (no token)
+- NEW (Rust): `https://trip-dashboard-rs.yanggf.workers.dev/?plan=okinawa-2026&token=<owner>`
 
-Screenshots: `/tmp/compare/old-ts.png` (465×7976) · `/tmp/compare/new-rs.png` (465×5707).
+## Feature parity (fresh rendered-text capture, same grep patterns both sides)
 
-## Feature / content diff (grep of the live HTML)
-
-| Feature | OLD (TS) | NEW (Rust) | Note |
+| Feature | OLD (TS) | NEW (Rust) | Verdict |
 |---|---|---|---|
-| Noon (中午) **label** | ✅ | ✅ | both render the heading |
-| Noon (中午) **content** | ❌ (empty) | ✅ | old has the label-map but no data slot → noon activities/meals fall through (the original bug) |
-| 🍽 Meals | ❌ | ✅ | old drops all meals (incl. the Makishi lunch) |
-| Map images (`/map/...png`) | ❌ | ✅ | old has no maps; new has plan + 5 per-day keyless OSM maps from R2 |
-| Per-stop Google Maps links (`maps?q=lat,lon`) | ❌ | ✅ | new: tap a stop → exact place in Google Maps |
-| Progressive disclosure (`<details>`) | ❌ | ✅ | new collapses PNR/CFM/booking minutiae behind a tap; old dumps inline |
-| Transfer route + ¥340 price | ✅ | ✅ | parity |
-| Flight CI120 / hotel AZAT / weather strip | ✅ | ✅ | parity |
+| Rendered text length | 5696 chars | 5871 chars | ~equal |
+| Noon (中午) content | 5 | 4 | both render noon |
+| **Meals (🍜)** | **9** | **0** | ❌ NEW BUG — see below |
+| **Route segments (今日路線)** | **5 days** | **0** | ❌ NEW MISSING FEATURE — see below |
+| Transit pills (→) | 73 | 23 | old has ~3× transit detail (route segments) |
+| Reservations (需訂位) | 4 | 4 | parity |
+| Shikinaen / AEON / ¥340 transfer | yes | yes | parity |
 
-## Page weight / density
+## Root cause of the two NEW-worker gaps (verified)
 
-| | OLD (TS) | NEW (Rust) |
-|---|---|---|
-| HTML bytes | 60,138 | 31,174 (~½) |
-| Full-page height | 7,976 px | 5,707 px (~−30%) |
+Data IS in Turso (so these are worker render/feature gaps, not missing data):
+- `session_meals` for okinawa: **9 rows**. The Rust worker DOES query `session_meals` (1 ref in
+  router.rs) but renders **0 meals** → a **render/assembly bug** (likely a join-key / session_type
+  mismatch in `model::assemble` or `render::session`). The CLI `itinerary` view shows these meals
+  fine, so the data path is proven.
+- `day_route_segments` for okinawa: **21 rows**. The Rust worker queries it **0 times** → the
+  per-day door-to-door routing ("今日路線" — 🚗/🚌/🚶 segments with times) is **not implemented**
+  in the Rust worker at all.
 
-## Visual verdict
-- **OLD:** wall-of-text, no maps, sparse booking block, weak hierarchy. Information-dense but hard to scan; the empty noon blocks read as "missing data."
-- **NEW:** card-based day timeline, a map per day + a trip-wide map, weather strips with rain-gear tips, day-type colour accents, collapsed booking details. A genuine redesign, not a reskin — and lighter on the wire.
+## NEW-worker advantages (still real, but narrower than first claimed)
+1. **Maps** — plan + 5 per-day keyless OSM maps (chromeport→R2). Old site has none.
+2. **Progressive disclosure** — booking minutiae behind `<details>`.
+3. **Page weight** — ~31KB raw HTML vs ~60KB (old ships more inline).
+4. **Token-scoped access** — owner index + per-plan share links.
+5. **Rust/WASM stack** + soft-deleted plans hidden end-to-end.
 
-## What the NEW worker adds beyond bug-fixes
-Even after the old site's noon/meals bugs are fixed, these remain new-worker-only advantages:
-1. **Maps** (plan + per-day, keyless, chromeport-snapshotted → R2).
-2. **Progressive disclosure** of booking minutiae.
-3. **~½ the page weight**, ~30% shorter.
-4. **Token-scoped access** (owner sees index + all plans; share links scope to one plan).
-5. **Rust/WASM** stack (the migration goal); soft-deleted plans hidden end-to-end.
+## Net assessment
+The Rust worker is **NOT yet at content parity** with the old TS site. Before cutover it needs:
+- **FIX:** meals rendering (queried but dropped — 9 rows → 0 shown).
+- **ADD:** `day_route_segments` querying + a "今日路線" per-day route block (21 rows ignored).
+Until then the old site is richer on itinerary/transit detail; the new site wins on maps, weight,
+auth, and stack. Re-run the parity grep (below) after those two land.
 
-## Rerun (after old-site fixes land)
+## Rerun (rendered-text capture — the correct method)
 ```bash
 OWNER=<owner-token>
-mkdir -p /tmp/compare
-./bin/chromeport screenshot "https://trip-dashboard.yanggf.workers.dev/?plan=okinawa-2026" \
-  --out /tmp/compare/old-ts.png --width 480 --height 1400 --wait 6000 --full-page
-./bin/chromeport screenshot "https://trip-dashboard-rs.yanggf.workers.dev/?plan=okinawa-2026&token=$OWNER" \
-  --out /tmp/compare/new-rs.png --width 480 --height 1400 --wait 6000 --full-page
-# then diff the live HTML for the feature table above:
-curl -s "https://trip-dashboard.yanggf.workers.dev/?plan=okinawa-2026" > /tmp/compare/old.html
-curl -s "https://trip-dashboard-rs.yanggf.workers.dev/?plan=okinawa-2026&token=$OWNER" > /tmp/compare/new.html
-for p in 中午 🍽 Asato 340 /map/okinawa "maps?q=26" "<details"; do
-  printf "%-20s old=%s new=%s\n" "$p" "$(grep -c "$p" /tmp/compare/old.html)" "$(grep -c "$p" /tmp/compare/new.html)"
+OID=$(./bin/chromeport fetch url "https://trip-dashboard.yanggf.workers.dev/?plan=okinawa-2026" --source dash | sed -n 's/^capture_id\t//p')
+NID=$(./bin/chromeport fetch url "https://trip-dashboard-rs.yanggf.workers.dev/?plan=okinawa-2026&token=$OWNER" --source dashrs | sed -n 's/^capture_id\t//p')
+for pat in 中午 🍜 今日路線 需訂位 識名園 ¥340; do
+  o=$(./bin/chromeport db query "SELECT raw_text FROM captures WHERE capture_id='$OID'" | grep -oc "$pat")
+  n=$(./bin/chromeport db query "SELECT raw_text FROM captures WHERE capture_id='$NID'" | grep -oc "$pat")
+  printf "%-12s old=%s new=%s\n" "$pat" "$o" "$n"
 done
 ```
