@@ -307,6 +307,10 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_low_c REAL;").await;
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_high_c REAL;").await;
 
+    // 14b. lat/lon on destination_pois (map pins for the dashboard; sourced via geocoder).
+    add_column(&conn, "ALTER TABLE destination_pois ADD COLUMN lat REAL;").await;
+    add_column(&conn, "ALTER TABLE destination_pois ADD COLUMN lon REAL;").await;
+
     // 15. flight_legs (normalized — replaces JSON blobs in flights).
     exec_create(
         &conn,
