@@ -1,7 +1,11 @@
 pub mod session;
 pub mod day;
+pub mod map;
 
-/// Escape text for HTML. Escape ONCE — never double-escape (the old TS bug rendered `&amp;amp;`).
+/// Escape text for HTML TEXT content and DOUBLE-QUOTED attribute values only.
+/// (Escapes & < > ". Not safe for single-quoted attrs, unquoted attrs, URLs, or
+/// JS/CSS contexts — build those from trusted components instead.)
+/// Escape ONCE — never double-escape (the old TS bug rendered `&amp;amp;`).
 pub fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

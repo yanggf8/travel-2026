@@ -1,7 +1,7 @@
 use crate::model::Day;
 use super::{esc, session};
 
-pub fn render(day: &Day, _plan_id: &str, lang: &str) -> String {
+pub fn render(day: &Day, plan_id: &str, lang: &str) -> String {
     let theme = if lang == "zh" && !day.theme_zh.is_empty() { &day.theme_zh } else { &day.theme };
     let mut h = String::new();
     h.push_str(&format!("<section class=\"day day-{}\">", esc(&day.day_type)));
@@ -10,11 +10,12 @@ pub fn render(day: &Day, _plan_id: &str, lang: &str) -> String {
     if !day.weather_label.is_empty() {
         h.push_str(&format!("<div class=\"weather\">🌧️ {}</div>", esc(&day.weather_label)));
     }
-    // TASK 7 will inject the day map <img> here: h.push_str(&map::day_map_img(_plan_id, day.day_number));
+    h.push_str(&super::map::day_map_img(plan_id, day.day_number));
     for sess in &day.sessions {
         // skip wholly-empty sessions to avoid 4 empty boxes on a light day
         if sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty() { continue; }
         h.push_str(&session::render(sess, lang));
+        h.push_str(&super::map::stop_list(&sess.stops));
     }
     h.push_str("</section>");
     h
@@ -51,5 +52,11 @@ mod tests {
         assert!(html.contains("Arrive"));
         // the empty noon session should NOT emit a session block
         assert!(!html.contains("session-noon"));
+    }
+    #[test]
+    fn day_includes_day_map_image() {
+        let day = Day { day_number: 2, date: "2026-06-13".into(), day_type: "full".into(), ..Default::default() };
+        let html = render(&day, "okinawa-2026", "en");
+        assert!(html.contains("/map/okinawa-2026/day-2.png"));
     }
 }
