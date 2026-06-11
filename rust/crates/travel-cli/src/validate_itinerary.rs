@@ -140,6 +140,31 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     }
 }
 
+/// Agent-first hook for `doctor`: run only the map-link checks for one plan's
+/// active destination and return the ERROR-level findings (cross-country legs —
+/// the ocean-spanning Maps routes). Returns (day, message) pairs. Best-effort:
+/// returns empty on any DB/resolution failure so doctor never hard-fails here.
+pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
+    let Ok(conn) = db::connect_read().await else {
+        return Vec::new();
+    };
+    let Ok(destination) = read_destination(&conn, plan_id, None).await else {
+        return Vec::new();
+    };
+    let Ok(days) = load_day_summaries(&conn, plan_id, &destination).await else {
+        return Vec::new();
+    };
+    let mut issues = Vec::new();
+    for day in &days {
+        validate_map_links(day, &mut issues);
+    }
+    issues
+        .into_iter()
+        .filter(|i| matches!(i.severity, Severity::Error))
+        .map(|i| (i.day.unwrap_or(0), i.message))
+        .collect()
+}
+
 fn count(issues: &[Issue]) -> (usize, usize, usize) {
     let mut e = 0;
     let mut w = 0;

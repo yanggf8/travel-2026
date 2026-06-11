@@ -66,10 +66,46 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     // modes produce identical output. Remove when root package.json is deleted.
     if matches!(mode, Mode::Doctor) {
         // no-op: validateDependencies() (intentionally skipped — see note above)
+        // Agent-first map-link check: cross-country (ocean-spanning) Maps legs
+        // across all plans are doctor errors. Ambiguous-stop info/warnings stay
+        // advisory (surfaced only by `validate-itinerary`, not doctor).
+        validate_map_links_all_plans(&mut issues).await;
     }
 
     emit_report(&issues);
     Ok(())
+}
+
+/// Doctor-only: run the map-link lint across every plan and add cross-country
+/// errors. Best-effort — skips silently if the plan list can't be read.
+async fn validate_map_links_all_plans(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    let mut rows = match conn
+        .query("SELECT plan_id FROM plan_metadata ORDER BY plan_id", ())
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut plan_ids: Vec<String> = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(id) = row.get::<String>(0) {
+            plan_ids.push(id);
+        }
+    }
+    for plan_id in plan_ids {
+        for (day, message) in crate::validate_itinerary::map_link_errors(&plan_id).await {
+            issues.push(Issue {
+                category: "map-links".to_string(),
+                severity: Severity::Error,
+                message: format!("{message} (day {day})"),
+                file: Some(format!("plan:{plan_id}")),
+                line: None,
+            });
+        }
+    }
 }
 
 fn project_root() -> PathBuf {
