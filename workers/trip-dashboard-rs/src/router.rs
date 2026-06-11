@@ -89,6 +89,7 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
                  FROM plans p \
                  LEFT JOIN plan_destinations pd ON pd.plan_id = p.plan_id \
                  LEFT JOIN date_anchors d ON d.plan_id = p.plan_id \
+                 WHERE p.deleted_at IS NULL \
                  ORDER BY p.plan_id"
                     .to_string(),
             ],
@@ -143,7 +144,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              FROM plans p \
              JOIN date_anchors d ON d.plan_id = p.plan_id \
              LEFT JOIN plan_destinations pd ON pd.plan_id = p.plan_id \
-             WHERE p.plan_id = '{slug}'"
+             WHERE p.plan_id = '{slug}' AND p.deleted_at IS NULL"
         ),
         format!(
             "SELECT day_number, date, day_type, theme, theme_zh, weather_label \
