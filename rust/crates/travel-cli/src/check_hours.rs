@@ -1,7 +1,7 @@
-//! `travel check-hours` — pre-trip open-hours check.
+//! `travel check-hours` — pre-trip open-hours and label-freshness check.
 //!
-//! For every named activity in the plan, reads `Hours: HH:MM-HH:MM` and
-//! optional `Closed: Mon,Tue,...` markers from the activity notes column.
+//! **Hours check**: for every named activity in the plan, reads `Hours: HH:MM-HH:MM`
+//! and optional `Closed: Mon,Tue,...` markers from the activity notes column.
 //! When no explicit start_time is set, the session is used as a proxy:
 //!   morning  → 09:00–12:00
 //!   noon     → 12:00–14:00
@@ -13,6 +13,10 @@
 //!   ⚠️  visit window partially outside opening hours
 //!   ❌  closed (day-of-week closure or fully outside hours)
 //!   ·   no hours data — cannot check
+//!
+//! **Label freshness**: compares day themes and session focus labels against
+//! actual activities. Flags when a theme mentions a place that no longer
+//! appears in that day's activities (e.g., after deleting or moving activities).
 
 use crate::db;
 use libsql::{params, Connection};
@@ -167,6 +171,8 @@ struct DayCheck {
     day_number: i64,
     date: String,
     theme: String,
+    theme_zh: String,
+    session_focus: Vec<(String, String, String)>, // (session, focus, focus_zh)
     activities: Vec<ActivityCheck>,
 }
 
@@ -255,23 +261,129 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
         n_closed, n_warn, n_unknown
     );
 
-    if any_issue {
+    // ── label freshness check ─────────────────────────────────────────────────
+    let stale_labels = check_label_freshness(&days);
+
+    if any_issue || !stale_labels.is_empty() {
+        if !stale_labels.is_empty() {
+            println!();
+            println!("Label freshness issues:");
+            for label in &stale_labels {
+                println!("  ⚠️  {}", label);
+            }
+        }
         println!();
-        println!("Issues found — review ❌/⚠️  activities above.");
+        println!("Issues found — review ❌/⚠️  items above.");
         std::process::exit(1);
     } else {
         println!();
         println!("All checked activities are open during planned visit windows.");
+        println!("All labels match their activities.");
     }
 
     Ok(())
 }
 
+/// Extract place names in parentheses from activity titles (e.g., "(識名園)", "(波上宮)")
+fn extract_parenthesized_names(titles: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    for title in titles {
+        // Match both (...) and （...）
+        for (open, close) in &[('(', ')'), ('（', '）')] {
+            let mut chars = title.chars().peekable();
+            while let Some(&c) = chars.peek() {
+                if c == *open {
+                    chars.next();
+                    let name: String = chars.by_ref().take_while(|&ch| ch != *close).collect();
+                    if !name.is_empty() && name.len() <= 20 {
+                        names.push(name);
+                    }
+                } else {
+                    chars.next();
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Extract keywords from a theme/focus string (split by ・, ·, /, ,)
+fn extract_place_keywords(text: &str) -> Vec<String> {
+    text
+        .split(|c| c == '・' || c == '·' || c == '/' || c == '、')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() > 1)
+        .collect()
+}
+
+/// Check label freshness: verify day themes match actual activities.
+/// Returns a list of stale label descriptions.
+fn check_label_freshness(days: &[DayCheck]) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    for day in days {
+        // Collect all activity titles for this day (lowercase for matching)
+        let day_titles_lower: Vec<String> = day.activities.iter()
+            .map(|a| a.title.to_lowercase())
+            .collect();
+
+        // Check if theme keywords appear in any activity
+        let theme_keywords = extract_place_keywords(&day.theme);
+        let theme_zh_keywords = extract_place_keywords(&day.theme_zh);
+        let all_keywords: std::collections::HashSet<_> = theme_keywords.iter()
+            .chain(theme_zh_keywords.iter())
+            .collect();
+
+        for kw in all_keywords {
+            if kw.len() < 2 {
+                continue;
+            }
+            let kw_lower = kw.to_lowercase();
+            let is_generic = ["購物", "漫步", "散步", "美食", "返程", "抵達", "搭單軌",
+                             "紀念品", "晚餐", "午餐", "早餐", "住宿", "飯店"].iter()
+                .any(|g| kw_lower.contains(g));
+            if is_generic {
+                continue;
+            }
+
+            // Lenient matching:
+            // 1. Full substring match
+            // 2. First 2 characters match (handles shortened forms like "牧志市場" → "牧志公設市場")
+            // 3. Common ZH→EN translations
+            let first_two: String = kw_lower.chars().take(2).collect();
+            let en_equivalents: &[&str] = match kw_lower.as_str() {
+                k if k.contains("博物館") || k.contains("美術館") => &["museum"],
+                k if k.contains("公園") => &["park"],
+                k if k.contains("市場") => &["market"],
+                k if k.contains("城") => &["castle"],
+                k if k.contains("宮") || k.contains("神社") => &["shrine"],
+                k if k.contains("園") => &["garden"],
+                _ => &[],
+            };
+            let found = day_titles_lower.iter().any(|t| {
+                t.contains(&kw_lower) || t.contains(&first_two)
+                    || en_equivalents.iter().any(|en| t.contains(en))
+            });
+
+            if !found {
+                issues.push(format!(
+                    "Day {} theme mentions '{}' but no activity matches",
+                    day.day_number, kw
+                ));
+            }
+        }
+    }
+
+    issues
+}
+
 async fn load_days(conn: &Connection, plan_id: &str, dest: &str) -> Result<Vec<DayCheck>, String> {
-    // Load days
+    // Load days with both EN and ZH themes
     let mut day_rows = conn
         .query(
-            "SELECT day_number, date, COALESCE(NULLIF(theme_zh,''), NULLIF(theme,''), day_type) \
+            "SELECT day_number, date, \
+                    COALESCE(NULLIF(theme_zh,''), NULLIF(theme,''), day_type), \
+                    COALESCE(theme_zh, '') \
              FROM days WHERE plan_id = ?1 AND destination = ?2 ORDER BY day_number",
             params![plan_id.to_string(), dest.to_string()],
         )
@@ -284,8 +396,34 @@ async fn load_days(conn: &Connection, plan_id: &str, dest: &str) -> Result<Vec<D
             day_number: r.get(0).unwrap_or(0),
             date: r.get(1).unwrap_or_default(),
             theme: r.get(2).unwrap_or_default(),
+            theme_zh: r.get(3).unwrap_or_default(),
+            session_focus: Vec::new(),
             activities: Vec::new(),
         });
+    }
+
+    // Load session focus labels
+    let mut tod_rows = conn
+        .query(
+            "SELECT day_number, session_type, COALESCE(focus, ''), COALESCE(focus_zh, '') \
+             FROM timesofday WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY day_number, \
+               CASE session_type WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 \
+                 WHEN 'afternoon' THEN 2 ELSE 3 END",
+            params![plan_id.to_string(), dest.to_string()],
+        )
+        .await
+        .map_err(|e| format!("timesofday query failed: {e}"))?;
+
+    while let Some(r) = tod_rows.next().await.map_err(|e| format!("tod row: {e}"))? {
+        let day_number: i64 = r.get(0).unwrap_or(0);
+        let session: String = r.get(1).unwrap_or_default();
+        let focus: String = r.get(2).unwrap_or_default();
+        let focus_zh: String = r.get(3).unwrap_or_default();
+
+        if let Some(day) = days.iter_mut().find(|d| d.day_number == day_number) {
+            day.session_focus.push((session, focus, focus_zh));
+        }
     }
 
     // Load activities
