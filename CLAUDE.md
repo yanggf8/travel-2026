@@ -346,8 +346,9 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 ./bin/travel add-lifetour-offer --url <url> --price <twd> --hotel "<name>"
 
 # Mutations — only the 4 most common shown here.
-# Full list (set-airport-transfer, set-activity-time, set-day-theme, set-route-segment,
-# set-tod-zh, delete-activity, swap-days, run-status, check-booking-integrity, …)
+# Full list (add-activity, reorder-activities, delete-activity, set-meals,
+# set-airport-transfer, set-activity-time, set-day-theme, set-route-segment,
+# set-tod-zh, swap-days, run-status, check-booking-integrity, …)
 # lives in docs/reference/CLI.md. Add new mutation examples THERE, not here.
 ./bin/travel set-dates 2026-02-13 2026-02-17
 ./bin/travel select-offer <offer-id> <date>

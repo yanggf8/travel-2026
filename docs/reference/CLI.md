@@ -67,7 +67,7 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ./bin/travel sync-bookings [--dry-run]
 ./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
 ./bin/travel check-booking-integrity
-./bin/travel validate-itinerary --dest tokyo_2026  # historical days skip booking-deadline failures
+./bin/travel validate-itinerary --dest tokyo_2026 [--severity error|warning|info]  # also a MAP-LINK lint: cross-country legs (error), &-truncating URLs / walking-mode rail (warning), ambiguous bare stops + meals with no map pin (info). historical days skip booking-deadline failures
 ```
 
 ## Utilities
@@ -76,7 +76,7 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel leave calc 2026-02-24 2026-02-28
 ./bin/travel normalize flights scrapes/trip-feb24-out.json --top 5
 ./bin/travel validate data                       # data integrity check
-./bin/travel doctor                              # full system health check
+./bin/travel doctor                              # full system health check (also runs the map-link lint across all plans; cross-country/ocean-route legs fail as errors)
 ```
 
 ## Mutations
@@ -93,6 +93,9 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...]    # plain-text; repeat --seg per segment
 ./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activity-zh "<zh>" (repeatable)] [--plan-id <id>]    # (alias: set-session-zh)
 ./bin/travel set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]    # (alias: set-session-focus)
+./bin/travel set-meals <day> <session> --meal "<text>" [--meal "<text>"...] [--dest slug]    # replace session meals; a meal may carry a place pin: "<label>｜map:<query>"
+./bin/travel add-activity <day> <session> "<title>" [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest slug]    # append a new activity (audit triad)
+./bin/travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest slug]    # rewrite sort_order; list ALL activities in the session in the desired order
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
 ./bin/travel swap-days <dayA> <dayB> [--dest slug]
 ./bin/travel fetch-weather [--dest slug] [--all]
