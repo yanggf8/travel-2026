@@ -177,6 +177,13 @@ pub async fn run_title(
         std::process::exit(1);
     }
 
+    // Fail loud on a broken embedded Maps URL (the /maps/dir/?...&... form the
+    // dashboard linkifier truncates at the first '&'). Reject before any write.
+    if let Err(reason) = crate::checks::check_title_map_url(&parsed.new_title) {
+        eprintln!("Error: {reason}");
+        std::process::exit(1);
+    }
+
     let conn = crate::db::connect_write().await?;
     let destination = match read_destination(&conn, &plan_id, &parsed.dest).await {
         Ok(d) => d,
@@ -319,6 +326,18 @@ fn parse_time(args: &[String]) -> Result<ActivityTime, String> {
         return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
     }
     p.activity = positional[2].clone();
+    // Fail-loud HH:MM validation BEFORE any DB write (this Err bubbles to main →
+    // stderr + non-zero exit, writing NOTHING). When BOTH times are present,
+    // also enforce start ≤ end.
+    if let Some(s) = &p.start_time {
+        crate::checks::validate_time_flag("--start", s)?;
+    }
+    if let Some(e) = &p.end_time {
+        crate::checks::validate_time_flag("--end", e)?;
+    }
+    if let (Some(s), Some(e)) = (&p.start_time, &p.end_time) {
+        crate::checks::validate_start_le_end("--start", s, "--end", e)?;
+    }
     Ok(p)
 }
 
@@ -1208,6 +1227,13 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
         std::process::exit(1);
     }
 
+    // Fail loud on a broken embedded Maps URL (the /maps/dir/?...&... form the
+    // dashboard linkifier truncates at the first '&'). Reject before any write.
+    if let Err(reason) = crate::checks::check_title_map_url(&parsed.title) {
+        eprintln!("Error: {reason}");
+        std::process::exit(1);
+    }
+
     let conn = crate::db::connect_write().await?;
     let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
 
@@ -1363,6 +1389,18 @@ fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
     p.title = positional[2..].join(" ");
     if !["must", "want", "optional"].contains(&p.priority.as_str()) {
         return Err("--priority must be one of: must | want | optional".to_string());
+    }
+    // Fail-loud HH:MM validation BEFORE any DB write (this Err bubbles to main →
+    // stderr + non-zero exit, writing NOTHING). When BOTH times are present,
+    // also enforce start ≤ end.
+    if let Some(s) = &p.start_time {
+        crate::checks::validate_time_flag("--start", s)?;
+    }
+    if let Some(e) = &p.end_time {
+        crate::checks::validate_time_flag("--end", e)?;
+    }
+    if let (Some(s), Some(e)) = (&p.start_time, &p.end_time) {
+        crate::checks::validate_start_le_end("--start", s, "--end", e)?;
     }
     Ok(p)
 }
@@ -1740,45 +1778,12 @@ fn parse_booking(args: &[String]) -> Result<ActivityBooking, String> {
         );
     }
     if let Some(b) = &p.book_by {
-        validate_iso_date(b)?;
+        // Shared canonical ISO-date check (crate::checks). Passing "--book-by" as
+        // the field name keeps the error strings byte-identical to the old local
+        // copy ("--book-by must be YYYY-MM-DD format …" / "… is not a valid date").
+        crate::checks::validate_iso_date(b, "--book-by")?;
     }
     Ok(p)
-}
-
-// Mirrors validateIsoDate: strict YYYY-MM-DD with a real-date check.
-fn validate_iso_date(input: &str) -> Result<(), String> {
-    let bytes = input.as_bytes();
-    let valid_shape = bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && input[0..4].chars().all(|c| c.is_ascii_digit())
-        && input[5..7].chars().all(|c| c.is_ascii_digit())
-        && input[8..10].chars().all(|c| c.is_ascii_digit());
-    if !valid_shape {
-        return Err(format!("--book-by must be YYYY-MM-DD format (got: \"{input}\")"));
-    }
-    let year: i32 = input[0..4].parse().unwrap();
-    let month: u32 = input[5..7].parse().unwrap();
-    let day: u32 = input[8..10].parse().unwrap();
-    if month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) {
-        return Err(format!("--book-by is not a valid date: \"{input}\""));
-    }
-    Ok(())
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 0,
-    }
 }
 
 async fn read_booking_status(
@@ -1818,6 +1823,62 @@ async fn read_booking_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── HH:MM fail-loud validation (set-activity-time / add-activity) ──
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_time_accepts_valid_clocks() {
+        let p = parse_time(&s(&["1", "morning", "checkout", "--start", "09:00", "--end", "11:30"]))
+            .unwrap();
+        assert_eq!(p.start_time.as_deref(), Some("09:00"));
+        assert_eq!(p.end_time.as_deref(), Some("11:30"));
+    }
+
+    #[test]
+    fn parse_time_rejects_bad_start() {
+        let err = parse_time(&s(&["1", "morning", "checkout", "--start", "9am"])).unwrap_err();
+        assert!(err.contains("--start") && err.contains("\"9am\""), "got: {err}");
+        assert!(err.contains("HH:MM"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_time_rejects_bad_end() {
+        let err = parse_time(&s(&["1", "morning", "checkout", "--end", "25:00"])).unwrap_err();
+        assert!(err.contains("--end") && err.contains("\"25:00\""), "got: {err}");
+    }
+
+    #[test]
+    fn parse_time_rejects_start_after_end() {
+        let err =
+            parse_time(&s(&["1", "morning", "checkout", "--start", "14:00", "--end", "09:00"]))
+                .unwrap_err();
+        assert!(err.contains("start must be"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_add_rejects_bad_start() {
+        let err = parse_add(&s(&["3", "evening", "Stroll", "--start", "noon"])).unwrap_err();
+        assert!(err.contains("--start") && err.contains("\"noon\""), "got: {err}");
+    }
+
+    #[test]
+    fn parse_add_rejects_start_after_end() {
+        let err =
+            parse_add(&s(&["3", "evening", "Stroll", "--start", "20:00", "--end", "18:00"]))
+                .unwrap_err();
+        assert!(err.contains("start must be"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_add_accepts_valid_clocks() {
+        let p =
+            parse_add(&s(&["3", "evening", "Stroll", "--start", "18:00", "--end", "20:00"])).unwrap();
+        assert_eq!(p.start_time.as_deref(), Some("18:00"));
+        assert_eq!(p.end_time.as_deref(), Some("20:00"));
+    }
 
     #[test]
     fn parse_bool_valid() {

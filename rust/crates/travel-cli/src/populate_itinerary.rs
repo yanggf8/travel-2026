@@ -78,6 +78,16 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let pois = load_pois(&conn, &destination).await?;
     let area_names = load_area_names(&conn, &destination).await?;
 
+    // Fail loud BEFORE any write: every generated activity title comes from a
+    // POI title in the ref data. If any carries a broken embedded Maps URL (the
+    // /maps/dir/?...&... form the dashboard linkifier truncates at the first
+    // '&'), reject now so NOTHING is written (no partial theme/focus/activity).
+    for (poi_id, poi) in &pois {
+        if let Err(reason) = crate::checks::check_title_map_url(&poi.title) {
+            return Err(format!("POI \"{poi_id}\" title has a {reason}"));
+        }
+    }
+
     // Allocation: clusters → day numbers.
     let explicit = parse_assignments(parsed.assign.as_deref());
     let allocation = allocate_clusters_to_days(&parsed.goals, &days, &explicit);

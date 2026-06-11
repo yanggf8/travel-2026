@@ -263,8 +263,8 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
         let stops: Vec<&str> = tc.text.split('\u{2192}').collect(); // →
         for w in stops.windows(2) {
             legs.push((
-                clean_stop(w[0]),
-                clean_stop(w[1]),
+                crate::checks::clean_stop(w[0]),
+                crate::checks::clean_stop(w[1]),
                 tc.text.clone(),
                 None,
                 Some(tc.session.clone()),
@@ -273,8 +273,8 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
     }
     for rl in &day.route_legs {
         legs.push((
-            clean_stop(&rl.from),
-            clean_stop(&rl.to),
+            crate::checks::clean_stop(&rl.from),
+            crate::checks::clean_stop(&rl.to),
             format!("{} {}", rl.from, rl.to),
             Some(rl.mode.clone()),
             None,
@@ -292,7 +292,7 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
         let raw_stops: Vec<&str> = ctx.split('\u{2192}').collect();
         for (cleaned, idx) in [(from, 0usize), (to, raw_stops.len().saturating_sub(1))] {
             let raw = raw_stops.get(idx).map(|s| s.trim()).unwrap_or("");
-            if let Some(reason) = stop_link_problem(cleaned, raw) {
+            if let Some(reason) = crate::checks::stop_link_problem(cleaned, raw) {
                 out.push(Issue {
                     severity: Severity::Error,
                     day: Some(day.day_number),
@@ -313,8 +313,8 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
             continue;
         }
         // (2) cross-country leg
-        let cf = place_country(from);
-        let ct = place_country(to);
+        let cf = crate::checks::place_country(from);
+        let ct = crate::checks::place_country(to);
         if let (Some(a), Some(b)) = (cf, ct) {
             if a != b {
                 out.push(Issue {
@@ -332,7 +332,7 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
         }
         // (3) rail/bus route leg explicitly stored as walking
         if let Some(m) = mode {
-            if m == "walking" && mentions_rail_or_bus(ctx) {
+            if m == "walking" && crate::checks::mentions_rail_or_bus(ctx) {
                 out.push(Issue {
                     severity: Severity::Warning,
                     day: Some(day.day_number),
@@ -365,7 +365,7 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
     // (5) meal-pin coverage: a lunch/dinner meal with no map pin (｜map:<q> marker
     // or an embedded URL) renders as a plain pill with no "where is it" link.
     for meal in &day.meals {
-        if !meal_has_pin(&meal.text) {
+        if !crate::checks::meal_has_pin(&meal.text) {
             out.push(Issue {
                 severity: Severity::Info,
                 day: Some(day.day_number),
@@ -463,152 +463,6 @@ fn needs_reservation_check(session: &str, text: &str) -> bool {
     !WALK_IN.iter().any(|m| lower.contains(m))
 }
 
-/// A meal "has a pin" if it carries the ｜map:/|map: marker or an embedded URL.
-fn meal_has_pin(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    lower.contains("\u{FF5C}map:") // ｜map:
-        || lower.contains("|map:")
-        || lower.contains("http://")
-        || lower.contains("https://")
-}
-
-/// Strip the same noise the dashboard's cleanStopLabel removes, so lint sees the
-/// same place string Maps will: drop note after （。、, clock times, ①②③ markers,
-/// leading verbs/mode-nouns, "…至/到<place>", trailing 步行.
-/// Decide whether a transit/route stop will produce a BROKEN Google Maps link.
-/// `cleaned` is the output of [`clean_stop`]; `raw` is the original stop text.
-/// Returns `Some(reason)` when the link is broken, `None` when it's fine.
-///
-/// This is the guard that stops broken map links reaching the dashboard. The
-/// dashboard geocodes the cleaned stop name; if cleaning leaves nothing, or
-/// leaves residual junk (a stray paren, a `+步行` tail, a clock time, a pure
-/// mode word with no place), the resulting Maps query is wrong or empty.
-pub(crate) fn stop_link_problem(cleaned: &str, raw: &str) -> Option<String> {
-    let c = cleaned.trim();
-
-    // 1. Cleans to nothing → the stop was pure junk/mode text, no place at all.
-    //    (e.g. "（單軌約2分）+步行", "步行", "單軌" with nothing after it)
-    if c.is_empty() {
-        // Only flag if the raw text actually carried something (an empty raw
-        // stop is a malformed chain we report once via the empty-leg path).
-        if raw.trim().is_empty() {
-            return None;
-        }
-        return Some("has no usable place name — cleans to empty, so the map link can't geocode".to_string());
-    }
-
-    // 2. Residual structural junk survived cleaning → poisons the Maps query.
-    const JUNK: [char; 6] = ['\u{FF08}', '\u{FF09}', '(', ')', '+', '\u{FF0B}']; // （ ） ( ) + ＋
-    if let Some(bad) = c.chars().find(|ch| JUNK.contains(ch)) {
-        return Some(format!("contains stray '{bad}' after cleaning — malformed map query"));
-    }
-
-    // 3. A leftover mode tail/word with no real place (e.g. "步行", "單軌電車").
-    const MODE_ONLY: [&str; 6] = [
-        "\u{6B65}\u{884C}", "\u{55AE}\u{8ECC}", "\u{55AE}\u{8ECC}\u{96FB}\u{8ECA}",
-        "\u{5DF4}\u{58EB}", "\u{96FB}\u{8ECA}", "\u{63A5}\u{99C1}\u{5DF4}\u{58EB}",
-    ]; // 步行 單軌 單軌電車 巴士 電車 接駁巴士
-    if MODE_ONLY.contains(&c) {
-        return Some("is only a transport word, not a place — map link can't geocode".to_string());
-    }
-
-    None
-}
-
-/// Validate that a place string will produce a working Google Maps link as a
-/// transit/route stop. Returns `Err(reason)` for a broken stop, `Ok(())` when
-/// fine. This is the WRITE-TIME guard: `set-route-segment` / transit writers
-/// call it so a bad stop is rejected at creation, never reaching the dashboard.
-pub(crate) fn check_stop_linkable(stop: &str) -> Result<(), String> {
-    match stop_link_problem(&clean_stop(stop), stop.trim()) {
-        Some(reason) => Err(reason),
-        None => Ok(()),
-    }
-}
-
-pub(crate) fn clean_stop(s: &str) -> String {
-    let mut out = s
-        .split(['\u{FF08}', '(', '\u{3002}', '\u{3001}', ','])
-        .next()
-        .unwrap_or("")
-        .to_string();
-    // drop clock times
-    out = strip_clock(&out);
-    // keep text after the last 至/到 (verb phrase → place)
-    if let Some(idx) = out.rfind(['\u{81F3}', '\u{5230}']) {
-        out = out[idx + '\u{81F3}'.len_utf8()..].to_string();
-    }
-    // strip leading ①②③ markers
-    out = out.trim_start_matches(|c: char| ('\u{2460}'..='\u{2473}').contains(&c) || c == '.' || c == '\u{FF0E}').to_string();
-    // strip leading verbs / mode-nouns
-    for p in [
-        "\u{958B}\u{8ECA}", "\u{81EA}\u{99D5}", "\u{8F49}\u{4E58}", "\u{642D}\u{4E58}", "\u{642D}", "\u{4E58}",
-        "\u{63A5}\u{99C1}\u{5DF4}\u{58EB}", "\u{5DF4}\u{58EB}", "\u{55AE}\u{8ECC}\u{96FB}\u{8ECA}", "\u{55AE}\u{8ECC}", "\u{96FB}\u{8ECA}",
-    ] {
-        if let Some(rest) = out.strip_prefix(p) {
-            out = rest.trim_start_matches([':', '\u{FF1A}']).to_string();
-        }
-    }
-    out.trim().trim_end_matches("\u{6B65}\u{884C}").trim().to_string()
-}
-
-fn strip_clock(s: &str) -> String {
-    // remove HH:MM occurrences
-    let bytes: Vec<char> = s.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        // try to match D?D:DD
-        let rest: String = bytes[i..].iter().take(5).collect();
-        if regex_lite_clock(&rest) {
-            // skip the matched clock (4 or 5 chars)
-            let len = if bytes.get(i + 2) == Some(&':') { 5 } else { 4 };
-            i += len;
-            continue;
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    out
-}
-
-// matches H:MM or HH:MM at start
-fn regex_lite_clock(s: &str) -> bool {
-    let c: Vec<char> = s.chars().collect();
-    if c.len() >= 5 && c[0].is_ascii_digit() && c[1].is_ascii_digit() && c[2] == ':' && c[3].is_ascii_digit() && c[4].is_ascii_digit() {
-        return true;
-    }
-    if c.len() >= 4 && c[0].is_ascii_digit() && c[1] == ':' && c[2].is_ascii_digit() && c[3].is_ascii_digit() {
-        return true;
-    }
-    false
-}
-
-// Country of a place by keyword. None = unknown (don't flag).
-fn place_country(s: &str) -> Option<&'static str> {
-    const TW: [&str; 9] = [
-        "\u{7D05}\u{6A39}\u{6797}", "\u{6DE1}\u{6C34}", "\u{65B0}\u{5317}", "\u{53F0}\u{5317}", "\u{6843}\u{5712}",
-        "\u{5927}\u{5712}", "TPE", "\u{53F0}\u{7063}", "\u{6A4B}",
-    ]; // 紅樹林 淡水 新北 台北 桃園 大園 TPE 台灣 橋(機場)
-    const JP: [&str; 10] = [
-        "\u{90A3}\u{8987}", "\u{5B89}\u{91CC}", "\u{6C96}\u{7E04}", "\u{9996}\u{91CC}", "\u{570B}\u{969B}\u{901A}",
-        "\u{725F}\u{6587}", "OKA", "\u{6771}\u{4EAC}", "\u{4EAC}\u{90FD}", "\u{5927}\u{962A}",
-    ]; // 那覇 安里 沖繩 首里 國際通 牧志 OKA 東京 京都 大阪
-    if TW.iter().any(|k| s.contains(k)) {
-        return Some("TW");
-    }
-    if JP.iter().any(|k| s.contains(k)) {
-        return Some("JP");
-    }
-    None
-}
-
-fn mentions_rail_or_bus(s: &str) -> bool {
-    ["\u{7DDA}", "\u{5DF4}\u{58EB}", "\u{55AE}\u{8ECC}", "\u{96FB}\u{8ECA}", "\u{5730}\u{9435}", "\u{6377}\u{904B}", "\u{706B}\u{8ECA}", "JR", "monorail", "rail", "bus", "train"]
-        .iter()
-        .any(|k| s.contains(k))
-}
-
 // A stop is "ambiguous" if it's a short CJK place name with no station/city marker.
 fn is_ambiguous_stop(s: &str) -> bool {
     if s.is_empty() {
@@ -629,25 +483,6 @@ fn is_ambiguous_stop(s: &str) -> bool {
     }
     // Short bare CJK name (≤4 chars) → ambiguous.
     s.chars().count() <= 4
-}
-
-fn extract_map_urls(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while let Some(pos) = rest.find("http") {
-        let tail = &rest[pos..];
-        // take until whitespace
-        let end = tail.find(char::is_whitespace).unwrap_or(tail.len());
-        let url = &tail[..end];
-        if url.contains("google.com/maps") || url.contains("maps.google") || url.contains("/maps/") {
-            out.push(url.to_string());
-        }
-        rest = &tail[end.min(tail.len())..];
-        if rest.is_empty() {
-            break;
-        }
-    }
-    out
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1017,7 +852,7 @@ async fn load_day_summaries(
             // Activity for a day with no day row — skip (TS only iterates days).
             continue;
         };
-        for u in extract_map_urls(&title) {
+        for u in crate::checks::extract_map_urls(&title) {
             summary.activity_map_urls.push(u);
         }
         summary.total_duration_min += duration_min;
@@ -1373,42 +1208,11 @@ async fn read_destination(
 mod map_link_tests {
     use super::*;
 
-    #[test]
-    fn clean_stop_strips_noise() {
-        // verb + 至 + place（note）
-        assert_eq!(clean_stop("\u{8F49}\u{4E58}\u{63A5}\u{99C1}\u{5DF4}\u{58EB}\u{81F3}\u{6843}\u{6A5F}T2"), "\u{6843}\u{6A5F}T2"); // 轉乘接駁巴士至桃機T2 → 桃機T2
-        // ①marker + 開車：place
-        assert_eq!(clean_stop("\u{2460}\u{958B}\u{8ECA}\u{FF1A}\u{7D05}\u{6A39}\u{6797}"), "\u{7D05}\u{6A39}\u{6797}"); // ①開車：紅樹林 → 紅樹林
-        // place（note）
-        assert_eq!(clean_stop("\u{5B89}\u{91CC}\u{99C5}\u{FF08}\u{55AE}\u{8ECC}\u{FF09}"), "\u{5B89}\u{91CC}\u{99C5}"); // 安里駅（單軌）→ 安里駅
-        // clock time stripped
-        assert_eq!(clean_stop("05:00 \u{7D05}\u{6A39}\u{6797}").trim(), "\u{7D05}\u{6A39}\u{6797}");
-    }
-
-    #[test]
-    fn stop_linkable_guard() {
-        // Clean places pass (the write-time guard accepts these).
-        assert!(check_stop_linkable("\u{8D64}\u{5DBA}\u{99C5}").is_ok());          // 赤嶺駅
-        assert!(check_stop_linkable("iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}").is_ok()); // iias 沖縄豊崎
-        assert!(check_stop_linkable("hotel").is_ok());
-
-        // Junk-only stops are rejected (this is the bug that broke 3×).
-        assert!(check_stop_linkable("\u{FF08}\u{55AE}\u{8ECC}\u{7D04}2\u{5206}\u{FF09}+\u{6B65}\u{884C}").is_err()); // （單軌約2分）+步行
-        assert!(check_stop_linkable("\u{6B65}\u{884C}").is_err());                 // 步行 (mode word only)
-        assert!(check_stop_linkable("\u{55AE}\u{8ECC}").is_err());                 // 單軌 (mode word only)
-        // A wholly-empty stop is caught by required-arg checks before the guard,
-        // so check_stop_linkable("") is intentionally Ok (nothing to geocode-flag).
-        assert!(check_stop_linkable("").is_ok());
-    }
-
-    #[test]
-    fn place_country_detects() {
-        assert_eq!(place_country("\u{7D05}\u{6A39}\u{6797}"), Some("TW")); // 紅樹林
-        assert_eq!(place_country("\u{5927}\u{5712}\u{51FA}\u{570B}\u{505C}\u{8ECA}\u{5834}"), Some("TW")); // 大園…
-        assert_eq!(place_country("\u{5B89}\u{91CC}"), Some("JP")); // 安里
-        assert_eq!(place_country("\u{90A3}\u{8987}\u{6A5F}\u{5834}"), Some("JP")); // 那覇機場
-        assert_eq!(place_country("Somewhere"), None);
-    }
+    // NOTE: the pure predicates clean_stop / check_stop_linkable / stop_link_problem
+    // / place_country / mentions_rail_or_bus / meal_has_pin / extract_map_urls now
+    // live in crate::checks and are unit-tested there. The tests below cover the
+    // map-link lint BEHAVIOR (validate_map_links wiring) and the predicates that
+    // stayed local (is_ambiguous_stop, needs_reservation_check).
 
     #[test]
     fn ambiguous_stop_rules() {
@@ -1417,14 +1221,6 @@ mod map_link_tests {
         assert!(!is_ambiguous_stop("\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}")); // has space (city ctx)
         assert!(!is_ambiguous_stop("\u{90A3}\u{8987}\u{6A5F}\u{5834}")); // 那覇機場 (機場 marker)
         assert!(!is_ambiguous_stop("Kokusai-dori")); // ascii
-    }
-
-    #[test]
-    fn extract_map_urls_finds_maps() {
-        let t = "drive\nGoogle: https://www.google.com/maps/dir/A/B then walk";
-        let u = extract_map_urls(t);
-        assert_eq!(u.len(), 1);
-        assert!(u[0].contains("/maps/dir/A/B"));
     }
 
     #[test]
@@ -1456,14 +1252,6 @@ mod map_link_tests {
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
         assert!(out.iter().any(|i| i.message.contains("truncated")));
-    }
-
-    #[test]
-    fn meal_has_pin_detects() {
-        assert!(meal_has_pin("\u{5348}\u{9910}\u{FF1A}X\u{FF5C}map:\u{9996}\u{91CC}\u{6BBF}\u{5167}")); // ｜map:首里殿内
-        assert!(meal_has_pin("Dinner |map: somewhere"));
-        assert!(meal_has_pin("see https://maps.google.com/x"));
-        assert!(!meal_has_pin("Lunch: near Omoromachi / Shuri")); // generic, no pin
     }
 
     #[test]

@@ -1,5 +1,6 @@
 mod bookings;
 mod cascade;
+mod checks; // shared lint predicates (single source of truth) — see checks.rs
 mod compare;
 mod compare_dates;
 mod compare_true_cost;

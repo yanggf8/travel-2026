@@ -1042,8 +1042,8 @@ use chrono::NaiveDate;
 /// byte-identical to TS (verified against live `set-dates` output). NO max-days cap —
 /// TS has none (a 425-day range is valid).
 pub fn validate_date_range(start: &str, end: &str) -> Result<u32, String> {
-    validate_iso_date(start, "start date")?;
-    validate_iso_date(end, "end date")?;
+    crate::checks::validate_iso_date(start, "start date")?;
+    crate::checks::validate_iso_date(end, "end date")?;
     // Both are valid ISO dates here.
     let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
     let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap();
@@ -1058,31 +1058,9 @@ pub fn validate_date_range(start: &str, end: &str) -> Result<u32, String> {
     Ok(days)
 }
 
-/// Port of validateIsoDate(input, fieldName): required → format (YYYY-MM-DD) →
-/// real-date validity. Matches the TS error strings exactly.
-fn validate_iso_date(input: &str, field: &str) -> Result<(), String> {
-    if input.is_empty() {
-        return Err(format!("{field} is required"));
-    }
-    // ^(\d{4})-(\d{2})-(\d{2})$
-    let bytes = input.as_bytes();
-    let well_formed = input.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && input[0..4].bytes().all(|b| b.is_ascii_digit())
-        && input[5..7].bytes().all(|b| b.is_ascii_digit())
-        && input[8..10].bytes().all(|b| b.is_ascii_digit());
-    if !well_formed {
-        return Err(format!(
-            "{field} must be YYYY-MM-DD format (got: \"{input}\")"
-        ));
-    }
-    // Real calendar date? (e.g. 2026-13-99 is well-formed but invalid.)
-    if NaiveDate::parse_from_str(input, "%Y-%m-%d").is_err() {
-        return Err(format!("{field} is not a valid date: \"{input}\""));
-    }
-    Ok(())
-}
+// NOTE: validate_iso_date now lives in crate::checks (single source of truth);
+// validate_date_range calls crate::checks::validate_iso_date. The error strings
+// are unchanged (still byte-identical to the TS originals).
 
 #[cfg(test)]
 mod date_range_tests {

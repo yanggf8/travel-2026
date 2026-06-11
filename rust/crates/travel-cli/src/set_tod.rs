@@ -628,6 +628,18 @@ fn parse_time_range(args: &[String]) -> Result<ParsedTimeRange, String> {
     if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
         return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
     }
+    // Fail-loud HH:MM validation BEFORE any DB write (this Err bubbles to main →
+    // stderr + non-zero exit, writing NOTHING). run_time_range requires BOTH
+    // --start and --end; when both are present here, also enforce start ≤ end.
+    if let Some(s) = &p.start {
+        crate::checks::validate_time_flag("--start", s)?;
+    }
+    if let Some(e) = &p.end {
+        crate::checks::validate_time_flag("--end", e)?;
+    }
+    if let (Some(s), Some(e)) = (&p.start, &p.end) {
+        crate::checks::validate_start_le_end("--start", s, "--end", e)?;
+    }
     Ok(p)
 }
 
@@ -1165,6 +1177,40 @@ fn now_civil() -> (i32, u32, u32, u32, u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    // ── HH:MM fail-loud validation (set-tod-time-range) ───────────────
+    #[test]
+    fn parse_time_range_accepts_valid_clocks() {
+        let p = parse_time_range(&s(&["1", "morning", "--start", "08:00", "--end", "12:00"]))
+            .unwrap();
+        assert_eq!(p.start.as_deref(), Some("08:00"));
+        assert_eq!(p.end.as_deref(), Some("12:00"));
+    }
+
+    #[test]
+    fn parse_time_range_rejects_bad_start() {
+        let err = parse_time_range(&s(&["1", "morning", "--start", "8am", "--end", "12:00"]))
+            .unwrap_err();
+        assert!(err.contains("--start") && err.contains("\"8am\""), "got: {err}");
+    }
+
+    #[test]
+    fn parse_time_range_rejects_bad_end() {
+        let err = parse_time_range(&s(&["1", "morning", "--start", "08:00", "--end", "24:00"]))
+            .unwrap_err();
+        assert!(err.contains("--end") && err.contains("\"24:00\""), "got: {err}");
+    }
+
+    #[test]
+    fn parse_time_range_rejects_start_after_end() {
+        let err = parse_time_range(&s(&["1", "morning", "--start", "13:00", "--end", "09:00"]))
+            .unwrap_err();
+        assert!(err.contains("start must be"), "got: {err}");
+    }
 
     #[test]
     fn parse_focus_basic() {
