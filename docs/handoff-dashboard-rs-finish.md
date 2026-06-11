@@ -167,7 +167,10 @@ Steps:
    Either way: **after cutover you are back on the original URL**, not stuck on `-rs`. The TS
    worker's bug-fix handoff (`docs/handoff-worker-noon-meals-transfers.md`) becomes moot once the
    Rust worker owns the URL.
-4. Merge `dashboard-rs` → `master`. **MERGE CAVEAT:** Task 3 (`share-token`) was written against this branch's OLDER plan-resolution form (`env::var("TRAVEL_PLAN_ID")`). Master has since adopted `plan_resolver::resolve_plan_id(rest)` for all mutation arms (see master's `docs/handoff-cli-mutation-bugs.md`). When merging, reconcile the `share-token` dispatch arm in `main.rs` to use `plan_resolver::resolve_plan_id(rest)` like its neighbors, and confirm the `--plan-id`/`--dest` skip in `share_token.rs`'s parser stays consistent.
+4. Merge `dashboard-rs` → `master`. **MERGE CAVEATS** (this branch diverged from master early; several CLI changes need reconciling):
+   - **(a) `share-token` resolver:** Task 3 (`share-token`) was written against this branch's OLDER plan-resolution form (`env::var("TRAVEL_PLAN_ID")`). Master has since adopted `plan_resolver::resolve_plan_id(rest)` for all mutation arms (see master's `docs/handoff-cli-mutation-bugs.md`). Reconcile the `share-token` (and `mark-plan-deleted`, `mark-maps-snapshotted`, `set-activity-poi` — all added on this branch with the env form) dispatch arms in `main.rs` to use `plan_resolver::resolve_plan_id(rest)` like their neighbors; confirm the `--plan-id`/`--dest` skip in each parser stays consistent.
+   - **(b) DUPLICATE map-link lints:** master has a `validate_map_links`/`map_link_errors` lint in `validate_itinerary.rs`; this branch independently added `check_map_links`/`is_malformed_map_text` (commit 5b47d57) because it diverged BEFORE master's lint landed. At merge, these two overlapping map-link lints must be reconciled into ONE (keep the better predicate; don't ship both). Same applies to any other lint added on both sides.
+   - **(c) Schema columns added on this branch** (apply to master's `db_migrate.rs` if not already present, all idempotent `add_column`): `destination_pois.lat/lon`, `plan_share_tokens` table, `plans.deleted_at`, `plan_map_snapshots` table, `hotels.voucher_url`, `activities.poi_id`. Master's migrate must create these for a fresh DB to match.
 
 ---
 
