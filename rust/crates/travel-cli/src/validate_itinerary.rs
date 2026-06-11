@@ -85,6 +85,13 @@ struct DaySummary {
     transit_chains: Vec<TransitChain>, // from timesofday.transit_notes(_zh), split on →
     route_legs: Vec<RouteLeg>,         // from day_route_segments
     activity_map_urls: Vec<String>,    // https://…maps… URLs embedded in activity titles
+    meals: Vec<MealEntry>,             // session_meals rows (for pin-coverage check)
+}
+
+// One session_meals row (session + text) for the meal-pin coverage check.
+struct MealEntry {
+    session: String,
+    text: String,
 }
 
 // One transit-pill string (e.g. "A→B→C") tied to its session, for link linting.
@@ -303,6 +310,34 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
             }
         }
     }
+
+    // (5) meal-pin coverage: a lunch/dinner meal with no map pin (｜map:<q> marker
+    // or an embedded URL) renders as a plain pill with no "where is it" link.
+    for meal in &day.meals {
+        if !meal_has_pin(&meal.text) {
+            out.push(Issue {
+                severity: Severity::Info,
+                day: Some(day.day_number),
+                session: Some(meal.session.clone()),
+                message: format!(
+                    "Meal has no map pin: \"{}\"",
+                    truncate(&meal.text, 50)
+                ),
+                suggestion: Some(
+                    "Name a restaurant and add a pin: set-meals … --meal \"<label>｜map:<place>\".".to_string(),
+                ),
+            });
+        }
+    }
+}
+
+/// A meal "has a pin" if it carries the ｜map:/|map: marker or an embedded URL.
+fn meal_has_pin(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("\u{FF5C}map:") // ｜map:
+        || lower.contains("|map:")
+        || lower.contains("http://")
+        || lower.contains("https://")
 }
 
 /// Strip the same noise the dashboard's cleanStopLabel removes, so lint sees the
@@ -756,6 +791,7 @@ async fn load_day_summaries(
             transit_chains: Vec::new(),
             route_legs: Vec::new(),
             activity_map_urls: Vec::new(),
+            meals: Vec::new(),
         });
     }
 
@@ -861,6 +897,28 @@ async fn load_day_summaries(
         let mode: String = r.get(3).unwrap_or_default();
         if let Some(summary) = summaries.iter_mut().find(|d| d.day_number == day_number) {
             summary.route_legs.push(RouteLeg { from, to, mode });
+        }
+    }
+
+    // Meals (for pin-coverage check).
+    let mut meal_rows = conn
+        .query(
+            "SELECT day_number, session_type, meal FROM session_meals \
+             WHERE plan_id = ?1 AND destination = ?2 ORDER BY day_number, sort_order",
+            params![plan_id.to_string(), dest.to_string()],
+        )
+        .await
+        .map_err(|e| format!("session_meals query failed: {e}"))?;
+    while let Some(r) = meal_rows
+        .next()
+        .await
+        .map_err(|e| format!("session_meals row read failed: {e}"))?
+    {
+        let day_number: i64 = r.get(0).unwrap_or(0);
+        let session: String = r.get(1).unwrap_or_default();
+        let text: String = r.get(2).unwrap_or_default();
+        if let Some(summary) = summaries.iter_mut().find(|d| d.day_number == day_number) {
+            summary.meals.push(MealEntry { session, text });
         }
     }
 
@@ -1180,7 +1238,7 @@ mod map_link_tests {
                 // 紅樹林→安里 : TW → JP, should error
                 text: "\u{7D05}\u{6A39}\u{6797}\u{2192}\u{5B89}\u{91CC}".into(),
             }],
-            route_legs: vec![], activity_map_urls: vec![],
+            route_legs: vec![], activity_map_urls: vec![], meals: vec![],
         };
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
@@ -1194,6 +1252,7 @@ mod map_link_tests {
             activities: vec![], total_duration_min: 0,
             transit_chains: vec![], route_legs: vec![],
             activity_map_urls: vec!["https://www.google.com/maps/dir/?api=1&origin=A&destination=B".into()],
+            meals: vec![],
         };
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
@@ -1201,6 +1260,14 @@ mod map_link_tests {
     }
 
     #[test]
+    #[test]
+    fn meal_has_pin_detects() {
+        assert!(meal_has_pin("\u{5348}\u{9910}\u{FF1A}X\u{FF5C}map:\u{9996}\u{91CC}\u{6BBF}\u{5167}")); // ｜map:首里殿内
+        assert!(meal_has_pin("Dinner |map: somewhere"));
+        assert!(meal_has_pin("see https://maps.google.com/x"));
+        assert!(!meal_has_pin("Lunch: near Omoromachi / Shuri")); // generic, no pin
+    }
+
     fn clean_same_country_leg_ok() {
         // 那霸機場→安里駅 那覇 : both JP, disambiguated → no error, no ambiguous-info
         let day = DaySummary {
@@ -1210,7 +1277,7 @@ mod map_link_tests {
                 session: "afternoon".into(),
                 text: "\u{90A3}\u{8987}\u{6A5F}\u{5834}\u{2192}\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}".into(),
             }],
-            route_legs: vec![], activity_map_urls: vec![],
+            route_legs: vec![], activity_map_urls: vec![], meals: vec![],
         };
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
