@@ -69,8 +69,11 @@ function esc(s: string): string {
  *  renders as a short labeled link instead of dumping the whole encoded URL. */
 function renderActivityText(text: string): string {
   if (text.includes('<span')) return text; // already HTML
-  const linkStyle = 'color:#2563eb;font-size:11px;word-break:break-all';
+  const linkStyle = 'color:#2563eb;font-size:11px;word-break:break-all;white-space:nowrap';
   return esc(text)
+    // Keep a labeled map link inline with the line before it: a "\nGoogle Maps：<url>"
+    // tail attaches with a thin space, not a <br>, so it doesn't claim its own line.
+    .replace(/\n(?=\s*(?:Google Maps|地圖|地图|導航|导航|Map|Directions)[^:：<]*[:：]\s*https?:\/\/)/gi, '  ')
     .replace(/\n/g, '<br>')
     // Labeled link: "Google Maps 導航：<url>" / "地圖：<url>" / "Map: <url>" → label is the clickable text.
     .replace(/((?:Google Maps|地圖|地图|導航|导航|Map|Directions)[^:：<]*)[:：]\s*(https?:\/\/[^\s<&"，。、]+)/gi,
@@ -407,6 +410,47 @@ function extractActivityHours(activities: unknown[]): Map<string, string> {
   return map;
 }
 
+interface BackupVenue {
+  /** Full label with surrounding context, e.g. "まーちぬ家（前島2-7-14，步行10分）". */
+  label: string;
+  /** Bare venue name for the Google Maps search query, e.g. "まーちぬ家". */
+  mapsQuery: string;
+  /** First detail line (rating / phone), e.g. "Google Maps 4.3 ⭐（沖繩家常料理）". */
+  detail: string;
+}
+
+/**
+ * Parse a "備案：<name>（…）\n  <details…>" block from activity notes into a
+ * structured backup venue (label, bare name for a maps link, first detail line).
+ * Returns null when no 備案 line is present.
+ */
+function parseBackupFromNotes(notes: string | null): BackupVenue | null {
+  if (!notes) return null;
+  const lines = notes.split('\n');
+  const idx = lines.findIndex((l) => /^\s*備案[:：]/.test(l));
+  if (idx === -1) return null;
+  const label = lines[idx].replace(/^\s*備案[:：]\s*/, '').trim();
+  // Bare venue name = text before the first parenthesis/separator, for a clean maps query.
+  const mapsQuery = label.split(/[（(·]/)[0]!.trim();
+  // First indented continuation line usually carries the rating (Google 4.3 ⭐).
+  const detail = (lines[idx + 1] || '').trim();
+  return { label, mapsQuery, detail };
+}
+
+/** Extract activity backup map from raw session.activities array */
+function extractActivityBackup(activities: unknown[]): Map<string, BackupVenue> {
+  const map = new Map<string, BackupVenue>();
+  for (const a of activities) {
+    if (typeof a === 'object' && a !== null && 'title' in a) {
+      const obj = a as Record<string, unknown>;
+      const title = obj.title as string;
+      const backup = parseBackupFromNotes((obj.notes as string) || null);
+      if (backup) map.set(title, backup);
+    }
+  }
+  return map;
+}
+
 function renderSession(
   session: Record<string, unknown> | undefined,
   sessionKey: 'morning' | 'noon' | 'afternoon' | 'evening',
@@ -425,6 +469,7 @@ function renderSession(
     ? (zhOverride.activities.length > 0 ? zhOverride.activities : enActivities)
     : enActivities;
   const activityHours = extractActivityHours((session.activities as unknown[]) || []);
+  const activityBackup = extractActivityBackup((session.activities as unknown[]) || []);
   // Fall back to the base session meals when the ZH override has none. meals_zh
   // was de-JSON'd away, so a zhOverride always carries an empty meals[]; using ??
   // would let that [] mask the real session.meals and drop every lunch/dinner pill.
@@ -467,11 +512,24 @@ function renderSession(
           const plainTitle = a.replace(/<[^>]+>/g, '').trim();
           const hours = activityHours.get(plainTitle);
           const hoursBadge = hours ? `<div class="activity-hours">${esc(hours)}</div>` : '';
+          const backup = activityBackup.get(plainTitle);
+          let backupBadge = '';
+          if (backup) {
+            const mapUrl = `https://www.google.com/maps/search/${encodeURIComponent(backup.mapsQuery)}`;
+            // Inline link (not .map-place-link, which is a full-width tappable row) so the
+            // whole badge stays on one line.
+            const mapLink = `<a class="backup-link" href="${esc(mapUrl)}" target="_blank" rel="noopener">${esc(backup.mapsQuery)} \uD83D\uDDFA\uFE0F</a>`;
+            // Keep the badge to one short line: just a rating, not the full detail line.
+            const ratingMatch = backup.detail.match(/(\d+\.\d+\s*\u2B50)/);
+            const rating = ratingMatch ? ` \u00B7 ${esc(ratingMatch[1])}` : '';
+            backupBadge = `<div class="activity-backup">\uD83D\uDCCB \u5099\u6848 ${mapLink}${rating}</div>`;
+          }
+          const badges = `${hoursBadge}${backupBadge}`;
 
           if (isPending && !a.includes('<span')) {
-            return `<li><span class="activity-booking">\u23F3 ${renderActivityText(a)}</span>${hoursBadge}</li>`;
+            return `<li><span class="activity-booking">\u23F3 ${renderActivityText(a)}</span>${badges}</li>`;
           }
-          return `<li>${renderActivityText(a)}${hoursBadge}</li>`;
+          return `<li>${renderActivityText(a)}${badges}</li>`;
         }).join('')}
       </ul>
       ${em ? editableField(activitiesFieldId, activities.join('\n'), {

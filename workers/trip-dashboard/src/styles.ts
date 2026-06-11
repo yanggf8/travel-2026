@@ -409,6 +409,21 @@ body {
   margin-left: 2px;
 }
 
+.activity-backup {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  margin-left: 2px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.backup-link {
+  color: var(--accent);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
 /* Transit & meal pills */
 .info-pills {
   display: flex;

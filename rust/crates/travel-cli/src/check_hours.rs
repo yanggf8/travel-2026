@@ -165,6 +165,7 @@ struct ActivityCheck {
     session: String,
     status: Status,
     detail: String,
+    notes: String,
 }
 
 struct DayCheck {
@@ -264,12 +265,22 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
     // ── label freshness check ─────────────────────────────────────────────────
     let stale_labels = check_label_freshness(&days);
 
-    if any_issue || !stale_labels.is_empty() {
+    // ── meal-reservation lint ──────────────────────────────────────────────────
+    let meal_issues = check_meal_reservations(&days);
+
+    if any_issue || !stale_labels.is_empty() || !meal_issues.is_empty() {
         if !stale_labels.is_empty() {
             println!();
             println!("Label freshness issues:");
             for label in &stale_labels {
                 println!("  ⚠️  {}", label);
+            }
+        }
+        if !meal_issues.is_empty() {
+            println!();
+            println!("Meal reservation issues (walk-in preferred; reservation only if Google 4.8+ AND online):");
+            for m in &meal_issues {
+                println!("  ⚠️  {}", m);
             }
         }
         println!();
@@ -279,6 +290,7 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
         println!();
         println!("All checked activities are open during planned visit windows.");
         println!("All labels match their activities.");
+        println!("All meals are walk-in or meet the reservation bar (Google 4.8+ & online).");
     }
 
     Ok(())
@@ -348,6 +360,82 @@ fn check_label_freshness(days: &[DayCheck]) -> Vec<String> {
                     day.day_number, kw
                 ));
             }
+        }
+    }
+
+    issues
+}
+
+/// True if the title marks this activity as a meal (早餐/午餐/晚餐/宵夜 or
+/// breakfast/lunch/dinner/supper), matching the dashboard's meal-alert rule.
+fn is_meal_title(title: &str) -> bool {
+    let t = title.trim_start();
+    const PREFIXES: &[&str] = &[
+        "早餐", "午餐", "晚餐", "宵夜",
+        "breakfast", "lunch", "dinner", "supper",
+    ];
+    let lower = t.to_lowercase();
+    PREFIXES.iter().any(|p| lower.starts_with(&p.to_lowercase()))
+}
+
+/// Meal-reservation lint. Yang's rule: walk-in by default; a phone-only
+/// reservation is unacceptable. A reservation is allowed ONLY when the place is
+/// Google 4.8+ AND has online booking. This flags meal activities whose
+/// title/notes REQUIRE a reservation but don't clear that bar.
+///
+/// Heuristics over the title+notes text, ordered to avoid false positives:
+///   1. negation wins  — 無需訂位 / 不需預約 / walk-in / no reservation → walk-in, skip
+///   2. required only   — 需訂位 / 要訂 / 必須預約 / 予約必須 (NOT 建議訂位 = merely recommended)
+///   3. online booking  — a real booking host (autoreserve/tablecheck/…) or 線上訂位;
+///                        a plain google.com/maps link does NOT count as booking
+///   4. rating gate     — a 4.8 / 4.9 / 5.0 token
+fn check_meal_reservations(days: &[DayCheck]) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    for day in days {
+        for a in &day.activities {
+            if !is_meal_title(&a.title) {
+                continue;
+            }
+            let hay = format!("{}\n{}", a.title, a.notes).to_lowercase();
+
+            // 1. Negation / explicit walk-in → fine, skip.
+            let walk_in = ["無需訂位", "不需訂位", "無需預約", "不需預約", "免訂位",
+                           "walk-in", "walk in", "no reservation"]
+                .iter().any(|k| hay.contains(&k.to_lowercase()));
+            if walk_in {
+                continue;
+            }
+
+            // 2. Reservation REQUIRED (not merely "建議"/recommended).
+            let required = ["需訂位", "需訂", "要訂位", "要訂", "必須預約", "必訂",
+                            "予約必須", "予約制", "套餐制需訂", "reservation required", "需預約"]
+                .iter().any(|k| hay.contains(&k.to_lowercase()));
+            if !required {
+                continue; // recommended-only or walk-in — fine
+            }
+
+            // 3. Online booking present? A bare Google Maps link does NOT count.
+            let has_online = ["線上訂位", "线上订位", "online booking", "autoreserve",
+                              "tablecheck", "tabelog.com/.../reserve", "オンライン予約",
+                              "ebica", "opentable"]
+                .iter().any(|k| hay.contains(&k.to_lowercase()));
+
+            // 4. Google 4.8+ rating?
+            let high_rating = ["4.8", "4.9", "5.0"].iter().any(|r| hay.contains(r));
+
+            // Allowed only if BOTH high rating AND online booking.
+            if high_rating && has_online {
+                continue;
+            }
+
+            let title1 = a.title.split('\n').next().unwrap_or(&a.title).trim();
+            let reason = if !has_online {
+                "reservation required, no online booking (phone-only rejected)"
+            } else {
+                "reservation required & online, but Google rating below 4.8"
+            };
+            issues.push(format!("Day {} {} — {} :: {}", day.day_number, a.session, title1, reason));
         }
     }
 
@@ -458,6 +546,7 @@ async fn load_days(conn: &Connection, plan_id: &str, dest: &str) -> Result<Vec<D
             session,
             status,
             detail,
+            notes: notes_str.to_string(),
         });
     }
 
