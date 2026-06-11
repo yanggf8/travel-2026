@@ -63,4 +63,7 @@ for f in "${OUT}"/*.png; do
     | grep -iE 'upload|creating' || true
 done
 
+echo "== record snapshot timestamp (for the check-maps-fresh lint) =="
+"$TRAVEL" mark-maps-snapshotted "$PLAN" || echo "warning: could not record snapshot timestamp (is ./bin/travel built?)"
+
 echo "== done: maps at ${BUCKET}/${PLAN}/{plan,day-1..N}.png =="
