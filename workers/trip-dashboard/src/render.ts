@@ -1009,13 +1009,17 @@ function hotelContactHtml(notes: string | null, lang: Lang): string {
     parts.push(`📞 ${label} <a href="tel:${esc(dialable)}" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${esc(raw)}</a>`);
   }
 
-  // Booking reference: prefer CFM No.; fall back to Order No.
+  // Booking references: CFM No. (hotel/supplier confirmation) and Order No.
+  // (agency order) are distinct — show both when present.
   const cfm = notes.match(/CFM\s*No\.?\s*([A-Za-z0-9-]+)/i);
+  if (cfm) {
+    const label = lang === 'zh' ? '確認碼 CFM' : 'CFM No.';
+    parts.push(`🎫 ${label} ${esc(cfm[1])}`);
+  }
   const order = notes.match(/Order\s*No\.?\s*([A-Za-z0-9-]+)/i);
-  const ref = cfm?.[1] || order?.[1];
-  if (ref) {
-    const label = lang === 'zh' ? '訂單編號' : 'Booking';
-    parts.push(`🎫 ${label} ${esc(ref)}`);
+  if (order) {
+    const label = lang === 'zh' ? '訂單號 Order' : 'Order No.';
+    parts.push(`🧾 ${label} ${esc(order[1])}`);
   }
 
   return parts.join(' &nbsp;·&nbsp; ');
