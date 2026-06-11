@@ -325,6 +325,12 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_low_c REAL;").await;
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_high_c REAL;").await;
 
+    // 14a. poi_id FK on activities — a durable activity→POI link so the dashboard
+    //      attaches ticket price + map pin by id, not fragile title equality
+    //      (set via `travel set-activity-poi`; title-match stays as a fallback).
+    //      Idempotent ADD COLUMN — tolerated "duplicate column" on re-run.
+    add_column(&conn, "ALTER TABLE activities ADD COLUMN poi_id TEXT;").await;
+
     // 15. flight_legs (normalized — replaces JSON blobs in flights).
     exec_create(
         &conn,
