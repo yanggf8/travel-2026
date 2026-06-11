@@ -20,9 +20,11 @@ pub fn page(title: &str, body: &str, lang: &str) -> String {
 }
 
 /// Render a full plan page: booking summary, plan map, then each day card.
-pub fn render_plan(plan: &Plan, lang: &str) -> String {
+/// `token` is the access token the page was loaded with — threaded into the
+/// auth-gated voucher link so a click carries the same token (else 403).
+pub fn render_plan(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let mut body = String::new();
-    body.push_str(&summary::render(plan, lang));
+    body.push_str(&summary::render(plan, lang, token));
     body.push_str(&map::plan_map_img(&plan.plan_id));
     for d in &plan.days {
         body.push_str(&day::render(d, &plan.plan_id, lang));
@@ -106,7 +108,7 @@ mod tests {
             days: vec![Day { day_number: 1, date: "2026-06-21".into(), day_type: "arrival".into(), ..Default::default() }],
             ..Default::default()
         };
-        let html = render_plan(&plan, "en");
+        let html = render_plan(&plan, "en", None);
         assert!(html.contains("booking-summary"));
         assert!(html.contains("/map/okinawa-2026/plan.png"));
         assert!(html.contains("Day 1"));

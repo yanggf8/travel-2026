@@ -135,7 +135,8 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
             return Response::error("Forbidden", 403);
         }
         let plan = load_plan(&turso_url, &turso_token, slug).await?;
-        return Response::from_html(render::render_plan(&plan, lang));
+        let token = query.get("token").map(|s| s.as_str());
+        return Response::from_html(render::render_plan(&plan, lang, token));
     }
 
     Response::error("Forbidden", 403)

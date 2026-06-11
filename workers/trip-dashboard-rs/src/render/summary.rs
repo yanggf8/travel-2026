@@ -76,7 +76,7 @@ fn render_notes(notes: &str) -> String {
     h
 }
 
-pub fn render(plan: &Plan, lang: &str) -> String {
+pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let mut h = String::new();
     h.push_str("<section class=\"booking-summary\">");
 
@@ -126,10 +126,20 @@ pub fn render(plan: &Plan, lang: &str) -> String {
             h.push_str(&format!("<div class=\"booking-sub\">{}</div>", esc(&check_in)));
         }
         // Voucher PDF link (own /voucher/* R2 route). 404s until the PDF is uploaded.
+        // The /voucher/* route is auth-gated (same scope as the plan view), so a
+        // tokenless link would 403 on click. Thread the page's token onto local
+        // voucher links so the click carries the SAME token the page loaded with.
         if !voucher_url.is_empty() {
+            let mut href = voucher_url.clone();
+            if voucher_url.starts_with("/voucher/") {
+                if let Some(tok) = token.filter(|t| !t.is_empty()) {
+                    href.push_str("?token=");
+                    href.push_str(tok);
+                }
+            }
             h.push_str(&format!(
                 "<a class=\"voucher-link\" href=\"{}\" target=\"_blank\" rel=\"noopener\">📄 {}</a>",
-                esc_url_attr(&voucher_url), esc(t("voucher", lang))
+                esc_url_attr(&href), esc(t("voucher", lang))
             ));
         }
         // PNR / cancellation text behind native <details> (progressive disclosure, no JS),
@@ -192,7 +202,7 @@ mod tests {
         tr.insert("selected_duration_min".into(), serde_json::json!("24"));
         tr.insert("selected_price_yen".into(), serde_json::json!("340"));
         let plan = Plan { transfers: vec![tr], ..Default::default() };
-        let html = render(&plan, "en");
+        let html = render(&plan, "en", None);
         assert!(html.contains("Naha Airport → Asato"));
         assert!(html.contains("340"));
         assert!(html.contains("Yui Rail"));
@@ -210,7 +220,7 @@ mod tests {
             f.insert(k.into(), serde_json::json!(v));
         }
         let plan = Plan { flights: vec![f], ..Default::default() };
-        let html = render(&plan, "en");
+        let html = render(&plan, "en", None);
         assert!(html.contains("CI120"));
         assert!(html.contains("TPE"));
         assert!(html.contains("OKA"));
@@ -224,7 +234,7 @@ mod tests {
         hotel.insert("check_in".into(), serde_json::json!("2026-06-21 15:00"));
         hotel.insert("notes".into(), serde_json::json!("CFM 1234567 cancellation by 2026-06-14"));
         let plan = Plan { hotel: Some(hotel), ..Default::default() };
-        let html = render(&plan, "zh");
+        let html = render(&plan, "zh", None);
         assert!(html.contains("那霸水都飯店")); // zh name preferred
         assert!(!html.contains("Hotel Aqua Citta Naha")); // en name not shown when zh present
         assert!(html.contains("<details"));
@@ -238,7 +248,7 @@ mod tests {
         hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
         hotel.insert("notes".into(), serde_json::json!(notes));
         let plan = Plan { hotel: Some(hotel), ..Default::default() };
-        let html = render(&plan, "zh");
+        let html = render(&plan, "zh", None);
         // wrapper preserved
         assert!(html.contains("<details"));
         // group labels present (rendered without the "## " prefix)
@@ -262,7 +272,7 @@ mod tests {
         hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
         hotel.insert("notes".into(), serde_json::json!(notes));
         let plan = Plan { hotel: Some(hotel), ..Default::default() };
-        let html = render(&plan, "en");
+        let html = render(&plan, "en", None);
         assert!(html.contains("<li>Standard twin</li>"));
         assert!(!html.contains("<li></li>")); // no empty bullets
     }
@@ -273,12 +283,41 @@ mod tests {
         hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
         hotel.insert("voucher_url".into(), serde_json::json!("/voucher/okinawa-2026/azat-voucher.pdf"));
         let plan = Plan { hotel: Some(hotel), ..Default::default() };
-        let html = render(&plan, "en");
+        let html = render(&plan, "en", Some("3b9412d0fa2b9961d80a044cab0ebbf4"));
         assert!(html.contains("class=\"voucher-link\""));
-        assert!(html.contains("href=\"/voucher/okinawa-2026/azat-voucher.pdf\""));
+        // Gated route → href must carry the page token.
+        assert!(html.contains(
+            "href=\"/voucher/okinawa-2026/azat-voucher.pdf?token=3b9412d0fa2b9961d80a044cab0ebbf4\""
+        ));
         assert!(html.contains("target=\"_blank\""));
         assert!(html.contains("rel=\"noopener\""));
         assert!(html.contains("Hotel voucher (PDF)")); // en label
+    }
+
+    #[test]
+    fn hotel_voucher_link_echoes_loading_token() {
+        // The href echoes WHATEVER token loaded the page (owner or share),
+        // proving it is the request token and not a hardcoded one.
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        hotel.insert("voucher_url".into(), serde_json::json!("/voucher/okinawa-2026/azat-voucher.pdf"));
+        let plan = Plan { hotel: Some(hotel), ..Default::default() };
+        let html = render(&plan, "en", Some("dd90508f2efd063ee760197d127fffa4"));
+        assert!(html.contains(
+            "href=\"/voucher/okinawa-2026/azat-voucher.pdf?token=dd90508f2efd063ee760197d127fffa4\""
+        ));
+    }
+
+    #[test]
+    fn hotel_voucher_link_without_token_has_no_query() {
+        // No token (shouldn't happen for a gated page) → bare href, no ?token=.
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        hotel.insert("voucher_url".into(), serde_json::json!("/voucher/okinawa-2026/azat-voucher.pdf"));
+        let plan = Plan { hotel: Some(hotel), ..Default::default() };
+        let html = render(&plan, "en", None);
+        assert!(html.contains("href=\"/voucher/okinawa-2026/azat-voucher.pdf\""));
+        assert!(!html.contains("?token="));
     }
 
     #[test]
@@ -286,14 +325,14 @@ mod tests {
         let mut hotel = Row::new();
         hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
         let plan = Plan { hotel: Some(hotel), ..Default::default() };
-        let html = render(&plan, "en");
+        let html = render(&plan, "en", None);
         assert!(!html.contains("voucher-link"));
     }
 
     #[test]
     fn empty_plan_renders_no_section_headings() {
         let plan = Plan::default();
-        let html = render(&plan, "en");
+        let html = render(&plan, "en", None);
         assert!(!html.contains("Flights"));
         assert!(!html.contains("Hotel"));
         assert!(!html.contains("Transfers"));
