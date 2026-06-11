@@ -284,29 +284,6 @@ pub async fn run(_args: &[String], plan_id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Extract place names in parentheses from activity titles (e.g., "(識名園)", "(波上宮)")
-fn extract_parenthesized_names(titles: &[String]) -> Vec<String> {
-    let mut names = Vec::new();
-    for title in titles {
-        // Match both (...) and （...）
-        for (open, close) in &[('(', ')'), ('（', '）')] {
-            let mut chars = title.chars().peekable();
-            while let Some(&c) = chars.peek() {
-                if c == *open {
-                    chars.next();
-                    let name: String = chars.by_ref().take_while(|&ch| ch != *close).collect();
-                    if !name.is_empty() && name.len() <= 20 {
-                        names.push(name);
-                    }
-                } else {
-                    chars.next();
-                }
-            }
-        }
-    }
-    names
-}
-
 /// Extract keywords from a theme/focus string (split by ・, ·, /, ,)
 fn extract_place_keywords(text: &str) -> Vec<String> {
     text
