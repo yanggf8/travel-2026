@@ -1,6 +1,34 @@
 pub mod session;
 pub mod day;
 pub mod map;
+pub mod summary;
+pub mod index;
+use crate::model::Plan;
+
+/// Wrap a rendered body in the full HTML page shell: charset, mobile viewport,
+/// `notranslate` (the ZH content must not be browser-auto-translated), and the
+/// inlined stylesheet.
+pub fn page(title: &str, body: &str, lang: &str) -> String {
+    let lang_attr = if lang == "en" { "en" } else { "zh-TW" };
+    format!(
+        "<!doctype html><html lang=\"{lang_attr}\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <meta name=\"google\" content=\"notranslate\">\
+         <title>{}</title><style>{}</style></head><body>{}</body></html>",
+        esc(title), crate::styles::CSS, body,
+    )
+}
+
+/// Render a full plan page: booking summary, plan map, then each day card.
+pub fn render_plan(plan: &Plan, lang: &str) -> String {
+    let mut body = String::new();
+    body.push_str(&summary::render(plan, lang));
+    body.push_str(&map::plan_map_img(&plan.plan_id));
+    for d in &plan.days {
+        body.push_str(&day::render(d, &plan.plan_id, lang));
+    }
+    page(&plan.display_name, &body, lang)
+}
 
 /// Escape text for HTML TEXT content and DOUBLE-QUOTED attribute values only.
 /// (Escapes & < > ". Not safe for single-quoted attrs, unquoted attrs, URLs, or
@@ -51,5 +79,36 @@ mod tests {
         assert_eq!(esc_url_attr("https://x/?q=a&z=15"), "https://x/?q=a&z=15"); // & preserved
         assert_eq!(esc_url_attr("https://x/?q=\"a\""), "https://x/?q=%22a%22"); // quote neutralized
         assert!(!esc_url_attr("a b").contains(' ')); // space encoded
+    }
+
+    #[test]
+    fn page_shell_has_notranslate_and_lang() {
+        let html = page("My Trip", "<p>hi</p>", "zh");
+        assert!(html.starts_with("<!doctype html>"));
+        assert!(html.contains("lang=\"zh-TW\""));
+        assert!(html.contains("content=\"notranslate\""));
+        assert!(html.contains("<title>My Trip</title>"));
+        assert!(html.contains("<p>hi</p>"));
+    }
+
+    #[test]
+    fn page_shell_en_lang() {
+        let html = page("Trip", "", "en");
+        assert!(html.contains("lang=\"en\""));
+    }
+
+    #[test]
+    fn render_plan_includes_summary_map_and_days() {
+        use crate::model::{Plan, Day};
+        let plan = Plan {
+            plan_id: "okinawa-2026".into(),
+            display_name: "Okinawa".into(),
+            days: vec![Day { day_number: 1, date: "2026-06-21".into(), day_type: "arrival".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "en");
+        assert!(html.contains("booking-summary"));
+        assert!(html.contains("/map/okinawa-2026/plan.png"));
+        assert!(html.contains("Day 1"));
     }
 }

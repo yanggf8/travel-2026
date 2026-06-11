@@ -1,8 +1,10 @@
 use worker::*;
 
 mod auth;
+mod i18n;
 mod model;
 mod render;
+mod styles;
 mod turso;
 
 // === WORKING OUTBOUND-POST SIGNATURE (worker 0.8.4) — Task 1 must copy verbatim ===
