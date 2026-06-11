@@ -147,6 +147,7 @@ fn validate(days: &[DaySummary]) -> Vec<Issue> {
         validate_booking_deadlines(day, &mut issues);
         validate_business_hours(day, &mut issues);
         validate_area_efficiency(day, &mut issues);
+        check_map_links(day, &mut issues);
     }
     validate_logical_order(days, &mut issues);
     issues
@@ -428,6 +429,75 @@ fn validate_logical_order(days: &[DaySummary], out: &mut Vec<Issue>) {
 
 fn session_order(session: &str) -> usize {
     SESSIONS.iter().position(|s| *s == session).unwrap_or(0)
+}
+
+// ── map-link lint ─────────────────────────────────────────────────────
+//
+// Catches the activity-text shape that breaks the dashboard's per-stop Google
+// Maps "search" links: a MULTI-LINE blob that ALSO embeds an http(s) URL. The
+// worker's maps/search/<query> fallback URL-encodes the whole title, so a
+// newline becomes %0A and the embedded URL becomes a nested https%3A — garbage.
+// The fix is render_activity_text in the worker (renders the embedded URL as a
+// clean inline labeled link); this lint flags the stored data so the bug is
+// caught at the data/validate layer too, not just visually. Advisory (warning),
+// never an error → it must not fail `validate-itinerary` or `doctor`.
+fn check_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
+    for a in &day.activities {
+        if is_malformed_map_text(&a.title) {
+            out.push(Issue {
+                severity: Severity::Warning,
+                day: Some(day.day_number),
+                session: Some(a.session.clone()),
+                message: format!(
+                    "activity text has embedded URL + newlines — will produce a malformed map link; ensure the worker uses render_activity_text: \"{}\"",
+                    truncate(&a.title, 50)
+                ),
+                suggestion: Some(
+                    "The worker's render_activity_text turns the embedded \"Google Maps：<url>\" tail into a clean labeled link; verify the dashboard is deployed with it.".to_string(),
+                ),
+            });
+        }
+    }
+}
+
+/// The malformed-map-link predicate: text that will become a Google-Maps
+/// `search` link is malformed when it contains BOTH a newline AND an embedded
+/// http(s) URL (the multi-line-blob-with-nested-URL pattern). Pure + testable.
+fn is_malformed_map_text(text: &str) -> bool {
+    let has_newline = text.contains('\n');
+    let has_url = text.contains("http://") || text.contains("https://");
+    has_newline && has_url
+}
+
+/// Truncate a string to at most `max` chars, appending an ellipsis when cut.
+/// Newlines are shown as the literal "\n" so the one-line message stays readable.
+fn truncate(s: &str, max: usize) -> String {
+    let flat = s.replace('\n', "\\n");
+    let chars: Vec<char> = flat.chars().collect();
+    if chars.len() <= max {
+        flat
+    } else {
+        let head: String = chars[..max].iter().collect();
+        format!("{head}…")
+    }
+}
+
+/// Doctor hook: run the map-link lint for ONE plan's active destination and
+/// return (day_number, message) for each malformed-map-link warning. Read-only,
+/// advisory — `doctor` renders these as warnings (exit 0). Returns an empty vec
+/// on any DB/load error (the lint never blocks doctor).
+pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
+    let Ok(conn) = db::connect_read().await else { return Vec::new() };
+    let Ok(dest) = read_destination(&conn, plan_id, None).await else { return Vec::new() };
+    let Ok(days) = load_day_summaries(&conn, plan_id, &dest).await else { return Vec::new() };
+    let mut issues: Vec<Issue> = Vec::new();
+    for day in &days {
+        check_map_links(day, &mut issues);
+    }
+    issues
+        .into_iter()
+        .map(|i| (i.day.unwrap_or(0), i.message))
+        .collect()
 }
 
 // ── data loading ─────────────────────────────────────────────────────
@@ -783,4 +853,109 @@ async fn read_destination(
         return Ok(dest);
     }
     Err(format!("plan_metadata row missing for plan_id={plan_id}"))
+}
+
+#[cfg(test)]
+mod map_link_tests {
+    use super::*;
+
+    fn act(session: &str, title: &str) -> Activity {
+        Activity {
+            title: title.to_string(),
+            session: session.to_string(),
+            start_time: None,
+            end_time: None,
+            duration_min: 60,
+            area: None,
+            booking_required: false,
+            booking_status: None,
+            book_by: None,
+            operating_hours: None,
+        }
+    }
+
+    // The exact okinawa bug shape: a multi-line title with an embedded maps URL.
+    #[test]
+    fn malformed_when_newline_and_embedded_url() {
+        let blob = "晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc";
+        assert!(is_malformed_map_text(blob));
+    }
+
+    #[test]
+    fn malformed_driving_leg_with_nav_url() {
+        let blob = "04:00 自家出發開車：紅樹林 → 大園\n地址：桃園市\nGoogle Maps 導航：https://www.google.com/maps/dir/A/B";
+        assert!(is_malformed_map_text(blob));
+    }
+
+    // Clean single-line venue name — NOT malformed.
+    #[test]
+    fn clean_single_line_is_not_malformed() {
+        assert!(!is_malformed_map_text("Naminoue Shrine"));
+        assert!(!is_malformed_map_text("首里城公園"));
+    }
+
+    // Multi-line but no embedded URL — NOT malformed (newline alone is fine).
+    #[test]
+    fn multiline_without_url_is_not_malformed() {
+        assert!(!is_malformed_map_text("晚餐：安里家\n營業：週五 17:00–23:00"));
+    }
+
+    // Single-line WITH a URL — NOT malformed (no newline → search query is clean;
+    // and render_activity_text handles the inline link regardless).
+    #[test]
+    fn single_line_with_url_is_not_malformed() {
+        assert!(!is_malformed_map_text("see https://example.com/x"));
+    }
+
+    // The lint emits a WARNING (advisory), with day + session, for a bad activity.
+    #[test]
+    fn lint_warns_on_malformed_activity() {
+        let day = DaySummary {
+            day_number: 2,
+            date: "2026-06-13".into(),
+            theme: "test".into(),
+            total_duration_min: 60,
+            activities: vec![act(
+                "evening",
+                "晚餐：安里家 — 飯店步行5分\nGoogle Maps：https://www.google.com/maps/search/x",
+            )],
+        };
+        let mut out = Vec::new();
+        check_map_links(&day, &mut out);
+        assert_eq!(out.len(), 1, "expected exactly one warning");
+        assert!(matches!(out[0].severity, Severity::Warning));
+        assert_eq!(out[0].day, Some(2));
+        assert_eq!(out[0].session.as_deref(), Some("evening"));
+        assert!(out[0].message.contains("embedded URL + newlines"), "got: {}", out[0].message);
+        assert!(out[0].message.contains("render_activity_text"), "got: {}", out[0].message);
+        // Truncation flattens the newline to a literal \n (one-line message).
+        assert!(!out[0].message.contains('\n'), "message must be single-line, got: {}", out[0].message);
+    }
+
+    // A clean day produces NO warnings.
+    #[test]
+    fn lint_silent_on_clean_activities() {
+        let day = DaySummary {
+            day_number: 1,
+            date: "2026-06-12".into(),
+            theme: "arrival".into(),
+            total_duration_min: 60,
+            activities: vec![
+                act("morning", "Naminoue Shrine"),
+                act("noon", "Makishi Market"),
+            ],
+        };
+        let mut out = Vec::new();
+        check_map_links(&day, &mut out);
+        assert!(out.is_empty(), "clean activities must not warn, got {} issues", out.len());
+    }
+
+    #[test]
+    fn truncate_flattens_newlines_and_caps_length() {
+        assert_eq!(truncate("a\nb", 50), "a\\nb");
+        let long = "x".repeat(100);
+        let t = truncate(&long, 10);
+        assert!(t.chars().count() <= 11, "10 chars + ellipsis, got {}", t.chars().count());
+        assert!(t.ends_with('…'));
+    }
 }

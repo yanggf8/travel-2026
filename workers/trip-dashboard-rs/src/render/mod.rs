@@ -3,6 +3,8 @@ pub mod day;
 pub mod map;
 pub mod summary;
 pub mod index;
+pub mod activity_text;
+pub use activity_text::render_activity_text;
 use crate::model::Plan;
 
 /// Wrap a rendered body in the full HTML page shell: charset, mobile viewport,

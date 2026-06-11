@@ -66,10 +66,44 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     // modes produce identical output. Remove when root package.json is deleted.
     if matches!(mode, Mode::Doctor) {
         // no-op: validateDependencies() (intentionally skipped — see note above)
+        // Agent-first map-link lint: flag stored activity text that would render
+        // a malformed Google-Maps search link (multi-line blob + embedded URL).
+        // Advisory (warnings only) — never fails doctor.
+        validate_map_links_all_plans(&mut issues).await;
     }
 
     emit_report(&issues);
     Ok(())
+}
+
+/// Doctor-only: run the map-link lint across every plan and add a Warning issue
+/// for each malformed-map-link activity found. Read-only + advisory: a DB error
+/// or a plan with no itinerary is silently skipped (the lint never blocks doctor).
+async fn validate_map_links_all_plans(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else { return };
+    let mut rows = match conn.query("SELECT plan_id FROM plans ORDER BY plan_id", ()).await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut plan_ids: Vec<String> = Vec::new();
+    while let Some(row) = rows.next().await.ok().flatten() {
+        if let Ok(pid) = row.get::<String>(0) {
+            if !pid.is_empty() {
+                plan_ids.push(pid);
+            }
+        }
+    }
+    for plan_id in plan_ids {
+        for (day, message) in crate::validate_itinerary::map_link_errors(&plan_id).await {
+            issues.push(Issue {
+                category: "map-links".to_string(),
+                severity: Severity::Warning,
+                message: format!("{plan_id} day {day}: {message}"),
+                file: Some(format!("turso:activities:{plan_id}")),
+                line: None,
+            });
+        }
+    }
 }
 
 fn project_root() -> PathBuf {

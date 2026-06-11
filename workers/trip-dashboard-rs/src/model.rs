@@ -164,8 +164,16 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
             let lat = poi.and_then(|p| p.get("lat")).and_then(json_f64);
             let lon = poi.and_then(|p| p.get("lon")).and_then(json_f64);
             let maps_link = match (lat, lon) {
+                // Clean coord link — always correct, leave untouched.
                 (Some(la), Some(lo)) => format!("https://www.google.com/maps?q={la},{lo}"),
-                _ => format!("https://www.google.com/maps/search/{}", urlencode(&title)),
+                // No POI coords → search-link fallback. But the title is often a
+                // MULTI-LINE blob with an embedded "Google Maps：<url>" tail; encoding
+                // the whole blob produces a garbage maps/search/<%0A…nested-url…> link.
+                // If the text already carries an embedded maps URL, the inline labeled
+                // link (render_activity_text) covers it — emit NO stop search link.
+                // Otherwise search on a CLEAN short venue name (first line, trimmed).
+                _ if has_embedded_maps_url(&title) => String::new(),
+                _ => format!("https://www.google.com/maps/search/{}", urlencode(&search_query_from_title(&title))),
             };
             sess.stops.push(Stop {
                 title,
@@ -182,6 +190,42 @@ fn json_f64(v: &Value) -> Option<f64> {
 }
 /// Normalize a title for tolerant POI matching (trim + lowercase).
 fn norm_title(t: &str) -> String { t.trim().to_lowercase() }
+
+/// True when the activity title already embeds a Google-Maps URL (the
+/// multi-line "…\nGoogle Maps：https://…maps…" pattern). In that case the inline
+/// labeled link from render_activity_text already gives the user a map link, so
+/// the stop list must NOT also emit a (broken) maps/search/<whole-blob> link.
+fn has_embedded_maps_url(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    let has_url = lower.contains("https://") || lower.contains("http://");
+    has_url && (lower.contains("maps.google") || lower.contains("google.com/maps") || lower.contains("/maps/"))
+}
+
+/// Derive a short, clean search query from a possibly-multi-line activity title:
+/// take the FIRST line, drop any leading "晚餐：/午餐：/…" meal prefix, and cut a
+/// trailing " — …" / "（…）" descriptor so the maps/search query is just the venue.
+fn search_query_from_title(title: &str) -> String {
+    // First non-empty line only.
+    let first_line = title.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    // Drop a leading "<meal label>：" prefix (晚餐：/午餐：/早餐：/Lunch:/Dinner:).
+    let after_prefix = match first_line.find(['：', ':']) {
+        Some(idx) if idx <= 12 && is_meal_prefix(&first_line[..idx]) => first_line[idx + first_line[idx..].chars().next().map_or(1, |c| c.len_utf8())..].trim(),
+        _ => first_line,
+    };
+    // Cut at the first descriptor separator: " — " (em dash) or "（" (full-width paren).
+    let mut q = after_prefix;
+    if let Some(idx) = q.find(" — ") { q = q[..idx].trim_end(); }
+    if let Some(idx) = q.find('（') { q = q[..idx].trim_end(); }
+    if let Some(idx) = q.find(" (") { q = q[..idx].trim_end(); }
+    q.trim().to_string()
+}
+
+/// Recognize a short leading label as a meal prefix to strip (so the venue name
+/// — not "晚餐" — becomes the search query). Kept deliberately small/specific.
+fn is_meal_prefix(label: &str) -> bool {
+    matches!(label.trim(), "晚餐" | "午餐" | "早餐" | "宵夜" | "下午茶"
+        | "Lunch" | "Dinner" | "Breakfast" | "Brunch" | "lunch" | "dinner" | "breakfast")
+}
 fn urlencode(s: &str) -> String {
     s.bytes().map(|b| match b {
         b'A'..=b'Z'|b'a'..=b'z'|b'0'..=b'9'|b'-'|b'_'|b'.'|b'~' => (b as char).to_string(),
@@ -236,6 +280,58 @@ mod tests {
         let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
         assert!(m.maps_link.contains("/maps/search/"));
         assert!(m.lat.is_none() && m.lon.is_none());
+    }
+
+    // The okinawa bug: an activity with a MULTI-LINE title carrying an embedded
+    // maps URL must NOT produce a maps/search/<whole-blob> link (which contained
+    // %0A for the newline and a nested https%3A for the embedded URL). The inline
+    // labeled link from render_activity_text covers it instead → no stop link.
+    #[test]
+    fn stop_with_embedded_maps_url_emits_no_search_link() {
+        let blob = "晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc";
+        let acts = vec![row(&[("session_type", json!("evening")), ("title", json!(blob))])];
+        let pois: Vec<Row> = vec![]; // no POI coords → would otherwise fall back to search
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "evening").unwrap().stops[0];
+        assert_eq!(m.maps_link, "", "embedded-URL stop must suppress the broken search fallback");
+        assert!(!m.maps_link.contains("%0A"));
+        assert!(!m.maps_link.contains("https%3A"));
+    }
+
+    // A multi-line title WITHOUT an embedded maps URL still gets a search link,
+    // but on a CLEAN short venue name (first line, meal-prefix + descriptor cut)
+    // — never the whole blob with %0A.
+    #[test]
+    fn stop_search_query_is_clean_first_line() {
+        let blob = "晚餐：安里家（アグー豚しゃぶ）— 飯店步行5分\n營業：週五 17:00–23:00";
+        let acts = vec![row(&[("session_type", json!("evening")), ("title", json!(blob))])];
+        let pois: Vec<Row> = vec![];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions.iter().find(|s| s.session_type == "evening").unwrap().stops[0];
+        assert!(m.maps_link.contains("/maps/search/"), "got: {}", m.maps_link);
+        assert!(!m.maps_link.contains("%0A"), "no newline in query, got: {}", m.maps_link);
+        // The meal prefix "晚餐" and the descriptor/2nd line are gone; venue remains.
+        assert!(!m.maps_link.contains("%E6%99%9A%E9%A4%90"), "meal prefix 晚餐 stripped, got: {}", m.maps_link);
+        let decoded = m.maps_link.replace("/maps/search/", "");
+        assert!(!decoded.contains("E7%87%9F%E6%A5%AD"), "2nd line 營業 dropped, got: {}", m.maps_link);
+    }
+
+    #[test]
+    fn search_query_helper_strips_meal_prefix_and_descriptor() {
+        assert_eq!(super::search_query_from_title("晚餐：安里家（アグー）— 飯店步行5分"), "安里家");
+        assert_eq!(super::search_query_from_title("首里そば\nLine2"), "首里そば");
+        assert_eq!(super::search_query_from_title("Lunch: Makishi Market — open till 5"), "Makishi Market");
+        assert_eq!(super::search_query_from_title("Plain Venue"), "Plain Venue");
+    }
+
+    #[test]
+    fn has_embedded_maps_url_detects_google_maps() {
+        assert!(super::has_embedded_maps_url("foo\nGoogle Maps：https://www.google.com/maps/search/x"));
+        assert!(super::has_embedded_maps_url("導航：https://maps.google.com/?q=1,2"));
+        assert!(!super::has_embedded_maps_url("just a venue name"));
+        assert!(!super::has_embedded_maps_url("see https://example.com/foo")); // url but not maps
     }
 
     #[test]

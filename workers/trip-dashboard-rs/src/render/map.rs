@@ -25,12 +25,19 @@ pub fn stop_list(stops: &[Stop]) -> String {
         let price = if s.cost_estimate > 0 {
             format!("<span class=\"stop-price\">🎫¥{}</span>", s.cost_estimate)
         } else { String::new() };
-        h.push_str(&format!(
-            "<li><a href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>{}{}</li>",
-            esc_url_attr(&s.maps_link), esc(&s.title),
-            if s.address.is_empty() { String::new() } else { format!("<span class=\"addr\">{}</span>", esc(&s.address)) },
-            price
-        ));
+        let addr = if s.address.is_empty() { String::new() }
+            else { format!("<span class=\"addr\">{}</span>", esc(&s.address)) };
+        // An empty maps_link means the model deliberately suppressed a (broken)
+        // search-link fallback because the activity text already carries an inline
+        // map link. Render the stop name as plain text (no dead/garbage anchor).
+        if s.maps_link.is_empty() {
+            h.push_str(&format!("<li>{}{}{}</li>", esc(&s.title), addr, price));
+        } else {
+            h.push_str(&format!(
+                "<li><a href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>{}{}</li>",
+                esc_url_attr(&s.maps_link), esc(&s.title), addr, price
+            ));
+        }
     }
     h.push_str("</ul>");
     h
