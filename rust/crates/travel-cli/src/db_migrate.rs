@@ -325,7 +325,14 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_low_c REAL;").await;
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_high_c REAL;").await;
 
-    // 14a. poi_id FK on activities — a durable activity→POI link so the dashboard
+    // 14b. lat/lon on destination_pois (map pins for the dashboard; sourced via geocoder).
+    add_column(&conn, "ALTER TABLE destination_pois ADD COLUMN lat REAL;").await;
+    add_column(&conn, "ALTER TABLE destination_pois ADD COLUMN lon REAL;").await;
+
+    // 14c. voucher_url on hotels (dashboard hotel-section PDF link → /voucher/* R2 route).
+    add_column(&conn, "ALTER TABLE hotels ADD COLUMN voucher_url TEXT;").await;
+
+    // 14d. poi_id FK on activities — a durable activity→POI link so the dashboard
     //      attaches ticket price + map pin by id, not fragile title equality
     //      (set via `travel set-activity-poi`; title-match stays as a fallback).
     //      Idempotent ADD COLUMN — tolerated "duplicate column" on re-run.
@@ -1643,6 +1650,13 @@ const PHASE1_TABLES: &[&str] = &[
   activity_id TEXT NOT NULL, tag TEXT NOT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (activity_id, tag)
+)"#,
+    // Per-plan dashboard share tokens (view scope). Worker reads this; the CLI
+    // `share-token` command is the sole write path. Opaque token is the PK.
+    r#"CREATE TABLE IF NOT EXISTS plan_share_tokens (
+  plan_id TEXT NOT NULL,
+  token TEXT NOT NULL PRIMARY KEY,
+  created_at TEXT NOT NULL
 )"#,
 ];
 

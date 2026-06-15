@@ -183,6 +183,23 @@ pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
         .collect()
 }
 
+/// Agent-first hook for `doctor`: dashboard activity-title map-link warnings
+/// from the dashboard branch. Kept narrow so generic advisory map-link warnings
+/// still stay in `validate-itinerary`, while this known broken-render shape is
+/// surfaced by doctor as before.
+pub async fn malformed_map_link_warnings(plan_id: &str) -> Vec<(i64, String)> {
+    collect_map_link_issues(plan_id)
+        .await
+        .into_iter()
+        .filter(|i| {
+            matches!(i.severity, Severity::Warning)
+                && i.message
+                    .starts_with("activity text has embedded URL + newlines")
+        })
+        .map(|i| (i.day.unwrap_or(0), i.message))
+        .collect()
+}
+
 /// Agent-first hook for `doctor`: sit-down restaurants that may need a
 /// reservation and are NOT yet enrolled in the booking ledger (no booked/pending
 /// activity in their session). Self-clearing — once you `set-activity-booking …
@@ -238,6 +255,25 @@ fn validate(days: &[DaySummary]) -> Vec<Issue> {
 //   4. an ambiguous bare-name stop (e.g. 安里 with no 駅/站/Station and no spelled-out
 //      city) that Maps can't geolocate reliably. (info)
 fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
+    // Dashboard branch guard: a multi-line activity title with an embedded URL
+    // becomes a malformed Maps search query unless rendered as rich text.
+    for a in &day.activities {
+        if is_malformed_map_text(&a.title) {
+            out.push(Issue {
+                severity: Severity::Warning,
+                day: Some(day.day_number),
+                session: Some(a.session.clone()),
+                message: format!(
+                    "activity text has embedded URL + newlines — will produce a malformed map link; ensure the worker uses render_activity_text: \"{}\"",
+                    truncate(&a.title, 50)
+                ),
+                suggestion: Some(
+                    "The worker's render_activity_text turns the embedded \"Google Maps：<url>\" tail into a clean labeled link; verify the dashboard is deployed with it.".to_string(),
+                ),
+            });
+        }
+    }
+
     // (1) activity-text URLs with '&'
     for url in &day.activity_map_urls {
         if url.contains('&') {
@@ -485,11 +521,21 @@ fn is_ambiguous_stop(s: &str) -> bool {
     s.chars().count() <= 4
 }
 
+/// The malformed-map-link predicate: text that will become a Google-Maps
+/// `search` link is malformed when it contains BOTH a newline AND an embedded
+/// http(s) URL (the multi-line-blob-with-nested-URL pattern). Pure + testable.
+fn is_malformed_map_text(text: &str) -> bool {
+    let has_newline = text.contains('\n');
+    let has_url = text.contains("http://") || text.contains("https://");
+    has_newline && has_url
+}
+
 fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
+    let flat = s.replace('\n', "\\n");
+    if flat.chars().count() <= n {
+        flat
     } else {
-        let t: String = s.chars().take(n).collect();
+        let t: String = flat.chars().take(n).collect();
         format!("{t}…")
     }
 }
@@ -1212,92 +1258,171 @@ mod map_link_tests {
     // / place_country / mentions_rail_or_bus / meal_has_pin / extract_map_urls now
     // live in crate::checks and are unit-tested there. The tests below cover the
     // map-link lint BEHAVIOR (validate_map_links wiring) and the predicates that
-    // stayed local (is_ambiguous_stop, needs_reservation_check).
+    // stayed local (is_ambiguous_stop, is_malformed_map_text, needs_reservation_check).
+
+    fn activity(session: &str, title: &str, booking_status: Option<&str>) -> Activity {
+        Activity {
+            title: title.to_string(),
+            session: session.to_string(),
+            start_time: None,
+            end_time: None,
+            duration_min: 0,
+            area: None,
+            booking_status: booking_status.map(|s| s.to_string()),
+            booking_required: booking_status.is_some(),
+            book_by: None,
+            operating_hours: None,
+        }
+    }
+
+    fn empty_day() -> DaySummary {
+        DaySummary {
+            day_number: 1,
+            date: "d".into(),
+            theme: "x".into(),
+            activities: vec![],
+            total_duration_min: 0,
+            transit_chains: vec![],
+            route_legs: vec![],
+            activity_map_urls: vec![],
+            meals: vec![],
+        }
+    }
 
     #[test]
     fn ambiguous_stop_rules() {
-        assert!(is_ambiguous_stop("\u{5B89}\u{91CC}")); // 安里 (bare, ≤4) → ambiguous
-        assert!(!is_ambiguous_stop("\u{5B89}\u{91CC}\u{99C5}")); // 安里駅 (has 駅)
-        assert!(!is_ambiguous_stop("\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}")); // has space (city ctx)
-        assert!(!is_ambiguous_stop("\u{90A3}\u{8987}\u{6A5F}\u{5834}")); // 那覇機場 (機場 marker)
-        assert!(!is_ambiguous_stop("Kokusai-dori")); // ascii
+        assert!(is_ambiguous_stop("\u{5B89}\u{91CC}")); // 安里
+        assert!(!is_ambiguous_stop("\u{5B89}\u{91CC}\u{99C5}")); // 安里駅
+        assert!(!is_ambiguous_stop("\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}"));
+        assert!(!is_ambiguous_stop("\u{90A3}\u{8987}\u{6A5F}\u{5834}")); // 那覇機場
+        assert!(!is_ambiguous_stop("Kokusai-dori"));
     }
 
     #[test]
     fn cross_country_leg_flagged() {
-        let day = DaySummary {
-            day_number: 1, date: "2026-06-12".into(), theme: "x".into(),
-            activities: vec![], total_duration_min: 0,
-            transit_chains: vec![TransitChain {
-                session: "morning".into(),
-                // 紅樹林→安里 : TW → JP, should error
-                text: "\u{7D05}\u{6A39}\u{6797}\u{2192}\u{5B89}\u{91CC}".into(),
-            }],
-            route_legs: vec![], activity_map_urls: vec![], meals: vec![],
-        };
+        let mut day = empty_day();
+        day.date = "2026-06-12".into();
+        day.transit_chains = vec![TransitChain {
+            session: "morning".into(),
+            text: "\u{7D05}\u{6A39}\u{6797}\u{2192}\u{5B89}\u{91CC}".into(),
+        }];
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
-        assert!(out.iter().any(|i| matches!(i.severity, Severity::Error) && i.message.contains("crosses countries")));
+        assert!(out.iter().any(|i| {
+            matches!(i.severity, Severity::Error) && i.message.contains("crosses countries")
+        }));
     }
 
     #[test]
     fn amp_url_flagged() {
-        let day = DaySummary {
-            day_number: 1, date: "d".into(), theme: "x".into(),
-            activities: vec![], total_duration_min: 0,
-            transit_chains: vec![], route_legs: vec![],
-            activity_map_urls: vec!["https://www.google.com/maps/dir/?api=1&origin=A&destination=B".into()],
-            meals: vec![],
-        };
+        let mut day = empty_day();
+        day.activity_map_urls =
+            vec!["https://www.google.com/maps/dir/?api=1&origin=A&destination=B".into()];
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
         assert!(out.iter().any(|i| i.message.contains("truncated")));
     }
 
     #[test]
-    fn reservation_check_skips_walk_in_and_breakfast() {
-        // Sit-down restaurants (no walk-in marker) → flagged.
-        assert!(needs_reservation_check("evening", "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}")); // ゆうなんぎい dinner
-        assert!(needs_reservation_check("noon", "\u{5348}\u{9910}\u{FF1A}\u{9996}\u{91CC}\u{6BBF}\u{5167}")); // 首里殿内 lunch
-        // Walk-in types → never flagged.
-        assert!(!needs_reservation_check("noon", "\u{7B2C}\u{4E00}\u{7261}\u{5FD7}\u{516C}\u{8A2D}\u{5E02}\u{5834} 2F \u{98DF}\u{5802}")); // public market 食堂
-        assert!(!needs_reservation_check("evening", "\u{6804}\u{753A}\u{5E02}\u{5834} \u{5C4B}\u{53F0}\u{6751}")); // 栄町市場 屋台村
-        assert!(!needs_reservation_check("noon", "\u{6CE2}\u{4E4B}\u{4E0A}\u{5468}\u{908A}\u{FF08}\u{6C96}\u{7E69}\u{305D}\u{3070}\u{FF09}")); // 沖繩そば
-        assert!(!needs_reservation_check("noon", "Tonkotsu ramen counter"));
-        assert!(!needs_reservation_check("noon", "\u{30EA}\u{30A6}\u{30DC}\u{30A6} \u{5B89}\u{91CC}\u{5E97}")); // リウボウ supermarket
-        // Breakfast is always walk-in regardless of venue text.
-        assert!(!needs_reservation_check("morning", "\u{65E9}\u{9910}\u{FF1A}\u{67D0}\u{9910}\u{5EF3}"));
+    fn malformed_when_newline_and_embedded_url() {
+        let blob = "晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc";
+        assert!(is_malformed_map_text(blob));
     }
 
-    // Build a minimal Activity for booking-aware tests.
-    fn act(session: &str, booking_status: Option<&str>) -> Activity {
-        Activity {
-            title: "restaurant".into(),
-            session: session.into(),
-            start_time: None,
-            end_time: None,
-            duration_min: 0,
-            area: None,
-            booking_required: booking_status.is_some(),
-            booking_status: booking_status.map(|s| s.to_string()),
-            book_by: None,
-            operating_hours: None,
-        }
+    #[test]
+    fn malformed_driving_leg_with_nav_url() {
+        let blob = "04:00 自家出發開車：紅樹林 → 大園\n地址：桃園市\nGoogle Maps 導航：https://www.google.com/maps/dir/A/B";
+        assert!(is_malformed_map_text(blob));
+    }
+
+    // Clean single-line venue name — NOT malformed.
+    #[test]
+    fn clean_single_line_is_not_malformed() {
+        assert!(!is_malformed_map_text("Naminoue Shrine"));
+        assert!(!is_malformed_map_text("首里城公園"));
+    }
+
+    // Multi-line but no embedded URL — NOT malformed (newline alone is fine).
+    #[test]
+    fn multiline_without_url_is_not_malformed() {
+        assert!(!is_malformed_map_text("晚餐：安里家\n營業：週五 17:00–23:00"));
+    }
+
+    // Single-line WITH a URL — NOT malformed (no newline → search query is clean;
+    // and render_activity_text handles the inline link regardless).
+    #[test]
+    fn single_line_with_url_is_not_malformed() {
+        assert!(!is_malformed_map_text("see https://example.com/x"));
+    }
+
+    // The lint emits a WARNING (advisory), with day + session, for a bad activity.
+    #[test]
+    fn lint_warns_on_malformed_activity() {
+        let mut day = empty_day();
+        day.day_number = 2;
+        day.date = "2026-06-13".into();
+        day.theme = "test".into();
+        day.activities = vec![activity(
+            "evening",
+            "晚餐：安里家 — 飯店步行5分\nGoogle Maps：https://www.google.com/maps/search/x",
+            None,
+        )];
+        let mut out = Vec::new();
+        validate_map_links(&day, &mut out);
+        assert_eq!(out.len(), 1, "expected exactly one warning");
+        assert!(matches!(out[0].severity, Severity::Warning));
+        assert_eq!(out[0].day, Some(2));
+        assert_eq!(out[0].session.as_deref(), Some("evening"));
+        assert!(out[0].message.contains("embedded URL + newlines"), "got: {}", out[0].message);
+        assert!(out[0].message.contains("render_activity_text"), "got: {}", out[0].message);
+        // Truncation flattens the newline to a literal \n (one-line message).
+        assert!(!out[0].message.contains('\n'), "message must be single-line, got: {}", out[0].message);
+    }
+
+    // A clean day produces NO warnings.
+    #[test]
+    fn lint_silent_on_clean_activities() {
+        let mut day = empty_day();
+        day.date = "2026-06-12".into();
+        day.theme = "arrival".into();
+        day.activities = vec![
+            activity("morning", "Naminoue Shrine", None),
+            activity("noon", "Makishi Market", None),
+        ];
+        let mut out = Vec::new();
+        validate_map_links(&day, &mut out);
+        assert!(out.is_empty(), "clean activities must not warn, got {} issues", out.len());
+    }
+
+    #[test]
+    fn truncate_flattens_newlines_and_caps_length() {
+        assert_eq!(truncate("a\nb", 50), "a\\nb");
+        let long = "x".repeat(100);
+        let t = truncate(&long, 10);
+        assert!(t.chars().count() <= 11, "10 chars + ellipsis, got {}", t.chars().count());
+        assert!(t.ends_with('…'));
+    }
+
+    #[test]
+    fn reservation_check_skips_walk_in_and_breakfast() {
+        assert!(needs_reservation_check("evening", "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}"));
+        assert!(needs_reservation_check("noon", "\u{5348}\u{9910}\u{FF1A}\u{9996}\u{91CC}\u{6BBF}\u{5167}"));
+        assert!(!needs_reservation_check("noon", "\u{7B2C}\u{4E00}\u{7261}\u{5FD7}\u{516C}\u{8A2D}\u{5E02}\u{5834} 2F \u{98DF}\u{5802}"));
+        assert!(!needs_reservation_check("evening", "\u{6804}\u{753A}\u{5E02}\u{5834} \u{5C4B}\u{53F0}\u{6751}"));
+        assert!(!needs_reservation_check("noon", "\u{6CE2}\u{4E4B}\u{4E0A}\u{5468}\u{908A}\u{FF08}\u{6C96}\u{7E69}\u{305D}\u{3070}\u{FF09}"));
+        assert!(!needs_reservation_check("noon", "Tonkotsu ramen counter"));
+        assert!(!needs_reservation_check("noon", "\u{30EA}\u{30A6}\u{30DC}\u{30A6} \u{5B89}\u{91CC}\u{5E97}"));
+        assert!(!needs_reservation_check("morning", "\u{65E9}\u{9910}\u{FF1A}\u{67D0}\u{9910}\u{5EF3}"));
     }
 
     #[test]
     fn reservation_flag_clears_once_session_has_tracked_booking() {
-        // A sit-down dinner meal with NO tracked activity in the session → flagged.
         let dinner = MealEntry {
             session: "evening".into(),
-            text: "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}\u{FF5C}map:x".into(), // ゆうなんぎい
+            text: "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}\u{FF5C}map:x".into(),
         };
-        let base = DaySummary {
-            day_number: 1, date: "d".into(), theme: "x".into(),
-            activities: vec![], total_duration_min: 0,
-            transit_chains: vec![], route_legs: vec![], activity_map_urls: vec![],
-            meals: vec![dinner],
-        };
+        let mut base = empty_day();
+        base.meals = vec![dinner];
         let mut out = Vec::new();
         validate_map_links(&base, &mut out);
         assert!(
@@ -1305,12 +1430,10 @@ mod map_link_tests {
             "unbooked sit-down restaurant should be flagged"
         );
 
-        // Same meal, but the evening session now has a pending activity → suppressed.
         let mut booked = DaySummary {
-            activities: vec![act("evening", Some("pending"))],
+            activities: vec![activity("evening", "restaurant", Some("pending"))],
             ..base
         };
-        // (base was moved; rebuild the meal it carried)
         booked.meals = vec![MealEntry {
             session: "evening".into(),
             text: "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}\u{FF5C}map:x".into(),
@@ -1322,23 +1445,17 @@ mod map_link_tests {
             "a pending booking in the session should clear the reservation flag"
         );
 
-        // A booking in a DIFFERENT session must NOT clear it.
         assert!(session_has_tracked_booking(&booked, "evening"));
         assert!(!session_has_tracked_booking(&booked, "noon"));
     }
 
     #[test]
     fn clean_same_country_leg_ok() {
-        // 那霸機場→安里駅 那覇 : both JP, disambiguated → no error, no ambiguous-info
-        let day = DaySummary {
-            day_number: 1, date: "d".into(), theme: "x".into(),
-            activities: vec![], total_duration_min: 0,
-            transit_chains: vec![TransitChain {
-                session: "afternoon".into(),
-                text: "\u{90A3}\u{8987}\u{6A5F}\u{5834}\u{2192}\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}".into(),
-            }],
-            route_legs: vec![], activity_map_urls: vec![], meals: vec![],
-        };
+        let mut day = empty_day();
+        day.transit_chains = vec![TransitChain {
+            session: "afternoon".into(),
+            text: "\u{90A3}\u{8987}\u{6A5F}\u{5834}\u{2192}\u{5B89}\u{91CC}\u{99C5} \u{90A3}\u{8987}".into(),
+        }];
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
         assert!(!out.iter().any(|i| matches!(i.severity, Severity::Error)));

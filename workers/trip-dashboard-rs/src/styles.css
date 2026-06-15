@@ -1,0 +1,397 @@
+/* Mobile-first dashboard styles. Ported from the TS worker baseline
+   (workers/trip-dashboard/src/styles.ts) and adapted to the Rust render
+   layer's class names (.day / .session-* / .booking-* / .daymap / .planmap). */
+
+:root {
+  --bg: #f8f7f4;
+  --card: #ffffff;
+  --text: #1a1a1a;
+  --text-dim: #6b6b6b;
+  --border: #e8e6e1;
+  --accent: #2563eb;
+  --accent-light: #dbeafe;
+  --green: #16a34a;
+  --green-bg: #dcfce7;
+  --amber: #d97706;
+  --amber-bg: #fef3c7;
+  --red: #dc2626;
+  --red-bg: #fee2e2;
+  --morning: #fde68a;
+  --noon: #bbf7d0;
+  --afternoon: #fbcfe8;
+  --evening: #c7d2fe;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans TC', 'Noto Sans JP', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 12px 48px;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  padding: 16px 4px 4px;
+}
+
+/* ---- Booking summary ---- */
+.booking-summary {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-top: 16px;
+}
+
+.booking-summary h2 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin: 12px 0 8px;
+}
+.booking-summary h2:first-child { margin-top: 0; }
+
+.booking-grid { display: grid; gap: 10px; }
+
+.booking-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.booking-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  background: var(--accent-light);
+}
+
+.booking-detail { flex: 1; min-width: 0; }
+
+.booking-value { font-size: 14px; font-weight: 600; }
+
+.booking-sub { font-size: 12px; color: var(--text-dim); }
+
+/* PNR / cancellation text — collapsed by default (native <details>) */
+.booking-notes { margin-top: 4px; }
+.booking-notes > summary {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.booking-notes > summary::-webkit-details-marker { display: none; }
+.booking-notes > summary::after { content: '\25B8'; transition: transform 0.2s; font-size: 11px; color: var(--text-dim); }
+.booking-notes[open] > summary::after { transform: rotate(90deg); }
+.booking-notes-body {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+/* Grouped hotel notes: a labeled bullet list per ## group. */
+.hotel-group { margin: 0 0 8px; }
+.hotel-group:last-child { margin-bottom: 0; }
+.hotel-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+  margin: 6px 0 2px;
+}
+.booking-notes-body ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.booking-notes-body li { margin: 1px 0; }
+
+/* Voucher PDF link — small inline button consistent with the booking UI. */
+.voucher-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-light);
+  border-radius: 8px;
+  text-decoration: none;
+}
+.voucher-link:hover { text-decoration: underline; }
+
+/* ---- Plan map / day map images ---- */
+.planmap, .daymap {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-top: 16px;
+  display: block;
+}
+.daymap { margin-top: 12px; }
+
+/* ---- Day cards ---- */
+.day {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-top: 16px;
+  overflow: hidden;
+  padding-bottom: 8px;
+  border-left: 4px solid var(--accent);
+}
+.day-arrival { border-left-color: var(--accent); }
+.day-full { border-left-color: var(--green); }
+.day-departure { border-left-color: var(--amber); }
+
+.day h2 {
+  font-size: 18px;
+  font-weight: 700;
+  padding: 16px 16px 4px;
+  letter-spacing: -0.3px;
+}
+
+.theme {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 0 16px 8px;
+  color: var(--text);
+}
+
+/* Weather strip */
+.weather {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin: 0 0 4px;
+  background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 100%);
+  font-size: 13px;
+  font-weight: 500;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+/* What-to-wear tips under the weather strip — small, muted, wraps. */
+.weather-clothing {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 4px 16px 8px;
+  line-height: 1.5;
+  background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 100%);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---- Session blocks ---- */
+.session {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.session:first-of-type { border-top: none; }
+
+.session-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.session-morning .session-label { background: var(--morning); color: #92400e; }
+.session-noon .session-label { background: var(--noon); color: #166534; }
+.session-afternoon .session-label { background: var(--afternoon); color: #9d174d; }
+.session-evening .session-label { background: var(--evening); color: #3730a3; }
+
+.session-focus {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.activity {
+  font-size: 13px;
+  padding: 3px 0 3px 18px;
+  position: relative;
+  color: var(--text);
+}
+.activity::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 10px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.meal {
+  font-size: 12px;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: inline-block;
+  background: var(--amber-bg);
+  color: #92400e;
+}
+
+.transit {
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: inline-block;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+/* ---- Today's route (day_route_segments) ---- */
+.route-block {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+}
+.route-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0369a1;
+  margin-bottom: 4px;
+}
+.route-seg {
+  font-size: 12px;
+  color: #334155;
+  padding: 2px 0;
+  line-height: 1.4;
+}
+.route-mode {
+  margin-right: 2px;
+}
+
+/* ---- Stop list (per-session maps links) ---- */
+.stoplist {
+  list-style: none;
+  padding: 4px 0 0;
+  margin: 0;
+}
+.stoplist li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.stoplist li:last-child { border-bottom: none; }
+.stoplist a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.stoplist a:active { text-decoration: underline; }
+.addr {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+/* Per-POI ticket price badge */
+.stop-price {
+  font-size: 12px;
+  font-weight: 600;
+  color: #92400e;
+  background: var(--amber-bg);
+  padding: 1px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+/* ---- Plan index ---- */
+.plan-index {
+  list-style: none;
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 0;
+}
+.plan-card {
+  display: block;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  text-decoration: none;
+  color: var(--text);
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.plan-card:active {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
+}
+.plan-card-name { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+.plan-card-dates { font-size: 14px; color: var(--text-dim); }
+
+/* ---- Desktop two-column ---- */
+@media (min-width: 900px) {
+  body { max-width: 1080px; }
+  /* summary + plan map side by side */
+  .booking-summary {
+    float: left;
+    width: 48%;
+    margin-right: 4%;
+  }
+  .planmap {
+    float: left;
+    width: 48%;
+  }
+  /* day content beside its day map */
+  .day {
+    clear: both;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 16px;
+    align-items: start;
+  }
+  .day h2 { grid-column: 1 / -1; }
+  .theme { grid-column: 1 / -1; }
+  .weather { grid-column: 1 / -1; }
+  .daymap { grid-column: 2; grid-row: span 20; align-self: start; margin-top: 0; }
+  .session { grid-column: 1; }
+}
+
+/* Print */
+@media print {
+  body { max-width: none; padding: 0; }
+  .day { break-inside: avoid; }
+  .daymap, .planmap { break-inside: avoid; }
+}

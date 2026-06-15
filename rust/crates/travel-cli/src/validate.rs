@@ -108,6 +108,15 @@ async fn validate_map_links_all_plans(issues: &mut Vec<Issue>) {
                 line: None,
             });
         }
+        for (day, message) in crate::validate_itinerary::malformed_map_link_warnings(&plan_id).await {
+            issues.push(Issue {
+                category: "map-links".to_string(),
+                severity: Severity::Warning,
+                message: format!("{message} (day {day})"),
+                file: Some(format!("plan:{plan_id}")),
+                line: None,
+            });
+        }
         // Reservation gate (advisory, not pass/fail): sit-down restaurants not yet
         // enrolled in the booking ledger. One concise actionable line per plan —
         // self-clears as each is booked. Keeps doctor's error/warning counts clean.
