@@ -63,9 +63,10 @@ User picks a candidate OR asks to explore another date/destination
   --dest KIX:"Osaka/Kyoto (KIX)" --dest NRT:"Tokyo (NRT)" \
   --nights 6 --nights 7 --pax 2 --rate 32
 
-# Scrape, import, and rank. The Python wrapper performs no direct Turso I/O:
-# it reads through shaping-export and writes through shaping-import.
-python scripts/shaping_research.py --run <run_id>
+# Scrape offers via chromeport CDP driver, then import into shaping run:
+#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
+#   → ./bin/chromeport parse capture <capture-id> --source <id>
+#   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 
 # Compare top candidates.
 ./bin/travel shaping-compare --run <run_id>
@@ -319,7 +320,7 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 
 | Stage | Existing skill(s) reused | What changes |
 |-------|--------------------------|--------------|
-| Shaping Stage — Triangle Research | `/shaping-research` (orchestration skill) + `scripts/shaping_research.py` | `/shaping-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
+| Shaping Stage — Triangle Research | `/shaping-research` (orchestration skill) + chromeport CDP scraping + `shaping-import` | `/shaping-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
 | Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `shaping-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Shaping Stage handoff can seed the provisional P1/P2 lock; `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
 | Stage 2 — Shop Flight | `/stage2-shop-transport`, `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | `/stage2-shop-transport` owns the package-vs-direct decision; lower-level P3/P4 skills remain the implementation tools. |
 | Stage 3 — Expand Itinerary | `/stage3-expand-itinerary`, `/p5-itinerary` | `/stage3-expand-itinerary` owns booking-aware detail expansion and validation; `/p5-itinerary` remains the implementation tool. |

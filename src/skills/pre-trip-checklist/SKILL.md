@@ -44,7 +44,28 @@ Package, flight, and hotel should all be `booked` (not `selected` or `booking`).
 
 Verify all booked activities have confirmation numbers recorded.
 
-### 4. Check weather data
+### 4. Check restaurant reservations
+
+```bash
+./bin/travel doctor                                       # [reservations] line per plan, or:
+./bin/travel validate-itinerary --dest <slug> --severity info | grep "may need a reservation"
+```
+
+The reservation check flags **sit-down** lunch/dinner restaurants not yet tracked
+in the booking ledger. Walk-in venues (ramen, public-market food courts / 食堂,
+屋台村 street stalls, supermarkets, casual そば) are never flagged.
+
+For each flagged restaurant, either **enroll and book it** so it's tracked:
+```bash
+./bin/travel add-activity <day> <session> "<restaurant> … map link"        # if not already an activity
+./bin/travel set-activity-booking <day> <session> "<restaurant>" pending   # → shows 待訂 on dashboard
+# …once you've actually reserved:
+./bin/travel set-activity-booking <day> <session> "<restaurant>" booked --ref "<reservation>"
+```
+…**or leave it as a walk-in** (don't enroll it). Enrolled reservations flow into
+`query-bookings`/`status` and self-clear from this check once `pending`/`booked`.
+
+### 5. Check weather data
 
 ```bash
 ./bin/travel itinerary
@@ -55,7 +76,7 @@ Each day should have a `weather` object. If missing:
 ./bin/travel fetch-weather --dest <slug>
 ```
 
-### 5. Check dashboard deployment
+### 6. Check dashboard deployment
 
 ```bash
 curl "https://trip-dashboard.<subdomain>.workers.dev/?plan=<slug>"
@@ -63,7 +84,7 @@ curl "https://trip-dashboard.<subdomain>.workers.dev/?plan=<slug>"
 
 Should return HTML dashboard. If 404 or error, run `/stage4-publish-dashboard`.
 
-### 6. Verify transport details
+### 7. Verify transport details
 
 ```bash
 ./bin/travel transport

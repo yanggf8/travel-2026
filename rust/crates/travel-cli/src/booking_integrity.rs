@@ -308,16 +308,19 @@ async fn extract_activity(
     trip_id: &str,
     dest: &str,
 ) -> Result<Vec<BookingRow>, String> {
-    // TS iterates sessions morning/afternoon/evening (NOT noon) day-by-day.
+    // Iterate sessions day-by-day. noon is included so a booking-tracked lunch
+    // reservation (e.g. a sit-down restaurant in the noon session) reaches the
+    // ledger — the row-level filter below still requires booking_required||has_status,
+    // so ordinary untracked noon meals never appear. (TS originally skipped noon.)
     let mut rows = conn
         .query(
             "SELECT day_number, session_type, id, title, booking_status, booking_required, \
                     booking_ref, book_by, cost_estimate, area, booking_url \
              FROM activities \
              WHERE plan_id = ?1 AND destination = ?2 \
-               AND session_type IN ('morning','afternoon','evening') \
+               AND session_type IN ('morning','noon','afternoon','evening') \
              ORDER BY day_number, \
-               CASE session_type WHEN 'morning' THEN 0 WHEN 'afternoon' THEN 1 ELSE 2 END, \
+               CASE session_type WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'afternoon' THEN 2 ELSE 3 END, \
                sort_order",
             params![plan_id.to_string(), dest.to_string()],
         )

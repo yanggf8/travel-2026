@@ -24,7 +24,7 @@ Each view is a separate subcommand — pick one:
 
 ## Comparison
 ```bash
-./bin/travel compare-offers --region osaka [--json]
+./bin/travel compare-offers --region osaka
 ./bin/travel compare trips --input <your-comparison-file.json> [--detailed]   # input file is BYO
 ./bin/travel compare dates --start 2026-02-24 --end 2026-02-28 --nights 4
 ./bin/travel compare true-cost --region kansai --pax 2 --date 2026-02-24
@@ -50,8 +50,8 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ## Turso DB
 ```bash
 ./bin/travel import-offers --dir scrapes --dest tokyo_2026 [--start 2026-02-13 --end 2026-02-17] [--dry-run]
-./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000] [--json]
-./bin/travel query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000] [--json]
+./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
+./bin/travel query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000]
 ./bin/travel check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
 ./bin/travel check-freshness --source besttour --region kansai
 # (the old `db:import:turso` raw-offers loader is retired — the chromeport CDP path now
@@ -67,8 +67,10 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ./bin/travel sync-bookings [--dry-run]
 ./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
 ./bin/travel check-booking-integrity
-./bin/travel validate-itinerary --dest tokyo_2026  # historical days skip booking-deadline failures
+./bin/travel validate-itinerary --dest tokyo_2026 [--severity error|warning|info]  # also a MAP-LINK lint: cross-country legs (error), &-truncating URLs / walking-mode rail (warning), ambiguous bare stops + meals with no map pin (info). Plus a RESERVATION lint (info): sit-down lunch/dinner restaurants not yet tracked in the booking ledger — walk-ins (ramen, 公設市場/食堂, 屋台村, supermarket, casual そば) are never flagged; self-clears once the session has a booked/pending activity. historical days skip booking-deadline failures
 ```
+
+**Restaurant reservations reuse the activity booking lifecycle** (no separate meal-booking subsystem): a sit-down restaurant that needs booking is enrolled as an `activity` with `add-activity`, then `set-activity-booking <day> <session> "<restaurant>" pending` (→ `booked --ref` once confirmed). It then flows into `sync-bookings` → `bookings_current` → `query-bookings`/`status`/`check-booking-integrity`, renders a 待訂/已訂 badge on the dashboard, and disappears from the reservation lint. Walk-in venues are simply left as `session_meals` lines (not enrolled). The booking extract includes the `noon` session, so bookable lunches are tracked too.
 
 ## Utilities
 ```bash
@@ -76,7 +78,7 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel leave calc 2026-02-24 2026-02-28
 ./bin/travel normalize flights scrapes/trip-feb24-out.json --top 5
 ./bin/travel validate data                       # data integrity check
-./bin/travel doctor                              # full system health check
+./bin/travel doctor                              # full system health check (also runs the map-link lint across all plans; cross-country/ocean-route legs fail as errors). Emits a per-plan [reservations] info line for sit-down restaurants not yet tracked in the booking ledger (advisory — never fails the check)
 ```
 
 ## Mutations
@@ -90,9 +92,12 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM    # (alias: set-session-time-range)
 ./bin/travel set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
 ./bin/travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
-./bin/travel set-route-segments-bulk <day> --json '[{"from":"A","to":"B","mode":"walking","duration":5},...]'
-./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activities-zh-json '[...]'] [--meals-zh-json '[...]'] [--plan-id <id>]    # (alias: set-session-zh)
+./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...]    # plain-text; repeat --seg per segment
+./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activity-zh "<zh>" (repeatable)] [--plan-id <id>]    # (alias: set-session-zh)
 ./bin/travel set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]    # (alias: set-session-focus)
+./bin/travel set-meals <day> <session> --meal "<text>" [--meal "<text>"...] [--dest slug]    # replace session meals; a meal may carry a place pin: "<label>｜map:<query>"
+./bin/travel add-activity <day> <session> "<title>" [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest slug]    # append a new activity (audit triad)
+./bin/travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest slug]    # rewrite sort_order; list ALL activities in the session in the desired order
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
 ./bin/travel swap-days <dayA> <dayB> [--dest slug]
 ./bin/travel fetch-weather [--dest slug] [--all]
@@ -111,8 +116,11 @@ Explore departure date × destination × flight price together before any plan e
 ./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32] \
   [--shaping ASPECT:ROLE:KIND:VALUE[:NOTES] ...]   # e.g. date:hard_constraint:return_no_later_than:2026-06-27
-python scripts/shaping_research.py --run <run_id>          # aggregator (no Turso I/O of its own)
-./bin/travel shaping-compare --run <run_id> [--json] [--limit N]
+# After shaping-init: scrape via chromeport, then import + compare:
+#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
+#   → ./bin/chromeport parse capture <capture-id> --source <id>
+#   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
+./bin/travel shaping-compare --run <run_id> [--limit N]
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>   # seed new plan with P1/P2
 ./bin/travel shaping-adopt <candidate_id> <plan_id>   # link to an existing plan only
 # Internal (aggregator handoff — usually not run by hand):

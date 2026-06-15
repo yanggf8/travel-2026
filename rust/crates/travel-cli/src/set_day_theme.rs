@@ -95,6 +95,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                 );
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }

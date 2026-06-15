@@ -123,8 +123,10 @@ Logical groupings for trip planning:
 > ./bin/travel shaping-init --origin TPE --start 2026-04-01 --end 2026-04-05 \
 >   --dest KIX:"Kyoto via KIX" --nights 4
 >
-> # 2. Run the aggregator
-> python scripts/shaping_research.py --run <run_id>
+> # 2. Scrape offers via chromeport, then import candidates
+> ./bin/chromeport fetch interact "<url>" --source <id> --step ...
+> → ./bin/chromeport parse capture <capture-id> --source <id>
+> → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 >
 > # 3. Pick a candidate
 > ./bin/travel shaping-compare --run <run_id>

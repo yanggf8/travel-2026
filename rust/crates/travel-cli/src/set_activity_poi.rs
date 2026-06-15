@@ -76,8 +76,9 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                 p.dest = Some(arg_value(args, i, "--dest")?);
                 i += 2;
             }
-            // Accept-and-skip --plan-id (resolution is via $TRAVEL_PLAN_ID,
-            // matching the neighboring set-* mutations).
+            // Accept-and-skip --plan-id (plan resolution is done in main.rs via
+            // plan_resolver::resolve_plan_id, matching the neighboring set-*
+            // mutations; the resolved plan_id is passed into run()).
             "--plan-id" => {
                 let _ = arg_value(args, i, "--plan-id")?;
                 i += 2;

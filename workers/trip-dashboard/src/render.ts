@@ -64,13 +64,24 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Render activity text: escape, convert \n to <br>, linkify https:// URLs. */
+/** Render activity text: escape, convert \n to <br>, linkify https:// URLs.
+ *  A "<label>：<url>" / "<label>: <url>" pair (e.g. "Google Maps 導航：https://…")
+ *  renders as a short labeled link instead of dumping the whole encoded URL. */
 function renderActivityText(text: string): string {
   if (text.includes('<span')) return text; // already HTML
+  const linkStyle = 'color:#2563eb;font-size:11px;word-break:break-all;white-space:nowrap';
   return esc(text)
+    // Keep a labeled map link inline with the line before it: a "\nGoogle Maps：<url>"
+    // tail attaches with a thin space, not a <br>, so it doesn't claim its own line.
+    .replace(/\n(?=\s*(?:Google Maps|地圖|地图|導航|导航|Map|Directions)[^:：<]*[:：]\s*https?:\/\/)/gi, '  ')
     .replace(/\n/g, '<br>')
-    .replace(/(https?:\/\/[^\s<&"，。、]+)/g,
-      (url) => `<a href="${url}" target="_blank" rel="noopener" style="color:#2563eb;font-size:11px;word-break:break-all">${url}</a>`);
+    // Labeled link: "Google Maps 導航：<url>" / "地圖：<url>" / "Map: <url>" → label is the clickable text.
+    .replace(/((?:Google Maps|地圖|地图|導航|导航|Map|Directions)[^:：<]*)[:：]\s*(https?:\/\/[^\s<&"，。、]+)/gi,
+      (_m, label, url) => `<a href="${url}" target="_blank" rel="noopener" style="${linkStyle}">🗺️ ${label.trim()}</a>`)
+    // Any remaining bare URL → linkify with the URL as text. The lookbehind
+    // skips URLs already wrapped by the labeled-link pass above (href="…").
+    .replace(/(?<!href=")(https?:\/\/[^\s<&"，。、]+)/g,
+      (url) => `<a href="${url}" target="_blank" rel="noopener" style="${linkStyle}">${url}</a>`);
 }
 
 function formatDate(dateStr: string, lang: Lang): string {
@@ -279,30 +290,187 @@ interface SessionZhOverride {
   transit_notes: string;
 }
 
+function cleanStopLabel(s: string): string {
+  let out = s
+    .split(/[\uFF08(\u3002\u3001,]/)[0]                  // drop note after \uFF08 \u3002 \u3001 ,
+    .replace(/\d{1,2}:\d{2}/g, '')                        // drop clock times
+    .replace(/[\u2460-\u2473]\s*[.\uFF0E]?/g, '')          // drop \u2460\u2461\u2462\u2026 markers
+    .trim();
+  // If the segment is "<verb/mode-phrase>\u81F3|\u5230 <place>", keep the place after the last \u81F3/\u5230.
+  const m = out.match(/[\u81F3\u5230]([^\u81F3\u5230]+)$/); // \u81F3=\u81F3(to)  \u5230=\u5230(arrive)
+  if (m) out = m[1];
+  out = out
+    .replace(/^(?:\s*(?:\u958B\u8ECA|\u81EA\u99D5|\u81EA\u884C\u958B\u8ECA|\u8F49\u4E58|\u642D\u4E58|\u642D|\u4E58|\u6B65\u884C)\s*[:\uFF1A]?\s*)/, '') // strip leading verb (+ optional :)
+    .replace(/^(?:\u63A5\u99C1\u5DF4\u58EB|\u5DF4\u58EB|\u55AE\u8ECC\u96FB\u8ECA|\u55AE\u8ECC|\u96FB\u8ECA|\u706B\u8ECA|\u8A08\u7A0B\u8ECA)\s*/, '') // strip leading mode-noun (\u63A5\u99C1\u5DF4\u58EB/\u5DF4\u58EB/\u55AE\u8ECC\u96FB\u8ECA\u2026)
+    .replace(/\s*\u6B65\u884C\s*$/, '')                    // trailing \u6B65\u884C
+    .trim();
+  return out;
+}
+
+const TRANSIT_KEYWORDS = /\u7DDA|\u5DF4\u58EB|\u55AE\u8ECC|\u96FB\u8ECA|\u5730\u9435|\u6377\u904B|\u706B\u8ECA|\u9435|JR|monorail|rail|bus|train/i; // \u7DDA \u5DF4\u58EB \u55AE\u8ECC \u96FB\u8ECA \u5730\u9435 \u6377\u904B \u706B\u8ECA \u9435 JR
+
+function legTravelMode(legText: string): 'walking' | 'driving' | 'transit' {
+  if (/\u958B\u8ECA|\u81EA\u99D5|\u81EA\u884C\u958B\u8ECA/.test(legText)) return 'driving'; // \u958B\u8ECA / \u81EA\u99D5
+  // walking only when 步行 AND no rail/bus keyword (so "\u55AE\u8ECC\u2026\u653E\u884C\u674E\u5F8C\u6B65\u884C" stays transit)
+  if (legText.includes('\u6B65\u884C') && !TRANSIT_KEYWORDS.test(legText)) return 'walking';
+  return 'transit';
+}
+
+function mapsDirUrl(from: string, to: string, city: string, mode: string): string {
+  const o = city ? `${from} ${city}` : from;
+  const d = city ? `${to} ${city}` : to;
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}&travelmode=${mode}`;
+}
+
+const LEG_MODE_ICON: Record<string, string> = {
+  walking: '\uD83D\uDEB6', driving: '\uD83D\uDE97', transit: '\uD83D\uDE83',
+};
+
 function renderTransitPill(transit: string, city: string): string {
-  if (transit.includes('\u2192')) {
-    const parts = transit.split('\u2192');
-    if (parts.length >= 2) {
-      const from = parts[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
-      let to = parts[1].split(/[（。，,]/)[0].trim().replace(/\d{1,2}:\d{2}/g, '').trim();
-      // Remove trailing 步行 from destination name
-      to = to.replace(/\s*\u6B65\u884C\s*$/, '').trim();
-      if (from && to) {
-        // Check travel mode only from the route description (before any period/sentence break), not trailing notes
-        const routePart = transit.split(/[。]/)[0];
-        const travelmode = (routePart.includes('\u6B65\u884C') && !routePart.includes('\u7DDA') && !routePart.includes('\u5DF4\u58EB')) ? 'walking' : 'transit';
-        const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from + ' ' + city)}&destination=${encodeURIComponent(to + ' ' + city)}&travelmode=${travelmode}`;
-        return `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
-      }
+  const stops = transit.split('\u2192');
+
+  // Single hop (2 stops): preserve original one-pill behavior (Tokyo/Kyoto).
+  if (stops.length === 2) {
+    const from = cleanStopLabel(stops[0]);
+    const to = cleanStopLabel(stops[1]);
+    if (from && to) {
+      const routePart = transit.split(/[\u3002]/)[0];
+      const travelmode = legTravelMode(routePart);
+      const url = mapsDirUrl(from, to, city, travelmode);
+      return `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">\uD83D\uDE83 ${esc(transit)} \uD83D\uDDFA\uFE0F</a>`;
     }
   }
+
+  // Multi-leg chain (3+ stops): one clickable sub-pill per leg, each with its own
+  // inferred mode + a correct point-to-point Maps link. A single <a> can target
+  // only one route, so we split the chain rather than mislink the whole thing.
+  if (stops.length > 2) {
+    const subPills: string[] = [];
+    for (let i = 0; i < stops.length - 1; i++) {
+      const from = cleanStopLabel(stops[i]);
+      const to = cleanStopLabel(stops[i + 1]);
+      if (!from || !to) continue;
+      const mode = legTravelMode(stops[i + 1] + ' ' + stops[i]);
+      const url = mapsDirUrl(from, to, city, mode);
+      subPills.push(
+        `<a class="pill pill-transit" href="${esc(url)}" target="_blank" rel="noopener">${LEG_MODE_ICON[mode]} ${esc(from)} \u2192 ${esc(to)} \uD83D\uDDFA\uFE0F</a>`
+      );
+    }
+    if (subPills.length > 0) return subPills.join('');
+  }
+
   return `<span class="pill pill-transit">\uD83D\uDE83 ${esc(transit)}</span>`;
+}
+
+/** Render a meal as a clickable place pin when it carries a map target.
+ *  Convention: "<label>\uFF5Cmap:<query>" (full- or half-width pipe) renders <label>
+ *  linked to a Google Maps place search for <query> (+ city for disambiguation).
+ *  Without the marker it's a plain meal pill. */
+function renderMealPill(meal: string, city: string): string {
+  const m = meal.match(/^(.*?)\s*[\uFF5C|]\s*map:\s*(.+)$/i); // \uFF5Cmap:  or  |map:
+  if (m) {
+    const label = m[1].trim();
+    const query = m[2].trim();
+    const term = city ? `${query} ${city}` : query;
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(term)}`;
+    return `<a class="pill pill-meal" href="${esc(url)}" target="_blank" rel="noopener">\uD83C\uDF5C ${esc(label)} \uD83D\uDDFA\uFE0F</a>`;
+  }
+  return `<span class="pill pill-meal">\uD83C\uDF5C ${esc(meal)}</span>`;
 }
 
 interface SessionEditMeta {
   plan_id: string;
   dest: string;
   day: number;
+}
+
+/** Parse "Hours: HH:MM-HH:MM" and optional "Closed: Day,..." from activity notes */
+function parseHoursFromNotes(notes: string | null): string | null {
+  if (!notes) return null;
+  const hoursMatch = notes.match(/Hours:\s*(\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2})/i);
+  const closedMatch = notes.match(/Closed:\s*([A-Za-z,/\s]+)/i);
+  if (!hoursMatch && !closedMatch) return null;
+  const parts: string[] = [];
+  if (hoursMatch) parts.push(`🕐 ${hoursMatch[1]}`);
+  if (closedMatch) parts.push(`休 ${closedMatch[1].trim()}`);
+  return parts.join(' · ');
+}
+
+/** Extract activity hours map from raw session.activities array */
+function extractActivityHours(activities: unknown[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of activities) {
+    if (typeof a === 'object' && a !== null && 'title' in a) {
+      const obj = a as Record<string, unknown>;
+      const title = obj.title as string;
+      const hours = parseHoursFromNotes((obj.notes as string) || null);
+      if (hours) map.set(title, hours);
+    }
+  }
+  return map;
+}
+
+/**
+ * Extract an admission-fee label per activity title from `cost_estimate`.
+ * `0` → 免費/Free; a positive number → ¥N; null/undefined → no badge (unknown,
+ * not necessarily free — e.g. shopping/meals/transport where cost isn't a ticket).
+ */
+function extractActivityCost(activities: unknown[], lang: Lang): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of activities) {
+    if (typeof a === 'object' && a !== null && 'title' in a) {
+      const obj = a as Record<string, unknown>;
+      const title = obj.title as string;
+      const cost = obj.cost_estimate;
+      if (cost === 0) {
+        map.set(title, lang === 'zh' ? '免費' : 'Free');
+      } else if (typeof cost === 'number' && cost > 0) {
+        map.set(title, `¥${cost}`);
+      }
+    }
+  }
+  return map;
+}
+
+interface BackupVenue {
+  /** Full label with surrounding context, e.g. "まーちぬ家（前島2-7-14，步行10分）". */
+  label: string;
+  /** Bare venue name for the Google Maps search query, e.g. "まーちぬ家". */
+  mapsQuery: string;
+  /** First detail line (rating / phone), e.g. "Google Maps 4.3 ⭐（沖繩家常料理）". */
+  detail: string;
+}
+
+/**
+ * Parse a "備案：<name>（…）\n  <details…>" block from activity notes into a
+ * structured backup venue (label, bare name for a maps link, first detail line).
+ * Returns null when no 備案 line is present.
+ */
+function parseBackupFromNotes(notes: string | null): BackupVenue | null {
+  if (!notes) return null;
+  const lines = notes.split('\n');
+  const idx = lines.findIndex((l) => /^\s*備案[:：]/.test(l));
+  if (idx === -1) return null;
+  const label = lines[idx].replace(/^\s*備案[:：]\s*/, '').trim();
+  // Bare venue name = text before the first parenthesis/separator, for a clean maps query.
+  const mapsQuery = label.split(/[（(·]/)[0]!.trim();
+  // First indented continuation line usually carries the rating (Google 4.3 ⭐).
+  const detail = (lines[idx + 1] || '').trim();
+  return { label, mapsQuery, detail };
+}
+
+/** Extract activity backup map from raw session.activities array */
+function extractActivityBackup(activities: unknown[]): Map<string, BackupVenue> {
+  const map = new Map<string, BackupVenue>();
+  for (const a of activities) {
+    if (typeof a === 'object' && a !== null && 'title' in a) {
+      const obj = a as Record<string, unknown>;
+      const title = obj.title as string;
+      const backup = parseBackupFromNotes((obj.notes as string) || null);
+      if (backup) map.set(title, backup);
+    }
+  }
+  return map;
 }
 
 function renderSession(
@@ -322,6 +490,9 @@ function renderSession(
   const activities = zhOverride
     ? (zhOverride.activities.length > 0 ? zhOverride.activities : enActivities)
     : enActivities;
+  const activityHours = extractActivityHours((session.activities as unknown[]) || []);
+  const activityBackup = extractActivityBackup((session.activities as unknown[]) || []);
+  const activityCost = extractActivityCost((session.activities as unknown[]) || [], lang);
   // Fall back to the base session meals when the ZH override has none. meals_zh
   // was de-JSON'd away, so a zhOverride always carries an empty meals[]; using ??
   // would let that [] mask the real session.meals and drop every lunch/dinner pill.
@@ -360,10 +531,33 @@ function renderSession(
       <ul class="activity-list">
         ${activities.map((a) => {
           const isPending = pendingBookings.some((pb) => a.includes('teamLab') || a.includes('\u7121\u754C') || a.toLowerCase().includes(pb.toLowerCase()));
-          if (isPending && !a.includes('<span')) {
-            return `<li><span class="activity-booking">\u23F3 ${renderActivityText(a)}</span></li>`;
+          // Extract plain title for hours lookup (strip HTML wrappers)
+          const plainTitle = a.replace(/<[^>]+>/g, '').trim();
+          const hours = activityHours.get(plainTitle);
+          const cost = activityCost.get(plainTitle);
+          // Ticket price sits on the same row as the hours badge when both exist.
+          const costPart = cost ? `🎫 ${esc(cost)}` : '';
+          const hoursPart = hours ? esc(hours) : '';
+          const hoursCostInner = [hoursPart, costPart].filter(Boolean).join(' · ');
+          const hoursBadge = hoursCostInner ? `<div class="activity-hours">${hoursCostInner}</div>` : '';
+          const backup = activityBackup.get(plainTitle);
+          let backupBadge = '';
+          if (backup) {
+            const mapUrl = `https://www.google.com/maps/search/${encodeURIComponent(backup.mapsQuery)}`;
+            // Inline link (not .map-place-link, which is a full-width tappable row) so the
+            // whole badge stays on one line.
+            const mapLink = `<a class="backup-link" href="${esc(mapUrl)}" target="_blank" rel="noopener">${esc(backup.mapsQuery)} \uD83D\uDDFA\uFE0F</a>`;
+            // Keep the badge to one short line: just a rating, not the full detail line.
+            const ratingMatch = backup.detail.match(/(\d+\.\d+\s*\u2B50)/);
+            const rating = ratingMatch ? ` \u00B7 ${esc(ratingMatch[1])}` : '';
+            backupBadge = `<div class="activity-backup">\uD83D\uDCCB \u5099\u6848 ${mapLink}${rating}</div>`;
           }
-          return `<li>${renderActivityText(a)}</li>`;
+          const badges = `${hoursBadge}${backupBadge}`;
+
+          if (isPending && !a.includes('<span')) {
+            return `<li><span class="activity-booking">\u23F3 ${renderActivityText(a)}</span>${badges}</li>`;
+          }
+          return `<li>${renderActivityText(a)}${badges}</li>`;
         }).join('')}
       </ul>
       ${em ? editableField(activitiesFieldId, activities.join('\n'), {
@@ -372,7 +566,7 @@ function renderSession(
       }) : ''}
       <div class="info-pills">
         ${transit ? renderTransitPill(transit, mapCity || '') : ''}
-        ${meals.map((m) => `<span class="pill pill-meal">\uD83C\uDF5C ${esc(m)}</span>`).join('')}
+        ${meals.map((m) => renderMealPill(m, mapCity || '')).join('')}
       </div>
       ${em ? editableField(mealsFieldId, meals.join('\n'), {
         table: 'timesofday', plan_id: em.plan_id, dest: em.dest,
@@ -388,26 +582,43 @@ function renderSession(
 function clothingTip(tempLow: number, tempHigh: number, rainPct: number, lang: Lang): string {
   const tips: string[] = [];
 
-  // Morning/evening tip based on low temp
+  // Primary "what to wear" tip, banded by temp so it works for both cold-season
+  // (Tokyo/Kyoto Feb) and hot-season (Okinawa Jun) trips.
   if (tempLow <= 0) {
     tips.push(lang === 'zh'
       ? '\uD83E\uDDE3 早晚接近0\u00B0C\u2014\u2014厚外套、圍巾、手套'
       : '\uD83E\uDDE3 Near 0\u00B0C morning/evening\u2014heavy coat, scarf, gloves');
   } else if (tempLow <= 5) {
     tips.push(lang === 'zh'
-      ? `\uD83E\uDDE5 早晚${tempLow}\u00B0C\u2014\u2014冬季外套+毛衣，下午可脫`
-      : `\uD83E\uDDE5 ${tempLow}\u00B0C morning/evening\u2014winter coat+sweater, lighter afternoon`);
+      ? `\uD83E\uDDE5 早晚${Math.round(tempLow)}\u00B0C\u2014\u2014冬季外套+毛衣，下午可脫`
+      : `\uD83E\uDDE5 ${Math.round(tempLow)}\u00B0C morning/evening\u2014winter coat+sweater, lighter afternoon`);
   } else if (tempLow <= 10) {
     tips.push(lang === 'zh'
       ? `\uD83E\uDDE5 早晚${Math.round(tempLow)}\u00B0C\u2014\u2014外套+薄毛衣`
       : `\uD83E\uDDE5 ${Math.round(tempLow)}\u00B0C morning/evening\u2014jacket+light sweater`);
+  } else if (tempHigh <= 18) {
+    tips.push(lang === 'zh'
+      ? `\uD83E\uDDE5 涼爽${Math.round(tempHigh)}\u00B0C\u2014\u2014長袖+薄外套`
+      : `\uD83E\uDDE5 Cool ${Math.round(tempHigh)}\u00B0C\u2014long sleeves + light jacket`);
+  } else if (tempHigh <= 24) {
+    tips.push(lang === 'zh'
+      ? `\uD83D\uDC55 舒適${Math.round(tempHigh)}\u00B0C\u2014\u2014長短袖皆可，早晚帶薄外套`
+      : `\uD83D\uDC55 Mild ${Math.round(tempHigh)}\u00B0C\u2014short or long sleeves, light layer for evening`);
+  } else if (tempHigh <= 29) {
+    tips.push(lang === 'zh'
+      ? `\uD83D\uDC55 溫暖${Math.round(tempHigh)}\u00B0C\u2014\u2014透氣短袖、好走的鞋`
+      : `\uD83D\uDC55 Warm ${Math.round(tempHigh)}\u00B0C\u2014breathable short sleeves, comfy shoes`);
+  } else {
+    tips.push(lang === 'zh'
+      ? `\u2600\uFE0F 炎熱${Math.round(tempHigh)}\u00B0C\u2014\u2014排汗短袖、防曬、帽子、多補水`
+      : `\u2600\uFE0F Hot ${Math.round(tempHigh)}\u00B0C\u2014moisture-wicking tee, sun protection, hat, hydrate`);
   }
 
   // Afternoon warmth note if big temp swing
   if (tempHigh - tempLow >= 10) {
     tips.push(lang === 'zh'
-      ? `\u2600\uFE0F 午後回暖到${tempHigh}\u00B0C\u2014\u2014穿脫方便的洋蔥式穿搭`
-      : `\u2600\uFE0F Warms to ${tempHigh}\u00B0C afternoon\u2014layer for easy removal`);
+      ? `\u2600\uFE0F 午後回暖到${Math.round(tempHigh)}\u00B0C\u2014\u2014穿脫方便的洋蔥式穿搭`
+      : `\u2600\uFE0F Warms to ${Math.round(tempHigh)}\u00B0C afternoon\u2014layer for easy removal`);
   }
 
   // Rain gear
@@ -780,6 +991,41 @@ function hotelMapsLink(name: string, city?: string): string {
 }
 
 /**
+ * Pull the hotel phone (Tel …) and booking reference (CFM/Order No.) out of the
+ * free-text hotel.notes so the booking summary can show a tappable tel: link and
+ * the confirmation number. Returns ready-to-embed HTML (already escaped), or ''
+ * when neither is present.
+ */
+function hotelContactHtml(notes: string | null, lang: Lang): string {
+  if (!notes) return '';
+  const parts: string[] = [];
+
+  // Phone: "Tel 81-098-8630888" / "電話 …". Keep digits/+/- for the tel: href.
+  const telMatch = notes.match(/(?:Tel|TEL|電話|Phone)[:\s]*([+\d][\d\s\-()]{6,})/);
+  if (telMatch) {
+    const raw = telMatch[1].trim();
+    const dialable = raw.replace(/[^\d+]/g, '');
+    const label = lang === 'zh' ? '電話' : 'Tel';
+    parts.push(`📞 ${label} <a href="tel:${esc(dialable)}" style="color:inherit;text-decoration:underline dotted;text-underline-offset:3px">${esc(raw)}</a>`);
+  }
+
+  // Booking references: CFM No. (hotel/supplier confirmation) and Order No.
+  // (agency order) are distinct — show both when present.
+  const cfm = notes.match(/CFM\s*No\.?\s*([A-Za-z0-9-]+)/i);
+  if (cfm) {
+    const label = lang === 'zh' ? '確認碼 CFM' : 'CFM No.';
+    parts.push(`🎫 ${label} ${esc(cfm[1])}`);
+  }
+  const order = notes.match(/Order\s*No\.?\s*([A-Za-z0-9-]+)/i);
+  if (order) {
+    const label = lang === 'zh' ? '訂單號 Order' : 'Order No.';
+    parts.push(`🧾 ${label} ${esc(order[1])}`);
+  }
+
+  return parts.join(' &nbsp;·&nbsp; ');
+}
+
+/**
  * Compute "leave by" time for departure: flightTime minus offsetMinutes.
  * Returns HH:MM string or null if time cannot be parsed.
  */
@@ -892,7 +1138,13 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
         const nameLink = hotelMapsLink(name, city);
         return zhName ? `${nameLink}<span style="color:var(--text-dim);font-size:12px"> / ${hotelMapsLink(zhName, city)}</span>` : nameLink;
       })() : '\u2014',
-      sub: hotel?.access ? (hotel.access as string[]).join(', ') : '',
+      sub: (() => {
+        const lines: string[] = [];
+        if (hotel?.access) lines.push(esc((hotel.access as string[]).join(', ')));
+        const contact = hotelContactHtml((hotel?.notes as string) || null, lang);
+        if (contact) lines.push(contact);
+        return lines.join('<br>');
+      })(),
       badge: accommodation?.status ? statusBadge(accommodation.status as string, lang) : '',
     },
     {
@@ -987,7 +1239,13 @@ function renderBookingSummary(dest: Record<string, unknown>, lang: Lang): string
     </div>`;
 }
 
-function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang): string {
+const MEAL_TITLE_RE = /^(早餐|午餐|晚餐|宵夜|breakfast|lunch|dinner|supper)/i;
+
+function isMealBooking(title: string): boolean {
+  return MEAL_TITLE_RE.test(title.trim());
+}
+
+function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang, mealOnly = false): string {
   const itinerary = dest.process_5_daily_itinerary as Record<string, unknown> | undefined;
   const days = (itinerary?.days as Record<string, unknown>[]) || [];
   const alerts: string[] = [];
@@ -1000,17 +1258,20 @@ function renderPendingAlerts(dest: Record<string, unknown>, lang: Lang): string 
         if (typeof activity === 'object' && activity !== null) {
           const a = activity as Record<string, unknown>;
           if (a.booking_status === 'pending') {
+            const rawTitle = a.title as string;
+            if (isMealBooking(rawTitle) !== mealOnly) continue;
+            // Strip embedded "Google Maps：<url>" line; use it as a clean map link
+            const mapsMatch = rawTitle.match(/\nGoogle Maps[：:]\s*(https?:\/\/\S+)/i);
+            const mapsUrl = mapsMatch ? mapsMatch[1] : (a.booking_url as string | undefined);
+            const title = rawTitle.replace(/\nGoogle Maps[：:].*$/is, '').trim();
             const bookBy = a.book_by as string | undefined;
             const isUrgent = bookBy ? new Date(bookBy) <= new Date() : false;
-            const url = a.booking_url as string | undefined;
-            const title = a.title as string;
             alerts.push(`
               <div class="alert ${isUrgent ? 'alert-urgent' : ''}">
                 <span class="alert-icon">${isUrgent ? '\u26A0\uFE0F' : '\u23F3'}</span>
                 <div class="alert-text">
-                  <strong>${esc(title)}</strong>
+                  <strong>${esc(title)}</strong>${mapsUrl ? ` <a href="${esc(mapsUrl)}" target="_blank" rel="noopener" style="font-size:12px">\uD83D\uDDFA\uFE0F</a>` : ''}
                   ${bookBy ? ` \u2014 ${t('bookBy', lang)} ${esc(bookBy)}` : ''}
-                  ${url ? `<br><a href="${esc(url)}" target="_blank">${lang === 'zh' ? '立即預約' : 'Book now'} \u2192</a>` : ''}
                 </div>
               </div>`);
           }
@@ -1129,6 +1390,7 @@ export function renderDashboard(
 
   ${days.map((day) => renderDayCard(day, lang, hotelName, (dest.home_address as string) || null, mapsKey, editMeta)).join('')}
 
+  ${renderPendingAlerts(dest, lang, true)}
   ${renderTransitSummary(dest, lang)}
 
   <div class="footer">

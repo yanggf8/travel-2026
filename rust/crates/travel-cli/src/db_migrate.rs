@@ -298,10 +298,28 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // 12b. plan_map_snapshots — records when the dashboard's static map PNGs
+    //      were last snapshotted (by scripts/snapshot-maps.sh via chromeport→R2)
+    //      so the `check-maps-fresh` lint can flag maps that have gone stale
+    //      relative to the latest itinerary edit. Side table keyed by plan_id.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS plan_map_snapshots (
+  plan_id TEXT NOT NULL PRIMARY KEY,
+  snapshotted_at TEXT NOT NULL
+);"#,
+    )
+    .await;
+
     // 13. Rename plans_current → plans.
     if table_exists(&conn, "plans_current").await {
         exec_lenient(&conn, "ALTER TABLE plans_current RENAME TO plans").await;
     }
+
+    // 13b. Soft-delete flag on plans. NULL = live; a timestamp = soft-deleted
+    //      (set by `mark-plan-deleted`, wiped in batch by `db cleanup-deleted`).
+    //      Idempotent ADD COLUMN — tolerated "duplicate column" on re-run.
+    add_column(&conn, "ALTER TABLE plans ADD COLUMN deleted_at TEXT;").await;
 
     // 14. feels_like columns on days.
     add_column(&conn, "ALTER TABLE days ADD COLUMN feels_like_low_c REAL;").await;
@@ -317,6 +335,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // 14d. poi_id FK on activities — a durable activity→POI link so the dashboard
     //      attaches ticket price + map pin by id, not fragile title equality
     //      (set via `travel set-activity-poi`; title-match stays as a fallback).
+    //      Idempotent ADD COLUMN — tolerated "duplicate column" on re-run.
     add_column(&conn, "ALTER TABLE activities ADD COLUMN poi_id TEXT;").await;
 
     // 15. flight_legs (normalized — replaces JSON blobs in flights).

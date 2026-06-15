@@ -66,42 +66,131 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     // modes produce identical output. Remove when root package.json is deleted.
     if matches!(mode, Mode::Doctor) {
         // no-op: validateDependencies() (intentionally skipped — see note above)
-        // Agent-first map-link lint: flag stored activity text that would render
-        // a malformed Google-Maps search link (multi-line blob + embedded URL).
-        // Advisory (warnings only) — never fails doctor.
+        // Agent-first map-link check: cross-country (ocean-spanning) Maps legs
+        // across all plans are doctor errors. Ambiguous-stop info/warnings stay
+        // advisory (surfaced only by `validate-itinerary`, not doctor).
         validate_map_links_all_plans(&mut issues).await;
+        // Map-snapshot staleness: dashboard map PNGs that no longer match the
+        // itinerary (advisory warning, never an error — re-run snapshot-maps).
+        validate_maps_fresh_all_plans(&mut issues).await;
     }
 
     emit_report(&issues);
     Ok(())
 }
 
-/// Doctor-only: run the map-link lint across every plan and add a Warning issue
-/// for each malformed-map-link activity found. Read-only + advisory: a DB error
-/// or a plan with no itinerary is silently skipped (the lint never blocks doctor).
+/// Doctor-only: run the map-link lint across every plan and add cross-country
+/// errors. Best-effort — skips silently if the plan list can't be read.
 async fn validate_map_links_all_plans(issues: &mut Vec<Issue>) {
-    let Ok(conn) = db::connect_read().await else { return };
-    let mut rows = match conn.query("SELECT plan_id FROM plans ORDER BY plan_id", ()).await {
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    let mut rows = match conn
+        .query("SELECT plan_id FROM plan_metadata ORDER BY plan_id", ())
+        .await
+    {
         Ok(r) => r,
         Err(_) => return,
     };
     let mut plan_ids: Vec<String> = Vec::new();
-    while let Some(row) = rows.next().await.ok().flatten() {
-        if let Ok(pid) = row.get::<String>(0) {
-            if !pid.is_empty() {
-                plan_ids.push(pid);
-            }
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(id) = row.get::<String>(0) {
+            plan_ids.push(id);
         }
     }
     for plan_id in plan_ids {
         for (day, message) in crate::validate_itinerary::map_link_errors(&plan_id).await {
             issues.push(Issue {
                 category: "map-links".to_string(),
-                severity: Severity::Warning,
-                message: format!("{plan_id} day {day}: {message}"),
-                file: Some(format!("turso:activities:{plan_id}")),
+                severity: Severity::Error,
+                message: format!("{message} (day {day})"),
+                file: Some(format!("plan:{plan_id}")),
                 line: None,
             });
+        }
+        for (day, message) in crate::validate_itinerary::malformed_map_link_warnings(&plan_id).await {
+            issues.push(Issue {
+                category: "map-links".to_string(),
+                severity: Severity::Warning,
+                message: format!("{message} (day {day})"),
+                file: Some(format!("plan:{plan_id}")),
+                line: None,
+            });
+        }
+        // Reservation gate (advisory, not pass/fail): sit-down restaurants not yet
+        // enrolled in the booking ledger. One concise actionable line per plan —
+        // self-clears as each is booked. Keeps doctor's error/warning counts clean.
+        let unbooked = crate::validate_itinerary::unbooked_reservations(&plan_id).await;
+        if !unbooked.is_empty() {
+            let days: Vec<String> = unbooked.iter().map(|(d, _)| format!("day {d}")).collect();
+            issues.push(Issue {
+                category: "reservations".to_string(),
+                severity: Severity::Info,
+                message: format!(
+                    "{} restaurant(s) may need a reservation, not yet tracked ({}). Enroll: add-activity + set-activity-booking … pending; walk-in spots can be left as-is.",
+                    unbooked.len(),
+                    days.join(", ")
+                ),
+                file: Some(format!("plan:{plan_id}")),
+                line: None,
+            });
+        }
+    }
+}
+
+/// Doctor-only: surface plans whose static dashboard map PNGs are stale relative
+/// to the latest itinerary edit. Advisory only — emitted as warnings, never
+/// errors (a stale map doesn't break data integrity; it just needs a re-snapshot).
+/// Best-effort — skips silently if the plan list can't be read.
+async fn validate_maps_fresh_all_plans(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    let mut rows = match conn
+        .query(
+            "SELECT plan_id FROM plans WHERE deleted_at IS NULL ORDER BY plan_id",
+            (),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut plan_ids: Vec<String> = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(id) = row.get::<String>(0) {
+            plan_ids.push(id);
+        }
+    }
+    for plan_id in plan_ids {
+        let verdict = match crate::check_maps_fresh::evaluate(&conn, &plan_id).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match verdict {
+            crate::check_maps_fresh::Status::NeverSnapshotted => {
+                issues.push(Issue {
+                    category: "maps-fresh".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "maps never snapshotted — run scripts/snapshot-maps.sh {plan_id} <dest>"
+                    ),
+                    file: Some(format!("plan:{plan_id}")),
+                    line: None,
+                });
+            }
+            crate::check_maps_fresh::Status::Stale { snapshotted_at } => {
+                issues.push(Issue {
+                    category: "maps-fresh".to_string(),
+                    severity: Severity::Warning,
+                    message: format!(
+                        "itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run scripts/snapshot-maps.sh"
+                    ),
+                    file: Some(format!("plan:{plan_id}")),
+                    line: None,
+                });
+            }
+            crate::check_maps_fresh::Status::Fresh { .. } => {}
         }
     }
 }
@@ -591,7 +680,7 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
                 category: "destinations".to_string(),
                 severity: Severity::Warning,
                 message: format!(
-                    "{slug}: no rows in destination_areas. Run npx ts-node scripts/seed-destination-refs.ts."
+                    "{slug}: no rows in destination_areas. Run ./bin/travel db seed destination-refs."
                 ),
                 file: Some("turso:destination_areas".to_string()),
                 line: None,
@@ -620,7 +709,7 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
         issues.push(Issue {
             category: "destinations".to_string(),
             severity: Severity::Error,
-            message: "airlines table is empty. Run npx ts-node scripts/seed-ota-knowledge.ts.".to_string(),
+            message: "airlines table is empty. Run ./bin/travel db seed ota-knowledge.".to_string(),
             file: Some("turso:airlines".to_string()),
             line: None,
         });
@@ -743,18 +832,18 @@ async fn validate_reference_tables(issues: &mut Vec<Issue>) {
     };
 
     let checks: [(&str, &str); 7] = [
-        ("hotel_areas", "scripts/backfill-local-reference-data.ts"),
-        ("transport_routes", "scripts/backfill-local-reference-data.ts"),
-        ("transport_hubs", "scripts/backfill-local-reference-data.ts"),
-        ("destination_areas", "scripts/seed-destination-refs.ts"),
-        ("airlines", "scripts/seed-ota-knowledge.ts"),
+        ("hotel_areas", "no live seeder (archived backfill-local-reference-data.ts)"),
+        ("transport_routes", "no live seeder (archived backfill-local-reference-data.ts)"),
+        ("transport_hubs", "no live seeder (archived backfill-local-reference-data.ts)"),
+        ("destination_areas", "./bin/travel db seed destination-refs"),
+        ("airlines", "./bin/travel db seed ota-knowledge"),
         (
             "shaping_research_artifacts",
-            "scripts/backfill-local-reference-data.ts",
+            "populated by shaping-import (no standalone seeder)",
         ),
         (
             "shaping_selected_offers",
-            "scripts/backfill-local-reference-data.ts",
+            "populated by shaping-adopt (no standalone seeder)",
         ),
     ];
 
@@ -778,11 +867,16 @@ async fn validate_reference_tables(issues: &mut Vec<Issue>) {
             _ => 0,
         };
         if n == 0 {
+            let action = if seed.starts_with("./bin/") {
+                format!("Run {seed}.")
+            } else {
+                format!("{seed}.")
+            };
             issues.push(Issue {
                 category: "turso-reference".to_string(),
                 severity: Severity::Error,
                 message: format!(
-                    "Turso {label} has no rows. Run npx ts-node {seed}."
+                    "Turso {label} has no rows. {action}"
                 ),
                 file: Some(format!("turso:{label}")),
                 line: None,
@@ -957,8 +1051,8 @@ use chrono::NaiveDate;
 /// byte-identical to TS (verified against live `set-dates` output). NO max-days cap —
 /// TS has none (a 425-day range is valid).
 pub fn validate_date_range(start: &str, end: &str) -> Result<u32, String> {
-    validate_iso_date(start, "start date")?;
-    validate_iso_date(end, "end date")?;
+    crate::checks::validate_iso_date(start, "start date")?;
+    crate::checks::validate_iso_date(end, "end date")?;
     // Both are valid ISO dates here.
     let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
     let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap();
@@ -973,31 +1067,9 @@ pub fn validate_date_range(start: &str, end: &str) -> Result<u32, String> {
     Ok(days)
 }
 
-/// Port of validateIsoDate(input, fieldName): required → format (YYYY-MM-DD) →
-/// real-date validity. Matches the TS error strings exactly.
-fn validate_iso_date(input: &str, field: &str) -> Result<(), String> {
-    if input.is_empty() {
-        return Err(format!("{field} is required"));
-    }
-    // ^(\d{4})-(\d{2})-(\d{2})$
-    let bytes = input.as_bytes();
-    let well_formed = input.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && input[0..4].bytes().all(|b| b.is_ascii_digit())
-        && input[5..7].bytes().all(|b| b.is_ascii_digit())
-        && input[8..10].bytes().all(|b| b.is_ascii_digit());
-    if !well_formed {
-        return Err(format!(
-            "{field} must be YYYY-MM-DD format (got: \"{input}\")"
-        ));
-    }
-    // Real calendar date? (e.g. 2026-13-99 is well-formed but invalid.)
-    if NaiveDate::parse_from_str(input, "%Y-%m-%d").is_err() {
-        return Err(format!("{field} is not a valid date: \"{input}\""));
-    }
-    Ok(())
-}
+// NOTE: validate_iso_date now lives in crate::checks (single source of truth);
+// validate_date_range calls crate::checks::validate_iso_date. The error strings
+// are unchanged (still byte-identical to the TS originals).
 
 #[cfg(test)]
 mod date_range_tests {

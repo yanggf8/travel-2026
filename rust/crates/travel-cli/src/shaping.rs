@@ -480,7 +480,7 @@ async fn get_candidates(conn: &Connection, run_id: &str) -> Result<Vec<Candidate
 
 pub async fn run_compare(args: &[String]) -> Result<(), String> {
     if has_flag(args, "--help") || has_flag(args, "-h") {
-        println!("Usage:\n  travel shaping-compare --run <run_id> [--json] [--limit N]");
+        println!("Usage:\n  travel shaping-compare --run <run_id> [--limit N]");
         return Ok(());
     }
     let Some(run_id) = opt(args, "--run") else {
@@ -499,11 +499,6 @@ pub async fn run_compare(args: &[String]) -> Result<(), String> {
     let mut candidates = get_candidates(&conn, &run_id).await?;
     if limit > 0 && candidates.len() > limit {
         candidates.truncate(limit);
-    }
-
-    if has_flag(args, "--json") {
-        println!("{}", compare_json(&run, &shaping, &candidates));
-        return Ok(());
     }
 
     println!(
@@ -608,51 +603,6 @@ fn opt_int(v: &Option<i64>) -> String {
         Some(i) => i.to_string(),
         None => "null".to_string(),
     }
-}
-
-fn compare_json(run: &ResearchRun, shaping: &[ShapingRule], cands: &[Candidate]) -> String {
-    let shaping_json: Vec<String> = shaping
-        .iter()
-        .map(|s| {
-            format!(
-                "{{\"aspect\":{},\"role\":{},\"kind\":{},\"value_text\":{},\"value_date\":{},\"value_integer\":{},\"notes\":{}}}",
-                js_str(&s.aspect),
-                js_str(&s.role),
-                js_str(&s.kind),
-                opt_str(&s.value_text),
-                opt_str(&s.value_date),
-                opt_int(&s.value_integer),
-                opt_str(&s.notes),
-            )
-        })
-        .collect();
-    let cand_json: Vec<String> = cands
-        .iter()
-        .map(|c| {
-            format!(
-                "{{\"dest_code\":{},\"depart_date\":{},\"return_date\":{},\"nights\":{},\"flight_total_twd\":{},\"leave_days\":{},\"rank\":{},\"verdict\":{}}}",
-                js_str(&c.dest_code),
-                js_str(&c.depart_date),
-                js_str(&c.return_date),
-                c.nights,
-                opt_int(&c.flight_total_twd),
-                opt_int(&c.leave_days),
-                opt_int(&c.rank),
-                opt_str(&c.verdict),
-            )
-        })
-        .collect();
-    format!(
-        "{{\n  \"run\": {{\"run_id\":{},\"origin_code\":{},\"pax\":{},\"window_start\":{},\"window_end\":{},\"currency\":{},\"shaping\":[{}]}},\n  \"candidates\": [{}]\n}}",
-        js_str(&run.run_id),
-        js_str(&run.origin_code),
-        run.pax,
-        js_str(&run.window_start),
-        js_str(&run.window_end),
-        js_str(&run.currency),
-        shaping_json.join(","),
-        cand_json.join(","),
-    )
 }
 
 // ── shaping-adopt ────────────────────────────────────────────────────
@@ -1026,7 +976,7 @@ struct BaselineRow {
 pub async fn run_baseline(args: &[String]) -> Result<(), String> {
     if has_flag(args, "--help") || has_flag(args, "-h") {
         println!(
-            "Usage:\n  travel shaping-baseline --run <run_id> [--dest-region <region>] [--nights N] [--json]"
+            "Usage:\n  travel shaping-baseline --run <run_id> [--dest-region <region>] [--nights N]"
         );
         return Ok(());
     }
@@ -1148,11 +1098,6 @@ pub async fn run_baseline(args: &[String]) -> Result<(), String> {
             .then(a.nights.cmp(&b.nights))
     });
 
-    if has_flag(args, "--json") {
-        println!("{}", baseline_json(&run, &filter_region, filter_nights, &baseline_rows));
-        return Ok(());
-    }
-
     println!(
         "\nShaping Stage Baseline — {}  ({}, {} pax, window {}..{})",
         run.run_id, run.origin_code, run.pax, run.window_start, run.window_end
@@ -1243,46 +1188,6 @@ fn fmt_src(s: &Option<String>, conf: &Option<String>) -> String {
 
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
-}
-
-fn baseline_json(
-    run: &ResearchRun,
-    region: &Option<String>,
-    nights: Option<i64>,
-    rows: &[BaselineRow],
-) -> String {
-    let row_json: Vec<String> = rows
-        .iter()
-        .map(|r| {
-            format!(
-                "{{\"dest_region\":{},\"depart_date\":{},\"nights\":{},\"cheapest_group_tour_twd\":{},\"cheapest_group_tour_source\":{},\"cheapest_group_tour_confidence\":{},\"group_tour_count\":{},\"cheapest_fit_twd\":{},\"cheapest_fit_source\":{},\"cheapest_fit_confidence\":{},\"fit_count\":{},\"fit_savings_vs_group_tour_twd\":{},\"fit_savings_pct\":{}}}",
-                js_str(&r.dest_region),
-                js_str(&r.depart_date),
-                r.nights,
-                opt_int(&r.gt_price),
-                opt_str(&r.gt_source),
-                opt_str(&r.gt_conf),
-                r.gt_count,
-                opt_int(&r.fit_price),
-                opt_str(&r.fit_source),
-                opt_str(&r.fit_conf),
-                r.fit_count,
-                opt_int(&r.savings),
-                opt_int(&r.savings_pct),
-            )
-        })
-        .collect();
-    format!(
-        "{{\n  \"run_id\": {},\n  \"origin_code\": {},\n  \"window_start\": {},\n  \"window_end\": {},\n  \"pax\": {},\n  \"filter\": {{\"dest_region\": {}, \"nights\": {}}},\n  \"baseline_rows\": [{}]\n}}",
-        js_str(&run.run_id),
-        js_str(&run.origin_code),
-        js_str(&run.window_start),
-        js_str(&run.window_end),
-        run.pax,
-        opt_str(region),
-        opt_int(&nights),
-        row_json.join(","),
-    )
 }
 
 // ── shaping-export ───────────────────────────────────────────────────

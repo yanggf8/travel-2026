@@ -36,7 +36,6 @@ struct ParsedZh {
     focus_zh: Option<String>,
     transit_zh: Option<String>,
     activities_zh: Option<Vec<String>>,
-    meals_zh: Option<Vec<String>>,
     dest: Option<String>,
 }
 
@@ -214,6 +213,27 @@ pub async fn run_zh(
     plan_id: String,
 ) -> Result<(), String> {
     let parsed = parse_zh(args)?;
+
+    // Write-time map-link guard for the transit pill. transit_notes_zh renders as
+    // a clickable Google-Maps "A → B → C" chain on the dashboard; every stop in
+    // the chain must form a valid Maps query. This is the SAME guard set-route-
+    // segment uses — closing the hole that let broken transit pills (the bug that
+    // recurred 3×) reach the dashboard through this writer.
+    if let Some(z) = &parsed.transit_zh {
+        for stop in z.split('\u{2192}') {
+            // Skip blank segments (a trailing/leading → produces an empty piece).
+            if stop.trim().is_empty() {
+                continue;
+            }
+            if let Err(reason) = crate::checks::check_stop_linkable(stop) {
+                return Err(format!(
+                    "transit_notes_zh stop \"{}\" {reason}.\nHint: write the pill as a clean place chain, e.g. \"安里駅 → 赤嶺駅 → iias 沖縄豊崎\" — no （…）notes, +步行, or clock times inside a stop.",
+                    stop.trim()
+                ));
+            }
+        }
+    }
+
     let conn = crate::db::connect_write().await?;
     let destination = match read_destination(&conn, &plan_id, &parsed.dest).await {
         Ok(d) => d,
@@ -233,9 +253,6 @@ pub async fn run_zh(
     }
     if let Some(a) = &parsed.activities_zh {
         println!("   activities_zh: {} items", a.len());
-    }
-    if let Some(m) = &parsed.meals_zh {
-        println!("   meals_zh: {} items", m.len());
     }
 
     // Apply scalar updates to timesofday.
@@ -295,20 +312,19 @@ pub async fn run_zh(
             .map_err(|e| format!("session_activities_zh INSERT failed: {e}"))?;
         }
     }
-    // meals_zh: do NOT touch session_meals. The TS path's
-    // sync_normalized_tables only writes session_meals from the
-    // in-memory `meals` (EN) field, not from `meals_zh`. Since
-    // set-tod-zh only sets meals_zh (the Chinese variant), the EN
-    // meals row in session_meals is preserved.
-    let _ = &parsed.meals_zh; // explicitly unused
+    // No ZH meals: session_meals (the EN/display `meal` column) is the single
+    // meal source rendered for both languages — the ZH-meal path was dropped in
+    // the de-JSON program (no session_meals_zh table). set-tod-zh never touches
+    // session_meals; the EN meal row is preserved.
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
 
     // Event data: {day_number, session, focus_zh, transit_notes_zh,
-    // activities_zh, meals_zh} — all 6 keys present. The TS event `data`
-    // object carries the raw command fields, which are JS `undefined` when
-    // the user omits the flag; eventDataToKv does String(undefined) →
-    // "undefined" (verified against TS: omitted zh fields all serialize as
-    // the literal "undefined", NOT "null").
+    // activities_zh, meals_zh} — all 6 keys present for audit-schema parity.
+    // The TS event `data` object carried the raw command fields, JS `undefined`
+    // when omitted; eventDataToKv does String(undefined) → "undefined" (omitted
+    // zh fields all serialize as the literal "undefined", NOT "null"). meals_zh
+    // is now always "undefined" (the ZH-meal flag was removed) but the key is
+    // retained so the event shape is unchanged.
     let kv: Vec<(&str, String)> = vec![
         ("day_number", parsed.day.to_string()),
         ("session", parsed.session.clone()),
@@ -328,14 +344,8 @@ pub async fn run_zh(
                 .map(|a| a.join(", "))
                 .unwrap_or_else(|| "undefined".to_string()),
         ),
-        (
-            "meals_zh",
-            parsed
-                .meals_zh
-                .as_ref()
-                .map(|m| m.join(", "))
-                .unwrap_or_else(|| "undefined".to_string()),
-        ),
+        // meals_zh flag removed; key retained as "undefined" for event parity.
+        ("meals_zh", "undefined".to_string()),
     ];
 
     execute_tod(
@@ -359,9 +369,157 @@ pub async fn run_zh(
     Ok(())
 }
 
+// ── set-meals ──────────────────────────────────────────────────────
+//
+// Replace the session_meals (base, display) rows for a (day, session) with the
+// provided --meal values, in order. This is the missing write path for base
+// meals (set-tod-zh only ever touched the ZH activity list, never meals).
+//
+//   travel set-meals <day> <session> --meal "Lunch: …" [--meal "Dinner: …"] [--dest]
+//
+// A meal string may carry a map pin via the "<label>｜map:<query>" convention,
+// which the dashboard renders as a clickable place link.
+pub async fn run_meals(args: &[String], plan_id: String) -> Result<(), String> {
+    let parsed = parse_meals(args)?;
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+    require_session(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
+
+    println!(
+        "\n🍜 Setting meals:\n   Destination: {}, Day {}, {} — {} meal(s)",
+        destination,
+        parsed.day,
+        parsed.session,
+        parsed.meals.len()
+    );
+
+    conn.execute(
+        "DELETE FROM session_meals \
+         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            parsed.day,
+            parsed.session.clone()
+        ],
+    )
+    .await
+    .map_err(|e| format!("session_meals DELETE failed: {e}"))?;
+    for (i, meal) in parsed.meals.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO session_meals \
+                (plan_id, destination, day_number, session_type, sort_order, meal) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                parsed.day,
+                parsed.session.clone(),
+                i as i64,
+                meal.clone()
+            ],
+        )
+        .await
+        .map_err(|e| format!("session_meals INSERT failed: {e}"))?;
+        println!("   • {meal}");
+    }
+    touch_day(&conn, &plan_id, &destination, parsed.day).await?;
+
+    let kv: Vec<(&str, String)> = vec![
+        ("day_number", parsed.day.to_string()),
+        ("session", parsed.session.clone()),
+        ("count", parsed.meals.len().to_string()),
+        ("meals", parsed.meals.join(" | ")),
+    ];
+    execute_tod(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        None,
+        None,
+        None,
+        None,
+        &kv,
+        "itinerary_session_meals_set",
+        "set-meals",
+        &format!("D{}/{}", parsed.day, parsed.session),
+    )
+    .await?;
+
+    println!("✅ Meals updated");
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Arg parsing
 // ─────────────────────────────────────────────────────────────────
+
+#[derive(Default, Debug)]
+struct ParsedMeals {
+    day: i64,
+    session: String,
+    meals: Vec<String>,
+    dest: Option<String>,
+}
+
+fn parse_meals(args: &[String]) -> Result<ParsedMeals, String> {
+    let mut p = ParsedMeals::default();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                p.dest = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --dest".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--meal" => {
+                p.meals.push(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --meal".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--plan-id" => {
+                i += 2; // consumed by the top-level resolver
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() < 2 {
+        return Err(
+            "Usage: set-meals <day> <session> --meal \"<text>\" [--meal \"<text>\"...] [--dest <slug>]"
+                .to_string(),
+        );
+    }
+    p.day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    if p.day < 1 {
+        return Err("<day> must be a positive integer".to_string());
+    }
+    p.session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    if p.meals.is_empty() {
+        return Err("at least one --meal \"<text>\" is required".to_string());
+    }
+    Ok(p)
+}
 
 fn parse_focus(args: &[String]) -> Result<ParsedFocus, String> {
     let mut p = ParsedFocus::default();
@@ -376,6 +534,10 @@ fn parse_focus(args: &[String]) -> Result<ParsedFocus, String> {
                         .ok_or_else(|| "missing value for --dest".to_string())?
                         .clone(),
                 );
+                i += 2;
+            }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -440,6 +602,10 @@ fn parse_time_range(args: &[String]) -> Result<ParsedTimeRange, String> {
                 );
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -461,6 +627,18 @@ fn parse_time_range(args: &[String]) -> Result<ParsedTimeRange, String> {
     p.session = positional[1].clone();
     if !["morning", "noon", "afternoon", "evening"].contains(&p.session.as_str()) {
         return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    // Fail-loud HH:MM validation BEFORE any DB write (this Err bubbles to main →
+    // stderr + non-zero exit, writing NOTHING). run_time_range requires BOTH
+    // --start and --end; when both are present here, also enforce start ≤ end.
+    if let Some(s) = &p.start {
+        crate::checks::validate_time_flag("--start", s)?;
+    }
+    if let Some(e) = &p.end {
+        crate::checks::validate_time_flag("--end", e)?;
+    }
+    if let (Some(s), Some(e)) = (&p.start, &p.end) {
+        crate::checks::validate_start_le_end("--start", s, "--end", e)?;
     }
     Ok(p)
 }
@@ -496,22 +674,20 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
                 );
                 i += 2;
             }
-            "--activities-zh-json" => {
+            // Plain-text, agent-first: repeat the flag once per item instead of
+            // passing a JSON array. `--activity-zh "A" --activity-zh "B"` →
+            // ["A", "B"]. First occurrence starts the list (so it overwrites
+            // any prior value, matching the old set-then-replace semantics).
+            "--activity-zh" => {
                 let v = args
                     .get(i + 1)
-                    .ok_or_else(|| "missing value for --activities-zh-json".to_string())?;
-                let arr = parse_string_array(v)
-                    .map_err(|e| format!("--activities-zh-json: {e}"))?;
-                p.activities_zh = Some(arr);
+                    .ok_or_else(|| "missing value for --activity-zh".to_string())?
+                    .clone();
+                p.activities_zh.get_or_insert_with(Vec::new).push(v);
                 i += 2;
             }
-            "--meals-zh-json" => {
-                let v = args
-                    .get(i + 1)
-                    .ok_or_else(|| "missing value for --meals-zh-json".to_string())?;
-                let arr = parse_string_array(v)
-                    .map_err(|e| format!("--meals-zh-json: {e}"))?;
-                p.meals_zh = Some(arr);
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -537,52 +713,6 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
         return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
     }
     Ok(p)
-}
-
-fn parse_string_array(s: &str) -> Result<Vec<String>, String> {
-    let s = s.trim();
-    if !s.starts_with('[') || !s.ends_with(']') {
-        return Err("expected JSON array".to_string());
-    }
-    let inner = &s[1..s.len() - 1];
-    if inner.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    // Split top-level strings. Same depth-tracker as the bulk
-    // segments parser.
-    let bytes = inner.as_bytes();
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < inner.len() {
-        while i < inner.len() && (bytes[i] as char).is_whitespace() {
-            i += 1;
-        }
-        if i >= inner.len() {
-            break;
-        }
-        if bytes[i] != b'"' {
-            return Err("expected string".to_string());
-        }
-        i += 1;
-        let val_start = i;
-        while i < inner.len() {
-            if bytes[i] == b'\\' && i + 1 < inner.len() {
-                i += 2;
-                continue;
-            }
-            if bytes[i] == b'"' {
-                break;
-            }
-            i += 1;
-        }
-        let v = inner[val_start..i].to_string();
-        i += 1;
-        out.push(v);
-        while i < inner.len() && ((bytes[i] as char).is_whitespace() || bytes[i] == b',') {
-            i += 1;
-        }
-    }
-    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1048,6 +1178,40 @@ fn now_civil() -> (i32, u32, u32, u32, u32, u32, u32) {
 mod tests {
     use super::*;
 
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    // ── HH:MM fail-loud validation (set-tod-time-range) ───────────────
+    #[test]
+    fn parse_time_range_accepts_valid_clocks() {
+        let p = parse_time_range(&s(&["1", "morning", "--start", "08:00", "--end", "12:00"]))
+            .unwrap();
+        assert_eq!(p.start.as_deref(), Some("08:00"));
+        assert_eq!(p.end.as_deref(), Some("12:00"));
+    }
+
+    #[test]
+    fn parse_time_range_rejects_bad_start() {
+        let err = parse_time_range(&s(&["1", "morning", "--start", "8am", "--end", "12:00"]))
+            .unwrap_err();
+        assert!(err.contains("--start") && err.contains("\"8am\""), "got: {err}");
+    }
+
+    #[test]
+    fn parse_time_range_rejects_bad_end() {
+        let err = parse_time_range(&s(&["1", "morning", "--start", "08:00", "--end", "24:00"]))
+            .unwrap_err();
+        assert!(err.contains("--end") && err.contains("\"24:00\""), "got: {err}");
+    }
+
+    #[test]
+    fn parse_time_range_rejects_start_after_end() {
+        let err = parse_time_range(&s(&["1", "morning", "--start", "13:00", "--end", "09:00"]))
+            .unwrap_err();
+        assert!(err.contains("start must be"), "got: {err}");
+    }
+
     #[test]
     fn parse_focus_basic() {
         let p = parse_focus(&[
@@ -1073,13 +1237,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_string_array_basic() {
-        let s = r#"["a","b","c"]"#;
-        assert_eq!(parse_string_array(s).unwrap(), vec!["a", "b", "c"]);
+    fn parse_zh_repeatable_activity_flags() {
+        // Plain-text, agent-first: --activity-zh repeats instead of a JSON array.
+        let p = parse_zh(&[
+            "1".to_string(),
+            "morning".to_string(),
+            "--activity-zh".to_string(),
+            "晴空塔".to_string(),
+            "--activity-zh".to_string(),
+            "淺草寺".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            p.activities_zh.as_deref(),
+            Some(["晴空塔".to_string(), "淺草寺".to_string()].as_slice())
+        );
     }
 
     #[test]
-    fn parse_string_array_empty() {
-        assert!(parse_string_array("[]").unwrap().is_empty());
+    fn parse_zh_rejects_legacy_json_flags() {
+        // Both JSON-array flags are gone; they must be reported as unknown,
+        // not parsed. (meals_zh had no live ZH-meal storage — session_meals
+        // is the single meal source rendered for both languages — so the
+        // meal ZH flag was dropped entirely rather than left half-working.)
+        for flag in ["--activities-zh-json", "--meals-zh-json", "--meal-zh"] {
+            let err = parse_zh(&[
+                "1".to_string(),
+                "morning".to_string(),
+                flag.to_string(),
+                r#"["a","b"]"#.to_string(),
+            ])
+            .unwrap_err();
+            assert!(err.contains("unknown argument"), "flag {flag} got: {err}");
+        }
     }
 }

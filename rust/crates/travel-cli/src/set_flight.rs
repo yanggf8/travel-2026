@@ -181,11 +181,26 @@ fn parse_args(args: &[String]) -> Result<FlightInput, String> {
                 let _ = take(args, i, "--dest")?;
                 i += 2;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
             _ => i += 1,
         }
+    }
+    // Fail-loud HH:MM validation BEFORE any DB write (this Err bubbles to main →
+    // stderr + non-zero exit, writing NOTHING). --dep/--arr are independent
+    // clock times on different airports (a red-eye may arrive "before" it
+    // departs in wall-clock terms), so no dep ≤ arr ordering is enforced — only
+    // that each is a real HH:MM.
+    if let Some(d) = &input.departure_time {
+        crate::checks::validate_time_flag("--dep", d)?;
+    }
+    if let Some(a) = &input.arrival_time {
+        crate::checks::validate_time_flag("--arr", a)?;
     }
     Ok(input)
 }
@@ -757,10 +772,35 @@ fn now_civil() -> (i32, u32, u32, u32, u32, u32, u32) {
 mod tests {
     use super::*;
 
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
     #[test]
     fn parse_args_minimal() {
         let i = parse_args(&[]).unwrap();
         assert!(i.flight_number.is_none());
+    }
+
+    // ── HH:MM fail-loud validation (set-flight --dep / --arr) ─────────
+    #[test]
+    fn parse_args_accepts_valid_dep_arr() {
+        let i = parse_args(&s(&["--dep", "09:00", "--arr", "12:30"])).unwrap();
+        assert_eq!(i.departure_time.as_deref(), Some("09:00"));
+        assert_eq!(i.arrival_time.as_deref(), Some("12:30"));
+    }
+
+    #[test]
+    fn parse_args_rejects_bad_dep() {
+        let err = parse_args(&s(&["--dep", "9am"])).unwrap_err();
+        assert!(err.contains("--dep") && err.contains("\"9am\""), "got: {err}");
+        assert!(err.contains("HH:MM"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_args_rejects_bad_arr() {
+        let err = parse_args(&s(&["--arr", "24:00"])).unwrap_err();
+        assert!(err.contains("--arr") && err.contains("\"24:00\""), "got: {err}");
     }
 
     #[test]

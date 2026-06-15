@@ -321,7 +321,6 @@ pub async fn run_search(args: &[String]) -> Result<(), String> {
                 i += 1;
                 source = args.get(i).cloned();
             }
-            "--json" => { /* JSON output removed in the Rust port */ }
             other if other.starts_with("--") => {
                 eprintln!("Error: unknown flag for search-offers: {other}");
                 std::process::exit(1);

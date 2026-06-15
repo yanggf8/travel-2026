@@ -245,8 +245,10 @@ async fn filters_by_dest_region() {
     cleanup(&run_id);
 }
 
+// Agent-first: shaping-baseline emits plain text only (the --json output was
+// removed). Assert the rendered table carries the right prices & savings.
 #[tokio::test]
-async fn json_emits_structured_data() {
+async fn baseline_plain_text_shows_prices_and_savings() {
     let run_id = unique_run_id();
     if seed_run(&run_id).is_none() {
         eprintln!("skipping: no Turso credentials");
@@ -255,24 +257,18 @@ async fn json_emits_structured_data() {
     seed_offer(&run_id, "gt1", "okinawa", "group_tour", 21999, "2026-06-18", "2026-06-21", None).unwrap();
     seed_offer(&run_id, "fit1", "okinawa", "fit", 11900, "2026-06-18", "2026-06-21", Some("high")).unwrap();
 
-    let (ok, stdout, stderr) = run(&["shaping-baseline", "--run", &run_id, "--json"]).unwrap();
+    let (ok, stdout, stderr) = run(&["shaping-baseline", "--run", &run_id]).unwrap();
     assert!(ok, "expected success, stderr: {stderr}");
 
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
-    assert_eq!(parsed["run_id"], serde_json::json!(run_id), "run_id mismatch: {stdout}");
-    let rows = parsed["baseline_rows"].as_array().expect("baseline_rows array");
-    let row = rows
-        .iter()
-        .find(|r| r["depart_date"] == "2026-06-18" && r["dest_region"] == "okinawa")
-        .unwrap_or_else(|| panic!("no 6/18 okinawa row: {stdout}"));
-    assert_eq!(row["cheapest_group_tour_twd"].as_i64(), Some(21999), "gt price: {row}");
-    assert_eq!(row["cheapest_fit_twd"].as_i64(), Some(11900), "fit price: {row}");
-    assert_eq!(
-        row["fit_savings_vs_group_tour_twd"].as_i64(),
-        Some(10099),
-        "savings: {row}"
-    );
+    // Plain-text table renders thousands-separated prices and a "cheaper by"
+    // savings cell (21999 group-tour, 11900 fit, 10099 savings).
+    assert!(stdout.contains("21,999"), "group_tour price missing: {stdout}");
+    assert!(stdout.contains("11,900"), "fit price missing: {stdout}");
+    assert!(stdout.contains("10,099"), "fit savings missing: {stdout}");
+    assert!(stdout.contains("okinawa"), "region missing: {stdout}");
+    assert!(stdout.contains("2026-06-18"), "depart date missing: {stdout}");
+    // And it must NOT be JSON.
+    assert!(!stdout.trim_start().starts_with('{'), "output must be plain text, not JSON: {stdout}");
 
     cleanup(&run_id);
 }

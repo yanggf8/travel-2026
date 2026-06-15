@@ -18,6 +18,60 @@ struct SegmentInput {
     start_time: Option<String>,
 }
 
+/// Fail-loud guard bundle for a single (from, to, mode) route segment. Reuses
+/// the lint's OWN predicates verbatim (`crate::checks`) so the WRITE guard and
+/// the READ-ONLY lint in `validate_itinerary.rs` agree exactly — no drift.
+///
+/// Mirrors `validate_itinerary::lint`'s per-leg logic, in the same order:
+///   (#3) each of from/to must form a usable Maps stop: reject if it cleans to
+///        empty, retains stray （）()＋+, carries a clock time, or is a
+///        mode-only word (步行/單軌/巴士…). The segment's `mode` column already
+///        carries the travel mode, so a mode word standing as a PLACE is a bug.
+///   (#4) cross-country ground leg: compute place_country on the CLEANED stops
+///        (matching the lint, which cleans before comparing) and reject when
+///        both are known AND differ (an ocean-spanning route, e.g. TW↔JP).
+///   (#5) walking-over-rail: if mode=="walking" and `"<from> <to>"` mentions a
+///        rail/bus mode → reject (the lint uses the raw from/to as context).
+///
+/// Returns `Err(reason)` naming the offending stop/rule; `Ok(())` when clean.
+/// Pure: no DB, no I/O — so it's unit-tested directly and called before any write.
+fn guard_segment(from: &str, to: &str, mode: &str) -> Result<(), String> {
+    // (#3) per-stop map-link integrity — use the lint's check_stop_linkable,
+    // which is exactly clean_stop → stop_link_problem.
+    for (label, stop) in [("from", from), ("to", to)] {
+        if let Err(reason) = crate::checks::check_stop_linkable(stop) {
+            return Err(format!("<{label}> \"{stop}\" {reason} [rule: map-link/stop]"));
+        }
+    }
+
+    // The lint compares place_country on the CLEANED stop strings; do the same
+    // so the guard never disagrees with what the lint would flag.
+    let from_clean = crate::checks::clean_stop(from);
+    let to_clean = crate::checks::clean_stop(to);
+
+    // (#4) cross-country ground leg — both known AND different.
+    if let (Some(a), Some(b)) = (
+        crate::checks::place_country(&from_clean),
+        crate::checks::place_country(&to_clean),
+    ) {
+        if a != b {
+            return Err(format!(
+                "cross-country ground leg: \"{from}\" ({a}) → \"{to}\" ({b}) would draw an ocean-spanning route [rule: cross-country]"
+            ));
+        }
+    }
+
+    // (#5) walking leg that actually rides rail/bus — context is the raw pair
+    // (matches the lint's `format!("{from} {to}")` ctx for route legs).
+    if mode == "walking" && crate::checks::mentions_rail_or_bus(&format!("{from} {to}")) {
+        return Err(format!(
+            "mode=walking but \"{from} {to}\" names a rail/bus leg — set mode=transit [rule: walking-over-rail]"
+        ));
+    }
+
+    Ok(())
+}
+
 pub async fn run(
     args: &[String],
     plan_id: String,
@@ -35,6 +89,16 @@ pub async fn run(
     let mode = args[4].clone();
     if mode != "transit" && mode != "walking" && mode != "driving" {
         eprintln!("Error: <mode> must be one of: transit | walking | driving");
+        std::process::exit(1);
+    }
+    // Write-time fail-loud guard bundle (#3 map-link, #4 cross-country, #5
+    // walking-over-rail): a segment that would draw a broken / ocean-spanning /
+    // mis-moded Maps route is rejected here, before it reaches the DB /
+    // dashboard. Same predicates the validate-itinerary lint uses, so the guard
+    // and the lint agree exactly. Caught at creation, not in a late review.
+    if let Err(reason) = guard_segment(&from, &to, &mode) {
+        eprintln!("Error: route segment rejected — {reason}.");
+        eprintln!("Hint: use a clean place name (e.g. \"赤嶺駅\", \"iias 沖縄豊崎\") — no （…）notes, +步行, or clock times inside the stop; keep both stops in the same country; use mode=transit for a rail/bus leg.");
         std::process::exit(1);
     }
     let day: i64 = match day_str.parse() {
@@ -107,9 +171,11 @@ pub async fn run_bulk(
     args: &[String],
     plan_id: String,
 ) -> Result<(), String> {
-    // set-route-segments-bulk <day> --json '[{...}, ...]' [--dest slug]
+    // set-route-segments-bulk <day> --seg "from|to|mode[|dur[|start[|notes]]]" ... [--dest slug]
+    // Plain-text, agent-first: repeat --seg once per segment (pipe-delimited,
+    // like set-airport-transfer's --selected). No JSON.
     if args.is_empty() {
-        eprintln!("Error: set-route-segments-bulk requires <day> --json '[...]'");
+        eprintln!("Error: set-route-segments-bulk requires <day> --seg \"from|to|mode\" [--seg ...]");
         std::process::exit(1);
     }
     let day_str = &args[0];
@@ -120,25 +186,43 @@ pub async fn run_bulk(
             std::process::exit(1);
         }
     };
-    let json_opt = match parse_optional_string_flag(&args[1..], "--json")? {
-        Some(j) => j,
-        None => {
-            eprintln!("Error: --json is required with a JSON array of route segments");
-            std::process::exit(1);
+    let specs = collect_repeated_flag(&args[1..], "--seg");
+    if specs.is_empty() {
+        eprintln!("Error: at least one --seg \"from|to|mode[|duration[|start_time[|notes]]]\" is required");
+        std::process::exit(1);
+    }
+    // Parse + guard ALL segments BEFORE any write, collecting every bad one.
+    // A bulk write is all-or-nothing: if any segment is malformed or fails the
+    // fail-loud guard bundle (#3 map-link / #4 cross-country / #5 walking-over-
+    // rail), the WHOLE batch is rejected and NOTHING is written — a partial bad
+    // batch must never half-write. We report every offending --seg, not just the
+    // first, so the fix can be made in one pass.
+    let mut segments: Vec<SegmentInput> = Vec::with_capacity(specs.len());
+    let mut problems: Vec<String> = Vec::new();
+    for (i, spec) in specs.iter().enumerate() {
+        match parse_seg_spec(spec) {
+            Ok(s) => {
+                if let Err(reason) = guard_segment(&s.from, &s.to, &s.mode) {
+                    problems.push(format!("--seg #{i} {reason}"));
+                }
+                segments.push(s);
+            }
+            Err(e) => {
+                problems.push(format!("--seg #{i} invalid ({spec:?}): {e}"));
+            }
         }
-    };
-    let segments: Vec<SegmentInput> = match parse_bulk_json(&json_opt) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Error: Invalid --json: {e}");
-            std::process::exit(1);
+    }
+    if !problems.is_empty() {
+        eprintln!(
+            "Error: batch rejected — {} of {} segment(s) bad; NOTHING was written:",
+            problems.len(),
+            specs.len()
+        );
+        for p in &problems {
+            eprintln!("  - {p}");
         }
-    };
-    for (i, s) in segments.iter().enumerate() {
-        if s.mode != "transit" && s.mode != "walking" && s.mode != "driving" {
-            eprintln!("Error: Invalid mode in segment {i}: {}", s.mode);
-            std::process::exit(1);
-        }
+        eprintln!("Hint: use clean place names — no （…）notes, +步行, or clock times inside a stop; keep both stops in the same country; use mode=transit for a rail/bus leg.");
+        std::process::exit(1);
     }
     let destination = match read_destination(&conn_write().await?, &plan_id, &args[1..]).await {
         Ok(d) => d,
@@ -218,189 +302,64 @@ fn parse_optional_string_flag(
     Ok(None)
 }
 
-/// Hand-rolled minimal JSON parser for the bulk-segments format:
-///   `[{"from":"A","to":"B","mode":"walking","duration":5,"notes":"...","start_time":"HH:MM"}, ...]`
-/// Avoids adding a serde dep. Recognized keys: from, to, mode,
-/// duration, notes, start_time.
-fn parse_bulk_json(s: &str) -> Result<Vec<SegmentInput>, String> {
-    let s = s.trim();
-    if !s.starts_with('[') || !s.ends_with(']') {
-        return Err("expected JSON array".to_string());
-    }
-    let inner = &s[1..s.len() - 1];
-    if inner.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    // Split top-level objects (depth-0 commas). We don't need to
-    // handle nested arrays/objects beyond tracking `{` / `}` depth
-    // (none expected here, but defensive).
-    let objects = split_top_level_objects(inner)?;
-    let mut out: Vec<SegmentInput> = Vec::new();
-    for obj_str in objects {
-        let mut seg = SegmentInput {
-            from: String::new(),
-            to: String::new(),
-            mode: String::new(),
-            duration: None,
-            notes: None,
-            start_time: None,
-        };
-        let kv = parse_object_kv(obj_str.trim())?;
-        for (k, v) in kv {
-            match k.as_str() {
-                "from" => seg.from = v,
-                "to" => seg.to = v,
-                "mode" => seg.mode = v,
-                "duration" => {
-                    seg.duration = Some(
-                        v.parse::<i64>()
-                            .map_err(|_| format!("duration must be a number: {v}"))?,
-                    );
-                }
-                "notes" => seg.notes = Some(v),
-                "start_time" => seg.start_time = Some(v),
-                _ => {} // ignore unknown keys
-            }
-        }
-        if seg.from.is_empty() || seg.to.is_empty() || seg.mode.is_empty() {
-            return Err("each segment needs from, to, mode".to_string());
-        }
-        out.push(seg);
-    }
-    Ok(out)
-}
-
-fn split_top_level_objects(s: &str) -> Result<Vec<String>, String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut depth = 0i32;
-    let mut in_str = false;
-    let mut esc = false;
-    let mut start = 0usize;
-    let bytes = s.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        if in_str {
-            if esc {
-                esc = false;
-            } else if b == b'\\' {
-                esc = true;
-            } else if b == b'"' {
-                in_str = false;
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'{' => {
-                if depth == 0 {
-                    start = i;
-                }
-                depth += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    out.push(s[start..=i].to_string());
-                } else if depth < 0 {
-                    return Err("unbalanced braces".to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    if depth != 0 {
-        return Err("unbalanced braces".to_string());
-    }
-    Ok(out)
-}
-
-fn parse_object_kv(s: &str) -> Result<Vec<(String, String)>, String> {
-    let s = s.trim();
-    if !s.starts_with('{') || !s.ends_with('}') {
-        return Err("expected JSON object".to_string());
-    }
-    let inner = &s[1..s.len() - 1];
-    let mut out: Vec<(String, String)> = Vec::new();
-    let bytes = inner.as_bytes();
+/// Collect every value of a repeatable flag: `--seg X --seg Y` → ["X", "Y"].
+/// (Other flags like `--dest <v>` are skipped along with their value.)
+fn collect_repeated_flag(args: &[String], flag: &str) -> Vec<String> {
+    let mut out = Vec::new();
     let mut i = 0;
-    while i < inner.len() {
-        // Skip whitespace + comma
-        while i < inner.len() && (bytes[i] as char).is_whitespace() || bytes[i] == b',' {
-            i += 1;
-        }
-        if i >= inner.len() {
-            break;
-        }
-        // Parse key
-        if bytes[i] != b'"' {
-            return Err("expected string key".to_string());
-        }
-        i += 1;
-        let key_start = i;
-        let mut in_str = true;
-        while i < inner.len() && in_str {
-            if bytes[i] == b'\\' && i + 1 < inner.len() {
-                i += 2;
-                continue;
+    while i < args.len() {
+        if args[i] == flag {
+            if let Some(v) = args.get(i + 1) {
+                out.push(v.clone());
             }
-            if bytes[i] == b'"' {
-                in_str = false;
-            } else {
-                i += 1;
-            }
-        }
-        if in_str {
-            return Err("unterminated string".to_string());
-        }
-        let key = inner[key_start..i].to_string();
-        i += 1; // consume closing quote
-        // Skip ws + colon
-        while i < inner.len() && (bytes[i] as char).is_whitespace() {
-            i += 1;
-        }
-        if i >= inner.len() || bytes[i] != b':' {
-            return Err("expected ':'".to_string());
-        }
-        i += 1;
-        while i < inner.len() && (bytes[i] as char).is_whitespace() {
-            i += 1;
-        }
-        // Parse value (string or number)
-        if i >= inner.len() {
-            return Err("expected value".to_string());
-        }
-        if bytes[i] == b'"' {
-            i += 1;
-            let val_start = i;
-            while i < inner.len() {
-                if bytes[i] == b'\\' && i + 1 < inner.len() {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    break;
-                }
-                i += 1;
-            }
-            let val = inner[val_start..i].to_string();
-            i += 1; // closing quote
-            out.push((key, val));
-        } else if bytes[i] == b'-' || (bytes[i] as char).is_ascii_digit() {
-            let val_start = i;
-            while i < inner.len() {
-                let c = bytes[i] as char;
-                if c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' {
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            let val = inner[val_start..i].to_string();
-            out.push((key, val));
+            i += 2;
+        } else if args[i].starts_with("--") {
+            // skip an unrelated flag and its value (best-effort)
+            i += 2;
         } else {
-            return Err(format!("unexpected value at {i}"));
+            i += 1;
         }
     }
-    Ok(out)
+    out
+}
+
+/// Parse one plain-text segment spec:
+///   `from|to|mode[|duration[|start_time[|notes]]]`
+/// Pipe-delimited (same convention as set-airport-transfer's --selected).
+/// mode ∈ transit|walking|driving. Trailing fields are optional; an empty
+/// field means "omitted" (e.g. `a|b|walking||` → no duration, no start_time).
+fn parse_seg_spec(spec: &str) -> Result<SegmentInput, String> {
+    let parts: Vec<&str> = spec.split('|').collect();
+    if parts.len() < 3 {
+        return Err("expected at least from|to|mode".to_string());
+    }
+    let from = parts[0].trim().to_string();
+    let to = parts[1].trim().to_string();
+    let mode = parts[2].trim().to_string();
+    if from.is_empty() || to.is_empty() {
+        return Err("from and to must be non-empty".to_string());
+    }
+    if mode != "transit" && mode != "walking" && mode != "driving" {
+        return Err(format!("mode must be transit|walking|driving (got {mode:?})"));
+    }
+    let field = |idx: usize| -> Option<String> {
+        parts.get(idx).map(|s| s.trim()).filter(|s| !s.is_empty()).map(str::to_string)
+    };
+    let duration = match field(3) {
+        Some(d) => Some(
+            d.parse::<i64>()
+                .map_err(|_| format!("duration must be a number (got {d:?})"))?,
+        ),
+        None => None,
+    };
+    Ok(SegmentInput {
+        from,
+        to,
+        mode,
+        duration,
+        start_time: field(4),
+        notes: field(5),
+    })
 }
 
 async fn read_destination(
@@ -1008,15 +967,147 @@ mod tests {
     }
 
     #[test]
-    fn parse_bulk_json_basic() {
-        let s = r#"[{"from":"a","to":"b","mode":"walking"},{"from":"c","to":"d","mode":"transit","duration":12,"notes":"JR"}]"#;
-        let segs = parse_bulk_json(s).unwrap();
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0].from, "a");
-        assert_eq!(segs[0].to, "b");
-        assert_eq!(segs[0].mode, "walking");
-        assert!(segs[0].duration.is_none());
-        assert_eq!(segs[1].duration, Some(12));
-        assert_eq!(segs[1].notes.as_deref(), Some("JR"));
+    fn parse_seg_spec_minimal() {
+        // Plain-text, agent-first: "from|to|mode" — pipe-delimited, like
+        // set-airport-transfer's --selected. No JSON.
+        let s = parse_seg_spec("a|b|walking").unwrap();
+        assert_eq!(s.from, "a");
+        assert_eq!(s.to, "b");
+        assert_eq!(s.mode, "walking");
+        assert!(s.duration.is_none());
+        assert!(s.notes.is_none());
+        assert!(s.start_time.is_none());
+    }
+
+    #[test]
+    fn parse_seg_spec_full() {
+        // from|to|mode|duration|start_time|notes — trailing fields optional;
+        // empty field = omitted.
+        let s = parse_seg_spec("c|d|transit|12|09:30|JR").unwrap();
+        assert_eq!(s.from, "c");
+        assert_eq!(s.to, "d");
+        assert_eq!(s.mode, "transit");
+        assert_eq!(s.duration, Some(12));
+        assert_eq!(s.start_time.as_deref(), Some("09:30"));
+        assert_eq!(s.notes.as_deref(), Some("JR"));
+    }
+
+    #[test]
+    fn parse_seg_spec_empty_optional_fields() {
+        // "c|d|transit||" → duration & start_time omitted (empty), no notes.
+        let s = parse_seg_spec("c|d|transit||").unwrap();
+        assert_eq!(s.duration, None);
+        assert_eq!(s.start_time, None);
+        assert_eq!(s.notes, None);
+    }
+
+    #[test]
+    fn parse_seg_spec_rejects_bad_mode() {
+        assert!(parse_seg_spec("a|b|teleport").is_err());
+    }
+
+    #[test]
+    fn parse_seg_spec_rejects_missing_fields() {
+        assert!(parse_seg_spec("a|b").is_err());
+    }
+
+    // ── guard_segment: the fail-loud bundle (#3 / #4 / #5) ────────────────
+    // These use the lint's OWN predicates verbatim, so the guard and the
+    // validate-itinerary lint agree exactly. The good case must PASS; each
+    // junk class must be REJECTED with a reason naming the stop/rule.
+
+    #[test]
+    fn guard_passes_normal_monorail_segment() {
+        // The reference good leg: 赤嶺駅 → iias 沖縄豊崎, taxi (a real 単軌-area
+        // segment driven by taxi). Both are clean place names, same country, and
+        // mode isn't walking — must PASS untouched.
+        assert!(
+            guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving").is_ok()
+        ); // 赤嶺駅 → iias 沖縄豊崎
+        // and the same pair as a transit leg is also fine
+        assert!(
+            guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "transit").is_ok()
+        );
+    }
+
+    #[test]
+    fn guard_rejects_mode_only_stop() {
+        // (#3) "步行" is a mode word, not a place — REJECT, naming the stop.
+        let e = guard_segment("\u{6B65}\u{884C}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving")
+            .expect_err("mode-only '步行' as a place must be rejected"); // 步行 → iias…
+        assert!(e.contains("from"), "reason must name the offending side: {e}");
+        assert!(e.contains("map-link/stop"), "reason must name the rule: {e}");
+        // also as the `to` stop
+        assert!(
+            guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "\u{55AE}\u{8ECC}", "driving").is_err()
+        ); // 赤嶺駅 → 單軌 (mode word only)
+    }
+
+    #[test]
+    fn guard_rejects_empty_after_clean_stop() {
+        // (#3) a stop that cleans to empty (pure junk/mode/notes) has no usable
+        // place name — REJECT.
+        let raw = "\u{FF08}\u{55AE}\u{8ECC}\u{7D04}2\u{5206}\u{FF09}+\u{6B65}\u{884C}"; // （單軌約2分）+步行
+        let e = guard_segment(raw, "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving")
+            .expect_err("a stop that cleans to empty must be rejected");
+        assert!(e.contains("map-link/stop"), "reason must name the rule: {e}");
+    }
+
+    #[test]
+    fn guard_rejects_clock_time_only_stop() {
+        // (#3) a bare clock time cleans to empty → no place → REJECT.
+        assert!(
+            guard_segment("08:30", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving").is_err()
+        );
+    }
+
+    #[test]
+    fn guard_rejects_cross_country_pair() {
+        // (#4) 紅樹林 (TW) → 那覇機場 (JP) is an ocean-spanning ground leg — REJECT.
+        let e = guard_segment(
+            "\u{7D05}\u{6A39}\u{6797}",
+            "\u{90A3}\u{8987}\u{6A5F}\u{5834}",
+            "driving",
+        )
+        .expect_err("a TW→JP ground leg must be rejected"); // 紅樹林 → 那覇機場
+        assert!(e.contains("cross-country"), "reason must name the rule: {e}");
+        assert!(e.contains("TW") && e.contains("JP"), "reason must name both countries: {e}");
+    }
+
+    #[test]
+    fn guard_rejects_walking_over_rail() {
+        // (#5) mode=walking but the leg names rail (單軌) — REJECT.
+        let e = guard_segment(
+            "\u{8D64}\u{5DBA}\u{99C5}",
+            "\u{55AE}\u{8ECC}\u{6CBF}\u{7DDA}\u{67D0}\u{7AD9}",
+            "walking",
+        )
+        .expect_err("a walking leg that rides rail must be rejected");
+        assert!(e.contains("walking-over-rail"), "reason must name the rule: {e}");
+        // the SAME pair as transit is fine (it's the walking claim that's wrong)
+        assert!(
+            guard_segment(
+                "\u{8D64}\u{5DBA}\u{99C5}",
+                "\u{55AE}\u{8ECC}\u{6CBF}\u{7DDA}\u{67D0}\u{7AD9}",
+                "transit"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn guard_does_not_false_reject_legit_parenthetical_place() {
+        // Anti-false-positive: a real place whose parenthetical note clean_stop
+        // strips (安里駅（單軌）) must PASS — clean_stop yields 安里駅, a valid stop.
+        assert!(
+            guard_segment(
+                "\u{5B89}\u{91CC}\u{99C5}\u{FF08}\u{55AE}\u{8ECC}\u{FF09}",
+                "\u{8D64}\u{5DBA}\u{99C5}",
+                "transit"
+            )
+            .is_ok()
+        ); // 安里駅（單軌）→ 赤嶺駅
+        // an airport / hotel ASCII name is fine too
+        assert!(guard_segment("Naha Airport", "Hotel Azat Naha", "driving").is_ok());
     }
 }
