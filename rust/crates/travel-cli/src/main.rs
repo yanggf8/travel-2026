@@ -176,9 +176,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             // Parse: set-dates <start> <end> [reason...]
             if rest.len() < 2 {
-                eprintln!("Error: set-dates requires <start> and <end> dates");
-                eprintln!("Example: set-dates 2026-02-13 2026-02-17 \"Agent offered Feb 13\"");
-                std::process::exit(1);
+                return Err("Error: set-dates requires <start> and <end> dates\n\
+                            Example: set-dates 2026-02-13 2026-02-17 \"Agent offered Feb 13\""
+                    .to_string());
             }
             let start = rest[0].clone();
             let end = rest[1].clone();
@@ -199,9 +199,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let pos: Vec<&String> = rest.iter().filter(|a| !a.starts_with("--")).collect();
             if pos.len() < 3 {
-                eprintln!("Error: update-offer requires <offer-id> <date> <availability>");
-                eprintln!("Example: update-offer besttour_TYO05MM260211AM 2026-02-13 available 27888 2 agent");
-                std::process::exit(1);
+                return Err("Error: update-offer requires <offer-id> <date> <availability>\n\
+                            Example: update-offer besttour_TYO05MM260211AM 2026-02-13 available 27888 2 agent"
+                    .to_string());
             }
             let offer_id = pos[0].clone();
             let date = pos[1].clone();
@@ -224,9 +224,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             let positional: Vec<&String> =
                 rest.iter().filter(|a| !a.starts_with("--")).collect();
             if positional.len() < 2 {
-                eprintln!("Error: select-offer requires <offer-id> <date>");
-                eprintln!("Example: select-offer besttour_TYO05MM260211AM 2026-02-13");
-                std::process::exit(1);
+                return Err("Error: select-offer requires <offer-id> <date>\n\
+                            Example: select-offer besttour_TYO05MM260211AM 2026-02-13"
+                    .to_string());
             }
             let offer_id = positional[0].clone();
             let date = positional[1].clone();

@@ -461,32 +461,7 @@ async fn read_destination(
     plan_id: &str,
     dest_opt: &Option<String>,
 ) -> Result<String, String> {
-    if let Some(d) = dest_opt {
-        return Ok(d.clone());
-    }
-    let mut rows = conn
-        .query(
-            "SELECT active_destination FROM plan_metadata WHERE plan_id = ?1",
-            libsql::params![plan_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("plan_metadata query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_metadata row read failed: {e}"))?
-    {
-        let dest: String = row
-            .get(0)
-            .map_err(|e| format!("active_destination col read failed: {e}"))?;
-        if dest.is_empty() {
-            return Err("plan_metadata.active_destination is empty".to_string());
-        }
-        return Ok(dest);
-    }
-    Err(format!(
-        "plan_metadata row missing for plan_id={plan_id}"
-    ))
+    crate::cascade::common::resolve_active_destination(conn, plan_id, dest_opt.as_deref()).await
 }
 
 async fn find_activity(
@@ -793,30 +768,16 @@ async fn execute_event(
         kv,
     )
     .await?;
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?6, ?7, ?7)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            command_type.to_string(),
-            command_summary.to_string(),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        command_type,
+        command_summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
     Ok(())
 }
 

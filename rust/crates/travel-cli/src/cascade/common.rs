@@ -21,6 +21,46 @@
 
 use libsql::Connection;
 
+/// Resolve the destination a mutation should write against: an explicit
+/// `--dest` override if the caller supplied one, else the plan's
+/// `plan_metadata.active_destination`. THROWS (no local-data fallback) if the
+/// plan_metadata row is missing or `active_destination` is empty.
+///
+/// This is the single source of truth for the `read_destination()` logic that
+/// was previously copy-pasted into ~10 `set_*`/itinerary modules. Callers
+/// holding `&Option<String>` pass `.as_deref()`; callers that scan their own
+/// `--dest` flag pass the scanned value (or `None`).
+pub async fn resolve_active_destination(
+    conn: &Connection,
+    plan_id: &str,
+    dest_override: Option<&str>,
+) -> Result<String, String> {
+    if let Some(d) = dest_override {
+        return Ok(d.to_string());
+    }
+    let mut rows = conn
+        .query(
+            "SELECT active_destination FROM plan_metadata WHERE plan_id = ?1",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("plan_metadata query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("plan_metadata row read failed: {e}"))?
+    {
+        let dest: String = row
+            .get(0)
+            .map_err(|e| format!("active_destination col read failed: {e}"))?;
+        if dest.is_empty() {
+            return Err("plan_metadata.active_destination is empty".to_string());
+        }
+        return Ok(dest);
+    }
+    Err(format!("plan_metadata row missing for plan_id={plan_id}"))
+}
+
 /// Read the current `plans.version` for a plan. THROWS if the plan row
 /// is missing — there is no local-data fallback.
 pub async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {
@@ -230,6 +270,58 @@ pub fn civil_from_unix(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y as i32, m as u32, d as u32, hour, min, sec)
+}
+
+/// Write the back half of the audit triad in one call: INSERT one
+/// append-only `operation_runs` row, then bump `plans.version` to
+/// `version_after`. This is the single chokepoint every mutation should use
+/// so the triad can't be partially applied (the `plan_events` rows — the
+/// front half — are emitted by the caller via [`insert_event`] /
+/// [`insert_kv_rows`] before this is called, because their count/order is
+/// command-specific).
+///
+/// `version_before` is the value read via [`read_version`] BEFORE any write;
+/// `version_after` is normally `version_before + 1`. For a freshly-created
+/// plan (e.g. shaping-adopt) pass `version_before = 0`, `version_after = 1`.
+///
+/// `now_db` must be the SQLite-friendly timestamp from [`now_db_datetime`],
+/// shared with the rest of the mutation so every row carries one consistent
+/// value. Returns the generated `run_id`.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_operation(
+    conn: &Connection,
+    plan_id: &str,
+    command_type: &str,
+    command_summary: &str,
+    version_before: i64,
+    version_after: i64,
+    now_db: &str,
+) -> Result<String, String> {
+    let run_id = new_run_id();
+    conn.execute(
+        "INSERT INTO operation_runs \
+            (run_id, plan_id, command_type, command_summary, status, \
+             version_before, version_after, started_at, completed_at) \
+         VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?6, ?7, ?7)",
+        libsql::params![
+            run_id.clone(),
+            plan_id.to_string(),
+            command_type.to_string(),
+            command_summary.to_string(),
+            version_before,
+            version_after,
+            now_db.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
+        libsql::params![version_after, now_db.to_string(), plan_id.to_string()],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(run_id)
 }
 
 /// Generate a fresh `operation_runs.run_id` (UUIDv4-shaped). The value is

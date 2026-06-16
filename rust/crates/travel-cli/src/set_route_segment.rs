@@ -367,38 +367,21 @@ async fn read_destination(
     plan_id: &str,
     args: &[String],
 ) -> Result<String, String> {
+    let dest_override = dest_flag(args);
+    crate::cascade::common::resolve_active_destination(conn, plan_id, dest_override.as_deref())
+        .await
+}
+
+/// Scan `--dest <slug>` out of a raw arg slice (first occurrence).
+fn dest_flag(args: &[String]) -> Option<String> {
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--dest"
-            && let Some(d) = args.get(i + 1)
-        {
-            return Ok(d.clone());
+        if args[i] == "--dest" {
+            return args.get(i + 1).cloned();
         }
         i += 1;
     }
-    let mut rows = conn
-        .query(
-            "SELECT active_destination FROM plan_metadata WHERE plan_id = ?1",
-            libsql::params![plan_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("plan_metadata query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_metadata row read failed: {e}"))?
-    {
-        let dest: String = row
-            .get(0)
-            .map_err(|e| format!("active_destination col read failed: {e}"))?;
-        if dest.is_empty() {
-            return Err("plan_metadata.active_destination is empty".to_string());
-        }
-        return Ok(dest);
-    }
-    Err(format!(
-        "plan_metadata row missing for plan_id={plan_id}"
-    ))
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -545,31 +528,17 @@ async fn execute_single(
     .await?;
 
     // 4. operation_runs + plans.version.
-    let run_id = new_run_id();
     let summary = format!("D{day} slot{sort_order} {from}→{to}");
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'set-route-segment', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            summary,
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        "set-route-segment",
+        &summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
 
     Ok(version_after)
 }
@@ -695,31 +664,17 @@ async fn execute_bulk(
     .await?;
 
     // 4. operation_runs + plans.version.
-    let run_id = new_run_id();
     let summary = format!("D{day} {} segments", segments.len());
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'set-route-segments-bulk', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            summary,
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        "set-route-segments-bulk",
+        &summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
 
     Ok(version_after)
 }
@@ -875,27 +830,6 @@ async fn insert_kv(
         .map_err(|e| format!("plan_event_data INSERT failed: {e}"))?;
     }
     Ok(())
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        p1, p2, p3, p4, p5
-    )
 }
 
 fn now_rfc3339() -> String {

@@ -430,52 +430,22 @@ async fn write_day_weather(
 }
 
 /// Bump plans.version + write operation_runs audit (saveWithTracking analog).
+/// Delegates the operation_runs INSERT + version bump to the shared
+/// audit-triad helper so this path can't drift from the canonical one.
 async fn finalize(conn: &Connection, plan_id: &str, summary: &str) -> Result<(), String> {
-    let now_db = now_db_datetime();
-    let version_before = read_version(conn, plan_id).await?;
-    let version_after = version_before + 1;
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'fetch-weather', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            summary.to_string(),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    let now_db = crate::cascade::common::now_db_datetime();
+    let version_before = crate::cascade::common::read_version(conn, plan_id).await?;
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        "fetch-weather",
+        summary,
+        version_before,
+        version_before + 1,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
     Ok(())
-}
-
-async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {
-    let mut rows = conn
-        .query(
-            "SELECT version FROM plans WHERE plan_id = ?1",
-            libsql::params![plan_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("plans query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plans row read failed: {e}"))?
-    {
-        return Ok(row.get::<i64>(0).unwrap_or_default());
-    }
-    Err(format!("plans row missing for plan_id={plan_id}"))
 }
 
 async fn next_dest_process_sort_order(
@@ -594,24 +564,6 @@ fn fmt_temp(v: f64) -> String {
         let s = format!("{v}");
         s
     }
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", p1, p2, p3, p4, p5)
 }
 
 fn now_rfc3339() -> String {

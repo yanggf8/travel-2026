@@ -210,38 +210,17 @@ async fn read_destination(
     plan_id: &str,
     args: &[String],
 ) -> Result<String, String> {
+    let mut dest_override = None;
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--dest"
-            && let Some(d) = args.get(i + 1)
-        {
-            return Ok(d.clone());
+        if args[i] == "--dest" {
+            dest_override = args.get(i + 1).cloned();
+            break;
         }
         i += 1;
     }
-    let mut rows = conn
-        .query(
-            "SELECT active_destination FROM plan_metadata WHERE plan_id = ?1",
-            libsql::params![plan_id.to_string()],
-        )
+    crate::cascade::common::resolve_active_destination(conn, plan_id, dest_override.as_deref())
         .await
-        .map_err(|e| format!("plan_metadata query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_metadata row read failed: {e}"))?
-    {
-        let dest: String = row
-            .get(0)
-            .map_err(|e| format!("active_destination col read failed: {e}"))?;
-        if dest.is_empty() {
-            return Err("plan_metadata.active_destination is empty".to_string());
-        }
-        return Ok(dest);
-    }
-    Err(format!(
-        "plan_metadata row missing for plan_id={plan_id}"
-    ))
 }
 
 async fn execute(

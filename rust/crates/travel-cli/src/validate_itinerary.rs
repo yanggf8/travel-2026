@@ -1226,28 +1226,7 @@ async fn read_destination(
     plan_id: &str,
     dest_opt: Option<&str>,
 ) -> Result<String, String> {
-    if let Some(d) = dest_opt {
-        return Ok(d.to_string());
-    }
-    let mut rows = conn
-        .query(
-            "SELECT active_destination FROM plan_metadata WHERE plan_id = ?1",
-            params![plan_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("plan_metadata query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_metadata row read failed: {e}"))?
-    {
-        let dest: String = row.get(0).unwrap_or_default();
-        if dest.is_empty() {
-            return Err("plan_metadata.active_destination is empty".to_string());
-        }
-        return Ok(dest);
-    }
-    Err(format!("plan_metadata row missing for plan_id={plan_id}"))
+    crate::cascade::common::resolve_active_destination(conn, plan_id, dest_opt).await
 }
 
 #[cfg(test)]

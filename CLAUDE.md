@@ -52,6 +52,18 @@ an `operation_runs` audit row (the audit triad — mirror it in any new mutation
 by construction in Rust — there is nothing left to refactor. (The retired TS `StateManager` /
 `PlanRepository` / `syncNormalizedTables()` flow is read-only under `archive/ts-cli-retired/`.)
 
+**Shared mutation helpers (use these — do not re-roll them).** `cascade::common` is the single
+source of truth for the boilerplate every mutation needs; copy-pasting it into a new command is the
+bug, not the convention:
+- `record_operation(conn, plan_id, command_type, summary, version_before, version_after, now_db)`
+  writes the audit-triad **back half** in one call — the `operation_runs` INSERT + the
+  `plans.version` bump. Emit the `plan_events`/`plan_event_data` rows first (their count/order is
+  command-specific via `insert_event` / `insert_kv_rows`), then call this once. For a freshly
+  created plan (e.g. `shaping-adopt`) pass `version_before=0, version_after=1`.
+- `resolve_active_destination(conn, plan_id, dest_override)` resolves an explicit `--dest` override
+  else `plan_metadata.active_destination` (fail-loud, no local fallback). Every `set_*`/itinerary
+  module's `read_destination` is a thin wrapper over this — don't reintroduce a private copy.
+
 - **Turso cloud is sole source of truth** — fully normalized, no JSON blobs, no config JSON files
 - **No local data — fail loud, never fall back** — NO command may read trip/project data (destinations, shaping/constraints, research, ranked candidates, selected offers) from a local file as its source of truth. If a Turso table/row is missing, the command THROWS — it must not silently fall back to `research/*.json`, `data/*.json`, or any local export. A `if (!dbRow) readLocalJson()` path is the bug, not the fix. `scrapes/` is a raw landing zone whose only legal next step is import→Turso→read-from-Turso. A destination MUST be registered in `destination_config` (via `/new-destination`) **before** Shaping Stage researches it. "Is X saved?" → check Turso; local files existing ≠ saved.
 - **CLI agent first; plain text only** — User-facing CLI command output must be plain text/table lines, not JSON. Do not introduce JSON files, JSON fixtures, or JSON as the pipeline boundary. If structured data is needed, store it in normalized Turso tables and render a plain-text CLI view from Turso. JSON is allowed only where an external protocol/library requires it internally (e.g. the chromeport capture envelope, the shaping export/import handoff) — never as a user-facing artifact or source of truth.

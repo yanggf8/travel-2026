@@ -9,7 +9,7 @@
 //! Subcommands: shaping-init / shaping-compare / shaping-adopt /
 //! shaping-baseline / shaping-export / shaping-import.
 
-use crate::cascade::common::now_rfc3339;
+use crate::cascade::common::{now_db_datetime, now_rfc3339, record_operation};
 use crate::db;
 use libsql::{params, params_from_iter, Connection};
 use serde_json::Value;
@@ -911,6 +911,21 @@ async fn adopt_candidate_to_new_plan(
         .await
         .map_err(|e| format!("insert plan_event_data failed: {e}"))?;
     }
+
+    // Audit triad back half: the plan is brand new (plans.version defaults to
+    // 0), so record the adoption as version 0 -> 1 with an operation_runs row.
+    // Without this the adoption left no audit row and never advanced the
+    // version counter (the rest of the CLI relies on both).
+    record_operation(
+        conn,
+        plan_id,
+        "shaping-adopt",
+        candidate_id,
+        0,
+        1,
+        &now_db_datetime(),
+    )
+    .await?;
 
     // pointers
     conn.execute(

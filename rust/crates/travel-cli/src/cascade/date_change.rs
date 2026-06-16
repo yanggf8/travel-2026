@@ -46,8 +46,8 @@
 //     in-memory array indexed by append position.
 
 use super::common::{
-    insert_event, insert_kv_rows, new_run_id, next_dest_process_sort_order,
-    next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version,
+    insert_event, insert_kv_rows, next_dest_process_sort_order, next_timeline_sort_order,
+    now_db_datetime, now_rfc3339, read_version, record_operation,
 };
 use libsql::Connection;
 
@@ -296,31 +296,19 @@ pub async fn execute(
         .await.map_err(|e| e.to_string())?;
     }
 
-    // 6. INSERT operation_runs (one row, append-only).
-    let run_id = new_run_id();
+    // 6+7. INSERT operation_runs (append-only) + bump plans.version, via the
+    //       shared audit-triad back-half helper.
     let summary = format!("{start} {end}");
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'set-dates', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            summary,
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    record_operation(
+        conn,
+        plan_id,
+        "set-dates",
+        &summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await.map_err(|e| e.to_string())?;
-
-    // 7. Bump plans.version (+1, atomic).
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await.map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(version_after)
 }
