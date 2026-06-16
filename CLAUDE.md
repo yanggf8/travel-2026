@@ -352,6 +352,14 @@ Database: travel-2026 | Region: aws-ap-northeast-1 | Creds: .env (gitignored)
 Schema: `scripts/schema.sql` (auto-generated DDL, read-only; do not hand-edit). No JSON in any column — `*_json` columns were re-normalized; don't reintroduce them.
 Migration: `./bin/travel db migrate` | Seed: `./bin/travel db seed plans` (one-time, already run)
 
+**Token resolution / sandbox gotcha** — `./bin/travel` resolves its Turso token via turso-util in this order: `TRAVEL_TURSO_{READ,WRITE}_TOKEN` env → cache file → mint via the `turso` CLI broker (`turso auth login`). **In a sandbox the broker/cache/login usually fail** (`turso auth not available`), so the CLI can't reach Turso even when `.env` exists. Fix: export the static `.env` token into the env vars the CLI reads, e.g.
+```bash
+export TRAVEL_TURSO_URL=$(grep '^TURSO_URL=' .env | cut -d= -f2-)
+export TRAVEL_TURSO_READ_TOKEN=$(grep '^TURSO_TOKEN=' .env | cut -d= -f2-)
+export TRAVEL_TURSO_WRITE_TOKEN=$(grep '^TURSO_TOKEN=' .env | cut -d= -f2-)
+```
+The pre-commit hook also runs `validate data` via the CLI, so set these before committing or the hook fails on a token error (not a real data error). NOTE: `.env` is gitignored — a fresh clone/sandbox won't have it at all; one must be provisioned out-of-band. For ad-hoc reads/writes when the CLI can't get a token, the `/v2/pipeline` HTTP API with the `.env` `TURSO_TOKEN` works (but prefer the audit-trail CLI for mutations).
+
 ### DB Operation Decision
 - **Reusable operation** (editing itinerary content, updating themes, managing activities) → build a UI/CLI interface
 - **One-shot operation** (migration, schema change, data backfill) → direct SQL via turso-exec is acceptable
@@ -359,10 +367,14 @@ Before running raw SQL for content edits, ask: "Will this be done again?" If yes
 
 ## Trip Dashboard (Cloudflare Worker)
 
-Live web dashboard at `workers/trip-dashboard/` — reads directly from Turso DB, always up-to-date.
+**Two workers exist** (both read Turso directly, SSR):
+- `workers/trip-dashboard-rs/` — **Rust / workers-rs** (current, PR #4 merged). Live at `trip-dashboard-rs.yanggf.workers.dev`. Token-scoped auth (`OWNER_TOKEN` secret = owner; per-plan share tokens in `plan_share_tokens` table → `?token=<tok>`), keyless 3-level maps (chromeport→R2 buckets `MAPS`/`VOUCHERS`), meal-pin `<label>｜map:<query>` → clickable links. Deploy: `cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy` (runs `worker-build --release`).
+- `workers/trip-dashboard/` — **legacy TS** worker (still serves the original `trip-dashboard.yanggf.workers.dev` URL; section below describes it). The `-rs` worker is intended to reclaim that URL in a later cutover.
+
+Worktree note: `dashboard-rs` work happens in a separate git worktree at `../travel-2026-dashboard-rs` (run `git worktree list`). The CLI's `crate::checks` module (shift-left audit) holds shared lint predicates (`check_stop_linkable`, `stop_link_problem`, …) used by BOTH the read-only lints AND write-time guards in `set-route-segment`/`set-tod` — so a stop that won't form a valid Maps link is rejected at write time, not just flagged later.
 
 ```
-Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → 15 normalized tables → assemble plan object → render
+Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normalized tables → assemble plan object → render
 ```
 
 - **SSR-only** — zero client-side JS in read mode; minimal inline JS in edit mode only
@@ -420,6 +432,6 @@ Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install h
 Remaining agenda (none blocking — the project is between trips and the live DB is fully seeded):
 
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
-- **PARKED (on agenda, now unblocked)** — Worker → `workers-rs` port (~2.9k LOC in `workers/trip-dashboard/src`). wrangler/npm stays for deploy regardless and the read-mostly dashboard gains no data-integrity benefit, so low priority. Revisit per `docs/plans/2026-06-10-roadmap-v2-rust.md`.
+- **Worker `workers-rs` port — DONE & DEPLOYED** (PR #4, merged to master). The Rust dashboard lives at `workers/trip-dashboard-rs/` and is live at `trip-dashboard-rs.yanggf.workers.dev` (keyless maps, token auth, meal-pin links). The old TS worker (`workers/trip-dashboard/`) still exists and still serves the original URL; the `-rs` worker is meant to eventually reclaim it (a separate cutover, not yet done). See "Trip Dashboard — two workers" below.
 - **OTA decommission gate** (user-driven) — only `settour` is live-verified; the rest have snippet fixtures only. Their archived Python parsers can't be deleted until each passes a real `chromeport verify` against a live capture — needs human browser sessions, not code.
 - **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.
