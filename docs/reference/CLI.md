@@ -60,6 +60,7 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ./bin/travel db migrate                          # create/upgrade tables (idempotent)
 ./bin/travel db seed plans                       # one-time plan seed
 ./bin/travel db exec "<sql>"                     # one-shot raw SQL (migrations/backfills only)
+./bin/travel db schema [<table>]                 # list tables, or a table's columns (name/type/notnull/pk) — discover col names before db exec
 ```
 
 ## Bookings
@@ -93,10 +94,11 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
 ./bin/travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
 ./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...]    # plain-text; repeat --seg per segment
-./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activity-zh "<zh>" (repeatable)] [--plan-id <id>]    # (alias: set-session-zh)
-./bin/travel set-tod-focus <day> <session> "<focus_text>" [--plan-id <id>]    # (alias: set-session-focus)
+./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activity-zh "<zh>" (repeatable)] [--clear-activities] [--plan-id <id>]    # (alias: set-session-zh); --clear-activities empties the ZH activity list (mutually exclusive with --activity-zh)
+./bin/travel set-tod-focus <day> <session> "<focus_text>" [--zh "<focus_zh>"] [--plan-id <id>]    # (alias: set-session-focus); --zh sets focus_zh too (dashboard renders ZH by default)
 ./bin/travel set-meals <day> <session> --meal "<text>" [--meal "<text>"...] [--dest slug]    # replace session meals; a meal may carry a place pin: "<label>｜map:<query>"
-./bin/travel add-activity <day> <session> "<title>" [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest slug]    # append a new activity (audit triad)
+./bin/travel add-activity <day> <session> "<title>" [--after <id|title>] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest slug]    # add an activity (append, or --after to insert at a position); audit triad
+./bin/travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]    # move an activity to another session/day, PRESERVING its id + poi link (vs delete+re-add)
 ./bin/travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest slug]    # rewrite sort_order; list ALL activities in the session in the desired order
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
 ./bin/travel swap-days <dayA> <dayB> [--dest slug]

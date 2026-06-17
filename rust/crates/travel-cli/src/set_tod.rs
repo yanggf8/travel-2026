@@ -36,6 +36,11 @@ struct ParsedZh {
     focus_zh: Option<String>,
     transit_zh: Option<String>,
     activities_zh: Option<Vec<String>>,
+    /// `--clear-activities`: remove ALL session_activities_zh rows for this
+    /// session (the legacy worker then falls back to nothing; the -rs worker
+    /// already renders English titles). Avoids re-passing the whole list or
+    /// dropping to raw `db exec DELETE`.
+    clear_activities: bool,
     dest: Option<String>,
 }
 
@@ -329,8 +334,9 @@ pub async fn run_zh(
         )
         .await?;
     }
-    // activities_zh: DELETE-then-reinsert session_activities_zh.
-    if let Some(arr) = &parsed.activities_zh {
+    // activities_zh: DELETE-then-reinsert session_activities_zh. `--clear-activities`
+    // does the DELETE with no reinsert (empties the list without re-passing it).
+    if parsed.clear_activities || parsed.activities_zh.is_some() {
         conn.execute(
             "DELETE FROM session_activities_zh \
              WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
@@ -343,7 +349,7 @@ pub async fn run_zh(
         )
         .await
         .map_err(|e| format!("session_activities_zh DELETE failed: {e}"))?;
-        for (i, a) in arr.iter().enumerate() {
+        for (i, a) in parsed.activities_zh.as_deref().unwrap_or(&[]).iter().enumerate() {
             conn.execute(
                 "INSERT INTO session_activities_zh \
                     (plan_id, destination, day_number, session_type, sort_order, activity) \
@@ -585,6 +591,17 @@ fn parse_focus(args: &[String]) -> Result<ParsedFocus, String> {
                 );
                 i += 2;
             }
+            // Paired ZH: set focus AND focus_zh in one command. The dashboard
+            // renders focus_zh by default, so without this the ZH focus would
+            // stay stale (the very reason warn_zh_stale exists).
+            "--zh" => {
+                p.focus_zh = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --zh".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
             "--plan-id" => {
                 // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
@@ -735,6 +752,10 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
                 p.activities_zh.get_or_insert_with(Vec::new).push(v);
                 i += 2;
             }
+            "--clear-activities" => {
+                p.clear_activities = true;
+                i += 1;
+            }
             "--plan-id" => {
                 // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
@@ -749,7 +770,10 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
         }
     }
     if positional.len() < 2 {
-        return Err("Usage: set-session-zh <day> <session> --zh \"...\" ...".to_string());
+        return Err("Usage: set-session-zh <day> <session> [--zh \"...\"] [--transit-zh \"...\"] [--activity-zh \"...\" ...] [--clear-activities] [--dest slug]".to_string());
+    }
+    if p.clear_activities && p.activities_zh.is_some() {
+        return Err("--clear-activities cannot be combined with --activity-zh".to_string());
     }
     p.day = positional[0]
         .parse::<i64>()

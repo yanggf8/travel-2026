@@ -303,7 +303,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-tod-focus" || cmd == "set-session-focus" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-tod-focus <day> <session> \"<focus_text>\"");
+                println!("Usage:\n  travel set-tod-focus <day> <session> \"<focus_text>\" [--zh \"<chinese focus>\"] [--dest slug]\n  (--zh sets focus_zh too — the dashboard renders ZH by default)");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -321,7 +321,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-tod-zh" || cmd == "set-session-zh" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-tod-zh <day> <session> [--zh \"...\"] [--transit-zh \"...\"] [--activity-zh \"...\" (repeatable)] [--dest <slug>]");
+                println!("Usage:\n  travel set-tod-zh <day> <session> [--zh \"...\"] [--transit-zh \"...\"] [--activity-zh \"...\" (repeatable)] [--clear-activities] [--dest <slug>]");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -366,11 +366,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "add-activity" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel add-activity <day> <session> <title> [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]");
+                println!("Usage:\n  travel add-activity <day> <session> <title> [--after <id|title>] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_add(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "move-activity" => {
+            if wants_help(rest, "travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]\n  (move an activity to another session/day, preserving its id + poi link; appended at the end of the target session)") { return Ok(()); }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_activity::run_move(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "reorder-activities" => {

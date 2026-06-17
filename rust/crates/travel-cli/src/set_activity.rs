@@ -614,6 +614,41 @@ async fn read_activity_title(
     Err(format!("activity row disappeared: id={activity_id}"))
 }
 
+/// Read an activity's current `sort_order` (used by add-activity --after to
+/// find the anchor's slot).
+async fn read_activity_sort_order(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+) -> Result<i64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT sort_order FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
+               AND session_type = ?4 AND id = ?5",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string(),
+                activity_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities sort_order query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("activities sort_order row read failed: {e}"))?
+    {
+        return row.get::<i64>(0).map_err(|e| format!("sort_order col read failed: {e}"));
+    }
+    Err(format!("activity row disappeared: id={activity_id}"))
+}
+
 // Read the current poi_id of an activity. Returns None when the column is NULL
 // (or an empty string — treated the same as "no link" by the title guard);
 // Some(id) when a non-empty link is present. Errs only if the row vanished.
@@ -1019,6 +1054,9 @@ struct ActivityAdd {
     priority: String,
     notes: Option<String>,
     dest: Option<String>,
+    /// `--after <id|title>`: insert directly after this activity instead of
+    /// appending at the end of the session.
+    after: Option<String>,
 }
 
 // ── delete-activity / remove-activity ──────────────────────────────
@@ -1104,6 +1142,171 @@ pub async fn run_delete(args: &[String], plan_id: String) -> Result<(), String> 
 
     println!("✅ Activity deleted");
     Ok(())
+}
+
+// ── move-activity ──────────────────────────────────────────────────
+//
+// Move an activity to another session (and optionally another day) WITHOUT
+// delete+re-add — so the row keeps its id, poi_id, booking fields, tags, etc.
+// (delete+re-add was the old workaround and dropped all of those). The activity
+// is appended (max sort_order + 1) in the target session; reorder afterward if
+// a specific position is needed.
+//
+//   travel move-activity <day> <from-session> <to-session> <id|title>
+//                        [--to-day N] [--dest slug]
+pub async fn run_move(args: &[String], plan_id: String) -> Result<(), String> {
+    let parsed = parse_move(args)?;
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+
+    let from_day = parsed.day;
+    let to_day = parsed.to_day.unwrap_or(parsed.day);
+    if from_day == to_day && parsed.from_session == parsed.to_session {
+        return Err(
+            "move-activity: source and target (day, session) are identical — nothing to move"
+                .to_string(),
+        );
+    }
+
+    let activity_id = find_activity(
+        &conn,
+        &plan_id,
+        &destination,
+        from_day,
+        &parsed.from_session,
+        &parsed.activity,
+    )
+    .await?;
+    let title =
+        read_activity_title(&conn, &plan_id, &destination, from_day, &parsed.from_session, &activity_id)
+            .await?;
+
+    // Verify the target day/session exists (fail loud, like the set-* writers).
+    require_session_exists(&conn, &plan_id, &destination, to_day, &parsed.to_session).await?;
+
+    let new_sort =
+        next_activity_sort_order(&conn, &plan_id, &destination, to_day, &parsed.to_session).await?;
+
+    println!("\n↔️  Moving activity:");
+    println!(
+        "   D{} {} → D{} {}: \"{}\"",
+        from_day, parsed.from_session, to_day, parsed.to_session, title
+    );
+
+    // Re-key the row by id; every other column (poi_id, booking_*, tags via the
+    // separate activity_tags table keyed on activity_id) is preserved untouched.
+    conn.execute(
+        "UPDATE activities \
+         SET day_number = ?1, session_type = ?2, sort_order = ?3 \
+         WHERE plan_id = ?4 AND destination = ?5 AND id = ?6",
+        libsql::params![
+            to_day,
+            parsed.to_session.clone(),
+            new_sort,
+            plan_id.to_string(),
+            destination.to_string(),
+            activity_id.clone()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities move UPDATE failed: {e}"))?;
+
+    touch_day(&conn, &plan_id, &destination, from_day).await?;
+    if to_day != from_day {
+        touch_day(&conn, &plan_id, &destination, to_day).await?;
+    }
+
+    let kv: Vec<(&str, String)> = vec![
+        ("activity_id", activity_id.clone()),
+        ("title", title.clone()),
+        ("from_day", from_day.to_string()),
+        ("from_session", parsed.from_session.clone()),
+        ("to_day", to_day.to_string()),
+        ("to_session", parsed.to_session.clone()),
+    ];
+    // Audit under the TARGET day/session (where the activity now lives).
+    execute_event(
+        &conn,
+        &plan_id,
+        &destination,
+        to_day,
+        &parsed.to_session,
+        &activity_id,
+        "activity_moved",
+        "move-activity",
+        &format!(
+            "D{}/{} → D{}/{}: {}",
+            from_day, parsed.from_session, to_day, parsed.to_session, title
+        ),
+        &kv,
+    )
+    .await?;
+
+    println!("✅ Activity moved (id preserved: {activity_id})");
+    Ok(())
+}
+
+struct MoveArgs {
+    day: i64,
+    from_session: String,
+    to_session: String,
+    activity: String,
+    to_day: Option<i64>,
+    dest: Option<String>,
+}
+
+fn parse_move(args: &[String]) -> Result<MoveArgs, String> {
+    let mut positional: Vec<String> = Vec::new();
+    let mut to_day: Option<i64> = None;
+    let mut dest: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--to-day" => {
+                to_day = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --to-day".to_string())?
+                        .parse::<i64>()
+                        .map_err(|_| "--to-day must be an integer".to_string())?,
+                );
+                i += 2;
+            }
+            "--dest" => {
+                dest = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --dest".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--plan-id" => i += 2, // consumed by the resolver
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() < 4 {
+        return Err(
+            "Usage: move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]"
+                .to_string(),
+        );
+    }
+    let day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    Ok(MoveArgs {
+        day,
+        from_session: positional[1].clone(),
+        to_session: positional[2].clone(),
+        activity: positional[3..].join(" "),
+        to_day,
+        dest,
+    })
 }
 
 // ── set-activity-booking ───────────────────────────────────────────
@@ -1282,8 +1485,47 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
     }
 
     let activity_id = new_activity_id();
-    let sort_order =
-        next_activity_sort_order(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
+    // Position: append at the end (default), or insert directly after a named
+    // activity when `--after <id|title>` is given. For --after we open a gap by
+    // shifting every later row up by one, then take that slot.
+    let sort_order = match &parsed.after {
+        None => {
+            next_activity_sort_order(&conn, &plan_id, &destination, parsed.day, &parsed.session)
+                .await?
+        }
+        Some(anchor) => {
+            let anchor_id =
+                find_activity(&conn, &plan_id, &destination, parsed.day, &parsed.session, anchor)
+                    .await?;
+            let anchor_so = read_activity_sort_order(
+                &conn,
+                &plan_id,
+                &destination,
+                parsed.day,
+                &parsed.session,
+                &anchor_id,
+            )
+            .await?;
+            // Shift later rows up to free the (anchor_so + 1) slot. Descending
+            // order is not required since +1 keeps values distinct, but the gap
+            // must be opened before the INSERT.
+            conn.execute(
+                "UPDATE activities SET sort_order = sort_order + 1 \
+                 WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
+                   AND session_type = ?4 AND sort_order > ?5",
+                libsql::params![
+                    plan_id.to_string(),
+                    destination.to_string(),
+                    parsed.day,
+                    parsed.session.clone(),
+                    anchor_so
+                ],
+            )
+            .await
+            .map_err(|e| format!("activities sort_order shift failed: {e}"))?;
+            anchor_so + 1
+        }
+    };
 
     conn.execute(
         "INSERT INTO activities \
@@ -1392,6 +1634,10 @@ fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
                 p.notes = Some(arg_value(args, i, "--notes")?);
                 i += 2;
             }
+            "--after" => {
+                p.after = Some(arg_value(args, i, "--after")?);
+                i += 2;
+            }
             "--plan-id" => {
                 // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
@@ -1407,7 +1653,7 @@ fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
     }
     if positional.len() < 3 {
         return Err(
-            "Usage: add-activity <day> <session> <title> [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]"
+            "Usage: add-activity <day> <session> <title> [--after <id|title>] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]"
                 .to_string(),
         );
     }
@@ -1459,6 +1705,42 @@ async fn day_exists(
         .await
         .map_err(|e| format!("days existence row read failed: {e}"))?
         .is_some())
+}
+
+/// Fail loud if the target (day, session) has no `timesofday` row — used by
+/// move-activity so an activity can't be moved into a non-existent session.
+async fn require_session_exists(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+) -> Result<(), String> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM timesofday \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("timesofday existence query failed: {e}"))?;
+    let exists = rows
+        .next()
+        .await
+        .map_err(|e| format!("timesofday existence row read failed: {e}"))?
+        .is_some();
+    if !exists {
+        return Err(format!(
+            "no session for D{day}/{session} (destination={destination}); \
+             scaffold the itinerary first (travel scaffold-itinerary)"
+        ));
+    }
+    Ok(())
 }
 
 async fn next_activity_sort_order(
