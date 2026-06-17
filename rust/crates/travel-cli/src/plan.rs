@@ -251,6 +251,25 @@ pub struct RouteSegment {
 /// Load a `PlanView` for the given `plan_id`. Throws if `plan_metadata` has
 /// no row for `plan_id` (matches the TS `[turso] Plan "X" not found in
 /// normalized tables. Run migration first.` error message).
+/// Fail loud if a `--dest <slug>` override does not match the plan's
+/// `active_destination`. View commands (`itinerary`/`bookings`/`transport`)
+/// load data keyed on `active_destination`; they used to PARSE `--dest` and
+/// silently ignore it, so `itinerary --dest wrong_slug` quietly showed the
+/// active destination instead. Until multi-destination plans exist, the honest
+/// behavior is to reject a mismatching `--dest` rather than mislead. A matching
+/// (or absent) `--dest` is a no-op.
+pub fn assert_dest_matches(dest_opt: Option<&str>, active_destination: &str) -> Result<(), String> {
+    if let Some(d) = dest_opt {
+        if d != active_destination {
+            return Err(format!(
+                "--dest {d} does not match this plan's active destination ({active_destination}). \
+                 View commands only render the active destination; drop --dest or pass --dest {active_destination}."
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let conn = db::connect_read().await?;
     let esc = sql_quote(plan_id);

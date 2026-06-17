@@ -57,9 +57,10 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // currently keys on active_destination from plan_metadata, so a future
     // override would require either an extra query or a thin wrapper around
     // plan::load() that re-keys transfers/days.
-    let _dest_opt: Option<String> = parse_dest(args);
+    let dest_opt: Option<String> = parse_dest(args);
     let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
     let view = plan::load(&plan_id).await?;
+    plan::assert_dest_matches(dest_opt.as_deref(), &view.active_destination)?;
     print!("{}", render(&view));
     Ok(())
 }
@@ -308,9 +309,11 @@ fn render_weather_line(w: &plan::DayWeather) -> String {
 }
 
 fn render_session(out: &mut String, session_name: &str, s: &SessionView) {
-    // TS: `if (!activities || activities.length === 0) continue;` — skip
-    // sessions with no activities.
-    if s.activities.is_empty() {
+    // Skip a session only when it has NO user content. A session may legitimately
+    // carry a meal (e.g. a lunch spot) without any activity rows — the old
+    // `activities.is_empty()` skip hid those meals from the itinerary, so a
+    // ramen-only noon block silently vanished. Meals count as content.
+    if s.activities.is_empty() && s.meals.is_empty() {
         return;
     }
     // Session label: "Morning" / "Noon" / "Afternoon" / "Evening".

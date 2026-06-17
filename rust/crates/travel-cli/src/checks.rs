@@ -119,6 +119,39 @@ pub(crate) fn stop_link_problem(cleaned: &str, raw: &str) -> Option<String> {
     None
 }
 
+/// Emit (to stderr) the standard "the dashboard renders ZH by default, but you
+/// only updated the English field" warning. The trip dashboard defaults to
+/// Traditional Chinese and reads separate `*_zh` columns, so an English-only
+/// edit silently does NOT change what the default page shows. Call this from an
+/// English-side mutation when a corresponding `*_zh` value already exists and
+/// the command did not also set it. `zh_hint` is the copy-pasteable fix command.
+pub(crate) fn warn_zh_stale(field: &str, zh_hint: &str) {
+    eprintln!(
+        "⚠ note: updated the English {field}, but the dashboard shows Traditional Chinese by \
+         default and its {field}_zh still holds the OLD text — the change won't appear on the \
+         default page until you also run: {zh_hint}"
+    );
+}
+
+/// Normalize a user-typed route mode to one of the three canonical Google Maps
+/// travel modes: `transit` | `walking` | `driving`. Accepts the common natural
+/// aliases a user (or agent) reaches for — `walk`, `monorail`, `bus`, `train`,
+/// `rail`, `taxi`, `car`, `ferry`, etc. — so the route writers stop rejecting
+/// obvious synonyms. Returns `Err` (listing the canonical set) only for a value
+/// with no sensible mapping. Single source of truth: both `set-route-segment`
+/// and `set-route-segments-bulk` validate through here.
+pub(crate) fn normalize_mode(mode: &str) -> Result<&'static str, String> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "transit" | "monorail" | "rail" | "train" | "bus" | "subway" | "metro" | "tram"
+        | "ferry" | "boat" | "single" | "單軌" | "電車" | "巴士" | "公車" => Ok("transit"),
+        "walking" | "walk" | "foot" | "on foot" | "步行" | "走路" => Ok("walking"),
+        "driving" | "drive" | "car" | "taxi" | "cab" | "計程車" | "開車" | "自駕" => Ok("driving"),
+        other => Err(format!(
+            "mode must be transit|walking|driving (or an alias like walk/monorail/bus/taxi); got {other:?}"
+        )),
+    }
+}
+
 /// Validate that a place string will produce a working Google Maps link as a
 /// transit/route stop. Returns `Err(reason)` for a broken stop, `Ok(())` when
 /// fine. This is the WRITE-TIME guard: `set-route-segment` / transit writers

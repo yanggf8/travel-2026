@@ -6,6 +6,7 @@ mod compare_dates;
 mod compare_true_cost;
 mod db;
 mod db_exec;
+mod db_schema;
 mod db_query_offers;
 mod db_status;
 mod destination_ref;
@@ -394,6 +395,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             db_status::run().await
         }
         [group, sub, rest @ ..] if group == "db" && sub == "exec" => db_exec::run(rest).await,
+        [group, sub, rest @ ..] if group == "db" && sub == "schema" => db_schema::run(rest).await,
         [group, sub, rest @ ..] if group == "db" && sub == "cleanup-deleted" => {
             db_cleanup_deleted::run(rest).await
         }
@@ -469,16 +471,19 @@ async fn run(args: Vec<String>) -> Result<(), String> {
 
         // batch 2: itinerary structure
         [cmd, rest @ ..] if cmd == "scaffold-itinerary" => {
+            if wants_help(rest, "travel scaffold-itinerary [--dest slug]\n  (create empty day/session rows for the plan's date range)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             scaffold_itinerary::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "populate-itinerary" => {
+            if wants_help(rest, "travel populate-itinerary [--dest slug]\n  (fill scaffolded days from destination reference data)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             populate_itinerary::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "swap-days" => {
+            if wants_help(rest, "travel swap-days <dayA> <dayB> [--dest slug]\n  (swap the content of two days; date/day_number/day_type preserved)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             swap_days::run(rest, plan_id).await?;
             Ok(())
@@ -511,11 +516,13 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "validate-itinerary" => {
+            if wants_help(rest, "travel validate-itinerary [--dest slug] [--severity error|warn|info]\n  (lint the daily itinerary: map links, open hours, reservations)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             validate_itinerary::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "check-hours" => {
+            if wants_help(rest, "travel check-hours [--dest slug]\n  (flag activities scheduled outside their POI open hours)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             check_hours::run(rest, plan_id).await?;
             Ok(())
@@ -532,6 +539,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
 
         // batch 5: weather / prices / compare / chat
         [cmd, rest @ ..] if cmd == "fetch-weather" => {
+            if wants_help(rest, "travel fetch-weather [--dest slug] [--all]\n  (fetch Open-Meteo forecast into the day rows)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             weather::run(rest, plan_id).await?;
             Ok(())
@@ -599,8 +607,72 @@ fn normalize_flights(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// If `rest` contains `--help`/`-h`, print `usage` and return true (caller
+/// should stop). Lets simple dispatch arms get a one-line help without a bespoke
+/// block each. Returns false when no help flag is present.
+fn wants_help(rest: &[String], usage: &str) -> bool {
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Usage:\n  {usage}");
+        true
+    } else {
+        false
+    }
+}
+
 fn print_usage() {
+    // Grouped command reference. Run `travel <cmd> --help` for a command's args.
+    // Keep this in sync when adding a dispatch arm — it is the only discovery
+    // surface for the full command set.
     println!(
-        "Travel CLI\n\nUsage:\n  travel plans\n  travel resolve-plan [--plan-id <id> | --plan-path <path> | --travel-date YYYY-MM-DD | --travel-start YYYY-MM-DD --travel-end YYYY-MM-DD]\n  travel status [--full]\n  travel bookings [--dest slug]\n  travel itinerary [--dest slug]\n  travel transport [--dest slug]\n  travel query-offers [--source a,b] [--region r] [--dest d] [--max-price N] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--limit N]\n  travel query-destination-ref --slug <destination_slug>\n  travel query-bookings [--trip-id id] [--dest slug] [--category c] [--status s] [--max N]\n  travel check-freshness --source <id> [--region r] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--max-age N] [--plan-id id] [--dest slug]\n  travel compare trips --trip '<key=value;...>' [--trip '<key=value;...>'] [--market taiwan] [--detailed]\n  travel normalize flights --text '<rendered flight text>' --url '<source url>' [--label name]\n  travel normalize flights --stdin --url '<source url>' [--label name]\n  travel leave calc <start-date> <end-date> [country]\n  travel validate data\n  travel doctor\n\nRules:\n  plain-text input and output; no JSON files or JSON output"
+        "Travel CLI — plain-text in/out, no JSON. Run `travel <cmd> --help` for details.\n\
+\n\
+VIEWS\n\
+  plans                         list DB plans and date anchors\n\
+  status [--full]               booking + process overview\n\
+  itinerary [--dest slug]       daily plan\n\
+  transport [--dest slug]       transport summary\n\
+  bookings [--dest slug]        booking ledger\n\
+  query-bookings [--dest slug] [--category c] [--status s] [--max N]\n\
+  query-offers [--source a,b] [--dest d] [--max-price N] [--start D] [--end D] [--limit N]\n\
+  query-destination-ref --slug <slug>\n\
+  view-prices | check-freshness --source <id> [--dest slug]\n\
+\n\
+ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
+  set-dates <start> <end> [reason]\n\
+  set-day-theme <day> [theme] [--zh \"<zh>\"]\n\
+  scaffold-itinerary | populate-itinerary | swap-days <dayA> <dayB>\n\
+  add-activity <day> <session> <title> [--after <id|title>] [--zh \"<zh>\"] [...]\n\
+  set-activity-title <day> <session> <activity> <new_title> [--zh \"<zh>\"]\n\
+  set-activity-time | set-activity-poi | set-activity-booking | delete-activity\n\
+  reorder-activities <day> <session> <id|title> ...\n\
+  move-activity <day> <from-session> <to-session> <id|title> [--to-day N]\n\
+  set-meals <day> <session> --meal \"<text>\" [--meal ...] [--zh \"<zh>\" ...]\n\
+  set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\
+  set-route-segment | set-route-segments-bulk <day> --seg \"from|to|mode[|...]\"\n\
+  set-flight | set-hotel | set-airport-transfer | mark-booked | sync-bookings\n\
+\n\
+SHOP / OFFERS\n\
+  import-offers [--dest slug] [--dir path] [--dry-run]\n\
+  add-offer | add-besttour-offer | add-lifetour-offer | update-offer | select-offer\n\
+  shaping-init | shaping-compare | shaping-adopt | shaping-baseline | shaping-export | shaping-import\n\
+  query-tour-group-offers | import-tour-group-offers | compare-offers | search-offers\n\
+\n\
+VALIDATE / CHECKS\n\
+  validate data | doctor | validate-itinerary | check-hours\n\
+  check-booking-integrity | check-maps-fresh | mark-maps-snapshotted\n\
+  run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
+\n\
+COMPARE / UTIL\n\
+  compare trips --trip '<k=v;...>' [--detailed] | compare dates | compare true-cost\n\
+  normalize flights --text '<...>' --url '<...>' | leave calc <start> <end> [country]\n\
+  fetch-weather [--dest slug] | share-token | mark-plan-deleted <plan>\n\
+\n\
+DB\n\
+  db status | db schema [<table>] | db exec \"<SQL>\" | db migrate\n\
+  db seed {{plans|destination-refs|ota-knowledge|test-plan}} | db sync {{destinations|events}}\n\
+  db fetch holidays | db cleanup-deleted [--confirm] | db query-offers\n\
+\n\
+Plan resolution: --plan-id > $TRAVEL_PLAN_ID > --travel-date > active > upcoming > most-recent.\n\
+Note: the dashboard renders Traditional Chinese by default — pair --zh on content edits, or update *_zh via set-tod-zh / set-day-theme --zh, or the change won't show."
     );
 }

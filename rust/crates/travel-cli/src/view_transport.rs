@@ -42,9 +42,10 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // currently keys on active_destination from plan_metadata, so a future
     // override would require either an extra query or a thin wrapper around
     // plan::load() that re-keys transfers/days.
-    let _dest_opt: Option<String> = parse_dest(args);
+    let dest_opt: Option<String> = parse_dest(args);
     let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
     let view = plan::load(&plan_id).await?;
+    plan::assert_dest_matches(dest_opt.as_deref(), &view.active_destination)?;
     print!("{}", render(&view));
     Ok(())
 }

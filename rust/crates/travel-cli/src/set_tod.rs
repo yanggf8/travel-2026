@@ -124,7 +124,56 @@ pub async fn run_focus(
         )
         .await?;
     }
+    // Dashboard renders ZH by default: an English-only focus edit won't show
+    // until focus_zh is also updated. Warn if a stale focus_zh exists.
+    if focus.is_some() && focus_zh.is_none() {
+        let zh = read_tod_zh_field(&conn, &plan_id, &destination, parsed.day, &parsed.session, "focus_zh")
+            .await
+            .unwrap_or_default();
+        if !zh.trim().is_empty() {
+            crate::checks::warn_zh_stale(
+                "focus",
+                &format!(
+                    "set-tod-zh {} {} --zh \"<chinese focus>\" --dest {destination}",
+                    parsed.day, parsed.session
+                ),
+            );
+        }
+    }
     Ok(())
+}
+
+/// Read one `timesofday` ZH column (empty string if NULL/missing), to decide
+/// whether to warn about a stale default-ZH dashboard render.
+async fn read_tod_zh_field(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    column: &str,
+) -> Result<String, String> {
+    // `column` is a fixed internal literal ("focus_zh"), never user input.
+    let sql = format!(
+        "SELECT COALESCE({column}, '') FROM timesofday \
+         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4"
+    );
+    let mut rows = conn
+        .query(
+            &sql,
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        return Ok(row.get::<String>(0).unwrap_or_default());
+    }
+    Ok(String::new())
 }
 
 // ─────────────────────────────────────────────────────────────────

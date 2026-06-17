@@ -52,6 +52,22 @@ pub async fn run(
     {
         Ok(_) => {
             println!("✅ Day theme updated");
+            // Dashboard renders ZH by default: an English-only theme edit won't
+            // show until theme_zh is also updated. Warn if a stale theme_zh exists.
+            if parsed.theme.is_some() && parsed.theme_zh.is_none() {
+                let zh = read_theme_zh(&conn, &plan_id, &destination, parsed.day)
+                    .await
+                    .unwrap_or_default();
+                if !zh.trim().is_empty() {
+                    crate::checks::warn_zh_stale(
+                        "theme",
+                        &format!(
+                            "set-day-theme {} --zh \"<chinese title>\" --dest {destination}",
+                            parsed.day
+                        ),
+                    );
+                }
+            }
             Ok(())
         }
         Err(e) => {
@@ -138,6 +154,28 @@ async fn read_destination(
     dest_opt: Option<&str>,
 ) -> Result<String, String> {
     crate::cascade::common::resolve_active_destination(conn, plan_id, dest_opt).await
+}
+
+/// Read the current `days.theme_zh` (empty string if NULL/missing). Used only to
+/// decide whether to warn that a default-ZH dashboard still shows the old theme.
+async fn read_theme_zh(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<String, String> {
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(theme_zh, '') FROM days \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
+            libsql::params![plan_id.to_string(), destination.to_string(), day],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        return Ok(row.get::<String>(0).unwrap_or_default());
+    }
+    Ok(String::new())
 }
 
 async fn execute(

@@ -86,11 +86,13 @@ pub async fn run(
     let sort_order_str = &args[1];
     let from = args[2].clone();
     let to = args[3].clone();
-    let mode = args[4].clone();
-    if mode != "transit" && mode != "walking" && mode != "driving" {
-        eprintln!("Error: <mode> must be one of: transit | walking | driving");
-        std::process::exit(1);
-    }
+    let mode = match crate::checks::normalize_mode(&args[4]) {
+        Ok(m) => m.to_string(),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
     // Write-time fail-loud guard bundle (#3 map-link, #4 cross-country, #5
     // walking-over-rail): a segment that would draw a broken / ocean-spanning /
     // mis-moded Maps route is rejected here, before it reaches the DB /
@@ -335,13 +337,10 @@ fn parse_seg_spec(spec: &str) -> Result<SegmentInput, String> {
     }
     let from = parts[0].trim().to_string();
     let to = parts[1].trim().to_string();
-    let mode = parts[2].trim().to_string();
     if from.is_empty() || to.is_empty() {
         return Err("from and to must be non-empty".to_string());
     }
-    if mode != "transit" && mode != "walking" && mode != "driving" {
-        return Err(format!("mode must be transit|walking|driving (got {mode:?})"));
-    }
+    let mode = crate::checks::normalize_mode(parts[2])?.to_string();
     let field = |idx: usize| -> Option<String> {
         parts.get(idx).map(|s| s.trim()).filter(|s| !s.is_empty()).map(str::to_string)
     };
