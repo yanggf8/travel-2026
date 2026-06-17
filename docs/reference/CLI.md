@@ -94,6 +94,7 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
 ./bin/travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
 ./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...]    # plain-text; repeat --seg per segment
+#   <mode> canonical: transit | walking | driving. Aliases are normalized: walk→walking; monorail/rail/train/bus/subway/metro/tram/ferry→transit; taxi/car/cab→driving (plus 步行/單軌/巴士/計程車…).
 ./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activity-zh "<zh>" (repeatable)] [--clear-activities] [--plan-id <id>]    # (alias: set-session-zh); --clear-activities empties the ZH activity list (mutually exclusive with --activity-zh)
 ./bin/travel set-tod-focus <day> <session> "<focus_text>" [--zh "<focus_zh>"] [--plan-id <id>]    # (alias: set-session-focus); --zh sets focus_zh too (dashboard renders ZH by default)
 ./bin/travel set-meals <day> <session> --meal "<text>" [--meal "<text>"...] [--dest slug]    # replace session meals; a meal may carry a place pin: "<label>｜map:<query>"
