@@ -67,11 +67,10 @@ render_map() {
   local arr; arr="$(printf '%s\n' "$pts" | awk -F',' 'NF==2{printf "[%s,%s],",$1,$2}')"
   arr="[${arr%,}]"
 
-  # NOTE: the screenshot step below loads this page via file://. Run the script
-  # in the SAME environment as the Chrome that chromeport drives — if Chrome runs
-  # on a Windows host while this script runs under WSL, write $OUT to a path both
-  # can see (or point CHROMEPORT at a Linux Chrome). The data pipeline + HTML are
-  # environment-independent; only the screenshot needs a co-located browser.
+  # The page is screenshotted via a percent-encoded data: URL (NOT file://) so it
+  # works regardless of where Chrome runs — a Windows-host Chrome cannot read a
+  # WSL /tmp file:// path. The HTML still travels inline over CDP. A debug copy is
+  # also written to $OUT/<name>.html for inspection.
   local html="${OUT}/${name}.html"
   cat > "$html" <<HTML
 <!doctype html><html><head><meta charset="utf-8">
@@ -107,8 +106,13 @@ render_map() {
 </script></body></html>
 HTML
 
-  $CHROMEPORT screenshot "file://${html}" --out "${OUT}/${name}.png" \
-    --width 640 --height 440 --wait 4500 | grep -E 'screenshot|error' || true
+  # Encode the HTML into a data: URL (filesystem-independent — works whether
+  # Chrome is on this host or a Windows host across the WSL boundary).
+  local data_url
+  data_url="$(python3 -c 'import urllib.parse,sys; print("data:text/html,"+urllib.parse.quote(open(sys.argv[1]).read()))' "$html")"
+  # Longer wait: the page must pull Leaflet from the CDN + OSM tiles before paint.
+  $CHROMEPORT screenshot "$data_url" --out "${OUT}/${name}.png" \
+    --width 640 --height 440 --wait 9000 | grep -E 'screenshot|error' || true
   sleep 1
 }
 
