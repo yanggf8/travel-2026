@@ -204,6 +204,13 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
                 // link (render_activity_text) covers it — emit NO stop search link.
                 // Otherwise search on a CLEAN short venue name (first line, trimmed).
                 _ if has_embedded_maps_url(&title) => String::new(),
+                // The activity is not a geocodable place (a flight line, an
+                // airport-process step, a transit instruction, a bare meal label,
+                // a bare time) → emit NO search link; render/map.rs renders an
+                // empty maps_link as plain text. This mirrors the TS worker, which
+                // never search-links a bare title, and the CLI's stop_link_problem
+                // guard (rust/crates/travel-cli/src/checks.rs).
+                _ if !is_linkable_stop(&title) => String::new(),
                 _ => format!("https://www.google.com/maps/search/{}", crate::render::urlencode(&search_query_from_title(&title))),
             };
             sess.stops.push(Stop {
@@ -233,6 +240,97 @@ fn has_embedded_maps_url(title: &str) -> bool {
 }
 
 /// Derive a short, clean search query from a possibly-multi-line activity title:
+/// True when an activity title is plausibly a geocodable PLACE worth a
+/// `/maps/search/` link. False for non-places — flight lines, airport-process
+/// steps, transit instructions, bare meal labels, bare times — which would
+/// otherwise produce garbage pins (`/maps/search/CI120 起飛...`). Mirrors the TS
+/// worker (never search-links a bare title) and the CLI's `stop_link_problem`
+/// (rust/crates/travel-cli/src/checks.rs). Checks the cleaned venue query, so
+/// `晚餐：リウボウ 安里店` (a real venue) still links while bare `晚餐` does not.
+fn is_linkable_stop(title: &str) -> bool {
+    let first = title.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    if first.is_empty() {
+        return false;
+    }
+    // Transit instruction (a leg, not a place): "A → B", "A -> B".
+    if first.contains('→') || first.contains("->") {
+        return false;
+    }
+    // Flight line: an airline code (2 letters + 3-4 digits, e.g. CI120) anywhere,
+    // or a boarding/departure verb.
+    if has_flight_code(first)
+        || first.contains("起飛") || first.contains("起降") || first.contains("登機")
+    {
+        return false;
+    }
+    // Airport / travel-process step (not a destination).
+    const PROCESS: [&str; 9] = [
+        "報到", "託運", "出境", "入境", "安檢", "航廈", "候機", "接駁", "停車場",
+    ];
+    if PROCESS.iter().any(|w| first.contains(w)) {
+        return false;
+    }
+    // What would actually be searched: if cleaning leaves nothing (bare meal
+    // label, bare time, mode word) it can't geocode.
+    let q = search_query_from_title(title);
+    let q = q.trim();
+    if q.is_empty() {
+        return false;
+    }
+    // Bare meal label with no venue after it ("晚餐", "Lunch") — search_query
+    // only strips the prefix when a "：/:" follows, so a lone label survives as
+    // the whole query. It can't geocode.
+    if is_meal_prefix(q) {
+        return false;
+    }
+    // Bare time ("04:00", "14:30") with nothing place-like after.
+    if is_bare_time(q) {
+        return false;
+    }
+    // Mode-only word (port of stop_link_problem MODE_ONLY).
+    const MODE_ONLY: [&str; 6] = ["步行", "單軌", "單軌電車", "巴士", "電車", "接駁巴士"];
+    if MODE_ONLY.contains(&q) {
+        return false;
+    }
+    true
+}
+
+/// True when `s` contains an airline-style code: 2 ASCII letters then 3–4 digits
+/// (CI120, BR123, JX1234), as a standalone token at the start of a word.
+fn has_flight_code(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // token boundary: start of string or after a space
+        let at_boundary = i == 0 || bytes[i - 1] == b' ';
+        if at_boundary
+            && i + 2 < bytes.len()
+            && bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1].is_ascii_alphabetic()
+        {
+            let digits = bytes[i + 2..].iter().take_while(|b| b.is_ascii_digit()).count();
+            if (3..=4).contains(&digits) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True when the trimmed string is JUST a clock time ("4:00", "04:00", "14:30").
+fn is_bare_time(s: &str) -> bool {
+    let s = s.trim();
+    let mut parts = s.split(':');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(h), Some(m), None) => {
+            !h.is_empty() && h.len() <= 2 && h.bytes().all(|b| b.is_ascii_digit())
+                && m.len() == 2 && m.bytes().all(|b| b.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
 /// take the FIRST line, drop any leading "晚餐：/午餐：/…" meal prefix, and cut a
 /// trailing " — …" / "（…）" descriptor so the maps/search query is just the venue.
 fn search_query_from_title(title: &str) -> String {
@@ -348,6 +446,37 @@ mod tests {
         assert_eq!(super::search_query_from_title("首里そば\nLine2"), "首里そば");
         assert_eq!(super::search_query_from_title("Lunch: Makishi Market — open till 5"), "Makishi Market");
         assert_eq!(super::search_query_from_title("Plain Venue"), "Plain Venue");
+    }
+
+    #[test]
+    fn is_linkable_stop_rejects_non_places_keeps_venues() {
+        use super::is_linkable_stop as ok;
+        // Real okinawa-2026 day-1 NON-places (must NOT link):
+        assert!(!ok("CI120 起飛 TPE T2 08:00 → OKA T1 10:45"), "flight line");
+        assert!(!ok("T2 報到、託運、出境安檢（建議起飛前2.5–3小時抵達）"), "airport process");
+        assert!(!ok("停車場接駁巴士 → 桃園機場第二航廈（T2，約10–15分）"), "transit instruction");
+        assert!(!ok("晚餐"), "bare meal label");
+        assert!(!ok("04:00"), "bare time");
+        assert!(!ok("04:00 自家出發開車：紅樹林 → 大園出國停車場第三停車場"), "instruction w/ arrow");
+        assert!(!ok("步行"), "mode-only word");
+        assert!(!ok("接駁巴士"), "mode-only word");
+        // Real places / venues (must STILL link):
+        assert!(ok("首里城公園"), "real place");
+        assert!(ok("晚餐：リウボウ 安里店"), "meal prefix + real venue");
+        assert!(ok("識名園"), "real place");
+        assert!(ok("HOTEL AZAT NAHA"), "hotel — letters but no flight-code digit pattern");
+        assert!(ok("Makishi Market"), "english venue");
+    }
+    #[test]
+    fn flight_code_and_bare_time_helpers() {
+        assert!(super::has_flight_code("CI120 起飛"));
+        assert!(super::has_flight_code("foo BR1234 bar"));
+        assert!(!super::has_flight_code("HOTEL AZAT NAHA")); // letters, no NN+digits token
+        assert!(!super::has_flight_code("T2 報到"));
+        assert!(super::is_bare_time("04:00"));
+        assert!(super::is_bare_time("14:30"));
+        assert!(!super::is_bare_time("首里城"));
+        assert!(!super::is_bare_time("04:00 出發")); // has more than the time
     }
 
     #[test]
