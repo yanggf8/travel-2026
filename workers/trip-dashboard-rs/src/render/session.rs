@@ -1,5 +1,5 @@
 use crate::model::Session;
-use super::{esc, esc_url_attr, render_activity_text};
+use super::{esc, esc_url_attr, render_activity_text, urlencode};
 
 /// Render one meal line. Meals carry a map-pin convention
 /// `"<label>｜map:<query>"` (full-width `｜` or ASCII `|`, case-insensitive on
@@ -83,17 +83,6 @@ fn matches_map_kw(c: &[char], i: usize) -> bool {
         && c[i..i + kw.len()].iter().zip(&kw).all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
-/// Percent-encode a maps/search query (render-local; mirrors model.rs's
-/// `urlencode` — unreserved chars pass, space → `%20`, everything else → `%XX`
-/// over UTF-8 bytes).
-fn urlencode(s: &str) -> String {
-    s.bytes().map(|b| match b {
-        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-        b' ' => "%20".to_string(),
-        _ => format!("%{b:02X}"),
-    }).collect()
-}
-
 /// Render one session block. Empty sessions are caller-skipped (see day.rs).
 pub fn render(sess: &Session, lang: &str) -> String {
     let label = match (sess.session_type.as_str(), lang) {
@@ -111,7 +100,7 @@ pub fn render(sess: &Session, lang: &str) -> String {
         // render_activity_text (port of the JS worker's renderActivityText):
         // escapes, turns \n into <br>, and renders an embedded "Google Maps：<url>"
         // tail as a short labeled link instead of dumping the giant URL inline.
-        h.push_str(&format!("<div class=\"activity\">{}</div>", render_activity_text(a)));
+        h.push_str(&format!("<div class=\"activity\">{}</div>", render_activity_text(&a.title)));
     }
     for m in &sess.meals {
         h.push_str(&render_meal(m));
@@ -126,7 +115,9 @@ pub fn render(sess: &Session, lang: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Session;
+    use crate::model::{Session, Activity};
+    /// Build an Activity carrying only a display title (the common test case).
+    fn act(title: &str) -> Activity { Activity { title: title.into(), ..Default::default() } }
     #[test]
     fn noon_meal_renders() {
         let sess = Session { session_type: "noon".into(), meals: vec!["Lunch: Makishi".into()], ..Default::default() };
@@ -136,7 +127,7 @@ mod tests {
     }
     #[test]
     fn activity_ampersand_escaped_once() {
-        let sess = Session { session_type: "morning".into(), activities: vec!["Museum & Art".into()], ..Default::default() };
+        let sess = Session { session_type: "morning".into(), activities: vec![act("Museum & Art")], ..Default::default() };
         let html = render(&sess, "en");
         assert!(html.contains("Museum &amp; Art"));
         assert!(!html.contains("amp;amp;"));
@@ -147,7 +138,7 @@ mod tests {
         // tail must render as a short labeled link, not dump %0A / the raw URL.
         let sess = Session {
             session_type: "evening".into(),
-            activities: vec!["晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc".into()],
+            activities: vec![act("晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc")],
             ..Default::default()
         };
         let html = render(&sess, "zh");
@@ -157,7 +148,7 @@ mod tests {
     }
     #[test]
     fn activity_newline_becomes_br() {
-        let sess = Session { session_type: "morning".into(), activities: vec!["line a\nline b".into()], ..Default::default() };
+        let sess = Session { session_type: "morning".into(), activities: vec![act("line a\nline b")], ..Default::default() };
         let html = render(&sess, "en");
         assert!(html.contains("line a<br>line b"), "got: {html}");
     }

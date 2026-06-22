@@ -15,12 +15,23 @@ pub struct RouteSegment {
     pub start_time: String,
 }
 
+/// One itinerary activity row, carrying the booking fields the pending-alert
+/// renderer needs. `title` is the (possibly multi-line) display text; the
+/// booking_* fields drive the pending-booking alerts (feature #3).
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct Activity {
+    pub title: String,
+    pub booking_status: String,
+    pub book_by: String,
+    pub booking_url: String,
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Session {
     pub session_type: String, // morning|noon|afternoon|evening
     pub focus_zh: String,
     pub transit_zh: String,
-    pub activities: Vec<String>,
+    pub activities: Vec<Activity>,
     pub meals: Vec<String>,
     pub stops: Vec<Stop>,
 }
@@ -64,7 +75,12 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
         Session {
             session_type: st.to_string(),
             activities: activities.iter().filter(|r| s(r, "session_type") == st)
-                .map(|r| s(r, "title")).collect(),
+                .map(|r| Activity {
+                    title: s(r, "title"),
+                    booking_status: s(r, "booking_status"),
+                    book_by: s(r, "book_by"),
+                    booking_url: s(r, "booking_url"),
+                }).collect(),
             meals: meals.iter().filter(|r| s(r, "session_type") == st)
                 .map(|r| s(r, "meal")).collect(),
             ..Default::default()
@@ -82,6 +98,13 @@ pub struct Plan {
     pub flights: Vec<Row>,
     pub hotel: Option<Row>,
     pub transfers: Vec<Row>,
+    // ---- transit cheat-sheet (feature #4) ----
+    /// `transit_hotel_station` / `_zh` from itinerary_metadata (home base).
+    pub transit_hotel_station: String,
+    pub transit_hotel_station_zh: String,
+    /// `(destination, lang, line)` rows from itinerary_transit_key_lines, in
+    /// SQL sort_order. Keyed at render time by `dest:lang`.
+    pub transit_key_lines: Vec<(String, String, String)>,
 }
 
 /// Assemble a Plan from the pipeline result vectors (query order defined in the router/loader).
@@ -91,7 +114,7 @@ pub fn assemble(
     plan_rows: &[Row], day_rows: &[Row], session_rows: &[Row],
     activity_rows: &[Row], meal_rows: &[Row], flight_rows: &[Row],
     hotel_rows: &[Row], transfer_rows: &[Row], poi_rows: &[Row],
-    route_rows: &[Row],
+    route_rows: &[Row], transit_key_line_rows: &[Row], itin_meta_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -103,6 +126,14 @@ pub fn assemble(
     plan.flights = flight_rows.to_vec();
     plan.hotel = hotel_rows.first().cloned();
     plan.transfers = transfer_rows.to_vec();
+    // ---- transit cheat-sheet (feature #4) ----
+    if let Some(m) = itin_meta_rows.first() {
+        plan.transit_hotel_station = s(m, "transit_hotel_station");
+        plan.transit_hotel_station_zh = s(m, "transit_hotel_station_zh");
+    }
+    plan.transit_key_lines = transit_key_line_rows.iter()
+        .map(|r| (s(r, "destination"), s(r, "lang"), s(r, "line")))
+        .collect();
     for d in day_rows {
         let dn = i(d, "day_number");
         let acts: Vec<Row> = activity_rows.iter().filter(|r| i(r, "day_number") == dn).cloned().collect();
@@ -173,7 +204,7 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
                 // link (render_activity_text) covers it — emit NO stop search link.
                 // Otherwise search on a CLEAN short venue name (first line, trimmed).
                 _ if has_embedded_maps_url(&title) => String::new(),
-                _ => format!("https://www.google.com/maps/search/{}", urlencode(&search_query_from_title(&title))),
+                _ => format!("https://www.google.com/maps/search/{}", crate::render::urlencode(&search_query_from_title(&title))),
             };
             sess.stops.push(Stop {
                 title,
@@ -226,14 +257,6 @@ fn is_meal_prefix(label: &str) -> bool {
     matches!(label.trim(), "晚餐" | "午餐" | "早餐" | "宵夜" | "下午茶"
         | "Lunch" | "Dinner" | "Breakfast" | "Brunch" | "lunch" | "dinner" | "breakfast")
 }
-fn urlencode(s: &str) -> String {
-    s.bytes().map(|b| match b {
-        b'A'..=b'Z'|b'a'..=b'z'|b'0'..=b'9'|b'-'|b'_'|b'.'|b'~' => (b as char).to_string(),
-        b' ' => "%20".to_string(),
-        _ => format!("%{b:02X}"),
-    }).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,7 +272,8 @@ mod tests {
         let sessions = build_sessions(&acts, &meals);
         assert_eq!(sessions.len(), 4);
         let noon = sessions.iter().find(|s| s.session_type == "noon").unwrap();
-        assert_eq!(noon.activities, vec!["Makishi Market".to_string()]);
+        assert_eq!(noon.activities.len(), 1);
+        assert_eq!(noon.activities[0].title, "Makishi Market".to_string());
         assert_eq!(noon.meals, vec!["Lunch: Makishi".to_string()]);
     }
 
@@ -342,7 +366,7 @@ mod tests {
             row(&[("day_number", json!("2")), ("from_place", json!("Hotel")), ("to_place", json!("Naminoue")), ("mode", json!("driving")), ("duration_min", json!("12")), ("notes", json!("")), ("start_time", json!("09:00"))]),
             row(&[("day_number", json!("1")), ("from_place", json!("Airport")), ("to_place", json!("Hotel")), ("mode", json!("transit")), ("duration_min", json!("30")), ("notes", json!("")), ("start_time", json!(""))]),
         ];
-        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &route_rows);
+        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &route_rows, &[], &[]);
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
         let seg = &day.route_segments[0];
@@ -362,7 +386,7 @@ mod tests {
             ("precipitation_pct", json!("73")),
             ("feels_like_low_c", json!("28.0")), ("feels_like_high_c", json!("34.2")),
         ])];
-        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[]);
+        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &[]);
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
         assert_eq!(day.temp_high_c, Some(30.1));
@@ -375,7 +399,7 @@ mod tests {
     fn assemble_weather_detail_is_none_when_absent() {
         let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
         let day_rows = vec![row(&[("day_number", json!("1")), ("date", json!("2026-06-12"))])];
-        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[]);
+        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &[]);
         let day = plan.days.iter().find(|d| d.day_number == 1).unwrap();
         assert_eq!(day.temp_low_c, None);
         assert_eq!(day.precipitation_pct, None);
@@ -454,6 +478,69 @@ mod tests {
         super::attach_stops(&mut sessions, &acts, &pois);
         let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
         assert_eq!(m.address, "Naha", "unlinked activity still matches by title");
+    }
+
+    // build_sessions populates the full Activity (title + booking fields), not
+    // just a title string — pending-alert rendering (feature #3) reads these.
+    #[test]
+    fn build_sessions_populates_activity_booking_fields() {
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Churaumi Aquarium")),
+            ("booking_status", json!("pending")),
+            ("book_by", json!("2026-05-01")),
+            ("booking_url", json!("https://book.example/churaumi")),
+        ])];
+        let sessions = build_sessions(&acts, &[]);
+        let m = sessions.iter().find(|s| s.session_type == "morning").unwrap();
+        assert_eq!(m.activities.len(), 1);
+        let a = &m.activities[0];
+        assert_eq!(a.title, "Churaumi Aquarium");
+        assert_eq!(a.booking_status, "pending");
+        assert_eq!(a.book_by, "2026-05-01");
+        assert_eq!(a.booking_url, "https://book.example/churaumi");
+    }
+
+    // Activity booking fields default to empty strings when columns are absent.
+    #[test]
+    fn build_sessions_activity_defaults_empty_when_columns_absent() {
+        let acts = vec![row(&[("session_type", json!("noon")), ("title", json!("Free walk"))])];
+        let sessions = build_sessions(&acts, &[]);
+        let a = &sessions.iter().find(|s| s.session_type == "noon").unwrap().activities[0];
+        assert_eq!(a.title, "Free walk");
+        assert_eq!(a.booking_status, "");
+        assert_eq!(a.book_by, "");
+        assert_eq!(a.booking_url, "");
+    }
+
+    // ---- transit cheat-sheet assembly (feature #4) ----
+    #[test]
+    fn assemble_populates_transit_station_and_key_lines() {
+        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
+        let itin_meta = vec![row(&[
+            ("transit_hotel_station", json!("Asato Station")),
+            ("transit_hotel_station_zh", json!("安里站")),
+        ])];
+        let key_lines = vec![
+            row(&[("destination", json!("okinawa_2026")), ("lang", json!("en")), ("line", json!("Yui Rail: airport - Asato"))]),
+            row(&[("destination", json!("okinawa_2026")), ("lang", json!("zh")), ("line", json!("單軌電車：機場－安里"))]),
+        ];
+        let plan = assemble(&plan_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &key_lines, &itin_meta);
+        assert_eq!(plan.transit_hotel_station, "Asato Station");
+        assert_eq!(plan.transit_hotel_station_zh, "安里站");
+        assert_eq!(plan.transit_key_lines.len(), 2);
+        assert_eq!(plan.transit_key_lines[0], ("okinawa_2026".into(), "en".into(), "Yui Rail: airport - Asato".into()));
+        assert_eq!(plan.transit_key_lines[1].1, "zh");
+    }
+
+    // No itinerary_metadata + no key lines → empty transit fields.
+    #[test]
+    fn assemble_transit_empty_when_absent() {
+        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
+        let plan = assemble(&plan_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &[], &[]);
+        assert_eq!(plan.transit_hotel_station, "");
+        assert_eq!(plan.transit_hotel_station_zh, "");
+        assert!(plan.transit_key_lines.is_empty());
     }
 
     // A wrong poi_id must NOT silently fall back to a title match — the id is

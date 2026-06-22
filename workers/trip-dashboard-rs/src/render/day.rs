@@ -154,7 +154,9 @@ pub fn render(day: &Day, plan_id: &str, lang: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Day, Session, RouteSegment};
+    use crate::model::{Day, Session, RouteSegment, Activity};
+    /// Build an Activity carrying only a display title (the common test case).
+    fn act(title: &str) -> Activity { Activity { title: title.into(), ..Default::default() } }
     #[test]
     fn renders_route_block() {
         let day = Day {
@@ -194,7 +196,7 @@ mod tests {
         let day = Day {
             day_number: 1, date: "2026-06-12".into(), day_type: "arrival".into(),
             sessions: vec![
-                Session{ session_type:"morning".into(), activities: vec!["Arrive".into()], ..Default::default()},
+                Session{ session_type:"morning".into(), activities: vec![act("Arrive")], ..Default::default()},
                 Session{ session_type:"noon".into(), ..Default::default()}, // empty → skipped
             ],
             ..Default::default()

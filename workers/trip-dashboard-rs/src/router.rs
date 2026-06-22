@@ -158,7 +158,7 @@ fn is_safe_slug(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// Load the full plan via a 10-statement Turso pipeline. Query order matches
+/// Load the full plan via a 12-statement Turso pipeline. Query order matches
 /// model::assemble()'s argument order exactly.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
@@ -183,7 +183,8 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              FROM timesofday WHERE plan_id = '{slug}'"
         ),
         format!(
-            "SELECT day_number, session_type, title, poi_id \
+            "SELECT day_number, session_type, title, poi_id, \
+             book_by, booking_status, booking_url \
              FROM activities WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
         ),
         format!(
@@ -211,13 +212,24 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             "SELECT day_number, from_place, to_place, mode, duration_min, notes, start_time \
              FROM day_route_segments WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
         ),
+        // [10] transit cheat-sheet key lines (feature #4), keyed dest:lang at render time.
+        format!(
+            "SELECT destination, lang, line \
+             FROM itinerary_transit_key_lines WHERE plan_id = '{slug}' \
+             ORDER BY destination, lang, sort_order"
+        ),
+        // [11] itinerary metadata — home-base station (en + zh) for the cheat-sheet.
+        format!(
+            "SELECT transit_hotel_station, transit_hotel_station_zh \
+             FROM itinerary_metadata WHERE plan_id = '{slug}'"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 10 {
-        return Err(Error::RustError("Turso pipeline returned fewer than 10 results".into()));
+    if r.len() < 12 {
+        return Err(Error::RustError("Turso pipeline returned fewer than 12 results".into()));
     }
     Ok(model::assemble(
-        &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9],
+        &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
     ))
 }
 

@@ -4,6 +4,7 @@ pub mod map;
 pub mod summary;
 pub mod index;
 pub mod activity_text;
+pub mod alerts;
 pub use activity_text::render_activity_text;
 use crate::model::Plan;
 
@@ -26,11 +27,17 @@ pub fn page(title: &str, body: &str, lang: &str) -> String {
 /// auth-gated voucher link so a click carries the same token (else 403).
 pub fn render_plan(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let mut body = String::new();
+    // Non-meal pending-booking alerts BEFORE the summary (mirror render.ts:1388).
+    body.push_str(&alerts::render_pending_alerts(plan, lang, false));
     body.push_str(&summary::render(plan, lang, token));
     body.push_str(&map::plan_map_img(&plan.plan_id));
     for d in &plan.days {
         body.push_str(&day::render(d, &plan.plan_id, lang));
     }
+    // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),
+    // then the transit cheat-sheet (mirror render.ts:1394).
+    body.push_str(&alerts::render_pending_alerts(plan, lang, true));
+    body.push_str(&alerts::render_transit_summary(plan, lang));
     page(&plan.display_name, &body, lang)
 }
 
@@ -50,6 +57,17 @@ pub fn esc(s: &str) -> String {
         }
     }
     out
+}
+
+/// Percent-encode a string for a URL path/query component (RFC 3986 unreserved
+/// set passes through; space → `%20`; every other byte → `%XX` over its UTF-8
+/// bytes). Single shared implementation — do NOT re-roll this per module.
+pub fn urlencode(s: &str) -> String {
+    s.bytes().map(|b| match b {
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+        b' ' => "%20".to_string(),
+        _ => format!("%{b:02X}"),
+    }).collect()
 }
 
 /// Escape a URL for a double-quoted HTML attribute (href/src).

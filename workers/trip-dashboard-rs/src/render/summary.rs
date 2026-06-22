@@ -7,7 +7,7 @@
 
 use crate::model::Plan;
 use crate::turso::Row;
-use super::{esc, esc_url_attr};
+use super::{esc, esc_url_attr, urlencode};
 use crate::i18n::t;
 
 /// Read a Turso row field as an owned String (scalars come back as JSON strings).
@@ -18,6 +18,23 @@ fn rs(row: &Row, k: &str) -> String {
 /// Join non-empty parts with a single space (skips blanks so we don't emit "  ").
 fn join_parts(parts: &[String]) -> String {
     parts.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" ")
+}
+
+/// Wrap flight display text in a Google search link (opens new tab). Port of the
+/// TS worker's `flightLink` (render.ts:979-982): the search query is the
+/// PERCENT-ENCODED flight number ONLY (`number.trim()`), never the airline. With
+/// an empty flight number → plain escaped text (no anchor), mirroring the TS guard.
+fn flight_link(display_text: &str, flight_number: &str) -> String {
+    if flight_number.trim().is_empty() {
+        return esc(display_text);
+    }
+    let query = urlencode(flight_number.trim());
+    let url = format!("https://www.google.com/search?q={}", query);
+    format!(
+        "<a href=\"{}\" target=\"_blank\" rel=\"noopener\" style=\"color:inherit;text-decoration:underline dotted;text-underline-offset:3px\">{}</a>",
+        esc_url_attr(&url),
+        esc(display_text),
+    )
 }
 
 /// Render the hotel `notes` blob into grouped <ul> bullets.
@@ -93,9 +110,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             h.push_str("<div class=\"booking-item flight\">");
             h.push_str("<span class=\"booking-icon\">✈️</span>");
             h.push_str("<div class=\"booking-detail\">");
+            let display = join_parts(&[number.clone(), airline.clone()]);
             h.push_str(&format!(
-                "<div class=\"booking-value\">{} {}</div>",
-                esc(&number), esc(&airline)
+                "<div class=\"booking-value\">{}</div>",
+                flight_link(&display, &number)
             ));
             h.push_str(&format!(
                 "<div class=\"booking-sub\">{} → {}</div>",
@@ -224,6 +242,42 @@ mod tests {
         assert!(html.contains("CI120"));
         assert!(html.contains("TPE"));
         assert!(html.contains("OKA"));
+    }
+
+    #[test]
+    fn flight_number_is_clickable_google_search_link() {
+        let mut f = Row::new();
+        for (k, v) in [
+            ("flight_number", "CI 120"), ("airline", "China Airlines"),
+            ("departure_code", "TPE"), ("arrival_code", "OKA"),
+        ] {
+            f.insert(k.into(), serde_json::json!(v));
+        }
+        let plan = Plan { flights: vec![f], ..Default::default() };
+        let html = render(&plan, "en", None);
+        // (a) href contains the percent-encoded flight number ("CI 120" → "CI%20120").
+        assert!(
+            html.contains("href=\"https://www.google.com/search?q=CI%20120\""),
+            "encoded flight number missing from href; got: {html}"
+        );
+        // (b) visible anchor text includes the airline (airline is NOT in the query).
+        assert!(html.contains(">CI 120 China Airlines</a>"), "got: {html}");
+        // anchor styling/attrs mirror the TS port.
+        assert!(html.contains("target=\"_blank\""));
+        assert!(html.contains("rel=\"noopener\""));
+        assert!(html.contains("text-decoration:underline dotted"));
+    }
+
+    #[test]
+    fn flight_without_number_renders_plain_text_no_anchor() {
+        let mut f = Row::new();
+        f.insert("airline".into(), serde_json::json!("China Airlines"));
+        f.insert("departure_code".into(), serde_json::json!("TPE"));
+        let plan = Plan { flights: vec![f], ..Default::default() };
+        let html = render(&plan, "en", None);
+        // (c) empty flight_number → no <a tag in the flight value.
+        assert!(!html.contains("<a "), "unexpected anchor for empty flight number; got: {html}");
+        assert!(html.contains("China Airlines"), "got: {html}");
     }
 
     #[test]

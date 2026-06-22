@@ -18,6 +18,16 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("details", true) => "訂位明細",
         ("voucher", false) => "Hotel voucher (PDF)",
         ("voucher", true) => "住宿券 PDF",
+        // pending-booking alerts (feature #3)
+        ("bookBy", false) => "Book by",
+        ("bookBy", true) => "預約期限",
+        // transit cheat-sheet (feature #4) — ported from render.ts:24,50-51
+        ("transitCheat", false) => "Transit Cheat Sheet",
+        ("transitCheat", true) => "交通速查表",
+        ("dailyTransit", false) => "Daily transit: ~\u{00a5}600-800/person",
+        ("dailyTransit", true) => "每日交通：約\u{00a5}600-800/人",
+        ("homeBase", false) => "Home base",
+        ("homeBase", true) => "住宿",
         _ => "",
     }
 }
@@ -40,5 +50,16 @@ mod tests {
     fn voucher_label_is_bilingual() {
         assert_eq!(t("voucher", "en"), "Hotel voucher (PDF)");
         assert_eq!(t("voucher", "zh"), "住宿券 PDF");
+    }
+    #[test]
+    fn alert_and_transit_keys_are_bilingual() {
+        assert_eq!(t("bookBy", "en"), "Book by");
+        assert_eq!(t("bookBy", "zh"), "預約期限");
+        assert_eq!(t("transitCheat", "en"), "Transit Cheat Sheet");
+        assert_eq!(t("transitCheat", "zh"), "交通速查表");
+        assert_eq!(t("homeBase", "en"), "Home base");
+        assert_eq!(t("homeBase", "zh"), "住宿");
+        assert!(t("dailyTransit", "en").contains("Daily transit"));
+        assert!(t("dailyTransit", "zh").contains("每日交通"));
     }
 }
