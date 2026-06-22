@@ -85,15 +85,40 @@ async fn list_plans() -> Result<Vec<PlanSummary>, String> {
     Ok(order.into_iter().filter_map(|id| summaries.remove(&id)).collect())
 }
 
+/// Lifecycle of a single date range vs `today` (ISO YYYY-MM-DD): "active" while
+/// today is within [start, end], "upcoming" before it, "past" after. Shared
+/// single source of truth so `plans` and `status` agree.
+pub fn lifecycle(start_date: &str, end_date: &str, today: &str) -> &'static str {
+    if start_date <= today && today <= end_date {
+        "active"
+    } else if today < start_date {
+        "upcoming"
+    } else {
+        "past"
+    }
+}
+
+/// Today as ISO YYYY-MM-DD (UTC; `TRAVEL_TODAY` overrides for tests). Public so
+/// other views (e.g. `status`) compute the same "today" the plan list uses.
+pub fn today_iso_pub() -> String {
+    today_iso()
+}
+
 fn plan_status(plan: &PlanSummary, today: &str) -> String {
+    // A multi-anchor plan is "active" if ANY anchor is active, else "upcoming"
+    // if ANY anchor is still ahead, else "past". Reuse the single-range helper.
     if plan
         .anchors
         .iter()
-        .any(|a| a.start_date.as_str() <= today && a.end_date.as_str() >= today)
+        .any(|a| lifecycle(&a.start_date, &a.end_date, today) == "active")
     {
         return "active".to_string();
     }
-    if plan.anchors.iter().any(|a| a.end_date.as_str() >= today) {
+    if plan
+        .anchors
+        .iter()
+        .any(|a| lifecycle(&a.start_date, &a.end_date, today) == "upcoming")
+    {
         return "upcoming".to_string();
     }
     "past".to_string()
@@ -167,4 +192,23 @@ fn minimal_utc_date() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_classifies_past_active_upcoming() {
+        // okinawa-2026 (2026-06-12 → 06-16) vs today 2026-06-22 → past
+        assert_eq!(lifecycle("2026-06-12", "2026-06-16", "2026-06-22"), "past");
+        // during the trip → active (inclusive on both ends)
+        assert_eq!(lifecycle("2026-06-12", "2026-06-16", "2026-06-12"), "active");
+        assert_eq!(lifecycle("2026-06-12", "2026-06-16", "2026-06-14"), "active");
+        assert_eq!(lifecycle("2026-06-12", "2026-06-16", "2026-06-16"), "active");
+        // before the trip → upcoming
+        assert_eq!(lifecycle("2026-06-12", "2026-06-16", "2026-06-01"), "upcoming");
+        // day after end → past
+        assert_eq!(lifecycle("2026-06-12", "2026-06-16", "2026-06-17"), "past");
+    }
 }

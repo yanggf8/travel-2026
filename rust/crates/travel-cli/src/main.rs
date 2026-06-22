@@ -73,6 +73,7 @@ mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
+mod snapshot_maps;      // snapshot-maps (wrap scripts/snapshot-maps.sh: capture+upload route maps)
 
 use std::{env, io::Read, process};
 
@@ -452,6 +453,11 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             check_maps_fresh::run(rest).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "snapshot-maps" => {
+            let plan_id = plan_resolver::resolve_plan_id(rest).await.unwrap_or_default();
+            snapshot_maps::run(rest, plan_id).await?;
+            Ok(())
+        }
 
         // ── P1 Rust-port dispatch (pre-wired; modules filled per batch) ──
 
@@ -665,7 +671,7 @@ SHOP / OFFERS\n\
 \n\
 VALIDATE / CHECKS\n\
   validate data | doctor | validate-itinerary | check-hours\n\
-  check-booking-integrity | check-maps-fresh | mark-maps-snapshotted\n\
+  check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
   run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
 \n\
 COMPARE / UTIL\n\

@@ -47,6 +47,16 @@ fn render(view: &PlanView, full: bool) -> String {
             format_date(&d.end_date),
             d.days
         ));
+        // Trip lifecycle vs today (PAST / ACTIVE / UPCOMING) — surfaces at a glance
+        // that e.g. a trip has already happened, which the process-status block alone
+        // does not. Uses the same shared helper + "today" the `plans` list uses.
+        let today = crate::plans::today_iso_pub();
+        let (label, icon) = match crate::plans::lifecycle(&d.start_date, &d.end_date, &today) {
+            "active" => ("ACTIVE (in progress)", "🟢"),
+            "upcoming" => ("UPCOMING", "🔜"),
+            _ => ("PAST (completed)", "✅"),
+        };
+        out.push_str(&format!("Trip Status: {icon} {label}\n"));
     }
 
     out.push('\n');
