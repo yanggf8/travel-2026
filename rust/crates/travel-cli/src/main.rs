@@ -258,7 +258,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "share-token" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel share-token\n  (plan resolved from $TRAVEL_PLAN_ID; mints an opaque per-plan view-scope token for the trip dashboard)");
+                println!("Usage:\n  travel share-token          mint a new per-plan view-scope token + print its dashboard URL\n  travel share-token --show   list the plan's existing token(s) + URL (read-only, no mint)\n  (plan resolved from $TRAVEL_PLAN_ID; URL host overridable via TRAVEL_DASHBOARD_HOST)");
                 return Ok(());
             }
             let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());

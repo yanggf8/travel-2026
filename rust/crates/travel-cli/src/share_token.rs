@@ -18,18 +18,39 @@
 
 use libsql::Connection;
 
-/// Dashboard host is not finalized yet — use a literal placeholder in the URL.
-const DASHBOARD_HOST: &str = "<dashboard-host>";
+/// Live host for the Rust dashboard worker (the read path the share token gates).
+/// Override with `TRAVEL_DASHBOARD_HOST` when the URL cutover reclaims the primary
+/// `trip-dashboard.yanggf.workers.dev` name.
+const DEFAULT_DASHBOARD_HOST: &str = "trip-dashboard-rs.yanggf.workers.dev";
+
+fn dashboard_host() -> String {
+    std::env::var("TRAVEL_DASHBOARD_HOST")
+        .ok()
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_DASHBOARD_HOST.to_string())
+}
+
+/// Build the shareable dashboard URL. The Worker addresses plans by hyphenated slug.
+fn share_url(plan_id: &str, token: &str) -> String {
+    let plan_slug = plan_id.replace('_', "-");
+    format!("https://{}/?plan={plan_slug}&token={token}", dashboard_host())
+}
 
 /// CLI entry: `travel share-token`. The plan is resolved by the dispatcher (via
 /// TRAVEL_PLAN_ID / default), matching the other `set-*` mutation arms in this
-/// crate; this command takes no required positional args.
+/// crate. Default action MINTS a fresh token; `--show` instead LISTS the existing
+/// token(s) for the plan + their share URLs (read-only — no new token minted).
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     // Accept-and-skip the flags the dispatcher / resolver own so the catch-all
-    // doesn't reject e.g. `--dest` that other commands tolerate.
+    // doesn't reject e.g. `--dest` that other commands tolerate. `--show` is ours.
+    let mut show = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--show" | "--list" => {
+                show = true;
+                i += 1;
+            }
             "--plan-id" | "--dest" | "--travel-date" | "--travel-start" | "--travel-end" => {
                 i += 2; // skip flag + its value
             }
@@ -42,29 +63,81 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
     }
 
-    let conn = match crate::db::connect_write().await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: failed to connect to Turso (write tier): {e}");
-            std::process::exit(1);
+    if show {
+        // Read-only path: list existing tokens (no mint). Read tier suffices.
+        let conn = match crate::db::connect_read().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: failed to connect to Turso (read tier): {e}");
+                std::process::exit(1);
+            }
+        };
+        match list_tokens(&conn, &plan_id).await {
+            Ok(tokens) if tokens.is_empty() => {
+                eprintln!(
+                    "No share token for plan_id={plan_id}. Mint one with: travel share-token"
+                );
+                std::process::exit(1);
+            }
+            Ok(tokens) => {
+                // Newest first; print token + ready-to-open URL for each.
+                for (token, created_at) in &tokens {
+                    println!("token: {token}  (created {created_at})");
+                    println!("url:   {}", share_url(&plan_id, token));
+                }
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("Error: share-token --show failed: {e}");
+                std::process::exit(1);
+            }
         }
-    };
-
-    match execute(&conn, &plan_id).await {
-        Ok(token) => {
-            // Plan slug for the URL: the Worker addresses plans by hyphenated slug.
-            let plan_slug = plan_id.replace('_', "-");
-            println!("token: {token}");
-            println!(
-                "url: https://{DASHBOARD_HOST}/?plan={plan_slug}&token={token}"
-            );
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Error: share-token failed: {e}");
-            std::process::exit(1);
+    } else {
+        let conn = match crate::db::connect_write().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: failed to connect to Turso (write tier): {e}");
+                std::process::exit(1);
+            }
+        };
+        match execute(&conn, &plan_id).await {
+            Ok(token) => {
+                println!("token: {token}");
+                println!("url:   {}", share_url(&plan_id, &token));
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("Error: share-token failed: {e}");
+                std::process::exit(1);
+            }
         }
     }
+}
+
+/// List existing share tokens for a plan, newest first, as (token, created_at).
+async fn list_tokens(
+    conn: &Connection,
+    plan_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT token, created_at FROM plan_share_tokens \
+             WHERE plan_id = ?1 ORDER BY created_at DESC",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("plan_share_tokens query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("plan_share_tokens row read failed: {e}"))?
+    {
+        let token: String = row.get(0).map_err(|e| format!("token read: {e}"))?;
+        let created_at: String = row.get(1).map_err(|e| format!("created_at read: {e}"))?;
+        out.push((token, created_at));
+    }
+    Ok(out)
 }
 
 async fn execute(conn: &Connection, plan_id: &str) -> Result<String, String> {
@@ -136,5 +209,17 @@ mod tests {
             mint_token(),
             "successive tokens must differ"
         );
+    }
+
+    #[test]
+    fn share_url_uses_real_host_and_hyphen_slug() {
+        // underscore plan_id → hyphenated slug; real default host (not a placeholder).
+        let u = share_url("okinawa_2026", "deadbeef");
+        assert_eq!(
+            u,
+            "https://trip-dashboard-rs.yanggf.workers.dev/?plan=okinawa-2026&token=deadbeef"
+        );
+        assert!(!u.contains('_'), "slug must be hyphenated");
+        assert!(!u.contains("<"), "no placeholder host left in the URL");
     }
 }
