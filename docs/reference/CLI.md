@@ -57,6 +57,7 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 # (the old `db:import:turso` raw-offers loader is retired — the chromeport CDP path now
 #  imports directly to Turso: `./bin/chromeport parse capture <id> --source <id>`. See Scraping.)
 ./bin/travel db status                           # show DB state
+./bin/travel db token-status                      # diagnose Turso creds: which TRAVEL_TURSO_* env vars are set (values never printed) + live read/write probe; prints the export fix + exits 1 on failure
 ./bin/travel db migrate                          # create/upgrade tables (idempotent)
 ./bin/travel db seed plans                       # one-time plan seed
 ./bin/travel db exec "<sql>"                     # one-shot raw SQL (migrations/backfills only)
@@ -81,6 +82,21 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel validate data                       # data integrity check
 ./bin/travel doctor                              # full system health check (also runs the map-link lint across all plans; cross-country/ocean-route legs fail as errors). Emits a per-plan [reservations] info line for sit-down restaurants not yet tracked in the booking ledger (advisory — never fails the check)
 ```
+
+## Dashboard / Maps
+The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust**) serving Turso directly — live at **`https://trip-dashboard-rs.yanggf.workers.dev`**. Read access is token-gated (owner token, or a per-plan share token via `?token=`). See CLAUDE.md "Trip Dashboard" for deploy.
+```bash
+# Share tokens (gate per-plan dashboard viewing). plan resolved from $TRAVEL_PLAN_ID / --plan-id.
+./bin/travel share-token                          # mint a NEW per-plan view token + print its ready-to-open dashboard URL
+./bin/travel share-token --show                   # LIST the plan's existing token(s) + URL (read-only, no mint) — use this to re-find a URL
+#   URL host defaults to trip-dashboard-rs.yanggf.workers.dev; override with TRAVEL_DASHBOARD_HOST (e.g. after the primary-URL cutover)
+
+# Route maps (per-day + plan PNGs: numbered markers + route polyline, auto-framed; chromeport→Leaflet→R2).
+./bin/travel snapshot-maps [--dest <slug>]        # (re)capture + upload the route-map PNGs (wraps scripts/snapshot-maps.sh). Needs Chrome at the chromeport CDP endpoint + wrangler auth.
+./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
+./bin/travel check-maps-fresh [--plan-id <id>]    # lint: flag map PNGs that are stale vs the latest itinerary edit (advisory; never fails)
+```
+Only activities linked to a POI with lat/lon appear on the maps; non-place lines (flights, airport steps, bare meals) are excluded from both the maps and the per-stop Google-Maps links.
 
 ## Mutations
 ```bash
