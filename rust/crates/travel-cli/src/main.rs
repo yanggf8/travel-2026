@@ -9,6 +9,7 @@ mod db_exec;
 mod db_schema;
 mod db_query_offers;
 mod db_status;
+mod db_token_status;    // db token-status (diagnose Turso credential resolution)
 mod destination_ref;
 mod flights;
 mod freshness;
@@ -401,6 +402,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             db_status::run().await
         }
+        [group, sub, rest @ ..] if group == "db" && sub == "token-status" => {
+            db_token_status::run(rest).await
+        }
         [group, sub, rest @ ..] if group == "db" && sub == "exec" => db_exec::run(rest).await,
         [group, sub, rest @ ..] if group == "db" && sub == "schema" => db_schema::run(rest).await,
         [group, sub, rest @ ..] if group == "db" && sub == "cleanup-deleted" => {
@@ -680,7 +684,7 @@ COMPARE / UTIL\n\
   fetch-weather [--dest slug] | share-token | mark-plan-deleted <plan>\n\
 \n\
 DB\n\
-  db status | db schema [<table>] | db exec \"<SQL>\" | db migrate\n\
+  db status | db token-status | db schema [<table>] | db exec \"<SQL>\" | db migrate\n\
   db seed {{plans|destination-refs|ota-knowledge|test-plan}} | db sync {{destinations|events}}\n\
   db fetch holidays | db cleanup-deleted [--confirm] | db query-offers\n\
 \n\
