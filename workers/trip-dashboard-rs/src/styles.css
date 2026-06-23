@@ -431,6 +431,60 @@ h1 {
   .session { grid-column: 1; }
 }
 
+/* ---- Auth / OAuth pages ---- */
+.auth-page {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px 20px;
+  margin-top: 24px;
+  text-align: center;
+}
+.auth-page h1 {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  padding: 0;
+}
+.auth-page p {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin: 8px 0;
+  line-height: 1.5;
+}
+.auth-hint {
+  font-size: 13px;
+  margin-top: 12px;
+}
+.gh-btn {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 12px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: #24292f;
+  border-radius: 8px;
+  text-decoration: none;
+  box-shadow: var(--shadow);
+}
+.gh-btn:active {
+  background: #1b1f23;
+}
+.signin-banner {
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 8px 4px 0;
+  text-align: right;
+}
+.signin-banner a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.signin-banner a:active {
+  text-decoration: underline;
+}
+
 /* Print */
 @media print {
   body { max-width: none; padding: 0; }

@@ -5,6 +5,7 @@
 
 use worker::*;
 use std::collections::HashMap;
+use worker_github_oauth::{self as gho, CallbackOutcome, OauthConfig};
 use crate::{auth, turso, model, render};
 
 /// 1×1 transparent PNG — returned when an R2 map image is missing, so the
@@ -50,11 +51,46 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         return serve_placeholder();
     }
 
+    let public_origin = env.secret("PUBLIC_ORIGIN")?.to_string();
+    let cfg = OauthConfig {
+        callback_url: format!("{public_origin}/auth/callback"),
+        user_agent: "trip-dashboard-rs".into(),
+        cookie_prefix: "td".into(),
+    };
+    let lang = if query.get("lang").map(|s| s.as_str()) == Some("en") {
+        "en"
+    } else {
+        "zh"
+    };
+
+    // OAuth routes — no Turso read.
+    match path.as_str() {
+        "/auth/login" => {
+            let next = url
+                .query_pairs()
+                .find(|(k, _)| k == "next")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_else(|| "/".into());
+            return gho::start_login(&env, &cfg, &next);
+        }
+        "/auth/callback" => {
+            return match gho::callback(&req, &env, &cfg, &url).await? {
+                CallbackOutcome::Authorized(r) => Ok(r),
+                CallbackOutcome::BadState(r) => Ok(r),
+                CallbackOutcome::Denied { login, .. } => Ok(Response::from_html(
+                    render::auth::not_authorized_page(&login, lang),
+                )?
+                .with_status(403)),
+            };
+        }
+        "/auth/logout" => return gho::logout(&cfg),
+        _ => {}
+    }
+
     // All other routes: load secrets + resolve auth BEFORE any Turso read.
     let turso_url = env.secret("TURSO_URL")?.to_string();
     let turso_token = env.secret("TURSO_TOKEN")?.to_string(); // READ token
     let owner_token = env.secret("OWNER_TOKEN")?.to_string();
-    let lang = if query.get("lang").map(|s| s.as_str()) == Some("en") { "en" } else { "zh" };
 
     // Load share tokens (one query; small table).
     let share_rows = turso::pipeline(
@@ -74,7 +110,24 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
             }
         }
     }
-    let scope = auth::resolve(query.get("token").map(|s| s.as_str()), &owner_token, &shares);
+
+    let secret = env
+        .secret("SESSION_SECRET")
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let allowed = env
+        .var("ALLOWED_LOGIN")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    let allowed_id = gho::allowed_id(&env);
+    let session_login = gho::read_cookie(&req, &cfg.session_cookie())
+        .and_then(|c| gho::verify_session(&secret, &allowed, allowed_id, &c));
+    let is_owner_session = session_login.is_some();
+
+    let mut scope = auth::resolve(query.get("token").map(|s| s.as_str()), &owner_token, &shares);
+    if is_owner_session {
+        scope = auth::AccessScope::Owner;
+    }
 
     // /voucher/<plan>/<file> → R2 VOUCHERS bucket passthrough (PDF).
     //
@@ -105,7 +158,7 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
     // Index — owner only.
     if path == "/" && query.get("plan").is_none() {
         if scope != auth::AccessScope::Owner {
-            return Response::error("Forbidden", 403);
+            return Ok(Response::from_html(render::auth::sign_in_page(lang))?);
         }
         let plans = turso::pipeline(
             &turso_url,
@@ -122,24 +175,29 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         )
         .await?;
         let rows = plans.first().cloned().unwrap_or_default();
-        return Response::from_html(render::page(
-            "Plans",
-            &render::index::render(&rows, lang),
-            lang,
-        ));
+        // Owner banner name: the session login if present, else the configured
+        // ALLOWED_LOGIN (never a hardcoded handle — honors "no hardcode").
+        let owner_login = session_login.as_deref().unwrap_or(allowed.as_str());
+        let body = format!(
+            "{}{}",
+            render::auth::signed_in_banner(owner_login, lang),
+            render::index::render(&rows, lang),
+        );
+        return Response::from_html(render::page("Plans", &body, lang));
     }
 
     // Single plan view.
     if let Some(slug) = query.get("plan") {
         if !auth::can_view_plan(&scope, slug) {
-            return Response::error("Forbidden", 403);
+            return Response::from_html(render::auth::bad_share_page(lang))
+                .map(|r| r.with_status(403));
         }
         let plan = load_plan(&turso_url, &turso_token, slug).await?;
         let token = query.get("token").map(|s| s.as_str());
         return Response::from_html(render::render_plan(&plan, lang, token));
     }
 
-    Response::error("Forbidden", 403)
+    Ok(Response::from_html(render::auth::sign_in_page(lang))?)
 }
 
 fn serve_placeholder() -> Result<Response> {

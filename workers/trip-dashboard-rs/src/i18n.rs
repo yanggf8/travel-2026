@@ -28,6 +28,23 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("dailyTransit", true) => "每日交通：約\u{00a5}600-800/人",
         ("homeBase", false) => "Home base",
         ("homeBase", true) => "住宿",
+        // GitHub OAuth auth pages
+        ("signIn", false) => "Sign in with GitHub",
+        ("signIn", true) => "使用 GitHub 登入",
+        ("signedInAs", false) => "Signed in as",
+        ("signedInAs", true) => "已登入",
+        ("logout", false) => "Log out",
+        ("logout", true) => "登出",
+        ("notAuthorized", false) => "Not authorized",
+        ("notAuthorized", true) => "未授權",
+        ("notAuthorizedBody", false) => "This account does not have access to the owner dashboard.",
+        ("notAuthorizedBody", true) => "此帳號無法存取擁有者儀表板。",
+        ("badShare", false) => "Invalid share link",
+        ("badShare", true) => "分享連結無效",
+        ("badShareBody", false) => "This trip link needs a valid share token.",
+        ("badShareBody", true) => "此行程連結需要有效的分享權杖。",
+        ("ownerSignIn", false) => "Owner? Sign in",
+        ("ownerSignIn", true) => "擁有者？登入",
         _ => "",
     }
 }
