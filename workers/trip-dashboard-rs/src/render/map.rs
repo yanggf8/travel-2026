@@ -39,7 +39,7 @@ pub fn plan_map_slot(plan_id: &str, has_map: bool, lang: &str) -> String {
     let caption = i18n::t("tripOverview", lang);
     if has_map {
         format!(
-            "<figure class=\"map-frame\"><img class=\"planmap\" loading=\"lazy\" alt=\"{}\" \
+            "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
              src=\"/map/{}/plan.png\"><figcaption>{}</figcaption></figure>",
             esc(caption),
             esc_url_attr(plan_id),
@@ -61,7 +61,7 @@ pub fn day_map_slot(plan_id: &str, day_number: i64, has_map: bool, lang: &str) -
     let caption = day_route_caption(day_number, lang);
     if has_map {
         format!(
-            "<figure class=\"map-frame\"><img class=\"daymap\" loading=\"lazy\" alt=\"{}\" \
+            "<figure class=\"map-frame\"><img class=\"daymap\" alt=\"{}\" \
              src=\"/map/{}/day-{}.png\"><figcaption>{}</figcaption></figure>",
             esc(&caption),
             esc_url_attr(plan_id),
