@@ -43,6 +43,9 @@ drives the live OTA page, captures plain text → Turso `captures`, then rule-pa
 ./bin/chromeport fetch interact "<url>" --source <id> --step ...   # drive the live page (or: browser snapshot)
 ./bin/chromeport verify <source-id> <capture-id>                  # read-only regex diagnostics
 ./bin/chromeport parse capture <capture-id> --source <id>         # rule-parse → import to Turso
+# verify/parse FAIL if the capture's stored source ≠ --source (guards against parsing a
+# capture under the wrong rules). Add --allow-source-override for an intentional re-parse
+# (e.g. re-sourcing an `unknown`-tagged snapshot).
 ```
 
 See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper-migration.md`.

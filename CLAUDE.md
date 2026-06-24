@@ -188,9 +188,13 @@ URLs 404 / hit the wrong page. Scrape via the Rust CDP driver against real Chrom
 
 The driver navigates/clicks the actual UI (no fragile URL templates). Captures live in the
 Turso `captures` table; offers go to the `offers` table. Parser rules per OTA: `parser_rules` table.
-NOTE: flight/hotel-only OTAs (tigerair, google_flights, trip, agoda, eztravel) are seeded
-with `has_custom_parser=0`. The generic parser has flight/hotel-specific required fields now; each
-source still needs a real live Chrome scrape before decommission status can advance.
+NOTE: every source uses the generic regex parser (`has_custom_parser=0`) EXCEPT `settour`, whose
+Rust override `parse_settour` is now wired on (`has_custom_parser=1`). The generic parser has
+flight/hotel-specific required fields. **No source is live-verified yet** — each still needs a real
+live Chrome capture + `verify` + `parse` before its archived Python parser can be deleted. The
+migration plan + per-source checklist + decommission gate live in
+`docs/plans/2026-06-24-ota-migration-chromeport.md`. Guard: `parse capture` / `verify` now FAIL on a
+capture↔`--source` mismatch (pass `--allow-source-override` for the rare intentional re-parse).
 
 Full skill reference: `src/skills/scrape-ota/SKILL.md`
 
@@ -447,5 +451,5 @@ Remaining agenda (none blocking — the project is between trips and the live DB
 
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **Worker `workers-rs` port — DONE & DEPLOYED** (PR #4, merged to master). The Rust dashboard lives at `workers/trip-dashboard-rs/` and is live at `trip-dashboard-rs.yanggf.workers.dev` (keyless maps, token auth, meal-pin links). The old TS worker (`workers/trip-dashboard/`) still exists and still serves the original URL; the `-rs` worker is meant to eventually reclaim it (a separate cutover, not yet done). See "Trip Dashboard — two workers" below.
-- **OTA decommission gate** (user-driven) — only `settour` is live-verified; the rest have snippet fixtures only. Their archived Python parsers can't be deleted until each passes a real `chromeport verify` against a live capture — needs human browser sessions, not code.
+- **OTA migration to chromeport** (planned, code pre-work DONE; per-source verification PENDING) — **no source is live-verified yet** (all 10 had identical seed `fetched_at` + stale captures; the earlier "settour is live-verified" claim was wrong). Plan: `docs/plans/2026-06-24-ota-migration-chromeport.md` (Codex-reviewed + corroborated). The mechanical code batch is shipped (commit `5652b65`): settour's Rust parser wired on, dead seed `source_url`s nulled, `trip`/`eztravel` source-inference, generalized `content_snippet` needles, and a capture↔source mismatch guard (`--allow-source-override` to bypass). What's LEFT is human-in-the-loop: per-source live Chrome capture + regex tuning against the G0–G6 decommission gate, then delete each archived Python parser. Tier order: FIT packages (settour first) → flights → agoda.
 - **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.
