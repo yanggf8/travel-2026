@@ -351,6 +351,10 @@ h1 {
   padding: 6px 0;
   font-size: 13px;
   border-bottom: 1px solid var(--border);
+  /* wrap long place names / Maps links so a single line can't blow out the
+     grid column width (see the minmax(0,1fr) note in the desktop @media). */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .stoplist li:last-child { border-bottom: none; }
 .stoplist a {
@@ -458,7 +462,13 @@ h1 {
   .day {
     clear: both;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    /* minmax(0,1fr), NOT 1fr: a plain `1fr` track has a min-size of `auto` =
+       min-content, so a non-wrapping line in a .stoplist <li> (e.g. a long Maps
+       link/place name with no break points) forced column 1 to its content width
+       (~2385px) and collapsed column 2 to ~8px — the day-1..3 maps vanished on
+       desktop (those days had the long lines; sparse days 4-5 did not). minmax(0,1fr)
+       lets each track shrink below its content, keeping the two columns equal. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     column-gap: 16px;
     align-items: start;
   }
