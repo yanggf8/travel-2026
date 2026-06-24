@@ -88,11 +88,22 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             capture_id,
             source_id,
             dry_run,
-        }) => run_async(parse_capture(capture_id, source_id, dry_run)),
+            allow_source_override,
+        }) => run_async(parse_capture(
+            capture_id,
+            source_id,
+            dry_run,
+            allow_source_override,
+        )),
         Command::Verify {
             source_id,
             capture_id,
-        } => run_async(verify_capture(source_id, capture_id)),
+            allow_source_override,
+        } => run_async(verify_capture(
+            source_id,
+            capture_id,
+            allow_source_override,
+        )),
         Command::ParserRules(ParserRulesCommand::SeedDefaults) => {
             run_async(seed_default_parser_rules())
         }
@@ -122,6 +133,7 @@ enum Command {
     Verify {
         source_id: String,
         capture_id: String,
+        allow_source_override: bool,
     },
     ParserRules(ParserRulesCommand),
     Db(DbCommand),
@@ -142,6 +154,7 @@ enum ParseCommand {
         capture_id: String,
         source_id: String,
         dry_run: bool,
+        allow_source_override: bool,
     },
 }
 
@@ -303,14 +316,16 @@ impl Cli {
                         capture_id: capture_id.to_string(),
                         source_id,
                         dry_run: has_flag(rest, "--dry-run"),
+                        allow_source_override: has_flag(rest, "--allow-source-override"),
                     }),
                 })
             }
-            [cmd, source_id, capture_id] if cmd == "verify" => Ok(Self {
+            [cmd, source_id, capture_id, rest @ ..] if cmd == "verify" => Ok(Self {
                 endpoint,
                 command: Command::Verify {
                     source_id: source_id.to_string(),
                     capture_id: capture_id.to_string(),
+                    allow_source_override: has_flag(rest, "--allow-source-override"),
                 },
             }),
             [group, subgroup, cmd]
@@ -1106,6 +1121,10 @@ fn infer_source_id(url: &str) -> String {
         "agoda"
     } else if lower.contains("google.com/travel/flights") {
         "google_flights"
+    } else if lower.contains("trip.com") {
+        "trip"
+    } else if lower.contains("eztravel.com.tw") {
+        "eztravel"
     } else {
         "unknown"
     }
@@ -1115,16 +1134,18 @@ fn infer_source_id(url: &str) -> String {
 fn content_snippet(raw_text: &str) -> String {
     let collapsed = raw_text.split_whitespace().collect::<Vec<_>>().join(" ");
     for needle in [
-        "HOTEL",
-        "AZAT",
         "China Airlines",
         "中華航空",
         "華航",
         "Naha",
         "那霸",
-        "5天",
-        "6/12",
-        "2026/06/12",
+        "沖繩",
+        "OKA",
+        "TPE",
+        "出發日期",
+        "機票",
+        "航班",
+        "飯店",
     ] {
         if let Some(index) = collapsed.find(needle) {
             return snippet_around_byte_index(&collapsed, index, 180, 420);
@@ -1574,8 +1595,8 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             airline_rx: String::new(),
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
-            has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/settour.py".to_string()),
+            has_custom_parser: true,
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1594,7 +1615,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/liontravel.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1613,7 +1634,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/lifetour.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1632,7 +1653,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/besttour.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1651,7 +1672,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/travel4u.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1670,7 +1691,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/tigerair.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1689,7 +1710,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/google_flights.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1708,7 +1729,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "USD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/trip_com.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1728,7 +1749,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: r"(?m)^(.+?)\s*\([A-Za-z\s&'.,-]*(?:Hotel|Inn|Resort|Hostel|House|Suites?)[A-Za-z\s&'.,-]*\)".to_string(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/agoda.py".to_string()),
+            source_url: None,
             fetched_at: fetched_at.clone(),
         },
         turso::ParserRule {
@@ -1747,7 +1768,7 @@ fn default_parser_rules() -> Vec<turso::ParserRule> {
             hotel_name_rx: String::new(),
             currency: "TWD".to_string(),
             has_custom_parser: false,
-            source_url: Some("repo:scripts/scrapers/parsers/eztravel.py".to_string()),
+            source_url: None,
             fetched_at,
         },
     ]
@@ -1760,6 +1781,7 @@ async fn parse_capture(
     capture_id: String,
     source_id: String,
     dry_run: bool,
+    allow_source_override: bool,
 ) -> Result<(), CliError> {
     let db = if dry_run {
         turso::TravelDb::connect_read().await
@@ -1769,7 +1791,7 @@ async fn parse_capture(
     .map_err(CliError::runtime)?;
 
     // Read the capture's raw_text from Turso (plain text, not a JSON file).
-    let (_stored_source, url, raw_text) = db
+    let (stored_source, url, raw_text) = db
         .get_capture(&capture_id)
         .await
         .map_err(CliError::runtime)?
@@ -1778,6 +1800,12 @@ async fn parse_capture(
                 "no capture with capture_id='{capture_id}' in Turso; run a fetch/snapshot first"
             ))
         })?;
+    if stored_source != source_id && !allow_source_override {
+        return Err(CliError::runtime(format!(
+            "capture '{capture_id}' was captured as source '{stored_source}' but --source is '{source_id}'; \
+             pass --allow-source-override to parse it under a different source"
+        )));
+    }
     let capture = TravelCapture {
         schema: default_schema(),
         source_id: source_id.clone(),
@@ -1854,7 +1882,11 @@ async fn parse_capture(
 }
 
 /// Verify one stored capture against one parser_rules row without importing.
-async fn verify_capture(source_id: String, capture_id: String) -> Result<(), CliError> {
+async fn verify_capture(
+    source_id: String,
+    capture_id: String,
+    allow_source_override: bool,
+) -> Result<(), CliError> {
     let db = turso::TravelDb::connect_read()
         .await
         .map_err(CliError::runtime)?;
@@ -1867,8 +1899,11 @@ async fn verify_capture(source_id: String, capture_id: String) -> Result<(), Cli
                 "no capture with capture_id='{capture_id}' in Turso; run a fetch/snapshot first"
             ))
         })?;
-    if stored_source != source_id {
-        println!("warning\tcapture_source_mismatch\tstored={stored_source}\trequested={source_id}");
+    if stored_source != source_id && !allow_source_override {
+        return Err(CliError::runtime(format!(
+            "capture '{capture_id}' was captured as source '{stored_source}' but verify --source is '{source_id}'; \
+             pass --allow-source-override to verify it under a different source"
+        )));
     }
     let rule = db
         .parser_rule(&source_id)
