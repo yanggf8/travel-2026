@@ -311,6 +311,51 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // 12c. map_artifacts — manifest of dashboard map PNGs uploaded to R2 by
+    //      scripts/snapshot-maps.sh. The CLI lint reads this (no R2 client) to
+    //      flag MISSING/EMPTY keys per plan.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS map_artifacts (
+  plan_id TEXT NOT NULL,
+  map_key TEXT NOT NULL,
+  byte_size INTEGER,
+  sha256 TEXT,
+  status TEXT NOT NULL,
+  skip_reason TEXT,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY (plan_id, map_key)
+);"#,
+    )
+    .await;
+
+    // 12d. route_place_geocodes — keyless-geocoding cache (Nominatim/OSM) for
+    //      day_route_segments place names (hotel/airport/restaurant/mall/etc. that
+    //      are NOT sightseeing destination_pois). snapshot-maps.sh resolves each
+    //      route place to lat/lon via this cache (write-through), so a re-run is
+    //      free and we respect Nominatim's ≤1 req/s policy. `query_key` is the
+    //      normalized lookup key; `confidence`/`review` gate plotting low-quality
+    //      matches; `failure_reason` records a no-result so we don't re-hit it.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS route_place_geocodes (
+  query_key TEXT NOT NULL,
+  raw_place TEXT NOT NULL,
+  lat REAL,
+  lon REAL,
+  display_name TEXT,
+  osm_id TEXT,
+  osm_type TEXT,
+  provider TEXT NOT NULL,
+  confidence TEXT,
+  review INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (query_key)
+);"#,
+    )
+    .await;
+
     // 13. Rename plans_current → plans.
     if table_exists(&conn, "plans_current").await {
         exec_lenient(&conn, "ALTER TABLE plans_current RENAME TO plans").await;

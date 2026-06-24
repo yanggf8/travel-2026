@@ -1,16 +1,82 @@
+use std::collections::HashMap;
 use crate::model::Stop;
+use crate::i18n;
 use super::{esc, esc_url_attr};
 
-/// <img> pointing at the R2-served map for this day. Image key convention:
-/// `<plan_id>/day-<n>.png` (plan-level = `<plan_id>/plan.png`), served by the
-/// worker's `/map/*` route (Task 9) from the MAPS bucket.
-/// NOTE: the src is built ONLY from trusted, controlled components (plan_id +
-/// day number) — never from free user text — so it is a safe URL by construction.
-pub fn day_map_img(plan_id: &str, day_number: i64) -> String {
-    format!("<img class=\"daymap\" loading=\"lazy\" alt=\"Day {day_number} map\" src=\"/map/{}/day-{}.png\">", esc_url_attr(plan_id), day_number)
+/// PNG magic bytes — first four bytes of every valid PNG file.
+const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
+
+/// Minimum byte length for a real map PNG. Objects at or below 64 bytes are
+/// treated as garbage/placeholder (the worker's own 1×1 placeholder is 66 bytes).
+pub const MIN_MAP_PNG_BYTES: usize = 64;
+
+/// Server-side map availability for a plan page render. Built in the async router
+/// (R2 HEAD/get per key) and threaded into the sync render layer.
+#[derive(Debug, Default)]
+pub struct MapStatus {
+    pub plan: bool,
+    pub days: HashMap<i64, bool>,
 }
-pub fn plan_map_img(plan_id: &str) -> String {
-    format!("<img class=\"planmap\" loading=\"lazy\" alt=\"Trip map\" src=\"/map/{}/plan.png\">", esc_url_attr(plan_id))
+
+/// True when the body is a real PNG map (not a 1-byte garbage capture or tiny stub).
+pub fn is_valid_map_png(bytes: &[u8]) -> bool {
+    bytes.len() > MIN_MAP_PNG_BYTES
+        && bytes.len() >= PNG_MAGIC.len()
+        && bytes[..PNG_MAGIC.len()] == PNG_MAGIC
+}
+
+fn day_route_caption(day_number: i64, lang: &str) -> String {
+    if lang == "en" {
+        format!("Day {day_number} route")
+    } else {
+        format!("第 {day_number} 天路線")
+    }
+}
+
+/// Framed plan-overview map slot. Emits a real `<img>` only when `has_map` is true;
+/// otherwise a styled missing placeholder (never a blind broken-image `<img>`).
+pub fn plan_map_slot(plan_id: &str, has_map: bool, lang: &str) -> String {
+    let caption = i18n::t("tripOverview", lang);
+    if has_map {
+        format!(
+            "<figure class=\"map-frame\"><img class=\"planmap\" loading=\"lazy\" alt=\"{}\" \
+             src=\"/map/{}/plan.png\"><figcaption>{}</figcaption></figure>",
+            esc(caption),
+            esc_url_attr(plan_id),
+            esc(caption),
+        )
+    } else {
+        let not_avail = i18n::t("mapNotAvailable", lang);
+        format!(
+            "<figure class=\"map-frame map-missing\"><div class=\"map-missing-box\">{}</div>\
+             <figcaption>{}</figcaption></figure>",
+            esc(not_avail),
+            esc(caption),
+        )
+    }
+}
+
+/// Framed per-day route map slot. Same contract as `plan_map_slot`.
+pub fn day_map_slot(plan_id: &str, day_number: i64, has_map: bool, lang: &str) -> String {
+    let caption = day_route_caption(day_number, lang);
+    if has_map {
+        format!(
+            "<figure class=\"map-frame\"><img class=\"daymap\" loading=\"lazy\" alt=\"{}\" \
+             src=\"/map/{}/day-{}.png\"><figcaption>{}</figcaption></figure>",
+            esc(&caption),
+            esc_url_attr(plan_id),
+            day_number,
+            esc(&caption),
+        )
+    } else {
+        let not_avail = i18n::t("mapNotAvailable", lang);
+        format!(
+            "<figure class=\"map-frame map-missing\"><div class=\"map-missing-box\">{}</div>\
+             <figcaption>{}</figcaption></figure>",
+            esc(not_avail),
+            esc(&caption),
+        )
+    }
 }
 
 /// A list of stops with their Google Maps links (keyless q=lat,lon). The
@@ -47,6 +113,7 @@ pub fn stop_list(stops: &[Stop]) -> String {
 mod tests {
     use super::*;
     use crate::model::Stop;
+
     #[test]
     fn stop_list_links_to_maps() {
         let stops = vec![Stop{ title:"Naminoue".into(), maps_link:"https://www.google.com/maps?q=26.2,127.6".into(), ..Default::default()}];
@@ -54,18 +121,62 @@ mod tests {
         assert!(h.contains("q=26.2,127.6"));
         assert!(h.contains("Naminoue"));
     }
+
     #[test]
-    fn day_map_points_at_r2_route() {
-        assert!(day_map_img("okinawa-2026", 2).contains("/map/okinawa-2026/day-2.png"));
+    fn plan_map_slot_with_map_emits_img() {
+        let h = plan_map_slot("okinawa-2026", true, "en");
+        assert!(h.contains("map-frame"));
+        assert!(h.contains("class=\"planmap\""));
+        assert!(h.contains("/map/okinawa-2026/plan.png"));
+        assert!(h.contains("<figcaption>Trip overview</figcaption>"));
+        assert!(!h.contains("map-missing"));
     }
+
     #[test]
-    fn plan_map_points_at_r2_route() {
-        assert!(plan_map_img("okinawa-2026").contains("/map/okinawa-2026/plan.png"));
+    fn plan_map_slot_without_map_emits_placeholder() {
+        let h = plan_map_slot("okinawa-2026", false, "en");
+        assert!(h.contains("map-frame map-missing"));
+        assert!(h.contains("map-missing-box"));
+        assert!(h.contains("Map not available yet"));
+        assert!(h.contains("<figcaption>Trip overview</figcaption>"));
+        assert!(!h.contains("src=\"/map"));
+        assert!(!h.contains("<img"));
     }
+
+    #[test]
+    fn day_map_slot_with_map_emits_img() {
+        let h = day_map_slot("okinawa-2026", 2, true, "zh");
+        assert!(h.contains("map-frame"));
+        assert!(h.contains("class=\"daymap\""));
+        assert!(h.contains("/map/okinawa-2026/day-2.png"));
+        assert!(h.contains("第 2 天路線"));
+        assert!(!h.contains("map-missing"));
+    }
+
+    #[test]
+    fn day_map_slot_without_map_emits_placeholder_zh() {
+        let h = day_map_slot("okinawa-2026", 3, false, "zh");
+        assert!(h.contains("map-missing"));
+        assert!(h.contains("地圖尚未產生"));
+        assert!(h.contains("第 3 天路線"));
+        assert!(!h.contains("src=\"/map"));
+    }
+
+    #[test]
+    fn is_valid_map_png_rejects_tiny_and_garbage() {
+        assert!(!is_valid_map_png(&[0x89]));
+        assert!(!is_valid_map_png(&[0u8; 64]));
+        assert!(!is_valid_map_png(b"not-a-png"));
+        let mut ok = vec![0x89, 0x50, 0x4E, 0x47];
+        ok.resize(100, 0);
+        assert!(is_valid_map_png(&ok));
+    }
+
     #[test]
     fn empty_stops_render_nothing() {
         assert_eq!(stop_list(&[]), "");
     }
+
     #[test]
     fn stop_with_cost_shows_price_badge() {
         let stops = vec![Stop{ title:"Shuri Castle".into(), maps_link:"https://www.google.com/maps?q=26.2,127.7".into(), cost_estimate:530, ..Default::default()}];
@@ -73,6 +184,7 @@ mod tests {
         assert!(h.contains("stop-price"), "got: {h}");
         assert!(h.contains("¥530"), "got: {h}");
     }
+
     #[test]
     fn free_stop_shows_no_price() {
         let stops = vec![Stop{ title:"Free Beach".into(), maps_link:"https://www.google.com/maps?q=1,1".into(), cost_estimate:0, ..Default::default()}];

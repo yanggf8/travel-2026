@@ -1,3 +1,6 @@
 /target
 /build
 /.wrangler
+# OAuth secrets — local only, NEVER commit (holds GITHUB_CLIENT_SECRET, SESSION_SECRET)
+.secrets
+.dev.vars

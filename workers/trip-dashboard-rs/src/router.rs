@@ -41,13 +41,17 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         if let Some(obj) = bucket.get(rest).execute().await? {
             if let Some(body) = obj.body() {
                 let bytes = body.bytes().await?;
-                let h = Headers::new();
-                h.set("Content-Type", "image/png")?;
-                h.set("Cache-Control", "public, max-age=86400")?;
-                return Ok(Response::from_bytes(bytes)?.with_headers(h));
+                // Garbage 1-byte captures and tiny stubs are NOT real maps — fall through
+                // to the valid 66-byte placeholder so clients never get image/png junk.
+                if render::map::is_valid_map_png(&bytes) {
+                    let h = Headers::new();
+                    h.set("Content-Type", "image/png")?;
+                    h.set("Cache-Control", "public, max-age=86400")?;
+                    return Ok(Response::from_bytes(bytes)?.with_headers(h));
+                }
             }
         }
-        // R2 miss (or no body) → placeholder, not a broken-image icon.
+        // R2 miss, no body, or invalid/garbage PNG → placeholder, not a broken-image icon.
         return serve_placeholder();
     }
 
@@ -164,12 +168,17 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
             &turso_url,
             &turso_token,
             &[
-                "SELECT p.plan_id, pd.display_name, d.start_date, d.end_date \
+                // One row per plan (GROUP BY collapses the destination/anchor joins),
+                // ordered chronologically by the plan's earliest trip date — earliest
+                // first; plans with no date anchor sort last (NULL → far-future key).
+                "SELECT p.plan_id, MIN(pd.display_name) AS display_name, \
+                        MIN(d.start_date) AS start_date, MAX(d.end_date) AS end_date \
                  FROM plans p \
                  LEFT JOIN plan_destinations pd ON pd.plan_id = p.plan_id \
                  LEFT JOIN date_anchors d ON d.plan_id = p.plan_id \
                  WHERE p.deleted_at IS NULL \
-                 ORDER BY p.plan_id"
+                 GROUP BY p.plan_id \
+                 ORDER BY COALESCE(MIN(d.start_date), '9999-12-31') ASC, p.plan_id ASC"
                     .to_string(),
             ],
         )
@@ -193,11 +202,42 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
                 .map(|r| r.with_status(403));
         }
         let plan = load_plan(&turso_url, &turso_token, slug).await?;
+        let map_status = check_map_status(&env, &plan.plan_id, &plan.days).await?;
         let token = query.get("token").map(|s| s.as_str());
-        return Response::from_html(render::render_plan(&plan, lang, token));
+        return Response::from_html(render::render_plan(&plan, lang, token, &map_status));
     }
 
     Ok(Response::from_html(render::auth::sign_in_page(lang))?)
+}
+
+/// Probe R2 for each expected map key and record whether a real PNG is present.
+async fn check_map_status(
+    env: &Env,
+    plan_id: &str,
+    days: &[model::Day],
+) -> Result<render::map::MapStatus> {
+    let bucket = env.bucket("MAPS")?;
+    let plan_key = format!("{plan_id}/plan.png");
+    let plan = r2_has_valid_map(&bucket, &plan_key).await?;
+    let mut day_status = HashMap::new();
+    for d in days {
+        let key = format!("{plan_id}/day-{}.png", d.day_number);
+        day_status.insert(d.day_number, r2_has_valid_map(&bucket, &key).await?);
+    }
+    Ok(render::map::MapStatus {
+        plan,
+        days: day_status,
+    })
+}
+
+async fn r2_has_valid_map(bucket: &worker::Bucket, key: &str) -> Result<bool> {
+    if let Some(obj) = bucket.get(key).execute().await? {
+        if let Some(body) = obj.body() {
+            let bytes = body.bytes().await?;
+            return Ok(render::map::is_valid_map_png(&bytes));
+        }
+    }
+    Ok(false)
 }
 
 fn serve_placeholder() -> Result<Response> {

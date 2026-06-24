@@ -2,6 +2,13 @@ name = "trip-dashboard-rs"
 main = "build/worker/shim.mjs"
 compatibility_date = "2024-12-01"
 
+# OAuth allow-list (non-secret config; secrets SESSION_SECRET / GITHUB_CLIENT_ID /
+# GITHUB_CLIENT_SECRET / PUBLIC_ORIGIN go via `wrangler secret put`). The crate gates
+# on the immutable GitHub numeric id AND login. Same values as the finance worker.
+[vars]
+ALLOWED_LOGIN = "yanggf8"
+ALLOWED_GITHUB_ID = "48974237"
+
 [build]
 # Only install worker-build if it's not already on PATH. (Installing it requires
 # pkg-config/OpenSSL, which isn't present in this WSL; a pre-installed

@@ -45,6 +45,11 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("badShareBody", true) => "此行程連結需要有效的分享權杖。",
         ("ownerSignIn", false) => "Owner? Sign in",
         ("ownerSignIn", true) => "擁有者？登入",
+        // map slots (feature: server-side missing detection)
+        ("tripOverview", false) => "Trip overview",
+        ("tripOverview", true) => "行程總覽",
+        ("mapNotAvailable", false) => "Map not available yet",
+        ("mapNotAvailable", true) => "地圖尚未產生",
         _ => "",
     }
 }

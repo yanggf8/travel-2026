@@ -73,6 +73,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
         // Map-snapshot staleness: dashboard map PNGs that no longer match the
         // itinerary (advisory warning, never an error — re-run snapshot-maps).
         validate_maps_fresh_all_plans(&mut issues).await;
+        validate_maps_completeness_all_plans(&mut issues).await;
     }
 
     emit_report(&issues);
@@ -191,6 +192,57 @@ async fn validate_maps_fresh_all_plans(issues: &mut Vec<Issue>) {
                 });
             }
             crate::check_maps_fresh::Status::Fresh { .. } => {}
+        }
+    }
+}
+
+/// Doctor-only: surface plans whose map-artifact manifest is missing or has
+/// EMPTY keys. Advisory only — emitted as warnings, never errors.
+async fn validate_maps_completeness_all_plans(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    let mut rows = match conn
+        .query(
+            "SELECT plan_id FROM plans WHERE deleted_at IS NULL ORDER BY plan_id",
+            (),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut plan_ids: Vec<String> = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(id) = row.get::<String>(0) {
+            plan_ids.push(id);
+        }
+    }
+    for plan_id in plan_ids {
+        let verdict = match crate::check_maps_fresh::evaluate_completeness(&conn, &plan_id).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match verdict {
+            crate::check_maps_fresh::CompletenessVerdict::NoManifest => {
+                issues.push(Issue {
+                    category: "maps-complete".to_string(),
+                    severity: Severity::Warning,
+                    message: "no map manifest — run snapshot-maps".to_string(),
+                    file: Some(format!("plan:{plan_id}")),
+                    line: None,
+                });
+            }
+            crate::check_maps_fresh::CompletenessVerdict::Incomplete { line } => {
+                issues.push(Issue {
+                    category: "maps-complete".to_string(),
+                    severity: Severity::Warning,
+                    message: line,
+                    file: Some(format!("plan:{plan_id}")),
+                    line: None,
+                });
+            }
+            crate::check_maps_fresh::CompletenessVerdict::Complete { .. } => {}
         }
     }
 }
