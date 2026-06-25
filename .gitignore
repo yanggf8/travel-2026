@@ -30,6 +30,9 @@ Thumbs.db
 .env
 .env.local
 
+# Wrangler local cache (repo root; worker subdir has its own rule)
+.wrangler/
+
 # Temporary files
 *.tmp
 .temp/

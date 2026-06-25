@@ -50,6 +50,11 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("tripOverview", true) => "行程總覽",
         ("mapNotAvailable", false) => "Map not available yet",
         ("mapNotAvailable", true) => "地圖尚未產生",
+        // owner share-link copy (logged-in owner; recipients open ?token= link, no login)
+        ("copyShareLink", false) => "Copy share link",
+        ("copyShareLink", true) => "複製分享連結",
+        ("noShareLink", false) => "No share link yet — run ./bin/travel share-token",
+        ("noShareLink", true) => "尚無分享連結 — 請執行 ./bin/travel share-token",
         _ => "",
     }
 }

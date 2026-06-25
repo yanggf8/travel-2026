@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod share;
 pub mod session;
 pub mod day;
 pub mod map;
@@ -26,8 +27,19 @@ pub fn page(title: &str, body: &str, lang: &str) -> String {
 /// Render a full plan page: booking summary, plan map, then each day card.
 /// `token` is the access token the page was loaded with — threaded into the
 /// auth-gated voucher link so a click carries the same token (else 403).
-pub fn render_plan(plan: &Plan, lang: &str, token: Option<&str>, map_status: &map::MapStatus) -> String {
+/// `owner_chrome` is the logged-in owner top bar (copy share link); empty for viewers.
+pub fn render_plan(
+    plan: &Plan,
+    lang: &str,
+    token: Option<&str>,
+    map_status: &map::MapStatus,
+    owner_chrome: &str,
+) -> String {
     let mut body = String::new();
+    if !owner_chrome.is_empty() {
+        body.push_str(owner_chrome);
+        body.push_str(share::COPY_SCRIPT);
+    }
     // Non-meal pending-booking alerts BEFORE the summary (mirror render.ts:1388).
     body.push_str(&alerts::render_pending_alerts(plan, lang, false));
     body.push_str(&summary::render(plan, lang, token));
@@ -134,7 +146,7 @@ mod tests {
             plan: true,
             days: [(1i64, true)].into_iter().collect(),
         };
-        let html = render_plan(&plan, "en", None, &map_status);
+        let html = render_plan(&plan, "en", None, &map_status, "");
         assert!(html.contains("booking-summary"));
         assert!(html.contains("/map/okinawa-2026/plan.png"));
         assert!(html.contains("Day 1"));

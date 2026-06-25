@@ -533,6 +533,56 @@ h1 {
   text-decoration: underline;
 }
 
+/* ---- Owner chrome (logged in: copy share link for others) ---- */
+.owner-chrome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px 14px;
+  margin-top: 12px;
+}
+.owner-chrome-user strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.copy-share-btn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.copy-share-btn:active {
+  opacity: 0.9;
+}
+.copy-share-btn.copy-share-ok {
+  background: var(--green);
+}
+.copy-share-missing {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+.owner-chrome-logout {
+  color: var(--accent);
+  text-decoration: none;
+  margin-left: auto;
+}
+.owner-chrome-logout:active {
+  text-decoration: underline;
+}
+
 /* Print */
 @media print {
   body { max-width: none; padding: 0; }

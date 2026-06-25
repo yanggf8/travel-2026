@@ -96,24 +96,26 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
     let turso_token = env.secret("TURSO_TOKEN")?.to_string(); // READ token
     let owner_token = env.secret("OWNER_TOKEN")?.to_string();
 
-    // Load share tokens (one query; small table).
+    // Load share tokens (one query; small table). DESC so copy map picks a current
+    // token per plan via or_insert; auth map still gets every token via insert.
     let share_rows = turso::pipeline(
         &turso_url,
         &turso_token,
-        &["SELECT token, plan_id FROM plan_share_tokens".to_string()],
+        &["SELECT token, plan_id FROM plan_share_tokens ORDER BY created_at DESC".to_string()],
     )
     .await?;
-    let mut shares: HashMap<String, String> = HashMap::new();
+    let mut share_pairs: Vec<(String, String)> = Vec::new();
     if let Some(rows) = share_rows.first() {
         for r in rows {
             if let (Some(t), Some(p)) = (
                 r.get("token").and_then(|v| v.as_str()),
                 r.get("plan_id").and_then(|v| v.as_str()),
             ) {
-                shares.insert(t.to_string(), p.to_string());
+                share_pairs.push((t.to_string(), p.to_string()));
             }
         }
     }
+    let (shares, plan_share_tokens) = render::share::build_share_maps(&share_pairs);
 
     let secret = env
         .secret("SESSION_SECRET")
@@ -204,7 +206,24 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         let plan = load_plan(&turso_url, &turso_token, slug).await?;
         let map_status = check_map_status(&env, &plan.plan_id, &plan.days).await?;
         let token = query.get("token").map(|s| s.as_str());
-        return Response::from_html(render::render_plan(&plan, lang, token, &map_status));
+        // Logged-in owner: copy a viewer share URL (share token) for others — never
+        // the request ?token= and never the session cookie. Viewers opening a share
+        // link get no chrome (they are not logged in as owner).
+        let owner_chrome = if is_owner_session {
+            let login = session_login.as_deref().unwrap_or(allowed.as_str());
+            render::share::owner_plan_chrome(
+                slug,
+                plan_share_tokens.get(slug).map(|s| s.as_str()),
+                &public_origin,
+                login,
+                lang,
+            )
+        } else {
+            String::new()
+        };
+        return Response::from_html(render::render_plan(
+            &plan, lang, token, &map_status, &owner_chrome,
+        ));
     }
 
     Ok(Response::from_html(render::auth::sign_in_page(lang))?)
