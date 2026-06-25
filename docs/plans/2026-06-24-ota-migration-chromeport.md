@@ -36,9 +36,12 @@ You call gwebcdb tools ─▶ gwebcdb runtime picks WSLg|Windows Chrome
    navigate.py / form_fill.py / form_click.py / combo_select.py   (drive the search form;
                                                                     human logs in if needed)
         │
-   save_page_text.py  ─▶  Turso `captures` (raw body text, source_id, url, captured_at)
+   NEW capture writer (ota_capture.py)  ─▶  Turso `captures`
+        │  (UNREDACTED body.innerText + source_id + url + captured_at → capture_id)
+        │  ⚠ does NOT reuse save_page_text.py: that tool REDACTS (masks ≥5-digit runs)
+        │    BEFORE writing — it would destroy prices (36587) and dates (2026-06-20).
         │
-   NEW gwebcdb parser (Python port of chromeport extraction)
+   NEW gwebcdb parser (ota_parse.py — Python port of chromeport extraction)
    parse_capture: read capture + parser_rules → branch has_custom_parser →
                   generic OR settour parser → offer rows → Turso `offers`
    verify_capture: read-only field-by-field OK/MISSING report
@@ -48,21 +51,57 @@ You call gwebcdb tools ─▶ gwebcdb runtime picks WSLg|Windows Chrome
 ```
 
 gwebcdb stays plain-text/CLI and Turso-only (no JSON files) — same constraints as chromeport.
+**Backend nuance (Codex):** `preferred_backend(auto)` returns an ALREADY-RUNNING backend first,
+THEN prefers WSLg — so "WSLg-first" holds only when nothing is running. To force WSLg, ensure no
+Windows Chrome is up, or pass the WSLg backend explicitly.
 
 ## 3. The Python port (the code work)
+
+### 3.0 gwebcdb readiness prerequisites (net-new — MUST land before the parser)
+
+A readiness audit (2026-06-25) found gwebcdb is **architecturally ready but technically PARTIAL** —
+three pieces do not exist yet and block the port:
+
+- **P-1 Python Turso access (MISSING).** gwebcdb's Turso path is Rust (`turso-util` + `price-cli`);
+  there is NO Python Turso/libsql client (`bridge/requirements.txt` = playwright, pytest,
+  faster-whisper only). The port must add one — cleanest is a small `bridge/turso_db.py` hitting
+  the Turso `/v2/pipeline` HTTP API with the `.env` token (the same API CLAUDE.md already blesses
+  for ad-hoc reads/writes), so no native libsql build is needed. It reads `captures`/`parser_rules`,
+  writes `offers`.
+- **P-2 Unredacted capture writer (MISSING — and a trap).** `save_page_text.py`/`snapshot.py`
+  write LOCAL files, not Turso, AND `save_page_text.py:66` **redacts** the text first
+  (`redact_sensitive_numbers`, `common.py:172`: masks any `\d[\d -]{3,}\d` run) — which destroys
+  prices (`36587`) and dates (`2026-06-20`). So do NOT reuse it. Build a NEW `bridge/ota_capture.py`:
+  attach via the existing CDP runtime, read **raw** `body.innerText`, tag `source_id`, INSERT a
+  `captures` row, return `capture_id`. This is the explicit capture boundary chromeport had and
+  gwebcdb lacks.
+- **P-3 captures/parser_rules/offers schema in the travel Turso DB** — already exist (chromeport
+  + travel-cli migrations created them); the Python tools just connect to the SAME travel-2026
+  Turso DB. No new schema, but confirm the offers insert matches the live schema (Codex: the live
+  `offers` table has MORE nullable/default columns than the 16 chromeport inserts —
+  `scripts/schema.sql:516` / `db_migrate.rs:758`; insert the same 16, let the rest default).
+
+Form-driving (navigate/form_fill/form_click/combo_select), the persistent WSLg Chrome profile, the
+pytest harness, and the no-JSON house style are all **READY**. `login_assist.py` is E*TRADE-specific —
+treat it as a *pattern to copy*, not a generic OTA helper; OTA login = human logs in by hand in the
+WSLg Chrome window (session persists in the profile).
+
+### 3.1 The parser itself
 
 Port the **pure text→offers** logic from `chromeport/src/main.rs` + `turso.rs`. The exact
 surface (function-by-function, with file:line, signatures, regex/group logic, price math, the
 settour char-scanner, the 17-col `parser_rules` + `offers` schemas, helpers) is captured in the
 investigation appended below as **Appendix A — port spec**. Build it as a new gwebcdb bridge
-module (e.g. `bridge/ota_parse.py`) + Turso access via gwebcdb's existing DB path. Key pieces:
+module `bridge/ota_parse.py` using the P-1 `turso_db.py`. Key pieces:
 
 - **Generic parser** — 6 extractors: `date_range` (2 groups → YYYY-MM-DD), `nights`
   (group select by `nights_is_days`, offset), `price` (marker-find → `price_amount_rx` →
   `digits_only` → **ceiling div** `(total+divisor-1)/divisor` for `price_basis=total`, multiply
   for `per_person`), `flights` (dedup first/second), `airline` (optional), `hotel`
-  (`hotel_name_rx` else anchor → next non-empty line). product_kind branching: flight skips
-  hotel+nights; hotel skips flights; flight requires a flight# or airline.
+  (`hotel_name_rx` else anchor → next non-empty line). product_kind branching (CORRECTED, see
+  A.3): ONLY flight-kind nulls nights+hotel; flights+airline are ALWAYS extracted (so a hotel page
+  can pick up incidental flight data — replicate this); hotel is required for non-flight; flight
+  requires a flight# or airline.
 - **settour custom parser** — bespoke, no regex: char-by-char `YYYY/MM/DD` window; `共N晚`/`共N日`
   nights; `機加酒未稅總價` marker → first ≥4-digit amount (skip commas); 2-upper+digits flight
   numbers; hotel = line starting `飯店` & containing `入住` → next non-empty line;
@@ -74,11 +113,20 @@ module (e.g. `bridge/ota_parse.py`) + Turso access via gwebcdb's existing DB pat
 - **The capture↔source guard + `--allow-source-override`** (already proven in Rust) — port it.
 - **DROP** all browser/CDP functions (Appendix A §7) — gwebcdb already provides that layer.
 
-**Fidelity gate:** the port must reproduce the Rust output on the existing stale captures. We
-have a known-good Rust result to diff against: `verify settour settour-test-0620` →
-`depart_return 2026-06-20→2026-06-24, nights 4, price pp=18294 total=36587, flight IT212/IT211,
-hotel 微笑飯店京都烏丸五條, overall OK offers=1`. The Python port must produce the same. Capture
-the equivalent for one generic-parser source too before trusting it.
+**Fidelity gate (expanded per Codex — one capture is NOT enough):** the port must reproduce the
+Rust output. The anchor case is known-good: `verify settour settour-test-0620` → `depart_return
+2026-06-20→2026-06-24, nights 4, price pp=18294 total=36587, flight IT212/IT211, hotel
+微笑飯店京都烏丸五條, overall OK offers=1` (settour custom parser). But add a fixture suite that
+exercises the GENERIC parser's branches too — generate each by running the current Rust binary on a
+crafted capture and snapshotting its output, then assert the Python matches:
+- one generic `fit`, one `flight`, one `hotel` product_kind;
+- `price_basis=total` AND `price_basis=per_person`; invalid/zero `pax_divisor` (must error);
+- `nights_is_days` true and false;
+- flight with a MISSING return date (group 2 None — allowed only for flight);
+- hotel via `hotel_name_rx` AND via the anchor→next-non-empty-line fallback;
+- the capture↔source guard (mismatch errors; `--allow-source-override` bypasses);
+- `offer_row_id` composite-id generation.
+Port the Rust unit tests where they exist; otherwise snapshot Rust output as the oracle.
 
 ## 4. Per-source migration unit (parallelizable, unchanged in spirit)
 
@@ -181,16 +229,21 @@ flight kind with no flight# AND no airline → error (main.rs:2126).
 - `extract_rule_hotel` (2333) — `hotel_name_rx` if set (group1/0); else `hotel_anchor_rx` →
   first non-empty line after a matching line.
 
-### A.3 product_kind branching (main.rs:2106–2131)
-| field | fit | flight | hotel |
-|---|---|---|---|
-| date_range | req | req | req |
-| nights | req | SKIP | req |
-| price | req | req | req |
-| flights | opt | req | SKIP |
-| airline | opt | req(fallback) | SKIP |
-| hotel | opt | SKIP | req |
-flight validation: error if no flight# AND no airline.
+### A.3 product_kind branching (main.rs:2112–2131) — CORRECTED (Codex)
+Only `nights` and `hotel` are gated on kind. `flights` and `airline` are **always** extracted
+(main.rs:2118-2119, no guard), and `hotel` is **required** (error-propagating `?`) for any
+non-flight kind — it is NOT "optional".
+| field | fit | flight | hotel | gated? |
+|---|---|---|---|---|
+| date_range | req | req | req | no |
+| nights | req | **None** | req | `kind=="flight"`→None (2114) |
+| price | req | req | req | no |
+| flights | always | always | always | NONE — extracted unconditionally (2118) |
+| airline | always | always | always | NONE — extracted unconditionally (2119) |
+| hotel | **req** | None | **req** | `kind=="flight"`→None else required `?` (2120) |
+flight validation (2126): error if `flights.0` is None AND `airline` is None.
+Consequence: a `hotel`-kind page whose text matches `flight_rx` yields **incidental flight data**
+(not skipped). The port must replicate this exactly, including that quirk.
 
 ### A.4 settour custom parser — `parse_settour(capture)` main.rs:2612 (no regex)
 - `extract_date_range` (2683) — char-by-char sliding 10-char `YYYY/MM/DD` window, `/`→`-`, dedup,
@@ -209,9 +262,12 @@ flight validation: error if no flight# AND no airline.
   nights_is_days, price_marker, price_amount_rx, price_basis, pax_divisor, flight_rx,
   hotel_anchor_rx, airline_rx, hotel_name_rx, currency, has_custom_parser, source_url, fetched_at.
   Upsert ON CONFLICT(source_id) DO UPDATE.
-- `offers` (turso.rs:163) 16 cols: id, source_file, source_id, type, name, price_per_person,
-  currency, region, destination, departure_date, return_date, nights, availability, hotel_name,
-  airline, scraped_at. PK (id, scraped_at), ON CONFLICT DO NOTHING.
+- `offers` — chromeport INSERTS 16 cols (turso.rs:163): id, source_file, source_id, type, name,
+  price_per_person, currency, region, destination, departure_date, return_date, nights,
+  availability, hotel_name, airline, scraped_at. PK (id, scraped_at), ON CONFLICT DO NOTHING.
+  NOTE (Codex): the LIVE `offers` table has more nullable/default columns than these 16
+  (`scripts/schema.sql:516`, `db_migrate.rs:758`) — the port inserts the same 16 and lets the rest
+  default; do not assume 16 is the full schema.
   `offer_row_id` = `source_id_<product_code>_YYYYMMDD_<N>n`; product_code = last URL path seg
   minus .html/.htm.
 
