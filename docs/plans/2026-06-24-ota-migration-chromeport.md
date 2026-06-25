@@ -1,11 +1,22 @@
 # OTA migration → gwebcdb (chromeport retired; extraction ported to Python)
 
-**Status:** PLAN v2 (architecture corrected 2026-06-25) — supersedes the v1 "chromeport stays
-the pipeline" plan. Awaiting Codex review → corroborate → agent appraisal.
+**Status:** PLAN v2 — **Phase 0 (the Python port) SHIPPED 2026-06-25** in gwebcdb. Per-source
+live capture + decommission remain (human-in-the-loop).
 **Scope:** Retire `chromeport` entirely. Move the OTA pipeline to **gwebcdb** as the single
 WSLg-based entry point: gwebcdb drives the page (it picks WSLg|Windows backend itself) → saves
 raw text to Turso → a NEW gwebcdb Python parser turns text → `offers`. Then verify each source
 live and delete its archived Python scraper.
+
+> **Phase 0 status (DONE).** gwebcdb now owns the extraction pipeline: `bridge/turso_db.py`
+> (Turso `/v2/pipeline` client), `bridge/ota_capture.py` (unredacted innerText → `captures`),
+> `bridge/ota_parse.py` (generic + settour parsers), `bridge/ota_cli.py` (parse/verify →
+> `offers`). Designed + adversarially audited via multi-agent workflows; every wire-format fact
+> proven against the live Turso DB; code-reviewed (caught + fixed a real airline-inference parity
+> bug). Live-verified on the settour oracle: dates/nights/price/flight/hotel/airline all match the
+> retiring Rust. 321 bridge tests pass. **Remaining (NOT Phase 0, human-in-the-loop):** per-source
+> live captures (drive WSLg Chrome), the `ota_capture` CDP path needs a live-Chrome smoke, then the
+> G0–G6 decommission gate per source → delete each archived Python parser. The Rust `chromeport`
+> binary is superseded but not yet archived.
 
 ---
 
