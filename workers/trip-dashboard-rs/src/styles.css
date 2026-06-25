@@ -429,12 +429,12 @@ h1 {
   padding: 0;
 }
 .plan-card {
-  display: block;
+  display: grid;
+  gap: 12px;
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 20px;
-  text-decoration: none;
+  padding: 16px;
   color: var(--text);
   transition: box-shadow 0.15s, transform 0.15s;
 }
@@ -442,8 +442,18 @@ h1 {
   box-shadow: var(--shadow-lg);
   transform: translateY(-1px);
 }
+.plan-card-main {
+  display: block;
+  text-decoration: none;
+  color: var(--text);
+}
 .plan-card-name { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
 .plan-card-dates { font-size: 14px; color: var(--text-dim); }
+.plan-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
 
 /* ---- Desktop two-column ---- */
 @media (min-width: 900px) {

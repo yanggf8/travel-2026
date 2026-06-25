@@ -55,7 +55,7 @@ SELECT token, plan_id FROM plan_share_tokens ORDER BY created_at DESC
 
 From the same rows, build:
 
-1. `token → plan_id` — existing auth (`auth::resolve()`); unchanged semantics
+1. `token → plan_id` — viewer share-token auth (`auth::resolve()`)
 2. `plan_slug → newest token` — owner copy chrome only
 
 For DESC order, use `entry(plan_id).or_insert(token)` (first-write-wins = newest). Plain `insert()` would overwrite and pick the **oldest**.

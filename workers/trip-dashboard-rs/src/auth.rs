@@ -1,5 +1,5 @@
-//! Access scoping. A request carries an optional token (query param `token` or
-//! the owner secret). Owner sees everything; a per-plan token sees exactly one plan.
+//! Access scoping. GitHub OAuth grants owner scope; query tokens are per-plan
+//! viewer share tokens only.
 
 use std::collections::HashMap;
 
@@ -10,32 +10,16 @@ pub enum AccessScope {
     Denied,
 }
 
-/// Resolve scope. `token` is the value from `?token=`; `owner_token` is the secret;
+/// Resolve viewer scope. `token` is the value from `?token=`;
 /// `share_tokens` maps token -> plan_id (loaded from plan_share_tokens).
-pub fn resolve(token: Option<&str>, owner_token: &str, share_tokens: &HashMap<String, String>) -> AccessScope {
+pub fn resolve(token: Option<&str>, share_tokens: &HashMap<String, String>) -> AccessScope {
     match token {
-        Some(t) if !t.is_empty() && !owner_token.is_empty() && ct_eq(t, owner_token) => AccessScope::Owner,
         Some(t) => match share_tokens.get(t) {
             Some(plan) => AccessScope::Plan(plan.clone()),
             None => AccessScope::Denied,
         },
         None => AccessScope::Denied,
     }
-}
-
-/// Constant-time byte comparison for secret tokens. Returns false fast ONLY on
-/// length mismatch (length is not secret here); otherwise compares all bytes
-/// without short-circuiting, so timing does not leak how many leading bytes matched.
-fn ct_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut acc: u8 = 0;
-    for i in 0..a.len() {
-        acc |= a[i] ^ b[i];
-    }
-    acc == 0
 }
 
 /// Can this scope view the given plan slug?
@@ -58,20 +42,16 @@ mod tests {
     }
 
     #[test]
-    fn owner_token_is_owner() {
-        assert_eq!(resolve(Some("OWNER"), "OWNER", &shares()), AccessScope::Owner);
-    }
-    #[test]
     fn share_token_scopes_to_one_plan() {
-        assert_eq!(resolve(Some("share-oki-abc"), "OWNER", &shares()), AccessScope::Plan("okinawa-2026".into()));
+        assert_eq!(resolve(Some("share-oki-abc"), &shares()), AccessScope::Plan("okinawa-2026".into()));
     }
     #[test]
     fn unknown_token_denied() {
-        assert_eq!(resolve(Some("nope"), "OWNER", &shares()), AccessScope::Denied);
+        assert_eq!(resolve(Some("nope"), &shares()), AccessScope::Denied);
     }
     #[test]
     fn no_token_denied() {
-        assert_eq!(resolve(None, "OWNER", &shares()), AccessScope::Denied);
+        assert_eq!(resolve(None, &shares()), AccessScope::Denied);
     }
     #[test]
     fn plan_scope_cannot_view_other_plan() {
@@ -84,18 +64,8 @@ mod tests {
         assert!(can_view_plan(&AccessScope::Owner, "anything"));
     }
     #[test]
-    fn ct_eq_matches_and_rejects() {
-        assert!(super::ct_eq("abc123", "abc123"));
-        assert!(!super::ct_eq("abc123", "abc124"));
-        assert!(!super::ct_eq("abc", "abcd"));       // length mismatch
-        assert!(!super::ct_eq("", "x"));
-    }
-    #[test]
-    fn empty_token_never_owner_even_with_empty_owner_secret() {
+    fn empty_token_is_denied() {
         let m = std::collections::HashMap::new();
-        // empty owner secret + empty token must NOT be Owner
-        assert_eq!(resolve(Some(""), "", &m), AccessScope::Denied);
-        // empty token must never be Owner regardless
-        assert_eq!(resolve(Some(""), "OWNER", &m), AccessScope::Denied);
+        assert_eq!(resolve(Some(""), &m), AccessScope::Denied);
     }
 }

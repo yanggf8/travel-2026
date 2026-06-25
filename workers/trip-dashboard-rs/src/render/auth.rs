@@ -34,11 +34,12 @@ pub fn not_authorized_page(login: &str, lang: &str) -> String {
     page(t("notAuthorized", lang), &body, lang)
 }
 
-pub fn bad_share_page(lang: &str) -> String {
+pub fn bad_share_page(login_href: &str, lang: &str) -> String {
     let body = format!(
-        r#"<div class="auth-page"><h1>{}</h1><p>{}</p><p class="auth-hint"><a href="/auth/login">{}</a></p></div>"#,
+        r#"<div class="auth-page"><h1>{}</h1><p>{}</p><p class="auth-hint"><a href="{}">{}</a></p></div>"#,
         esc(t("badShare", lang)),
         esc(t("badShareBody", lang)),
+        esc(login_href),
         esc(t("ownerSignIn", lang)),
     );
     page(t("badShare", lang), &body, lang)
@@ -80,7 +81,7 @@ mod tests {
         for html in [
             sign_in_page("en"),
             not_authorized_page("other", "en"),
-            bad_share_page("en"),
+            bad_share_page("/auth/login", "en"),
             logged_out_page("en"),
             oauth_error_page("oops", "en"),
         ] {
@@ -91,5 +92,11 @@ mod tests {
         assert!(banner.contains("/auth/logout"));
         assert!(!banner.contains(r#"href="/logout""#));
         assert!(!banner.contains(r#"href="/login""#));
+    }
+
+    #[test]
+    fn bad_share_page_can_preserve_plan_login_target() {
+        let html = bad_share_page("/auth/login?next=%2F%3Fplan%3Dokinawa-2026", "en");
+        assert!(html.contains(r#"href="/auth/login?next=%2F%3Fplan%3Dokinawa-2026""#));
     }
 }

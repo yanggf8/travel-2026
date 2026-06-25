@@ -91,10 +91,9 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         _ => {}
     }
 
-    // All other routes: load secrets + resolve auth BEFORE any Turso read.
+    // All other routes: load secrets, share-token auth data, then resolve scope.
     let turso_url = env.secret("TURSO_URL")?.to_string();
     let turso_token = env.secret("TURSO_TOKEN")?.to_string(); // READ token
-    let owner_token = env.secret("OWNER_TOKEN")?.to_string();
 
     // Load share tokens (one query; small table). DESC so copy map picks a current
     // token per plan via or_insert; auth map still gets every token via insert.
@@ -130,7 +129,7 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         .and_then(|c| gho::verify_session(&secret, &allowed, allowed_id, &c));
     let is_owner_session = session_login.is_some();
 
-    let mut scope = auth::resolve(query.get("token").map(|s| s.as_str()), &owner_token, &shares);
+    let mut scope = auth::resolve(query.get("token").map(|s| s.as_str()), &shares);
     if is_owner_session {
         scope = auth::AccessScope::Owner;
     }
@@ -190,9 +189,10 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         // ALLOWED_LOGIN (never a hardcoded handle — honors "no hardcode").
         let owner_login = session_login.as_deref().unwrap_or(allowed.as_str());
         let body = format!(
-            "{}{}",
+            "{}{}{}",
             render::auth::signed_in_banner(owner_login, lang),
-            render::index::render(&rows, lang),
+            render::index::render(&rows, &plan_share_tokens, &public_origin, lang),
+            render::share::COPY_SCRIPT,
         );
         return Response::from_html(render::page("Plans", &body, lang));
     }
@@ -200,7 +200,8 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
     // Single plan view.
     if let Some(slug) = query.get("plan") {
         if !auth::can_view_plan(&scope, slug) {
-            return Response::from_html(render::auth::bad_share_page(lang))
+            let login_href = owner_login_href_for_plan(slug, lang);
+            return Response::from_html(render::auth::bad_share_page(&login_href, lang))
                 .map(|r| r.with_status(403));
         }
         let plan = load_plan(&turso_url, &turso_token, slug).await?;
@@ -273,6 +274,19 @@ fn is_safe_slug(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// Login URL for an owner who opened `/?plan=<slug>` without a valid session.
+/// Preserve the plan and language only; never carry a bad viewer token into
+/// the post-OAuth owner view.
+fn owner_login_href_for_plan(slug: &str, lang: &str) -> String {
+    let mut q = url::form_urlencoded::Serializer::new(String::new());
+    q.append_pair("plan", slug);
+    if lang == "en" {
+        q.append_pair("lang", "en");
+    }
+    let next = format!("/?{}", q.finish());
+    format!("/auth/login?next={}", render::urlencode(&next))
 }
 
 /// Load the full plan via a 12-statement Turso pipeline. Query order matches
@@ -377,6 +391,22 @@ mod tests {
         assert_eq!(
             &PLACEHOLDER_PNG[..8],
             &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+        );
+    }
+
+    #[test]
+    fn owner_login_href_preserves_plan_target() {
+        assert_eq!(
+            owner_login_href_for_plan("okinawa-2026", "zh"),
+            "/auth/login?next=%2F%3Fplan%3Dokinawa-2026"
+        );
+    }
+
+    #[test]
+    fn owner_login_href_preserves_language_but_not_token() {
+        assert_eq!(
+            owner_login_href_for_plan("okinawa-2026", "en"),
+            "/auth/login?next=%2F%3Fplan%3Dokinawa-2026%26lang%3Den"
         );
     }
 }

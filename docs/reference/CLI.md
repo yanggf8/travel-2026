@@ -87,13 +87,13 @@ make test                                        # full Rust test suite (or: cd 
 ```
 
 ## Dashboard / Maps
-The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust**) serving Turso directly — live at **`https://trip-dashboard-rs.yanggf.workers.dev`**. Read access is token-gated (owner token, or a per-plan share token via `?token=`). See CLAUDE.md "Trip Dashboard" for deploy.
+The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust**) serving Turso directly — live at **`https://trip-dashboard-rs.yanggf.workers.dev`**. Owner access is GitHub OAuth-gated; `?token=` is only for per-plan viewer share links. See CLAUDE.md "Trip Dashboard" for deploy.
 ```bash
 # Share tokens (gate per-plan dashboard viewing). plan resolved from $TRAVEL_PLAN_ID / --plan-id.
 ./bin/travel share-token                          # mint a NEW per-plan view token + print its ready-to-open dashboard URL
 ./bin/travel share-token --show                   # LIST the plan's existing token(s) + URL (read-only, no mint) — use this to re-find a URL
 #   URL host defaults to trip-dashboard-rs.yanggf.workers.dev; override with TRAVEL_DASHBOARD_HOST (e.g. after the primary-URL cutover)
-#   After minting: logged-in owner can also copy the viewer URL from the plan page UI (Copy share link button on /?plan=<slug>).
+#   After minting: logged-in owner can also copy the viewer URL from the dashboard/plan page UI (Copy share link button).
 #   Recipients open the copied link logged-out — no GitHub login. Plan: docs/plans/2026-06-25-dashboard-share-link-copy.md
 
 # Route maps (per-day + plan PNGs: numbered markers + route polyline, auto-framed; chromeport→Leaflet→R2).

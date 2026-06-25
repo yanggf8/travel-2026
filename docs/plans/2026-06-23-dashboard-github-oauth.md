@@ -29,9 +29,8 @@ can't elevate a non-owner, XSS escaped, fail-closed holds. Two IMPORTANT issues 
 
 Travel files: DELETED `src/{session,oauth}.rs`; KEPT `src/render/auth.rs`; edited `router.rs`
 (wired to crate `verify_session`/`CallbackOutcome`, `/auth/*` routes, `SESSION_SECRET`+`ALLOWED_*`,
-two-step `OWNER_TOKEN` preserved), `lib.rs`, `Cargo.toml` (+crate dep, −`js-sys`), `i18n.rs`,
-`styles.css`. NOT yet (user-performed): the secrets/vars, the GitHub OAuth App, deploy, and the
-2nd-deploy `OWNER_TOKEN` removal (see below). Full plan: `~/.claude/plans/` shared-crate plan.
+and removed the `OWNER_TOKEN` fallback), `lib.rs`, `Cargo.toml` (+crate dep, −`js-sys`), `i18n.rs`,
+`styles.css`. Full plan: `~/.claude/plans/` shared-crate plan.
 
 ## Problem (observed)
 
@@ -47,17 +46,10 @@ Opening a dashboard URL **without a valid token** returns a bare `Response::erro
 
 ## Current auth model (what exists today)
 
-Token-only. `workers/trip-dashboard-rs/src/auth.rs`:
-- `AccessScope::Owner` — request `?token=` equals the `OWNER_TOKEN` secret → can view index + any plan.
-- `AccessScope::Plan(slug)` — `?token=` matches a row in `plan_share_tokens` → can view that ONE plan.
-- `AccessScope::Denied` — no/unknown token → 403.
-
-Gates in `router.rs`: index `/` (owner only), `/?plan=` (owner or matching share token),
-`/voucher/*` (same scope as plan), bare fallthrough. `/map/*` images are ungated (low-stakes).
-
-**There is NO GitHub OAuth code anywhere** (verified by grep across both workers + wrangler config).
-The "session" matches are itinerary time-of-day sessions, unrelated to auth. So GitHub OAuth is a
-feature to BUILD, not a regression to fix.
+Current deployed model after the OAuth cutover:
+- Owner pages (`/`, `/?plan=<slug>` without a share token) require GitHub OAuth session auth.
+- `?token=` is only a per-plan viewer share token from `plan_share_tokens`.
+- `OWNER_TOKEN` is no longer an access mechanism.
 
 ## Target auth model (the requirement)
 
@@ -124,9 +116,8 @@ way forward. **Every denial must offer a path forward.**
    set `__Host-td_session`), `/auth/logout` (clear). Owner pages gated via the crate's
    `verify_session`; share links `/?plan=X&token=…` stay open to logged-out viewers.
 5. `npx wrangler deploy`, then smoke-test (see Verification in the plan).
-6. **Two-step OWNER_TOKEN cutover**: this deploy keeps the `OWNER_TOKEN` `?token=` owner fallback;
-   after confirming GitHub login works, a 2nd deploy removes that branch + `wrangler secret delete
-   OWNER_TOKEN`.
+6. **OWNER_TOKEN cutover complete**: the `?token=` owner fallback has been removed; delete the
+   Cloudflare `OWNER_TOKEN` secret after deploying code that no longer reads it.
 
 **Finance** (`plan-viewer-rs`) just needs a redeploy — its config (env vars, `SESSION_SECRET`,
 `__Host-pv_*` cookies) is unchanged, so live sessions survive.
