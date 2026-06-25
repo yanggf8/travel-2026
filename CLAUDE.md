@@ -179,7 +179,21 @@ User provides booking confirmation   → ./bin/travel set-activity-booking
 ### URL Routing
 **Do not use WebFetch for OTA sites** (they require JavaScript). **The Python scrapers are
 DECOMMISSIONED and archived** (`archive/broken-python-scrapers/`) — their constructed
-URLs 404 / hit the wrong page. Scrape via the Rust CDP driver against real Chrome:
+URLs 404 / hit the wrong page.
+
+> **ARCHITECTURE IN TRANSITION (2026-06-25) — read first.** The browser layer is now
+> **gwebcdb**, the shared WSLg-based CDP toolset (you call its bridge tools — `navigate`,
+> `form_fill`, `form_click`, `combo_select`, `save_page_text`, `login_assist`; gwebcdb's runtime
+> picks the backend itself, **WSLg-native Chrome first, Windows only as fallback** — the Windows
+> attach was retired for stability). **`chromeport` is being fully RETIRED**: its browser/CDP
+> half is dropped; its OTA *extraction* half (`parser_rules` → `verify`/`parse` → `offers`) is
+> being **ported into gwebcdb as a Python tool**. The `chromeport fetch interact / verify / parse`
+> commands below are the OLD path and will go away — they describe the retiring tool, kept only
+> until the Python port lands. Plan + full port spec: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
+> For sign-in OTAs, the human logs in / settles 2FA by hand in the WSLg Chrome window (session
+> persists in the profile) or via gwebcdb's approval-gated `login_assist`.
+
+(Historic, retiring) Scrape via the Rust CDP driver against real Chrome:
 
 | URL Contains | Action |
 |-------------|--------|
@@ -245,8 +259,13 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 
 > OTA URL details and scraping patterns → `src/skills/scrape-ota/SKILL.md`
 
-### Scrapers — DECOMMISSIONED
-Python scrapers archived under `archive/broken-python-scrapers/` — never run. Use `./bin/chromeport` (Rust CDP driver). `gwebcdb`'s bridge is a separate read-only finance tool — never route OTA scraping through it.
+### Scrapers — DECOMMISSIONED; browser layer = gwebcdb
+Python scrapers archived under `archive/broken-python-scrapers/` — never run. **OTA scraping
+routes through `gwebcdb`** — the shared WSLg-based CDP toolset is the browser layer (it picks
+WSLg|Windows backend itself, WSLg-first). `chromeport` (Rust CDP driver) is being **retired** and
+its extraction logic ported into gwebcdb as Python (see URL Routing banner + the migration plan).
+**Correction to earlier docs:** gwebcdb is NOT "read-only finance only" — it is the shared
+multi-function CDP toolset, and OTA scraping is meant to go through it, not around it.
 
 ## Current Status
 

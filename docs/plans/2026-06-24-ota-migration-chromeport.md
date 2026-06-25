@@ -1,199 +1,230 @@
-# OTA Migration to chromeport — full source verification + Python decommission
+# OTA migration → gwebcdb (chromeport retired; extraction ported to Python)
 
-**Status:** PLAN (awaiting Codex review → corroborate → agent appraisal)
-**Date:** 2026-06-24
-**Scope:** Migrate ALL OTA (online travel agent) sources off the dead archived Python
-scrapers onto the live `chromeport` CDP pipeline, reaching a *verified* state per source
-so each archived parser can be deleted.
+**Status:** PLAN v2 (architecture corrected 2026-06-25) — supersedes the v1 "chromeport stays
+the pipeline" plan. Awaiting Codex review → corroborate → agent appraisal.
+**Scope:** Retire `chromeport` entirely. Move the OTA pipeline to **gwebcdb** as the single
+WSLg-based entry point: gwebcdb drives the page (it picks WSLg|Windows backend itself) → saves
+raw text to Turso → a NEW gwebcdb Python parser turns text → `offers`. Then verify each source
+live and delete its archived Python scraper.
 
 ---
 
-## 1. Why this plan exists (ground truth, not assumption)
+## 1. Corrected architecture (why v1 is obsolete)
 
-The earlier mental model — "settour works, replicate it to the other 9" — is **wrong**.
-Live DB inspection (2026-06-24) shows:
+**The browser layer is gwebcdb, not chromeport.** You call gwebcdb's bridge tools; gwebcdb's
+runtime (`bridge/runtime.py:preferred_backend`) decides the backend — **WSLg-native Chrome
+first, Windows Chrome only as fallback** (Windows attach was retired for stability). There is no
+separate "chromeport" browser invocation anymore.
 
-- **No OTA source is live-verified.** All 10 active sources in `parser_rules` have
-  `has_custom_parser=0` AND an identical *seed* `fetched_at` (`2026-06-10`). The `captures`
-  table holds only stale seed captures (`2026-06-06` / `2026-06-10`) for OTA sources — no
-  fresh live capture exists for any of them.
-- **settour's custom Rust parser is dark.** `parse_settour` exists in code
-  (`chromeport/src/main.rs:2581`) but its `parser_rules` row has `has_custom_parser=0`, so
-  `parse capture` runs the *generic* regex path and never calls it. The flag is off in
-  `default_parser_rules()` (`main.rs:1577`).
-- The archived Python scrapers (`archive/broken-python-scrapers/`) are **dead** — URL
-  templates 404. They must never run. `chromeport` replaces them.
+**chromeport is being fully retired.** Its browser/CDP half (fetch interact, CdpSession,
+settle_rendered_page, screenshot, capture_page) is dropped. Its EXTRACTION half — `parser_rules`
+→ generic/settour parsers → `verify` → `parse capture` → `offers` — has **no gwebcdb equivalent**
+(gwebcdb has form-driving + raw-text dump but zero structured extraction). So that extraction
+logic is **ported into gwebcdb as a Python tool**. End state: one WSLg-based toolset owns the
+whole OTA pipeline; the `chromeport` Rust crate is archived.
 
-So the real task is: **get from ~0 verified → N verified**, per source, each via a real
-live Chrome capture + `verify` + `parse`, then delete the matching archived Python file.
+**Login/2FA is no longer a blocker.** For any OTA that requires sign-in (trip.com prices,
+tigerair booking-confirmation views), the human **logs in / settles 2FA by hand** in the WSLg
+Chrome window (or via gwebcdb's approval-gated `login_assist` pattern); the session persists in
+the dedicated Chrome profile, and gwebcdb's capture tools then read the logged-in results page.
+This moves the previously-"deferred, login-walled" sources back into scope.
 
-## 2. Two CDP toolsets — division of labor
+## 2. Target pipeline
 
-Both `chromeport` (travel repo, Rust) and `gwebcdb/bridge` (shared, Python) attach to the
-**same** Chrome on `:9222`. They are complementary, not competing.
+```
+You call gwebcdb tools ─▶ gwebcdb runtime picks WSLg|Windows Chrome
+   navigate.py / form_fill.py / form_click.py / combo_select.py   (drive the search form;
+                                                                    human logs in if needed)
+        │
+   save_page_text.py  ─▶  Turso `captures` (raw body text, source_id, url, captured_at)
+        │
+   NEW gwebcdb parser (Python port of chromeport extraction)
+   parse_capture: read capture + parser_rules → branch has_custom_parser →
+                  generic OR settour parser → offer rows → Turso `offers`
+   verify_capture: read-only field-by-field OK/MISSING report
+        │
+        ▼
+   Turso `offers`   (then ./bin/travel query-offers reads them — unchanged)
+```
 
-**Decision: chromeport does all OTA scraping. gwebcdb is NOT in the OTA path.**
+gwebcdb stays plain-text/CLI and Turso-only (no JSON files) — same constraints as chromeport.
 
-Rationale: `chromeport fetch interact` already implements the same primitives gwebcdb
-offers (`fill:SEL=VAL` with React-aware event dispatch, `click:SEL`, `wait:MS`,
-`waitfor:SEL`) AND already owns the downstream pipeline gwebcdb entirely lacks —
-capture→verify→parse→`offers` table with regex `parser_rules`. gwebcdb's bridge has **no
-structured extraction** (only the E*TRADE-specific `positions.py`); routing OTA work
-through it would add a Python subprocess boundary for zero gain.
+## 3. The Python port (the code work)
 
-**The one place gwebcdb could win** (and only if it arises): an OTA that requires an
-authenticated session — gwebcdb's approval-gated `login_assist` keeps credentials out of
-the CLI. That's a human-in-the-loop prerequisite step *before* chromeport captures; not
-part of the automated path. (tigerair/trip are the only candidates; confirm logged-out
-results pages render price first — they likely do.)
+Port the **pure text→offers** logic from `chromeport/src/main.rs` + `turso.rs`. The exact
+surface (function-by-function, with file:line, signatures, regex/group logic, price math, the
+settour char-scanner, the 17-col `parser_rules` + `offers` schemas, helpers) is captured in the
+investigation appended below as **Appendix A — port spec**. Build it as a new gwebcdb bridge
+module (e.g. `bridge/ota_parse.py`) + Turso access via gwebcdb's existing DB path. Key pieces:
 
-| Phase | Tool |
-|---|---|
-| Drive search form (dates/dest/pax) | chromeport `fetch interact --step` |
-| Capture results page (`body.innerText`) | chromeport (auto, end of `fetch interact`) |
-| Store capture | chromeport → Turso `captures` |
-| Regex diagnostics (read-only) | chromeport `verify` |
-| Parse + import to `offers` | chromeport `parse capture` |
-| Login (only if an OTA forces it) | human, or gwebcdb `login_assist` (approval-gated) |
+- **Generic parser** — 6 extractors: `date_range` (2 groups → YYYY-MM-DD), `nights`
+  (group select by `nights_is_days`, offset), `price` (marker-find → `price_amount_rx` →
+  `digits_only` → **ceiling div** `(total+divisor-1)/divisor` for `price_basis=total`, multiply
+  for `per_person`), `flights` (dedup first/second), `airline` (optional), `hotel`
+  (`hotel_name_rx` else anchor → next non-empty line). product_kind branching: flight skips
+  hotel+nights; hotel skips flights; flight requires a flight# or airline.
+- **settour custom parser** — bespoke, no regex: char-by-char `YYYY/MM/DD` window; `共N晚`/`共N日`
+  nights; `機加酒未稅總價` marker → first ≥4-digit amount (skip commas); 2-upper+digits flight
+  numbers; hotel = line starting `飯店` & containing `入住` → next non-empty line;
+  `per_person=(total+1)//2`.
+- **Helpers** — `parse_amount`, `digits_only`, `normalize_rule_date`, `compile_rule_regex`,
+  `infer_region`/`infer_destination`, `infer_airline_from_flight_number` (IT→虎航, CI→華航, …),
+  `offer_to_row`/`offer_row_id` (composite id `source_product_YYYYMMDD_Nn`), `product_code_from_url`,
+  `sanitize_id_part`, `now_iso`.
+- **The capture↔source guard + `--allow-source-override`** (already proven in Rust) — port it.
+- **DROP** all browser/CDP functions (Appendix A §7) — gwebcdb already provides that layer.
 
-## 3. The per-source migration unit (parallelizable checklist)
+**Fidelity gate:** the port must reproduce the Rust output on the existing stale captures. We
+have a known-good Rust result to diff against: `verify settour settour-test-0620` →
+`depart_return 2026-06-20→2026-06-24, nights 4, price pp=18294 total=36587, flight IT212/IT211,
+hotel 微笑飯店京都烏丸五條, overall OK offers=1`. The Python port must produce the same. Capture
+the equivalent for one generic-parser source too before trusting it.
 
-Prereqs: Chrome on `:9222` (automation profile, not daily Chrome); `chromeport browser
-doctor` OK; Turso tokens exported (`TRAVEL_TURSO_{URL,READ_TOKEN,WRITE_TOKEN}`).
+## 4. Per-source migration unit (parallelizable, unchanged in spirit)
 
-1. **Rule row exists** — `db query "SELECT … FROM parser_rules WHERE source_id='<id>'"`;
-   if missing, `parser rules seed-defaults`.
-2. **Find the live URL** — navigate the OTA's own search UI in Chrome to the product/results
-   page for the target trip (Naha, 2026-06-12) and confirm real offer data renders.
-3. **Capture** — GET-able page: `fetch url "<url>" --source <id>`; form-driven:
-   `fetch interact "<url>" --source <id> --step 'click:…' --step 'fill:…=…' --step
-   'wait:1500' --step 'waitfor:.results'`. Record the `capture_id`.
-   - **Set pax=2 in the form** (project default) so `pax_divisor=2` math is correct (risk 6c).
-4. **Verify (read-only)** — `verify <source_id> <capture_id>`; read per-field OK/MISSING and
-   the `snippet`.
-5. **Tune `parser_rules` on MISSING** — adjust the offending regex/marker via
-   `db exec "UPDATE parser_rules SET … WHERE source_id='<id>'"`; re-verify until all
-   *required* fields OK (`not-required` for the product_kind doesn't count).
-6. **Dry-run parse** — `parse capture <capture_id> --source <id> --dry-run`; eyeball
-   dates/nights/price_per_person/airline/hotel. **Cross-check the flight number** against
-   known flights (CI120/CI121) — `flight_rx` false-positives are real (risk 6d).
-7. **Live parse** — `parse capture <capture_id> --source <id>`; expect `imported>=1`.
-8. **Confirm in DB** — `query-offers --plan-id okinawa-2026 --dest okinawa_2026` shows the
-   offer with today's `scraped_at`.
-9. **Stamp the rule** — `UPDATE parser_rules SET source_url='<live-url>', fetched_at='<now>'`.
-10. **settour only** — set `has_custom_parser=1` (see §5a) and re-run 6–8 through the Rust path.
-11. **Decommission gate (§4)** passes → `rm archive/broken-python-scrapers/<source>*.py`.
+Prereqs: WSLg Chrome up (`gwebcdb/scripts/start-chrome-cdp-wslg.sh`), gwebcdb tools resolve a
+backend, Turso tokens exported.
 
-## 4. Definition of done / decommission gate (per source)
+1. Rule row exists (seed parser_rules — port the seeder too, or seed via SQL).
+2. Navigate the OTA search UI to the target product/results page (human logs in if the OTA
+   requires it; set **pax=2**).
+3. Capture page text → Turso `captures` via gwebcdb `save_page_text.py` (tagged with source_id).
+4. `verify` (Python) — read field OK/MISSING + snippet.
+5. Tune `parser_rules` regex/markers on MISSING; re-verify until required fields OK.
+6. Dry-run `parse` — eyeball dates/nights/price/airline/hotel; **cross-check flight# vs known
+   flights** (false-positive risk).
+7. Live `parse` → `offers`.
+8. Confirm via `./bin/travel query-offers`.
+9. Stamp `parser_rules.source_url` + `fetched_at`.
+10. Decommission gate (§5) passes → delete the archived Python scraper.
 
-A source is live-verified (and its Python parser deletable) when ALL hold, by command output.
-**All of G1–G4 must run against the SAME `capture_id`, and that capture must belong to the
-source** (see G0 — Codex review caught that `parse capture`/`verify` do NOT enforce this).
+## 5. Decommission gate (per source) — unchanged from v1, still applies
 
-- **G0 capture↔source match** — the capture used for G1–G4 has `captures.source_id == <id>`.
-  This is NOT enforced by the tools today: `parse capture` binds the stored source as
-  `_stored_source` and ignores it, trusting the CLI `--source` (`main.rs:1772`); `verify` only
-  prints `warning capture_source_mismatch` (`main.rs:1870`), it does not fail. So a `settour`
-  capture parsed `--source liontravel` silently runs liontravel's rules and could fake a
-  "verified". Until §5h hardens this in code, G0 is a MANUAL check:
-  `db query "SELECT source_id FROM captures WHERE capture_id='<cap>'"` must equal `<id>`.
-- **G1 live capture** — latest `captures` row for the source has `captured_at >= today`,
-  `LENGTH(raw_text) > 500`, AND its stored `url` host/path is the real OTA results/product page
-  for the target trip (not a login wall, generic landing page, or wrong-date page). `raw_text >
-  500` alone is insufficient — a login wall easily exceeds it. Eyeball the capture `url` +
-  `verify` snippet to confirm it's the right page.
-- **G2 verify clean** — `verify` emits zero `MISSING` lines for *required* fields; `overall OK`.
-- **G3 parse ≥1** — `parse … --dry-run` prints `offers N` (N≥1) with plausible values
-  (date `2026-0X-XX`; price TWD 5k–50k package / 1k–10k flight; valid flight/hotel).
-- **G4 offer in Turso** — `query-offers` shows ≥1 row, `source_id=<id>`, `scraped_at>=today`.
-- **G5 rule stamped** — `source_url` points at the real OTA URL (not the dead
-  `repo:scripts/...` placeholder); `fetched_at` post-2026-06-24.
-- **G6 deletion hygiene** — before `rm`, grep the repo: no live command, doc, test, skill, or
-  registry entry still references the archived parser file as an executable source
-  (`grep -rn "<source>.py" --include=*.rs --include=*.md --include=*.py .` outside `archive/`).
+- **G0 capture↔source match** — now enforced in code (the ported guard).
+- **G1 live capture** — `captured_at >= today`, `raw_text > 500`, **and the stored URL is the
+  real OTA page** (not a login wall / wrong date).
+- **G2 verify clean** — zero MISSING for required fields; overall OK.
+- **G3 parse ≥1** — dry-run prints ≥1 plausible offer.
+- **G4 offer in Turso** — `query-offers` shows it, today's `scraped_at`.
+- **G5 rule stamped** — real `source_url`, fresh `fetched_at`.
+- **G6 deletion hygiene** — grep repo: no live ref to the archived parser before `rm`.
 
-Only then: delete the archived Python file.
+## 6. Sequencing
 
-## 5. Code changes (vs operational/data work)
+- **Phase 0 (code, blocking) — the Python port** (§3) + fidelity gate vs the known Rust output.
+  This is the prerequisite; nothing per-source can be verified until extraction runs in gwebcdb.
+- **Tier A — FIT packages**: settour (custom parser, port it faithfully first) → liontravel →
+  besttour → lifetour → travel4u.
+- **Tier B — flight-only**: tigerair → google_flights → eztravel → trip. Flight result pages are
+  tables; raw text flattens them — may need a structured-text capture (gwebcdb `save_page_text`
+  vs a table-aware dump). Login: trip/tigerair confirmation may need a human sign-in (now OK).
+- **Tier C — hotel**: agoda (expect `hotel_name_rx` tuning). No login.
+- **Blocked**: skyscanner (captcha). booking/jalan/rakuten_travel (inactive/unsupported).
 
-Most of the migration is **human-browser + data tuning**, not code. The code deltas:
-
-- **5a (CRITICAL) settour flag** — `default_parser_rules()` `main.rs:1577`: flip
-  `has_custom_parser: false` → `true`, then `parser rules seed-defaults` to upsert. (Code fix
-  is authoritative; a bare `UPDATE` gets clobbered by the next seed.) Unblocks settour G2–G3.
-- **5b `content_snippet`** `main.rs:1116` — the needle list is **okinawa-2026-hardcoded**
-  (`HOTEL`/`AZAT`/`6/12`/`Naha`/`那霸`/`China Airlines` are already there — Codex caught that my
-  earlier "add 那霸" was wrong; it's present at `main.rs:1123`). Real fix: generalize the
-  trip-specific needles (don't bake one trip's hotel/date into the binary) and add the missing
-  generic flight markers (`TPE`, `出發日期`, `機票`, `OKA`) so `verify` snippets surface on
-  flight-source captures too.
-- **5c `infer_source_id`** `main.rs:1091` — recognize `trip.com`, `eztravel.com.tw` (today
-  they fall to `unknown` on a bare `browser snapshot`).
-- **5d `source_url` seeds** `default_parser_rules()` — change dead
-  `Some("repo:scripts/...")` → `None` so a `seed-defaults` re-run can't clobber a verified URL
-  back to a dead path.
-- **5e (verify-only, no change)** confirm `parse_settour`'s helpers (`extract_date_range`,
-  `extract_nights`, `extract_flight_numbers`) are defined/reachable before wiring 5a.
-- **5f (OPTIONAL) `chromeport verify-all`** — new `Command::VerifyAll` looping every
-  `parser_rules` source against its latest capture. Convenience audit; build *after* Tier A.
-- **5g (no change) travel-cli** — `parse capture` writes the shared `offers` table directly;
-  `query-offers` already reads it. No travel-cli edits.
-- **5h (NEW — from Codex GAP) enforce capture↔source match** — today `parse capture` binds the
-  stored source as `_stored_source` and ignores it (`main.rs:1772`), trusting CLI `--source`;
-  `verify` only prints `warning capture_source_mismatch` (`main.rs:1870`). A capture can be
-  parsed/verified under the WRONG source and fake a "verified", undermining the whole
-  decommission gate. Change both to **FAIL** (`CliError`/non-zero exit) when
-  `stored_source != source_id`, with an explicit `--allow-source-override` escape hatch for the
-  rare intentional case (e.g. re-parsing an `unknown`-sourced snapshot). Small, mechanical,
-  well-scoped. This makes G0 automatic instead of a manual check.
-
-**Possible structural change, gated on Tier B findings (risk 6a):** flight-results pages are
-tables; `body.innerText` flattens them. chromeport already parses `<table>` DOM into
-`TravelCapture.tables` but does **not** persist it. If generic regex fails on flight sources,
-extend `turso.rs:insert_capture` to store a denormalized table rendering (NOT JSON in the RDB
-— a text rendering or child rows) and let `parse_generic` consume it. Decide only if a flight
-source actually fails — don't build it speculatively.
-
-## 6. Sequencing (code-vs-human split)
-
-- **Tier A — FIT packages** (`product_kind=fit`, richest data, shared ZH markers): settour →
-  liontravel → besttour → lifetour → travel4u. settour first (only code fix is 5a; parser
-  already written). One browser session can batch all five; tuning one informs the rest.
-- **Tier B — flight-only** (`product_kind=flight`): tigerair → google_flights → eztravel →
-  trip. Simpler structure but bot-detection/login risk; may need a separate session and the
-  table-capture change (6a). trip/tigerair: confirm logged-out price renders.
-- **Tier C — hotel**: agoda (`product_kind=hotel`); expect `hotel_name_rx` tuning. No login.
-- **Blocked/deferred**: skyscanner (captcha — permanently blocked, no automated path);
-  booking/jalan/rakuten_travel (inactive/unsupported — no work).
-
-Code work (5a–5d) is a small, single batch done up front. Everything else is per-source
-human-browser capture + regex tuning, parallelizable across sources within a session.
+Code-vs-human split: Phase 0 port = code (Grok-suitable, tight spec, against a known-good diff).
+Per-source capture + tuning + login = human-in-the-loop (you drive WSLg Chrome).
 
 ## 7. Risks / honest gaps
 
-- **6a structure loss** — `body.innerText` flattens flight tables; may need the table-capture
-  change for Tier B (gated, see §5).
-- **6b ZH markers drift** — seeded markers came from the *dead Python parsers*, not live
-  renders; `verify` surfaces mismatches immediately as `price MISSING` + snippet. Expected.
-- **6c pax math** — all `pax_divisor=2`; the search form MUST be filled with 2 adults or
-  per-person price is wrong. Operational discipline.
-- **6d flight_rx false positives** — `[A-Z]{2}\d{3,4}` matches product/room codes too; always
-  cross-check the dry-run flight against CI120/CI121; constrain with `airline_rx` if needed.
-- **6e login walls** — tigerair confirmation / trip detailed prices may need auth; confirm the
-  results-page level is logged-out-accessible before capture.
-- **6f churn** — regex vs rendered text is brittle; a 0-offer parse IS a loud error
-  (`Err("parser produced 0 offers")`), but there's no scheduled re-verify — fold
-  `check-freshness` into `/pre-trip-checklist`.
-- **6g offers PK** — `ON CONFLICT(id, scraped_at) DO NOTHING` can silently drop a same-second
-  re-capture (`imported=0`, no error); acceptable, not a blocker.
+- **Port fidelity** — the settour char-scanner + price ceiling-div + product_kind branching must
+  match Rust exactly; the fidelity gate (diff vs `settour-test-0620` output) is the backstop.
+- **Structure loss on flight tables** (Tier B) — `body.innerText` flattens; may need a
+  table-aware capture in gwebcdb (NOT JSON in the RDB — text rendering or child rows).
+- **Regex brittleness / ZH marker drift** — `verify` surfaces it as MISSING + snippet.
+- **pax math** — search form must be 2 adults or per-person price is wrong.
+- **flight_rx false positives** — `[A-Z]{2}\d{3,4}` matches room/product codes; cross-check.
+- **Where chromeport retires to** — archive the crate (like `archive/ts-cli-retired/`); update
+  CLAUDE.md/CLI.md/skills that still say `./bin/chromeport`.
 
 ## 8. Process
+1. (this doc) plan written. 2. Codex CLI reviews → I corroborate vs source. 3. optional Grok 3rd
+review + corroborate. 4. appraise agents — Phase 0 port is mechanical-but-large (Grok against the
+appended spec + fidelity diff); per-source = human-in-the-loop. 5. review delegated code
+line-by-line before commit.
 
-1. (this doc) plan written.
-2. **Codex CLI reviews this plan** (read-only); I **corroborate** each finding vs the real
-   chromeport source before accepting.
-3. If warranted, **Grok 3rd-reviewer** pass + corroborate.
-4. **Appraise which agent implements which batch** — the small code batch (5a–5d) is
-   well-scoped/mechanical (Grok-suitable); per-source capture+tune is human-in-the-loop
-   (you drive Chrome, agent runs chromeport + reads verify output).
-5. I review any delegated code line-by-line BEFORE commit (logged lesson).
+---
+
+## Appendix A — chromeport extraction port spec (function-by-function)
+
+> Captured from a read-only investigation of `rust/crates/chromeport/src/{main.rs,turso.rs}` on
+> 2026-06-25. This is the authoritative reimplementation reference for §3. Sections: (1) parse
+> entry points, (2) generic parser + 6 extractors, (3) product_kind branching, (4) settour
+> custom parser, (5) the 3 Turso tables, (6) helper utilities, (7) browser/CDP pieces to DROP.
+> [Full spec pasted below at implementation time — see investigation output in session; key
+> facts already inlined in §3. The spec gives file:line + signature + logic for every function,
+> the 17 parser_rules columns, the 16 offers columns + (id,scraped_at) PK / ON CONFLICT, and the
+> exact price/date/nights normalization.]
+
+### A.1 Parse entry points
+- `parse_capture(capture_id, source_id, dry_run, allow_source_override)` — main.rs:1780. Steps:
+  read `SELECT source_id,url,raw_text FROM captures WHERE capture_id=?`; guard
+  `stored_source != source_id && !allow_source_override` → error (main.rs:1803); load
+  parser_rules row; branch `has_custom_parser` → `parse_settour` (settour) else `parse_generic`;
+  dry_run prints tab-separated offers + `offers\tN`; else `offer_to_row` each →
+  `insert_offer` → print `imported\tN`.
+- `verify_capture(source_id, capture_id, allow_source_override)` — main.rs:1884. Same read+guard;
+  prints the 17-col rule report then per-field `verify_*` OK/MISSING; attempts parse, no write.
+
+### A.2 Generic parser — `parse_generic(capture, rule)` main.rs:2105
+Calls 6 extractors then builds one `CanonicalOfferOut`. Skips per product_kind (A.3). Validates:
+flight kind with no flight# AND no airline → error (main.rs:2126).
+- `extract_rule_date_range` (2188) — `date_range_rx`, groups 1&2; group2 may be None only for
+  flight; `normalize_rule_date` each.
+- `extract_rule_nights` (2221) — `nights_rx`; group = 1 if `nights_is_days` else last group;
+  `digits_only`; if `nights_is_days` subtract 1.
+- `extract_rule_price` (2254) — find `price_marker`, slice after it, `price_amount_rx` group1 →
+  `parse_amount`; `total` → per_person `(amount+pax_divisor-1)/pax_divisor` (ceiling);
+  `per_person` → total `amount*pax_divisor`.
+- `extract_rule_flights` (2314) — `flight_rx` captures_iter, group1/0, strip spaces, dedup →
+  (first, second).
+- `extract_rule_airline` (2368) — empty `airline_rx` → None; else group1/0 trimmed.
+- `extract_rule_hotel` (2333) — `hotel_name_rx` if set (group1/0); else `hotel_anchor_rx` →
+  first non-empty line after a matching line.
+
+### A.3 product_kind branching (main.rs:2106–2131)
+| field | fit | flight | hotel |
+|---|---|---|---|
+| date_range | req | req | req |
+| nights | req | SKIP | req |
+| price | req | req | req |
+| flights | opt | req | SKIP |
+| airline | opt | req(fallback) | SKIP |
+| hotel | opt | SKIP | req |
+flight validation: error if no flight# AND no airline.
+
+### A.4 settour custom parser — `parse_settour(capture)` main.rs:2612 (no regex)
+- `extract_date_range` (2683) — char-by-char sliding 10-char `YYYY/MM/DD` window, `/`→`-`, dedup,
+  return first two.
+- `extract_nights` (2715) — `capture_after("共","晚")` nights, or `capture_after("共","日")` days−1.
+  `capture_after` (2808): substring between markers, ASCII digits only.
+- `extract_settour_total` (2726) — find `機加酒未稅總價`, then `extract_first_amount` (2733):
+  accumulate ASCII digits, skip commas, return first run ≥4 digits.
+- `extract_flight_numbers` (2758) — 2 uppercase + 1–4 digits (len 4–6), dedup → (first, second).
+- `extract_settour_hotel` (2790) — line.startswith `飯店` AND contains `入住` → next non-empty line.
+- per_person = `(total + 1) / 2` (2 pax). source_id "settour", package_type "fit", TWD.
+
+### A.5 Turso tables
+- `captures` (turso.rs:86): capture_id PK, source_id, url, title, captured_at, raw_text.
+- `parser_rules` (turso.rs:195) 17 cols: source_id PK, product_kind, date_range_rx, nights_rx,
+  nights_is_days, price_marker, price_amount_rx, price_basis, pax_divisor, flight_rx,
+  hotel_anchor_rx, airline_rx, hotel_name_rx, currency, has_custom_parser, source_url, fetched_at.
+  Upsert ON CONFLICT(source_id) DO UPDATE.
+- `offers` (turso.rs:163) 16 cols: id, source_file, source_id, type, name, price_per_person,
+  currency, region, destination, departure_date, return_date, nights, availability, hotel_name,
+  airline, scraped_at. PK (id, scraped_at), ON CONFLICT DO NOTHING.
+  `offer_row_id` = `source_id_<product_code>_YYYYMMDD_<N>n`; product_code = last URL path seg
+  minus .html/.htm.
+
+### A.6 Helpers to port
+`parse_amount`(2416), `digits_only`(2425, ASCII only — handles fullwidth by dropping it),
+`normalize_rule_date`(2397, `/`→`-`, validate YYYY-MM-DD), `compile_rule_regex`(2384),
+`infer_region`(2575)/`infer_destination`(2566) URL-keyword, `infer_airline_from_flight_number`
+(2546: IT→台灣虎航, CI→中華航空, BR→長榮, JX→星宇, MM→樂桃, TR→酷航, GK→捷星),
+`offer_to_row`(2469)/`offer_row_kind`(2509, →flight/hotel/package)/`product_code_from_url`(2529),
+`non_empty_string`(2586), `sanitize_id_part`(2594), `now_iso`(2816).
+
+### A.7 DROP (browser/CDP — gwebcdb provides this)
+CdpSession(665), fetch_url(519), fetch_interact(630), capture_snapshot(489), screenshot_url(553),
+settle_rendered_page(768), execute_interaction_steps(792), set_control_value(839),
+wait_for_selector(895), capture_page(967), evaluate_{string,links,tables}(1012/1020/1033),
+guard_interactive_profile(917). Extraction boundary = raw_text string in.
