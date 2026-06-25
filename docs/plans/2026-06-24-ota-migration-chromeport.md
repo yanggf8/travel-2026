@@ -265,9 +265,13 @@ Consequence: a `hotel`-kind page whose text matches `flight_rx` yields **inciden
 - `offers` — chromeport INSERTS 16 cols (turso.rs:163): id, source_file, source_id, type, name,
   price_per_person, currency, region, destination, departure_date, return_date, nights,
   availability, hotel_name, airline, scraped_at. PK (id, scraped_at), ON CONFLICT DO NOTHING.
-  NOTE (Codex): the LIVE `offers` table has more nullable/default columns than these 16
-  (`scripts/schema.sql:516`, `db_migrate.rs:758`) — the port inserts the same 16 and lets the rest
-  default; do not assume 16 is the full schema.
+  NOTE (Codex, corroborated): the LIVE `offers` table has **21 columns** (`scripts/schema.sql:516`):
+  the 16 chromeport inserts + `hotel_area`, `flight_outbound`, `flight_return`, `includes`,
+  `created_at` (default). Insert the same 16; the extra 5 take NULL/default — fine. **BUT two of the
+  16 are CHECK-constrained**: `type IN ('package','flight','hotel')` and `availability IN
+  ('available','sold_out','limited')`. The port MUST emit valid enum values (or NULL for
+  availability) — an arbitrary string like `"unknown"` makes the INSERT *fail*, it does not default.
+  chromeport's `offer_row_kind` already maps to exactly package/flight/hotel; replicate that.
   `offer_row_id` = `source_id_<product_code>_YYYYMMDD_<N>n`; product_code = last URL path seg
   minus .html/.htm.
 
