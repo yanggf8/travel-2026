@@ -1,5 +1,5 @@
-use crate::model::{Day, RouteSegment};
 use super::{esc, session};
+use crate::model::{Day, RouteSegment};
 
 /// "What to wear" tips, banded by temperature so it works for both cold-season
 /// (Tokyo/Kyoto Feb) and hot-season (Okinawa Jun) trips. Faithful port of the
@@ -14,41 +14,71 @@ pub fn clothing_tip(temp_low: f64, temp_high: f64, rain_pct: f64, lang: &str) ->
 
     // Primary band.
     if temp_low <= 0.0 {
-        tips.push(if zh { "🧣 早晚接近0°C——厚外套、圍巾、手套".to_string() }
-                  else { "🧣 Near 0°C morning/evening—heavy coat, scarf, gloves".to_string() });
+        tips.push(if zh {
+            "🧣 早晚接近0°C——厚外套、圍巾、手套".to_string()
+        } else {
+            "🧣 Near 0°C morning/evening—heavy coat, scarf, gloves".to_string()
+        });
     } else if temp_low <= 5.0 {
-        tips.push(if zh { format!("🧥 早晚{lo}°C——冬季外套+毛衣，下午可脫") }
-                  else { format!("🧥 {lo}°C morning/evening—winter coat+sweater, lighter afternoon") });
+        tips.push(if zh {
+            format!("🧥 早晚{lo}°C——冬季外套+毛衣，下午可脫")
+        } else {
+            format!("🧥 {lo}°C morning/evening—winter coat+sweater, lighter afternoon")
+        });
     } else if temp_low <= 10.0 {
-        tips.push(if zh { format!("🧥 早晚{lo}°C——外套+薄毛衣") }
-                  else { format!("🧥 {lo}°C morning/evening—jacket+light sweater") });
+        tips.push(if zh {
+            format!("🧥 早晚{lo}°C——外套+薄毛衣")
+        } else {
+            format!("🧥 {lo}°C morning/evening—jacket+light sweater")
+        });
     } else if temp_high <= 18.0 {
-        tips.push(if zh { format!("🧥 涼爽{hi}°C——長袖+薄外套") }
-                  else { format!("🧥 Cool {hi}°C—long sleeves + light jacket") });
+        tips.push(if zh {
+            format!("🧥 涼爽{hi}°C——長袖+薄外套")
+        } else {
+            format!("🧥 Cool {hi}°C—long sleeves + light jacket")
+        });
     } else if temp_high <= 24.0 {
-        tips.push(if zh { format!("👕 舒適{hi}°C——長短袖皆可，早晚帶薄外套") }
-                  else { format!("👕 Mild {hi}°C—short or long sleeves, light layer for evening") });
+        tips.push(if zh {
+            format!("👕 舒適{hi}°C——長短袖皆可，早晚帶薄外套")
+        } else {
+            format!("👕 Mild {hi}°C—short or long sleeves, light layer for evening")
+        });
     } else if temp_high <= 29.0 {
-        tips.push(if zh { format!("👕 溫暖{hi}°C——透氣短袖、好走的鞋") }
-                  else { format!("👕 Warm {hi}°C—breathable short sleeves, comfy shoes") });
+        tips.push(if zh {
+            format!("👕 溫暖{hi}°C——透氣短袖、好走的鞋")
+        } else {
+            format!("👕 Warm {hi}°C—breathable short sleeves, comfy shoes")
+        });
     } else {
-        tips.push(if zh { format!("☀️ 炎熱{hi}°C——排汗短袖、防曬、帽子、多補水") }
-                  else { format!("☀️ Hot {hi}°C—moisture-wicking tee, sun protection, hat, hydrate") });
+        tips.push(if zh {
+            format!("☀️ 炎熱{hi}°C——排汗短袖、防曬、帽子、多補水")
+        } else {
+            format!("☀️ Hot {hi}°C—moisture-wicking tee, sun protection, hat, hydrate")
+        });
     }
 
     // Afternoon warmth note if a big temp swing.
     if temp_high - temp_low >= 10.0 {
-        tips.push(if zh { format!("☀️ 午後回暖到{hi}°C——穿脫方便的洋蔥式穿搭") }
-                  else { format!("☀️ Warms to {hi}°C afternoon—layer for easy removal") });
+        tips.push(if zh {
+            format!("☀️ 午後回暖到{hi}°C——穿脫方便的洋蔥式穿搭")
+        } else {
+            format!("☀️ Warms to {hi}°C afternoon—layer for easy removal")
+        });
     }
 
     // Rain gear.
     if rain_pct >= 30.0 {
-        tips.push(if zh { "☔ 帶傘（降雨機率高）".to_string() }
-                  else { "☔ Bring umbrella (likely rain)".to_string() });
+        tips.push(if zh {
+            "☔ 帶傘（降雨機率高）".to_string()
+        } else {
+            "☔ Bring umbrella (likely rain)".to_string()
+        });
     } else if rain_pct >= 15.0 {
-        tips.push(if zh { "🌂 帶折疊傘備用".to_string() }
-                  else { "🌂 Compact umbrella just in case".to_string() });
+        tips.push(if zh {
+            "🌂 帶折疊傘備用".to_string()
+        } else {
+            "🌂 Compact umbrella just in case".to_string()
+        });
     }
 
     tips
@@ -59,7 +89,8 @@ pub fn clothing_tip(temp_low: f64, temp_high: f64, rain_pct: f64, lang: &str) ->
 fn weather_strip(day: &Day, lang: &str) -> String {
     // No weather data at all → keep the old plain label line (or nothing).
     if day.weather_label.is_empty()
-        && day.temp_low_c.is_none() && day.temp_high_c.is_none()
+        && day.temp_low_c.is_none()
+        && day.temp_high_c.is_none()
         && day.precipitation_pct.is_none()
     {
         return String::new();
@@ -72,12 +103,20 @@ fn weather_strip(day: &Day, lang: &str) -> String {
     }
     // temp range
     if let (Some(lo), Some(hi)) = (day.temp_low_c, day.temp_high_c) {
-        strip.push_str(&format!(" · {}\u{2013}{}°C", lo.round() as i64, hi.round() as i64));
+        strip.push_str(&format!(
+            " · {}\u{2013}{}°C",
+            lo.round() as i64,
+            hi.round() as i64
+        ));
     }
     // feels-like range
     if let (Some(flo), Some(fhi)) = (day.feels_like_low_c, day.feels_like_high_c) {
         let label = if zh { "體感" } else { "Feels" };
-        strip.push_str(&format!(" · {label} {}\u{2013}{}°C", flo.round() as i64, fhi.round() as i64));
+        strip.push_str(&format!(
+            " · {label} {}\u{2013}{}°C",
+            flo.round() as i64,
+            fhi.round() as i64
+        ));
     }
     // rain
     if let Some(rain) = day.precipitation_pct {
@@ -110,13 +149,26 @@ fn mode_icon(mode: &str) -> &'static str {
 
 /// Render the per-day "今日路線" (today's route) block from door-to-door segments.
 fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
-    let heading = if lang == "en" { "Today's route" } else { "今日路線" };
+    let heading = if lang == "en" {
+        "Today's route"
+    } else {
+        "今日路線"
+    };
     let mut h = String::new();
-    h.push_str(&format!("<div class=\"route-block\"><div class=\"route-heading\">{heading}</div>"));
+    h.push_str(&format!(
+        "<div class=\"route-block\"><div class=\"route-heading\">{heading}</div>"
+    ));
     for seg in segments {
         h.push_str("<div class=\"route-seg\">");
-        h.push_str(&format!("<span class=\"route-mode\">{}</span> ", mode_icon(&seg.mode)));
-        h.push_str(&format!("{} → {}", esc(&seg.from_place), esc(&seg.to_place)));
+        h.push_str(&format!(
+            "<span class=\"route-mode\">{}</span> ",
+            mode_icon(&seg.mode)
+        ));
+        h.push_str(&format!(
+            "{} → {}",
+            esc(&seg.from_place),
+            esc(&seg.to_place)
+        ));
         if !seg.start_time.is_empty() {
             h.push_str(&format!(" · {}", esc(&seg.start_time)));
         }
@@ -131,19 +183,37 @@ fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
 }
 
 pub fn render(day: &Day, plan_id: &str, lang: &str, has_map: bool) -> String {
-    let theme = if lang == "zh" && !day.theme_zh.is_empty() { &day.theme_zh } else { &day.theme };
+    let theme = if lang == "zh" && !day.theme_zh.is_empty() {
+        &day.theme_zh
+    } else {
+        &day.theme
+    };
     let mut h = String::new();
-    h.push_str(&format!("<section class=\"day day-{}\">", esc(&day.day_type)));
-    h.push_str(&format!("<h2>Day {} · {}</h2>", day.day_number, esc(&day.date)));
+    h.push_str(&format!(
+        "<section class=\"day day-{}\">",
+        esc(&day.day_type)
+    ));
+    h.push_str(&format!(
+        "<h2>Day {} · {}</h2>",
+        day.day_number,
+        esc(&day.date)
+    ));
     h.push_str(&format!("<div class=\"theme\">{}</div>", esc(theme)));
     h.push_str(&weather_strip(day, lang));
-    h.push_str(&super::map::day_map_slot(plan_id, day.day_number, has_map, lang));
+    h.push_str(&super::map::day_map_slot(
+        plan_id,
+        day.day_number,
+        has_map,
+        lang,
+    ));
     if !day.route_segments.is_empty() {
         h.push_str(&render_route_block(&day.route_segments, lang));
     }
     for sess in &day.sessions {
         // skip wholly-empty sessions to avoid 4 empty boxes on a light day
-        if sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty() { continue; }
+        if sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty() {
+            continue;
+        }
         h.push_str(&session::render(sess, lang));
         h.push_str(&super::map::stop_list(&sess.stops));
     }
@@ -154,13 +224,20 @@ pub fn render(day: &Day, plan_id: &str, lang: &str, has_map: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Day, Session, RouteSegment, Activity};
+    use crate::model::{Activity, Day, RouteSegment, Session};
     /// Build an Activity carrying only a display title (the common test case).
-    fn act(title: &str) -> Activity { Activity { title: title.into(), ..Default::default() } }
+    fn act(title: &str) -> Activity {
+        Activity {
+            title: title.into(),
+            ..Default::default()
+        }
+    }
     #[test]
     fn renders_route_block() {
         let day = Day {
-            day_number: 2, date: "2026-06-13".into(), day_type: "full".into(),
+            day_number: 2,
+            date: "2026-06-13".into(),
+            day_type: "full".into(),
             route_segments: vec![RouteSegment {
                 from_place: "HOTEL AZAT NAHA".into(),
                 to_place: "波上宮".into(),
@@ -181,9 +258,15 @@ mod tests {
     #[test]
     fn renders_zh_theme_and_sessions() {
         let day = Day {
-            day_number: 3, date: "2026-06-14".into(), day_type: "full".into(),
+            day_number: 3,
+            date: "2026-06-14".into(),
+            day_type: "full".into(),
             theme_zh: "壺屋陶器街".into(),
-            sessions: vec![Session{ session_type:"noon".into(), meals:vec!["Lunch".into()], ..Default::default()}],
+            sessions: vec![Session {
+                session_type: "noon".into(),
+                meals: vec!["Lunch".into()],
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let html = render(&day, "okinawa-2026", "zh", false);
@@ -194,10 +277,19 @@ mod tests {
     #[test]
     fn empty_session_is_skipped() {
         let day = Day {
-            day_number: 1, date: "2026-06-12".into(), day_type: "arrival".into(),
+            day_number: 1,
+            date: "2026-06-12".into(),
+            day_type: "arrival".into(),
             sessions: vec![
-                Session{ session_type:"morning".into(), activities: vec![act("Arrive")], ..Default::default()},
-                Session{ session_type:"noon".into(), ..Default::default()}, // empty → skipped
+                Session {
+                    session_type: "morning".into(),
+                    activities: vec![act("Arrive")],
+                    ..Default::default()
+                },
+                Session {
+                    session_type: "noon".into(),
+                    ..Default::default()
+                }, // empty → skipped
             ],
             ..Default::default()
         };
@@ -208,7 +300,12 @@ mod tests {
     }
     #[test]
     fn day_includes_day_map_image_when_available() {
-        let day = Day { day_number: 2, date: "2026-06-13".into(), day_type: "full".into(), ..Default::default() };
+        let day = Day {
+            day_number: 2,
+            date: "2026-06-13".into(),
+            day_type: "full".into(),
+            ..Default::default()
+        };
         let html = render(&day, "okinawa-2026", "en", true);
         assert!(html.contains("/map/okinawa-2026/day-2.png"));
         assert!(html.contains("map-frame"));
@@ -216,7 +313,12 @@ mod tests {
 
     #[test]
     fn day_shows_missing_placeholder_when_map_unavailable() {
-        let day = Day { day_number: 2, date: "2026-06-13".into(), day_type: "full".into(), ..Default::default() };
+        let day = Day {
+            day_number: 2,
+            date: "2026-06-13".into(),
+            day_type: "full".into(),
+            ..Default::default()
+        };
         let html = render(&day, "okinawa-2026", "en", false);
         assert!(html.contains("map-missing"));
         assert!(!html.contains("src=\"/map"));
@@ -277,11 +379,15 @@ mod tests {
     #[test]
     fn weather_strip_shows_feels_like_and_rain() {
         let day = Day {
-            day_number: 3, date: "2026-06-14".into(), day_type: "full".into(),
+            day_number: 3,
+            date: "2026-06-14".into(),
+            day_type: "full".into(),
             weather_label: "Cloudy".into(),
-            temp_low_c: Some(26.0), temp_high_c: Some(30.0),
+            temp_low_c: Some(26.0),
+            temp_high_c: Some(30.0),
             precipitation_pct: Some(73.0),
-            feels_like_low_c: Some(28.0), feels_like_high_c: Some(34.0),
+            feels_like_low_c: Some(28.0),
+            feels_like_high_c: Some(34.0),
             ..Default::default()
         };
         let html = render(&day, "okinawa-2026", "zh", false);
@@ -293,9 +399,12 @@ mod tests {
     #[test]
     fn weather_strip_hot_rainy_renders_clothing() {
         let day = Day {
-            day_number: 3, date: "2026-06-14".into(), day_type: "full".into(),
+            day_number: 3,
+            date: "2026-06-14".into(),
+            day_type: "full".into(),
             weather_label: "Rain".into(),
-            temp_low_c: Some(26.0), temp_high_c: Some(30.0),
+            temp_low_c: Some(26.0),
+            temp_high_c: Some(30.0),
             precipitation_pct: Some(73.0),
             ..Default::default()
         };
@@ -308,9 +417,12 @@ mod tests {
     #[test]
     fn weather_strip_mild_no_umbrella() {
         let day = Day {
-            day_number: 3, date: "2026-06-14".into(), day_type: "full".into(),
+            day_number: 3,
+            date: "2026-06-14".into(),
+            day_type: "full".into(),
             weather_label: "Clear".into(),
-            temp_low_c: Some(16.0), temp_high_c: Some(22.0),
+            temp_low_c: Some(16.0),
+            temp_high_c: Some(22.0),
             precipitation_pct: Some(5.0),
             ..Default::default()
         };
@@ -323,21 +435,30 @@ mod tests {
     fn weather_strip_uses_feels_like_for_clothing_when_present() {
         // Actual high 28 (would be 溫暖), but feels-like 34 → should pick 炎熱.
         let day = Day {
-            day_number: 3, date: "2026-06-14".into(), day_type: "full".into(),
+            day_number: 3,
+            date: "2026-06-14".into(),
+            day_type: "full".into(),
             weather_label: "Humid".into(),
-            temp_low_c: Some(25.0), temp_high_c: Some(28.0),
+            temp_low_c: Some(25.0),
+            temp_high_c: Some(28.0),
             precipitation_pct: Some(0.0),
-            feels_like_low_c: Some(27.0), feels_like_high_c: Some(34.0),
+            feels_like_low_c: Some(27.0),
+            feels_like_high_c: Some(34.0),
             ..Default::default()
         };
         let html = render(&day, "okinawa-2026", "zh", false);
-        assert!(html.contains("炎熱"), "expected feels-like-driven 炎熱, got: {html}");
+        assert!(
+            html.contains("炎熱"),
+            "expected feels-like-driven 炎熱, got: {html}"
+        );
     }
 
     #[test]
     fn weather_strip_only_label_when_no_temps() {
         let day = Day {
-            day_number: 1, date: "2026-06-12".into(), day_type: "arrival".into(),
+            day_number: 1,
+            date: "2026-06-12".into(),
+            day_type: "arrival".into(),
             weather_label: "Sunny".into(),
             ..Default::default()
         };

@@ -1,14 +1,14 @@
-pub mod auth;
-pub mod share;
-pub mod session;
-pub mod day;
-pub mod map;
-pub mod summary;
-pub mod index;
 pub mod activity_text;
 pub mod alerts;
-pub use activity_text::render_activity_text;
+pub mod auth;
+pub mod day;
+pub mod index;
+pub mod map;
+pub mod session;
+pub mod share;
+pub mod summary;
 use crate::model::Plan;
+pub use activity_text::render_activity_text;
 
 /// Wrap a rendered body in the full HTML page shell: charset, mobile viewport,
 /// `notranslate` (the ZH content must not be browser-auto-translated), and the
@@ -20,7 +20,9 @@ pub fn page(title: &str, body: &str, lang: &str) -> String {
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"google\" content=\"notranslate\">\
          <title>{}</title><style>{}</style></head><body>{}</body></html>",
-        esc(title), crate::styles::CSS, body,
+        esc(title),
+        crate::styles::CSS,
+        body,
     )
 }
 
@@ -77,11 +79,15 @@ pub fn esc(s: &str) -> String {
 /// set passes through; space → `%20`; every other byte → `%XX` over its UTF-8
 /// bytes). Single shared implementation — do NOT re-roll this per module.
 pub fn urlencode(s: &str) -> String {
-    s.bytes().map(|b| match b {
-        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-        b' ' => "%20".to_string(),
-        _ => format!("%{b:02X}"),
-    }).collect()
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "%20".to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 /// Escape a URL for a double-quoted HTML attribute (href/src).
@@ -135,11 +141,16 @@ mod tests {
 
     #[test]
     fn render_plan_includes_summary_map_and_days() {
-        use crate::model::{Plan, Day};
+        use crate::model::{Day, Plan};
         let plan = Plan {
             plan_id: "okinawa-2026".into(),
             display_name: "Okinawa".into(),
-            days: vec![Day { day_number: 1, date: "2026-06-21".into(), day_type: "arrival".into(), ..Default::default() }],
+            days: vec![Day {
+                day_number: 1,
+                date: "2026-06-21".into(),
+                day_type: "arrival".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let map_status = map::MapStatus {

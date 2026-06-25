@@ -7,9 +7,9 @@
 //! (NOT `session_meals`) — see render.ts:1242-1246. The split between the two
 //! alert blocks is by `is_meal_title(title) == meal_only`.
 
-use crate::model::Plan;
 use super::{esc, esc_url_attr};
 use crate::i18n::t;
+use crate::model::Plan;
 
 /// True when a (trimmed) activity title begins with a meal label. Hand-rolled
 /// port of `MEAL_TITLE_RE = /^(早餐|午餐|晚餐|宵夜|breakfast|lunch|dinner|supper)/i`
@@ -63,10 +63,9 @@ fn extract_maps_url(tail: &str) -> Option<String> {
     // the lowercase scheme prefixes via the raw bytes (ASCII, case-insensitive).
     let bytes = tail.as_bytes();
     for (i, _) in tail.char_indices() {
-        let starts_http = bytes[i..].len() >= 7
-            && bytes[i..i + 7].eq_ignore_ascii_case(b"http://");
-        let starts_https = bytes[i..].len() >= 8
-            && bytes[i..i + 8].eq_ignore_ascii_case(b"https://");
+        let starts_http = bytes[i..].len() >= 7 && bytes[i..i + 7].eq_ignore_ascii_case(b"http://");
+        let starts_https =
+            bytes[i..].len() >= 8 && bytes[i..i + 8].eq_ignore_ascii_case(b"https://");
         if starts_http || starts_https {
             let rest = &tail[i..];
             let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
@@ -87,7 +86,9 @@ fn parse_iso_date_millis(s: &str) -> Option<f64> {
     let y: i64 = it.next()?.parse().ok()?;
     let m: i64 = it.next()?.parse().ok()?;
     let d: i64 = it.next()?.parse().ok()?;
-    if it.next().is_some() { return None; } // extra dashes → not a plain date
+    if it.next().is_some() {
+        return None;
+    } // extra dashes → not a plain date
     if !(1..=12).contains(&m) || y < 1970 || y > 9999 {
         return None;
     }
@@ -104,7 +105,13 @@ fn days_in_month(y: i64, m: i64) -> i64 {
     match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 { 29 } else { 28 },
+        2 => {
+            if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
         _ => 0,
     }
 }
@@ -133,9 +140,19 @@ fn is_urgent(book_by: &str, now_ms: f64) -> bool {
 
 /// Render one alert `<div>` (port of render.ts:1269-1276). `title` is already
 /// the cleaned visible title; `maps_url` is the preferred link (embedded > booking_url).
-fn alert_html(title: &str, maps_url: Option<&str>, book_by: &str, urgent: bool, lang: &str) -> String {
+fn alert_html(
+    title: &str,
+    maps_url: Option<&str>,
+    book_by: &str,
+    urgent: bool,
+    lang: &str,
+) -> String {
     let urgent_class = if urgent { " alert-urgent" } else { "" };
-    let icon = if urgent { "\u{26A0}\u{FE0F}" } else { "\u{23F3}" };
+    let icon = if urgent {
+        "\u{26A0}\u{FE0F}"
+    } else {
+        "\u{23F3}"
+    };
     let map_link = match maps_url {
         Some(u) if !u.is_empty() => format!(
             " <a href=\"{}\" target=\"_blank\" rel=\"noopener\" style=\"font-size:12px\">\u{1F5FA}\u{FE0F}</a>",
@@ -167,7 +184,10 @@ fn alert_html(title: &str, maps_url: Option<&str>, book_by: &str, urgent: bool, 
 /// still avoids calling `worker::Date::now()` on plans with no pending bookings.
 /// Testable core: tests pass a closure returning a fixed `now_ms`.
 fn render_pending_alerts_with<F: FnMut() -> f64>(
-    plan: &Plan, lang: &str, meal_only: bool, mut now: F,
+    plan: &Plan,
+    lang: &str,
+    meal_only: bool,
+    mut now: F,
 ) -> String {
     let mut out = String::new();
     let mut now_ms: Option<f64> = None;
@@ -187,7 +207,13 @@ fn render_pending_alerts_with<F: FnMut() -> f64>(
                 // Resolve "now" once, lazily, on the first emitted alert.
                 let n = *now_ms.get_or_insert_with(&mut now);
                 let urgent = is_urgent(&a.book_by, n);
-                out.push_str(&alert_html(&title, maps_url.as_deref(), &a.book_by, urgent, lang));
+                out.push_str(&alert_html(
+                    &title,
+                    maps_url.as_deref(),
+                    &a.book_by,
+                    urgent,
+                    lang,
+                ));
             }
         }
     }
@@ -201,7 +227,9 @@ fn render_pending_alerts_with<F: FnMut() -> f64>(
 /// "now" comes from `worker::Date::now()` (epoch millis), resolved lazily so the
 /// JS boundary is never crossed for a plan with no pending bookings.
 pub fn render_pending_alerts(plan: &Plan, lang: &str, meal_only: bool) -> String {
-    render_pending_alerts_with(plan, lang, meal_only, || worker::Date::now().as_millis() as f64)
+    render_pending_alerts_with(plan, lang, meal_only, || {
+        worker::Date::now().as_millis() as f64
+    })
 }
 
 /// Render the transit cheat-sheet (feature #4) — port of render.ts:1290-1313.
@@ -213,7 +241,9 @@ pub fn render_transit_summary(plan: &Plan, lang: &str) -> String {
     let want_zh = lang != "en";
     let lang_key = if want_zh { "zh" } else { "en" };
 
-    let key_lines: Vec<&str> = plan.transit_key_lines.iter()
+    let key_lines: Vec<&str> = plan
+        .transit_key_lines
+        .iter()
         .filter(|(d, l, _)| d == &dest && l == lang_key)
         .map(|(_, _, line)| line.as_str())
         .collect();
@@ -252,7 +282,7 @@ pub fn render_transit_summary(plan: &Plan, lang: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Plan, Day, Session, Activity};
+    use crate::model::{Activity, Day, Plan, Session};
 
     fn pending(title: &str, book_by: &str, booking_url: &str) -> Activity {
         Activity {
@@ -267,8 +297,14 @@ mod tests {
         Plan {
             plan_id: "okinawa-2026".into(),
             days: vec![Day {
-                day_number: 1, date: "2026-06-12".into(), day_type: "arrival".into(),
-                sessions: vec![Session { session_type: "morning".into(), activities: acts, ..Default::default() }],
+                day_number: 1,
+                date: "2026-06-12".into(),
+                day_type: "arrival".into(),
+                sessions: vec![Session {
+                    session_type: "morning".into(),
+                    activities: acts,
+                    ..Default::default()
+                }],
                 ..Default::default()
             }],
             ..Default::default()
@@ -295,21 +331,30 @@ mod tests {
         assert!(parse_iso_date_millis("not-a-date").is_none());
         assert!(parse_iso_date_millis("").is_none());
         assert!(parse_iso_date_millis("2026-13-01").is_none()); // bad month
-        assert!(parse_iso_date_millis("2026-05").is_none());    // incomplete
+        assert!(parse_iso_date_millis("2026-05").is_none()); // incomplete
     }
     #[test]
     fn urgency_past_deadline_is_urgent_future_is_not() {
         let now = parse_iso_date_millis("2026-06-22").unwrap();
         assert!(is_urgent("2026-05-01", now), "past deadline → urgent");
-        assert!(!is_urgent("2026-12-01", now), "future deadline → not urgent");
-        assert!(is_urgent("2026-06-22", now), "same-day deadline (<=) → urgent");
+        assert!(
+            !is_urgent("2026-12-01", now),
+            "future deadline → not urgent"
+        );
+        assert!(
+            is_urgent("2026-06-22", now),
+            "same-day deadline (<=) → urgent"
+        );
     }
     #[test]
     fn urgency_empty_or_garbage_book_by_is_not_urgent() {
         let now = parse_iso_date_millis("2026-06-22").unwrap();
         assert!(!is_urgent("", now));
         assert!(!is_urgent("   ", now));
-        assert!(!is_urgent("garbage", now), "unparseable book_by must NOT be urgent");
+        assert!(
+            !is_urgent("garbage", now),
+            "unparseable book_by must NOT be urgent"
+        );
     }
 
     // ---- strip_embedded_maps ----
@@ -325,7 +370,10 @@ mod tests {
         let raw = "Foo\ngoogle maps: https://www.google.com/maps/search/foo more";
         let (title, url) = strip_embedded_maps(raw);
         assert_eq!(title, "Foo");
-        assert_eq!(url.as_deref(), Some("https://www.google.com/maps/search/foo"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://www.google.com/maps/search/foo")
+        );
     }
     #[test]
     fn strip_embedded_maps_none_when_absent() {
@@ -344,8 +392,16 @@ mod tests {
             "中文標題（很長）\nGoogle Maps：https://maps.google.com/?q=x extra",
         ] {
             let (title, url) = strip_embedded_maps(raw); // must not panic
-            assert!(!title.contains("Google Maps"), "embedded line stripped; got: {title}");
-            assert!(url.as_deref().unwrap().starts_with("https://maps.google.com/?q="), "got: {url:?}");
+            assert!(
+                !title.contains("Google Maps"),
+                "embedded line stripped; got: {title}"
+            );
+            assert!(
+                url.as_deref()
+                    .unwrap()
+                    .starts_with("https://maps.google.com/?q="),
+                "got: {url:?}"
+            );
         }
     }
     #[test]
@@ -358,13 +414,28 @@ mod tests {
     // ---- parse_iso_date_millis: reject impossible day-of-month ----
     #[test]
     fn parse_iso_date_rejects_impossible_days() {
-        assert!(parse_iso_date_millis("2026-04-31").is_none(), "Apr has 30 days");
-        assert!(parse_iso_date_millis("2026-02-30").is_none(), "Feb never has 30");
-        assert!(parse_iso_date_millis("2026-02-29").is_none(), "2026 is not a leap year");
-        assert!(parse_iso_date_millis("2026-06-31").is_none(), "Jun has 30 days");
+        assert!(
+            parse_iso_date_millis("2026-04-31").is_none(),
+            "Apr has 30 days"
+        );
+        assert!(
+            parse_iso_date_millis("2026-02-30").is_none(),
+            "Feb never has 30"
+        );
+        assert!(
+            parse_iso_date_millis("2026-02-29").is_none(),
+            "2026 is not a leap year"
+        );
+        assert!(
+            parse_iso_date_millis("2026-06-31").is_none(),
+            "Jun has 30 days"
+        );
         // Valid dates still parse, incl. a real leap day.
         assert!(parse_iso_date_millis("2026-02-28").is_some());
-        assert!(parse_iso_date_millis("2024-02-29").is_some(), "2024 IS a leap year");
+        assert!(
+            parse_iso_date_millis("2024-02-29").is_some(),
+            "2024 IS a leap year"
+        );
         assert!(parse_iso_date_millis("2026-06-15").is_some());
     }
 
@@ -374,11 +445,18 @@ mod tests {
         let now = parse_iso_date_millis("2026-06-22").unwrap();
         let plan = plan_with(vec![
             pending("Churaumi Aquarium", "2026-12-01", ""),
-            Activity { title: "Booked thing".into(), booking_status: "booked".into(), ..Default::default() },
+            Activity {
+                title: "Booked thing".into(),
+                booking_status: "booked".into(),
+                ..Default::default()
+            },
         ]);
         let html = render_pending_alerts_with(&plan, "en", false, || now);
         assert!(html.contains("Churaumi Aquarium"), "got: {html}");
-        assert!(!html.contains("Booked thing"), "non-pending must be excluded; got: {html}");
+        assert!(
+            !html.contains("Booked thing"),
+            "non-pending must be excluded; got: {html}"
+        );
     }
 
     // ---- urgent past vs future class/icon ----
@@ -388,7 +466,10 @@ mod tests {
         let plan = plan_with(vec![pending("Churaumi Aquarium", "2026-05-01", "")]);
         let html = render_pending_alerts_with(&plan, "en", false, || now);
         assert!(html.contains("alert-urgent"), "got: {html}");
-        assert!(html.contains("\u{26A0}\u{FE0F}"), "warning icon; got: {html}");
+        assert!(
+            html.contains("\u{26A0}\u{FE0F}"),
+            "warning icon; got: {html}"
+        );
         assert!(html.contains("Book by 2026-05-01"), "got: {html}");
     }
     #[test]
@@ -406,9 +487,18 @@ mod tests {
         let now = parse_iso_date_millis("2026-06-22").unwrap();
         let plan = plan_with(vec![pending("Churaumi Aquarium", "", "")]);
         let html = render_pending_alerts_with(&plan, "en", false, || now);
-        assert!(!html.contains("Book by"), "no book-by suffix when empty; got: {html}");
-        assert!(!html.contains("alert-urgent"), "empty book_by → not urgent; got: {html}");
-        assert!(html.contains("\u{23F3}"), "hourglass (not urgent); got: {html}");
+        assert!(
+            !html.contains("Book by"),
+            "no book-by suffix when empty; got: {html}"
+        );
+        assert!(
+            !html.contains("alert-urgent"),
+            "empty book_by → not urgent; got: {html}"
+        );
+        assert!(
+            html.contains("\u{23F3}"),
+            "hourglass (not urgent); got: {html}"
+        );
     }
 
     // ---- meal vs activity split ----
@@ -421,11 +511,17 @@ mod tests {
         ]);
         let non_meal = render_pending_alerts_with(&plan, "en", false, || now);
         assert!(non_meal.contains("Churaumi Aquarium"), "got: {non_meal}");
-        assert!(!non_meal.contains("ステーキ88"), "meal must not appear in non-meal block; got: {non_meal}");
+        assert!(
+            !non_meal.contains("ステーキ88"),
+            "meal must not appear in non-meal block; got: {non_meal}"
+        );
 
         let meal = render_pending_alerts_with(&plan, "en", true, || now);
         assert!(meal.contains("ステーキ88"), "got: {meal}");
-        assert!(!meal.contains("Churaumi Aquarium"), "activity must not appear in meal block; got: {meal}");
+        assert!(
+            !meal.contains("Churaumi Aquarium"),
+            "activity must not appear in meal block; got: {meal}"
+        );
     }
 
     // ---- embedded Google-Maps URL stripping (preferred over booking_url) ----
@@ -439,18 +535,37 @@ mod tests {
         )]);
         let html = render_pending_alerts_with(&plan, "en", false, || now);
         // Visible title is cleaned (no embedded line / no raw URL dump / no %0A).
-        assert!(html.contains("<strong>Churaumi Aquarium</strong>"), "got: {html}");
-        assert!(!html.contains("Google Maps"), "embedded line stripped; got: {html}");
+        assert!(
+            html.contains("<strong>Churaumi Aquarium</strong>"),
+            "got: {html}"
+        );
+        assert!(
+            !html.contains("Google Maps"),
+            "embedded line stripped; got: {html}"
+        );
         // Embedded URL preferred over booking_url.
-        assert!(html.contains("href=\"https://maps.google.com/?q=churaumi\""), "got: {html}");
-        assert!(!html.contains("should-not-win"), "embedded URL must win; got: {html}");
+        assert!(
+            html.contains("href=\"https://maps.google.com/?q=churaumi\""),
+            "got: {html}"
+        );
+        assert!(
+            !html.contains("should-not-win"),
+            "embedded URL must win; got: {html}"
+        );
     }
     #[test]
     fn booking_url_used_as_link_when_no_embedded_url() {
         let now = parse_iso_date_millis("2026-06-22").unwrap();
-        let plan = plan_with(vec![pending("Churaumi Aquarium", "2026-12-01", "https://booking.example/x")]);
+        let plan = plan_with(vec![pending(
+            "Churaumi Aquarium",
+            "2026-12-01",
+            "https://booking.example/x",
+        )]);
         let html = render_pending_alerts_with(&plan, "en", false, || now);
-        assert!(html.contains("href=\"https://booking.example/x\""), "got: {html}");
+        assert!(
+            html.contains("href=\"https://booking.example/x\""),
+            "got: {html}"
+        );
     }
 
     // ---- transit assembly with / without station+lines ----
@@ -461,8 +576,16 @@ mod tests {
             transit_hotel_station: "Asato".into(),
             transit_hotel_station_zh: "安里".into(),
             transit_key_lines: vec![
-                ("okinawa_2026".into(), "en".into(), "Yui Rail: airport - Asato".into()),
-                ("okinawa_2026".into(), "zh".into(), "單軌電車：機場－安里".into()),
+                (
+                    "okinawa_2026".into(),
+                    "en".into(),
+                    "Yui Rail: airport - Asato".into(),
+                ),
+                (
+                    "okinawa_2026".into(),
+                    "zh".into(),
+                    "單軌電車：機場－安里".into(),
+                ),
             ],
             ..Default::default()
         };
@@ -472,7 +595,10 @@ mod tests {
         assert!(html.contains("Asato"), "got: {html}");
         assert!(html.contains("Yui Rail: airport - Asato"), "got: {html}");
         // EN view must NOT pull the zh line.
-        assert!(!html.contains("單軌電車"), "en view leaked zh line; got: {html}");
+        assert!(
+            !html.contains("單軌電車"),
+            "en view leaked zh line; got: {html}"
+        );
         assert!(html.contains("Daily transit"), "got: {html}");
     }
 
@@ -493,13 +619,22 @@ mod tests {
         assert!(html.contains("交通速查表"), "got: {html}");
         assert!(html.contains("安里"), "zh station; got: {html}");
         assert!(html.contains("單軌電車線"), "zh line; got: {html}");
-        assert!(!html.contains("Yui Rail line"), "zh view leaked en line; got: {html}");
-        assert!(!html.contains("Asato"), "zh view leaked en station; got: {html}");
+        assert!(
+            !html.contains("Yui Rail line"),
+            "zh view leaked en line; got: {html}"
+        );
+        assert!(
+            !html.contains("Asato"),
+            "zh view leaked en station; got: {html}"
+        );
     }
 
     #[test]
     fn transit_summary_empty_when_no_station_and_no_lines() {
-        let plan = Plan { plan_id: "okinawa-2026".into(), ..Default::default() };
+        let plan = Plan {
+            plan_id: "okinawa-2026".into(),
+            ..Default::default()
+        };
         assert_eq!(render_transit_summary(&plan, "en"), "");
         assert_eq!(render_transit_summary(&plan, "zh"), "");
     }

@@ -28,7 +28,15 @@ const LINK_STYLE: &str = "color:#2563eb;font-size:11px;word-break:break-all;whit
 /// Map-link labels recognized at the head of a "label：<url>" tail. Matches the
 /// JS alternation `Google Maps|地圖|地图|導航|导航|Map|Directions`. Longest-first
 /// so "Google Maps" wins over a hypothetical shorter prefix.
-const LABELS: &[&str] = &["Google Maps", "Directions", "地圖", "地图", "導航", "导航", "Map"];
+const LABELS: &[&str] = &[
+    "Google Maps",
+    "Directions",
+    "地圖",
+    "地图",
+    "導航",
+    "导航",
+    "Map",
+];
 
 /// Render activity text → safe HTML. See module docs for the ported algorithm.
 pub fn render_activity_text(text: &str) -> String {
@@ -247,7 +255,10 @@ mod tests {
     #[test]
     fn labeled_map_link_renders_short_label_not_giant_url() {
         let out = render_activity_text("foo\nGoogle Maps：https://maps.example/x");
-        assert!(out.contains("<a href=\"https://maps.example/x\""), "got: {out}");
+        assert!(
+            out.contains("<a href=\"https://maps.example/x\""),
+            "got: {out}"
+        );
         assert!(out.contains("🗺️ Google Maps"), "got: {out}");
         // The clickable text must be the LABEL, not the URL.
         assert!(out.contains(">🗺️ Google Maps</a>"), "got: {out}");
@@ -291,7 +302,10 @@ mod tests {
         let raw = "04:00 自家出發開車：紅樹林 → 大園（約45–60分）\n地址：桃園市\nGoogle Maps 導航：https://www.google.com/maps/dir/A/B";
         let out = render_activity_text(raw);
         // The 導航 line attaches inline (newline collapsed to spaces, no <br> before it).
-        assert!(out.contains("<a href=\"https://www.google.com/maps/dir/A/B\""), "got: {out}");
+        assert!(
+            out.contains("<a href=\"https://www.google.com/maps/dir/A/B\""),
+            "got: {out}"
+        );
         assert!(out.contains("🗺️ Google Maps 導航"), "got: {out}");
         // The FIRST newline (before 地址) still becomes a <br>.
         assert!(out.contains("地址：桃園市"), "got: {out}");
@@ -305,7 +319,10 @@ mod tests {
     fn real_meal_with_google_maps_search_label() {
         let raw = "晚餐：ステーキハウス88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc";
         let out = render_activity_text(raw);
-        assert!(out.contains("<a href=\"https://www.google.com/maps/search/abc\""), "got: {out}");
+        assert!(
+            out.contains("<a href=\"https://www.google.com/maps/search/abc\""),
+            "got: {out}"
+        );
         assert!(out.contains("🗺️ Google Maps"), "got: {out}");
         // Label is clickable text; the long URL is NOT the visible text.
         assert!(out.contains(">🗺️ Google Maps</a>"), "got: {out}");
@@ -317,7 +334,10 @@ mod tests {
     fn zh_ditu_label_variant() {
         let out = render_activity_text("波上宮\n地圖：https://maps.example/n");
         assert!(out.contains("🗺️ 地圖"), "got: {out}");
-        assert!(out.contains("<a href=\"https://maps.example/n\""), "got: {out}");
+        assert!(
+            out.contains("<a href=\"https://maps.example/n\""),
+            "got: {out}"
+        );
     }
 
     // "Map: <url>" English label with ASCII colon + space.
@@ -325,7 +345,10 @@ mod tests {
     fn english_map_label_ascii_colon() {
         let out = render_activity_text("Beach\nMap: https://maps.example/b");
         assert!(out.contains("🗺️ Map"), "got: {out}");
-        assert!(out.contains("<a href=\"https://maps.example/b\""), "got: {out}");
+        assert!(
+            out.contains("<a href=\"https://maps.example/b\""),
+            "got: {out}"
+        );
     }
 
     // A bare URL AND a labeled URL in the same text: labeled stays labeled, bare

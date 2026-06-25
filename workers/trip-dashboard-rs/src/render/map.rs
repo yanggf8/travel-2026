@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use crate::model::Stop;
-use crate::i18n;
 use super::{esc, esc_url_attr};
+use crate::i18n;
+use crate::model::Stop;
+use std::collections::HashMap;
 
 /// PNG magic bytes — first four bytes of every valid PNG file.
 const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
@@ -84,15 +84,22 @@ pub fn day_map_slot(plan_id: &str, day_number: i64, has_map: bool, lang: &str) -
 /// /maps/search/<title> fallback) — render it as the href; esc() guards the
 /// attribute and text.
 pub fn stop_list(stops: &[Stop]) -> String {
-    if stops.is_empty() { return String::new(); }
+    if stops.is_empty() {
+        return String::new();
+    }
     let mut h = String::from("<ul class=\"stoplist\">");
     for s in stops {
         // Ticket price badge — shown only for paid POIs (cost_estimate > 0; 0 = free).
         let price = if s.cost_estimate > 0 {
             format!("<span class=\"stop-price\">🎫¥{}</span>", s.cost_estimate)
-        } else { String::new() };
-        let addr = if s.address.is_empty() { String::new() }
-            else { format!("<span class=\"addr\">{}</span>", esc(&s.address)) };
+        } else {
+            String::new()
+        };
+        let addr = if s.address.is_empty() {
+            String::new()
+        } else {
+            format!("<span class=\"addr\">{}</span>", esc(&s.address))
+        };
         // An empty maps_link means the model deliberately suppressed a (broken)
         // search-link fallback because the activity text already carries an inline
         // map link. Render the stop name as plain text (no dead/garbage anchor).
@@ -101,7 +108,10 @@ pub fn stop_list(stops: &[Stop]) -> String {
         } else {
             h.push_str(&format!(
                 "<li><a href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>{}{}</li>",
-                esc_url_attr(&s.maps_link), esc(&s.title), addr, price
+                esc_url_attr(&s.maps_link),
+                esc(&s.title),
+                addr,
+                price
             ));
         }
     }
@@ -116,7 +126,11 @@ mod tests {
 
     #[test]
     fn stop_list_links_to_maps() {
-        let stops = vec![Stop{ title:"Naminoue".into(), maps_link:"https://www.google.com/maps?q=26.2,127.6".into(), ..Default::default()}];
+        let stops = vec![Stop {
+            title: "Naminoue".into(),
+            maps_link: "https://www.google.com/maps?q=26.2,127.6".into(),
+            ..Default::default()
+        }];
         let h = stop_list(&stops);
         assert!(h.contains("q=26.2,127.6"));
         assert!(h.contains("Naminoue"));
@@ -179,7 +193,12 @@ mod tests {
 
     #[test]
     fn stop_with_cost_shows_price_badge() {
-        let stops = vec![Stop{ title:"Shuri Castle".into(), maps_link:"https://www.google.com/maps?q=26.2,127.7".into(), cost_estimate:530, ..Default::default()}];
+        let stops = vec![Stop {
+            title: "Shuri Castle".into(),
+            maps_link: "https://www.google.com/maps?q=26.2,127.7".into(),
+            cost_estimate: 530,
+            ..Default::default()
+        }];
         let h = stop_list(&stops);
         assert!(h.contains("stop-price"), "got: {h}");
         assert!(h.contains("¥530"), "got: {h}");
@@ -187,7 +206,12 @@ mod tests {
 
     #[test]
     fn free_stop_shows_no_price() {
-        let stops = vec![Stop{ title:"Free Beach".into(), maps_link:"https://www.google.com/maps?q=1,1".into(), cost_estimate:0, ..Default::default()}];
+        let stops = vec![Stop {
+            title: "Free Beach".into(),
+            maps_link: "https://www.google.com/maps?q=1,1".into(),
+            cost_estimate: 0,
+            ..Default::default()
+        }];
         let h = stop_list(&stops);
         assert!(!h.contains("stop-price"), "got: {h}");
         assert!(!h.contains('¥'), "got: {h}");

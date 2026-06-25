@@ -453,6 +453,87 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.grant-form {
+  display: inline;
+}
+.grant-create-btn,
+.grant-deactivate-btn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.grant-create-btn {
+  color: #fff;
+  background: var(--green);
+}
+.grant-deactivate-btn {
+  color: var(--red);
+  background: var(--red-bg);
+  border: 1px solid #fecaca;
+}
+.grant-manager {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.grant-manager > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.grant-empty {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.grant-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.grant-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfbfa;
+}
+.grant-row-inactive {
+  opacity: 0.72;
+}
+.grant-row-main,
+.grant-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.grant-fingerprint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.grant-meta,
+.grant-status {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.grant-status {
+  color: var(--red);
+  font-weight: 600;
 }
 
 /* ---- Desktop two-column ---- */

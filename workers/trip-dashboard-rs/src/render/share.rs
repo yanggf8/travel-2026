@@ -1,10 +1,11 @@
-//! Logged-in owner copies a viewer share URL for others. Recipients open the
-//! copied link with no login — just `?plan=` + per-plan share token.
+//! Logged-in owner manages viewer grant tokens for others. Recipients open the
+//! copied link with no login — just `?plan=` + per-plan grant token.
 
 use std::collections::HashMap;
 
 use super::esc;
 use crate::i18n::t;
+use crate::turso::Row;
 
 /// One-shot clipboard handler for every `.copy-share-btn` on the page.
 pub const COPY_SCRIPT: &str = r#"<script>
@@ -26,18 +27,82 @@ pub const COPY_SCRIPT: &str = r#"<script>
 })();
 </script>"#;
 
-/// Build maps from share-token rows (query must be `ORDER BY created_at DESC`).
-/// - `token_to_plan`: every token → hyphenated plan slug (auth; order-independent `insert`)
-/// - `plan_slug_to_token`: hyphenated slug → a valid share token (first seen = newest by created_at, second granularity)
-pub fn build_share_maps(rows: &[(String, String)]) -> (HashMap<String, String>, HashMap<String, String>) {
-    let mut token_to_plan = HashMap::new();
-    let mut plan_slug_to_token = HashMap::new();
-    for (token, plan_id) in rows {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GrantStatus {
+    Active,
+    Inactive,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantToken {
+    pub token: String,
+    pub plan_slug: String,
+    pub status: GrantStatus,
+    pub created_at: String,
+    pub created_by: Option<String>,
+    pub deactivated_at: Option<String>,
+    pub deactivated_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GrantMaps {
+    /// Active token -> hyphenated plan slug. Used for viewer auth.
+    pub token_to_plan: HashMap<String, String>,
+    /// Hyphenated plan slug -> newest active grant token.
+    pub plan_to_current: HashMap<String, GrantToken>,
+    /// Hyphenated plan slug -> all tokens, newest first.
+    pub plan_to_history: HashMap<String, Vec<GrantToken>>,
+}
+
+/// Build grant maps from rows ordered newest first.
+pub fn build_grant_maps(rows: &[Row]) -> GrantMaps {
+    let mut maps = GrantMaps::default();
+    for r in rows {
+        let token = rs(r, "token");
+        let plan_id = rs(r, "plan_id");
+        if token.is_empty() || plan_id.is_empty() {
+            continue;
+        }
         let slug = plan_id.replace('_', "-");
-        token_to_plan.insert(token.clone(), slug.clone());
-        plan_slug_to_token.entry(slug).or_insert_with(|| token.clone());
+        let status = match rs(r, "status").as_str() {
+            "" | "active" => GrantStatus::Active,
+            "inactive" => GrantStatus::Inactive,
+            _ => continue,
+        };
+        let grant = GrantToken {
+            token: token.clone(),
+            plan_slug: slug.clone(),
+            status: status.clone(),
+            created_at: rs(r, "created_at"),
+            created_by: opt(r, "created_by"),
+            deactivated_at: opt(r, "deactivated_at"),
+            deactivated_by: opt(r, "deactivated_by"),
+        };
+        if status == GrantStatus::Active {
+            maps.token_to_plan.insert(token, slug.clone());
+            maps.plan_to_current
+                .entry(slug.clone())
+                .or_insert_with(|| grant.clone());
+        }
+        maps.plan_to_history.entry(slug).or_default().push(grant);
     }
-    (token_to_plan, plan_slug_to_token)
+    maps
+}
+
+fn rs(row: &Row, k: &str) -> String {
+    row.get(k)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn opt(row: &Row, k: &str) -> Option<String> {
+    let s = rs(row, k);
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Shareable viewer URL (view-scope token only — never owner secret or session).
@@ -54,12 +119,22 @@ pub fn copy_button(share_url: &str, lang: &str) -> String {
     )
 }
 
+pub fn create_grant_form(plan_slug: &str, csrf: &str, lang: &str) -> String {
+    format!(
+        r#"<form class="grant-form" method="post" action="/grants/create"><input type="hidden" name="plan" value="{}"><input type="hidden" name="csrf" value="{}"><button type="submit" class="grant-create-btn">{}</button></form>"#,
+        esc(plan_slug),
+        esc(csrf),
+        esc(t("createGrantToken", lang)),
+    )
+}
+
 /// Owner chrome when logged in: signed-in label + copy (or missing hint) + logout.
 pub fn owner_plan_chrome(
     plan_slug: &str,
-    share_token: Option<&str>,
+    grant_token: Option<&GrantToken>,
     public_origin: &str,
     owner_login: &str,
+    create_csrf: &str,
     lang: &str,
 ) -> String {
     let mut h = String::from(r#"<div class="owner-chrome">"#);
@@ -68,12 +143,12 @@ pub fn owner_plan_chrome(
         esc(t("signedInAs", lang)),
         esc(owner_login),
     ));
-    match share_token {
-        Some(tok) => h.push_str(&copy_button(&share_url(public_origin, plan_slug, tok), lang)),
-        None => h.push_str(&format!(
-            r#"<span class="copy-share-missing">{}</span>"#,
-            esc(t("noShareLink", lang)),
+    match grant_token {
+        Some(grant) => h.push_str(&copy_button(
+            &share_url(public_origin, plan_slug, &grant.token),
+            lang,
         )),
+        None => h.push_str(&create_grant_form(plan_slug, create_csrf, lang)),
     }
     h.push_str(&format!(
         r#" <a class="owner-chrome-logout" href="/auth/logout">{}</a>"#,
@@ -83,13 +158,25 @@ pub fn owner_plan_chrome(
     h
 }
 
+pub fn token_fingerprint(token: &str) -> String {
+    if token.len() <= 12 {
+        return token.to_string();
+    }
+    format!("{}...{}", &token[..6], &token[token.len() - 6..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::turso::Row;
 
     #[test]
     fn share_url_uses_public_origin_and_slug() {
-        let u = share_url("https://trip-dashboard-rs.yanggf.workers.dev", "okinawa-2026", "abc123");
+        let u = share_url(
+            "https://trip-dashboard-rs.yanggf.workers.dev",
+            "okinawa-2026",
+            "abc123",
+        );
         assert_eq!(
             u,
             "https://trip-dashboard-rs.yanggf.workers.dev/?plan=okinawa-2026&token=abc123"
@@ -111,11 +198,21 @@ mod tests {
 
     #[test]
     fn owner_chrome_includes_share_token_url() {
+        let grant = GrantToken {
+            token: "deadbeef".into(),
+            plan_slug: "okinawa-2026".into(),
+            status: GrantStatus::Active,
+            created_at: "2026-06-25".into(),
+            created_by: None,
+            deactivated_at: None,
+            deactivated_by: None,
+        };
         let html = owner_plan_chrome(
             "okinawa-2026",
-            Some("deadbeef"),
+            Some(&grant),
             "https://example.dev",
             "yanggf8",
+            "csrf",
             "zh",
         );
         assert!(html.contains("copy-share-btn"));
@@ -126,31 +223,50 @@ mod tests {
 
     #[test]
     fn owner_chrome_shows_missing_hint_when_no_token() {
-        let html = owner_plan_chrome("okinawa-2026", None, "https://example.dev", "yanggf8", "en");
-        assert!(html.contains("No share link yet"));
+        let html = owner_plan_chrome(
+            "okinawa-2026",
+            None,
+            "https://example.dev",
+            "yanggf8",
+            "csrf",
+            "en",
+        );
+        assert!(html.contains("Create grant token"));
+        assert!(html.contains("/grants/create"));
         assert!(!html.contains("copy-share-btn"));
     }
 
     #[test]
-    fn build_share_maps_auth_resolves_every_token() {
-        let rows = vec![
-            ("tok-new".into(), "okinawa-2026".into()),
-            ("tok-old".into(), "okinawa-2026".into()),
-            ("tok-tokyo".into(), "tokyo-2026".into()),
-        ];
-        let (auth, copy) = build_share_maps(&rows);
-        assert_eq!(auth.get("tok-new").map(|s| s.as_str()), Some("okinawa-2026"));
-        assert_eq!(auth.get("tok-old").map(|s| s.as_str()), Some("okinawa-2026"));
-        assert_eq!(auth.get("tok-tokyo").map(|s| s.as_str()), Some("tokyo-2026"));
-        assert_eq!(copy.get("okinawa-2026").map(|s| s.as_str()), Some("tok-new"));
-        assert_eq!(copy.get("tokyo-2026").map(|s| s.as_str()), Some("tok-tokyo"));
+    fn build_grant_maps_auth_resolves_active_tokens_only() {
+        let mut a = Row::new();
+        a.insert("token".into(), serde_json::json!("tok-new"));
+        a.insert("plan_id".into(), serde_json::json!("okinawa-2026"));
+        a.insert("status".into(), serde_json::json!("active"));
+        let mut b = Row::new();
+        b.insert("token".into(), serde_json::json!("tok-old"));
+        b.insert("plan_id".into(), serde_json::json!("okinawa-2026"));
+        b.insert("status".into(), serde_json::json!("inactive"));
+        let maps = build_grant_maps(&[a, b]);
+        assert_eq!(
+            maps.token_to_plan.get("tok-new").map(|s| s.as_str()),
+            Some("okinawa-2026")
+        );
+        assert!(maps.token_to_plan.get("tok-old").is_none());
+        assert_eq!(maps.plan_to_current["okinawa-2026"].token, "tok-new");
+        assert_eq!(maps.plan_to_history["okinawa-2026"].len(), 2);
     }
 
     #[test]
-    fn build_share_maps_hyphenates_underscore_plan_ids() {
-        let rows = vec![("abc".into(), "okinawa_2026".into())];
-        let (auth, copy) = build_share_maps(&rows);
-        assert_eq!(auth.get("abc").map(|s| s.as_str()), Some("okinawa-2026"));
-        assert_eq!(copy.get("okinawa-2026").map(|s| s.as_str()), Some("abc"));
+    fn build_grant_maps_hyphenates_underscore_plan_ids() {
+        let mut row = Row::new();
+        row.insert("token".into(), serde_json::json!("abc"));
+        row.insert("plan_id".into(), serde_json::json!("okinawa_2026"));
+        row.insert("status".into(), serde_json::json!("active"));
+        let maps = build_grant_maps(&[row]);
+        assert_eq!(
+            maps.token_to_plan.get("abc").map(|s| s.as_str()),
+            Some("okinawa-2026")
+        );
+        assert_eq!(maps.plan_to_current["okinawa-2026"].token, "abc");
     }
 }

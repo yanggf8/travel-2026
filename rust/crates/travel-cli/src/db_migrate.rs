@@ -420,6 +420,23 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         exec_create(&conn, sql).await;
     }
 
+    // Phase 1b. Grant-token management columns for the dashboard. Existing
+    // plan_share_tokens rows default to active; dashboard mutation routes write
+    // created_by/deactivated_* for owner-visible history.
+    add_column(
+        &conn,
+        "ALTER TABLE plan_share_tokens ADD COLUMN status TEXT NOT NULL DEFAULT 'active';",
+    )
+    .await;
+    add_column(&conn, "ALTER TABLE plan_share_tokens ADD COLUMN created_by TEXT;").await;
+    add_column(&conn, "ALTER TABLE plan_share_tokens ADD COLUMN deactivated_at TEXT;").await;
+    add_column(&conn, "ALTER TABLE plan_share_tokens ADD COLUMN deactivated_by TEXT;").await;
+    exec_lenient(
+        &conn,
+        "CREATE INDEX IF NOT EXISTS idx_plan_share_tokens_plan_status_created ON plan_share_tokens(plan_id, status, created_at DESC);",
+    )
+    .await;
+
     // selected_* scalar columns on airport_transfers.
     for col in [
         "selected_title TEXT",
@@ -1701,7 +1718,11 @@ const PHASE1_TABLES: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS plan_share_tokens (
   plan_id TEXT NOT NULL,
   token TEXT NOT NULL PRIMARY KEY,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT,
+  deactivated_at TEXT,
+  deactivated_by TEXT
 )"#,
 ];
 

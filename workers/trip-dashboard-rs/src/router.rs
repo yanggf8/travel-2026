@@ -3,10 +3,15 @@
 //! exception — it's a pure R2 passthrough with no auth (map images are low-stakes
 //! and the page already links to them; gating them would just add latency).
 
-use worker::*;
+use crate::{auth, model, render, turso};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use std::collections::HashMap;
+use worker::*;
 use worker_github_oauth::{self as gho, CallbackOutcome, OauthConfig};
-use crate::{auth, turso, model, render};
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// 1×1 transparent PNG — returned when an R2 map image is missing, so the
 /// browser never shows a broken-image icon. Generated offline (standard
@@ -20,10 +25,10 @@ const PLACEHOLDER_PNG: &[u8] = &[
     0x54, 0x78, 0x9c, 0x62, 0x00, 0x00, 0x00, 0x02, // compressed data (1×1 RGBA transparent)
     0x00, 0x01, 0xe5, 0x27, 0xde, 0xfc, 0x00, 0x00, // CRC IDAT; IEND len=0
     0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, // IEND
-    0x60, 0x82,                                      // CRC IEND
+    0x60, 0x82, // CRC IEND
 ];
 
-pub async fn handle(req: Request, env: Env) -> Result<Response> {
+pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
     let url = req.url()?;
     let path = url.path().to_string();
     let query: HashMap<String, String> = url
@@ -91,31 +96,10 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         _ => {}
     }
 
-    // All other routes: load secrets, share-token auth data, then resolve scope.
+    // All other routes: load secrets and resolve owner session before any
+    // owner-only mutation route is allowed to use the write Turso token.
     let turso_url = env.secret("TURSO_URL")?.to_string();
     let turso_token = env.secret("TURSO_TOKEN")?.to_string(); // READ token
-
-    // Load share tokens (one query; small table). DESC so copy map picks a current
-    // token per plan via or_insert; auth map still gets every token via insert.
-    let share_rows = turso::pipeline(
-        &turso_url,
-        &turso_token,
-        &["SELECT token, plan_id FROM plan_share_tokens ORDER BY created_at DESC".to_string()],
-    )
-    .await?;
-    let mut share_pairs: Vec<(String, String)> = Vec::new();
-    if let Some(rows) = share_rows.first() {
-        for r in rows {
-            if let (Some(t), Some(p)) = (
-                r.get("token").and_then(|v| v.as_str()),
-                r.get("plan_id").and_then(|v| v.as_str()),
-            ) {
-                share_pairs.push((t.to_string(), p.to_string()));
-            }
-        }
-    }
-    let (shares, plan_share_tokens) = render::share::build_share_maps(&share_pairs);
-
     let secret = env
         .secret("SESSION_SECRET")
         .map(|s| s.to_string())
@@ -125,11 +109,54 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         .map(|v| v.to_string())
         .unwrap_or_default();
     let allowed_id = gho::allowed_id(&env);
-    let session_login = gho::read_cookie(&req, &cfg.session_cookie())
-        .and_then(|c| gho::verify_session(&secret, &allowed, allowed_id, &c));
+    let session_cookie = gho::read_cookie(&req, &cfg.session_cookie());
+    let session_login = session_cookie
+        .as_deref()
+        .and_then(|c| gho::verify_session(&secret, &allowed, allowed_id, c));
     let is_owner_session = session_login.is_some();
 
-    let mut scope = auth::resolve(query.get("token").map(|s| s.as_str()), &shares);
+    if path == "/grants/create" || path == "/grants/deactivate" {
+        // Owner-session (403) and method (405) gate. These two checks need a live
+        // `Method`/session, so they're covered by the deploy smoke + `curl` spot-checks,
+        // not unit tests. The slug/CSRF/token/dispatch outcomes ARE unit-tested via
+        // `decide_grant_post`.
+        if !is_owner_session {
+            return Response::error("Forbidden", 403);
+        }
+        if req.method() != Method::Post {
+            return Response::error("Method not allowed", 405);
+        }
+        let write_token = env.secret("TURSO_WRITE_TOKEN")?.to_string();
+        let csrf = GrantCsrf::new(&secret, session_cookie.as_deref().unwrap_or(""));
+        let owner_login = session_login.as_deref().unwrap_or(allowed.as_str());
+        return handle_grant_post(
+            &mut req,
+            &path,
+            &turso_url,
+            &write_token,
+            &csrf,
+            owner_login,
+        )
+        .await;
+    }
+
+    // Load grant tokens (one query; small table). DESC so the current-token map
+    // keeps the newest active token while auth still accepts all active tokens.
+    let grant_rows = turso::pipeline(
+        &turso_url,
+        &turso_token,
+        &["SELECT token, plan_id, status, created_at, created_by, deactivated_at, deactivated_by \
+           FROM plan_share_tokens ORDER BY created_at DESC, token DESC"
+            .to_string()],
+    )
+    .await?;
+    let grants =
+        render::share::build_grant_maps(grant_rows.first().map(Vec::as_slice).unwrap_or(&[]));
+
+    let mut scope = auth::resolve(
+        query.get("token").map(|s| s.as_str()),
+        &grants.token_to_plan,
+    );
     if is_owner_session {
         scope = auth::AccessScope::Owner;
     }
@@ -188,10 +215,11 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         // Owner banner name: the session login if present, else the configured
         // ALLOWED_LOGIN (never a hardcoded handle — honors "no hardcode").
         let owner_login = session_login.as_deref().unwrap_or(allowed.as_str());
+        let csrf = GrantCsrf::new(&secret, session_cookie.as_deref().unwrap_or(""));
         let body = format!(
             "{}{}{}",
             render::auth::signed_in_banner(owner_login, lang),
-            render::index::render(&rows, &plan_share_tokens, &public_origin, lang),
+            render::index::render(&rows, &grants, &public_origin, &csrf, lang),
             render::share::COPY_SCRIPT,
         );
         return Response::from_html(render::page("Plans", &body, lang));
@@ -212,22 +240,272 @@ pub async fn handle(req: Request, env: Env) -> Result<Response> {
         // link get no chrome (they are not logged in as owner).
         let owner_chrome = if is_owner_session {
             let login = session_login.as_deref().unwrap_or(allowed.as_str());
+            let csrf = GrantCsrf::new(&secret, session_cookie.as_deref().unwrap_or(""));
             render::share::owner_plan_chrome(
                 slug,
-                plan_share_tokens.get(slug).map(|s| s.as_str()),
+                grants.plan_to_current.get(slug),
                 &public_origin,
                 login,
+                &csrf.create(slug),
                 lang,
             )
         } else {
             String::new()
         };
         return Response::from_html(render::render_plan(
-            &plan, lang, token, &map_status, &owner_chrome,
+            &plan,
+            lang,
+            token,
+            &map_status,
+            &owner_chrome,
         ));
     }
 
     Ok(Response::from_html(render::auth::sign_in_page(lang))?)
+}
+
+/// The pure outcome of validating a grant POST, decoupled from Worker I/O.
+///
+/// Everything that decides the *response* — slug/token validation, CSRF check,
+/// sub-path dispatch — is computed here so it is host-unit-testable without a live
+/// `Request`/`Env`. The plan-existence 404 is deliberately NOT decided here: it needs
+/// a DB read, so `PlanCheckThenCreate` defers it to the caller. The owner-session 403
+/// and method 405 gate lives upstream in `handle` (it needs `Method`/session) and is
+/// covered by the deploy smoke test, not unit tests.
+#[derive(Debug, PartialEq, Eq)]
+enum GrantDecision {
+    InvalidSlug,
+    InvalidToken,
+    BadCsrf,
+    PlanCheckThenCreate { plan: String },
+    Deactivate { plan: String, token: String },
+    NotFound,
+}
+
+/// Pure decision logic for `/grants/{create,deactivate}`. Mirrors the original
+/// inline checks 1:1 (slug first; for deactivate, token-format before CSRF), minus the
+/// DB-backed plan-existence check which the caller performs for `PlanCheckThenCreate`.
+fn decide_grant_post(
+    path: &str,
+    plan: &str,
+    posted_csrf: &str,
+    token: &str,
+    csrf: &GrantCsrf,
+) -> GrantDecision {
+    if !is_safe_slug(plan) {
+        return GrantDecision::InvalidSlug;
+    }
+    match path {
+        "/grants/create" => {
+            if !csrf.verify_create(plan, posted_csrf) {
+                return GrantDecision::BadCsrf;
+            }
+            GrantDecision::PlanCheckThenCreate {
+                plan: plan.to_string(),
+            }
+        }
+        "/grants/deactivate" => {
+            if !is_grant_token(token) {
+                return GrantDecision::InvalidToken;
+            }
+            if !csrf.verify_deactivate(plan, token, posted_csrf) {
+                return GrantDecision::BadCsrf;
+            }
+            GrantDecision::Deactivate {
+                plan: plan.to_string(),
+                token: token.to_string(),
+            }
+        }
+        _ => GrantDecision::NotFound,
+    }
+}
+
+async fn handle_grant_post(
+    req: &mut Request,
+    path: &str,
+    turso_url: &str,
+    write_token: &str,
+    csrf: &GrantCsrf,
+    owner_login: &str,
+) -> Result<Response> {
+    let form = req.form_data().await?;
+    let plan = form.get_field("plan").unwrap_or_default();
+    let posted_csrf = form.get_field("csrf").unwrap_or_default();
+    let token = form.get_field("token").unwrap_or_default();
+    match decide_grant_post(path, &plan, &posted_csrf, &token, csrf) {
+        GrantDecision::InvalidSlug => Response::error("invalid plan", 400),
+        GrantDecision::InvalidToken => Response::error("invalid token", 400),
+        GrantDecision::BadCsrf => Response::error("invalid csrf", 403),
+        GrantDecision::NotFound => Response::error("not found", 404),
+        GrantDecision::PlanCheckThenCreate { plan } => {
+            if !grant_plan_exists(turso_url, write_token, &plan).await? {
+                return Response::error("plan not found", 404);
+            }
+            create_grant(turso_url, write_token, &plan, owner_login).await?;
+            redirect_after_grant("created", &plan)
+        }
+        GrantDecision::Deactivate { plan, token } => {
+            deactivate_grant(turso_url, write_token, &plan, &token, owner_login).await?;
+            redirect_after_grant("inactive", &plan)
+        }
+    }
+}
+
+async fn grant_plan_exists(turso_url: &str, write_token: &str, plan: &str) -> Result<bool> {
+    let rows = turso::pipeline(
+        turso_url,
+        write_token,
+        &[format!(
+            "SELECT 1 FROM plans WHERE plan_id = '{plan}' AND deleted_at IS NULL"
+        )],
+    )
+    .await?;
+    Ok(rows.first().map(|r| !r.is_empty()).unwrap_or(false))
+}
+
+// SQL-builder seam: the two `build_*_grant_sql` fns below are pure so the SQL shape
+// (column set, the create `WHERE EXISTS` guard, the deactivate `status = 'active'`
+// guard, owner escaping) is host-unit-testable without a DB or the Worker runtime.
+//
+// SAFETY — interpolation: `turso::pipeline` sends raw SQL with NO bind parameters, so
+// every interpolated value must be safe by construction. `plan` and `token` reach here
+// only after `is_safe_slug` / `is_grant_token` (enforced in `decide_grant_post`).
+// `owner_login` originates ONLY from `gho::verify_session`, which returns the login
+// solely after it matches the allow-listed `ALLOWED_LOGIN`, so it can only ever be that
+// one constant value; `sql_quote` (single-quote doubling) is kept as defense-in-depth.
+// If the OAuth crate is ever relaxed to accept multiple logins / org members, this
+// becomes an injection sink — keep the allow-list invariant or switch to bound params.
+
+fn build_create_grant_sql(plan: &str, token: &str, owner_login: &str) -> String {
+    let owner_sql = sql_quote(owner_login);
+    format!(
+        "INSERT INTO plan_share_tokens (plan_id, token, created_at, status, created_by) \
+         SELECT '{plan}', '{token}', datetime('now'), 'active', '{owner_sql}' \
+         WHERE EXISTS (SELECT 1 FROM plans WHERE plan_id = '{plan}' AND deleted_at IS NULL)"
+    )
+}
+
+fn build_deactivate_grant_sql(plan: &str, token: &str, owner_login: &str) -> String {
+    let owner_sql = sql_quote(owner_login);
+    format!(
+        "UPDATE plan_share_tokens \
+         SET status='inactive', deactivated_at=datetime('now'), deactivated_by='{owner_sql}' \
+         WHERE plan_id = '{plan}' AND token = '{token}' AND status = 'active'"
+    )
+}
+
+async fn create_grant(
+    turso_url: &str,
+    write_token: &str,
+    plan: &str,
+    owner_login: &str,
+) -> Result<()> {
+    let token = mint_grant_token();
+    let sql = build_create_grant_sql(plan, &token, owner_login);
+    turso::pipeline(turso_url, write_token, &[sql]).await?;
+    Ok(())
+}
+
+async fn deactivate_grant(
+    turso_url: &str,
+    write_token: &str,
+    plan: &str,
+    token: &str,
+    owner_login: &str,
+) -> Result<()> {
+    let sql = build_deactivate_grant_sql(plan, token, owner_login);
+    turso::pipeline(turso_url, write_token, &[sql]).await?;
+    Ok(())
+}
+
+fn redirect_after_grant(status: &str, plan: &str) -> Result<Response> {
+    let h = Headers::new();
+    h.set("Location", &format!("/?grant={status}&plan={plan}"))?;
+    Ok(Response::empty()?.with_status(303).with_headers(h))
+}
+
+fn mint_grant_token() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("CSPRNG failed");
+    let mut s = String::with_capacity(32);
+    use std::fmt::Write;
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+fn is_grant_token(s: &str) -> bool {
+    s.len() == 32
+        && s.bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+fn sql_quote(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+#[derive(Debug, Clone)]
+pub struct GrantCsrf {
+    secret: String,
+    session_cookie: String,
+}
+
+impl GrantCsrf {
+    pub fn new(secret: &str, session_cookie: &str) -> Self {
+        Self {
+            secret: secret.to_string(),
+            session_cookie: session_cookie.to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn test() -> Self {
+        Self::new("test-secret", "test-session-cookie")
+    }
+
+    pub fn create(&self, plan: &str) -> String {
+        self.sign(&format!("grant:create:{plan}:{}", self.session_cookie))
+    }
+
+    pub fn deactivate(&self, plan: &str, token: &str) -> String {
+        self.sign(&format!(
+            "grant:deactivate:{plan}:{token}:{}",
+            self.session_cookie
+        ))
+    }
+
+    fn verify_create(&self, plan: &str, provided: &str) -> bool {
+        self.verify(
+            &format!("grant:create:{plan}:{}", self.session_cookie),
+            provided,
+        )
+    }
+
+    fn verify_deactivate(&self, plan: &str, token: &str, provided: &str) -> bool {
+        self.verify(
+            &format!("grant:deactivate:{plan}:{token}:{}", self.session_cookie),
+            provided,
+        )
+    }
+
+    fn sign(&self, msg: &str) -> String {
+        let mut mac =
+            HmacSha256::new_from_slice(self.secret.as_bytes()).expect("HMAC accepts any key");
+        mac.update(msg.as_bytes());
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    }
+
+    fn verify(&self, msg: &str, provided: &str) -> bool {
+        let Ok(bytes) = URL_SAFE_NO_PAD.decode(provided) else {
+            return false;
+        };
+        let Ok(mut mac) = HmacSha256::new_from_slice(self.secret.as_bytes()) else {
+            return false;
+        };
+        mac.update(msg.as_bytes());
+        mac.verify_slice(&bytes).is_ok()
+    }
 }
 
 /// Probe R2 for each expected map key and record whether a real PNG is present.
@@ -357,7 +635,9 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
     if r.len() < 12 {
-        return Err(Error::RustError("Turso pipeline returned fewer than 12 results".into()));
+        return Err(Error::RustError(
+            "Turso pipeline returned fewer than 12 results".into(),
+        ));
     }
     Ok(model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
@@ -378,11 +658,166 @@ mod tests {
     #[test]
     fn safe_slug_rejects_invalid() {
         assert!(!is_safe_slug(""));
-        assert!(!is_safe_slug("Tokyo"));       // uppercase
-        assert!(!is_safe_slug("plan;DROP"));   // injection
-        assert!(!is_safe_slug("a b"));         // space
-        assert!(!is_safe_slug("a.b"));         // dot
-        assert!(!is_safe_slug("'or'1'='1"));   // SQL injection
+        assert!(!is_safe_slug("Tokyo")); // uppercase
+        assert!(!is_safe_slug("plan;DROP")); // injection
+        assert!(!is_safe_slug("a b")); // space
+        assert!(!is_safe_slug("a.b")); // dot
+        assert!(!is_safe_slug("'or'1'='1")); // SQL injection
+    }
+
+    #[test]
+    fn grant_token_validator_accepts_lower_hex_only() {
+        assert!(is_grant_token("0123456789abcdef0123456789abcdef"));
+        assert!(!is_grant_token("0123456789ABCDEF0123456789ABCDEF"));
+        assert!(!is_grant_token("short"));
+        assert!(!is_grant_token("0123456789abcdef0123456789abcdeg"));
+    }
+
+    #[test]
+    fn grant_csrf_verifies_action_and_token_scope() {
+        let csrf = GrantCsrf::test();
+        let create = csrf.create("okinawa-2026");
+        assert!(csrf.verify_create("okinawa-2026", &create));
+        assert!(!csrf.verify_create("tokyo-2026", &create));
+
+        let token = "0123456789abcdef0123456789abcdef";
+        let deactivate = csrf.deactivate("okinawa-2026", token);
+        assert!(csrf.verify_deactivate("okinawa-2026", token, &deactivate));
+        assert!(!csrf.verify_deactivate(
+            "okinawa-2026",
+            "ffffffffffffffffffffffffffffffff",
+            &deactivate
+        ));
+    }
+
+    // A valid 32-lowercase-hex token reused across the builder/decision tests.
+    const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn sql_quote_doubles_single_quotes() {
+        assert_eq!(sql_quote("o'brien"), "o''brien");
+        assert_eq!(sql_quote("plain"), "plain");
+        assert_eq!(sql_quote("a'b'c"), "a''b''c");
+        assert_eq!(sql_quote("'; DROP TABLE x;--"), "''; DROP TABLE x;--");
+    }
+
+    #[test]
+    fn create_sql_has_where_exists_guard() {
+        let sql = build_create_grant_sql("okinawa-2026", TEST_TOKEN, "yanggf8");
+        assert!(sql.contains(
+            "WHERE EXISTS (SELECT 1 FROM plans WHERE plan_id = 'okinawa-2026' \
+             AND deleted_at IS NULL)"
+        ));
+        // Insert path sets the new row active and records the owner.
+        assert!(sql.contains("'active'"));
+        assert!(sql.contains("'yanggf8'"));
+        assert!(sql.contains(&format!("'{TEST_TOKEN}'")));
+    }
+
+    #[test]
+    fn deactivate_sql_keeps_active_guard() {
+        let sql = build_deactivate_grant_sql("okinawa-2026", TEST_TOKEN, "yanggf8");
+        assert!(sql.contains("status='inactive'"));
+        // The guard that prevents re-deactivating an already-inactive row.
+        assert!(sql.contains("AND status = 'active'"));
+        assert!(sql.contains(&format!("token = '{TEST_TOKEN}'")));
+    }
+
+    #[test]
+    fn create_sql_escapes_owner_login() {
+        let sql = build_create_grant_sql("p", TEST_TOKEN, "o'brien");
+        // sql_quote must be wired into the builder: the escaped form is present...
+        assert!(sql.contains("'o''brien'"));
+        // ...and the un-escaped bare form (which would break out of the string) is not.
+        assert!(!sql.contains("'o'brien'"));
+    }
+
+    #[test]
+    fn mint_grant_token_is_32_lowercase_hex() {
+        // NOTE: host-side this exercises NATIVE getrandom. The WASM Web-Crypto (js
+        // feature) path is proven by the live create smoke test, NOT by this test.
+        let tok = mint_grant_token();
+        assert!(
+            is_grant_token(&tok),
+            "minted token must pass is_grant_token: {tok}"
+        );
+    }
+
+    #[test]
+    fn decide_rejects_unsafe_slug() {
+        let csrf = GrantCsrf::test();
+        assert_eq!(
+            decide_grant_post("/grants/create", "bad slug", "", "", &csrf),
+            GrantDecision::InvalidSlug
+        );
+        assert_eq!(
+            decide_grant_post("/grants/deactivate", "bad slug", "", TEST_TOKEN, &csrf),
+            GrantDecision::InvalidSlug
+        );
+    }
+
+    #[test]
+    fn decide_rejects_bad_csrf_on_create() {
+        let csrf = GrantCsrf::test();
+        assert_eq!(
+            decide_grant_post("/grants/create", "okinawa-2026", "wrong", "", &csrf),
+            GrantDecision::BadCsrf
+        );
+        let good = csrf.create("okinawa-2026");
+        assert_eq!(
+            decide_grant_post("/grants/create", "okinawa-2026", &good, "", &csrf),
+            GrantDecision::PlanCheckThenCreate {
+                plan: "okinawa-2026".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn decide_rejects_bad_token_format_on_deactivate() {
+        let csrf = GrantCsrf::test();
+        // Token format is checked before CSRF (matches source order).
+        assert_eq!(
+            decide_grant_post("/grants/deactivate", "okinawa-2026", "", "short", &csrf),
+            GrantDecision::InvalidToken
+        );
+    }
+
+    #[test]
+    fn decide_rejects_bad_csrf_on_deactivate() {
+        let csrf = GrantCsrf::test();
+        assert_eq!(
+            decide_grant_post(
+                "/grants/deactivate",
+                "okinawa-2026",
+                "wrong",
+                TEST_TOKEN,
+                &csrf
+            ),
+            GrantDecision::BadCsrf
+        );
+        let good = csrf.deactivate("okinawa-2026", TEST_TOKEN);
+        assert_eq!(
+            decide_grant_post(
+                "/grants/deactivate",
+                "okinawa-2026",
+                &good,
+                TEST_TOKEN,
+                &csrf
+            ),
+            GrantDecision::Deactivate {
+                plan: "okinawa-2026".to_string(),
+                token: TEST_TOKEN.to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn decide_unknown_path_is_not_found() {
+        let csrf = GrantCsrf::test();
+        assert_eq!(
+            decide_grant_post("/grants/wat", "okinawa-2026", "", "", &csrf),
+            GrantDecision::NotFound
+        );
     }
 
     #[test]

@@ -43,7 +43,10 @@ mod tests {
 
     #[test]
     fn share_token_scopes_to_one_plan() {
-        assert_eq!(resolve(Some("share-oki-abc"), &shares()), AccessScope::Plan("okinawa-2026".into()));
+        assert_eq!(
+            resolve(Some("share-oki-abc"), &shares()),
+            AccessScope::Plan("okinawa-2026".into())
+        );
     }
     #[test]
     fn unknown_token_denied() {

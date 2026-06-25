@@ -2,20 +2,22 @@
 //! `plan_id` is a controlled slug (hyphenated), safe in an href by construction;
 //! all displayed text still goes through esc().
 
-use std::collections::HashMap;
-
 use super::{esc, share};
 use crate::i18n::t;
 use crate::turso::Row;
 
 fn rs(row: &Row, k: &str) -> String {
-    row.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    row.get(k)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 pub fn render(
     plan_rows: &[Row],
-    plan_share_tokens: &HashMap<String, String>,
+    grants: &share::GrantMaps,
     public_origin: &str,
+    csrf: &crate::router::GrantCsrf,
     lang: &str,
 ) -> String {
     let mut h = String::new();
@@ -23,10 +25,16 @@ pub fn render(
     h.push_str("<ul class=\"plan-index\">");
     for p in plan_rows {
         let plan_id = rs(p, "plan_id");
-        if plan_id.is_empty() { continue; }
+        if plan_id.is_empty() {
+            continue;
+        }
         let name = {
             let dn = rs(p, "display_name");
-            if dn.is_empty() { plan_id.clone() } else { dn }
+            if dn.is_empty() {
+                plan_id.clone()
+            } else {
+                dn
+            }
         };
         let start = rs(p, "start_date");
         let end = rs(p, "end_date");
@@ -40,25 +48,108 @@ pub fn render(
             "<li class=\"plan-card\"><a class=\"plan-card-main\" href=\"/?plan={}\">",
             esc(&plan_id)
         ));
-        h.push_str(&format!("<div class=\"plan-card-name\">{}</div>", esc(&name)));
+        h.push_str(&format!(
+            "<div class=\"plan-card-name\">{}</div>",
+            esc(&name)
+        ));
         if !dates.is_empty() {
-            h.push_str(&format!("<div class=\"plan-card-dates\">{}</div>", esc(&dates)));
+            h.push_str(&format!(
+                "<div class=\"plan-card-dates\">{}</div>",
+                esc(&dates)
+            ));
         }
         h.push_str("</a><div class=\"plan-card-actions\">");
-        if let Some(token) = plan_share_tokens.get(&plan_id) {
+        if let Some(grant) = grants.plan_to_current.get(&plan_id) {
             h.push_str(&share::copy_button(
-                &share::share_url(public_origin, &plan_id, token),
+                &share::share_url(public_origin, &plan_id, &grant.token),
                 lang,
             ));
         } else {
-            h.push_str(&format!(
-                r#"<span class="copy-share-missing">{}</span>"#,
-                esc(t("noShareLink", lang)),
+            h.push_str(&share::create_grant_form(
+                &plan_id,
+                &csrf.create(&plan_id),
+                lang,
             ));
         }
-        h.push_str("</div></li>");
+        h.push_str("</div>");
+        h.push_str(&grant_manager(
+            &plan_id,
+            grants
+                .plan_to_history
+                .get(&plan_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            public_origin,
+            csrf,
+            lang,
+        ));
+        h.push_str("</li>");
     }
     h.push_str("</ul>");
+    h
+}
+
+fn grant_manager(
+    plan_id: &str,
+    history: &[share::GrantToken],
+    public_origin: &str,
+    csrf: &crate::router::GrantCsrf,
+    lang: &str,
+) -> String {
+    let mut h = String::new();
+    h.push_str(&format!(
+        r#"<details class="grant-manager"><summary>{}</summary>"#,
+        esc(t("grantTokens", lang)),
+    ));
+    if history.is_empty() {
+        h.push_str(&format!(
+            r#"<div class="grant-empty">{}</div>"#,
+            esc(t("noActiveGrantToken", lang)),
+        ));
+    } else {
+        h.push_str(r#"<div class="grant-history">"#);
+        for grant in history {
+            let active = grant.status == share::GrantStatus::Active;
+            h.push_str(&format!(
+                r#"<div class="grant-row grant-row-{}"><div class="grant-row-main"><span class="grant-fingerprint">{}</span><span class="grant-meta">{} {}</span></div>"#,
+                if active { "active" } else { "inactive" },
+                esc(&share::token_fingerprint(&grant.token)),
+                esc(t("created", lang)),
+                esc(&grant.created_at),
+            ));
+            if active {
+                h.push_str(r#"<div class="grant-row-actions">"#);
+                h.push_str(&share::copy_button(
+                    &share::share_url(public_origin, plan_id, &grant.token),
+                    lang,
+                ));
+                h.push_str(&format!(
+                    r#"<form class="grant-form" method="post" action="/grants/deactivate"><input type="hidden" name="plan" value="{}"><input type="hidden" name="token" value="{}"><input type="hidden" name="csrf" value="{}"><button type="submit" class="grant-deactivate-btn">{}</button></form>"#,
+                    esc(plan_id),
+                    esc(&grant.token),
+                    esc(&csrf.deactivate(plan_id, &grant.token)),
+                    esc(t("makeInactive", lang)),
+                ));
+                h.push_str("</div>");
+            } else {
+                h.push_str(&format!(
+                    r#"<div class="grant-row-actions"><span class="grant-status">{}</span>"#,
+                    esc(t("inactive", lang)),
+                ));
+                if let Some(at) = &grant.deactivated_at {
+                    h.push_str(&format!(
+                        r#"<span class="grant-meta">{} {}</span>"#,
+                        esc(t("inactivated", lang)),
+                        esc(at),
+                    ));
+                }
+                h.push_str("</div>");
+            }
+            h.push_str("</div>");
+        }
+        h.push_str("</div>");
+    }
+    h.push_str("</details>");
     h
 }
 
@@ -71,10 +162,19 @@ mod tests {
     fn plan_appears_as_link() {
         let mut p = Row::new();
         p.insert("plan_id".into(), serde_json::json!("okinawa-2026"));
-        p.insert("display_name".into(), serde_json::json!("Okinawa June 2026"));
+        p.insert(
+            "display_name".into(),
+            serde_json::json!("Okinawa June 2026"),
+        );
         p.insert("start_date".into(), serde_json::json!("2026-06-21"));
         p.insert("end_date".into(), serde_json::json!("2026-06-24"));
-        let html = render(&[p], &HashMap::new(), "https://example.dev", "en");
+        let html = render(
+            &[p],
+            &share::GrantMaps::default(),
+            "https://example.dev",
+            &crate::router::GrantCsrf::test(),
+            "en",
+        );
         assert!(html.contains("href=\"/?plan=okinawa-2026\""));
         assert!(html.contains("Okinawa June 2026"));
         assert!(html.contains("2026-06-21"));
@@ -84,14 +184,26 @@ mod tests {
     fn falls_back_to_plan_id_when_name_absent() {
         let mut p = Row::new();
         p.insert("plan_id".into(), serde_json::json!("tokyo-2026"));
-        let html = render(&[p], &HashMap::new(), "https://example.dev", "en");
+        let html = render(
+            &[p],
+            &share::GrantMaps::default(),
+            "https://example.dev",
+            &crate::router::GrantCsrf::test(),
+            "en",
+        );
         assert!(html.contains("href=\"/?plan=tokyo-2026\""));
         assert!(html.contains("tokyo-2026"));
     }
 
     #[test]
     fn heading_is_localized() {
-        let html = render(&[], &HashMap::new(), "https://example.dev", "zh");
+        let html = render(
+            &[],
+            &share::GrantMaps::default(),
+            "https://example.dev",
+            &crate::router::GrantCsrf::test(),
+            "zh",
+        );
         assert!(html.contains("行程"));
     }
 
@@ -99,11 +211,30 @@ mod tests {
     fn owner_index_includes_copy_share_button_when_token_exists() {
         let mut p = Row::new();
         p.insert("plan_id".into(), serde_json::json!("okinawa-2026"));
-        let mut tokens = HashMap::new();
-        tokens.insert("okinawa-2026".into(), "share123".into());
-        let html = render(&[p], &tokens, "https://example.dev", "en");
+        let mut grants = share::GrantMaps::default();
+        grants.plan_to_current.insert(
+            "okinawa-2026".into(),
+            share::GrantToken {
+                token: "share123".into(),
+                plan_slug: "okinawa-2026".into(),
+                status: share::GrantStatus::Active,
+                created_at: "2026-06-25".into(),
+                created_by: None,
+                deactivated_at: None,
+                deactivated_by: None,
+            },
+        );
+        let html = render(
+            &[p],
+            &grants,
+            "https://example.dev",
+            &crate::router::GrantCsrf::test(),
+            "en",
+        );
         assert!(html.contains("copy-share-btn"));
-        assert!(html.contains("data-copy-url=\"https://example.dev/?plan=okinawa-2026&amp;token=share123\""));
+        assert!(html.contains(
+            "data-copy-url=\"https://example.dev/?plan=okinawa-2026&amp;token=share123\""
+        ));
         assert!(!html.contains("<a class=\"plan-card\""));
     }
 }

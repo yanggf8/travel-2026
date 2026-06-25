@@ -3,7 +3,14 @@ use crate::turso::Row;
 use serde_json::Value;
 
 #[derive(Debug, Default, PartialEq)]
-pub struct Stop { pub title: String, pub address: String, pub lat: Option<f64>, pub lon: Option<f64>, pub maps_link: String, pub cost_estimate: i64 }
+pub struct Stop {
+    pub title: String,
+    pub address: String,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub maps_link: String,
+    pub cost_estimate: i64,
+}
 
 #[derive(Debug, Default, PartialEq)]
 pub struct RouteSegment {
@@ -57,11 +64,17 @@ pub struct Day {
 pub const SESSION_ORDER: [&str; 4] = ["morning", "noon", "afternoon", "evening"];
 
 fn s(row: &Row, key: &str) -> String {
-    row.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    row.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 fn i(row: &Row, key: &str) -> i64 {
-    row.get(key).and_then(|v| v.as_str()).and_then(|s| s.parse().ok())
-        .or_else(|| row.get(key).and_then(|v| v.as_i64())).unwrap_or(0)
+    row.get(key)
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .or_else(|| row.get(key).and_then(|v| v.as_i64()))
+        .unwrap_or(0)
 }
 /// Optional float column. Turso returns REALs as strings; accept either.
 /// Returns None when the column is absent or NULL.
@@ -71,21 +84,28 @@ fn f(row: &Row, key: &str) -> Option<f64> {
 
 /// Build the 4 sessions for one day from activity + meal rows already filtered to that day.
 pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
-    SESSION_ORDER.iter().map(|&st| {
-        Session {
+    SESSION_ORDER
+        .iter()
+        .map(|&st| Session {
             session_type: st.to_string(),
-            activities: activities.iter().filter(|r| s(r, "session_type") == st)
+            activities: activities
+                .iter()
+                .filter(|r| s(r, "session_type") == st)
                 .map(|r| Activity {
                     title: s(r, "title"),
                     booking_status: s(r, "booking_status"),
                     book_by: s(r, "book_by"),
                     booking_url: s(r, "booking_url"),
-                }).collect(),
-            meals: meals.iter().filter(|r| s(r, "session_type") == st)
-                .map(|r| s(r, "meal")).collect(),
+                })
+                .collect(),
+            meals: meals
+                .iter()
+                .filter(|r| s(r, "session_type") == st)
+                .map(|r| s(r, "meal"))
+                .collect(),
             ..Default::default()
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -111,10 +131,18 @@ pub struct Plan {
 /// Row slices MUST be pre-sorted by their sort_order in the SQL query — this
 /// function preserves input order and does not re-sort.
 pub fn assemble(
-    plan_rows: &[Row], day_rows: &[Row], session_rows: &[Row],
-    activity_rows: &[Row], meal_rows: &[Row], flight_rows: &[Row],
-    hotel_rows: &[Row], transfer_rows: &[Row], poi_rows: &[Row],
-    route_rows: &[Row], transit_key_line_rows: &[Row], itin_meta_rows: &[Row],
+    plan_rows: &[Row],
+    day_rows: &[Row],
+    session_rows: &[Row],
+    activity_rows: &[Row],
+    meal_rows: &[Row],
+    flight_rows: &[Row],
+    hotel_rows: &[Row],
+    transfer_rows: &[Row],
+    poi_rows: &[Row],
+    route_rows: &[Row],
+    transit_key_line_rows: &[Row],
+    itin_meta_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -131,18 +159,28 @@ pub fn assemble(
         plan.transit_hotel_station = s(m, "transit_hotel_station");
         plan.transit_hotel_station_zh = s(m, "transit_hotel_station_zh");
     }
-    plan.transit_key_lines = transit_key_line_rows.iter()
+    plan.transit_key_lines = transit_key_line_rows
+        .iter()
         .map(|r| (s(r, "destination"), s(r, "lang"), s(r, "line")))
         .collect();
     for d in day_rows {
         let dn = i(d, "day_number");
-        let acts: Vec<Row> = activity_rows.iter().filter(|r| i(r, "day_number") == dn).cloned().collect();
-        let mls: Vec<Row> = meal_rows.iter().filter(|r| i(r, "day_number") == dn).cloned().collect();
+        let acts: Vec<Row> = activity_rows
+            .iter()
+            .filter(|r| i(r, "day_number") == dn)
+            .cloned()
+            .collect();
+        let mls: Vec<Row> = meal_rows
+            .iter()
+            .filter(|r| i(r, "day_number") == dn)
+            .cloned()
+            .collect();
         let mut sessions = build_sessions(&acts, &mls);
         merge_session_meta(&mut sessions, session_rows, dn);
         attach_stops(&mut sessions, &acts, poi_rows);
         // Route rows arrive pre-sorted by sort_order; preserve that order.
-        let route_segments: Vec<RouteSegment> = route_rows.iter()
+        let route_segments: Vec<RouteSegment> = route_rows
+            .iter()
             .filter(|r| i(r, "day_number") == dn)
             .map(|r| RouteSegment {
                 from_place: s(r, "from_place"),
@@ -154,15 +192,19 @@ pub fn assemble(
             })
             .collect();
         plan.days.push(Day {
-            day_number: dn, date: s(d, "date"), day_type: s(d, "day_type"),
-            theme: s(d, "theme"), theme_zh: s(d, "theme_zh"),
+            day_number: dn,
+            date: s(d, "date"),
+            day_type: s(d, "day_type"),
+            theme: s(d, "theme"),
+            theme_zh: s(d, "theme_zh"),
             weather_label: s(d, "weather_label"),
             temp_low_c: f(d, "temp_low_c"),
             temp_high_c: f(d, "temp_high_c"),
             precipitation_pct: f(d, "precipitation_pct"),
             feels_like_low_c: f(d, "feels_like_low_c"),
             feels_like_high_c: f(d, "feels_like_high_c"),
-            sessions, route_segments,
+            sessions,
+            route_segments,
         });
     }
     plan
@@ -170,7 +212,10 @@ pub fn assemble(
 
 fn merge_session_meta(sessions: &mut [Session], session_rows: &[Row], day_number: i64) {
     for sess in sessions.iter_mut() {
-        if let Some(r) = session_rows.iter().find(|r| i(r, "day_number") == day_number && s(r, "session_type") == sess.session_type) {
+        if let Some(r) = session_rows
+            .iter()
+            .find(|r| i(r, "day_number") == day_number && s(r, "session_type") == sess.session_type)
+        {
             sess.focus_zh = s(r, "focus_zh");
             sess.transit_zh = s(r, "transit_notes_zh");
         }
@@ -179,7 +224,10 @@ fn merge_session_meta(sessions: &mut [Session], session_rows: &[Row], day_number
 
 fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
     for sess in sessions.iter_mut() {
-        for a in acts.iter().filter(|r| s(r, "session_type") == sess.session_type) {
+        for a in acts
+            .iter()
+            .filter(|r| s(r, "session_type") == sess.session_type)
+        {
             let title = s(a, "title");
             // Prefer the durable poi_id FK; fall back to a normalized title
             // match only when the activity has no poi_id set. This keeps
@@ -211,12 +259,17 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
                 // never search-links a bare title, and the CLI's stop_link_problem
                 // guard (rust/crates/travel-cli/src/checks.rs).
                 _ if !is_linkable_stop(&title) => String::new(),
-                _ => format!("https://www.google.com/maps/search/{}", crate::render::urlencode(&search_query_from_title(&title))),
+                _ => format!(
+                    "https://www.google.com/maps/search/{}",
+                    crate::render::urlencode(&search_query_from_title(&title))
+                ),
             };
             sess.stops.push(Stop {
                 title,
                 address: poi.map(|p| s(p, "address")).unwrap_or_default(),
-                lat, lon, maps_link,
+                lat,
+                lon,
+                maps_link,
                 cost_estimate: poi.map(|p| i(p, "cost_estimate")).unwrap_or(0),
             });
         }
@@ -224,10 +277,13 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
 }
 
 fn json_f64(v: &Value) -> Option<f64> {
-    v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 /// Normalize a title for tolerant POI matching (trim + lowercase).
-fn norm_title(t: &str) -> String { t.trim().to_lowercase() }
+fn norm_title(t: &str) -> String {
+    t.trim().to_lowercase()
+}
 
 /// True when the activity title already embeds a Google-Maps URL (the
 /// multi-line "…\nGoogle Maps：https://…maps…" pattern). In that case the inline
@@ -236,7 +292,10 @@ fn norm_title(t: &str) -> String { t.trim().to_lowercase() }
 fn has_embedded_maps_url(title: &str) -> bool {
     let lower = title.to_lowercase();
     let has_url = lower.contains("https://") || lower.contains("http://");
-    has_url && (lower.contains("maps.google") || lower.contains("google.com/maps") || lower.contains("/maps/"))
+    has_url
+        && (lower.contains("maps.google")
+            || lower.contains("google.com/maps")
+            || lower.contains("/maps/"))
 }
 
 /// Derive a short, clean search query from a possibly-multi-line activity title:
@@ -248,7 +307,11 @@ fn has_embedded_maps_url(title: &str) -> bool {
 /// (rust/crates/travel-cli/src/checks.rs). Checks the cleaned venue query, so
 /// `晚餐：リウボウ 安里店` (a real venue) still links while bare `晚餐` does not.
 fn is_linkable_stop(title: &str) -> bool {
-    let first = title.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let first = title
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if first.is_empty() {
         return false;
     }
@@ -259,13 +322,23 @@ fn is_linkable_stop(title: &str) -> bool {
     // Flight line: an airline code (2 letters + 3-4 digits, e.g. CI120) anywhere,
     // or a boarding/departure verb.
     if has_flight_code(first)
-        || first.contains("起飛") || first.contains("起降") || first.contains("登機")
+        || first.contains("起飛")
+        || first.contains("起降")
+        || first.contains("登機")
     {
         return false;
     }
     // Airport / travel-process step (not a destination).
     const PROCESS: [&str; 9] = [
-        "報到", "託運", "出境", "入境", "安檢", "航廈", "候機", "接駁", "停車場",
+        "報到",
+        "託運",
+        "出境",
+        "入境",
+        "安檢",
+        "航廈",
+        "候機",
+        "接駁",
+        "停車場",
     ];
     if PROCESS.iter().any(|w| first.contains(w)) {
         return false;
@@ -308,7 +381,10 @@ fn has_flight_code(s: &str) -> bool {
             && bytes[i].is_ascii_alphabetic()
             && bytes[i + 1].is_ascii_alphabetic()
         {
-            let digits = bytes[i + 2..].iter().take_while(|b| b.is_ascii_digit()).count();
+            let digits = bytes[i + 2..]
+                .iter()
+                .take_while(|b| b.is_ascii_digit())
+                .count();
             if (3..=4).contains(&digits) {
                 return true;
             }
@@ -324,8 +400,11 @@ fn is_bare_time(s: &str) -> bool {
     let mut parts = s.split(':');
     match (parts.next(), parts.next(), parts.next()) {
         (Some(h), Some(m), None) => {
-            !h.is_empty() && h.len() <= 2 && h.bytes().all(|b| b.is_ascii_digit())
-                && m.len() == 2 && m.bytes().all(|b| b.is_ascii_digit())
+            !h.is_empty()
+                && h.len() <= 2
+                && h.bytes().all(|b| b.is_ascii_digit())
+                && m.len() == 2
+                && m.bytes().all(|b| b.is_ascii_digit())
         }
         _ => false,
     }
@@ -335,38 +414,72 @@ fn is_bare_time(s: &str) -> bool {
 /// trailing " — …" / "（…）" descriptor so the maps/search query is just the venue.
 fn search_query_from_title(title: &str) -> String {
     // First non-empty line only.
-    let first_line = title.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let first_line = title
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     // Drop a leading "<meal label>：" prefix (晚餐：/午餐：/早餐：/Lunch:/Dinner:).
     let after_prefix = match first_line.find(['：', ':']) {
-        Some(idx) if idx <= 12 && is_meal_prefix(&first_line[..idx]) => first_line[idx + first_line[idx..].chars().next().map_or(1, |c| c.len_utf8())..].trim(),
+        Some(idx) if idx <= 12 && is_meal_prefix(&first_line[..idx]) => {
+            first_line[idx + first_line[idx..].chars().next().map_or(1, |c| c.len_utf8())..].trim()
+        }
         _ => first_line,
     };
     // Cut at the first descriptor separator: " — " (em dash) or "（" (full-width paren).
     let mut q = after_prefix;
-    if let Some(idx) = q.find(" — ") { q = q[..idx].trim_end(); }
-    if let Some(idx) = q.find('（') { q = q[..idx].trim_end(); }
-    if let Some(idx) = q.find(" (") { q = q[..idx].trim_end(); }
+    if let Some(idx) = q.find(" — ") {
+        q = q[..idx].trim_end();
+    }
+    if let Some(idx) = q.find('（') {
+        q = q[..idx].trim_end();
+    }
+    if let Some(idx) = q.find(" (") {
+        q = q[..idx].trim_end();
+    }
     q.trim().to_string()
 }
 
 /// Recognize a short leading label as a meal prefix to strip (so the venue name
 /// — not "晚餐" — becomes the search query). Kept deliberately small/specific.
 fn is_meal_prefix(label: &str) -> bool {
-    matches!(label.trim(), "晚餐" | "午餐" | "早餐" | "宵夜" | "下午茶"
-        | "Lunch" | "Dinner" | "Breakfast" | "Brunch" | "lunch" | "dinner" | "breakfast")
+    matches!(
+        label.trim(),
+        "晚餐"
+            | "午餐"
+            | "早餐"
+            | "宵夜"
+            | "下午茶"
+            | "Lunch"
+            | "Dinner"
+            | "Breakfast"
+            | "Brunch"
+            | "lunch"
+            | "dinner"
+            | "breakfast"
+    )
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     fn row(pairs: &[(&str, Value)]) -> Row {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
     fn noon_meal_is_not_dropped() {
-        let acts = vec![row(&[("session_type", json!("noon")), ("title", json!("Makishi Market"))])];
-        let meals = vec![row(&[("session_type", json!("noon")), ("meal", json!("Lunch: Makishi"))])];
+        let acts = vec![row(&[
+            ("session_type", json!("noon")),
+            ("title", json!("Makishi Market")),
+        ])];
+        let meals = vec![row(&[
+            ("session_type", json!("noon")),
+            ("meal", json!("Lunch: Makishi")),
+        ])];
         let sessions = build_sessions(&acts, &meals);
         assert_eq!(sessions.len(), 4);
         let noon = sessions.iter().find(|s| s.session_type == "noon").unwrap();
@@ -384,22 +497,44 @@ mod tests {
 
     #[test]
     fn stop_gets_maps_link_from_poi_latlon() {
-        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("Naminoue Shrine"))])];
-        let pois = vec![row(&[("title", json!("Naminoue Shrine")), ("lat", json!("26.2156")), ("lon", json!("127.6691")), ("address", json!("Naha"))])];
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Naminoue Shrine")),
+        ])];
+        let pois = vec![row(&[
+            ("title", json!("Naminoue Shrine")),
+            ("lat", json!("26.2156")),
+            ("lon", json!("127.6691")),
+            ("address", json!("Naha")),
+        ])];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type=="morning").unwrap().stops[0];
-        assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.2156,127.6691");
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
+        assert_eq!(
+            m.maps_link,
+            "https://www.google.com/maps?q=26.2156,127.6691"
+        );
         assert_eq!(m.address, "Naha");
     }
 
     #[test]
     fn stop_without_poi_falls_back_to_search_link() {
-        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("Mystery Spot"))])];
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Mystery Spot")),
+        ])];
         let pois: Vec<Row> = vec![]; // no matching POI
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
         assert!(m.maps_link.contains("/maps/search/"));
         assert!(m.lat.is_none() && m.lon.is_none());
     }
@@ -410,13 +545,24 @@ mod tests {
     // labeled link from render_activity_text covers it instead → no stop link.
     #[test]
     fn stop_with_embedded_maps_url_emits_no_search_link() {
-        let blob = "晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc";
-        let acts = vec![row(&[("session_type", json!("evening")), ("title", json!(blob))])];
+        let blob =
+            "晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc";
+        let acts = vec![row(&[
+            ("session_type", json!("evening")),
+            ("title", json!(blob)),
+        ])];
         let pois: Vec<Row> = vec![]; // no POI coords → would otherwise fall back to search
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "evening").unwrap().stops[0];
-        assert_eq!(m.maps_link, "", "embedded-URL stop must suppress the broken search fallback");
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "evening")
+            .unwrap()
+            .stops[0];
+        assert_eq!(
+            m.maps_link, "",
+            "embedded-URL stop must suppress the broken search fallback"
+        );
         assert!(!m.maps_link.contains("%0A"));
         assert!(!m.maps_link.contains("https%3A"));
     }
@@ -427,24 +573,56 @@ mod tests {
     #[test]
     fn stop_search_query_is_clean_first_line() {
         let blob = "晚餐：安里家（アグー豚しゃぶ）— 飯店步行5分\n營業：週五 17:00–23:00";
-        let acts = vec![row(&[("session_type", json!("evening")), ("title", json!(blob))])];
+        let acts = vec![row(&[
+            ("session_type", json!("evening")),
+            ("title", json!(blob)),
+        ])];
         let pois: Vec<Row> = vec![];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "evening").unwrap().stops[0];
-        assert!(m.maps_link.contains("/maps/search/"), "got: {}", m.maps_link);
-        assert!(!m.maps_link.contains("%0A"), "no newline in query, got: {}", m.maps_link);
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "evening")
+            .unwrap()
+            .stops[0];
+        assert!(
+            m.maps_link.contains("/maps/search/"),
+            "got: {}",
+            m.maps_link
+        );
+        assert!(
+            !m.maps_link.contains("%0A"),
+            "no newline in query, got: {}",
+            m.maps_link
+        );
         // The meal prefix "晚餐" and the descriptor/2nd line are gone; venue remains.
-        assert!(!m.maps_link.contains("%E6%99%9A%E9%A4%90"), "meal prefix 晚餐 stripped, got: {}", m.maps_link);
+        assert!(
+            !m.maps_link.contains("%E6%99%9A%E9%A4%90"),
+            "meal prefix 晚餐 stripped, got: {}",
+            m.maps_link
+        );
         let decoded = m.maps_link.replace("/maps/search/", "");
-        assert!(!decoded.contains("E7%87%9F%E6%A5%AD"), "2nd line 營業 dropped, got: {}", m.maps_link);
+        assert!(
+            !decoded.contains("E7%87%9F%E6%A5%AD"),
+            "2nd line 營業 dropped, got: {}",
+            m.maps_link
+        );
     }
 
     #[test]
     fn search_query_helper_strips_meal_prefix_and_descriptor() {
-        assert_eq!(super::search_query_from_title("晚餐：安里家（アグー）— 飯店步行5分"), "安里家");
-        assert_eq!(super::search_query_from_title("首里そば\nLine2"), "首里そば");
-        assert_eq!(super::search_query_from_title("Lunch: Makishi Market — open till 5"), "Makishi Market");
+        assert_eq!(
+            super::search_query_from_title("晚餐：安里家（アグー）— 飯店步行5分"),
+            "安里家"
+        );
+        assert_eq!(
+            super::search_query_from_title("首里そば\nLine2"),
+            "首里そば"
+        );
+        assert_eq!(
+            super::search_query_from_title("Lunch: Makishi Market — open till 5"),
+            "Makishi Market"
+        );
         assert_eq!(super::search_query_from_title("Plain Venue"), "Plain Venue");
     }
 
@@ -453,18 +631,30 @@ mod tests {
         use super::is_linkable_stop as ok;
         // Real okinawa-2026 day-1 NON-places (must NOT link):
         assert!(!ok("CI120 起飛 TPE T2 08:00 → OKA T1 10:45"), "flight line");
-        assert!(!ok("T2 報到、託運、出境安檢（建議起飛前2.5–3小時抵達）"), "airport process");
-        assert!(!ok("停車場接駁巴士 → 桃園機場第二航廈（T2，約10–15分）"), "transit instruction");
+        assert!(
+            !ok("T2 報到、託運、出境安檢（建議起飛前2.5–3小時抵達）"),
+            "airport process"
+        );
+        assert!(
+            !ok("停車場接駁巴士 → 桃園機場第二航廈（T2，約10–15分）"),
+            "transit instruction"
+        );
         assert!(!ok("晚餐"), "bare meal label");
         assert!(!ok("04:00"), "bare time");
-        assert!(!ok("04:00 自家出發開車：紅樹林 → 大園出國停車場第三停車場"), "instruction w/ arrow");
+        assert!(
+            !ok("04:00 自家出發開車：紅樹林 → 大園出國停車場第三停車場"),
+            "instruction w/ arrow"
+        );
         assert!(!ok("步行"), "mode-only word");
         assert!(!ok("接駁巴士"), "mode-only word");
         // Real places / venues (must STILL link):
         assert!(ok("首里城公園"), "real place");
         assert!(ok("晚餐：リウボウ 安里店"), "meal prefix + real venue");
         assert!(ok("識名園"), "real place");
-        assert!(ok("HOTEL AZAT NAHA"), "hotel — letters but no flight-code digit pattern");
+        assert!(
+            ok("HOTEL AZAT NAHA"),
+            "hotel — letters but no flight-code digit pattern"
+        );
         assert!(ok("Makishi Market"), "english venue");
     }
     #[test]
@@ -481,21 +671,62 @@ mod tests {
 
     #[test]
     fn has_embedded_maps_url_detects_google_maps() {
-        assert!(super::has_embedded_maps_url("foo\nGoogle Maps：https://www.google.com/maps/search/x"));
-        assert!(super::has_embedded_maps_url("導航：https://maps.google.com/?q=1,2"));
+        assert!(super::has_embedded_maps_url(
+            "foo\nGoogle Maps：https://www.google.com/maps/search/x"
+        ));
+        assert!(super::has_embedded_maps_url(
+            "導航：https://maps.google.com/?q=1,2"
+        ));
         assert!(!super::has_embedded_maps_url("just a venue name"));
         assert!(!super::has_embedded_maps_url("see https://example.com/foo")); // url but not maps
     }
 
     #[test]
     fn assemble_attaches_route_segments() {
-        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
-        let day_rows = vec![row(&[("day_number", json!("2")), ("date", json!("2026-06-13"))])];
+        let plan_rows = vec![row(&[
+            ("plan_id", json!("okinawa-2026")),
+            ("display_name", json!("Okinawa")),
+            ("start_date", json!("2026-06-12")),
+            ("end_date", json!("2026-06-16")),
+        ])];
+        let day_rows = vec![row(&[
+            ("day_number", json!("2")),
+            ("date", json!("2026-06-13")),
+        ])];
         let route_rows = vec![
-            row(&[("day_number", json!("2")), ("from_place", json!("Hotel")), ("to_place", json!("Naminoue")), ("mode", json!("driving")), ("duration_min", json!("12")), ("notes", json!("")), ("start_time", json!("09:00"))]),
-            row(&[("day_number", json!("1")), ("from_place", json!("Airport")), ("to_place", json!("Hotel")), ("mode", json!("transit")), ("duration_min", json!("30")), ("notes", json!("")), ("start_time", json!(""))]),
+            row(&[
+                ("day_number", json!("2")),
+                ("from_place", json!("Hotel")),
+                ("to_place", json!("Naminoue")),
+                ("mode", json!("driving")),
+                ("duration_min", json!("12")),
+                ("notes", json!("")),
+                ("start_time", json!("09:00")),
+            ]),
+            row(&[
+                ("day_number", json!("1")),
+                ("from_place", json!("Airport")),
+                ("to_place", json!("Hotel")),
+                ("mode", json!("transit")),
+                ("duration_min", json!("30")),
+                ("notes", json!("")),
+                ("start_time", json!("")),
+            ]),
         ];
-        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &route_rows, &[], &[]);
+        let plan = assemble(
+            &plan_rows,
+            &day_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &route_rows,
+            &[],
+            &[],
+        );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
         let seg = &day.route_segments[0];
@@ -507,15 +738,36 @@ mod tests {
 
     #[test]
     fn assemble_populates_weather_detail_from_day_row() {
-        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
+        let plan_rows = vec![row(&[
+            ("plan_id", json!("okinawa-2026")),
+            ("display_name", json!("Okinawa")),
+            ("start_date", json!("2026-06-12")),
+            ("end_date", json!("2026-06-16")),
+        ])];
         // Turso returns REALs as strings — assert we parse those.
         let day_rows = vec![row(&[
-            ("day_number", json!("2")), ("date", json!("2026-06-13")),
-            ("temp_low_c", json!("26.4")), ("temp_high_c", json!("30.1")),
+            ("day_number", json!("2")),
+            ("date", json!("2026-06-13")),
+            ("temp_low_c", json!("26.4")),
+            ("temp_high_c", json!("30.1")),
             ("precipitation_pct", json!("73")),
-            ("feels_like_low_c", json!("28.0")), ("feels_like_high_c", json!("34.2")),
+            ("feels_like_low_c", json!("28.0")),
+            ("feels_like_high_c", json!("34.2")),
         ])];
-        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &[]);
+        let plan = assemble(
+            &plan_rows,
+            &day_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
         assert_eq!(day.temp_high_c, Some(30.1));
@@ -526,9 +778,30 @@ mod tests {
 
     #[test]
     fn assemble_weather_detail_is_none_when_absent() {
-        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
-        let day_rows = vec![row(&[("day_number", json!("1")), ("date", json!("2026-06-12"))])];
-        let plan = assemble(&plan_rows, &day_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &[]);
+        let plan_rows = vec![row(&[
+            ("plan_id", json!("okinawa-2026")),
+            ("display_name", json!("Okinawa")),
+            ("start_date", json!("2026-06-12")),
+            ("end_date", json!("2026-06-16")),
+        ])];
+        let day_rows = vec![row(&[
+            ("day_number", json!("1")),
+            ("date", json!("2026-06-12")),
+        ])];
+        let plan = assemble(
+            &plan_rows,
+            &day_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         let day = plan.days.iter().find(|d| d.day_number == 1).unwrap();
         assert_eq!(day.temp_low_c, None);
         assert_eq!(day.precipitation_pct, None);
@@ -537,31 +810,61 @@ mod tests {
 
     #[test]
     fn stop_carries_poi_cost_estimate() {
-        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("Shuri Castle"))])];
-        let pois = vec![row(&[("title", json!("Shuri Castle")), ("lat", json!("26.2")), ("lon", json!("127.7")), ("cost_estimate", json!("400"))])];
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Shuri Castle")),
+        ])];
+        let pois = vec![row(&[
+            ("title", json!("Shuri Castle")),
+            ("lat", json!("26.2")),
+            ("lon", json!("127.7")),
+            ("cost_estimate", json!("400")),
+        ])];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
         assert_eq!(m.cost_estimate, 400);
     }
 
     #[test]
     fn stop_cost_estimate_defaults_zero_without_poi() {
-        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("Free Beach"))])];
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Free Beach")),
+        ])];
         let pois: Vec<Row> = vec![];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
         assert_eq!(m.cost_estimate, 0);
     }
 
     #[test]
     fn poi_match_tolerates_whitespace_and_case() {
-        let acts = vec![row(&[("session_type", json!("morning")), ("title", json!("  Naminoue SHRINE "))])];
-        let pois = vec![row(&[("title", json!("Naminoue Shrine")), ("lat", json!("26.2")), ("lon", json!("127.6"))])];
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("  Naminoue SHRINE ")),
+        ])];
+        let pois = vec![row(&[
+            ("title", json!("Naminoue Shrine")),
+            ("lat", json!("26.2")),
+            ("lon", json!("127.6")),
+        ])];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
         assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.2,127.6");
     }
 
@@ -572,7 +875,10 @@ mod tests {
         let acts = vec![row(&[
             ("session_type", json!("morning")),
             // Title intentionally != POI title (the Shuri gap).
-            ("title", json!("Shurijo Castle Park (首里城公園) — reconstruction grounds")),
+            (
+                "title",
+                json!("Shurijo Castle Park (首里城公園) — reconstruction grounds"),
+            ),
             ("poi_id", json!("shuri_castle")),
         ])];
         let pois = vec![row(&[
@@ -584,8 +890,15 @@ mod tests {
         ])];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
-        assert_eq!(m.cost_estimate, 400, "linked activity must inherit the POI price by id");
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
+        assert_eq!(
+            m.cost_estimate, 400,
+            "linked activity must inherit the POI price by id"
+        );
         assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.217,127.719");
     }
 
@@ -605,8 +918,15 @@ mod tests {
         ])];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
-        assert_eq!(m.address, "Naha", "unlinked activity still matches by title");
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
+        assert_eq!(
+            m.address, "Naha",
+            "unlinked activity still matches by title"
+        );
     }
 
     // build_sessions populates the full Activity (title + booking fields), not
@@ -621,7 +941,10 @@ mod tests {
             ("booking_url", json!("https://book.example/churaumi")),
         ])];
         let sessions = build_sessions(&acts, &[]);
-        let m = sessions.iter().find(|s| s.session_type == "morning").unwrap();
+        let m = sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap();
         assert_eq!(m.activities.len(), 1);
         let a = &m.activities[0];
         assert_eq!(a.title, "Churaumi Aquarium");
@@ -633,9 +956,16 @@ mod tests {
     // Activity booking fields default to empty strings when columns are absent.
     #[test]
     fn build_sessions_activity_defaults_empty_when_columns_absent() {
-        let acts = vec![row(&[("session_type", json!("noon")), ("title", json!("Free walk"))])];
+        let acts = vec![row(&[
+            ("session_type", json!("noon")),
+            ("title", json!("Free walk")),
+        ])];
         let sessions = build_sessions(&acts, &[]);
-        let a = &sessions.iter().find(|s| s.session_type == "noon").unwrap().activities[0];
+        let a = &sessions
+            .iter()
+            .find(|s| s.session_type == "noon")
+            .unwrap()
+            .activities[0];
         assert_eq!(a.title, "Free walk");
         assert_eq!(a.booking_status, "");
         assert_eq!(a.book_by, "");
@@ -645,28 +975,79 @@ mod tests {
     // ---- transit cheat-sheet assembly (feature #4) ----
     #[test]
     fn assemble_populates_transit_station_and_key_lines() {
-        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
+        let plan_rows = vec![row(&[
+            ("plan_id", json!("okinawa-2026")),
+            ("display_name", json!("Okinawa")),
+            ("start_date", json!("2026-06-12")),
+            ("end_date", json!("2026-06-16")),
+        ])];
         let itin_meta = vec![row(&[
             ("transit_hotel_station", json!("Asato Station")),
             ("transit_hotel_station_zh", json!("安里站")),
         ])];
         let key_lines = vec![
-            row(&[("destination", json!("okinawa_2026")), ("lang", json!("en")), ("line", json!("Yui Rail: airport - Asato"))]),
-            row(&[("destination", json!("okinawa_2026")), ("lang", json!("zh")), ("line", json!("單軌電車：機場－安里"))]),
+            row(&[
+                ("destination", json!("okinawa_2026")),
+                ("lang", json!("en")),
+                ("line", json!("Yui Rail: airport - Asato")),
+            ]),
+            row(&[
+                ("destination", json!("okinawa_2026")),
+                ("lang", json!("zh")),
+                ("line", json!("單軌電車：機場－安里")),
+            ]),
         ];
-        let plan = assemble(&plan_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &key_lines, &itin_meta);
+        let plan = assemble(
+            &plan_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &key_lines,
+            &itin_meta,
+        );
         assert_eq!(plan.transit_hotel_station, "Asato Station");
         assert_eq!(plan.transit_hotel_station_zh, "安里站");
         assert_eq!(plan.transit_key_lines.len(), 2);
-        assert_eq!(plan.transit_key_lines[0], ("okinawa_2026".into(), "en".into(), "Yui Rail: airport - Asato".into()));
+        assert_eq!(
+            plan.transit_key_lines[0],
+            (
+                "okinawa_2026".into(),
+                "en".into(),
+                "Yui Rail: airport - Asato".into()
+            )
+        );
         assert_eq!(plan.transit_key_lines[1].1, "zh");
     }
 
     // No itinerary_metadata + no key lines → empty transit fields.
     #[test]
     fn assemble_transit_empty_when_absent() {
-        let plan_rows = vec![row(&[("plan_id", json!("okinawa-2026")), ("display_name", json!("Okinawa")), ("start_date", json!("2026-06-12")), ("end_date", json!("2026-06-16"))])];
-        let plan = assemble(&plan_rows, &[], &[], &[], &[], &[], &[], &[], &[], &[], &[], &[]);
+        let plan_rows = vec![row(&[
+            ("plan_id", json!("okinawa-2026")),
+            ("display_name", json!("Okinawa")),
+            ("start_date", json!("2026-06-12")),
+            ("end_date", json!("2026-06-16")),
+        ])];
+        let plan = assemble(
+            &plan_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         assert_eq!(plan.transit_hotel_station, "");
         assert_eq!(plan.transit_hotel_station_zh, "");
         assert!(plan.transit_key_lines.is_empty());
@@ -688,7 +1069,14 @@ mod tests {
         ])];
         let mut sessions = build_sessions(&acts, &[]);
         super::attach_stops(&mut sessions, &acts, &pois);
-        let m = &sessions.iter().find(|s| s.session_type == "morning").unwrap().stops[0];
-        assert_eq!(m.cost_estimate, 0, "an unmatched poi_id must not borrow the title-match price");
+        let m = &sessions
+            .iter()
+            .find(|s| s.session_type == "morning")
+            .unwrap()
+            .stops[0];
+        assert_eq!(
+            m.cost_estimate, 0,
+            "an unmatched poi_id must not borrow the title-match price"
+        );
     }
 }

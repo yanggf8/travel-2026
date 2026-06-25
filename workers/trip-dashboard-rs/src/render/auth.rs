@@ -85,7 +85,10 @@ mod tests {
             logged_out_page("en"),
             oauth_error_page("oops", "en"),
         ] {
-            assert!(html.contains("/auth/login"), "missing /auth/login in auth page");
+            assert!(
+                html.contains("/auth/login"),
+                "missing /auth/login in auth page"
+            );
             assert!(!html.contains(r#"href="/login""#), "bare /login href found");
         }
         let banner = signed_in_banner("yanggf8", "en");

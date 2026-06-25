@@ -15,11 +15,20 @@ pub fn decode_result(result: &Value) -> Vec<Row> {
         .and_then(|c| c.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|c| c.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string())
+                .map(|c| {
+                    c.get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .collect()
         })
         .unwrap_or_default();
-    let rows = result.get("rows").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let rows = result
+        .get("rows")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default();
     rows.into_iter()
         .map(|row| {
             let cells = row.as_array().cloned().unwrap_or_default();
@@ -56,18 +65,26 @@ pub async fn pipeline(turso_url: &str, token: &str, sqls: &[String]) -> Result<V
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_headers(headers)
-        .with_body(Some(wasm_bindgen::JsValue::from_str(&serde_json::to_string(&body)?)));
+        .with_body(Some(wasm_bindgen::JsValue::from_str(
+            &serde_json::to_string(&body)?,
+        )));
     let req = Request::new_with_init(&url, &init)?;
     let mut res = Fetch::Request(req).send().await?;
     if res.status_code() >= 400 {
         let t = res.text().await.unwrap_or_default();
-        return Err(Error::RustError(format!("Turso HTTP {}: {t}", res.status_code())));
+        return Err(Error::RustError(format!(
+            "Turso HTTP {}: {t}",
+            res.status_code()
+        )));
     }
     let json: Value = res.json().await?;
     let mut out = Vec::with_capacity(sqls.len());
     for (i, _) in sqls.iter().enumerate() {
         let entry = json.get("results").and_then(|r| r.get(i));
-        if let Some(err) = entry.and_then(|e| e.get("response")).and_then(|r| r.get("error")) {
+        if let Some(err) = entry
+            .and_then(|e| e.get("response"))
+            .and_then(|r| r.get("error"))
+        {
             return Err(Error::RustError(format!("Turso query {i} error: {err}")));
         }
         let result = entry
