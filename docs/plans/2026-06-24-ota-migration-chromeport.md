@@ -1,7 +1,9 @@
 # OTA migration → gwebcdb (chromeport retired; extraction ported to Python)
 
 **Status:** PLAN v2 — **Phase 0 (the Python port) SHIPPED 2026-06-25** in gwebcdb. Per-source
-live capture + decommission remain (human-in-the-loop).
+live capture + decommission remain — **agent-first (escalate-on-block)**, NOT human-in-the-loop:
+the agent drives the whole navigate→fill→capture→parse→verify loop autonomously and only WARNS
+the user to act on a true blocker (a login wall, a captcha, or Chrome not started on :9222).
 **Scope:** Retire `chromeport` entirely. Move the OTA pipeline to **gwebcdb** as the single
 WSLg-based entry point: gwebcdb drives the page (it picks WSLg|Windows backend itself) → saves
 raw text to Turso → a NEW gwebcdb Python parser turns text → `offers`. Then verify each source
@@ -13,10 +15,21 @@ live and delete its archived Python scraper.
 > `offers`). Designed + adversarially audited via multi-agent workflows; every wire-format fact
 > proven against the live Turso DB; code-reviewed (caught + fixed a real airline-inference parity
 > bug). Live-verified on the settour oracle: dates/nights/price/flight/hotel/airline all match the
-> retiring Rust. 321 bridge tests pass. **Remaining (NOT Phase 0, human-in-the-loop):** per-source
-> live captures (drive WSLg Chrome), the `ota_capture` CDP path needs a live-Chrome smoke, then the
-> G0–G6 decommission gate per source → delete each archived Python parser. The Rust `chromeport`
-> binary is superseded but not yet archived.
+> retiring Rust. 321 bridge tests pass. **Remaining (NOT Phase 0) — AGENT-FIRST, escalate-on-block:**
+> the agent runs the per-source loop autonomously — navigate (`navigate.py`) → fill search
+> (`form_fill.py --confirm`) → click Search (`form_click.py --confirm`) → capture (`ota_capture.py`)
+> → parse/verify (`ota_cli.py`) → tune the `parser_rules` regex if `verify` flags MISSING → re-run
+> → G0–G6 decommission gate → delete the archived Python parser. The agent only WARNS the user to
+> act on a genuine blocker: (a) Chrome not running on :9222 (one-time
+> `gwebcdb/scripts/start-chrome-cdp-wslg.sh` — the agent can't start a display session), (b) a login
+> wall (`login_assist` / the user signs in once, session persists in the profile), or (c) a captcha
+> (skyscanner-class — skip + flag). The Rust `chromeport` binary is superseded but not yet archived.
+>
+> **Autonomous readiness check (2026-06-25, agent-run against existing captures):** 7/10 sources
+> parse cleanly through the new pipeline (settour/liontravel/lifetour/travel4u/tigerair/agoda — all
+> on STALE captures needing a refresh); besttour parses-but-needs a `date_range_rx` tune;
+> eztravel/google_flights/trip have NO capture yet. So the loop is proven end-to-end on real data —
+> it just needs fresh captures, which needs Chrome on :9222.
 
 ---
 
@@ -181,7 +194,9 @@ backend, Turso tokens exported.
 - **Blocked**: skyscanner (captcha). booking/jalan/rakuten_travel (inactive/unsupported).
 
 Code-vs-human split: Phase 0 port = code (Grok-suitable, tight spec, against a known-good diff).
-Per-source capture + tuning + login = human-in-the-loop (you drive WSLg Chrome).
+Per-source capture + tuning = AGENT-driven (the agent runs navigate/form_fill/form_click/
+ota_capture/ota_cli autonomously with --confirm/--always-approve); the agent only WARNS the user
+to act on a blocker (Chrome-not-started / login wall / captcha).
 
 ## 7. Risks / honest gaps
 
@@ -198,7 +213,7 @@ Per-source capture + tuning + login = human-in-the-loop (you drive WSLg Chrome).
 ## 8. Process
 1. (this doc) plan written. 2. Codex CLI reviews → I corroborate vs source. 3. optional Grok 3rd
 review + corroborate. 4. appraise agents — Phase 0 port is mechanical-but-large (Grok against the
-appended spec + fidelity diff); per-source = human-in-the-loop. 5. review delegated code
+appended spec + fidelity diff); per-source = agent-driven (escalate-on-block). 5. review delegated code
 line-by-line before commit.
 
 ---
