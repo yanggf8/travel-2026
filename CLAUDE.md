@@ -28,7 +28,7 @@ Turso: 28+ fully-normalized tables, no JSON blobs. Schema: `scripts/schema.sql`;
 | `process_3_4_packages_selected` | populate P3+P4 from chosen offer | current destination |
 
 ### Data Flow
-`URL → chromeport (CDP capture) → parse capture (parser_rules) → Turso offers → normalize (CanonicalOffer[]) → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)`
+`URL → gwebcdb on WSLg (navigate + ota_capture, CDP) → ota_cli parse (parser_rules) → Turso offers → normalize (CanonicalOffer[]) → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)` — (capture+parse formerly chromeport; now gwebcdb Python bridge tools)
 
 ### CLI Architecture (Rust, fine-grained SQL)
 ```
@@ -80,9 +80,9 @@ bug, not the convention:
 ```
 Rust binary invoked directly — no npm at the repo root:
   ./bin/travel <cmd>        (built from rust/crates/travel-cli)
-  ./bin/chromeport <cmd>    (the CDP OTA capture driver)
+  (OTA capture: chromeport RETIRED — use gwebcdb's Python bridge tools on WSLg; see URL Routing)
 Worker (workers/trip-dashboard/) keeps its own self-contained package.json (wrangler).
-Python/other → none (Python scrapers archived; chromeport is Rust)
+Python/other → OTA scraping = gwebcdb (~/b/gwebcdb) on WSLg; old Python scrapers archived
 ```
 
 **Current state:** the root `package.json` is gone — the npm→Rust cutover is **done**. The Rust CLI is the sole write path (each command = targeted SELECT + UPDATE/INSERT). The old TS CLI is read-only under `archive/ts-cli-retired/`. Build with `make build`; the Makefile is the build/dev entry.
@@ -181,34 +181,34 @@ User provides booking confirmation   → ./bin/travel set-activity-booking
 DECOMMISSIONED and archived** (`archive/broken-python-scrapers/`) — their constructed
 URLs 404 / hit the wrong page.
 
-> **ARCHITECTURE IN TRANSITION (2026-06-25) — read first.** The browser layer is now
-> **gwebcdb**, the shared WSLg-based CDP toolset (you call its bridge tools — `navigate`,
-> `form_fill`, `form_click`, `combo_select`, `save_page_text`, `login_assist`; gwebcdb's runtime
-> picks the backend itself, **WSLg-native Chrome first, Windows only as fallback** — the Windows
-> attach was retired for stability). **`chromeport` is being fully RETIRED**: its browser/CDP
-> half is dropped; its OTA *extraction* half (`parser_rules` → `verify`/`parse` → `offers`) is
-> being **ported into gwebcdb as a Python tool**. The `chromeport fetch interact / verify / parse`
-> commands below are the OLD path and will go away — they describe the retiring tool, kept only
-> until the Python port lands. Plan + full port spec: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
-> For sign-in OTAs, the human logs in / settles 2FA by hand in the WSLg Chrome window (session
-> persists in the profile) or via gwebcdb's approval-gated `login_assist`.
+> **OTA scraping = gwebcdb on WSLg (current, verified 2026-06-25) — read first.** The browser
+> layer is **gwebcdb** (`~/b/gwebcdb`), the shared WSLg-based CDP toolset, AND it now owns the OTA
+> extraction too (Phase 0 Python port SHIPPED). **`chromeport` is RETIRED** — do NOT run
+> `./bin/chromeport fetch interact / verify / parse`; it was the fragile Windows-Chrome path that
+> WSLg replaces, not a fallback to keep working. WSLg-native Chrome is the **standing verified
+> backend** (live on this host: `running_backend=wslg`, CDP up on :9222, bridge attached). Drive
+> everything with gwebcdb's Python bridge tools. Full recipe + gotchas: **gwebcdb `CLAUDE.md` →
+> "OTA scraping — end-to-end usage"**; per-source gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
+> For sign-in OTAs the human logs in / settles 2FA in the WSLg Chrome window (session persists in
+> the `~/.local/share/gwebcdb/codex-browser` profile) or via gwebcdb's approval-gated `login_assist`.
 
-(Historic, retiring) Scrape via the Rust CDP driver against real Chrome:
+OTA capture flow (run from `~/b/gwebcdb`; export `TURSO_URL`/`TURSO_TOKEN` from this repo's `.env`
+first — gwebcdb's `turso_db.py` has no `.env` loader):
 
 | URL Contains | Action |
 |-------------|--------|
-| Any OTA (besttour / liontravel / lifetour / settour / …) | Drive the real page in Chrome, then capture + verify + parse: <br>`./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step ...` (or `browser snapshot` on an open tab) <br>→ `./rust/target/debug/chromeport verify <source-id> <capture-id>` (read-only regex diagnostics) <br>→ `./rust/target/debug/chromeport parse capture <capture-id> --source <id>` (imports to Turso) |
+| Any OTA (besttour / liontravel / lifetour / settour / …) | Start Chrome, drive the page, then capture → verify → parse: <br>`./scripts/start-chrome-cdp-wslg.sh` (idempotent; CDP on :9222) <br>→ `python bridge/navigate.py "<url>"` (+ `form_fill`/`combo_select`/`form_click` for SPA searches) <br>→ `python bridge/ota_capture.py --source <id> [--url-contains <s>]` (UNREDACTED text → `captures`; prints `capture_id`) <br>→ `python bridge/ota_cli.py verify <capture_id> --source <id>` (read-only regex diagnostics) <br>→ `python bridge/ota_cli.py parse <capture_id> --source <id>` (writes `offers`; `--dry-run` to preview) |
 | Non-OTA URL | Use WebFetch as normal |
 
-The driver navigates/clicks the actual UI (no fragile URL templates). Captures live in the
-Turso `captures` table; offers go to the `offers` table. Parser rules per OTA: `parser_rules` table.
-NOTE: every source uses the generic regex parser (`has_custom_parser=0`) EXCEPT `settour`, whose
-Rust override `parse_settour` is now wired on (`has_custom_parser=1`). The generic parser has
-flight/hotel-specific required fields. **No source is live-verified yet** — each still needs a real
-live Chrome capture + `verify` + `parse` before its archived Python parser can be deleted. The
-migration plan + per-source checklist + decommission gate live in
-`docs/plans/2026-06-24-ota-migration-chromeport.md`. Guard: `parse capture` / `verify` now FAIL on a
-capture↔`--source` mismatch (pass `--allow-source-override` for the rare intentional re-parse).
+The bridge navigates/clicks the actual UI (no fragile URL templates). Captures live in the Turso
+`captures` table; offers go to the `offers` table; parser rules per OTA in `parser_rules`. NOTE:
+every source uses the generic regex parser (`has_custom_parser=0`) EXCEPT `settour`, whose Python
+override `parse_settour` (in gwebcdb `bridge/ota_parse.py`) is wired on (`has_custom_parser=1`); the
+generic parser has flight/hotel-specific required fields. The Phase 0 port is SHIPPED + tested
+(settour oracle parity), but **no source is live-verified end-to-end yet** — each still needs a real
+live WSLg capture + `verify` + `parse` before its archived Python parser can be deleted. Guard:
+`verify`/`parse` FAIL on a capture↔`--source` mismatch (pass `--allow-source-override` for an
+intentional re-parse). `affected_row_count==0` on parse is a real ON-CONFLICT dedup, not a failure.
 
 Full skill reference: `src/skills/scrape-ota/SKILL.md`
 
@@ -224,7 +224,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 | `/p3-flights` | `src/skills/p3-flights/SKILL.md` | Search flights separately |
 | `/p3p4-packages` | `src/skills/p3p4-packages/SKILL.md` | Search OTA packages (flight+hotel) |
 | `/p5-itinerary` | `src/skills/p5-itinerary/SKILL.md` | Build daily itinerary |
-| `/scrape-ota` | `src/skills/scrape-ota/SKILL.md` | Scrape OTA sites (chromeport CDP driver) |
+| `/scrape-ota` | `src/skills/scrape-ota/SKILL.md` | Scrape OTA sites (gwebcdb on WSLg; chromeport retired) |
 | `/separate-bookings` | `src/skills/separate-bookings/SKILL.md` | Compare package vs split booking |
 | `/booking-confirmation` | `src/skills/booking-confirmation/SKILL.md` | Post-booking verification workflow |
 | `/post-pull-fix` | `src/skills/post-pull-fix/SKILL.md` | Health checks after git pull |
@@ -259,13 +259,16 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 
 > OTA URL details and scraping patterns → `src/skills/scrape-ota/SKILL.md`
 
-### Scrapers — DECOMMISSIONED; browser layer = gwebcdb
-Python scrapers archived under `archive/broken-python-scrapers/` — never run. **OTA scraping
-routes through `gwebcdb`** — the shared WSLg-based CDP toolset is the browser layer (it picks
-WSLg|Windows backend itself, WSLg-first). `chromeport` (Rust CDP driver) is being **retired** and
-its extraction logic ported into gwebcdb as Python (see URL Routing banner + the migration plan).
-**Correction to earlier docs:** gwebcdb is NOT "read-only finance only" — it is the shared
-multi-function CDP toolset, and OTA scraping is meant to go through it, not around it.
+### Scrapers — DECOMMISSIONED; OTA pipeline lives in gwebcdb (WSLg)
+Python scrapers archived under `archive/broken-python-scrapers/` — never run. **The entire OTA
+pipeline now lives in `gwebcdb`** (`~/b/gwebcdb`): WSLg-native Chrome is the verified default
+backend, and the extraction half (`parser_rules` → verify → parse → `offers`) was ported to Python
+bridge tools (`turso_db.py`, `ota_capture.py`, `ota_parse.py`, `ota_cli.py` — Phase 0 SHIPPED).
+**`chromeport` (the old Rust CDP driver) is RETIRED** — don't run `./bin/chromeport`, repair it, or
+treat it as a fallback; WSLg replaced it because it was too fragile. The verified command recipe is
+in gwebcdb's `CLAUDE.md` ("OTA scraping — end-to-end usage"); see also the URL Routing banner above
+and `docs/plans/2026-06-24-ota-migration-chromeport.md`. gwebcdb is NOT "read-only finance only" —
+it is the shared multi-function CDP toolset, and ALL OTA scraping goes through it.
 
 ## Current Status
 
@@ -291,9 +294,10 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 # Shaping Stage (pre-plan triangle research)
 ./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2]
-# After shaping-init: scrape offers via chromeport, then import + compare:
-#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
-#   → ./bin/chromeport parse capture <capture-id> --source <id>
+# After shaping-init: scrape offers via gwebcdb (WSLg), then import + compare:
+#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
+#   → python bridge/ota_capture.py --source <id>   # → capture_id
+#   → python bridge/ota_cli.py parse <capture_id> --source <id>   # writes offers
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id>
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
@@ -308,11 +312,14 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 ./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
 ./bin/travel validate-itinerary --dest tokyo_2026
 
-# Scraping — Python scrapers DECOMMISSIONED; use the chromeport CDP driver:
-#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
-#   → ./bin/chromeport verify <source-id> <capture-id>
-#   → ./bin/chromeport parse capture <capture-id> --source <id>   # imports to Turso
-# See URL Routing + src/skills/scrape-ota/SKILL.md.
+# Scraping — Python scrapers DECOMMISSIONED + chromeport RETIRED; use gwebcdb (WSLg) from ~/b/gwebcdb:
+#   export TURSO_URL=$(grep '^TURSO_URL=' ~/b/travel-2026/.env | cut -d= -f2-)
+#   export TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ~/b/travel-2026/.env | cut -d= -f2-)
+#   ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
+#   → python bridge/ota_capture.py --source <id>            # → capture_id (UNREDACTED → captures)
+#   → python bridge/ota_cli.py verify <capture_id> --source <id>   # read-only diagnostics
+#   → python bridge/ota_cli.py parse  <capture_id> --source <id>   # imports to Turso offers
+# See URL Routing + gwebcdb CLAUDE.md "OTA scraping — end-to-end usage" + src/skills/scrape-ota/SKILL.md.
 
 # Tour-group / FIT offers (manual entry for sources without a full scraper)
 ./bin/travel import-tour-group-offers --run <run_id> --file <path>
@@ -371,7 +378,7 @@ Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI u
 │   │   ├── src/db_migrate.rs      #   inline-DDL schema migrate (1:1 port of old turso-migrate.ts)
 │   │   ├── src/cascade/           #   cascade logic (date_change, select_offer → populate P3+P4)
 │   │   └── tests/                 #   real-Turso integration tests + fixtures/
-│   ├── chromeport/                # CDP OTA capture driver (the `chromeport` binary)
+│   ├── chromeport/                # RETIRED CDP OTA driver (still builds; OTA now = gwebcdb on WSLg)
 │   └── turso-util/                # Turso token mint/cache + libsql connect + migrate runner
 ├── src/skills/                    # LIVE skill defs (SKILL.md + references) — ONLY live part of src/
 ├── archive/ts-cli-retired/        # retired TS CLI: src/ (minus skills), tests/, scripts/*.ts (read-only)
@@ -464,11 +471,11 @@ Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install h
 
 ## Next Steps
 
-**The Rust port is DONE** (commits through `88385fb`): P1 command parity, P2 scripts, P3 real-Turso integration tests, the `package.json` cutover (root npm retired), TS archived, and docs/skills converted to `./bin/travel`. ADR-001 / "StateManagerV2" is achieved by construction (the Rust CLI *is* the targeted-SQL model) — do NOT refactor the archived TS `StateManager`; that work is complete and the code is read-only under `archive/`. Don't re-port `import-offers-to-turso` (intentionally dropped; replaced by `import-offers` + chromeport `parse capture`).
+**The Rust port is DONE** (commits through `88385fb`): P1 command parity, P2 scripts, P3 real-Turso integration tests, the `package.json` cutover (root npm retired), TS archived, and docs/skills converted to `./bin/travel`. ADR-001 / "StateManagerV2" is achieved by construction (the Rust CLI *is* the targeted-SQL model) — do NOT refactor the archived TS `StateManager`; that work is complete and the code is read-only under `archive/`. Don't re-port `import-offers-to-turso` (intentionally dropped; replaced by `import-offers` + gwebcdb's `ota_cli.py parse`).
 
 Remaining agenda (none blocking — the project is between trips and the live DB is fully seeded):
 
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **Worker `workers-rs` port — DONE & DEPLOYED** (PR #4, merged to master). The Rust dashboard lives at `workers/trip-dashboard-rs/` and is live at `trip-dashboard-rs.yanggf.workers.dev` (keyless maps, token auth, meal-pin links). The old TS worker (`workers/trip-dashboard/`) still exists and still serves the original URL; the `-rs` worker is meant to eventually reclaim it (a separate cutover, not yet done). See "Trip Dashboard — two workers" below.
-- **OTA migration to chromeport** (planned, code pre-work DONE; per-source verification PENDING) — **no source is live-verified yet** (all 10 had identical seed `fetched_at` + stale captures; the earlier "settour is live-verified" claim was wrong). Plan: `docs/plans/2026-06-24-ota-migration-chromeport.md` (Codex-reviewed + corroborated). The mechanical code batch is shipped (commit `5652b65`): settour's Rust parser wired on, dead seed `source_url`s nulled, `trip`/`eztravel` source-inference, generalized `content_snippet` needles, and a capture↔source mismatch guard (`--allow-source-override` to bypass). What's LEFT is human-in-the-loop: per-source live Chrome capture + regex tuning against the G0–G6 decommission gate, then delete each archived Python parser. Tier order: FIT packages (settour first) → flights → agoda.
+- **OTA migration to gwebcdb (WSLg)** — backend DONE & VERIFIED; per-source live capture PENDING. **WSLg-native Chrome is the verified default backend** (2026-06-25: `running_backend=wslg`, CDP on :9222, bridge attached) and the **Phase 0 Python port is SHIPPED** in gwebcdb (`turso_db.py`/`ota_capture.py`/`ota_parse.py`/`ota_cli.py`; settour-oracle parity, tests pass). `chromeport` is RETIRED — don't run/repair it. What's LEFT is the agent-driven per-source sweep: live WSLg capture → `verify`/`parse` → a REAL offer in Turso (not seed-junk; the 10 stored captures are seed shells), tuned against the G0–G6 decommission gate, then delete each archived Python parser. Resume at the 5 GET-param sources (liontravel/eztravel/agoda/trip/google_flights). Recipe: gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
 - **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.
