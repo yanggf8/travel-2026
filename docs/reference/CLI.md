@@ -93,6 +93,8 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 ./bin/travel share-token                          # mint a NEW per-plan view token + print its ready-to-open dashboard URL
 ./bin/travel share-token --show                   # LIST the plan's existing token(s) + URL (read-only, no mint) — use this to re-find a URL
 #   URL host defaults to trip-dashboard-rs.yanggf.workers.dev; override with TRAVEL_DASHBOARD_HOST (e.g. after the primary-URL cutover)
+#   After minting: logged-in owner can also copy the viewer URL from the plan page UI (Copy share link button on /?plan=<slug>).
+#   Recipients open the copied link logged-out — no GitHub login. Plan: docs/plans/2026-06-25-dashboard-share-link-copy.md
 
 # Route maps (per-day + plan PNGs: numbered markers + route polyline, auto-framed; chromeport→Leaflet→R2).
 ./bin/travel snapshot-maps [--dest <slug>]        # (re)capture + upload the route-map PNGs (wraps scripts/snapshot-maps.sh). Needs Chrome at the chromeport CDP endpoint + wrangler auth.

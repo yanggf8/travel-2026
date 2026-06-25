@@ -4,7 +4,7 @@
 
 ## Go / no-go
 
-**GO** — implement per `docs/plans/2026-06-25-dashboard-share-link-copy.md`.
+**SHIPPED** 2026-06-25 — commit `747fa40`, deployed to `trip-dashboard-rs.yanggf.workers.dev`.
 
 ## Resolved questions
 

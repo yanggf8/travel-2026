@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-25  
 **Worker:** `workers/trip-dashboard-rs/`  
-**Status:** Design approved; Codex + Claude reviewed; implementation written; pending code review + deploy
+**Status:** DEPLOYED 2026-06-25 — commit `747fa40`, worker version `3b182c83-bfb6-4281-acea-97ed1eacf271` at `trip-dashboard-rs.yanggf.workers.dev`
 
 ## Goal
 
@@ -138,3 +138,9 @@ Key refinements incorporated above: dual maps, `or_insert` for newest token, nev
 **Verdict:** GO with plan amendments. See `.review/claude-review.md`.
 
 Amendments adopted: soften “newest token” to second-granularity; dual-map insert split (auth `insert` vs copy `or_insert`); copy button for logged-in owner only.
+
+## Implementation review (2026-06-25)
+
+Codex + Claude implementation review: **GO**. See `.review/impl-review-summary.md`, `.review/claude-impl-review.md`.
+
+Post-review hardening: auth map stores hyphenated slug (underscore `plan_id` rows safe). Root `.gitignore` excludes `.wrangler/`.

@@ -44,13 +44,8 @@ Full reports: `.review/codex-impl-review.md`, `.review/codex-impl-review-summary
 | Underscore plan_id edge case | IMPORTANT | Not flagged | Codex stricter |
 | `.wrangler/` commit hygiene | P2 | IMPORTANT | Yes |
 
-## Deploy recommendation
+## Deploy
 
-**GO** — implementation matches your flow. Before commit:
+**DONE** 2026-06-25 — `trip-dashboard-rs.yanggf.workers.dev`, commit `747fa40`, worker version `3b182c83-bfb6-4281-acea-97ed1eacf271`.
 
-1. Do not add `.wrangler/` to git
-2. Optional hardening: normalize `plan_id` to hyphen slug in auth map (defense if underscore rows ever appear)
-
-```bash
-cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
-```
+Pre-ship fixes applied: hyphen slug in auth map; root `.gitignore` for `.wrangler/`.
