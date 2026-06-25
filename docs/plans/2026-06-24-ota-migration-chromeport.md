@@ -20,10 +20,12 @@ live and delete its archived Python scraper.
 > (`form_fill.py --confirm`) → click Search (`form_click.py --confirm`) → capture (`ota_capture.py`)
 > → parse/verify (`ota_cli.py`) → tune the `parser_rules` regex if `verify` flags MISSING → re-run
 > → G0–G6 decommission gate → delete the archived Python parser. The agent only WARNS the user to
-> act on a genuine blocker: (a) Chrome not running on :9222 (one-time
-> `gwebcdb/scripts/start-chrome-cdp-wslg.sh` — the agent can't start a display session), (b) a login
-> wall (`login_assist` / the user signs in once, session persists in the profile), or (c) a captcha
-> (skyscanner-class — skip + flag). The Rust `chromeport` binary is superseded but not yet archived.
+> act on a genuine blocker: (a) a login wall (`login_assist` / the user signs in once, session
+> persists in the profile), or (b) a captcha (skyscanner-class — skip + flag). **The agent CAN start
+> Chrome itself** — `bash gwebcdb/scripts/start-chrome-cdp-wslg.sh` (no sudo; WSLg DISPLAY=:0 is
+> present) brings up headed Chrome on :9222 in ~3s; it is NOT a human step (an earlier doc wrongly
+> said "the agent can't start a display session" — proven false 2026-06-25). The Rust `chromeport`
+> binary is superseded but not yet archived.
 >
 > **Autonomous readiness check (2026-06-25, agent-run against existing captures):** 7/10 sources
 > parse cleanly through the new pipeline (settour/liontravel/lifetour/travel4u/tigerair/agoda — all
