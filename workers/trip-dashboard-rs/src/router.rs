@@ -4,7 +4,7 @@
 //! and the page already links to them; gating them would just add latency).
 
 use crate::{auth, model, render, turso};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -86,7 +86,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
             return match gho::callback(&req, &env, &cfg, &url).await? {
                 CallbackOutcome::Authorized(r) => Ok(r),
                 CallbackOutcome::BadState(r) => Ok(r),
-                CallbackOutcome::Denied { login, .. } => Ok(Response::from_html(
+                CallbackOutcome::Denied { login, .. } => Ok(html_no_store(
                     render::auth::not_authorized_page(&login, lang),
                 )?
                 .with_status(403)),
@@ -190,7 +190,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
     // Index — owner only.
     if path == "/" && query.get("plan").is_none() {
         if scope != auth::AccessScope::Owner {
-            return Ok(Response::from_html(render::auth::sign_in_page(lang))?);
+            return html_no_store(render::auth::sign_in_page(lang));
         }
         let plans = turso::pipeline(
             &turso_url,
@@ -222,15 +222,16 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
             render::index::render(&rows, &grants, &public_origin, &csrf, lang),
             render::share::COPY_SCRIPT,
         );
-        return Response::from_html(render::page("Plans", &body, lang));
+        return html_no_store(render::page("Plans", &body, lang));
     }
 
     // Single plan view.
     if let Some(slug) = query.get("plan") {
         if !auth::can_view_plan(&scope, slug) {
             let login_href = owner_login_href_for_plan(slug, lang);
-            return Response::from_html(render::auth::bad_share_page(&login_href, lang))
-                .map(|r| r.with_status(403));
+            return Ok(
+                html_no_store(render::auth::bad_share_page(&login_href, lang))?.with_status(403),
+            );
         }
         let plan = load_plan(&turso_url, &turso_token, slug).await?;
         let map_status = check_map_status(&env, &plan.plan_id, &plan.days).await?;
@@ -252,7 +253,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         } else {
             String::new()
         };
-        return Response::from_html(render::render_plan(
+        return html_no_store(render::render_plan(
             &plan,
             lang,
             token,
@@ -261,7 +262,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         ));
     }
 
-    Ok(Response::from_html(render::auth::sign_in_page(lang))?)
+    html_no_store(render::auth::sign_in_page(lang))
 }
 
 /// The pure outcome of validating a grant POST, decoupled from Worker I/O.
@@ -529,13 +530,11 @@ async fn check_map_status(
 }
 
 async fn r2_has_valid_map(bucket: &worker::Bucket, key: &str) -> Result<bool> {
-    if let Some(obj) = bucket.get(key).execute().await? {
-        if let Some(body) = obj.body() {
-            let bytes = body.bytes().await?;
-            return Ok(render::map::is_valid_map_png(&bytes));
-        }
-    }
-    Ok(false)
+    Ok(bucket
+        .head(key)
+        .await?
+        .map(|obj| obj.size() as usize > render::map::MIN_MAP_PNG_BYTES)
+        .unwrap_or(false))
 }
 
 fn serve_placeholder() -> Result<Response> {
@@ -543,6 +542,12 @@ fn serve_placeholder() -> Result<Response> {
     h.set("Content-Type", "image/png")?;
     h.set("Cache-Control", "public, max-age=300")?;
     Ok(Response::from_bytes(PLACEHOLDER_PNG.to_vec())?.with_headers(h))
+}
+
+fn html_no_store(body: String) -> Result<Response> {
+    let h = Headers::new();
+    h.set("Cache-Control", "private, no-store")?;
+    Ok(Response::from_html(body)?.with_headers(h))
 }
 
 /// Reject anything that is not `[a-z0-9_-]+`. The slug is interpolated into SQL

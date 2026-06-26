@@ -260,10 +260,10 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "share-token" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel share-token          mint a new per-plan view-scope token + print its dashboard URL\n  travel share-token --show   list the plan's existing token(s) + URL (read-only, no mint)\n  (plan resolved from $TRAVEL_PLAN_ID; URL host overridable via TRAVEL_DASHBOARD_HOST)");
+                println!("Usage:\n  travel share-token                         mint a new per-plan view-scope token + print its dashboard URL\n  travel share-token --show                  list token fingerprints/status (read-only)\n  travel share-token --show-full             list full token URLs (sensitive)\n  travel share-token deactivate <token>      deactivate an active token\n  (plan resolved by --plan-id / $TRAVEL_PLAN_ID / --dest/date fallbacks; URL host overridable via TRAVEL_DASHBOARD_HOST)");
                 return Ok(());
             }
-            let plan_id = env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             share_token::run(rest, plan_id).await?;
             Ok(())
         }

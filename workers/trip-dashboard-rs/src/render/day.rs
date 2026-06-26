@@ -1,4 +1,4 @@
-use super::{esc, session};
+use super::{esc, render_activity_text, session};
 use crate::model::{Day, RouteSegment};
 
 /// "What to wear" tips, banded by temperature so it works for both cold-season
@@ -174,7 +174,7 @@ fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
         }
         h.push_str(&format!(" · ~{} min", seg.duration_min));
         if !seg.notes.is_empty() {
-            h.push_str(&format!(" · {}", esc(&seg.notes)));
+            h.push_str(&format!(" · {}", render_activity_text(&seg.notes)));
         }
         h.push_str("</div>");
     }
@@ -255,6 +255,37 @@ mod tests {
         assert!(html.contains("🚗"));
         assert!(html.contains("~12 min"));
     }
+
+    #[test]
+    fn route_note_embedded_map_url_becomes_labeled_link() {
+        let day = Day {
+            day_number: 1,
+            date: "2026-06-12".into(),
+            day_type: "arrival".into(),
+            route_segments: vec![RouteSegment {
+                from_place: "紅樹林".into(),
+                to_place: "大園出國停車場第三停車場".into(),
+                mode: "driving".into(),
+                duration_min: 60,
+                start_time: "04:00".into(),
+                notes: "地址：桃園市大園區中山南路544號旁 Google Maps 導航：https://www.google.com/maps/dir/%E6%96%B0%E5%8C%97/%E6%A1%83%E5%9C%92".into(),
+            }],
+            ..Default::default()
+        };
+        let html = render(&day, "okinawa-2026", "zh", false);
+        assert!(html.contains("🗺️ Google Maps 導航"), "got: {html}");
+        assert!(
+            html.contains(
+                "<a href=\"https://www.google.com/maps/dir/%E6%96%B0%E5%8C%97/%E6%A1%83%E5%9C%92\""
+            ),
+            "got: {html}"
+        );
+        assert!(
+            !html.contains(">https://www.google.com/maps/dir/"),
+            "got: {html}"
+        );
+    }
+
     #[test]
     fn renders_zh_theme_and_sessions() {
         let day = Day {

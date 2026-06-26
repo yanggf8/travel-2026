@@ -324,8 +324,9 @@ Traditional Chinese:
    - Add create/deactivate POST handlers.
 5. CLI:
    - Keep `travel share-token` for emergency/manual minting.
-   - Update `--show` to show active/inactive status.
-   - Optional: add `share-token deactivate <token>`.
+   - `--show` prints token fingerprints + active/inactive status by default.
+   - `--show-full` prints full bearer URLs when a URL must be re-copied.
+   - `share-token deactivate <token>` marks an active token inactive.
 6. Deploy:
    - Deploy migration.
    - Put `TURSO_WRITE_TOKEN`.

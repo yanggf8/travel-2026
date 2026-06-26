@@ -5,15 +5,14 @@
 //! This is a faithful port of the JS worker's `renderActivityText()`
 //! (`workers/trip-dashboard/src/render.ts`), which the user has validated by
 //! hand. The JS does, in order, on the RAW activity text:
-//!   1. If it already contains `<span` → return as-is (already HTML).
-//!   2. esc() the text (`& < > "`).
-//!   3. Collapse a `\n` that immediately precedes a "label：<url>" map tail
+//!   1. esc() the text (`& < > "`).
+//!   2. Collapse a `\n` that immediately precedes a "label：<url>" map tail
 //!      into two spaces, so the map link stays inline (not its own line).
-//!   4. Convert the remaining `\n` → `<br>`.
-//!   5. A labeled link "Google Maps 導航：<url>" / "地圖：<url>" / "Map: <url>"
+//!   3. Convert the remaining `\n` → `<br>`.
+//!   4. A labeled link "Google Maps 導航：<url>" / "地圖：<url>" / "Map: <url>"
 //!      renders as `<a href="<url>">🗺️ <label></a>` — the LABEL is the
 //!      clickable text, NOT the giant URL.
-//!   6. Any remaining bare URL → linkify with the URL as its own text.
+//!   5. Any remaining bare URL → linkify with the URL as its own text.
 //!
 //! WHY HAND-ROLLED (not the `regex` crate): the worker is a wasm binary built
 //! with `opt-level = "s"` + LTO to stay small; pulling in `regex` would add its
@@ -40,15 +39,11 @@ const LABELS: &[&str] = &[
 
 /// Render activity text → safe HTML. See module docs for the ported algorithm.
 pub fn render_activity_text(text: &str) -> String {
-    // (1) already HTML → pass through untouched.
-    if text.contains("<span") {
-        return text.to_string();
-    }
-    // (2) escape, then (3) collapse the pre-map-tail newline, then (4) \n→<br>.
+    // Escape first so stored itinerary text can never inject HTML.
     let escaped = esc(text);
     let collapsed = collapse_pre_label_newlines(&escaped);
     let with_breaks = collapsed.replace('\n', "<br>");
-    // (5) labeled links, then (6) bare-URL linkify outside existing anchors.
+    // Labeled links, then bare-URL linkify outside existing anchors.
     let labeled = linkify_labeled(&with_breaks);
     linkify_bare_urls_outside_anchors(&labeled)
 }
@@ -235,9 +230,14 @@ fn linkify_bare_urls(seg: &str) -> String {
                 i += 1;
             }
             let url: String = c[start..i].iter().collect();
+            let text = if is_google_maps_url(&url) {
+                "🗺️ Google Maps"
+            } else {
+                &url
+            };
             out.push_str(&format!(
                 "<a href=\"{}\" target=\"_blank\" rel=\"noopener\" style=\"{}\">{}</a>",
-                url, LINK_STYLE, url
+                url, LINK_STYLE, text
             ));
         } else {
             out.push(c[i]);
@@ -245,6 +245,10 @@ fn linkify_bare_urls(seg: &str) -> String {
         }
     }
     out
+}
+
+fn is_google_maps_url(url: &str) -> bool {
+    url.contains("google.com/maps") || url.contains("maps.google") || url.contains("/maps/")
 }
 
 #[cfg(test)]
@@ -283,17 +287,34 @@ mod tests {
         assert!(out.starts_with("see "), "got: {out}");
     }
 
+    #[test]
+    fn bare_google_maps_url_is_linkified_with_short_label() {
+        let out = render_activity_text("see https://www.google.com/maps/search/Asatoya");
+        assert!(
+            out.contains("<a href=\"https://www.google.com/maps/search/Asatoya\""),
+            "got: {out}"
+        );
+        assert!(out.contains(">🗺️ Google Maps</a>"), "got: {out}");
+        assert!(
+            !out.contains(">https://www.google.com/maps/search/"),
+            "got: {out}"
+        );
+    }
+
     // (d) multi-line "a\nb" → a<br>b.
     #[test]
     fn newlines_become_br() {
         assert_eq!(render_activity_text("a\nb"), "a<br>b");
     }
 
-    // (e) text already containing <span → returned unchanged.
+    // (e) stored HTML-like text is escaped, never passed through.
     #[test]
-    fn already_html_passthrough() {
+    fn stored_html_is_escaped() {
         let html = "<span class=\"x\">已是 HTML</span>";
-        assert_eq!(render_activity_text(html), html);
+        assert_eq!(
+            render_activity_text(html),
+            "&lt;span class=&quot;x&quot;&gt;已是 HTML&lt;/span&gt;"
+        );
     }
 
     // The real okinawa pattern: a driving leg with an embedded dir URL after 導航.

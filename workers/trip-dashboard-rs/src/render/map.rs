@@ -1,4 +1,4 @@
-use super::{esc, esc_url_attr};
+use super::{esc, esc_url_attr, render_activity_text};
 use crate::i18n;
 use crate::model::Stop;
 use std::collections::HashMap;
@@ -104,12 +104,18 @@ pub fn stop_list(stops: &[Stop]) -> String {
         // search-link fallback because the activity text already carries an inline
         // map link. Render the stop name as plain text (no dead/garbage anchor).
         if s.maps_link.is_empty() {
-            h.push_str(&format!("<li>{}{}{}</li>", esc(&s.title), addr, price));
+            h.push_str(&format!(
+                "<li>{}{}{}</li>",
+                render_activity_text(&s.title),
+                addr,
+                price
+            ));
         } else {
+            let title = stop_visible_title(&s.title);
             h.push_str(&format!(
                 "<li><a href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>{}{}</li>",
                 esc_url_attr(&s.maps_link),
-                esc(&s.title),
+                esc(&title),
                 addr,
                 price
             ));
@@ -117,6 +123,20 @@ pub fn stop_list(stops: &[Stop]) -> String {
     }
     h.push_str("</ul>");
     h
+}
+
+fn stop_visible_title(title: &str) -> String {
+    let bytes = title.as_bytes();
+    let needle = b"google maps";
+    if bytes.len() < needle.len() {
+        return title.trim().to_string();
+    }
+    for i in 0..=bytes.len().saturating_sub(needle.len()) {
+        if bytes[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            return title[..i].trim().to_string();
+        }
+    }
+    title.trim().to_string()
 }
 
 #[cfg(test)]
@@ -134,6 +154,49 @@ mod tests {
         let h = stop_list(&stops);
         assert!(h.contains("q=26.2,127.6"));
         assert!(h.contains("Naminoue"));
+    }
+
+    #[test]
+    fn stop_list_plain_embedded_maps_url_renders_short_label() {
+        let stops = vec![Stop {
+            title:
+                "午餐（實際）：安里屋すば\nGoogle Maps：https://www.google.com/maps/search/asatoya"
+                    .into(),
+            maps_link: "".into(),
+            ..Default::default()
+        }];
+        let h = stop_list(&stops);
+        assert!(h.contains("🗺️ Google Maps"), "got: {h}");
+        assert!(
+            !h.contains(">https://www.google.com/maps/search/"),
+            "got: {h}"
+        );
+    }
+
+    #[test]
+    fn stop_list_linked_stop_strips_embedded_maps_url_from_label() {
+        let stops = vec![Stop {
+            title: "DMM かりゆし水族館\nGoogle Maps：https://www.google.com/maps/search/dmm".into(),
+            maps_link: "https://www.google.com/maps?q=26.156,127.650".into(),
+            ..Default::default()
+        }];
+        let h = stop_list(&stops);
+        assert!(h.contains(">DMM かりゆし水族館</a>"), "got: {h}");
+        assert!(!h.contains("Google Maps："), "got: {h}");
+        assert!(!h.contains("search/dmm"), "got: {h}");
+    }
+
+    #[test]
+    fn stop_list_linked_stop_strip_is_safe_with_non_ascii_before_google_maps() {
+        let stops = vec![Stop {
+            title: "İ午餐：安里屋すば\nGoogle Maps：https://www.google.com/maps/search/asatoya"
+                .into(),
+            maps_link: "https://www.google.com/maps?q=26.217,127.696".into(),
+            ..Default::default()
+        }];
+        let h = stop_list(&stops);
+        assert!(h.contains(">İ午餐：安里屋すば</a>"), "got: {h}");
+        assert!(!h.contains("maps/search/asatoya"), "got: {h}");
     }
 
     #[test]

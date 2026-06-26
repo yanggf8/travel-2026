@@ -35,7 +35,10 @@ pub fn render_meal(meal: &str) -> String {
             }
             h
         }
-        None => format!("<div class=\"meal\">🍽️ {}</div>", esc(meal)),
+        None => format!(
+            "<div class=\"meal\">🍽️ {}</div>",
+            render_activity_text(meal)
+        ),
     }
 }
 
@@ -278,6 +281,30 @@ mod tests {
         let out = render_meal("Hotel breakfast");
         assert_eq!(out, "<div class=\"meal\">🍽️ Hotel breakfast</div>");
         assert!(!out.contains("<a "), "got: {out}");
+    }
+
+    #[test]
+    fn meal_embedded_google_maps_url_becomes_labeled_link() {
+        let out = render_meal("午餐（實際）：安里屋すば（Asatoya Suba・沖繩そば・安里・飯店附近） Google Maps：https://www.google.com/maps/search/%E5%AE%89%E9%87%8C%E5%B1%8B%E3%81%99%E3%81%B0%20%E9%82%A3%E8%A6%87%20%E5%AE%89%E9%87%8C");
+        assert!(out.contains("🗺️ Google Maps"), "got: {out}");
+        assert!(
+            out.contains("<a href=\"https://www.google.com/maps/search/%E5%AE%89%E9%87%8C"),
+            "got: {out}"
+        );
+        assert!(
+            !out.contains(">https://www.google.com/maps/search/"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn meal_bare_google_maps_url_becomes_short_map_link() {
+        let out = render_meal("Lunch https://www.google.com/maps/search/Asatoya");
+        assert!(out.contains(">🗺️ Google Maps</a>"), "got: {out}");
+        assert!(
+            !out.contains(">https://www.google.com/maps/search/"),
+            "got: {out}"
+        );
     }
 
     // esc/esc_url_attr: a meal label with &/< escapes ONCE in the visible text;

@@ -185,7 +185,7 @@ pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
 
 /// Agent-first hook for `doctor`: dashboard activity-title map-link warnings
 /// from the dashboard branch. Kept narrow so generic advisory map-link warnings
-/// still stay in `validate-itinerary`, while this known broken-render shape is
+/// still stay in `validate-itinerary`, while this renderer-dependent shape is
 /// surfaced by doctor as before.
 pub async fn malformed_map_link_warnings(plan_id: &str) -> Vec<(i64, String)> {
     collect_map_link_issues(plan_id)
@@ -255,8 +255,8 @@ fn validate(days: &[DaySummary]) -> Vec<Issue> {
 //   4. an ambiguous bare-name stop (e.g. 安里 with no 駅/站/Station and no spelled-out
 //      city) that Maps can't geolocate reliably. (info)
 fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
-    // Dashboard branch guard: a multi-line activity title with an embedded URL
-    // becomes a malformed Maps search query unless rendered as rich text.
+    // Dashboard branch guard: multi-line activity text with an embedded URL
+    // depends on the rich renderer to avoid raw/expanded Maps URLs.
     for a in &day.activities {
         if is_malformed_map_text(&a.title) {
             out.push(Issue {
@@ -264,11 +264,11 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
                 day: Some(day.day_number),
                 session: Some(a.session.clone()),
                 message: format!(
-                    "activity text has embedded URL + newlines — will produce a malformed map link; ensure the worker uses render_activity_text: \"{}\"",
+                    "activity text has embedded URL + newlines — requires deployed render_activity_text to avoid an expanded/raw map URL: \"{}\"",
                     truncate(&a.title, 50)
                 ),
                 suggestion: Some(
-                    "The worker's render_activity_text turns the embedded \"Google Maps：<url>\" tail into a clean labeled link; verify the dashboard is deployed with it.".to_string(),
+                    "The Rust worker's render_activity_text turns the embedded \"Google Maps：<url>\" tail into a clean labeled link; verify deployed pages use that renderer.".to_string(),
                 ),
             });
         }
@@ -401,6 +401,22 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
     // (5) meal-pin coverage: a lunch/dinner meal with no map pin (｜map:<q> marker
     // or an embedded URL) renders as a plain pill with no "where is it" link.
     for meal in &day.meals {
+        if !crate::checks::extract_map_urls(&meal.text).is_empty()
+            && !has_meal_map_marker(&meal.text)
+        {
+            out.push(Issue {
+                severity: Severity::Warning,
+                day: Some(day.day_number),
+                session: Some(meal.session.clone()),
+                message: format!(
+                    "Meal embeds a raw Google Maps URL and needs short-label rendering: \"{}\"",
+                    truncate(&meal.text, 50)
+                ),
+                suggestion: Some(
+                    "Prefer the structured form \"<label>｜map:<place>\" or verify the dashboard build renders meal URLs through render_activity_text.".to_string(),
+                ),
+            });
+        }
         if !crate::checks::meal_has_pin(&meal.text) {
             out.push(Issue {
                 severity: Severity::Info,
@@ -521,13 +537,18 @@ fn is_ambiguous_stop(s: &str) -> bool {
     s.chars().count() <= 4
 }
 
-/// The malformed-map-link predicate: text that will become a Google-Maps
-/// `search` link is malformed when it contains BOTH a newline AND an embedded
-/// http(s) URL (the multi-line-blob-with-nested-URL pattern). Pure + testable.
+/// Renderer-dependent map-text predicate: text with BOTH a newline AND an
+/// embedded http(s) URL needs render_activity_text. Newline alone is fine; URL
+/// alone is fine. Pure + testable.
 fn is_malformed_map_text(text: &str) -> bool {
     let has_newline = text.contains('\n');
     let has_url = text.contains("http://") || text.contains("https://");
     has_newline && has_url
+}
+
+fn has_meal_map_marker(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("\u{FF5C}map:") || lower.contains("|map:")
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1371,6 +1392,39 @@ mod map_link_tests {
         let mut out = Vec::new();
         validate_map_links(&day, &mut out);
         assert!(out.is_empty(), "clean activities must not warn, got {} issues", out.len());
+    }
+
+    #[test]
+    fn lint_accepts_structured_meal_map_marker() {
+        let mut day = empty_day();
+        day.meals = vec![MealEntry {
+            session: "noon".into(),
+            text: "午餐：安里屋すば｜map:安里屋すば 那覇 安里".into(),
+        }];
+        let mut out = Vec::new();
+        validate_map_links(&day, &mut out);
+        assert!(
+            !out.iter().any(|i| i.message.contains("raw Google Maps URL")),
+            "structured marker should not warn as raw maps URL: {:?}",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn lint_warns_on_raw_maps_url_in_meal() {
+        let mut day = empty_day();
+        day.meals = vec![MealEntry {
+            session: "noon".into(),
+            text: "午餐：安里屋すば Google Maps：https://www.google.com/maps/search/asatoya".into(),
+        }];
+        let mut out = Vec::new();
+        validate_map_links(&day, &mut out);
+        assert!(
+            out.iter()
+                .any(|i| matches!(i.severity, Severity::Warning)
+                    && i.message.contains("raw Google Maps URL")),
+            "raw Google Maps meal URL should warn"
+        );
     }
 
     #[test]

@@ -98,11 +98,7 @@ fn rs(row: &Row, k: &str) -> String {
 
 fn opt(row: &Row, k: &str) -> Option<String> {
     let s = rs(row, k);
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Shareable viewer URL (view-scope token only — never owner secret or session).
@@ -159,10 +155,13 @@ pub fn owner_plan_chrome(
 }
 
 pub fn token_fingerprint(token: &str) -> String {
-    if token.len() <= 12 {
+    let chars: Vec<char> = token.chars().collect();
+    if chars.len() <= 12 {
         return token.to_string();
     }
-    format!("{}...{}", &token[..6], &token[token.len() - 6..])
+    let head: String = chars.iter().take(6).collect();
+    let tail: String = chars[chars.len() - 6..].iter().collect();
+    format!("{head}...{tail}")
 }
 
 #[cfg(test)]
@@ -268,5 +267,14 @@ mod tests {
             Some("okinawa-2026")
         );
         assert_eq!(maps.plan_to_current["okinawa-2026"].token, "abc");
+    }
+
+    #[test]
+    fn token_fingerprint_is_unicode_safe() {
+        assert_eq!(token_fingerprint("abcdef0123456789"), "abcdef...456789");
+        assert_eq!(
+            token_fingerprint("短短短短短短短短短短短短短"),
+            "短短短短短短...短短短短短短"
+        );
     }
 }

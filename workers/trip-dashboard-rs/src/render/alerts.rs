@@ -30,25 +30,25 @@ pub fn is_meal_title(title: &str) -> bool {
 }
 
 /// Split an activity title into `(visible_title, embedded_maps_url)` by stripping
-/// a trailing `"\nGoogle Maps：<url>"` line (full-width `：` or ASCII `:`, the
-/// `Google Maps` keyword case-insensitive). Port of render.ts:1264-1266.
+/// a trailing `"Google Maps：<url>"` tail (full-width `：` or ASCII `:`, same-line
+/// or newline-separated, keyword case-insensitive).
 ///
 /// Returns the cleaned, trimmed title and `Some(url)` when a maps URL was found.
 fn strip_embedded_maps(raw: &str) -> (String, Option<String>) {
-    // Scan each LINE of the raw string directly (no lowercased copy → no
-    // byte-offset misalignment when a char's lowercase form changes its byte
-    // length, e.g. İ→i̇ / ẞ→ss). `match_indices('\n')` yields valid char
-    // boundaries in `raw` itself, so the slices below are always safe.
-    let needle = "google maps";
-    for (nl, _) in raw.match_indices('\n') {
-        // The line content starts right after the newline; skip leading spaces.
-        let line = &raw[nl + 1..];
-        if line.trim_start().to_lowercase().starts_with(needle) {
-            // Everything from the newline onward is the embedded tail → drop it.
-            let visible = raw[..nl].trim().to_string();
-            // Pull a URL out of the tail (after `：`/`:`), if present.
-            let url = extract_maps_url(line);
-            return (visible, url);
+    // Scan raw char-boundary offsets directly (no lowercased copy → no byte
+    // offset misalignment when a char's lowercase form changes byte length).
+    let bytes = raw.as_bytes();
+    let needle = b"google maps";
+    for (i, _) in raw.char_indices() {
+        if bytes[i..].len() < needle.len() {
+            continue;
+        }
+        if !bytes[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            continue;
+        }
+        let tail = &raw[i..];
+        if let Some(url) = extract_maps_url(tail) {
+            return (raw[..i].trim().to_string(), Some(url));
         }
     }
     (raw.trim().to_string(), None)
@@ -376,6 +376,17 @@ mod tests {
         );
     }
     #[test]
+    fn strip_embedded_maps_same_line_tail() {
+        let raw =
+            "午餐（實際）：安里屋すば Google Maps：https://www.google.com/maps/search/asatoya";
+        let (title, url) = strip_embedded_maps(raw);
+        assert_eq!(title, "午餐（實際）：安里屋すば");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://www.google.com/maps/search/asatoya")
+        );
+    }
+    #[test]
     fn strip_embedded_maps_none_when_absent() {
         let (title, url) = strip_embedded_maps("Plain Title");
         assert_eq!(title, "Plain Title");
@@ -551,6 +562,29 @@ mod tests {
         assert!(
             !html.contains("should-not-win"),
             "embedded URL must win; got: {html}"
+        );
+    }
+    #[test]
+    fn same_line_embedded_maps_url_is_stripped_from_alert_title() {
+        let now = parse_iso_date_millis("2026-06-22").unwrap();
+        let plan = plan_with(vec![pending(
+            "午餐（實際）：安里屋すば Google Maps：https://www.google.com/maps/search/asatoya",
+            "2026-12-01",
+            "",
+        )]);
+        let html = render_pending_alerts_with(&plan, "zh", true, || now);
+        assert!(
+            html.contains("<strong>午餐（實際）：安里屋すば</strong>"),
+            "got: {html}"
+        );
+        assert!(!html.contains("Google Maps："), "got: {html}");
+        assert!(
+            !html.contains(">https://www.google.com/maps/search/"),
+            "got: {html}"
+        );
+        assert!(
+            html.contains("href=\"https://www.google.com/maps/search/asatoya\""),
+            "got: {html}"
         );
     }
     #[test]
