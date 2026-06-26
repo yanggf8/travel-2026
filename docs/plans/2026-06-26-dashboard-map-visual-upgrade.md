@@ -1,7 +1,16 @@
 # Dashboard Route Maps — Visual Upgrade (catch up to Wanderlog)
 
-Status: **TIER 1 IMPLEMENTED (code, 2026-06-26); live visual confirmation PENDING.** Tier 2/3 not
-started.
+Status: **TIER 1 COMPLETE (code + live visual confirmation, 2026-06-26).** Tier 2/3 not started.
+Acceptance verified on `okinawa-2026`: (a/b) all 6 keys (`plan.png` + `day-1..5.png`) wrote
+`map_artifacts status=uploaded` with byte_size ≫ MIN_PNG_BYTES and passed the PNG magic/size guard
+(`check-maps-fresh` = 6/6 ok, fresh); (visual) the generated HTML asserts all Tier-1 elements
+(CARTO `light_all`, `L.control.scale`, `dashArray:'6,8'` + white casing, teardrop SVG with
+`iconAnchor:[14,40]`, `.credit` div), AND the live R2 PNGs were inspected: muted CARTO Positron
+basemap, day-colored numbered teardrop pins anchored at the tip, dashed-cased route, metric scale
+bar, burned-in © credit — and the plan overview draws each day as its OWN colored route (not
+chained). The retired-chromeport-on-:9222 dependency this note flagged is RESOLVED: snapshot-maps.sh
+now self-acquires an isolated, persistent Chrome via the gwebcdb per-agent allocator (travel-2026
+commit 758b3da).
 Reviewed by Codex (gpt-5.5, 2026-06-26); all 10 findings + 4 gotchas **corroborated against
 source** (router.rs:44/51/54, map.rs:51, db_migrate.rs:319/341, check_maps_fresh.rs:25,
 snapshot-maps.sh:173/190/191/198/214) and folded in below. Tier 1's *approach* is sound and
@@ -18,11 +27,11 @@ CARTO `{r}` token stays a literal Leaflet template (not shell-expanded) while `$
 `${arr}` / `attributionControl:false` / `MAP_READY` / the screenshot call / the fail-loud PNG guard
 are all untouched. **Delegation note:** assigned to `grok-composer-2.5-fast` via `--prompt-file`,
 which hit the documented single-turn failure (narrated the change, wrote zero files) — applied the
-verbatim spec by hand instead. **Still PENDING (agent-driven):** the agent re-runs the snapshot and
-self-verifies the `okinawa-2026` captures — this artifact is for the dashboard/agent pipeline, not a
-human eyeball. The agent escalates to the user ONLY on a real blocker (no Chrome on `:9222`, capture
-fails the PNG guard). That re-run needs Chrome on `:9222` via `./bin/chromeport` — the retired-tool
-dependency this plan flags below.
+verbatim spec by hand instead. **DONE (agent-driven, 2026-06-26):** the agent re-ran the snapshot
+and self-verified the `okinawa-2026` captures — 6/6 PNGs uploaded + passed the guard, HTML asserts
+all Tier-1 elements, live R2 PNGs visually confirm the deltas (see Status above). The old "needs
+Chrome on `:9222` via `./bin/chromeport`" blocker is RESOLVED: snapshot-maps.sh self-acquires an
+isolated, persistent Chrome via the gwebcdb per-agent allocator (commit 758b3da).
 
 Scope owner: `scripts/snapshot-maps.sh` (the keyless static-PNG map renderer).
 
