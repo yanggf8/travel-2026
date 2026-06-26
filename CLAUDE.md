@@ -242,18 +242,18 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 
 | Source ID | Name | Type | Status |
 |-----------|------|------|--------|
-| `besttour` | 喜鴻假期 | package | ✅ scraper |
-| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ scraper |
-| `lifetour` | 五福旅遊 | package, flight, hotel | ✅ scraper |
-| `settour` | 東南旅遊 | package, flight, hotel | ✅ scraper |
-| `trip` | Trip.com | flight | ⚠️ scrape-only |
-| `booking` | Booking.com | hotel | ⚠️ scrape-only |
-| `tigerair` | 台灣虎航 | flight | ✅ scraper |
-| `agoda` | Agoda | hotel | ✅ scraper |
-| `google_flights` | Google Flights | flight | ✅ scraper |
-| `eztravel` | 易遊網 | flight | ✅ scraper |
-| `travel4u` | 山富旅遊 | package | ✅ scraper |
-| `skyscanner` | Skyscanner | flight | ❌ captcha |
+| `besttour` | 喜鴻假期 | package | ✅ active — needs real listing URL |
+| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ active — ⛔ renderer-wedge (WSLg), parked |
+| `lifetour` | 五福旅遊 | package, flight, hotel | ✅ active — ⛔ renderer-wedge (WSLg), parked |
+| `settour` | 東南旅遊 | package, flight, hotel | ✅ active — SPA, custom parser |
+| `trip` | Trip.com | flight | ⚠️ scrape-only (login wall) |
+| `booking` | Booking.com | hotel | ❌ cloudflare (inactive) |
+| `tigerair` | 台灣虎航 | flight | ✅ active — form-only (no deep-link) |
+| `agoda` | Agoda | hotel | ✅ PROVEN REAL (2026-06-26) |
+| `google_flights` | Google Flights | flight | ✅ PROVEN REAL (2026-06-26) |
+| `eztravel` | 易遊網 | package (機加酒) | ✅ PROVEN REAL (2026-06-26) |
+| `travel4u` | 山富旅遊 | package | ✅ active — needs numeric area_code |
+| `skyscanner` | Skyscanner | flight | ❌ captcha (inactive) |
 | `jalan` | じゃらん | hotel | ❌ unsupported |
 | `rakuten_travel` | 楽天トラベル | hotel, package | ❌ unsupported |
 
@@ -477,5 +477,5 @@ Remaining agenda (none blocking — the project is between trips and the live DB
 
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **Worker `workers-rs` port — DONE & DEPLOYED** (PR #4, merged to master). The Rust dashboard lives at `workers/trip-dashboard-rs/` and is live at `trip-dashboard-rs.yanggf.workers.dev` (keyless maps, token auth, meal-pin links). The old TS worker (`workers/trip-dashboard/`) still exists and still serves the original URL; the `-rs` worker is meant to eventually reclaim it (a separate cutover, not yet done). See "Trip Dashboard — two workers" below.
-- **OTA migration to gwebcdb (WSLg)** — backend DONE & VERIFIED; per-source live capture PENDING. **WSLg-native Chrome is the verified default backend** (2026-06-25: `running_backend=wslg`, CDP on :9222, bridge attached) and the **Phase 0 Python port is SHIPPED** in gwebcdb (`turso_db.py`/`ota_capture.py`/`ota_parse.py`/`ota_cli.py`; settour-oracle parity, tests pass). `chromeport` is RETIRED — don't run/repair it. What's LEFT is the agent-driven per-source sweep: live WSLg capture → `verify`/`parse` → a REAL offer in Turso (not seed-junk; the 10 stored captures are seed shells), tuned against the G0–G6 decommission gate, then delete each archived Python parser. Resume at the 5 GET-param sources (liontravel/eztravel/agoda/trip/google_flights). Recipe: gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
+- **OTA migration to gwebcdb (WSLg)** — backend DONE & VERIFIED; **ALL 3 TYPES NOW PROVEN REAL** (2026-06-26): flight=`google_flights` (34 offers), hotel=`agoda` (5), **package=`eztravel` (9, first-ever real package)** — all via the AGENT-PARSE path (agent reads capture `raw_text` → TSV → `bridge/ota_write_llm_offers.py`; regex `ota_cli parse` is the fallback). Per-agent Chrome via `bridge/chrome_session.py acquire` (Chrome picks the port). `chromeport` is RETIRED — don't run/repair it. What's LEFT: (1) create/tag the `2026_sep` TEST PLAN + plan-tag these offers (currently source-tagged only); (2) G5/G6 per source (stamp `parser_rules.source_url`, then delete each archived parser); (3) more package coverage — `settour` (SPA, drive like eztravel), `besttour` (find real listing URL), `travel4u` (resolve numeric `area_code`). **BLOCKED (renderer-wedge under WSLg, parked):** `liontravel` + `lifetour` SPAs crash Chrome's renderer — do NOT retry as "needs a flag." Form-driving recipe (React-autocomplete coax + dpicker dates + 搜尋): gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
 - **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.
