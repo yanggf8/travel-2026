@@ -4,8 +4,10 @@
 # dashboard worker serves from.
 #
 # Keyless: a self-contained Leaflet page (OSM tiles, Leaflet from unpkg CDN) is
-# generated per day, screenshotted via chromeport (CDP → real Chrome). No Google
-# Maps key. Stops come from TWO sources, in itinerary order:
+# generated per day, screenshotted via chromeport (a CDP *client*) attached to an
+# isolated Chrome this script ACQUIRES from the gwebcdb per-agent allocator (Chrome
+# is launched detached so it persists across our subprocess calls; released on exit).
+# No Google Maps key. Stops come from TWO sources, in itinerary order:
 #   1. activities → destination_pois (sightseeing POIs already geocoded), and
 #   2. day_route_segments place names (hotel/airport/restaurant/mall/district)
 #      resolved to coords via a keyless Nominatim/OSM geocode CACHED in Turso
@@ -20,8 +22,10 @@
 # `check-maps-fresh` lint reads. The freshness stamp is only recorded if the run
 # did not fail.
 #
-# Requires: real Chrome at :9222 (./bin/chromeport browser doctor); wrangler
-#           authenticated; curl (for Nominatim); ./bin/chromeport db query/exec.
+# Requires: ~/b/gwebcdb checkout (per-agent Chrome allocator) + a healthy WSLg
+#           Chrome; wrangler authenticated; curl (for Nominatim); ./bin/chromeport
+#           db query/exec. The script acquires/releases its own Chrome — do NOT
+#           pre-start one or run start-chrome-cdp-wslg.sh.
 #
 # Usage: scripts/snapshot-maps.sh <plan-id> <dest-slug>
 #   e.g. scripts/snapshot-maps.sh okinawa-2026 okinawa_2026
@@ -51,8 +55,29 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 FAILED=0   # set if any required capture/upload fails → suppress the freshness stamp
 declare -a MANIFEST_KEYS=()   # keys we wrote a manifest row for
 
+# --- acquire an ISOLATED, PERSISTENT Chrome via the gwebcdb per-agent allocator ---
+# The harness reaps any process backgrounded inside a Bash call, so we CANNOT start
+# our own long-lived Chrome (nohup/setsid/disown all die when the call returns). The
+# allocator launches Chrome detached from Python (start_new_session=True) so it
+# survives across this script's many chromeport subprocess calls. Chrome picks its own
+# port; we point chromeport (a CDP *client*) at it via CHROMEPORT_CDP_ENDPOINT — no
+# more hardcoded :9222, no shared-tab collisions with another agent's Chrome.
+GWEBCDB="${GWEBCDB_DIR:-$HOME/b/gwebcdb}"
+echo "== acquire isolated Chrome session (gwebcdb) =="
+SESSION_OUT="$(cd "$GWEBCDB" && timeout 45 python bridge/chrome_session.py acquire 2>&1)" || {
+  echo "ERROR: chrome_session.py acquire failed:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
+CDP_PORT="$(printf '%s\n' "$SESSION_OUT" | sed -n 's/^port'$'\t''//p')"
+[ -n "$CDP_PORT" ] || { echo "ERROR: could not read port from acquire output:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
+export CHROMEPORT_CDP_ENDPOINT="http://127.0.0.1:${CDP_PORT}"
+echo "   chrome on ${CHROMEPORT_CDP_ENDPOINT} (isolated profile; released on exit)"
+
+# Always release the session on exit (success, failure, or interrupt) so we never
+# leak a detached Chrome. release is idempotent / safe if the session is already gone.
+cleanup() { (cd "$GWEBCDB" && python bridge/chrome_session.py release --port "$CDP_PORT" >/dev/null 2>&1) || true; }
+trap cleanup EXIT
+
 echo "== chromeport / Chrome reachability =="
-$CHROMEPORT browser doctor >/dev/null || { echo "Chrome not reachable at :9222"; exit 1; }
+$CHROMEPORT browser doctor >/dev/null || { echo "Chrome not reachable at ${CHROMEPORT_CDP_ENDPOINT}"; exit 1; }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "1970-01-01T00:00:00Z"; }
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
