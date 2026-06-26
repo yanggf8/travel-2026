@@ -183,24 +183,41 @@ render_map() {
   html,body{margin:0;padding:0;height:100%}
   #map{position:absolute;inset:0;background:#eef}
   .leaflet-control-attribution,.leaflet-control-zoom{display:none}
-  .num{font:700 13px/24px sans-serif;color:#fff;text-align:center}
-</style></head><body><div id="map"></div><script>
+  /* Keyless tile attribution is burned in below (.credit) since the Leaflet
+     attribution control is disabled — CARTO/OSM tiles require credit. */
+  .credit{position:absolute;right:3px;bottom:2px;z-index:1000;font:10px/13px sans-serif;
+    color:#555;background:rgba(255,255,255,.7);padding:0 4px;border-radius:3px}
+</style></head><body><div id="map"></div>
+<div class="credit">© OpenStreetMap, © CARTO</div><script>
   var pts = ${arr};
   var ll = pts.map(function(p){return [p[0],p[1]];});
   var map = L.map('map',{zoomControl:false,attributionControl:false});
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  // CARTO Positron — keyless, muted basemap so route + pins read clearly (no API key).
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:20}).addTo(map);
+  L.control.scale({imperial:false,position:'bottomleft'}).addTo(map);
   if (ll.length === 1) { map.setView(ll[0], 14); } else { map.fitBounds(ll, {padding:[45,45]}); }
-  // polyline per contiguous same-color run (each day = its own line; no chaining)
+  // polyline per contiguous same-color run (each day = its own line; no chaining).
+  // White casing under a dashed colored line: reads as a planned connector, not a road.
   var run=[], runColor=null;
-  function flush(){ if(run.length>1){L.polyline(run,{color:runColor,weight:4,opacity:.85}).addTo(map);} run=[]; }
+  function flush(){
+    if(run.length>1){
+      L.polyline(run,{color:'#fff',weight:7,opacity:.7}).addTo(map);                  // casing
+      L.polyline(run,{color:runColor,weight:4,opacity:.9,dashArray:'6,8'}).addTo(map); // dashed route
+    }
+    run=[];
+  }
   pts.forEach(function(p){ var c=p[2]; if(c!==runColor){flush(); runColor=c;} run.push([p[0],p[1]]); });
   flush();
-  // numbered markers (global order)
+  // numbered teardrop pins (global order), day-colored, anchored at the TIP (bottom-center)
   pts.forEach(function(p,i){
-    L.marker([p[0],p[1]],{icon:L.divIcon({className:'',html:
-      '<div style="width:24px;height:24px;border-radius:50%;background:'+p[2]+';'+
-      'border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)" class="num">'+(i+1)+'</div>',
-      iconSize:[24,24],iconAnchor:[12,12]})}).addTo(map);
+    var c=p[2];
+    var svg='<svg width="28" height="40" viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg">'+
+      '<path d="M14 39 C5 26 1 20 1 13 A13 13 0 0 1 27 13 C27 20 23 26 14 39 Z" '+
+      'fill="'+c+'" stroke="#fff" stroke-width="2"/>'+
+      '<text x="14" y="18" text-anchor="middle" font-family="sans-serif" font-size="13" '+
+      'font-weight="700" fill="#fff">'+(i+1)+'</text></svg>';
+    L.marker([p[0],p[1]],{icon:L.divIcon({className:'',html:svg,
+      iconSize:[28,40],iconAnchor:[14,40]})}).addTo(map);
   });
   setTimeout(function(){document.title='MAP_READY';}, 1200);
 </script></body></html>
