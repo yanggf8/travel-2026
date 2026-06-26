@@ -9,6 +9,29 @@ WSLg-based entry point: gwebcdb drives the page (it picks WSLg|Windows backend i
 raw text to Turso → a NEW gwebcdb Python parser turns text → `offers`. Then verify each source
 live and delete its archived Python scraper.
 
+> **PROGRESS 2026-06-26 — ALL 3 TYPES PROVEN REAL; G5/G6 done for the 3 proven sources.**
+> The per-source sweep is live, driven by the gwebcdb **per-agent Chrome allocator**
+> (`bridge/chrome_session.py acquire` — each agent gets an isolated Chrome; Chrome picks the port)
+> and the **AGENT-PARSE path** (the coding agent reads the capture `raw_text` and emits offers as
+> TSV → `bridge/ota_write_llm_offers.py`; the regex `ota_cli parse` is now the fallback, so the
+> gate's G2/G3 regex-verify steps are N/A for agent-parsed sources).
+> - ✅ **flight = `google_flights`** (34 real offers), **hotel = `agoda`** (5), **package = `eztravel`**
+>   (9 — the FIRST proven package). All G1+G4. **G5** (`parser_rules.source_url` + fresh `fetched_at`)
+>   and **G6** (no live exec path; `scraper_script` nulled in the seed, archived files kept) DONE for
+>   all three (commit 69d8362). eztravel offers plan-tagged to the `tokyo_sep_2026` test destination.
+> - ⛔ **`liontravel` + `lifetour` — BLOCKED (renderer-wedge under WSLg):** their results SPAs hang
+>   Chrome's renderer (Playwright attach AND raw-CDP `Runtime.evaluate`/`DOM.getDocument` all hang;
+>   closing the tab crashes Chrome; weston crash count does NOT rise → it's the page). Parked — do
+>   NOT retry as "needs a flag."
+> - ⏳ **Package SPAs need FORM-DRIVING, not a GET deep-link.** eztravel recipe: fill dest
+>   (`#package-search-dest`; React autocomplete needs a coax — native value-setter + `input`+`keyup`,
+>   then click the suggestion) → pick `.dpicker__day` dates by `aria-label` → `form_click 搜尋` → it
+>   POSTs the results XHR → `ota_capture`. The denied-page guard now scans host+path+fragment (not the
+>   query), so a travel `?checkout=<date>` no longer wrongly refuses the search (gwebcdb 0957e48).
+> - ⏳ **Remaining sources:** `settour` (custom-parser oracle; SPA, drive like eztravel), `besttour`
+>   (find a real listing URL — its captures were dashboard-URL seed junk), `travel4u` (needs the real
+>   numeric `area_code`; "JP" 404s), `tigerair`/`trip` (redundant flight coverage; trip has a login wall).
+
 > **Phase 0 status (DONE).** gwebcdb now owns the extraction pipeline: `bridge/turso_db.py`
 > (Turso `/v2/pipeline` client), `bridge/ota_capture.py` (unredacted innerText → `captures`),
 > `bridge/ota_parse.py` (generic + settour parsers), `bridge/ota_cli.py` (parse/verify →
