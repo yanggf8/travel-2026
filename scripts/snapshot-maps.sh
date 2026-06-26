@@ -55,6 +55,11 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 
 FAILED=0   # set if any required capture/upload fails → suppress the freshness stamp
 declare -a MANIFEST_KEYS=()   # keys we wrote a manifest row for
+# Per-day coords computed ONCE in the per-day loop and reused for the overview, so
+# the overview doesn't re-run every day's POI/segment SELECTs (+ a cache lookup per
+# place) through fresh chromeport subprocesses. Key = day number; value = the
+# newline-joined "lat,lon" lines (empty string for an un-mappable day).
+declare -A DAY_COORDS=()
 
 # --- acquire an ISOLATED, PERSISTENT Chrome via the gwebcdb per-agent allocator ---
 # The harness reaps any process backgrounded inside a Bash call, so we CANNOT start
@@ -290,6 +295,7 @@ HTML
 process_day() {
   local d="$1" key="day-${d}.png" color="${DAY_COLORS[$(( (d-1) % ${#DAY_COLORS[@]} ))]}"
   local coords; coords="$(day_coords "$d")"
+  DAY_COORDS[$d]="$coords"   # cache for the overview (computed once here)
   if [ -z "$coords" ]; then
     echo "   skip day-${d}: no mappable stops (no POI link, no geocodable route place)"
     record_artifact "$key" "skipped" 0 "no mappable stops"
@@ -326,10 +332,13 @@ echo "== render per-day route maps =="
 for d in $ALL_DAYS; do process_day "$d"; done
 
 echo "== render plan overview (each day its own colored route) =="
-# Build the overview from every day's coords, each tagged with that day's color.
+# Build the overview from each day's coords, each tagged with that day's color.
+# Reuses DAY_COORDS cached by process_day above — no second round of per-day
+# POI/segment/geocode DB queries.
 OVERVIEW="$(for d in $ALL_DAYS; do
+  [ -n "${DAY_COORDS[$d]:-}" ] || continue
   color="${DAY_COLORS[$(( (d-1) % ${#DAY_COLORS[@]} ))]}"
-  day_coords "$d" | awk -F',' -v c="$color" 'NF>=2{print $1","$2","c}'
+  printf '%s\n' "${DAY_COORDS[$d]}" | awk -F',' -v c="$color" 'NF>=2{print $1","$2","c}'
 done)"
 if [ -n "$OVERVIEW" ] && printf '%s\n' "$OVERVIEW" | render_map "plan"; then
   upload_and_record "plan.png" "${OUT}/plan.png"
