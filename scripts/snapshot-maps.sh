@@ -3,7 +3,8 @@
 # connecting polyline, auto-framed) and upload the PNGs to the R2 bucket the
 # dashboard worker serves from.
 #
-# Keyless: a self-contained Leaflet page (OSM tiles, Leaflet from unpkg CDN) is
+# Keyless: a self-contained Leaflet page (CARTO Positron basemap — © OpenStreetMap,
+# © CARTO; Leaflet from unpkg CDN) is
 # generated per day, screenshotted via chromeport (a CDP *client*) attached to an
 # isolated Chrome this script ACQUIRES from the gwebcdb per-agent allocator (Chrome
 # is launched detached so it persists across our subprocess calls; released on exit).
@@ -63,18 +64,37 @@ declare -a MANIFEST_KEYS=()   # keys we wrote a manifest row for
 # port; we point chromeport (a CDP *client*) at it via CHROMEPORT_CDP_ENDPOINT — no
 # more hardcoded :9222, no shared-tab collisions with another agent's Chrome.
 GWEBCDB="${GWEBCDB_DIR:-$HOME/b/gwebcdb}"
+# Fail with a CLEAR message if the gwebcdb allocator checkout is missing, rather than
+# a generic "acquire failed" that points the operator at Chrome/CDP. (.env + gwebcdb
+# are provisioned out-of-band per CLAUDE.md.)
+[ -f "$GWEBCDB/bridge/chrome_session.py" ] || {
+  echo "ERROR: gwebcdb checkout not found at '$GWEBCDB' (need bridge/chrome_session.py)."
+  echo "       Set GWEBCDB_DIR or clone ~/b/gwebcdb. This script self-acquires its Chrome from it."; exit 1; }
 echo "== acquire isolated Chrome session (gwebcdb) =="
-SESSION_OUT="$(cd "$GWEBCDB" && timeout 45 python bridge/chrome_session.py acquire 2>&1)" || {
+# python3 throughout (the rest of this script uses python3; a host with only python3
+# and no `python` alias would otherwise fail at this first step only).
+SESSION_OUT="$(cd "$GWEBCDB" && timeout 45 python3 bridge/chrome_session.py acquire 2>&1)" || {
   echo "ERROR: chrome_session.py acquire failed:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
+# acquire has now launched a detached Chrome + written session.json. Arm the release
+# trap IMMEDIATELY — BEFORE parsing the port — so an early exit (e.g. a malformed
+# port line below) can't leak the Chrome we just acquired. cleanup releases by
+# whichever id we managed to parse (session name preferred; port as fallback), warns
+# (does not silently swallow) if release fails, and is bounded by a timeout so a hung
+# release can't wedge the EXIT trap (and thus the whole script's exit) forever.
+SESSION_NAME="$(printf '%s\n' "$SESSION_OUT" | sed -n 's/^session'$'\t''//p')"
 CDP_PORT="$(printf '%s\n' "$SESSION_OUT" | sed -n 's/^port'$'\t''//p')"
+cleanup() {
+  local sel=""
+  if [ -n "${SESSION_NAME:-}" ]; then sel="--session $SESSION_NAME"
+  elif [ -n "${CDP_PORT:-}" ]; then sel="--port $CDP_PORT"
+  else return 0; fi
+  (cd "$GWEBCDB" && timeout 20 python3 bridge/chrome_session.py release $sel >/dev/null 2>&1) \
+    || echo "   WARN: could not release Chrome session ($sel) — check: cd $GWEBCDB && python3 bridge/chrome_session.py list" >&2
+}
+trap cleanup EXIT
 [ -n "$CDP_PORT" ] || { echo "ERROR: could not read port from acquire output:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
 export CHROMEPORT_CDP_ENDPOINT="http://127.0.0.1:${CDP_PORT}"
 echo "   chrome on ${CHROMEPORT_CDP_ENDPOINT} (isolated profile; released on exit)"
-
-# Always release the session on exit (success, failure, or interrupt) so we never
-# leak a detached Chrome. release is idempotent / safe if the session is already gone.
-cleanup() { (cd "$GWEBCDB" && python bridge/chrome_session.py release --port "$CDP_PORT" >/dev/null 2>&1) || true; }
-trap cleanup EXIT
 
 echo "== chromeport / Chrome reachability =="
 $CHROMEPORT browser doctor >/dev/null || { echo "Chrome not reachable at ${CHROMEPORT_CDP_ENDPOINT}"; exit 1; }
