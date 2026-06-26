@@ -33,6 +33,14 @@ all Tier-1 elements, live R2 PNGs visually confirm the deltas (see Status above)
 Chrome on `:9222` via `./bin/chromeport`" blocker is RESOLVED: snapshot-maps.sh self-acquires an
 isolated, persistent Chrome via the gwebcdb per-agent allocator (commit 758b3da).
 
+**Independent re-verification (2026-06-26):** confirmed the live state without re-rendering — all 6
+`map_artifacts` rows `status=uploaded` (29KB–300KB each); `check-maps-fresh` = 6/6 ok + fresh; the
+worker serves each `/map/okinawa-2026/*.png` as HTTP 200 `image/png` with sizes matching the
+manifest and PNG magic `89504e47` (passes the worker's `is_valid_map_png`). Operational note: a
+full 6-map render exceeds the harness's 5-min foreground Bash ceiling, so a re-run is SIGKILL'd
+mid-render and its `trap cleanup EXIT` cannot fire → it leaks a gwebcdb session; always
+`python bridge/chrome_session.py reap` / `release --port <p>` afterward (done — `list` shows none).
+
 Scope owner: `scripts/snapshot-maps.sh` (the keyless static-PNG map renderer).
 
 ## Goal
