@@ -1,6 +1,10 @@
 # Dashboard Route Maps — Visual Upgrade (catch up to Wanderlog)
 
-Status: **TIER 1 COMPLETE (code + live visual confirmation, 2026-06-26).** Tier 2/3 not started.
+Status: **PLAN COMPLETE — TIER 1 + TIER 2 DONE & COMMITTED; TIER 3 DECLINED (out of scope).**
+Tier 1 shipped in `5d64e20`; Tier 2 (OSRM road-following routes + per-leg Turso cache + tile-load
+capture gate) shipped in `8369ba4`; the tile-readiness gate was finalized in `256c5d8`. The working
+tree has no uncommitted map changes. Tier 3 (interactive client map / route optimization) is an
+explicit non-goal — it breaks the keyless static-PNG + SSR-only design (see Tier 3 section).
 Acceptance verified on `okinawa-2026`: (a/b) all 6 keys (`plan.png` + `day-1..5.png`) wrote
 `map_artifacts status=uploaded` with byte_size ≫ MIN_PNG_BYTES and passed the PNG magic/size guard
 (`check-maps-fresh` = 6/6 ok, fresh); (visual) the generated HTML asserts all Tier-1 elements
@@ -254,9 +258,10 @@ a static PNG; still no client JS; still no GCP key.
 unroutable hop, it falls back to a (dashed) straight connector with no error; the cache table is
 populated; a second run makes **zero** OSRM calls; fail-loud PNG invariants still hold.
 
-### Tier 2 — IMPLEMENTATION STATUS (2026-06-26): code-complete, UNCOMMITTED, 2 open bugs
-Implemented in `scripts/snapshot-maps.sh` (render_map split + `road_leg`/`road_geometry` + OSRM
-wiring) + `db_migrate.rs` (`route_road_legs`/`route_road_leg_points`, migrated live). A full
+### Tier 2 — IMPLEMENTATION STATUS: DONE & COMMITTED (`8369ba4`; tile gate finalized in `256c5d8`)
+Shipped in `scripts/snapshot-maps.sh` (render_map split + `road_leg`/`road_geometry` + OSRM
+wiring) + `db_migrate.rs` (`route_road_legs`/`route_road_leg_points`, migrated live). Both
+partial-coverage rendering bugs are fixed (per-leg redesign, below). A full
 `okinawa-2026` run rendered all 6 maps and cached 10 road legs (1931 normalized points; a re-run
 makes zero OSRM calls) — the happy path works end-to-end.
 
