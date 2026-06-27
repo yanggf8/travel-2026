@@ -413,27 +413,49 @@ render_map() {
           r.bottom>box.top && r.top<box.bottom; });
   }
   function markReadyAfterDecodeAndPaint(tiles){
-    Promise.all(tiles.map(function(img){ return img.decode?img.decode().catch(function(){}):Promise.resolve(); }))
-      .then(function(){ requestAnimationFrame(function(){ requestAnimationFrame(function(){
-        finishMap('MAP_READY','tiles='+tiles.length); }); }); });
+    // decode() rejections are tolerated INDIVIDUALLY: a tile that won't decode is
+    // dropped from the painted set, but as long as >=1 visible tile decoded we proceed
+    // (graceful degradation — a keyless CDN drops the odd tile; that's a gray gap, not
+    // a blank map). Only finishOk if at least one tile actually decoded.
+    var decoded = 0;
+    Promise.all(tiles.map(function(img){
+      return (img.decode?img.decode():Promise.resolve())
+        .then(function(){ decoded++; }, function(){});
+    })).then(function(){
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){
+        if(decoded>0) finishMap('MAP_READY','tiles='+decoded);
+        // else: leave readyDone false → the poll/timeout below re-evaluates.
+      }); });
+    });
   }
   function waitForVisibleTiles(){
+    // Tolerant gate: succeed as soon as the framed viewport has visibly-painted CARTO
+    // tiles — even if SOME tiles errored (one bad tile must NOT drop an otherwise-good
+    // map; the old blind-sleep captured those). We only fail-loud (MAP_FAILED) when the
+    // 14s safety timeout elapses with STILL nothing painted (a truly blank basemap).
     var deadline = performance.now()+1500;
     (function poll(){
       if(readyDone) return;
-      if(tileFailed>0){ finishMap('MAP_FAILED','tileerror='+tileFailed); return; }
       var tiles = visibleLoadedCartoTiles();
       if(tiles.length>0){ markReadyAfterDecodeAndPaint(tiles); return; }
       if(performance.now()<deadline) requestAnimationFrame(poll);
-      else finishMap('MAP_FAILED','no-visible-loaded-tiles');
+      // no visible tiles yet at +1500ms: keep waiting on the 'load'/timeout cycle
+      // rather than failing — slow networks paint later; the 14s cap is the real floor.
     })();
   }
   // CARTO Positron — keyless, muted basemap so route + pins read clearly (no API key).
   var baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:20});
-  baseLayer.on('tileerror', function(){ tileFailed++; });
+  baseLayer.on('tileerror', function(){ tileFailed++; });   // counted (for diagnostics) but NOT fatal
   baseLayer.on('load', waitForVisibleTiles);
-  // hard safety cap so a stuck tile can't hang the capture forever.
-  setTimeout(function(){ finishMap('MAP_FAILED','tile-timeout'); }, 14000);
+  // Safety cap (14s). On expiry: if ANY visible tile painted, capture it (degraded but
+  // present); only MAP_FAILED if the basemap is genuinely blank. This is the sole
+  // fail-loud path — a partial/slow map captures, a blank map is rejected.
+  setTimeout(function(){
+    if(readyDone) return;
+    var tiles = visibleLoadedCartoTiles();
+    if(tiles.length>0) finishMap('MAP_READY','tiles='+tiles.length+';timeout;err='+tileFailed);
+    else finishMap('MAP_FAILED','blank-no-tiles;err='+tileFailed);
+  }, 14000);
 
   // frame to include both stops AND road geometry FIRST (so tiles load for the final
   // view), THEN add the base layer so its 'load' reflects the framed viewport.
@@ -482,11 +504,13 @@ HTML
 
   local data_url
   data_url="$(python3 -c 'import urllib.parse,sys; print("data:text/html,"+urllib.parse.quote(open(sys.argv[1]).read()))' "$html")"
-  # --wait is now a MAX: chromeport returns as soon as the page sets MAP_READY (tiles
-  # painted) and errors on MAP_FAILED. 20s > the page's 14s tile-timeout, so a slow-but-
-  # loading map still captures instead of being cut off; a healthy map returns in ~1-2s.
+  # --wait is a MAX: chromeport returns as soon as the page sets MAP_READY and errors on
+  # MAP_FAILED. The page's 14s tile-timeout is the real budget (it captures whatever has
+  # painted by then, or fails only if the basemap is blank); --wait 20s just gives
+  # chromeport headroom to OBSERVE that 14s outcome. A healthy map returns in ~1-2s.
+  # grep keeps 'failed' so a MAP_FAILED reason (tileerror / blank-no-tiles) is logged.
   $CHROMEPORT screenshot "$data_url" --out "${OUT}/${name}.png" \
-    --width 640 --height 440 --wait 20000 2>&1 | grep -E 'screenshot|error|ready' || true
+    --width 640 --height 440 --wait 20000 2>&1 | grep -iE 'screenshot|error|ready|failed' || true
   sleep 1
   # FAIL-LOUD: a real PNG must exist, start with the PNG magic, and exceed the
   # min size. Otherwise remove the stub so it can never be uploaded.

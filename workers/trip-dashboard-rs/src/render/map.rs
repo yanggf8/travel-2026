@@ -22,8 +22,10 @@ pub struct MapStatus {
 }
 
 /// True when the body is a real PNG map (not a 1-byte garbage capture or tiny stub).
+/// Uses `>=` to match the script's `sz -lt MIN_PNG_BYTES` reject (i.e. a PNG of exactly
+/// MIN bytes is accepted by BOTH the upload gate and this serve gate — no boundary gap).
 pub fn is_valid_map_png(bytes: &[u8]) -> bool {
-    bytes.len() > MIN_MAP_PNG_BYTES
+    bytes.len() >= MIN_MAP_PNG_BYTES
         && bytes.len() >= PNG_MAGIC.len()
         && bytes[..PNG_MAGIC.len()] == PNG_MAGIC
 }
@@ -245,16 +247,17 @@ mod tests {
     #[test]
     fn is_valid_map_png_rejects_tiny_and_garbage() {
         assert!(!is_valid_map_png(&[0x89]));
-        assert!(!is_valid_map_png(&[0u8; MIN_MAP_PNG_BYTES]));
+        assert!(!is_valid_map_png(&[0u8; MIN_MAP_PNG_BYTES])); // at floor but no PNG magic
         assert!(!is_valid_map_png(b"not-a-png"));
-        // a stub at the threshold is still rejected (strictly-greater check)
+        // below the floor with magic is rejected
+        let mut below = vec![0x89, 0x50, 0x4E, 0x47];
+        below.resize(MIN_MAP_PNG_BYTES - 1, 0);
+        assert!(!is_valid_map_png(&below));
+        // EXACTLY at the floor with PNG magic is ACCEPTED — matches the script's upload
+        // gate (`sz -lt MIN` rejects, so >= MIN is accepted on both sides; no boundary gap)
         let mut at_floor = vec![0x89, 0x50, 0x4E, 0x47];
         at_floor.resize(MIN_MAP_PNG_BYTES, 0);
-        assert!(!is_valid_map_png(&at_floor));
-        // one byte over the floor, with PNG magic, is accepted
-        let mut ok = vec![0x89, 0x50, 0x4E, 0x47];
-        ok.resize(MIN_MAP_PNG_BYTES + 1, 0);
-        assert!(is_valid_map_png(&ok));
+        assert!(is_valid_map_png(&at_floor));
     }
 
     #[test]
