@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-25  
 **Worker:** `workers/trip-dashboard-rs/`  
-**Status:** Draft design for review  
+**Status:** ✅ **SHIPPED** — implemented in `9ab9e48` (`feat(dashboard-rs): grant-token management + hardening`) and hardened in `1c40b7e`. Live: `POST /grants/create` + `/grants/deactivate` routes (owner-OAuth + HMAC-SHA256 CSRF gated, `TURSO_WRITE_TOKEN`), `<details>` grant-manager UI (`render/index.rs` + `render/share.rs`), and the `plan_share_tokens` schema migration (`status`/`created_by`/`deactivated_at`/`deactivated_by`) is migrated on the live DB. The design Q1 path taken = **allow multiple active tokens** (create inserts a new active row, no auto-deactivate). The sections below are the as-designed spec, now realized.  
 **Goal:** Logged-in owner can create, copy, inspect, and deactivate per-plan viewer grant tokens from the dashboard. Recipients still open a copied `?plan=<slug>&token=<grant_token>` link without GitHub login.
 
 ## Requirement
@@ -369,9 +369,9 @@ Live smoke:
 
 ## Implementation Boundary
 
-This design is not yet implementation. It should be reviewed first, especially around:
+✅ **Implemented (commits `9ab9e48`, `1c40b7e`).** The review concerns below were all resolved as designed:
 
-- Multiple active tokens vs single active token.
-- Worker write token exposure and route guards.
-- CSRF implementation details.
-- Whether the UI should expose management on `/`, `/?plan=`, or both.
+- **Multiple active tokens vs single** → multiple active tokens (newest active = current/default copy).
+- **Worker write token exposure / route guards** → `TURSO_WRITE_TOKEN` used only after owner-OAuth + CSRF on `/grants/*`; viewer `?token=` never reaches these routes.
+- **CSRF** → stateless HMAC-SHA256 over the session cookie, constant-time verified on POST.
+- **UI surface** → management on the index `/`; plan page gets copy/create.
