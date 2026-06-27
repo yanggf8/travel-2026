@@ -15,22 +15,33 @@ live and delete its archived Python scraper.
 > and the **AGENT-PARSE path** (the coding agent reads the capture `raw_text` and emits offers as
 > TSV → `bridge/ota_write_llm_offers.py`; the regex `ota_cli parse` is now the fallback, so the
 > gate's G2/G3 regex-verify steps are N/A for agent-parsed sources).
-> - ✅ **flight = `google_flights`** (34 real offers), **hotel = `agoda`** (5), **package = `eztravel`**
->   (9 — the FIRST proven package). All G1+G4. **G5** (`parser_rules.source_url` + fresh `fetched_at`)
->   and **G6** (no live exec path; `scraper_script` nulled in the seed, archived files kept) DONE for
->   all three (commit 69d8362). eztravel offers plan-tagged to the `tokyo_sep_2026` test destination.
-> - ⛔ **`liontravel` + `lifetour` — BLOCKED (renderer-wedge under WSLg):** their results SPAs hang
+> **SWEEP EFFECTIVELY COMPLETE (2026-06-27): 6 sources PROVEN, 2 blocked, 2 deferred.** Every active
+> source is handled. `./bin/travel query-offers --destination tokyo_sep_2026` = 20 real package
+> offers across 4 OTAs (eztravel 9, settour 1, besttour 5, travel4u 5), plus flight (google_flights)
+> + hotel (agoda) proven separately.
+> - ✅ **PROVEN (G1–G6 done):** `google_flights` (flight, 34 offers), `agoda` (hotel, 5), `eztravel`
+>   (package FIT, 9), `settour` (package FIT, 1; custom parser kept but agent-parse used — its v2
+>   layout mis-reads price/hotel), `besttour` (package group-tour, 5), `travel4u` (package
+>   group-tour, 5). All via the AGENT-PARSE path; `parser_rules.source_url` stamped, `scraper_script`
+>   nulled in the seed (archived files kept), offers plan-tagged `tokyo_sep_2026`. Commits 69d8362 /
+>   da012ef / 4fe0c41.
+> - ⛔ **BLOCKED — `liontravel` + `lifetour` (renderer-wedge under WSLg):** their results SPAs hang
 >   Chrome's renderer (Playwright attach AND raw-CDP `Runtime.evaluate`/`DOM.getDocument` all hang;
 >   closing the tab crashes Chrome; weston crash count does NOT rise → it's the page). Parked — do
 >   NOT retry as "needs a flag."
-> - ⏳ **Package SPAs need FORM-DRIVING, not a GET deep-link.** eztravel recipe: fill dest
->   (`#package-search-dest`; React autocomplete needs a coax — native value-setter + `input`+`keyup`,
->   then click the suggestion) → pick `.dpicker__day` dates by `aria-label` → `form_click 搜尋` → it
->   POSTs the results XHR → `ota_capture`. The denied-page guard now scans host+path+fragment (not the
->   query), so a travel `?checkout=<date>` no longer wrongly refuses the search (gwebcdb 0957e48).
-> - ⏳ **Remaining sources:** `settour` (custom-parser oracle; SPA, drive like eztravel), `besttour`
->   (find a real listing URL — its captures were dashboard-URL seed junk), `travel4u` (needs the real
->   numeric `area_code`; "JP" 404s), `tigerair`/`trip` (redundant flight coverage; trip has a login wall).
+> - ⏸️ **DEFERRED — `tigerair` + `trip` (flight-only, redundant):** the flight TYPE is already proven
+>   by google_flights (which carries 台灣虎航 fares among 15 airlines), so these add only single-carrier
+>   source-tag duplication at high friction (tigerair = opaque Quasar SPA form, no deep-link; trip =
+>   login-wall risk). Documented in the seed notes; revisit only if their direct fares are wanted.
+> - **Recipes that worked (for re-runs / new sources):** Package SPAs need FORM-DRIVING, not a GET
+>   deep-link. FIT (eztravel/settour): coax the React dest autocomplete (native value-setter +
+>   `input`+`keyup`, click the suggestion) → set dates (eztravel `.dpicker__day` by `aria-label`;
+>   settour set BOTH flight AND hotel dates or they default to tomorrow) → click 搜尋 → POSTs results
+>   XHR → `ota_capture`. Group tours (besttour/travel4u): server-rendered LISTINGS at a numeric
+>   region/area code discovered from the homepage (besttour `/e_web/search?v=//////295///////` 東京;
+>   travel4u `/group/area/41/japan/` 東京｜東北) — scroll to lazy-load, agent-parse the product rows.
+>   The denied-page guard scans host+path+fragment (not the query) so a travel `?checkout=<date>`
+>   doesn't wrongly refuse the search (gwebcdb 0957e48).
 
 > **Phase 0 status (DONE).** gwebcdb now owns the extraction pipeline: `bridge/turso_db.py`
 > (Turso `/v2/pipeline` client), `bridge/ota_capture.py` (unredacted innerText → `captures`),
