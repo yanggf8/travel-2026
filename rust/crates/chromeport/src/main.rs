@@ -600,12 +600,13 @@ async fn screenshot_url(
     }
     settle_rendered_page(&page).await?;
 
-    // Map tiles lazy-load after settle; wait an extra beat before the shot.
+    // Wait for the page to signal readiness via document.title. A map page (see
+    // snapshot-maps.sh) sets MAP_READY only AFTER its tiles have loaded+decoded+painted,
+    // and MAP_FAILED on a tile error/timeout — so the shot never fires on a blank tile
+    // layer. `--wait` is the MAX wait: for a page that never sets the sentinel (any
+    // non-map page) this just sleeps the full duration, preserving the old behavior.
     let wait = wait_ms.unwrap_or(DEFAULT_SCREENSHOT_WAIT_MS);
-    if wait > 0 {
-        println!("waiting\t{wait}ms");
-        tokio::time::sleep(Duration::from_millis(wait)).await;
-    }
+    wait_for_map_ready_or_timeout(&page, wait).await?;
 
     let params = ScreenshotParams::builder()
         .format(CaptureScreenshotFormat::Png)
@@ -763,6 +764,47 @@ fn default_schema() -> String {
 struct CaptureLink {
     text: String,
     href: String,
+}
+
+/// Wait until the page signals readiness via document.title, bounded by `wait_ms`.
+///
+/// A map page sets `MAP_READY` (tiles loaded+decoded+painted) or `MAP_FAILED:<reason>`
+/// (tile error / timeout). We return as soon as `MAP_READY` appears, error on
+/// `MAP_FAILED`, and otherwise keep waiting up to the deadline. For a page that never
+/// sets either sentinel (any non-map page), this sleeps the full `wait_ms` — preserving
+/// the previous blind-wait behavior. `wait_ms == 0` returns immediately.
+async fn wait_for_map_ready_or_timeout(
+    page: &chromiumoxide::Page,
+    wait_ms: u64,
+) -> Result<(), CliError> {
+    if wait_ms == 0 {
+        return Ok(());
+    }
+    println!("waiting\t{wait_ms}ms (max; returns on MAP_READY)");
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
+    loop {
+        // get_title() failures are transient (page mid-navigation) — treat as "not yet".
+        let title = page
+            .get_title()
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if title.starts_with("MAP_READY") {
+            println!("ready\t{title}");
+            return Ok(());
+        }
+        if title.starts_with("MAP_FAILED") {
+            return Err(CliError::runtime(format!("map render failed: {title}")));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            // No sentinel before the deadline: non-map page (full wait elapsed) OR a map
+            // page whose tiles never settled. Capture anyway — the fail-loud PNG guard
+            // downstream rejects a truly broken capture.
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 async fn settle_rendered_page(page: &chromiumoxide::Page) -> Result<(), CliError> {

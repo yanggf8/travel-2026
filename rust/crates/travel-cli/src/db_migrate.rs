@@ -356,6 +356,44 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // 12e. route_road_legs / route_road_leg_points — keyless road-geometry cache (OSRM
+    //      public demo) for snapshot-maps.sh Tier 2. One LEG = one ordered pair of stop
+    //      coords (a per-day route is N-1 legs). The header row records provider/profile/
+    //      status (ok|error) + fetched_at so a re-run makes ZERO OSRM calls and
+    //      failures aren't re-hit; the child rows store the road polyline as NORMALIZED
+    //      point rows (NO JSON blob — repo rule). leg_key = canonicalized
+    //      "from_lat,from_lon>to_lat,to_lon|provider|profile" at fixed precision.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS route_road_legs (
+  leg_key TEXT NOT NULL,
+  from_lat REAL NOT NULL,
+  from_lon REAL NOT NULL,
+  to_lat REAL NOT NULL,
+  to_lon REAL NOT NULL,
+  provider TEXT NOT NULL,
+  profile TEXT NOT NULL,
+  status TEXT NOT NULL,
+  point_count INTEGER NOT NULL DEFAULT 0,
+  distance_m REAL,
+  failure_reason TEXT,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (leg_key)
+);"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS route_road_leg_points (
+  leg_key TEXT NOT NULL,
+  point_order INTEGER NOT NULL,
+  lat REAL NOT NULL,
+  lon REAL NOT NULL,
+  PRIMARY KEY (leg_key, point_order)
+);"#,
+    )
+    .await;
+
     // 13. Rename plans_current → plans.
     if table_exists(&conn, "plans_current").await {
         exec_lenient(&conn, "ALTER TABLE plans_current RENAME TO plans").await;

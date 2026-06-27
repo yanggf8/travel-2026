@@ -254,6 +254,51 @@ a static PNG; still no client JS; still no GCP key.
 unroutable hop, it falls back to a (dashed) straight connector with no error; the cache table is
 populated; a second run makes **zero** OSRM calls; fail-loud PNG invariants still hold.
 
+### Tier 2 — IMPLEMENTATION STATUS (2026-06-26): code-complete, UNCOMMITTED, 2 open bugs
+Implemented in `scripts/snapshot-maps.sh` (render_map split + `road_leg`/`road_geometry` + OSRM
+wiring) + `db_migrate.rs` (`route_road_legs`/`route_road_leg_points`, migrated live). A full
+`okinawa-2026` run rendered all 6 maps and cached 10 road legs (1931 normalized points; a re-run
+makes zero OSRM calls) — the happy path works end-to-end.
+
+A high-effort workflow code review (run `wf_07709cf1-ba6`; its verify phase was **truncated by a
+session limit**, so finder verdicts are only partly independently verified — corroborated by hand
+against source) found 10 findings. **FIXED (safe, behavior-preserving, verified):** distance_m now
+captured (was always NULL); point_count is single-source (was a divergent second `grep` pass);
+dead `no_route` status removed (only `ok|error` are written); coord regexes aligned to the file's
+canonical `/^-?[0-9]+\.?[0-9]*$/` idiom.
+
+**FIXED — the 2 partial-coverage rendering bugs (per-leg redesign, 2026-06-26):**
+1. (was) `road_geometry` concatenated all routable legs into ONE polyline → a failed middle leg
+   teleported the road across the gap.
+2. (was) the renderer suppressed the dashed fallback for any color with any road line → a partially
+   routed day showed a bare gap for the unrouted leg.
+**Fix:** `road_geometry` now emits **one routes-file line PER LEG**, tagged
+`COLOR<TAB>KIND<TAB>verts` where KIND ∈ {`road`,`straight`}. The renderer draws each leg as its own
+polyline — `road` solid, `straight` dashed — so a failed middle leg is its own honest dashed
+connector (no teleport, no gap). The per-color straight fallback now fires ONLY when there is no
+routes file at all. Verified: a partial-coverage day (1 routed + 1 unroutable leg) emits exactly
+`road`(382 verts) + `straight`(2 verts); all-routed day → both `road`; the renderer's roads-array
+awk parses both kinds into valid JS. Tier 2 is now correct for mixed-routability plans.
+
+### Blank-tile capture — ROOT-CAUSE FIXED (tile-load readiness gate, 2026-06-27)
+An early re-render produced a near-blank `plan.png` (4.3KB) and an intermittently-blank day-2
+(9KB once, 229KB another) with identical data — a **transient tile-render race**. Codex-diagnosed +
+corroborated against source: the real cause was that `./bin/chromeport screenshot` did a **blind
+`sleep(--wait)` and never watched the `MAP_READY` title** (main.rs), so the shot fired before CARTO
+tiles painted. A byte floor can't fix this (same map valid at 9KB and 229KB).
+**Fix (Path A — fix chromeport):**
+- `snapshot-maps.sh` page now signals `MAP_READY` only after visible CARTO tiles
+  **load + decode + paint** (tile `load` event → `img.decode()` → double-rAF), `MAP_FAILED` on
+  tile error / 14s timeout, framed-view-first.
+- `chromeport` gained `wait_for_map_ready_or_timeout()` — polls `document.title`, returns on
+  `MAP_READY`, errors (→ fail-loud, no upload) on `MAP_FAILED`, full-`--wait` fallback for non-map
+  pages. `--wait` raised 9000→20000 (now a max; healthy map returns in ~1-2s).
+- Byte floors synced: worker `MIN_MAP_PNG_BYTES` 64→200 = script `MIN_PNG_BYTES` (a tiny-stub guard
+  only; the readiness gate — not the floor — is what prevents blanks).
+**Verified end-to-end:** a full re-render logged `ready MAP_READY:tiles=8/12/9/9` (gate firing) and
+produced all 6 maps healthy — plan.png **224664B** (was 4.3KB), day-2 **301163B** — now live on the
+worker. chromeport + worker built; worker `is_valid_map_png` test updated + passing.
+
 ### Tier 3 — Interactive map / automatic route optimization — **NOT recommended**
 
 Wanderlog also offers a live interactive map and reorders stops to minimize travel. Both break

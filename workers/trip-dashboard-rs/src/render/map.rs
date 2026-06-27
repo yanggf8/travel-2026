@@ -6,9 +6,12 @@ use std::collections::HashMap;
 /// PNG magic bytes — first four bytes of every valid PNG file.
 const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
 
-/// Minimum byte length for a real map PNG. Objects at or below 64 bytes are
-/// treated as garbage/placeholder (the worker's own 1×1 placeholder is 66 bytes).
-pub const MIN_MAP_PNG_BYTES: usize = 64;
+/// Minimum byte length for a real map PNG — kept in sync with `MIN_PNG_BYTES` in
+/// scripts/snapshot-maps.sh so the upload gate and the serve gate agree. This is only
+/// a tiny-garbage/stub guard (a real 640×440 map is hundreds of KB); it does NOT detect
+/// a blank-but-valid PNG — that is prevented upstream by the tile-load readiness gate in
+/// snapshot-maps.sh (MAP_READY fires only after tiles paint).
+pub const MIN_MAP_PNG_BYTES: usize = 200;
 
 /// Server-side map availability for a plan page render. Built in the async router
 /// (R2 HEAD/get per key) and threaded into the sync render layer.
@@ -242,10 +245,15 @@ mod tests {
     #[test]
     fn is_valid_map_png_rejects_tiny_and_garbage() {
         assert!(!is_valid_map_png(&[0x89]));
-        assert!(!is_valid_map_png(&[0u8; 64]));
+        assert!(!is_valid_map_png(&[0u8; MIN_MAP_PNG_BYTES]));
         assert!(!is_valid_map_png(b"not-a-png"));
+        // a stub at the threshold is still rejected (strictly-greater check)
+        let mut at_floor = vec![0x89, 0x50, 0x4E, 0x47];
+        at_floor.resize(MIN_MAP_PNG_BYTES, 0);
+        assert!(!is_valid_map_png(&at_floor));
+        // one byte over the floor, with PNG magic, is accepted
         let mut ok = vec![0x89, 0x50, 0x4E, 0x47];
-        ok.resize(100, 0);
+        ok.resize(MIN_MAP_PNG_BYTES + 1, 0);
         assert!(is_valid_map_png(&ok));
     }
 
