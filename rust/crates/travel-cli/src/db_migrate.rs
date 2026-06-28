@@ -1188,9 +1188,25 @@ const OTA_SOURCES: &[OtaSeed] = &[
 async fn seed_ota_sources(conn: &libsql::Connection) {
     let opt = |v: Option<&str>| v.map(sq).unwrap_or_else(|| "NULL".to_string());
     for s in OTA_SOURCES {
+        // UPSERT, not INSERT OR IGNORE: the seed array is the authoritative source of
+        // status/scraper_script/url_template/notes (e.g. the "PROVEN REAL"/"DEFERRED"
+        // sweep decisions). OR IGNORE left every pre-existing live row stuck on its
+        // original pre-sweep metadata. ON CONFLICT resyncs the existing row so live Turso
+        // reflects the committed seed after a migrate. (The child type/region tables are
+        // already DELETE+reinsert below, so this makes the parent row consistent with them.)
         let insert = format!(
-            "INSERT OR IGNORE INTO ota_sources (source_id, name, status, scraper_script, url_template, notes) VALUES ({}, {}, {}, {}, {}, {})",
-            sq(s.source_id), sq(s.name), sq(s.status), opt(s.scraper_script), opt(s.url_template), opt(s.notes),
+            "INSERT INTO ota_sources (source_id, name, status, scraper_script, url_template, notes) \
+             VALUES ({sid}, {name}, {status}, {script}, {url}, {notes}) \
+             ON CONFLICT(source_id) DO UPDATE SET \
+                name = excluded.name, status = excluded.status, \
+                scraper_script = excluded.scraper_script, url_template = excluded.url_template, \
+                notes = excluded.notes",
+            sid = sq(s.source_id),
+            name = sq(s.name),
+            status = sq(s.status),
+            script = opt(s.scraper_script),
+            url = opt(s.url_template),
+            notes = opt(s.notes),
         );
         exec_lenient(conn, &insert).await;
         exec_lenient(conn, &format!("DELETE FROM ota_source_types WHERE source_id = {}", sq(s.source_id))).await;
