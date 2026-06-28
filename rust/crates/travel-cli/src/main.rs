@@ -1,5 +1,6 @@
 mod bookings;
 mod cascade;
+mod catalog_audit; // catalog_runs audit helper for global OTA-catalog mutations
 mod checks; // shared lint predicates (single source of truth) — see checks.rs
 mod compare;
 mod compare_dates;
