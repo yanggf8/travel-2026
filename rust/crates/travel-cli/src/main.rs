@@ -17,6 +17,7 @@ mod import_offers;
 mod leave;
 mod offers;
 mod plan;
+mod promote_offers;
 mod plan_resolver;
 mod plans;
 mod scrape_parser;
@@ -150,6 +151,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let opts = import_offers::parse_args(rest)?;
             import_offers::run(opts).await.map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "promote-offers" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel promote-offers --from-offers --dest <slug> [--plan-id <id>] [--source <id>] [--start <date>] [--end <date>] [--pax N] [--dry-run]");
+                return Ok(());
+            }
+            let opts = promote_offers::parse_args(rest)?;
+            promote_offers::run(opts).await.map_err(|e| e.to_string())?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "add-offer" => {
