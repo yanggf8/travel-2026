@@ -51,9 +51,21 @@ OSRM_BASE="https://router.project-osrm.org/route/v1/driving"
 OSRM_PROFILE="driving"
 OSRM_PROVIDER="osrm-demo"
 ROAD_DP=5                     # coord precision for the leg cache key (~1.1m)
-# Geocode context appended to every route-place query to disambiguate (the trip
-# is in Naha, Okinawa — without this, "おもろまち"/"イオン那覇" geocode poorly).
-GEO_CONTEXT="Naha, Okinawa, Japan"
+# Geocode context appended to every route-place query to disambiguate a bare place
+# name (e.g. "おもろまち"/"イオン那覇" geocode poorly without a city). DERIVED from the
+# destination, NOT hardcoded — a Naha hardcode resolved Tokyo/Kyoto stops to Okinawa
+# coords (wrong maps). Use destination_config.display_name for $DEST → "<City>, Japan";
+# fall back to "Japan" if the row/name is missing (still better than a wrong city).
+GEO_CITY="$($CHROMEPORT db query "SELECT display_name FROM destination_config \
+  WHERE slug='$(printf '%s' "$DEST" | sed "s/'/''/g")'" 2>/dev/null \
+  | awk -F'\t' 'NR>1 && $1!="" {print $1; exit}')"
+if [ -n "$GEO_CITY" ]; then
+  GEO_CONTEXT="${GEO_CITY}, Japan"
+else
+  echo "WARN: no destination_config.display_name for '$DEST' — geocoding with bare 'Japan' context." >&2
+  GEO_CONTEXT="Japan"
+fi
+echo "   geo-context: ${GEO_CONTEXT}"
 # Per-day polyline colors for the overview (Leaflet-friendly, high-contrast).
 DAY_COLORS=( "#e6194b" "#3cb44b" "#4363d8" "#f58231" "#911eb4" "#008080" "#9a6324" )
 
@@ -220,6 +232,11 @@ day_coords() {
     coord="$(geocode_place "$place")"
     [ -n "$coord" ] && printf '%s\n' "$coord"
   done
+  # The `printf | while read` pipeline exits with the final `read`'s status — non-zero
+  # at EOF — which under `set -e` would abort the caller (line 543) even though the
+  # coords were emitted fine. This bit Tokyo/Kyoto (segment-path days) but never Okinawa
+  # (POI-path days return at line 216). Force success: emission already happened above.
+  return 0
 }
 
 # --- OSRM road geometry for ONE leg (from "lat,lon" → to "lat,lon") -----------------
