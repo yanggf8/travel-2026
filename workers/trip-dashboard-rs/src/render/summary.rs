@@ -18,6 +18,26 @@ fn rs(row: &Row, k: &str) -> String {
         .to_string()
 }
 
+/// Group an integer with thousands separators (e.g. 27888 → "27,888"), matching the
+/// TS worker's `Number.toLocaleString()` for prices. Handles negatives defensively.
+fn group_thousands(n: i64) -> String {
+    let neg = n < 0;
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    let len = digits.len();
+    for (idx, ch) in digits.chars().enumerate() {
+        if idx > 0 && (len - idx) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if neg {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
 /// Join non-empty parts with a single space (skips blanks so we don't emit "  ").
 fn join_parts(parts: &[String]) -> String {
     parts
@@ -105,6 +125,39 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let mut h = String::new();
     h.push_str("<section class=\"booking-summary\">");
 
+    // Package offer (booking-summary package row) — the chosen plan_offer + its
+    // selected-date price. Only shown when a package was selected (flight+hotel
+    // booked-separately plans have no offer). Ported from render.ts:1078-1089.
+    if let Some(offer) = &plan.offer {
+        h.push_str(&format!("<h2>{}</h2>", esc(t("package", lang))));
+        h.push_str("<div class=\"booking-grid\">");
+        h.push_str("<div class=\"booking-item package\">");
+        h.push_str("<span class=\"booking-icon\">📦</span>");
+        h.push_str("<div class=\"booking-detail\">");
+        let title = join_parts(&[offer.source_id.clone(), offer.product_code.clone()]);
+        h.push_str(&format!(
+            "<div class=\"booking-value\">{}</div>",
+            esc(if title.is_empty() { "—" } else { &title })
+        ));
+        if offer.price > 0 {
+            let cur = if offer.currency.is_empty() {
+                "TWD"
+            } else {
+                &offer.currency
+            };
+            h.push_str(&format!(
+                "<div class=\"booking-sub\">{} {}{} ({} {})</div>",
+                esc(cur),
+                group_thousands(offer.price),
+                esc(t("perPerson", lang)),
+                esc(t("forTwo", lang)),
+                group_thousands(offer.price * 2),
+            ));
+        }
+        h.push_str("</div></div>");
+        h.push_str("</div>");
+    }
+
     // Flights
     if !plan.flights.is_empty() {
         h.push_str(&format!("<h2>{}</h2>", esc(t("flights", lang))));
@@ -168,6 +221,16 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             h.push_str(&format!(
                 "<div class=\"booking-sub\">{}</div>",
                 esc(&check_in)
+            ));
+        }
+        // Hotel access lines (transit directions to the hotel) — TS rendered these as
+        // a comma-joined access list (render.ts:1143). One labeled sub-line; skipped
+        // when there are no rows.
+        if !plan.hotel_access_lines.is_empty() {
+            h.push_str(&format!(
+                "<div class=\"booking-sub\">{}: {}</div>",
+                esc(t("hotelAccess", lang)),
+                esc(&plan.hotel_access_lines.join(", "))
             ));
         }
         // Voucher PDF link (own /voucher/* R2 route). 404s until the PDF is uploaded.
@@ -238,6 +301,38 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         h.push_str("</div>");
     }
 
+    // Japan-only entry info (Visit Japan Web + Japan Tourism), shown when the
+    // destination currency is JPY. Ported from render.ts:1049,1203-1218.
+    if plan.currency == "JPY" {
+        h.push_str(&format!("<h2>{}</h2>", esc(t("japanEntry", lang))));
+        h.push_str("<div class=\"booking-grid\">");
+        // Visit Japan Web (entry application)
+        h.push_str("<div class=\"booking-item japan-entry\">");
+        h.push_str("<span class=\"booking-icon\">🛂</span>");
+        h.push_str("<div class=\"booking-detail\">");
+        h.push_str(&format!(
+            "<div class=\"booking-value\"><a href=\"https://www.vjw.digital.go.jp/main/#/vjwplo001\" \
+             target=\"_blank\" rel=\"noopener\">{}</a></div>",
+            esc(t("visitJapanWeb", lang))
+        ));
+        h.push_str("</div></div>");
+        // Japan Tourism Agency
+        h.push_str("<div class=\"booking-item japan-entry\">");
+        h.push_str("<span class=\"booking-icon\">🗾</span>");
+        h.push_str("<div class=\"booking-detail\">");
+        h.push_str(&format!(
+            "<div class=\"booking-value\"><a href=\"https://www.japan.travel/\" \
+             target=\"_blank\" rel=\"noopener\">{}</a></div>",
+            esc(t("japanTourism", lang))
+        ));
+        h.push_str(&format!(
+            "<div class=\"booking-sub\">{}</div>",
+            esc(t("japanTourismSub", lang))
+        ));
+        h.push_str("</div></div>");
+        h.push_str("</div>");
+    }
+
     h.push_str("</section>");
     h
 }
@@ -245,8 +340,74 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Plan;
+    use crate::model::{Offer, Plan};
     use crate::turso::Row;
+
+    #[test]
+    fn group_thousands_formats_prices() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(27888), "27,888");
+        assert_eq!(group_thousands(55776), "55,776");
+        assert_eq!(group_thousands(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn package_offer_renders_with_per_person_and_for_two() {
+        let plan = Plan {
+            offer: Some(Offer {
+                source_id: "besttour".into(),
+                product_code: "TYO06MM260213AM2".into(),
+                price: 27888,
+                currency: "TWD".into(),
+            }),
+            ..Default::default()
+        };
+        let html = render(&plan, "en", None);
+        assert!(html.contains("besttour"));
+        assert!(html.contains("TYO06MM260213AM2"));
+        assert!(html.contains("TWD 27,888")); // per-person, grouped
+        assert!(html.contains("55,776")); // for-2 = price*2
+    }
+
+    #[test]
+    fn no_offer_means_no_package_block() {
+        let plan = Plan::default(); // offer: None
+        let html = render(&plan, "en", None);
+        assert!(!html.contains("booking-item package"));
+    }
+
+    #[test]
+    fn hotel_access_lines_render_in_hotel_block() {
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        let plan = Plan {
+            hotel: Some(hotel),
+            hotel_access_lines: vec!["Yui Rail Asato 3min".into(), "JR Naha 8min".into()],
+            ..Default::default()
+        };
+        let html = render(&plan, "en", None);
+        assert!(html.contains("Yui Rail Asato 3min, JR Naha 8min"));
+        assert!(html.contains("Access:"));
+    }
+
+    #[test]
+    fn japan_entry_rows_shown_only_for_jpy() {
+        let jpy = Plan {
+            currency: "JPY".into(),
+            ..Default::default()
+        };
+        let html = render(&jpy, "en", None);
+        assert!(html.contains("Visit Japan Web"));
+        assert!(html.contains("vjw.digital.go.jp"));
+
+        let twd = Plan {
+            currency: "TWD".into(),
+            ..Default::default()
+        };
+        let html2 = render(&twd, "en", None);
+        assert!(!html2.contains("Visit Japan Web"));
+    }
 
     #[test]
     fn transfer_renders_route_and_price() {

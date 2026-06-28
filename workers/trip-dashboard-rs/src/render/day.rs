@@ -1,5 +1,21 @@
 use super::{esc, render_activity_text, session};
+use crate::i18n::t;
 use crate::model::{Day, RouteSegment};
+
+/// Render the day's map landmarks (waypoints listed under the day map). Ported from
+/// the TS worker, which listed the day's landmarks beneath the route map.
+fn render_landmarks(landmarks: &[String], lang: &str) -> String {
+    let mut h = String::new();
+    h.push_str(&format!(
+        "<div class=\"day-landmarks\"><div class=\"landmarks-heading\">{}</div><ul>",
+        esc(t("landmarks", lang))
+    ));
+    for lm in landmarks {
+        h.push_str(&format!("<li>{}</li>", esc(lm)));
+    }
+    h.push_str("</ul></div>");
+    h
+}
 
 /// "What to wear" tips, banded by temperature so it works for both cold-season
 /// (Tokyo/Kyoto Feb) and hot-season (Okinawa Jun) trips. Faithful port of the
@@ -206,6 +222,9 @@ pub fn render(day: &Day, plan_id: &str, lang: &str, has_map: bool) -> String {
         has_map,
         lang,
     ));
+    if !day.landmarks.is_empty() {
+        h.push_str(&render_landmarks(&day.landmarks, lang));
+    }
     if !day.route_segments.is_empty() {
         h.push_str(&render_route_block(&day.route_segments, lang));
     }
@@ -254,6 +273,33 @@ mod tests {
         assert!(html.contains("波上宮"));
         assert!(html.contains("🚗"));
         assert!(html.contains("~12 min"));
+    }
+
+    #[test]
+    fn day_landmarks_render_as_list() {
+        let day = Day {
+            day_number: 2,
+            date: "2026-02-25".into(),
+            day_type: "full".into(),
+            landmarks: vec!["Kinkaku-ji Temple".into(), "Kitano Tenmangu Shrine".into()],
+            ..Default::default()
+        };
+        let html = render(&day, "kyoto-2026", "en", false);
+        assert!(html.contains("day-landmarks"));
+        assert!(html.contains("Kinkaku-ji Temple"));
+        assert!(html.contains("Kitano Tenmangu Shrine"));
+    }
+
+    #[test]
+    fn no_landmarks_means_no_landmarks_block() {
+        let day = Day {
+            day_number: 1,
+            date: "2026-02-24".into(),
+            day_type: "arrival".into(),
+            ..Default::default()
+        };
+        let html = render(&day, "kyoto-2026", "en", false);
+        assert!(!html.contains("day-landmarks"));
     }
 
     #[test]

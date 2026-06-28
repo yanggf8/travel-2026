@@ -58,6 +58,8 @@ pub struct Day {
     pub feels_like_high_c: Option<f64>,
     pub sessions: Vec<Session>, // ALWAYS 4: morning, noon, afternoon, evening
     pub route_segments: Vec<RouteSegment>,
+    /// Map waypoints for this day (from day_landmarks, in sort_order). Listed under the day map.
+    pub landmarks: Vec<String>,
 }
 
 /// The canonical 4 sessions, in display order. This is what makes "noon" impossible to drop.
@@ -125,6 +127,25 @@ pub struct Plan {
     /// `(destination, lang, line)` rows from itinerary_transit_key_lines, in
     /// SQL sort_order. Keyed at render time by `dest:lang`.
     pub transit_key_lines: Vec<(String, String, String)>,
+    // ---- booking-summary additions (TS-parity) ----
+    /// Selected package offer for the booking summary, if one is chosen. None when
+    /// no plan_offer_selection row exists (e.g. flight+hotel booked separately).
+    pub offer: Option<Offer>,
+    /// Hotel access lines (transit directions to the hotel), in sort_order.
+    pub hotel_access_lines: Vec<String>,
+    /// Destination currency (e.g. "JPY"); drives the Japan-only entry-info rows.
+    pub currency: String,
+}
+
+/// The chosen package offer, for the booking-summary package row.
+#[derive(Debug, Default, PartialEq)]
+pub struct Offer {
+    pub source_id: String,
+    pub product_code: String,
+    /// Per-person price actually charged: the selected-date price when present,
+    /// else the offer's base price_per_person.
+    pub price: i64,
+    pub currency: String,
 }
 
 /// Assemble a Plan from the pipeline result vectors (query order defined in the router/loader).
@@ -143,6 +164,10 @@ pub fn assemble(
     route_rows: &[Row],
     transit_key_line_rows: &[Row],
     itin_meta_rows: &[Row],
+    offer_rows: &[Row],
+    hotel_access_rows: &[Row],
+    landmark_rows: &[Row],
+    dest_config_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -163,6 +188,26 @@ pub fn assemble(
         .iter()
         .map(|r| (s(r, "destination"), s(r, "lang"), s(r, "line")))
         .collect();
+    // ---- booking-summary additions (TS-parity) ----
+    // Selected package offer: prefer the selected-date price, fall back to base price_per_person.
+    plan.offer = offer_rows.first().map(|o| {
+        let date_price = i(o, "date_price");
+        let price = if date_price > 0 {
+            date_price
+        } else {
+            i(o, "price_per_person")
+        };
+        Offer {
+            source_id: s(o, "source_id"),
+            product_code: s(o, "product_code"),
+            price,
+            currency: s(o, "currency"),
+        }
+    });
+    plan.hotel_access_lines = hotel_access_rows.iter().map(|r| s(r, "line")).collect();
+    if let Some(c) = dest_config_rows.first() {
+        plan.currency = s(c, "currency");
+    }
     for d in day_rows {
         let dn = i(d, "day_number");
         let acts: Vec<Row> = activity_rows
@@ -205,6 +250,11 @@ pub fn assemble(
             feels_like_high_c: f(d, "feels_like_high_c"),
             sessions,
             route_segments,
+            landmarks: landmark_rows
+                .iter()
+                .filter(|r| i(r, "day_number") == dn)
+                .map(|r| s(r, "landmark"))
+                .collect(),
         });
     }
     plan
@@ -726,6 +776,10 @@ mod tests {
             &route_rows,
             &[],
             &[],
+            &[],
+            &[],
+            &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
@@ -767,6 +821,10 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
+            &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
@@ -791,6 +849,10 @@ mod tests {
         let plan = assemble(
             &plan_rows,
             &day_rows,
+            &[],
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             &[],
@@ -1010,6 +1072,10 @@ mod tests {
             &[],
             &key_lines,
             &itin_meta,
+            &[],
+            &[],
+            &[],
+            &[],
         );
         assert_eq!(plan.transit_hotel_station, "Asato Station");
         assert_eq!(plan.transit_hotel_station_zh, "安里站");
@@ -1036,6 +1102,10 @@ mod tests {
         ])];
         let plan = assemble(
             &plan_rows,
+            &[],
+            &[],
+            &[],
+            &[],
             &[],
             &[],
             &[],

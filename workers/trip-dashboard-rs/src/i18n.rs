@@ -18,6 +18,28 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("details", true) => "訂位明細",
         ("voucher", false) => "Hotel voucher (PDF)",
         ("voucher", true) => "住宿券 PDF",
+        // package offer (booking-summary package row) — ported from render.ts:1081,1086
+        ("package", false) => "Package",
+        ("package", true) => "套裝",
+        ("perPerson", false) => "/person",
+        ("perPerson", true) => "/人",
+        ("forTwo", false) => "for 2",
+        ("forTwo", true) => "兩人",
+        // hotel access lines (transit directions to the hotel)
+        ("hotelAccess", false) => "Access",
+        ("hotelAccess", true) => "交通方式",
+        // per-day map landmarks
+        ("landmarks", false) => "Stops on the map",
+        ("landmarks", true) => "地圖景點",
+        // Japan-only entry info (render.ts:1206-1215) — shown when currency = JPY
+        ("japanEntry", false) => "Japan Entry",
+        ("japanEntry", true) => "日本入境申請",
+        ("visitJapanWeb", false) => "Visit Japan Web",
+        ("visitJapanWeb", true) => "Visit Japan Web",
+        ("japanTourism", false) => "Visit Japan",
+        ("japanTourism", true) => "日本觀光局",
+        ("japanTourismSub", false) => "Japan Tourism Agency",
+        ("japanTourismSub", true) => "日本觀光局官網",
         // pending-booking alerts (feature #3)
         ("bookBy", false) => "Book by",
         ("bookBy", true) => "預約期限",

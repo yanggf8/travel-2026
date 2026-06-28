@@ -637,15 +637,42 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             "SELECT transit_hotel_station, transit_hotel_station_zh \
              FROM itinerary_metadata WHERE plan_id = '{slug}'"
         ),
+        // [12] selected package offer + its price at the selected date (falls back to
+        // price_per_person when there is no date-specific row). Booking-summary package row.
+        format!(
+            "SELECT o.source_id, o.product_code, o.price_per_person, o.currency, \
+             sel.selected_date, dp.price AS date_price \
+             FROM plan_offer_selection sel \
+             JOIN plan_offers o ON o.plan_id = sel.plan_id AND o.destination = sel.destination \
+               AND o.id = sel.selected_offer_id \
+             LEFT JOIN plan_offer_date_pricing dp ON dp.plan_id = sel.plan_id \
+               AND dp.destination = sel.destination AND dp.offer_id = sel.selected_offer_id \
+               AND dp.date = sel.selected_date \
+             WHERE sel.plan_id = '{slug}'"
+        ),
+        // [13] hotel access lines (transit directions to the hotel) — booking-summary hotel block.
+        format!(
+            "SELECT line FROM hotel_access_lines WHERE plan_id = '{slug}' ORDER BY sort_order"
+        ),
+        // [14] per-day map landmarks (waypoints listed under each day's map).
+        format!(
+            "SELECT day_number, landmark FROM day_landmarks WHERE plan_id = '{slug}' \
+             ORDER BY day_number, sort_order"
+        ),
+        // [15] destination currency — JPY drives the Japan-only entry-info rows.
+        format!(
+            "SELECT currency FROM destination_config WHERE slug = '{dest}'"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 12 {
+    if r.len() < 16 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 12 results".into(),
+            "Turso pipeline returned fewer than 16 results".into(),
         ));
     }
     Ok(model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
+        &r[12], &r[13], &r[14], &r[15],
     ))
 }
 
