@@ -1,7 +1,9 @@
 # Rust CLI Migration Plan
 
-**Status:** Planned — not started  
-**Prerequisite:** All Rust binaries complete + tested before touching `package.json`  
+**Status:** ✅ DONE / superseded — the npm→Rust cutover is complete. Root `package.json` is
+retired; the Rust CLI (`./bin/travel`) is the sole write path; the TS CLI is read-only under
+`archive/ts-cli-retired/`. (This early plan assumed an npm-wrapper-with-Rust-first interim; the
+project went all the way to npm-free — see `2026-06-10-roadmap-v2-rust.md` + CLAUDE.md "CLI Execution".)
 **Owner:** yanggf
 
 ## Goal

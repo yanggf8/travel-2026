@@ -2,7 +2,13 @@
 
 > **Note:** the `travel-scraper` crate was later renamed to `chromeport` (the crate is a CDP driver, not a scraper).
 
-**Status:** In progress — full pipeline DONE (browser/CDP → capture → interactive click/fill →
+**Status:** ✅ SUPERSEDED — `chromeport` (this plan's Rust CDP driver) is **RETIRED**; the entire
+OTA pipeline moved to **gwebcdb on WSLg** (browser layer + the `parser_rules`→`verify`→`parse`→`offers`
+extraction, Phase 0 Python port SHIPPED). Do not run/repair chromeport. Current OTA plan + live status:
+`2026-06-24-ota-migration-chromeport.md` (6 sources proven, 2 blocked, 2 deferred). The notes below are
+retained as the historical record of the original Rust-CDP approach.
+
+**(historical) In progress — full pipeline DONE (browser/CDP → capture → interactive click/fill →
 rule-driven parser → Turso import), no-JSON/plain-text, native Rust→Turso. 10 OTA `parser_rules`
 seeded (all `has_custom_parser=0`); settour + liontravel real-scrape-verified and their Python parsers
 deleted. Added `verify <source> <capture-id>` for live regex close-out; current stored real rendered

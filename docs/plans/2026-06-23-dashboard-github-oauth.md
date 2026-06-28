@@ -2,7 +2,10 @@
 
 **Date:** 2026-06-23
 **Worker:** `workers/trip-dashboard-rs/` (Rust / workers-rs), live at `trip-dashboard-rs.yanggf.workers.dev`
-**Status:** IMPLEMENTED 2026-06-24 via a SHARED CRATE (committed; pending secrets + deploy).
+**Status:** ✅ DEPLOYED & LIVE — owner GitHub OAuth is live on `trip-dashboard-rs.yanggf.workers.dev`
+(routes `/auth/login|callback|logout` in `router.rs`, sign-in/not-authorized pages in `render/auth.rs`,
+gated on `ALLOWED_GITHUB_ID` + `ALLOWED_LOGIN`; secrets put + worker deployed). Implemented 2026-06-24
+via the SHARED CRATE.
 The auth core is NOT hand-rolled per-worker — it is the proven, deployed implementation from
 `finance-engineering/workers/plan-viewer-rs`, extracted into a shared crate
 **`gwebcdb/crates/worker-github-oauth`** that BOTH workers depend on (same cross-repo path-dep

@@ -429,8 +429,10 @@ Estimate: 3-6 weeks depending on how many mutation commands are still actively u
   not the TS JSON substring — honors no-json-in-rdb. Verified: DB-row parity on a disposable run_id
   across all 4 commands (full/minimal/group_tour, URL date+region inference, ok/partial/failed
   import paths, legacy raw_json decomposition) + every error-path message; 84 tests, clippy clean.
-- ⏳ NOT STARTED: shaping (6), itinerary builders (scaffold/populate), ops (sync-bookings,
-  fetch-weather, run-*), and ~10 remaining reads. Cascade runner generalization LAST.
+- ✅ DONE (all of these were ported): shaping (`shaping.rs`), itinerary builders
+  (`scaffold_itinerary.rs` / `populate_itinerary.rs`), ops (`sync_bookings.rs`, weather, run-*),
+  the remaining reads, and the cascade runner. The Rust port is complete — `./bin/travel` is the
+  sole CLI (npm retired). This audit was the port checklist; nothing here remains open.
 
 > Verified: clean rebuild, 10+1 cargo tests pass (4 new status.rs unit tests: formatDate
 > parity, locale_i64, status_icon, transfer-terminal logic), clippy clean (only the 2
