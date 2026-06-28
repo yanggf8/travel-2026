@@ -638,6 +638,57 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "CREATE TABLE IF NOT EXISTS ota_source_regions (source_id TEXT, region TEXT, PRIMARY KEY (source_id, region));",
     )
     .await;
+    // Normalized OTA provider catalog (DB-centric provider architecture, spec
+    // 2026-06-29). product_types is the ONE canonical type list; coverage + the
+    // re-keyed parser_rules both reference it. No FK clauses (the repo doesn't
+    // enable PRAGMA foreign_keys; validity is enforced by the write CLI + validate).
+    exec_lenient(
+        &conn,
+        "CREATE TABLE IF NOT EXISTS product_types (code TEXT PRIMARY KEY, description TEXT);",
+    )
+    .await;
+    exec_lenient(
+        &conn,
+        "CREATE TABLE IF NOT EXISTS coverage_block_reasons (code TEXT PRIMARY KEY, description TEXT);",
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_source_coverage (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  proven INTEGER NOT NULL DEFAULT 0 CHECK(proven IN (0,1)),
+  proven_at TEXT,
+  method TEXT CHECK(method IS NULL OR method IN ('agent_parse','regex')),
+  search_url TEXT,
+  blocked_reason_code TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (source_id, product_type)
+)"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_source_region_codes (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  region_label TEXT NOT NULL,
+  region_code TEXT NOT NULL,
+  PRIMARY KEY (source_id, product_type, region_label)
+)"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS catalog_runs (
+  run_id TEXT PRIMARY KEY,
+  command_type TEXT NOT NULL,
+  command_summary TEXT,
+  status TEXT NOT NULL,
+  changed_at TEXT NOT NULL
+)"#,
+    )
+    .await;
     seed_ota_sources(&conn).await;
 
     // Shaping Stage research tables.
