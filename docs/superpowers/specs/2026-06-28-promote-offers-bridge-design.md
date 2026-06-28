@@ -1,7 +1,9 @@
 # Design: `promote-offers` — bridge global `offers` → plan-scoped `plan_offers`
 
 **Date:** 2026-06-28
-**Status:** Approved (design); implementation pending
+**Status:** Approved (design); implementation pending. **Codex-reviewed 2026-06-28**
+(verdict: sound; findings corroborated against source and folded in — see "Review
+corrections" below).
 **Author:** Claude (with Yang)
 
 ## Problem
@@ -101,19 +103,32 @@ travel promote-offers --from-offers --dest <slug> [--plan-id <id>]
 ### Read
 
 ```sql
-SELECT id, source_id, type, name, price_per_person, currency, availability,
-       departure_date, hotel_name, hotel_area, flight_outbound, flight_return,
-       includes, scraped_at
-FROM offers
-WHERE destination = ?1
-  [AND source_id = ?source]
-  [AND departure_date >= ?start] [AND departure_date <= ?end]
-ORDER BY source_id, id;
+SELECT o.id, o.source_id, o.type, o.name, o.price_per_person, o.currency,
+       o.availability, o.departure_date, o.hotel_name, o.hotel_area,
+       o.flight_outbound, o.flight_return, o.includes, o.scraped_at
+FROM offers o
+JOIN (SELECT id, MAX(scraped_at) AS latest FROM offers
+      WHERE destination = ?1 GROUP BY id) m
+  ON o.id = m.id AND o.scraped_at = m.latest
+WHERE o.destination = ?1
+  [AND o.source_id = ?source]
+  [AND o.departure_date >= ?start] [AND o.departure_date <= ?end]
+ORDER BY o.source_id, o.id;
 ```
 
 NOTE: `offers` PK is `(id, scraped_at)` — the same `id` can have multiple scrape
-snapshots. `promote-offers` takes the **latest `scraped_at` per `id`** (group by `id`,
-`MAX(scraped_at)`) so a re-scrape supersedes, never duplicates.
+snapshots. The `MAX(scraped_at)` self-join (NOT a bare `SELECT *`) takes the **latest
+snapshot per `id`** so a re-scrape supersedes, never duplicates. `scraped_at` is
+`NOT NULL` (schema.sql:516) so no SQL-NULL pitfall in the `MAX`.
+
+**Skip NULL price/date (Codex finding #2/#3).** `plan_offer_date_pricing.price` is
+`NOT NULL` (schema.sql:633). The source columns `offers.price_per_person` and
+`offers.departure_date` are *nullable*. Today all 20 rows have both (verified live:
+`null_price=0, null_date=0`), but a strict insert of a future NULL-price/date row would
+THROW at insert time. So `promote-offers` **skips any offer with NULL
+`price_per_person` OR NULL `departure_date`**, prints a `— N skipped (no price/date)`
+note, and does not abort the run. (Fail-soft per-offer, not fail-loud per-run: one bad
+row must not block the good rows.)
 
 ### Write (per offer, mirroring import-offers' merge-by-id)
 
@@ -127,41 +142,54 @@ snapshots. `promote-offers` takes the **latest `scraped_at` per `id`** (group by
 
 ### Status + audit (once, after all offers)
 
-- `process_statuses` P3_4 → `researched` if currently null/pending/researching
-  (identical to `import_offers.rs:268-282`).
+- `process_statuses` P3_4 → `researched` if currently null/pending/researching, via
+  **upsert** (`INSERT … ON CONFLICT … DO UPDATE`, exactly `import_offers.rs:685-708`).
+  This is load-bearing (Codex finding #5): `select-offer`'s later `set_status` is a bare
+  `UPDATE` (`select_offer.rs:477`), so the P3_4 row **must already exist** before
+  `select-offer` runs. A plain `INSERT` (no ON CONFLICT) would also work on a fresh plan
+  but would throw on re-promote — use the upsert.
 - Events: `package_offers_promoted` (dest_process + timeline) with KV
   `{source_id, offers_found, note}` — a distinct event name from
   `package_offers_imported` so the timeline shows provenance honestly.
-- `operation_runs` row, `command_type='promote-offers'`,
-  `command_summary="<dest>: <src>:<n>, …"`.
-- `plans.version` + 1.
+- **Audit triad back-half:** call
+  `cascade::common::record_operation(conn, plan_id, "promote-offers", &summary,
+  version_before, version_after, &now_db)` — this writes the `operation_runs` row
+  (`command_type='promote-offers'`, `command_summary="<dest>: <src>:<n>, …"`) **and**
+  bumps `plans.version` in one call (Codex finding #4). Do NOT hand-roll the
+  `operation_runs` INSERT + `plans.version` UPDATE — `import_offers.rs:355-371` does that
+  by hand but that pattern is stale relative to current repo guidance (CLAUDE.md:55).
 
-(This is the audit triad. Reuse `cascade::common` helpers: `insert_event`,
-`insert_kv_rows`, `new_run_id`, `next_dest_process_sort_order`,
-`next_timeline_sort_order`, `now_db_datetime`, `now_rfc3339`, `read_version`.)
+(Reuse `cascade::common` helpers: `record_operation`, `insert_event`, `insert_kv_rows`,
+`next_dest_process_sort_order`, `next_timeline_sort_order`, `now_db_datetime`,
+`now_rfc3339`, `read_version`. Emit the events FIRST, then call `record_operation` once
+at the end — that ordering is the audit-triad contract.)
 
 ### Output (plain text, agent-first — no JSON)
 
 ```
 Promoting offers for <dest> from global offers table[ (dry-run)]...
-  <source>: <count> offer(s)[ — N skipped (no hotel)]
+  <source>: <count> offer(s)[ — N skipped (no price/date)]
 Saved to Turso (plan_offers).
 ```
 
 Edge: no matching offers → `No offers to promote (no matching rows in offers table).`,
-exit 0.
+exit 0. The per-source `— N skipped (no price/date)` note appears only when ≥1 offer for
+that source was dropped for NULL price/date.
 
 ## Module + dispatch
 
 - **CREATE** `rust/crates/travel-cli/src/promote_offers.rs` — `PromoteOpts`,
   `parse_args`, `run`. Structurally parallels `import_offers.rs` but reads the `offers`
-  table instead of files. Reuse `delete_offer_rows`-equivalent logic and the
-  `cascade::common` audit helpers (do NOT re-roll the triad).
+  table instead of files. **Copy** the delete-across-the-`plan_offer_*`-family logic
+  (`import_offers.rs:407-438`) into this module — `import_offers::delete_offer_rows` is
+  **private** (Codex finding #7b), so it can't be called; copy the table list + key
+  logic verbatim. Use the `cascade::common` audit helpers; do NOT re-roll the triad.
 - **EDIT** `rust/crates/travel-cli/src/main.rs` — add a dispatch arm
   `[cmd, rest @ ..] if cmd == "promote-offers"` mirroring the `import-offers` arm
   (lines 146-154), with `--help` text.
-- **EDIT** `rust/crates/travel-cli/src/lib.rs` (or wherever modules are declared) —
-  `mod promote_offers;`.
+- **EDIT** `rust/crates/travel-cli/src/main.rs` — add `mod promote_offers;` alongside the
+  other `mod` declarations (e.g. next to `mod import_offers;` at line 16). **There is no
+  `lib.rs`** — modules are declared in `main.rs` (Codex finding #7a).
 
 ## A precondition the user must satisfy (out of scope for this command)
 
@@ -189,7 +217,12 @@ Real-Turso integration test `rust/crates/travel-cli/tests/promote_offers.rs`
 5. `--dry-run` writes nothing (row counts unchanged).
 6. Latest-snapshot: seed the same `id` twice with different `scraped_at`; assert only
    the latest is promoted.
-7. **Teardown** all seeded rows.
+7. Skip-NULL: seed one offer with NULL `price_per_person` (or NULL `departure_date`);
+   assert it is skipped (no `plan_offers` row), the run still succeeds, and the good
+   rows are promoted.
+8. Re-promote idempotency: run twice; assert no duplicate rows and P3_4 stays
+   `researched` (the upsert path, Codex finding #5).
+9. **Teardown** all seeded rows.
 
 ## Verification
 
@@ -207,3 +240,27 @@ TRAVEL_PLAN_ID=<plan> ./bin/travel promote-offers --from-offers --dest tokyo_sep
 - Promoting non-package types — the mapping is type-agnostic, so flight/hotel offers
   promote too, but no current rows exercise those paths; tests cover the package +
   synthetic-flight cases only.
+
+## Review corrections (Codex 2026-06-28, each corroborated against source)
+
+All findings were verified against the cited file:line and live DB before folding in.
+
+1. **Audit triad — use `record_operation`** (common.rs:291). The spec originally listed
+   the helpers but omitted it; `import_offers.rs:355-371` hand-rolls operation_runs +
+   plans.version, which is the stale pattern. Corrected in "Status + audit".
+2. **P3_4 must be UPSERTed** — `select-offer`'s `set_status` is a bare `UPDATE`
+   (select_offer.rs:477); the row must pre-exist. Corrected to require the
+   `ON CONFLICT … DO UPDATE` upsert.
+3. **No `lib.rs`** — modules are declared in `main.rs` (mod import_offers; line 16).
+   Corrected the "module + dispatch" section.
+4. **`delete_offer_rows` is private** (import_offers.rs:407) — copy the logic, don't
+   call it. Corrected.
+5. **Nullable source price/date** — `plan_offer_date_pricing.price` is NOT NULL but
+   `offers.price_per_person`/`departure_date` are nullable. Added per-offer fail-soft
+   skip (no current rows trigger it; future-proofing).
+6. **Latest-snapshot needs a `MAX(scraped_at)` self-join**, not a bare `SELECT *`.
+   Corrected the read query.
+
+Findings #1 (mapping OK, provenance optional), #6 (flight decision OK) confirmed sound
+with no change needed. `plan_offer_provenance` is intentionally left out (select-offer
+doesn't need it; freshness/reporting can be added later if wanted — YAGNI for now).
