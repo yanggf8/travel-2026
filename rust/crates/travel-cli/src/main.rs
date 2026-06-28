@@ -17,6 +17,7 @@ mod freshness;
 mod import_offers;
 mod leave;
 mod offers;
+mod ota_status; // ota-status DB-native provider coverage view
 mod plan;
 mod promote_offers;
 mod plan_resolver;
@@ -172,6 +173,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-ota-region" => {
             set_ota_catalog::run_set_region(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "ota-status" => {
+            ota_status::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "add-offer" => {
             add_offer::run(rest).await
