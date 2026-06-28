@@ -15,6 +15,15 @@ live and delete its archived Python scraper.
 > and the **AGENT-PARSE path** (the coding agent reads the capture `raw_text` and emits offers as
 > TSV → `bridge/ota_write_llm_offers.py`; the regex `ota_cli parse` is now the fallback, so the
 > gate's G2/G3 regex-verify steps are N/A for agent-parsed sources).
+> **CLOSED (2026-06-28): offers now flow into a plan; tigerair/trip revisited.** Created the
+> `tokyo-sep-2026` TEST PLAN via `shaping-adopt --create-plan` and plan-tagged the 20 offers; built
+> **`promote-offers`** (global `offers` → plan-scoped `plan_offers`) so `select-offer` can consume
+> scraped offers — proven live end-to-end (`promote-offers` → `select-offer` populates P4). Spec:
+> `docs/superpowers/specs/2026-06-28-promote-offers-bridge-design.md`. Revisited `tigerair`/`trip`:
+> decision stands (DEFERRED, redundant with google_flights). Fixed `seed_ota_sources` to UPSERT so
+> live `ota_sources` notes sync to the committed PROVEN/DEFERRED seed on `db migrate` (was
+> INSERT OR IGNORE). The OTA migration agenda is done.
+>
 > **SWEEP EFFECTIVELY COMPLETE (2026-06-27): 6 sources PROVEN, 2 blocked, 2 deferred.** Every active
 > source is handled. `./bin/travel query-offers --destination tokyo_sep_2026` = 20 real package
 > offers across 4 OTAs (eztravel 9, settour 1, besttour 5, travel4u 5), plus flight (google_flights)

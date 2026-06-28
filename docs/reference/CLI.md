@@ -53,6 +53,13 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ## Turso DB
 ```bash
 ./bin/travel import-offers --dir scrapes --dest tokyo_2026 [--start 2026-02-13 --end 2026-02-17] [--dry-run]
+# Bridge OTA-scraped offers (global `offers` table) → plan-scoped `plan_offers` so select-offer
+# can consume them. Reads latest snapshot per id; maps hotel + a synthesized date_pricing row;
+# writes plan_offer_flights ONLY when flight_outbound/return are non-NULL (no id-string parsing);
+# skips offers with NULL price/date; flips P3_4→researched; audit triad. (--dest is the
+# global offers.destination; --plan-id owns the resulting plan_offers rows.)
+./bin/travel promote-offers --from-offers --dest tokyo_sep_2026 --plan-id tokyo-sep-2026 \
+  [--source eztravel] [--start 2026-09-01 --end 2026-09-30] [--pax 2] [--dry-run]
 ./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
 ./bin/travel query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000]
 ./bin/travel check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026

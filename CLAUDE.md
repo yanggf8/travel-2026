@@ -116,6 +116,7 @@ cargo test -p travel-cli ranks_candidates                 # one test by name (su
 ```
 
 - **Real-Turso integration tests** — `rust/crates/travel-cli/tests/*.rs`; seed → run binary → SELECT → assert → teardown; skip cleanly if creds absent. Unit tests live inline in each `src/*.rs` module.
+- **Panic-safe teardown (REQUIRED).** These tests hit the SHARED live Turso DB, so a leaked test row pollutes production. Do NOT call `teardown(...)` as the last statement — a panicking assertion (every TDD RED run) unwinds past it and the rows leak. Arm the shared RAII guard right after the plan-id is bound: `mod common; use common::Guard;` then `let _g = Guard::new({ let (plan,dest)=(plan.clone(),dest.clone()); move || teardown(&plan,&dest) });`. Its `Drop` runs teardown on both return and panic. Keep an optional pre-clean `teardown(...)` BEFORE the guard (clears a prior run's leftovers); never leave a trailing one. Helper: `rust/crates/travel-cli/tests/common/mod.rs`.
 - Fixtures: `rust/crates/travel-cli/tests/fixtures/`.
 
 ### Pre-commit
@@ -162,6 +163,7 @@ User intent                          → Skill / Action
 "compare offers"                     → /stage2-shop-transport
 "query offers"                       → ./bin/travel query-offers --plan-id <id> --dest <slug>
 "import scraped files"               → ./bin/travel import-offers --dir scrapes --dest <slug>
+"use scraped OTA offers in a plan"   → ./bin/travel promote-offers --from-offers --dest <slug> --plan-id <id>  (global offers → plan_offers; then select-offer)
 "is data fresh"                      → ./bin/travel check-freshness --source <s>
 "book separately"                    → /stage2-shop-transport (uses /separate-bookings)
 "how many leave days"                → ./bin/travel leave calc
@@ -242,17 +244,17 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 
 | Source ID | Name | Type | Status |
 |-----------|------|------|--------|
-| `besttour` | 喜鴻假期 | package | ✅ active — needs real listing URL |
+| `besttour` | 喜鴻假期 | package | ✅ PROVEN REAL (2026-06-26) — group tours |
 | `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ active — ⛔ renderer-wedge (WSLg), parked |
 | `lifetour` | 五福旅遊 | package, flight, hotel | ✅ active — ⛔ renderer-wedge (WSLg), parked |
-| `settour` | 東南旅遊 | package, flight, hotel | ✅ active — SPA, custom parser |
-| `trip` | Trip.com | flight | ⚠️ scrape-only (login wall) |
+| `settour` | 東南旅遊 | package, flight, hotel | ✅ PROVEN REAL (2026-06-26) — SPA, agent-parse |
+| `trip` | Trip.com | flight | ✅ active — ⏸️ DEFERRED (redundant w/ google_flights; login-wall) |
 | `booking` | Booking.com | hotel | ❌ cloudflare (inactive) |
-| `tigerair` | 台灣虎航 | flight | ✅ active — form-only (no deep-link) |
+| `tigerair` | 台灣虎航 | flight | ✅ active — ⏸️ DEFERRED (redundant w/ google_flights; Quasar SPA) |
 | `agoda` | Agoda | hotel | ✅ PROVEN REAL (2026-06-26) |
 | `google_flights` | Google Flights | flight | ✅ PROVEN REAL (2026-06-26) |
 | `eztravel` | 易遊網 | package (機加酒) | ✅ PROVEN REAL (2026-06-26) |
-| `travel4u` | 山富旅遊 | package | ✅ active — needs numeric area_code |
+| `travel4u` | 山富旅遊 | package | ✅ PROVEN REAL (2026-06-27) — group tours |
 | `skyscanner` | Skyscanner | flight | ❌ captcha (inactive) |
 | `jalan` | じゃらん | hotel | ❌ unsupported |
 | `rakuten_travel` | 楽天トラベル | hotel, package | ❌ unsupported |
@@ -304,6 +306,7 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 
 # Offers (Turso)
 ./bin/travel import-offers --dir scrapes --dest tokyo_2026 [--start ... --end ...] [--dry-run]
+./bin/travel promote-offers --from-offers --dest tokyo_sep_2026 --plan-id tokyo-sep-2026 [--source <id>] [--dry-run]   # global offers → plan_offers (then select-offer)
 ./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
 ./bin/travel check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
 
@@ -477,5 +480,5 @@ Remaining agenda (none blocking — the project is between trips and the live DB
 
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **Worker `workers-rs` port — DONE & DEPLOYED** (PR #4, merged to master). The Rust dashboard lives at `workers/trip-dashboard-rs/` and is live at `trip-dashboard-rs.yanggf.workers.dev` (keyless maps, token auth, meal-pin links). The old TS worker (`workers/trip-dashboard/`) still exists and still serves the original URL; the `-rs` worker is meant to eventually reclaim it (a separate cutover, not yet done). See "Trip Dashboard — two workers" below.
-- **OTA migration to gwebcdb (WSLg)** — backend DONE & VERIFIED; **ALL 3 TYPES NOW PROVEN REAL** (2026-06-26): flight=`google_flights` (34 offers), hotel=`agoda` (5), **package=`eztravel` (9, first-ever real package)** — all via the AGENT-PARSE path (agent reads capture `raw_text` → TSV → `bridge/ota_write_llm_offers.py`; regex `ota_cli parse` is the fallback). Per-agent Chrome via `bridge/chrome_session.py acquire` (Chrome picks the port). `chromeport` is RETIRED — don't run/repair it. What's LEFT: (1) create/tag the `2026_sep` TEST PLAN + plan-tag these offers (currently source-tagged only); (2) G5/G6 per source (stamp `parser_rules.source_url`, then delete each archived parser); (3) more package coverage — `settour` (SPA, drive like eztravel), `besttour` (find real listing URL), `travel4u` (resolve numeric `area_code`). **BLOCKED (renderer-wedge under WSLg, parked):** `liontravel` + `lifetour` SPAs crash Chrome's renderer — do NOT retry as "needs a flag." Form-driving recipe (React-autocomplete coax + dpicker dates + 搜尋): gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
+- **OTA migration to gwebcdb (WSLg) — SWEEP COMPLETE + offers now flow into a plan (2026-06-28).** All 3 types PROVEN REAL via the AGENT-PARSE path (agent reads capture `raw_text` → TSV → `bridge/ota_write_llm_offers.py`; regex `ota_cli parse` is the fallback): flight=`google_flights`, hotel=`agoda`, package=`eztravel`/`settour`/`besttour`/`travel4u`. 6 sources G1–G6; `tokyo_sep_2026` carries 20 real package offers (eztravel 9 / settour 1 / besttour 5 / travel4u 5). Per-agent Chrome via `bridge/chrome_session.py acquire`. `chromeport` is RETIRED — don't run/repair it. **DONE this session:** (a) created the `tokyo-sep-2026` TEST PLAN via `shaping-adopt --create-plan` and plan-tagged the 20 offers; (b) built **`promote-offers`** — bridges the global `offers` table → plan-scoped `plan_offers` so `select-offer` can consume scraped offers (the two were disjoint); proven live end-to-end (`promote-offers` → `select-offer` populates P4). Spec: `docs/superpowers/specs/2026-06-28-promote-offers-bridge-design.md`. **BLOCKED (renderer-wedge under WSLg, parked):** `liontravel` + `lifetour` SPAs crash Chrome's renderer — do NOT retry as "needs a flag." **DEFERRED (redundant flight-only):** `tigerair` (Quasar SPA) + `trip` (login-wall) — google_flights covers the flight type; revisited 2026-06-28, decision stands. Live `ota_sources` notes now sync to the committed seed on `db migrate` (was INSERT OR IGNORE). Form-driving recipe: gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
 - **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.
