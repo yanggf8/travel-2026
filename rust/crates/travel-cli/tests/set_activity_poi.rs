@@ -13,6 +13,9 @@
 //! Pattern mirrors set_mutation_bugs.rs: seed a throwaway plan, run the binary,
 //! SELECT to assert, tear down. Skips cleanly when Turso creds are absent.
 
+mod common;
+use common::Guard;
+
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -115,6 +118,10 @@ fn set_activity_poi_links_by_id_with_match_disambiguator() {
     let tag = nanos();
     let plan_id = format!("test-actpoi-link-{tag}");
     let dest = format!("actpoilink_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
@@ -138,7 +145,6 @@ fn set_activity_poi_links_by_id_with_match_disambiguator() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-activity-poi' AND status = 'completed'"
     ));
-    teardown(&plan_id, &dest);
 
     assert!(ok, "set-activity-poi should succeed; stdout={stdout} stderr={stderr}");
     assert!(
@@ -158,6 +164,10 @@ fn set_activity_poi_fails_loud_when_ambiguous() {
     let tag = nanos();
     let plan_id = format!("test-actpoi-ambig-{tag}");
     let dest = format!("actpoiambig_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
@@ -176,7 +186,6 @@ fn set_activity_poi_fails_loud_when_ambiguous() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-activity-poi' AND status = 'completed'"
     ));
-    teardown(&plan_id, &dest);
 
     assert!(!ok, "ambiguous match must exit non-zero; stderr={stderr}");
     assert_eq!(any_linked, Some(0), "no activity may be linked on an ambiguous call");
@@ -189,6 +198,10 @@ fn set_activity_poi_fails_loud_on_unknown_poi() {
     let tag = nanos();
     let plan_id = format!("test-actpoi-bad-{tag}");
     let dest = format!("actpoibad_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
@@ -206,7 +219,6 @@ fn set_activity_poi_fails_loud_on_unknown_poi() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-activity-poi' AND status = 'completed'"
     ));
-    teardown(&plan_id, &dest);
 
     assert!(!ok, "unknown poi_id must exit non-zero; stderr={stderr}");
     assert_eq!(any_linked, Some(0), "no activity may be linked to an unknown poi_id");

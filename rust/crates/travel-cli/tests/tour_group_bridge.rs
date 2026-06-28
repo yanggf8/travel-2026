@@ -16,6 +16,9 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 static BRIDGE_LOCK: Mutex<()> = Mutex::new(());
 
 fn bin() -> &'static str {
@@ -144,6 +147,11 @@ async fn bridge_audit_set_into_adopted_plan() {
     let plan = format!("test-plan-bridge-{tag}");
 
     teardown(&run, &plan, &candidate);
+    // Guard runs teardown on return AND on panic (so a failing assert can't leak rows).
+    let _g = Guard::new({
+        let (run, plan, candidate) = (run.clone(), plan.clone(), candidate.clone());
+        move || teardown(&run, &plan, &candidate)
+    });
 
     // Audit-set fixture (same shape as the TS test): a1 raw cheapest + top-3,
     // a2 quality-floor (4-star) + top-3, a3 top-3, a4 5-star NOT in any set,
@@ -156,7 +164,6 @@ async fn bridge_audit_set_into_adopted_plan() {
 
     let (ok, stdout, stderr) = seed_and_adopt(&run, &candidate, &plan);
     if !ok && is_skip(&stderr) {
-        teardown(&run, &plan, &candidate);
         eprintln!("skipping (no creds mid-test): {}", stderr.trim());
         return;
     }
@@ -186,6 +193,4 @@ async fn bridge_audit_set_into_adopted_plan() {
         "SELECT COUNT(*) FROM plan_offer_group_meta WHERE plan_id = '{plan}'"
     ));
     assert_eq!(scalar(&meta_n).as_deref(), Some("4"), "4 audit offers → 4 group_meta rows");
-
-    teardown(&run, &plan, &candidate);
 }

@@ -9,6 +9,9 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 static UPSERT_LOCK: Mutex<()> = Mutex::new(());
 
 fn bin() -> &'static str {
@@ -84,6 +87,11 @@ async fn select_offer_populates_missing_p4_status_row() {
     let offer = format!("up-offer-{tag}");
 
     teardown(&plan, &dest);
+    // Guard runs teardown on return AND on panic (so a failing assert can't leak rows).
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.clone());
+        move || teardown(&plan, &dest)
+    });
 
     // Minimal plan: plans + plan_metadata.
     db_exec(&format!(
@@ -126,9 +134,8 @@ async fn select_offer_populates_missing_p4_status_row() {
     let so_out = String::from_utf8_lossy(&out.stdout).into_owned();
     let so_err = String::from_utf8_lossy(&out.stderr).into_owned();
     if !so_ok && is_skip(&so_err) {
-        teardown(&plan, &dest);
         eprintln!("skipping (no creds mid-test): {}", so_err.trim());
-        return;
+        return; // _cleanup Drop tears down
     }
     assert!(so_ok, "select-offer should succeed; err={so_err}");
 
@@ -154,5 +161,5 @@ async fn select_offer_populates_missing_p4_status_row() {
         "select-offer must create+populate the missing P4 row (issue #5 upsert fix); got {p4:?}"
     );
 
-    teardown(&plan, &dest);
+    // _cleanup Drop runs teardown here (and on any panic above).
 }

@@ -21,6 +21,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -134,6 +137,10 @@ fn count(sql: &str) -> Option<i64> {
 fn set_flight_persists_on_fresh_plan() {
     let tag = nanos();
     let plan_id = format!("test-setbug-flight-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugflight_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -155,7 +162,6 @@ fn set_flight_persists_on_fresh_plan() {
     let flight = db_exec(&format!(
         "SELECT flight_number FROM flight_legs WHERE plan_id = '{plan_id}' AND direction = 'outbound'"
     ));
-    teardown(&plan_id);
 
     assert!(ok, "set-flight should succeed on a fresh plan; stdout={stdout} stderr={stderr}");
     assert_eq!(row_count, Some(1), "an outbound flight_legs row must be persisted");
@@ -170,6 +176,10 @@ fn set_flight_persists_on_fresh_plan() {
 fn set_hotel_persists_on_fresh_plan() {
     let tag = nanos();
     let plan_id = format!("test-setbug-hotel-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbughotel_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -193,7 +203,6 @@ fn set_hotel_persists_on_fresh_plan() {
     let access_count = count(&format!(
         "SELECT COUNT(*) AS n FROM hotel_access_lines WHERE plan_id = '{plan_id}'"
     ));
-    teardown(&plan_id);
 
     assert!(ok, "set-hotel should succeed on a fresh plan; stdout={stdout} stderr={stderr}");
     assert_eq!(row_count, Some(1), "a hotels row must be persisted");
@@ -211,6 +220,10 @@ fn set_hotel_persists_on_fresh_plan() {
 fn set_flight_accepts_dest_flag() {
     let tag = nanos();
     let plan_id = format!("test-setbug-fdest-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugfdest_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -223,7 +236,6 @@ fn set_flight_accepts_dest_flag() {
             "--flight", "CI120", "--from", "TPE", "--to", "OKA",
         ],
     );
-    teardown(&plan_id);
 
     assert!(
         ok && !stderr.contains("unknown argument: --dest"),
@@ -237,6 +249,10 @@ fn set_flight_accepts_dest_flag() {
 fn set_airport_transfer_persists_on_fresh_plan() {
     let tag = nanos();
     let plan_id = format!("test-setbug-xfer-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugxfer_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -258,7 +274,6 @@ fn set_airport_transfer_persists_on_fresh_plan() {
         "SELECT selected_title FROM airport_transfers \
          WHERE plan_id = '{plan_id}' AND direction = 'arrival'"
     ));
-    teardown(&plan_id);
 
     assert!(
         ok && !stderr.contains("unknown argument: --dest"),
@@ -280,6 +295,10 @@ fn set_airport_transfer_persists_on_fresh_plan() {
 fn set_day_theme_fails_loud_when_day_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-theme-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugtheme_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -295,7 +314,6 @@ fn set_day_theme_fails_loud_when_day_missing() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-day-theme' AND status = 'completed'"
     ));
-    teardown(&plan_id);
 
     assert!(
         !ok,
@@ -313,6 +331,10 @@ fn set_day_theme_fails_loud_when_day_missing() {
 fn set_tod_focus_fails_loud_when_session_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-tod-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugtod_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -327,7 +349,6 @@ fn set_tod_focus_fails_loud_when_session_missing() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-tod-focus' AND status = 'completed'"
     ));
-    teardown(&plan_id);
 
     assert!(
         !ok,
@@ -345,6 +366,10 @@ fn set_tod_focus_fails_loud_when_session_missing() {
 fn set_route_segment_fails_loud_when_day_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-route-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugroute_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -366,7 +391,6 @@ fn set_route_segment_fails_loud_when_day_missing() {
     let seg = count(&format!(
         "SELECT COUNT(*) AS n FROM day_route_segments WHERE plan_id = '{plan_id}'"
     ));
-    teardown(&plan_id);
 
     assert!(
         !ok,
@@ -389,6 +413,10 @@ fn set_route_segment_fails_loud_when_day_missing() {
 fn set_activity_time_fails_loud_when_activity_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-act-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugact_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -403,7 +431,6 @@ fn set_activity_time_fails_loud_when_activity_missing() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-activity-time' AND status = 'completed'"
     ));
-    teardown(&plan_id);
 
     assert!(
         !ok,
@@ -424,6 +451,10 @@ fn set_activity_time_fails_loud_when_activity_missing() {
 fn set_flight_honors_plan_id_flag() {
     let tag = nanos();
     let plan_id = format!("test-setbug-planid-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugplanid_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -437,7 +468,6 @@ fn set_flight_honors_plan_id_flag() {
     let row_count = count(&format!(
         "SELECT COUNT(*) AS n FROM flight_legs WHERE plan_id = '{plan_id}' AND direction = 'outbound'"
     ));
-    teardown(&plan_id);
 
     assert!(
         ok && !stderr.contains("unknown argument: --plan-id"),
@@ -457,6 +487,10 @@ fn set_flight_honors_plan_id_flag() {
 fn set_route_segment_honors_plan_id_flag() {
     let tag = nanos();
     let plan_id = format!("test-setbug-rsegplanid-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("setbugrsegplanid_{tag}");
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -468,7 +502,6 @@ fn set_route_segment_honors_plan_id_flag() {
     ))
     .is_none()
     {
-        teardown(&plan_id);
         return;
     }
 
@@ -480,7 +513,6 @@ fn set_route_segment_honors_plan_id_flag() {
     let seg = count(&format!(
         "SELECT COUNT(*) AS n FROM day_route_segments WHERE plan_id = '{plan_id}' AND day_number = 1"
     ));
-    teardown(&plan_id);
 
     assert!(
         ok && !stderr.contains("unknown argument: --plan-id"),

@@ -14,6 +14,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -104,6 +107,10 @@ fn mark_plan_deleted_soft_deletes_and_hides() {
     if !seed_bare(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // Pre-condition: plan lists.
     let (_, plans_before, _) = run_cmd(&["plans"]);
@@ -132,8 +139,6 @@ fn mark_plan_deleted_soft_deletes_and_hides() {
 
     // Idempotent re-run reports "already".
     let (ok2, stdout2, _) = run_cmd(&["mark-plan-deleted", &plan_id]);
-
-    teardown(&plan_id);
 
     assert!(was_set, "plans.deleted_at must be set after mark-plan-deleted");
     assert!(
@@ -195,6 +200,10 @@ fn db_cleanup_deleted_dry_run_then_wipe() {
     if !seed_bare(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // Seed a couple of plan-scoped child rows so there's something to count.
     let _ = db_exec(&format!(
@@ -253,8 +262,6 @@ fn db_cleanup_deleted_dry_run_then_wipe() {
 
     // `travel plans` no longer shows it (it was already hidden, now truly gone).
     let (_, plans_after, _) = run_cmd(&["plans"]);
-
-    teardown(&plan_id); // belt-and-suspenders; should already be empty
 
     assert_eq!(gone_plan.as_deref(), Some("0"), "plans row must be wiped");
     assert_eq!(gone_meta.as_deref(), Some("0"), "plan_metadata row must be wiped");

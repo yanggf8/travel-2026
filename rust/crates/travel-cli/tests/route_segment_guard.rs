@@ -19,6 +19,9 @@
 //! row, run the binary, SELECT to assert, tear down. Skips cleanly when Turso
 //! creds are absent. NEVER touches a real plan.
 
+mod common;
+use common::Guard;
+
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -133,6 +136,10 @@ fn set_route_segment_rejects_mode_only_stop() {
     let tag = nanos();
     let plan_id = format!("test-rsg-junk-{tag}");
     let dest = format!("rsgjunk_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
@@ -143,7 +150,6 @@ fn set_route_segment_rejects_mode_only_stop() {
 
     let seg = seg_count(&plan_id);
     let audit = completed_audit_count(&plan_id, "set-route-segment");
-    teardown(&plan_id);
 
     assert!(!ok, "a mode-only stop must exit non-zero; stdout={stdout} stderr={stderr}");
     assert_eq!(seg, Some(0), "NOTHING may be written when a stop is junk");
@@ -156,6 +162,10 @@ fn set_route_segment_rejects_empty_after_clean() {
     let tag = nanos();
     let plan_id = format!("test-rsg-empty-{tag}");
     let dest = format!("rsgempty_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
@@ -164,7 +174,6 @@ fn set_route_segment_rejects_empty_after_clean() {
     let (ok, _stdout, _stderr) =
         run_cmd(&plan_id, &["set-route-segment", "1", "0", AKAMINE_EKI, junk, "transit", "--dest", &dest]);
     let seg = seg_count(&plan_id);
-    teardown(&plan_id);
     assert!(!ok, "an empty-after-clean stop must be rejected");
     assert_eq!(seg, Some(0), "NOTHING may be written");
 }
@@ -175,13 +184,16 @@ fn set_route_segment_rejects_clock_time_stop() {
     let tag = nanos();
     let plan_id = format!("test-rsg-clock-{tag}");
     let dest = format!("rsgclock_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
     let (ok, _stdout, _stderr) =
         run_cmd(&plan_id, &["set-route-segment", "1", "0", "08:30", IIAS, "driving", "--dest", &dest]);
     let seg = seg_count(&plan_id);
-    teardown(&plan_id);
     assert!(!ok, "a bare clock-time stop must be rejected");
     assert_eq!(seg, Some(0), "NOTHING may be written");
 }
@@ -192,6 +204,10 @@ fn set_route_segment_rejects_cross_country_pair() {
     let tag = nanos();
     let plan_id = format!("test-rsg-xc-{tag}");
     let dest = format!("rsgxc_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
@@ -201,7 +217,6 @@ fn set_route_segment_rejects_cross_country_pair() {
         &["set-route-segment", "1", "0", HONGSHULIN, NAHA_AIRPORT, "driving", "--dest", &dest],
     );
     let seg = seg_count(&plan_id);
-    teardown(&plan_id);
     assert!(!ok, "a TW→JP ground leg must be rejected; stdout={stdout} stderr={stderr}");
     assert_eq!(seg, Some(0), "NOTHING may be written for a cross-country leg");
 }
@@ -212,6 +227,10 @@ fn set_route_segment_rejects_walking_over_rail() {
     let tag = nanos();
     let plan_id = format!("test-rsg-walkrail-{tag}");
     let dest = format!("rsgwalkrail_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
@@ -221,7 +240,6 @@ fn set_route_segment_rejects_walking_over_rail() {
         &["set-route-segment", "1", "0", AKAMINE_EKI, MONORAIL_STN, "walking", "--dest", &dest],
     );
     let seg = seg_count(&plan_id);
-    teardown(&plan_id);
     assert!(!ok, "a walking leg over rail must be rejected");
     assert_eq!(seg, Some(0), "NOTHING may be written");
 }
@@ -232,6 +250,10 @@ fn set_route_segment_passes_normal_segment() {
     let tag = nanos();
     let plan_id = format!("test-rsg-ok-{tag}");
     let dest = format!("rsgok_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
@@ -242,7 +264,6 @@ fn set_route_segment_passes_normal_segment() {
     );
     let seg = seg_count(&plan_id);
     let audit = completed_audit_count(&plan_id, "set-route-segment");
-    teardown(&plan_id);
     assert!(ok, "a clean segment must pass; stdout={stdout} stderr={stderr}");
     assert_eq!(seg, Some(1), "the clean segment must persist exactly one row");
     assert_eq!(audit, Some(1), "a clean write must record a completed audit row");
@@ -254,6 +275,10 @@ fn set_route_segments_bulk_rejects_whole_batch_on_one_bad() {
     let tag = nanos();
     let plan_id = format!("test-rsg-bulk-{tag}");
     let dest = format!("rsgbulk_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
@@ -272,7 +297,6 @@ fn set_route_segments_bulk_rejects_whole_batch_on_one_bad() {
     );
     let seg = seg_count(&plan_id);
     let audit = completed_audit_count(&plan_id, "set-route-segments-bulk");
-    teardown(&plan_id);
     assert!(!ok, "a batch with any bad segment must exit non-zero; stdout={stdout} stderr={stderr}");
     assert!(
         stderr.contains("--seg #1"),
@@ -288,6 +312,10 @@ fn set_route_segments_bulk_passes_all_clean() {
     let tag = nanos();
     let plan_id = format!("test-rsg-bulkok-{tag}");
     let dest = format!("rsgbulkok_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
     }
@@ -298,7 +326,6 @@ fn set_route_segments_bulk_passes_all_clean() {
         &["set-route-segments-bulk", "1", "--seg", &s1, "--seg", &s2, "--dest", &dest],
     );
     let seg = seg_count(&plan_id);
-    teardown(&plan_id);
     assert!(ok, "an all-clean batch must pass; stdout={stdout} stderr={stderr}");
     assert_eq!(seg, Some(2), "both clean segments must persist");
 }

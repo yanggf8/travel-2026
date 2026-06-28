@@ -9,6 +9,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -99,72 +102,68 @@ fn count(sql: &str) -> Option<i64> {
 fn full_maps_fresh_lifecycle() {
     let tag = nanos();
     let plan_id = format!("test-mapsfresh-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("mapsfresh_{tag}");
 
     if !seed(&plan_id, &dest) {
         return; // credless skip
     }
 
-    // Always tear down, even on assertion failure.
-    let result = std::panic::catch_unwind(|| {
-        // 1. No snapshot row yet → check-maps-fresh warns "never snapshotted".
-        let (ok, stdout, stderr) = run_cmd(&["check-maps-fresh", "--plan-id", &plan_id]);
-        assert!(ok, "check-maps-fresh should exit 0 (advisory). stderr: {stderr}");
-        assert!(
-            stdout.contains("never snapshotted") && stdout.contains(&plan_id),
-            "expected 'never snapshotted' warning for {plan_id}, got:\n{stdout}"
-        );
+    // 1. No snapshot row yet → check-maps-fresh warns "never snapshotted".
+    let (ok, stdout, stderr) = run_cmd(&["check-maps-fresh", "--plan-id", &plan_id]);
+    assert!(ok, "check-maps-fresh should exit 0 (advisory). stderr: {stderr}");
+    assert!(
+        stdout.contains("never snapshotted") && stdout.contains(&plan_id),
+        "expected 'never snapshotted' warning for {plan_id}, got:\n{stdout}"
+    );
 
-        // 2. mark-maps-snapshotted upserts exactly one row.
-        let (ok, stdout, stderr) = run_cmd(&["mark-maps-snapshotted", &plan_id]);
-        assert!(ok, "mark-maps-snapshotted should succeed. stderr: {stderr}");
-        assert!(
-            stdout.contains("marked maps snapshotted") && stdout.contains(&plan_id),
-            "unexpected mark output:\n{stdout}"
-        );
-        let n = count(&format!(
-            "SELECT COUNT(*) AS n FROM plan_map_snapshots WHERE plan_id = '{plan_id}'"
-        ))
-        .expect("count after mark");
-        assert_eq!(n, 1, "exactly one snapshot row expected after mark");
+    // 2. mark-maps-snapshotted upserts exactly one row.
+    let (ok, stdout, stderr) = run_cmd(&["mark-maps-snapshotted", &plan_id]);
+    assert!(ok, "mark-maps-snapshotted should succeed. stderr: {stderr}");
+    assert!(
+        stdout.contains("marked maps snapshotted") && stdout.contains(&plan_id),
+        "unexpected mark output:\n{stdout}"
+    );
+    let n = count(&format!(
+        "SELECT COUNT(*) AS n FROM plan_map_snapshots WHERE plan_id = '{plan_id}'"
+    ))
+    .expect("count after mark");
+    assert_eq!(n, 1, "exactly one snapshot row expected after mark");
 
-        // Upsert idempotency: a second mark stays at one row.
-        let (ok, _, _) = run_cmd(&["mark-maps-snapshotted", &plan_id]);
-        assert!(ok, "second mark-maps-snapshotted should succeed");
-        let n = count(&format!(
-            "SELECT COUNT(*) AS n FROM plan_map_snapshots WHERE plan_id = '{plan_id}'"
-        ))
-        .expect("count after 2nd mark");
-        assert_eq!(n, 1, "upsert must not create a duplicate row");
+    // Upsert idempotency: a second mark stays at one row.
+    let (ok, _, _) = run_cmd(&["mark-maps-snapshotted", &plan_id]);
+    assert!(ok, "second mark-maps-snapshotted should succeed");
+    let n = count(&format!(
+        "SELECT COUNT(*) AS n FROM plan_map_snapshots WHERE plan_id = '{plan_id}'"
+    ))
+    .expect("count after 2nd mark");
+    assert_eq!(n, 1, "upsert must not create a duplicate row");
 
-        // 3. Right after snapshot, itinerary is older or equal → fresh.
-        //    Force the seed rows to be OLDER than the snapshot to avoid a
-        //    same-second tie reading as stale.
-        db_exec(&format!(
-            "UPDATE activities SET updated_at = datetime('now','-1 hour') WHERE plan_id = '{plan_id}'; \
-             UPDATE days SET updated_at = datetime('now','-1 hour') WHERE plan_id = '{plan_id}';"
-        ));
-        let (ok, stdout, _) = run_cmd(&["check-maps-fresh", "--plan-id", &plan_id]);
-        assert!(ok, "check-maps-fresh exit 0");
-        assert!(
-            stdout.contains("maps fresh") && stdout.contains(&plan_id),
-            "expected 'maps fresh' after snapshot, got:\n{stdout}"
-        );
+    // 3. Right after snapshot, itinerary is older or equal → fresh.
+    //    Force the seed rows to be OLDER than the snapshot to avoid a
+    //    same-second tie reading as stale.
+    db_exec(&format!(
+        "UPDATE activities SET updated_at = datetime('now','-1 hour') WHERE plan_id = '{plan_id}'; \
+         UPDATE days SET updated_at = datetime('now','-1 hour') WHERE plan_id = '{plan_id}';"
+    ));
+    let (ok, stdout, _) = run_cmd(&["check-maps-fresh", "--plan-id", &plan_id]);
+    assert!(ok, "check-maps-fresh exit 0");
+    assert!(
+        stdout.contains("maps fresh") && stdout.contains(&plan_id),
+        "expected 'maps fresh' after snapshot, got:\n{stdout}"
+    );
 
-        // 4. Touch an activity to be NEWER than the snapshot → STALE.
-        db_exec(&format!(
-            "UPDATE activities SET updated_at = datetime('now','+1 hour') WHERE plan_id = '{plan_id}'"
-        ));
-        let (ok, stdout, _) = run_cmd(&["check-maps-fresh", "--plan-id", &plan_id]);
-        assert!(ok, "check-maps-fresh exit 0 even when stale (advisory)");
-        assert!(
-            stdout.contains("STALE") && stdout.contains(&plan_id),
-            "expected STALE warning after itinerary edit, got:\n{stdout}"
-        );
-    });
-
-    teardown(&plan_id);
-    if let Err(e) = result {
-        std::panic::resume_unwind(e);
-    }
+    // 4. Touch an activity to be NEWER than the snapshot → STALE.
+    db_exec(&format!(
+        "UPDATE activities SET updated_at = datetime('now','+1 hour') WHERE plan_id = '{plan_id}'"
+    ));
+    let (ok, stdout, _) = run_cmd(&["check-maps-fresh", "--plan-id", &plan_id]);
+    assert!(ok, "check-maps-fresh exit 0 even when stale (advisory)");
+    assert!(
+        stdout.contains("STALE") && stdout.contains(&plan_id),
+        "expected STALE warning after itinerary edit, got:\n{stdout}"
+    );
 }

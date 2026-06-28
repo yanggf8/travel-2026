@@ -11,6 +11,9 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 static PROMOTE_LOCK: Mutex<()> = Mutex::new(());
 
 fn bin() -> &'static str {
@@ -180,6 +183,15 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
     let ids: Vec<&str> = vec![&hotel_id, &flight_id, &null_id, &dup_id];
 
     teardown(&plan, &dest, &ids);
+    // Guard runs teardown on return AND on panic (so a failing assert can't leak rows).
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.clone());
+        let owned_ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        move || {
+            let ids: Vec<&str> = owned_ids.iter().map(String::as_str).collect();
+            teardown(&plan, &dest, &ids);
+        }
+    });
     seed_plan(&plan, &dest);
 
     // 1. hotel-only offer (the real case: hotel + NULL flights).
@@ -200,9 +212,8 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
     // --- 5. dry-run writes nothing ---
     let (ok, out, err) = run_promote(&plan, &dest, &["--dry-run"]);
     if !ok && is_skip(&err) {
-        teardown(&plan, &dest, &ids);
         eprintln!("skipping (no creds mid-test): {}", err.trim());
-        return;
+        return; // _cleanup Drop tears down
     }
     assert!(ok, "dry-run should succeed; err={err} out={out}");
     let (_, cnt, _) = db_exec(&format!(
@@ -299,5 +310,5 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
     // P3 must NOT be 'populated' for a hotel-only offer (no flights to populate).
     assert_ne!(scalar(&p3).as_deref(), Some("populated"), "hotel-only offer must not populate P3");
 
-    teardown(&plan, &dest, &ids);
+    // _cleanup Drop runs teardown here (and on any panic above).
 }

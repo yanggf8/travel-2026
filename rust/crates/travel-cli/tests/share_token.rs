@@ -7,6 +7,9 @@
 //! Pattern mirrors set_mutation_bugs.rs: seed a throwaway plan, run the binary,
 //! SELECT to assert, tear down. Skips cleanly when Turso creds are absent.
 
+mod common;
+use common::Guard;
+
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -92,6 +95,10 @@ fn share_token_mints_and_persists_a_view_scope_token() {
     let tag = nanos();
     let plan_id = format!("test-sharetoken-{tag}");
     let dest = format!("sharetoken_{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -105,7 +112,6 @@ fn share_token_mints_and_persists_a_view_scope_token() {
     let token_row = db_exec(&format!(
         "SELECT token FROM plan_share_tokens WHERE plan_id = '{plan_id}'"
     ));
-    teardown(&plan_id);
 
     assert!(ok, "share-token should succeed on a seeded plan; stdout={stdout} stderr={stderr}");
     assert_eq!(

@@ -27,6 +27,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -137,10 +140,13 @@ async fn finds_activity_by_exact_id() {
     if !seed(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", &format!("act-checkout-{plan_id}"), &["--start", "11:00"]);
     let start = read_activity_col(&plan_id, &dest, "start_time");
-    teardown(&plan_id);
 
     assert!(ok, "set-activity-time by id should succeed; stdout={stdout} stderr={stderr}");
     assert!(start.contains("start_time: 11:00"), "start_time should be 11:00; got {start}");
@@ -155,10 +161,13 @@ async fn finds_activity_by_title_substring_lowercase() {
     if !seed(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--start", "11:00"]);
     let start = read_activity_col(&plan_id, &dest, "start_time");
-    teardown(&plan_id);
 
     assert!(ok, "set-activity-time by lowercase substring should succeed; stdout={stdout} stderr={stderr}");
     assert!(start.contains("start_time: 11:00"), "start_time should be 11:00; got {start}");
@@ -173,10 +182,13 @@ async fn finds_activity_by_title_substring_uppercase() {
     if !seed(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", "CHECKOUT", &["--start", "11:00"]);
     let start = read_activity_col(&plan_id, &dest, "start_time");
-    teardown(&plan_id);
 
     assert!(ok, "set-activity-time by uppercase substring should succeed; stdout={stdout} stderr={stderr}");
     assert!(start.contains("start_time: 11:00"), "start_time should be 11:00; got {start}");
@@ -191,6 +203,10 @@ async fn only_updates_provided_fields() {
     if !seed(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // First set start_time.
     let (ok1, _o1, e1) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--start", "11:00"]);
@@ -200,7 +216,6 @@ async fn only_updates_provided_fields() {
 
     let start = read_activity_col(&plan_id, &dest, "start_time");
     let end = read_activity_col(&plan_id, &dest, "end_time");
-    teardown(&plan_id);
 
     assert!(ok2, "second set-activity-time should succeed; stderr={e2}");
     assert!(start.contains("start_time: 11:00"), "start_time should be preserved at 11:00; got {start}");
@@ -216,6 +231,10 @@ async fn sets_is_fixed_time_false_explicitly() {
     if !seed(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // true first.
     let (ok1, _o1, e1) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--fixed", "true"]);
@@ -226,7 +245,6 @@ async fn sets_is_fixed_time_false_explicitly() {
     // false explicitly — must not be ignored.
     let (ok2, _o2, e2) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--fixed", "false"]);
     let fixed_false = read_activity_col(&plan_id, &dest, "is_fixed_time");
-    teardown(&plan_id);
 
     assert!(ok2, "set fixed=false should succeed; stderr={e2}");
     assert!(fixed_false.contains("is_fixed_time: 0"), "is_fixed_time should be 0 (false); got {fixed_false}");
@@ -241,6 +259,10 @@ async fn emits_activity_time_updated_event() {
     if !seed(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--start", "11:00", "--fixed", "true"]);
     assert!(ok, "set-activity-time should succeed; stdout={stdout} stderr={stderr}");
@@ -260,7 +282,6 @@ async fn emits_activity_time_updated_event() {
         "SELECT key, value FROM plan_event_data WHERE plan_id = '{plan_id}' AND scope = 'timeline' ORDER BY key"
     ))
     .unwrap_or_default();
-    teardown(&plan_id);
 
     // day_number = 5, session = morning, activity_id = act-checkout-<plan>.
     assert!(kv.contains("key: day_number, value: 5"), "event should carry day_number=5; got {kv}");

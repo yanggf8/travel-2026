@@ -13,6 +13,9 @@
 //! activity row, run the binary, SELECT to assert, tear down. Skips cleanly
 //! when Turso creds are absent. NEVER touches a real plan.
 
+mod common;
+use common::Guard;
+
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -143,6 +146,10 @@ fn title_change_clears_stale_poi_id_and_notifies() {
     let plan_id = format!("test-acttitle-clear-{tag}");
     let dest = format!("acttitleclear_{tag}");
     let act_id = format!("act-clear-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_activity(&plan_id, &dest, &act_id, "Shikinaen Garden", Some("shikinaen")) {
         return;
     }
@@ -154,7 +161,6 @@ fn title_change_clears_stale_poi_id_and_notifies() {
 
     let new_title = read_title(&plan_id, &act_id);
     let new_poi = read_poi_id(&plan_id, &act_id);
-    teardown(&plan_id);
 
     assert!(
         ok,
@@ -187,6 +193,10 @@ fn idempotent_same_title_keeps_poi_id() {
     let plan_id = format!("test-acttitle-same-{tag}");
     let dest = format!("acttitlesame_{tag}");
     let act_id = format!("act-same-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_activity(&plan_id, &dest, &act_id, "Shuri Castle", Some("shuri_castle")) {
         return;
     }
@@ -197,7 +207,6 @@ fn idempotent_same_title_keeps_poi_id() {
     );
 
     let new_poi = read_poi_id(&plan_id, &act_id);
-    teardown(&plan_id);
 
     // Whether the command treats a no-op title as success or rejects it, the
     // invariant is the same: a stale-clear must NOT fire when nothing changed.
@@ -219,6 +228,10 @@ fn title_change_without_poi_id_just_retitles() {
     let plan_id = format!("test-acttitle-nopoi-{tag}");
     let dest = format!("acttitlenopoi_{tag}");
     let act_id = format!("act-nopoi-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     if !seed_activity(&plan_id, &dest, &act_id, "Free time", None) {
         return;
     }
@@ -230,7 +243,6 @@ fn title_change_without_poi_id_just_retitles() {
 
     let new_title = read_title(&plan_id, &act_id);
     let new_poi = read_poi_id(&plan_id, &act_id);
-    teardown(&plan_id);
 
     assert!(
         ok,

@@ -14,6 +14,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -125,6 +128,10 @@ fn set_activity_time_rejects_bad_time_writes_nothing() {
     if !seed_full(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // 1. Bad time → non-zero, actionable error, NOTHING written.
     let (ok, _stdout, stderr) = run_cmd(
@@ -147,8 +154,6 @@ fn set_activity_time_rejects_bad_time_writes_nothing() {
     let start_after_good = db_exec(&format!(
         "SELECT start_time FROM activities WHERE plan_id = '{plan_id}' AND id = '{plan_id}-act1'"
     ));
-
-    teardown(&plan_id);
 
     assert!(
         !ok,
@@ -186,6 +191,10 @@ fn set_activity_time_rejects_start_after_end() {
     if !seed_full(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     let (ok, _stdout, stderr) = run_cmd(
         &plan_id,
@@ -198,7 +207,6 @@ fn set_activity_time_rejects_start_after_end() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-activity-time' AND status = 'completed'"
     ));
-    teardown(&plan_id);
 
     assert!(!ok, "start>end must exit non-zero; stderr={stderr}");
     assert!(
@@ -217,6 +225,10 @@ fn add_activity_rejects_bad_time_writes_nothing() {
     if !seed_full(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // Bad time → non-zero, no new activity row.
     let (ok, _o, stderr) = run_cmd(
@@ -240,7 +252,6 @@ fn add_activity_rejects_bad_time_writes_nothing() {
         "SELECT COUNT(*) AS n FROM activities \
          WHERE plan_id = '{plan_id}' AND title = 'Coffee run'"
     ));
-    teardown(&plan_id);
 
     assert!(!ok, "add-activity must exit non-zero on a bad time; stderr={stderr}");
     assert!(
@@ -270,6 +281,10 @@ fn set_tod_time_range_validates_times() {
     if !seed_full(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // Bad start.
     let (ok_bad, _o, e_bad) = run_cmd(
@@ -295,7 +310,6 @@ fn set_tod_time_range_validates_times() {
         "SELECT time_range_start, time_range_end FROM timesofday \
          WHERE plan_id = '{plan_id}' AND day_number = 1 AND session_type = 'morning'"
     ));
-    teardown(&plan_id);
 
     assert!(!ok_bad, "bad --start must exit non-zero; stderr={e_bad}");
     assert!(e_bad.contains("--start") && e_bad.contains("8am"), "got: {e_bad}");
@@ -324,6 +338,10 @@ fn set_flight_validates_dep_arr_times() {
     if !seed_bare(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // Bad --dep → non-zero, no leg row.
     let (ok_bad, _o, e_bad) = run_cmd(
@@ -349,7 +367,6 @@ fn set_flight_validates_dep_arr_times() {
     let dep_after_good = db_exec(&format!(
         "SELECT departure_time FROM flight_legs WHERE plan_id = '{plan_id}' AND direction = 'outbound'"
     ));
-    teardown(&plan_id);
 
     assert!(!ok_bad, "bad --dep must exit non-zero; stderr={e_bad}");
     assert!(e_bad.contains("--dep") && e_bad.contains("9am"), "got: {e_bad}");

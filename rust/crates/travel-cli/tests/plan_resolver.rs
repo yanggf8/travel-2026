@@ -21,6 +21,9 @@
 //!      (ambiguity error)
 //!   5. falls back to latest updated only when all known plans are historical
 
+mod common;
+use common::Guard;
+
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -154,6 +157,13 @@ async fn selects_plan_whose_anchor_contains_travel_date() {
     let p_tokyo = format!("{prefix}tokyo");
     let p_kyoto = format!("{prefix}kyoto");
     let p_june = format!("{prefix}june");
+    let _g = Guard::new({
+        let ids: Vec<String> = vec![p_tokyo.clone(), p_kyoto.clone(), p_june.clone()];
+        move || {
+            let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            teardown(&refs);
+        }
+    });
 
     // Match the TS fixtures (pastTokyo / pastKyoto / junePlan).
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
@@ -163,7 +173,6 @@ async fn selects_plan_whose_anchor_contains_travel_date() {
     seed_plan(&p_june, "fukuoka_2026", "2026-05-22 10:00:00", Some(("fukuoka_2026", "2026-06-18", "2026-06-25", 8)));
 
     let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &["--travel-date", "2026-06-20"]);
-    teardown(&[&p_tokyo, &p_kyoto, &p_june]);
 
     assert!(ok, "resolve-plan should succeed; stderr={stderr} stdout={stdout}");
     assert!(stdout.contains(&format!("plan_id: {p_june}")), "expected june plan; got {stdout}");
@@ -182,6 +191,13 @@ async fn selects_single_upcoming_plan_when_no_date() {
     let p_tokyo = format!("{prefix}tokyo");
     let p_kyoto = format!("{prefix}kyoto");
     let p_june = format!("{prefix}june");
+    let _g = Guard::new({
+        let ids: Vec<String> = vec![p_tokyo.clone(), p_kyoto.clone(), p_june.clone()];
+        move || {
+            let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            teardown(&refs);
+        }
+    });
 
     // pastTokyo + pastKyoto are historical (end < today 2026-05-22); junePlan is upcoming.
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
@@ -191,7 +207,6 @@ async fn selects_single_upcoming_plan_when_no_date() {
     seed_plan(&p_june, "fukuoka_2026", "2026-05-22 10:00:00", Some(("fukuoka_2026", "2026-06-18", "2026-06-25", 8)));
 
     let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &[]);
-    teardown(&[&p_tokyo, &p_kyoto, &p_june]);
 
     assert!(ok, "resolve-plan should succeed; stderr={stderr} stdout={stdout}");
     assert!(stdout.contains(&format!("plan_id: {p_june}")), "expected june plan; got {stdout}");
@@ -209,6 +224,13 @@ async fn resolves_candidate_planning_window() {
     let p_tokyo = format!("{prefix}tokyo");
     let p_kyoto = format!("{prefix}kyoto");
     let p_window = format!("{prefix}window");
+    let _g = Guard::new({
+        let ids: Vec<String> = vec![p_tokyo.clone(), p_kyoto.clone(), p_window.clone()];
+        move || {
+            let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            teardown(&refs);
+        }
+    });
 
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
         return;
@@ -220,7 +242,6 @@ async fn resolves_candidate_planning_window() {
     seed_window_plan(&p_window, "undecided_japan_2026", "2026-05-22 12:00:00", "researching", "2027-09-13", "2027-09-20");
 
     let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &["--travel-start", "2027-09-13", "--travel-end", "2027-09-20"]);
-    teardown(&[&p_tokyo, &p_kyoto, &p_window]);
 
     assert!(ok, "resolve-plan should succeed; stderr={stderr} stdout={stdout}");
     assert!(stdout.contains(&format!("plan_id: {p_window}")), "expected window plan; got {stdout}");
@@ -238,6 +259,13 @@ async fn ambiguous_date_overlap_errors() {
     let prefix = format!("test-resolver-amb-{tag}-");
     let p_june = format!("{prefix}june");
     let p_osaka = format!("{prefix}osaka");
+    let _g = Guard::new({
+        let ids: Vec<String> = vec![p_june.clone(), p_osaka.clone()];
+        move || {
+            let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            teardown(&refs);
+        }
+    });
 
     // junePlan + otherJunePlan both contain 2026-06-21.
     if !seed_plan(&p_june, "fukuoka_2026", "2026-05-22 10:00:00", Some(("fukuoka_2026", "2026-06-18", "2026-06-25", 8))) {
@@ -246,7 +274,6 @@ async fn ambiguous_date_overlap_errors() {
     seed_plan(&p_osaka, "osaka_2026", "2026-05-22 10:00:00", Some(("osaka_2026", "2026-06-20", "2026-06-24", 5)));
 
     let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &["--travel-date", "2026-06-21"]);
-    teardown(&[&p_june, &p_osaka]);
 
     assert!(!ok, "resolve-plan should fail on ambiguous overlap; stdout={stdout}");
     // The error message mirrors the TS /Multiple travel plans contain 2026-06-21/.
@@ -278,6 +305,13 @@ async fn falls_back_to_latest_when_all_historical() {
     let prefix = format!("test-resolver-lat-{tag}-");
     let p_tokyo = format!("{prefix}tokyo");
     let p_kyoto = format!("{prefix}kyoto");
+    let _g = Guard::new({
+        let ids: Vec<String> = vec![p_tokyo.clone(), p_kyoto.clone()];
+        move || {
+            let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            teardown(&refs);
+        }
+    });
 
     // Two historical seeds (both end well before today 2026-05-22).
     if !seed_plan(&p_tokyo, "tokyo_2026", "2026-02-17 19:24:02", Some(("tokyo_2026", "2026-02-13", "2026-02-17", 5))) {
@@ -289,11 +323,10 @@ async fn falls_back_to_latest_when_all_historical() {
     let (ok, stdout, stderr) = resolve_scoped(Some(&prefix), &[]);
 
     // Independently confirm kyoto is the newer of OUR seeded pair (load-bearing
-    // input to the "most recently updated" rule).
+    // input to the "most recently updated" rule). Read before the Guard drops.
     let pair = run_db_exec(&format!(
         "SELECT plan_id FROM plan_metadata WHERE plan_id IN ('{p_tokyo}', '{p_kyoto}') ORDER BY updated_at DESC LIMIT 1"
     ));
-    teardown(&[&p_tokyo, &p_kyoto]);
 
     assert!(ok, "no-arg resolve over historical-only plans should succeed; stderr={stderr} stdout={stdout}");
     assert!(stdout.contains("source:  latest"), "expected the latest-fallback branch; got {stdout}");

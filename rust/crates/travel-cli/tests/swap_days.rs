@@ -13,6 +13,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -109,6 +112,10 @@ fn swap_days_swaps_themes_and_writes_audit_triad() {
     if !seed_two_days(&plan_id, &dest) {
         return;
     }
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
 
     // Pre-conditions: themes as seeded, version starts at 0.
     let theme1_before = scalar(
@@ -163,8 +170,6 @@ fn swap_days_swaps_themes_and_writes_audit_triad() {
         ),
         "n",
     );
-
-    teardown(&plan_id);
 
     assert_eq!(theme1_before.as_deref(), Some("THEME_ONE"), "seed sanity");
     assert_eq!(v_before.as_deref(), Some("0"), "fresh plan starts at version 0");

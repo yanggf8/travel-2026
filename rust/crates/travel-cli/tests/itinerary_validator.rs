@@ -19,6 +19,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -128,6 +131,10 @@ fn validate(plan_id: &str, dest: &str) -> (bool, String, String) {
 async fn historical_day_passes_past_deadline() {
     let tag = nanos();
     let plan_id = format!("test-validator-past-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("validatorpast_{tag}");
 
     if seed_plan(&plan_id, &dest).is_none() {
@@ -138,7 +145,6 @@ async fn historical_day_passes_past_deadline() {
     seed_day_with_pending_booking(&plan_id, &dest, 1, "2000-02-13", "2000-02-10");
 
     let (ok, stdout, stderr) = validate(&plan_id, &dest);
-    teardown(&plan_id);
 
     assert!(ok, "historical day should validate clean (exit 0); stdout={stdout} stderr={stderr}");
     assert!(stdout.contains("Result: VALID"), "expected VALID; got {stdout}");
@@ -154,6 +160,10 @@ async fn historical_day_passes_past_deadline() {
 async fn future_day_fails_passed_deadline() {
     let tag = nanos();
     let plan_id = format!("test-validator-future-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("validatorfuture_{tag}");
 
     if seed_plan(&plan_id, &dest).is_none() {
@@ -170,7 +180,6 @@ async fn future_day_fails_passed_deadline() {
     seed_day_with_pending_booking(&plan_id, &dest, 1, &future_date, &past_deadline);
 
     let (ok, stdout, stderr) = validate(&plan_id, &dest);
-    teardown(&plan_id);
 
     assert!(!ok, "future day with passed deadline should fail (exit 1); stdout={stdout} stderr={stderr}");
     assert!(stdout.contains("Result: ISSUES FOUND"), "expected ISSUES FOUND; got {stdout}");

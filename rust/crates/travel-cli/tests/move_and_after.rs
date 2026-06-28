@@ -11,6 +11,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -89,6 +92,10 @@ fn teardown(plan_id: &str) {
 fn move_activity_preserves_id_across_sessions() {
     let tag = nanos();
     let plan_id = format!("test-move-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("move_{tag}");
     if !seed(&plan_id, &dest) {
         return;
@@ -121,8 +128,6 @@ fn move_activity_preserves_id_across_sessions() {
         "n",
     );
 
-    teardown(&plan_id);
-
     assert_eq!(id_after.as_deref(), Some(id_before.as_str()), "id must be preserved by move");
     assert_eq!(still_morning.as_deref(), Some("0"), "activity must leave the source session");
 }
@@ -132,6 +137,10 @@ fn move_activity_preserves_id_across_sessions() {
 fn add_activity_after_inserts_in_order() {
     let tag = nanos();
     let plan_id = format!("test-after-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("after_{tag}");
     if !seed(&plan_id, &dest) {
         return;
@@ -157,8 +166,6 @@ fn add_activity_after_inserts_in_order() {
         .lines()
         .filter_map(|l| l.strip_prefix("title: ").map(|s| s.trim().to_string()))
         .collect();
-
-    teardown(&plan_id);
 
     assert_eq!(
         order,

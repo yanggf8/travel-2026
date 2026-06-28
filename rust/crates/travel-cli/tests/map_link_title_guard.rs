@@ -17,6 +17,9 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::Guard;
+
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
 }
@@ -108,6 +111,10 @@ fn count(sql: &str) -> Option<i64> {
 fn add_activity_rejects_broken_dir_map_url_in_title() {
     let tag = nanos();
     let plan_id = format!("test-maplink-reject-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("maplinkreject_{tag}");
     if !seed_with_day(&plan_id, &dest) {
         return;
@@ -128,7 +135,6 @@ fn add_activity_rejects_broken_dir_map_url_in_title() {
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'add-activity' AND status = 'completed'"
     ));
-    teardown(&plan_id);
 
     assert!(
         !ok,
@@ -155,6 +161,10 @@ fn add_activity_rejects_broken_dir_map_url_in_title() {
 fn add_activity_accepts_plain_title() {
     let tag = nanos();
     let plan_id = format!("test-maplink-plain-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("maplinkplain_{tag}");
     if !seed_with_day(&plan_id, &dest) {
         return;
@@ -168,7 +178,6 @@ fn add_activity_accepts_plain_title() {
     let act = count(&format!(
         "SELECT COUNT(*) AS n FROM activities WHERE plan_id = '{plan_id}'"
     ));
-    teardown(&plan_id);
 
     assert!(
         ok,
@@ -182,6 +191,10 @@ fn add_activity_accepts_plain_title() {
 fn add_activity_accepts_clean_search_map_url() {
     let tag = nanos();
     let plan_id = format!("test-maplink-search-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
     let dest = format!("maplinksearch_{tag}");
     if !seed_with_day(&plan_id, &dest) {
         return;
@@ -197,7 +210,6 @@ fn add_activity_accepts_clean_search_map_url() {
     let act = count(&format!(
         "SELECT COUNT(*) AS n FROM activities WHERE plan_id = '{plan_id}'"
     ));
-    teardown(&plan_id);
 
     assert!(
         ok,
