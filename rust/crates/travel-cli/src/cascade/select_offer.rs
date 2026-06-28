@@ -124,7 +124,19 @@ pub async fn run(
 
     println!("✅ Offer selected");
     if populate {
-        println!("✅ P3 (transportation) and P4 (accommodation) populated from package");
+        // Report only what the offer actually populated. A package with no flight legs
+        // populates P4 (accommodation) but not P3 (transportation) — claiming both is
+        // misleading (GitHub issue #5 item 3).
+        match (offer.has_flight(), offer.has_hotel()) {
+            (true, true) => println!(
+                "✅ P3 (transportation) and P4 (accommodation) populated from package"
+            ),
+            (true, false) => println!("✅ P3 (transportation) populated from package"),
+            (false, true) => println!("✅ P4 (accommodation) populated from package"),
+            (false, false) => {
+                println!("ℹ️  Offer has no flight or hotel — nothing to populate")
+            }
+        }
     }
     Ok(())
 }
@@ -474,15 +486,21 @@ async fn set_status(
     status: &str,
     now_db: &str,
 ) -> Result<(), String> {
+    // UPSERT, not a bare UPDATE: a real plan carries the full P1–P5 status ladder, but a
+    // plan whose ladder lacks this process_id (e.g. seeded without it) would otherwise have
+    // this write silently no-op, leaving the populate cascade invisible (GitHub issue #5).
+    // INSERT-on-missing keeps the populate honest; ON CONFLICT preserves the UPDATE path.
     conn.execute(
-        "UPDATE process_statuses SET status = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND process_id = ?5",
+        "INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(plan_id, destination, process_id) DO UPDATE SET \
+            status = excluded.status, updated_at = excluded.updated_at",
         libsql::params![
-            status.to_string(),
-            now_db.to_string(),
             plan_id.to_string(),
             dest.to_string(),
-            process_id.to_string()
+            process_id.to_string(),
+            status.to_string(),
+            now_db.to_string()
         ],
     )
     .await
