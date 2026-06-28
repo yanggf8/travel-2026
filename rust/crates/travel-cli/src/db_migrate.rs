@@ -690,6 +690,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
     seed_ota_sources(&conn).await;
+    seed_ota_catalog(&conn).await;
 
     // Shaping Stage research tables.
     for sql in SHAPING_RESEARCH_TABLES {
@@ -1235,6 +1236,31 @@ const OTA_SOURCES: &[OtaSeed] = &[
     OtaSeed { source_id: "skyscanner", name: "Skyscanner", types: &["flight"], status: "inactive", scraper_script: None, regions: &[], url_template: Some("https://www.skyscanner.com.tw"), notes: Some("Strong bot detection - returns captcha page. Use Google Flights instead for multi-airline price comparison.") },
     OtaSeed { source_id: "google_flights", name: "Google Flights", types: &["flight"], status: "active", scraper_script: None, regions: &[], url_template: Some("https://www.google.com/travel/flights?q=Flights+to+{dest}+from+{origin}+on+{depart_date}+through+{return_date}&curr={currency}&hl=zh-TW"), notes: Some("PROVEN REAL (2026-06-26, gwebcdb agent-parse path). Natural-language query URL; returns all-inclusive TWD prices + airline/times/duration/nonstop/CO2. No form interaction needed.") },
 ];
+
+/// Cold-start bootstrap of the canonical catalog enums (product_types,
+/// coverage_block_reasons) from the checked-in seed SQL. The SQL is embedded via
+/// `include_str!` so it ships with the binary (no CWD-dependent runtime read), yet the
+/// facts live in a version-controlled `.sql` file editable WITHOUT touching Rust — data,
+/// not a `const` array of structs. All statements are `INSERT OR IGNORE`, so this never
+/// overwrites a live row; it only fills an empty catalog.
+async fn seed_ota_catalog(conn: &libsql::Connection) {
+    const CATALOG_SEED: &str = include_str!("../../../../scripts/seed/ota_catalog.seed.sql");
+    for stmt in CATALOG_SEED.split(';') {
+        // Strip line comments WITHIN the chunk (a leading `-- ...` block must not cause the
+        // whole INSERT that follows it to be skipped — the split-then-skip-if-starts-with-`--`
+        // bug). Keep only the SQL lines.
+        let sql: String = stmt
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let s = sql.trim();
+        if s.is_empty() {
+            continue;
+        }
+        exec_lenient(conn, s).await;
+    }
+}
 
 async fn seed_ota_sources(conn: &libsql::Connection) {
     let opt = |v: Option<&str>| v.map(sq).unwrap_or_else(|| "NULL".to_string());
