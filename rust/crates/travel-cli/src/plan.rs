@@ -819,3 +819,32 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
 fn sql_quote(v: &str) -> String {
     v.replace('\'', "''")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `--dest` on view commands is parity-only: it must MATCH the plan's active
+    // destination (views render only the active destination) and otherwise
+    // fail loud — never silently ignored. These lock that contract.
+
+    #[test]
+    fn no_dest_always_ok() {
+        assert!(assert_dest_matches(None, "okinawa_2026").is_ok());
+    }
+
+    #[test]
+    fn matching_dest_ok() {
+        assert!(assert_dest_matches(Some("okinawa_2026"), "okinawa_2026").is_ok());
+    }
+
+    #[test]
+    fn mismatching_dest_fails_loud() {
+        let err = assert_dest_matches(Some("tokyo_2026"), "okinawa_2026")
+            .expect_err("a non-active --dest must be rejected, not ignored");
+        // surfaces both the bad value and the active destination so the user
+        // can correct the flag.
+        assert!(err.contains("tokyo_2026"), "err names the bad --dest: {err}");
+        assert!(err.contains("okinawa_2026"), "err names the active dest: {err}");
+    }
+}
