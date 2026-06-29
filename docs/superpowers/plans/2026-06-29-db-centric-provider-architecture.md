@@ -1,5 +1,12 @@
 # DB-Centric Provider Architecture — Implementation Plan
 
+> **STATUS: COMPLETE (2026-06-29).** All 9 tasks shipped (commits `47f5209`, `fa61364`, `f22cdd5`,
+> `4ca9af4`, `d2d0be9`, `d244383`, `ab67436`, `c58577b`, `07daa84`). A post-implementation review
+> (Claude, corroborating Codex's delegated work line-by-line vs source + live DB) found and fixed
+> three regressions the green suite had masked — see **Post-review fixes** at the bottom (commits
+> `49931bc`, `668ce24`). Provider coverage is now reproducible DB data; `travel ota-status` is the
+> single source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Make the OTA provider catalog + coverage status normalized, queryable DB data (the source of truth) instead of Rust `const` arrays, a free-text `notes` column, and CLAUDE.md prose.
@@ -213,3 +220,35 @@ git commit -m "feat(db): add normalized OTA provider catalog tables"
 - **Spec coverage:** product_types (T2) ✓, ota_source_coverage (T1) ✓, region_codes (T1) ✓, block_reasons (T1/T2) ✓, catalog_runs (T1/T3) ✓, CLI mutations (T4) ✓, ota-status view (T5) ✓, parser_rules re-key (T6) ✓, seed-from-SQL (T2) ✓, two-phase notes (T7) ✓, stop migrate-overwrite (T8) ✓, repoint validate + demote CLAUDE.md (T9) ✓, offers.type unchanged (Global Constraints) ✓.
 - **Delegation split:** T1–T5 are self-contained (new tables/commands/view, clear test oracle) → Grok-able. T6–T9 mutate live data / reverse existing test intent / touch the consistency contract → Claude (judgment + backup needed).
 - **Placeholder note:** T6/T7 steps are intentionally authored at execution time (they depend on a live-data snapshot) — flagged NOT-delegatable, not left as vague TODOs for a delegate.
+
+---
+
+## Post-review fixes (2026-06-29)
+
+After Tasks 3–9 were committed and pushed, a line-by-line review against source + the live DB
+(not just "the suite is green") surfaced three regressions the green suite had masked because the
+catalog rows already existed in the shared production Turso DB. All fixed in commits `49931bc`
+(chromeport) and `668ce24` (db). Review write-up: `tmp/claude-review-codex-tasks-3-9.md`.
+
+- **F1 (was BLOCKER) — T7 had no backfill, only `CREATE TABLE`.** The coverage/region/audit rows
+  existed only from manual `set-ota-*` CLI runs, not reproducible from the tree; a fresh / re-seeded
+  DB would have rendered an empty `ota-status`. FIXED: checked-in `scripts/seed/ota_coverage.seed.sql`
+  (14 coverage + 10 region rows, INSERT-OR-IGNORE, run on migrate) + a `backfill_ota_notes_audit()`
+  migrate step that records each note + sha256 checksum + `disposition='normalized'`, idempotent via
+  `NOT EXISTS` and self-healing the duplicate audit rows the naive insert had been appending every
+  migrate (the audit table has no PK). Also fixed a latent seed-splitter trap (a `;` inside a comment
+  silently dropped one coverage row).
+- **F2 (MUST-FIX) — T6 re-key could lose data.** `migrate_parser_rules_product_type` copied rows
+  with `exec_lenient` then DROPped the original unconditionally, so a swallowed copy failure would
+  replace the live table with an empty one. FIXED: error-propagating `exec` for the copy + a
+  row-count guard (`1 ≤ new ≤ old`) before the DROP; aborts and keeps the original otherwise.
+- **F3 (dead-crate, real) — chromeport still wrote the OLD `parser_rules` schema.** Its retired
+  `parse`/`verify`/`parser rules` subcommands assumed single-PK `(source_id)` + `product_kind` and
+  would break against the re-keyed table. FIXED: those subcommands now fail loud (exit 1, point to
+  gwebcdb); the dead OTA parser stage (~1.6k lines) was deleted. `snapshot-maps`' browser/screenshot/db
+  path is untouched.
+
+**Verification:** new in-memory libsql unit tests for F1 (seed populates 14/10 from code; backfill
+idempotent + dedups) and F2 (re-key preserves rows, reconciles besttour/travel4u → group_tour, is
+idempotent, count_rows guard) — no shared-DB mutation, so no cross-test collision. Full serial suite:
+30 binaries, all green. `validate data` 0/0/0; live DB 14 coverage / 14 audit / 10 region.

@@ -185,8 +185,10 @@ URLs 404 / hit the wrong page.
 
 > **OTA scraping = gwebcdb on WSLg (current, verified 2026-06-25) — read first.** The browser
 > layer is **gwebcdb** (`~/b/gwebcdb`), the shared WSLg-based CDP toolset, AND it now owns the OTA
-> extraction too (Phase 0 Python port SHIPPED). **`chromeport` is RETIRED** — do NOT run
-> `./bin/chromeport fetch interact / verify / parse`; it was the fragile Windows-Chrome path that
+> extraction too (Phase 0 Python port SHIPPED). **`chromeport` is RETIRED** — its OTA
+> `parse` / `verify` / `parser rules` subcommands are **removed** (they now fail loud, exit 1, and
+> point to gwebcdb; the dead parser code was deleted 2026-06-29). chromeport only still provides
+> `browser` / `screenshot` / `db` for `snapshot-maps`. It was the fragile Windows-Chrome path that
 > WSLg replaces, not a fallback to keep working. WSLg-native Chrome is the **standing verified
 > backend** (live on this host: `running_backend=wslg`, CDP up on :9222, bridge attached). Drive
 > everything with gwebcdb's Python bridge tools. Full recipe + gotchas: **gwebcdb `CLAUDE.md` →
@@ -374,7 +376,7 @@ Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI u
 └── docs/                          # API.md, EXTENDING.md, SKILL_TEMPLATE.md, reference/CLI.md, plans/
 ```
 
-Config/reference data all live in Turso (no JSON files): `destination_config`, `ota_sources`, `origin_config`, `global_config`; OTA rules in `airlines`/`booking_types`/`platform_behaviors`/`comparison_rules`; destination reference (areas/POIs/clusters/transit/tips) in `destination_areas` (+ child tables), `destination_pois`, `destination_clusters`, `destination_transit`, `destination_tips` — read via `./bin/travel query-destination-ref`. Re-seeding a fresh/empty DB uses the seed pipeline (the original TS seed scripts are under `archive/ts-cli-retired/scripts/`; reusable seeders are `./bin/travel db seed …` + inline `seed_*` in `db_migrate.rs`).
+Config/reference data all live in Turso (no JSON files): `destination_config`, `ota_sources`, `origin_config`, `global_config`; OTA rules in `airlines`/`booking_types`/`platform_behaviors`/`comparison_rules`; destination reference (areas/POIs/clusters/transit/tips) in `destination_areas` (+ child tables), `destination_pois`, `destination_clusters`, `destination_transit`, `destination_tips` — read via `./bin/travel query-destination-ref`. Re-seeding a fresh/empty DB uses the seed pipeline (the original TS seed scripts are under `archive/ts-cli-retired/scripts/`; reusable seeders are `./bin/travel db seed …` + inline `seed_*` in `db_migrate.rs`). The OTA provider catalog cold-start is checked-in SQL run insert-if-absent on every `db migrate`: `scripts/seed/ota_catalog.seed.sql` (product types + block reasons) and `scripts/seed/ota_coverage.seed.sql` (the per-`(source, product_type)` coverage matrix + region codes); the notes audit rows come from `backfill_ota_notes_audit` in `db_migrate.rs`. Seed-file rule: one statement per line, no `;` or `'` inside comments (the splitter splits on `;` before stripping comment lines).
 Note: `ref_path`/`scraper_script` must be repo-relative paths.
 
 ## Turso DB
