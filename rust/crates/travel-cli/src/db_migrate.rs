@@ -689,6 +689,17 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 )"#,
     )
     .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_notes_migration_audit (
+  source_id TEXT,
+  raw_note TEXT,
+  checksum TEXT,
+  normalized_at TEXT,
+  disposition TEXT CHECK(disposition IN ('normalized','discarded_recipe'))
+)"#,
+    )
+    .await;
     seed_ota_sources(&conn).await;
     seed_ota_catalog(&conn).await;
     migrate_parser_rules_product_type(&conn).await;
