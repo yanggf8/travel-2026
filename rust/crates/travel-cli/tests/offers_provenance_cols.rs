@@ -239,7 +239,7 @@ async fn offers_rejects_invalid_parser_method() {
     }
     let combined = format!("{stdout}{stderr}").to_lowercase();
     assert!(
-        !ok || combined.contains("constraint") || combined.contains("check"),
+        !ok && (combined.contains("constraint") || combined.contains("check")),
         "parser_method='bad' must be rejected; ok={ok} stdout={stdout} stderr={stderr}"
     );
 }
