@@ -242,22 +242,7 @@ Run CLI commands directly via Bash and show the output. No need to redirect to t
 
 ## OTA Sources
 
-| Source ID | Name | Type | Status |
-|-----------|------|------|--------|
-| `besttour` | 喜鴻假期 | package | ✅ PROVEN REAL (2026-06-26) — group tours |
-| `liontravel` | 雄獅旅遊 | package, flight, hotel | ✅ active — ⛔ renderer-wedge (WSLg), parked |
-| `lifetour` | 五福旅遊 | package, flight, hotel | ✅ active — ⛔ renderer-wedge (WSLg), parked |
-| `settour` | 東南旅遊 | package, flight, hotel | ✅ PROVEN REAL (2026-06-26) — SPA, agent-parse |
-| `trip` | Trip.com | flight | ✅ active — ⏸️ DEFERRED (redundant w/ google_flights; login-wall) |
-| `booking` | Booking.com | hotel | ❌ cloudflare (inactive) |
-| `tigerair` | 台灣虎航 | flight | ✅ active — ⏸️ DEFERRED (redundant w/ google_flights; Quasar SPA) |
-| `agoda` | Agoda | hotel | ✅ PROVEN REAL (2026-06-26) |
-| `google_flights` | Google Flights | flight | ✅ PROVEN REAL (2026-06-26) |
-| `eztravel` | 易遊網 | package (機加酒) | ✅ PROVEN REAL (2026-06-26) |
-| `travel4u` | 山富旅遊 | package | ✅ PROVEN REAL (2026-06-27) — group tours |
-| `skyscanner` | Skyscanner | flight | ❌ captcha (inactive) |
-| `jalan` | じゃらん | hotel | ❌ unsupported |
-| `rakuten_travel` | 楽天トラベル | hotel, package | ❌ unsupported |
+Provider coverage is DB data — run `travel ota-status` (catalog edited via `travel set-ota-*`).
 
 > OTA URL details and scraping patterns → `src/skills/scrape-ota/SKILL.md`
 
@@ -480,5 +465,5 @@ Remaining agenda (none blocking — the project is between trips and the live DB
 
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **Worker `workers-rs` port — DONE & DEPLOYED** (PR #4, merged to master). The Rust dashboard lives at `workers/trip-dashboard-rs/` and is live at `trip-dashboard-rs.yanggf.workers.dev` (keyless maps, token auth, meal-pin links). The old TS worker (`workers/trip-dashboard/`) still exists and still serves the original URL; the `-rs` worker is meant to eventually reclaim it (a separate cutover, not yet done). See "Trip Dashboard — two workers" below.
-- **OTA migration to gwebcdb (WSLg) — SWEEP COMPLETE + offers now flow into a plan (2026-06-28).** All 3 types PROVEN REAL via the AGENT-PARSE path (agent reads capture `raw_text` → TSV → `bridge/ota_write_llm_offers.py`; regex `ota_cli parse` is the fallback): flight=`google_flights`, hotel=`agoda`, package=`eztravel`/`settour`/`besttour`/`travel4u`. 6 sources G1–G6; `tokyo_sep_2026` carries 20 real package offers (eztravel 9 / settour 1 / besttour 5 / travel4u 5). Per-agent Chrome via `bridge/chrome_session.py acquire`. `chromeport` is RETIRED — don't run/repair it. **DONE this session:** (a) created the `tokyo-sep-2026` TEST PLAN via `shaping-adopt --create-plan` and plan-tagged the 20 offers; (b) built **`promote-offers`** — bridges the global `offers` table → plan-scoped `plan_offers` so `select-offer` can consume scraped offers (the two were disjoint); proven live end-to-end (`promote-offers` → `select-offer` populates P4). Spec: `docs/superpowers/specs/2026-06-28-promote-offers-bridge-design.md`. **BLOCKED (renderer-wedge under WSLg, parked):** `liontravel` + `lifetour` SPAs crash Chrome's renderer — do NOT retry as "needs a flag." **DEFERRED (redundant flight-only):** `tigerair` (Quasar SPA) + `trip` (login-wall) — google_flights covers the flight type; revisited 2026-06-28, decision stands. Live `ota_sources` notes now sync to the committed seed on `db migrate` (was INSERT OR IGNORE). Form-driving recipe: gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
+- **OTA scraping pipeline (gwebcdb / WSLg).** Agent-parse reads capture `raw_text` → TSV → `bridge/ota_write_llm_offers.py`; regex `ota_cli parse` is the fallback. Per-agent Chrome uses `bridge/chrome_session.py acquire`. `chromeport` is RETIRED — don't run/repair it. The `promote-offers` bridge moves global `offers` into plan-scoped `plan_offers` for `select-offer`; spec: `docs/superpowers/specs/2026-06-28-promote-offers-bridge-design.md`. Provider coverage is DB data — run `travel ota-status` (catalog edited via `travel set-ota-*`). Form-driving recipe: gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
 - **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.

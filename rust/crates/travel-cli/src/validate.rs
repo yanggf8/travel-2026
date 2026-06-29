@@ -47,8 +47,9 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     let mut issues: Vec<Issue> = Vec::new();
 
     // Always-run: data consistency checks
-    if let Some(sources) = validate_ota_sources(&mut issues).await {
-        validate_claude_md_consistency(&sources, &mut issues);
+    if validate_ota_sources(&mut issues).await.is_some() {
+        validate_ota_coverage(&mut issues).await;
+        validate_claude_md_consistency(&mut issues);
     }
     validate_python_scripts(&mut issues);
     validate_destinations(&mut issues).await;
@@ -248,9 +249,14 @@ async fn validate_maps_completeness_all_plans(issues: &mut Vec<Issue>) {
 }
 
 fn project_root() -> PathBuf {
-    // The binary's CWD is the project root in normal usage. Resolve relative
-    // file paths against CWD to match the TS behavior (which uses __dirname/..).
+    // Normal CLI usage starts at the repo root. Integration tests may run the
+    // binary from the crate directory, so walk upward until the repo marker is found.
     if let Ok(cwd) = std::env::current_dir() {
+        for dir in cwd.ancestors() {
+            if dir.join("CLAUDE.md").exists() {
+                return dir.to_path_buf();
+            }
+        }
         cwd
     } else {
         PathBuf::from(".")
@@ -275,7 +281,6 @@ fn read_file(rel: &str) -> Option<String> {
 struct OtaSource {
     source_id: String,
     currency: String,
-    supported: bool,
 }
 
 #[derive(Default)]
@@ -324,11 +329,10 @@ async fn validate_ota_sources(issues: &mut Vec<Issue>) -> Option<OtaSourcesFile>
     } {
         let source_id: String = row.get(0).unwrap_or_default();
         let _name: String = row.get(1).unwrap_or_default();
-        let status: String = row.get(2).unwrap_or_default();
+        let _status: String = row.get(2).unwrap_or_default();
         let _scraper_script: String = row.get(3).unwrap_or_default();
         let _notes: String = row.get(4).unwrap_or_default();
 
-        let supported = status == "active";
         source_ids.push(source_id.clone());
         sources.sources.insert(
             source_id.clone(),
@@ -338,7 +342,6 @@ async fn validate_ota_sources(issues: &mut Vec<Issue>) -> Option<OtaSourcesFile>
                 // simplified validation path (the JSON-backed field is gone
                 // post-de-JSON; we mirror that here).
                 currency: "TWD".to_string(),
-                supported,
             },
         );
     }
@@ -411,69 +414,85 @@ async fn validate_ota_sources(issues: &mut Vec<Issue>) -> Option<OtaSourcesFile>
     Some(sources)
 }
 
-// --- DB check: CLAUDE.md <-> ota_sources consistency ---
+// --- DB check: OTA coverage + CLAUDE.md pointer ---
 
-#[derive(Default, Debug)]
-struct ClaudeOtaEntry {
-    source_id: String,
-    supported: String,
-}
-
-fn parse_claude_ota_table(content: &str, issues: &mut Vec<Issue>) -> Vec<ClaudeOtaEntry> {
-    // The TS uses a non-consuming lookahead to bound the table at the next
-    // section break; the Rust `regex` crate does not support look-around, so
-    // we consume the terminator (an extra non-pipe line is harmless because
-    // the row filter below only keeps lines starting with `|`).
-    // 4-column table: Source ID | Name | Type | Status (Status merges the old
-    // Supported+Scraper columns; the ✅/scrape-only signal lives in Status text).
-    // Mirrors the TS fix in scripts/validate-data.ts.
-    let re = match regex::Regex::new(
-        r"\| Source ID \| Name \| Type \| Status \|[\s\S]*?(?:\n\n|\n###|\n##|\z)",
-    ) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
+async fn validate_ota_coverage(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else {
+        return;
     };
-    let table_match = match re.find(content) {
-        Some(m) => m.as_str(),
-        None => {
+
+    let mut missing = match conn
+        .query(
+            "SELECT s.source_id \
+             FROM ota_sources s \
+             LEFT JOIN ota_source_coverage c ON c.source_id = s.source_id \
+             WHERE s.status = 'active' \
+             GROUP BY s.source_id \
+             HAVING COUNT(c.source_id) = 0 \
+             ORDER BY s.source_id",
+            (),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
             issues.push(Issue {
-                category: "claude-md".to_string(),
-                severity: Severity::Warning,
-                message: "Could not find OTA Sources table in CLAUDE.md".to_string(),
-                file: Some("CLAUDE.md".to_string()),
+                category: "ota-coverage".to_string(),
+                severity: Severity::Error,
+                message: format!("failed to query ota_source_coverage: {err}"),
+                file: Some("turso:ota_source_coverage".to_string()),
                 line: None,
             });
-            return Vec::new();
+            return;
         }
     };
-
-    let mut entries: Vec<ClaudeOtaEntry> = Vec::new();
-    for line in table_match.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with('|') {
-            continue;
-        }
-        let cells: Vec<String> = trimmed
-            .split('|')
-            .map(|c| c.trim().to_string())
-            .filter(|c| !c.is_empty())
-            .collect();
-        if cells.len() < 4 {
-            continue;
-        }
-        // Skip header row + separator row.
-        if cells[0] == "Source ID" || cells[0].starts_with("---") {
-            continue;
-        }
-        entries.push(ClaudeOtaEntry {
-            source_id: cells[0].replace('`', ""),
-            supported: cells[3].clone(), // Status column ("✅ scraper" / "⚠️ scrape-only" / "❌ ...")
+    while let Some(row) = missing.next().await.ok().flatten() {
+        let source_id: String = row.get(0).unwrap_or_default();
+        issues.push(Issue {
+            category: "ota-coverage".to_string(),
+            severity: Severity::Error,
+            message: format!("{source_id}: active ota_source has no coverage row"),
+            file: Some("turso:ota_source_coverage".to_string()),
+            line: None,
         });
     }
-    entries
+
+    for (sql, message_prefix) in [
+        (
+            "SELECT c.source_id, c.product_type \
+             FROM ota_source_coverage c \
+             LEFT JOIN product_types p ON p.code = c.product_type \
+             WHERE p.code IS NULL \
+             ORDER BY c.source_id, c.product_type",
+            "unknown product_type",
+        ),
+        (
+            "SELECT c.source_id, c.blocked_reason_code \
+             FROM ota_source_coverage c \
+             LEFT JOIN coverage_block_reasons b ON b.code = c.blocked_reason_code \
+             WHERE c.blocked_reason_code IS NOT NULL AND b.code IS NULL \
+             ORDER BY c.source_id, c.blocked_reason_code",
+            "unknown blocked_reason_code",
+        ),
+    ] {
+        let Ok(mut rows) = conn.query(sql, ()).await else {
+            continue;
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let source_id: String = row.get(0).unwrap_or_default();
+            let value: String = row.get(1).unwrap_or_default();
+            issues.push(Issue {
+                category: "ota-coverage".to_string(),
+                severity: Severity::Error,
+                message: format!("{source_id}: {message_prefix} \"{value}\""),
+                file: Some("turso:ota_source_coverage".to_string()),
+                line: None,
+            });
+        }
+    }
 }
 
-fn validate_claude_md_consistency(sources: &OtaSourcesFile, issues: &mut Vec<Issue>) {
+fn validate_claude_md_consistency(issues: &mut Vec<Issue>) {
     let content = match read_file("CLAUDE.md") {
         Some(c) => c,
         None => {
@@ -488,69 +507,39 @@ fn validate_claude_md_consistency(sources: &OtaSourcesFile, issues: &mut Vec<Iss
         }
     };
 
-    let entries = parse_claude_ota_table(&content, issues);
-    if entries.is_empty() {
-        return;
+    const POINTER: &str =
+        "Provider coverage is DB data — run `travel ota-status` (catalog edited via `travel set-ota-*`).";
+    if !content.contains(POINTER) {
+        issues.push(Issue {
+            category: "claude-md".to_string(),
+            severity: Severity::Error,
+            message: "CLAUDE.md OTA section must point to `travel ota-status`".to_string(),
+            file: Some("CLAUDE.md".to_string()),
+            line: None,
+        });
     }
 
-    for entry in &entries {
-        let source = match sources.sources.get(&entry.source_id) {
-            Some(s) => s,
-            None => {
-                issues.push(Issue {
-                    category: "consistency".to_string(),
-                    severity: Severity::Warning,
-                    message: format!(
-                        "CLAUDE.md lists \"{}\" but not in Turso ota_sources",
-                        entry.source_id
-                    ),
-                    file: Some("CLAUDE.md".to_string()),
-                    line: None,
-                });
-                continue;
-            }
-        };
-
-        let json_supported = source.supported;
-        let md_supported = entry.supported.contains('✅');
-        let md_scrape_only = entry.supported.contains("scrape-only");
-
-        if json_supported && !md_supported && !md_scrape_only {
-            issues.push(Issue {
-                category: "consistency".to_string(),
-                severity: Severity::Error,
-                message: format!(
-                    "{}: Turso ota_sources says supported=true but CLAUDE.md shows unsupported",
-                    entry.source_id
-                ),
-                file: Some("CLAUDE.md".to_string()),
-                line: None,
-            });
-        }
-        if !json_supported && md_supported && !md_scrape_only {
-            issues.push(Issue {
-                category: "consistency".to_string(),
-                severity: Severity::Error,
-                message: format!(
-                    "{}: Turso ota_sources says supported=false but CLAUDE.md shows ✅",
-                    entry.source_id
-                ),
-                file: Some("CLAUDE.md".to_string()),
-                line: None,
-            });
-        }
+    let section = content
+        .split("## OTA Sources")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .unwrap_or("");
+    if section.contains("| Source ID |") || section.contains("| `") {
+        issues.push(Issue {
+            category: "claude-md".to_string(),
+            severity: Severity::Error,
+            message: "CLAUDE.md OTA section must not re-encode per-source status rows".to_string(),
+            file: Some("CLAUDE.md".to_string()),
+            line: None,
+        });
     }
-
-    let claude_ids: HashSet<&str> = entries.iter().map(|e| e.source_id.as_str()).collect();
-    let mut db_ids: Vec<&str> = sources.sources.keys().map(String::as_str).collect();
-    db_ids.sort();
-    for id in db_ids {
-        if !claude_ids.contains(id) {
+    for forbidden in ["PROVEN REAL", "DEFERRED", "renderer-wedge", "cloudflare", "captcha"] {
+        if section.contains(forbidden) {
             issues.push(Issue {
-                category: "consistency".to_string(),
-                severity: Severity::Info,
+                category: "claude-md".to_string(),
+                severity: Severity::Error,
                 message: format!(
-                    "{id}: in Turso ota_sources but not listed in CLAUDE.md OTA table"
+                    "CLAUDE.md OTA section must not encode status fact \"{forbidden}\""
                 ),
                 file: Some("CLAUDE.md".to_string()),
                 line: None,
