@@ -95,6 +95,19 @@ async fn table_exists(conn: &libsql::Connection, name: &str) -> bool {
     matches!(rows.next().await, Ok(Some(_)))
 }
 
+/// Return the row count of `table`, or None if the query failed (table missing, etc.).
+/// Used as an integrity guard around destructive table rebuilds. Table name is a fixed
+/// internal literal (never user input), so direct interpolation is safe here.
+async fn count_rows(conn: &libsql::Connection, table: &str) -> Option<i64> {
+    let sql = format!("SELECT count(*) FROM {table}");
+    let mut rows = conn.query(&sql, ()).await.ok()?;
+    let row = rows.next().await.ok()??;
+    match row.get_value(0).ok()? {
+        libsql::Value::Integer(n) => Some(n),
+        _ => None,
+    }
+}
+
 /// SQL string-literal escaper (single quotes doubled), matching the TS `esc`.
 fn sq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -702,6 +715,8 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
     seed_ota_sources(&conn).await;
     seed_ota_catalog(&conn).await;
+    seed_ota_coverage(&conn).await;
+    backfill_ota_notes_audit(&conn).await;
     migrate_parser_rules_product_type(&conn).await;
 
     // Shaping Stage research tables.
@@ -1257,10 +1272,24 @@ const OTA_SOURCES: &[OtaSeed] = &[
 /// overwrites a live row; it only fills an empty catalog.
 async fn seed_ota_catalog(conn: &libsql::Connection) {
     const CATALOG_SEED: &str = include_str!("../../../../scripts/seed/ota_catalog.seed.sql");
-    for stmt in CATALOG_SEED.split(';') {
-        // Strip line comments WITHIN the chunk (a leading `-- ...` block must not cause the
-        // whole INSERT that follows it to be skipped — the split-then-skip-if-starts-with-`--`
-        // bug). Keep only the SQL lines.
+    run_seed_file_stmts(conn, CATALOG_SEED).await;
+}
+
+/// Cold-start coverage matrix + provider region codes (DB-centric provider architecture,
+/// spec 2026-06-29). Replaces the manual `set-ota-coverage` / `set-ota-region` CLI runs that
+/// originally populated these tables but were NOT reproducible from the tree — so a fresh /
+/// re-seeded DB would have rendered an empty `ota-status`. All statements are `INSERT OR IGNORE`:
+/// fills an empty catalog, never clobbers a live edit. (Review finding F1, 2026-06-29.)
+async fn seed_ota_coverage(conn: &libsql::Connection) {
+    const COVERAGE_SEED: &str = include_str!("../../../../scripts/seed/ota_coverage.seed.sql");
+    run_seed_file_stmts(conn, COVERAGE_SEED).await;
+}
+
+/// Run a checked-in seed SQL file statement-by-statement, insert-if-absent. Strips line comments
+/// WITHIN each `;`-split chunk (a leading `-- ...` block must not cause the whole INSERT that
+/// follows it to be skipped — the split-then-skip-if-starts-with-`--` bug).
+async fn run_seed_file_stmts(conn: &libsql::Connection, seed_sql: &str) {
+    for stmt in seed_sql.split(';') {
         let sql: String = stmt
             .lines()
             .filter(|l| !l.trim_start().starts_with("--"))
@@ -1271,6 +1300,42 @@ async fn seed_ota_catalog(conn: &libsql::Connection) {
             continue;
         }
         exec_lenient(conn, s).await;
+    }
+}
+
+/// Phase-A of the two-phase `notes` migration (spec 2026-06-29 "Migration / data preservation"):
+/// record each `ota_sources.notes` string + a sha256 checksum + disposition in
+/// `ota_notes_migration_audit`, so Phase B (DROP `notes`, a later release) can confirm every note
+/// was accounted for. The note text's single source of truth is the `OTA_SOURCES` array (read here),
+/// not a duplicated copy in a SQL file. Every note is `normalized` — its facts already landed in the
+/// typed coverage/region rows seeded above. `INSERT OR IGNORE` keeps any live (Codex-written) audit
+/// row authoritative; a fresh DB gets a self-consistent row whose checksum matches its own raw_note.
+/// (Review finding F1, 2026-06-29.)
+async fn backfill_ota_notes_audit(conn: &libsql::Connection) {
+    use sha2::{Digest, Sha256};
+    // The audit table predates a uniqueness constraint, so de-dup any rows a prior backfill ran
+    // before this guard existed (keep the lowest rowid per source_id). Idempotent.
+    exec_lenient(
+        conn,
+        "DELETE FROM ota_notes_migration_audit \
+         WHERE rowid NOT IN (SELECT MIN(rowid) FROM ota_notes_migration_audit GROUP BY source_id)",
+    )
+    .await;
+    for s in OTA_SOURCES {
+        let Some(note) = s.notes else { continue };
+        let checksum = format!("{:x}", Sha256::digest(note.as_bytes()));
+        // Insert-if-absent guarded by NOT EXISTS (the table has no PK to make INSERT OR IGNORE
+        // dedupe), so re-running migrate never appends a duplicate audit row. (Finding F1.)
+        let sql = format!(
+            "INSERT INTO ota_notes_migration_audit \
+             (source_id, raw_note, checksum, normalized_at, disposition) \
+             SELECT {sid}, {note}, {chk}, CURRENT_TIMESTAMP, 'normalized' \
+             WHERE NOT EXISTS (SELECT 1 FROM ota_notes_migration_audit WHERE source_id = {sid})",
+            sid = sq(s.source_id),
+            note = sq(note),
+            chk = sq(&checksum),
+        );
+        exec_lenient(conn, &sql).await;
     }
 }
 
@@ -1333,7 +1398,10 @@ async fn migrate_parser_rules_product_type(conn: &libsql::Connection) {
     )
     .await;
 
-    exec_lenient(
+    // Copy rows into the re-keyed table. Use error-propagating exec (NOT exec_lenient) so a
+    // failed copy ABORTS before the destructive DROP — a swallowed INSERT failure followed by an
+    // unconditional DROP would replace the live table with an empty one. (Review finding F2.)
+    let copy = exec(
         conn,
         r#"INSERT OR REPLACE INTO parser_rules_new (
   source_id, product_type, date_range_rx, nights_rx, nights_is_days, price_marker,
@@ -1355,8 +1423,31 @@ SELECT
 FROM parser_rules;"#,
     )
     .await;
-    exec_lenient(conn, "DROP TABLE parser_rules;").await;
-    exec_lenient(conn, "ALTER TABLE parser_rules_new RENAME TO parser_rules;").await;
+    if let Err(e) = copy {
+        eprintln!("⚠️  parser_rules re-key copy failed, leaving original table intact: {e}");
+        exec_lenient(conn, "DROP TABLE IF EXISTS parser_rules_new;").await;
+        return;
+    }
+
+    // Integrity guard: do NOT drop the original until we've confirmed the copy preserved every
+    // row. besttour+travel4u may collapse two source rows into one product_type, so the new table
+    // can legitimately have FEWER rows than the old — never MORE, and never zero when the old had
+    // rows. Abort (and clean up) on any shortfall rather than silently losing data. (Finding F2.)
+    let old_n = count_rows(conn, "parser_rules").await;
+    let new_n = count_rows(conn, "parser_rules_new").await;
+    match (old_n, new_n) {
+        (Some(o), Some(n)) if n >= 1 && n <= o => {
+            exec_lenient(conn, "DROP TABLE parser_rules;").await;
+            exec_lenient(conn, "ALTER TABLE parser_rules_new RENAME TO parser_rules;").await;
+        }
+        _ => {
+            eprintln!(
+                "⚠️  parser_rules re-key row-count guard tripped (old={old_n:?}, new={new_n:?}); \
+                 leaving original table intact, not dropping."
+            );
+            exec_lenient(conn, "DROP TABLE IF EXISTS parser_rules_new;").await;
+        }
+    }
 }
 
 async fn seed_ota_sources(conn: &libsql::Connection) {
@@ -2007,3 +2098,292 @@ const SHAPING_RESEARCH_TABLES: &[&str] = &[
   PRIMARY KEY (run_id, dest_code, nights)
 );"#,
 ];
+
+#[cfg(test)]
+mod parser_rules_rekey_tests {
+    //! Unit tests for the `parser_rules` re-key (review finding F2): the rebuild must preserve every
+    //! row, reconcile besttour/travel4u `fit`→`group_tour`, and — via the row-count guard — refuse
+    //! to drop the original if the copy lost rows. Runs against an in-memory libsql DB, so it never
+    //! touches the shared production Turso DB.
+
+    use super::*;
+
+    async fn mem_conn() -> libsql::Connection {
+        libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .expect("in-memory db")
+            .connect()
+            .expect("connect")
+    }
+
+    /// Create the OLD-shape parser_rules (single PK, `product_kind`) and seed N rows.
+    async fn seed_old_shape(conn: &libsql::Connection) {
+        conn.execute(
+            "CREATE TABLE parser_rules (
+               source_id TEXT PRIMARY KEY,
+               product_kind TEXT DEFAULT 'fit',
+               date_range_rx TEXT NOT NULL,
+               nights_rx TEXT NOT NULL,
+               nights_is_days INTEGER DEFAULT 0,
+               price_marker TEXT NOT NULL,
+               price_amount_rx TEXT NOT NULL,
+               price_basis TEXT DEFAULT 'total',
+               pax_divisor INTEGER DEFAULT 2,
+               flight_rx TEXT NOT NULL,
+               hotel_anchor_rx TEXT NOT NULL,
+               currency TEXT DEFAULT 'TWD',
+               has_custom_parser INTEGER DEFAULT 0,
+               source_url TEXT,
+               fetched_at TEXT,
+               airline_rx TEXT DEFAULT '',
+               hotel_name_rx TEXT DEFAULT ''
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+        for (sid, kind) in [
+            ("settour", "package"),
+            ("besttour", "fit"),
+            ("travel4u", "fit"),
+            ("eztravel", "fit"),
+        ] {
+            conn.execute(
+                "INSERT INTO parser_rules
+                   (source_id, product_kind, date_range_rx, nights_rx, price_marker,
+                    price_amount_rx, flight_rx, hotel_anchor_rx)
+                 VALUES (?1, ?2, 'd', 'n', 'pm', 'pa', 'fr', 'hr')",
+                libsql::params![sid.to_string(), kind.to_string()],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    async fn scalar_i64(conn: &libsql::Connection, sql: &str) -> i64 {
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        match row.get_value(0).unwrap() {
+            libsql::Value::Integer(n) => n,
+            _ => panic!("not an integer"),
+        }
+    }
+
+    async fn scalar_text(conn: &libsql::Connection, sql: &str) -> String {
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        match row.get_value(0).unwrap() {
+            libsql::Value::Text(s) => s,
+            other => panic!("not text: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rekey_preserves_all_rows_and_reconciles_group_tour() {
+        let conn = mem_conn().await;
+        seed_old_shape(&conn).await;
+        assert_eq!(scalar_i64(&conn, "SELECT count(*) FROM parser_rules").await, 4);
+
+        migrate_parser_rules_product_type(&conn).await;
+
+        // No row lost, table is re-keyed (product_type column exists, product_kind gone).
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM parser_rules").await,
+            4,
+            "re-key must not lose rows"
+        );
+        assert!(has_column(&conn, "parser_rules", "product_type").await);
+        assert!(!has_column(&conn, "parser_rules", "product_kind").await);
+
+        // besttour/travel4u reconciled fit->group_tour; settour 'package'->'fit'; eztravel stays fit.
+        assert_eq!(
+            scalar_text(
+                &conn,
+                "SELECT product_type FROM parser_rules WHERE source_id='besttour'"
+            )
+            .await,
+            "group_tour"
+        );
+        assert_eq!(
+            scalar_text(
+                &conn,
+                "SELECT product_type FROM parser_rules WHERE source_id='travel4u'"
+            )
+            .await,
+            "group_tour"
+        );
+        assert_eq!(
+            scalar_text(
+                &conn,
+                "SELECT product_type FROM parser_rules WHERE source_id='settour'"
+            )
+            .await,
+            "fit"
+        );
+    }
+
+    #[tokio::test]
+    async fn rekey_is_idempotent_on_already_migrated_table() {
+        let conn = mem_conn().await;
+        seed_old_shape(&conn).await;
+        migrate_parser_rules_product_type(&conn).await; // first: rebuild
+        migrate_parser_rules_product_type(&conn).await; // second: must early-return, not corrupt
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM parser_rules").await,
+            4,
+            "second migrate must early-return and preserve rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_rows_guard_helper_reports_correctly() {
+        let conn = mem_conn().await;
+        seed_old_shape(&conn).await;
+        assert_eq!(count_rows(&conn, "parser_rules").await, Some(4));
+        assert_eq!(count_rows(&conn, "no_such_table").await, None);
+    }
+}
+
+#[cfg(test)]
+mod ota_coverage_backfill_tests {
+    //! Unit tests for review finding F1: the OTA coverage matrix + notes-audit must be reproducible
+    //! FROM CODE (the checked-in seed file + `backfill_ota_notes_audit`), and the backfill must be
+    //! idempotent (the shipped Task-7 audit table has no PK, so a naive INSERT duplicated rows on
+    //! every migrate). In-memory libsql — never touches the shared production Turso DB.
+
+    use super::*;
+
+    async fn mem_conn() -> libsql::Connection {
+        libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .expect("in-memory db")
+            .connect()
+            .expect("connect")
+    }
+
+    async fn create_catalog_tables(conn: &libsql::Connection) {
+        for ddl in [
+            "CREATE TABLE ota_source_coverage (source_id TEXT NOT NULL, product_type TEXT NOT NULL, \
+             proven INTEGER NOT NULL DEFAULT 0, proven_at TEXT, method TEXT, search_url TEXT, \
+             blocked_reason_code TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, \
+             PRIMARY KEY (source_id, product_type))",
+            "CREATE TABLE ota_source_region_codes (source_id TEXT NOT NULL, product_type TEXT NOT NULL, \
+             region_label TEXT NOT NULL, region_code TEXT NOT NULL, \
+             PRIMARY KEY (source_id, product_type, region_label))",
+            "CREATE TABLE ota_notes_migration_audit (source_id TEXT, raw_note TEXT, checksum TEXT, \
+             normalized_at TEXT, disposition TEXT)",
+        ] {
+            conn.execute(ddl, ()).await.unwrap();
+        }
+    }
+
+    async fn scalar_i64(conn: &libsql::Connection, sql: &str) -> i64 {
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        match row.get_value(0).unwrap() {
+            libsql::Value::Integer(n) => n,
+            _ => panic!("not an integer"),
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_and_backfill_populate_from_code() {
+        let conn = mem_conn().await;
+        create_catalog_tables(&conn).await;
+
+        seed_ota_coverage(&conn).await;
+        backfill_ota_notes_audit(&conn).await;
+
+        // Coverage matrix came from the checked-in seed file (all 14 sources, the 6 proven ones).
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM ota_source_coverage").await,
+            14,
+            "seed file must populate the full coverage matrix"
+        );
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM ota_source_coverage WHERE proven=1").await,
+            6,
+            "the 6 proven sources must be seeded proven=1"
+        );
+        assert_eq!(
+            scalar_i64(
+                &conn,
+                "SELECT proven FROM ota_source_coverage WHERE source_id='settour' AND product_type='fit'"
+            )
+            .await,
+            1,
+        );
+        // Region codes seeded (besttour 3 + travel4u 7).
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM ota_source_region_codes").await,
+            10,
+        );
+        // Notes audit backfilled (one per source with a note; all 14 OtaSeed entries have notes).
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM ota_notes_migration_audit").await,
+            14,
+        );
+        assert_eq!(
+            scalar_i64(
+                &conn,
+                "SELECT count(*) FROM ota_notes_migration_audit WHERE disposition='normalized'"
+            )
+            .await,
+            14,
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_is_idempotent_no_duplicate_audit_rows() {
+        let conn = mem_conn().await;
+        create_catalog_tables(&conn).await;
+
+        // The F1 bug: re-running migrate appended duplicate audit rows (table has no PK).
+        backfill_ota_notes_audit(&conn).await;
+        backfill_ota_notes_audit(&conn).await;
+        backfill_ota_notes_audit(&conn).await;
+
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM ota_notes_migration_audit").await,
+            14,
+            "backfill must be idempotent — exactly one audit row per source after repeated runs"
+        );
+        assert_eq!(
+            scalar_i64(
+                &conn,
+                "SELECT count(DISTINCT source_id) FROM ota_notes_migration_audit"
+            )
+            .await,
+            14,
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_dedups_preexisting_duplicate_rows() {
+        let conn = mem_conn().await;
+        create_catalog_tables(&conn).await;
+        // Simulate the corrupted live state: many duplicate rows for one source.
+        for _ in 0..5 {
+            conn.execute(
+                "INSERT INTO ota_notes_migration_audit (source_id, disposition) VALUES ('settour','normalized')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM ota_notes_migration_audit WHERE source_id='settour'").await,
+            5,
+        );
+
+        backfill_ota_notes_audit(&conn).await;
+
+        assert_eq!(
+            scalar_i64(&conn, "SELECT count(*) FROM ota_notes_migration_audit WHERE source_id='settour'").await,
+            1,
+            "backfill must collapse pre-existing duplicate audit rows to one per source"
+        );
+    }
+}
