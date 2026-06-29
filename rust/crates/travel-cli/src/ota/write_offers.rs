@@ -6,9 +6,7 @@ use std::fs;
 use std::path::Path;
 use travel_db::checksum::sha256_hex;
 use travel_db::ids::new_run_id;
-use travel_db::repo::{
-    captures, offers, ota_attempts, ota_jobs,
-};
+use travel_db::repo::{captures, offers, ota_attempts, ota_jobs};
 
 const VALID_TYPES: &[&str] = &["package", "flight", "hotel"];
 const PRICE_CEILING: i64 = 10_000_000;
@@ -32,10 +30,7 @@ fn normalize_date(value: &str) -> Result<String, String> {
         return Ok(String::new());
     }
     let s = t.replace('/', "-");
-    if s.len() == 10
-        && s.as_bytes().get(4) == Some(&b'-')
-        && s.as_bytes().get(7) == Some(&b'-')
-    {
+    if s.len() == 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-') {
         Ok(s)
     } else {
         Err(format!("invalid date {value:?}; expected YYYY-MM-DD"))
@@ -87,9 +82,9 @@ fn parse_tsv(path: &Path) -> Result<Vec<ParsedOffer>, String> {
             return Err(format!("Error: offer[{idx}] missing price_per_person"));
         }
         let price_s = price_raw.replace(',', "");
-        let price: i64 = price_s
-            .parse()
-            .map_err(|_| format!("Error: offer[{idx}] price_per_person={price_raw:?} not an int"))?;
+        let price: i64 = price_s.parse().map_err(|_| {
+            format!("Error: offer[{idx}] price_per_person={price_raw:?} not an int")
+        })?;
         if price <= 0 {
             return Err(format!(
                 "Error: offer[{idx}] price_per_person must be > 0 (got {price})"
@@ -185,16 +180,30 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         .await?
         .ok_or_else(|| format!("Error: job_id '{job_id}' not found"))?;
     if job.claim_token.as_deref() != Some(claim_token.as_str()) {
-        return Err(format!(
-            "Error: claim_token mismatch for job_id={job_id}"
-        ));
+        return Err(format!("Error: claim_token mismatch for job_id={job_id}"));
     }
 
     let cap = captures::get(&conn, &capture_id)
         .await?
         .ok_or_else(|| format!("Error: capture_id '{capture_id}' not found"))?;
+    if cap.source_id != job.source_id {
+        return Err(format!(
+            "Error: capture source_id='{}' does not match job source_id='{}'",
+            cap.source_id, job.source_id
+        ));
+    }
 
     let parsed = parse_tsv(Path::new(&tsv_path))?;
+    let expected_offer_type = common::offer_row_kind(&job.product_type);
+    for (idx, p) in parsed.iter().enumerate() {
+        let actual_offer_type = common::offer_row_kind(&p.product_type);
+        if actual_offer_type != expected_offer_type {
+            return Err(format!(
+                "Error: offer[{idx}] type='{}' is incompatible with job product_type='{}'",
+                p.product_type, job.product_type
+            ));
+        }
+    }
     let candidate_count = parsed.len() as i64;
     let capture_checksum = captures::capture_checksum(&cap.raw_text);
     let parser_rule_checksum = Some(format!(
@@ -208,7 +217,12 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let started_at = scraped_at.clone();
     let source_id = job.source_id.clone();
 
-    let _ = ota_jobs::mark_running(&conn, job_id, &claim_token, &started_at).await?;
+    let affected = ota_jobs::mark_running(&conn, job_id, &claim_token, &started_at).await?;
+    if affected != 1 {
+        return Err(format!(
+            "Error: claim rejected before write-offers — job_id={job_id} token may have been reclaimed"
+        ));
+    }
 
     let mut inserted_count = 0i64;
     let mut deduped_count = 0i64;
@@ -261,7 +275,8 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await?;
 
-    let affected = ota_jobs::finish(&conn, job_id, &claim_token, "succeeded", None, &finished_at).await?;
+    let affected =
+        ota_jobs::finish(&conn, job_id, &claim_token, "succeeded", None, &finished_at).await?;
     if affected == 0 {
         return Err(format!(
             "Error: finish rejected after write-offers — job_id={job_id}"

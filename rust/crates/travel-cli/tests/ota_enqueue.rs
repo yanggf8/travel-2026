@@ -1,20 +1,12 @@
 //! Integration test for `travel ota enqueue`. Real-Turso; skips if creds absent.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
 use common::Guard;
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
 }
 
 fn is_credless(stderr: &str) -> bool {
@@ -156,14 +148,8 @@ async fn enqueue_rejects_bad_source_and_writes_nothing() {
 
     let before = scalar("SELECT count(*) AS n FROM ota_jobs WHERE source_id='zznonexistent999'")
         .unwrap_or_else(|| "0".to_string());
-    let (ok, _stdout, stderr) = run(&[
-        "ota",
-        "enqueue",
-        "zznonexistent999",
-        "fit",
-        "--nights",
-        "4",
-    ]);
+    let (ok, _stdout, stderr) =
+        run(&["ota", "enqueue", "zznonexistent999", "fit", "--nights", "4"]);
     if is_credless(&stderr) {
         eprintln!("skipping (no creds mid-test): {}", stderr.trim());
         return;
@@ -182,12 +168,7 @@ async fn enqueue_rejects_bad_source_and_writes_nothing() {
 async fn enqueue_rejects_bad_product_type() {
     ensure_zztest_source();
     let _g_src = Guard::new(teardown_zztest_source);
-    let (ok, _stdout, stderr) = run(&[
-        "ota",
-        "enqueue",
-        "zztest",
-        "bogus_type",
-    ]);
+    let (ok, _stdout, stderr) = run(&["ota", "enqueue", "zztest", "bogus_type"]);
     if is_credless(&stderr) {
         eprintln!("skipping (no creds): {}", stderr.trim());
         return;

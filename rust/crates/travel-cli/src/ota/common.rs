@@ -26,7 +26,12 @@ pub fn lease_expires(now: &str, lease_seconds: i64) -> Result<String, String> {
         .to_string())
 }
 
-pub async fn table_exists(conn: &Connection, table: &str, col: &str, value: &str) -> Result<bool, String> {
+pub async fn table_exists(
+    conn: &Connection,
+    table: &str,
+    col: &str,
+    value: &str,
+) -> Result<bool, String> {
     let sql = format!("SELECT 1 FROM {table} WHERE {col} = ?1 LIMIT 1");
     let mut rows = conn
         .query(&sql, libsql::params![value.to_string()])
@@ -70,31 +75,7 @@ pub fn product_code_from_url(url: &str) -> Option<String> {
             code = stripped.to_string();
         }
     }
-    if code.is_empty() {
-        None
-    } else {
-        Some(code)
-    }
-}
-
-pub fn infer_destination(url: &str) -> Option<String> {
-    let lower = url.to_lowercase();
-    if lower.contains("kix") || lower.contains("%e4%ba%ac%e9%83%bd") {
-        Some("osaka_2026".to_string())
-    } else {
-        None
-    }
-}
-
-pub fn infer_region(url: &str) -> Option<String> {
-    let lower = url.to_lowercase();
-    if lower.contains("%e4%ba%ac%e9%83%bd") {
-        Some("kyoto".to_string())
-    } else if lower.contains("kix") {
-        Some("kansai".to_string())
-    } else {
-        None
-    }
+    if code.is_empty() { None } else { Some(code) }
 }
 
 pub fn offer_row_id(
@@ -113,34 +94,6 @@ pub fn offer_row_id(
         parts.push(format!("{n}n"));
     }
     parts.join("_")
-}
-
-pub fn infer_airline_from_flight(flight: &str) -> Option<String> {
-    if flight.len() < 2 {
-        return None;
-    }
-    let prefix = &flight[..2];
-    match prefix {
-        "IT" => Some("台灣虎航".to_string()),
-        "CI" => Some("中華航空".to_string()),
-        "BR" => Some("長榮航空".to_string()),
-        "JX" => Some("星宇航空".to_string()),
-        "MM" => Some("樂桃航空".to_string()),
-        "TR" => Some("酷航".to_string()),
-        "GK" => Some("捷星航空".to_string()),
-        _ => None,
-    }
-}
-
-pub fn row_airline(explicit: Option<&str>, flight_outbound: Option<&str>) -> Option<String> {
-    if let Some(a) = explicit {
-        let t = a.trim();
-        if !t.is_empty() {
-            return Some(t.to_string());
-        }
-    }
-    flight_outbound
-        .and_then(|f| infer_airline_from_flight(f.trim()))
 }
 
 pub fn ne(value: Option<&str>) -> Option<String> {
@@ -179,24 +132,19 @@ pub fn parsed_to_offer_row(
 ) -> OfferRow {
     let product_code = product_code_from_url(url).unwrap_or_default();
     OfferRow {
-        id: offer_row_id(
-            source_id,
-            &product_code,
-            departure_date,
-            nights,
-        ),
+        id: offer_row_id(source_id, &product_code, departure_date, nights),
         source_file: Some(format!("capture:{capture_id}")),
         source_id: source_id.to_string(),
         offer_type: offer_row_kind(product_type).to_string(),
         price_per_person: Some(price_per_person),
         currency: Some(currency.to_string()),
-        region: infer_region(url),
-        destination: infer_destination(url),
+        region: None,
+        destination: None,
         departure_date: ne(departure_date),
         return_date: ne(return_date),
         nights,
         hotel_name: ne(hotel_name),
-        airline: row_airline(airline, flight_outbound),
+        airline: ne(airline),
         flight_outbound: ne(flight_outbound),
         flight_return: ne(flight_return),
         scraped_at: scraped_at.to_string(),

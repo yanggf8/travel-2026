@@ -1,10 +1,17 @@
 //! Integration test for `travel ota parse` under a token-guarded job.
 
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
 use common::Guard;
+
+static PARSE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn parse_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    PARSE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
@@ -36,22 +43,13 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn field(stdout: &str, key: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.strip_prefix(&format!("{key}\t")).map(|v| v.to_string()))
-}
-
-fn teardown_all(job_id: &str, capture_id: &str, offer_prefix: &str) {
+fn teardown_all(job_id: &str, capture_id: &str, _offer_prefix: &str) {
     let _ = run(&[
         "db",
         "exec",
-        &format!("DELETE FROM offers WHERE produced_by_job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM offers WHERE id LIKE '{offer_prefix}%'"),
+        &format!(
+            "DELETE FROM offers WHERE produced_by_job_id='{job_id}' OR capture_id='{capture_id}'"
+        ),
     ]);
     let _ = run(&[
         "db",
@@ -109,13 +107,14 @@ fn seed_parse_fixtures(capture_id: &str) {
              VALUES ('zztest', 'fit', 'active', 'regex', '{now}')"
         ),
     ]);
-    let raw = "出發 2026/09/01 回程 2026/09/05\n5天4夜\n總價 NT$20000\nCI100 CI101\n飯店\nHOTEL ZZTEST";
+    let raw =
+        "出發 2026/09/01 回程 2026/09/05\n5天4夜\n總價 NT$20000\nCI100 CI101\n飯店\nHOTEL ZZTEST";
     let _ = run(&[
         "db",
         "exec",
         &format!(
             "INSERT INTO captures (capture_id, source_id, url, captured_at, raw_text) \
-             VALUES ('{capture_id}', 'zztest', 'https://example.com/pkg/ZZ01', '{now}', '{raw}')"
+             VALUES ('{capture_id}', 'zztest', 'https://example.com/pkg/{capture_id}', '{now}', '{raw}')"
         ),
     ]);
     let _ = run(&[
@@ -136,6 +135,7 @@ fn seed_parse_fixtures(capture_id: &str) {
 
 #[tokio::test]
 async fn parse_under_job_writes_provenance() {
+    let _lock = parse_test_lock();
     let (ok, _o, err) = run(&["db", "migrate"]);
     if !ok && is_credless(&err) {
         eprintln!("skipping (no creds): {}", err.trim());
@@ -212,6 +212,7 @@ async fn parse_under_job_writes_provenance() {
 
 #[tokio::test]
 async fn parse_dedup_on_repeat_insert_same_pk() {
+    let _lock = parse_test_lock();
     let (ok, _o, err) = run(&["db", "migrate"]);
     if !ok && is_credless(&err) {
         eprintln!("skipping (no creds): {}", err.trim());
@@ -232,9 +233,7 @@ async fn parse_dedup_on_repeat_insert_same_pk() {
             let _ = run(&[
                 "db",
                 "exec",
-                &format!(
-                    "DELETE FROM offers WHERE id='{offer_id}' AND scraped_at='{scraped_at}'"
-                ),
+                &format!("DELETE FROM offers WHERE id='{offer_id}' AND scraped_at='{scraped_at}'"),
             ]);
         }
     });
@@ -266,6 +265,7 @@ async fn parse_dedup_on_repeat_insert_same_pk() {
 
 #[tokio::test]
 async fn stale_token_parse_fails_before_writing_offers() {
+    let _lock = parse_test_lock();
     let suffix = nanos();
     let capture_id = format!("zzcapst{suffix}");
     let job_id = format!("zzjobst{suffix}");
@@ -305,9 +305,181 @@ async fn stale_token_parse_fails_before_writing_offers() {
     let (ok, stdout, _stderr) = run(&[
         "db",
         "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
+    ]);
+    if ok {
+        assert!(stdout.contains(": 0") || stdout.contains(":0"));
+    }
+}
+
+#[tokio::test]
+async fn parse_rejects_job_source_mismatch() {
+    let _lock = parse_test_lock();
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let suffix = nanos();
+    let capture_id = format!("zzcapmis{suffix}");
+    let job_id = format!("zzjobmis{suffix}");
+    teardown_all(&job_id, &capture_id, "zztest");
+    seed_parse_fixtures(&capture_id);
+    let token = format!("zztokmis{suffix}");
+    let now = "2026-06-29T15:23:00Z";
+    let _ = run(&[
+        "db",
+        "exec",
         &format!(
-            "SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, \
+             created_at, updated_at) \
+             VALUES ('{job_id}', 'zzother', 'fit', 'claimed', '{token}', '{now}', '{now}')"
         ),
+    ]);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown_all(&job_id, &capture_id, "zztest")
+    });
+
+    let (ok, _stdout, stderr) = run(&[
+        "ota",
+        "parse",
+        &job_id,
+        &capture_id,
+        "--source",
+        "zztest",
+        "--product-type",
+        "fit",
+        "--claim-token",
+        &token,
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(!ok, "source mismatch must fail");
+    assert!(stderr.contains("source_id"), "stderr={stderr}");
+
+    let (ok, stdout, _stderr) = run(&[
+        "db",
+        "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
+    ]);
+    if ok {
+        assert!(stdout.contains(": 0") || stdout.contains(":0"));
+    }
+}
+
+#[tokio::test]
+async fn parse_rejects_job_product_mismatch() {
+    let _lock = parse_test_lock();
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let suffix = nanos();
+    let capture_id = format!("zzcapprod{suffix}");
+    let job_id = format!("zzjobprod{suffix}");
+    teardown_all(&job_id, &capture_id, "zztest");
+    seed_parse_fixtures(&capture_id);
+    let token = format!("zztokprod{suffix}");
+    let now = "2026-06-29T15:25:00Z";
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, \
+             created_at, updated_at) \
+             VALUES ('{job_id}', 'zztest', 'flight', 'claimed', '{token}', '{now}', '{now}')"
+        ),
+    ]);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown_all(&job_id, &capture_id, "zztest")
+    });
+
+    let (ok, _stdout, stderr) = run(&[
+        "ota",
+        "parse",
+        &job_id,
+        &capture_id,
+        "--source",
+        "zztest",
+        "--product-type",
+        "fit",
+        "--claim-token",
+        &token,
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(!ok, "product mismatch must fail");
+    assert!(stderr.contains("product_type"), "stderr={stderr}");
+
+    let (ok, stdout, _stderr) = run(&[
+        "db",
+        "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
+    ]);
+    if ok {
+        assert!(stdout.contains(": 0") || stdout.contains(":0"));
+    }
+}
+
+#[tokio::test]
+async fn parse_stops_when_mark_running_rejects_token_state() {
+    let _lock = parse_test_lock();
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let suffix = nanos();
+    let capture_id = format!("zzcaprun{suffix}");
+    let job_id = format!("zzjobrun{suffix}");
+    teardown_all(&job_id, &capture_id, "zztest");
+    seed_parse_fixtures(&capture_id);
+    let token = format!("zztokrun{suffix}");
+    let now = "2026-06-29T15:24:00Z";
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, \
+             created_at, updated_at) \
+             VALUES ('{job_id}', 'zztest', 'fit', 'queued', '{token}', '{now}', '{now}')"
+        ),
+    ]);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown_all(&job_id, &capture_id, "zztest")
+    });
+
+    let (ok, _stdout, stderr) = run(&[
+        "ota",
+        "parse",
+        &job_id,
+        &capture_id,
+        "--source",
+        "zztest",
+        "--product-type",
+        "fit",
+        "--claim-token",
+        &token,
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(!ok, "mark_running rejection must fail before writing");
+    assert!(stderr.contains("claim rejected"), "stderr={stderr}");
+
+    let (ok, stdout, _stderr) = run(&[
+        "db",
+        "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
     ]);
     if ok {
         assert!(stdout.contains(": 0") || stdout.contains(":0"));

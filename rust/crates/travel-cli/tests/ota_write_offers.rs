@@ -37,12 +37,6 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn field(stdout: &str, key: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.strip_prefix(&format!("{key}\t")).map(|v| v.to_string()))
-}
-
 fn fixture_tsv() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zz_ota_offers.tsv")
 }
@@ -270,9 +264,175 @@ async fn write_offers_stale_token_writes_nothing() {
     let (ok, stdout, _) = run(&[
         "db",
         "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
+    ]);
+    if ok {
+        assert!(stdout.contains(": 0") || stdout.contains(":0"));
+    }
+}
+
+#[tokio::test]
+async fn write_offers_rejects_capture_source_mismatch() {
+    let suffix = nanos();
+    let job_id = format!("zzwo{suffix}");
+    let capture_id = format!("zzcap{suffix}");
+    teardown(&job_id, &capture_id);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown(&job_id, &capture_id)
+    });
+    let now = "2026-06-29T15:33:00Z";
+    let token = format!("zztok{suffix}");
+    let _ = run(&[
+        "db",
+        "exec",
         &format!(
-            "SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"
+            "INSERT INTO captures (capture_id, source_id, captured_at, raw_text) \
+             VALUES ('{capture_id}', 'zztest', '{now}', 'x')"
         ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, created_at, updated_at) \
+             VALUES ('{job_id}', 'zzother', 'fit', 'claimed', '{token}', '{now}', '{now}')"
+        ),
+    ]);
+
+    let tsv = fixture_tsv();
+    let (ok, _stdout, stderr) = run(&[
+        "ota",
+        "write-offers",
+        &job_id,
+        "--capture",
+        &capture_id,
+        "--claim-token",
+        &token,
+        "--tsv",
+        tsv.to_str().unwrap(),
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(!ok, "capture source mismatch must fail");
+    assert!(stderr.contains("source_id"), "stderr={stderr}");
+    let (ok, stdout, _) = run(&[
+        "db",
+        "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
+    ]);
+    if ok {
+        assert!(stdout.contains(": 0") || stdout.contains(":0"));
+    }
+}
+
+#[tokio::test]
+async fn write_offers_rejects_type_incompatible_with_job_product() {
+    let suffix = nanos();
+    let job_id = format!("zzwo{suffix}");
+    let capture_id = format!("zzcap{suffix}");
+    teardown(&job_id, &capture_id);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown(&job_id, &capture_id)
+    });
+    let now = "2026-06-29T15:34:00Z";
+    let token = format!("zztok{suffix}");
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO captures (capture_id, source_id, captured_at, raw_text) \
+             VALUES ('{capture_id}', 'zztest', '{now}', 'x')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, created_at, updated_at) \
+             VALUES ('{job_id}', 'zztest', 'flight', 'claimed', '{token}', '{now}', '{now}')"
+        ),
+    ]);
+
+    let tsv = fixture_tsv();
+    let (ok, _stdout, stderr) = run(&[
+        "ota",
+        "write-offers",
+        &job_id,
+        "--capture",
+        &capture_id,
+        "--claim-token",
+        &token,
+        "--tsv",
+        tsv.to_str().unwrap(),
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(!ok, "package TSV rows must not write to a flight job");
+    assert!(stderr.contains("incompatible"), "stderr={stderr}");
+    let (ok, stdout, _) = run(&[
+        "db",
+        "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
+    ]);
+    if ok {
+        assert!(stdout.contains(": 0") || stdout.contains(":0"));
+    }
+}
+
+#[tokio::test]
+async fn write_offers_stops_when_mark_running_rejects_token_state() {
+    let suffix = nanos();
+    let job_id = format!("zzwo{suffix}");
+    let capture_id = format!("zzcap{suffix}");
+    teardown(&job_id, &capture_id);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown(&job_id, &capture_id)
+    });
+    let now = "2026-06-29T15:35:00Z";
+    let token = format!("zztok{suffix}");
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO captures (capture_id, source_id, captured_at, raw_text) \
+             VALUES ('{capture_id}', 'zztest', '{now}', 'x')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, created_at, updated_at) \
+             VALUES ('{job_id}', 'zztest', 'fit', 'queued', '{token}', '{now}', '{now}')"
+        ),
+    ]);
+
+    let tsv = fixture_tsv();
+    let (ok, _stdout, stderr) = run(&[
+        "ota",
+        "write-offers",
+        &job_id,
+        "--capture",
+        &capture_id,
+        "--claim-token",
+        &token,
+        "--tsv",
+        tsv.to_str().unwrap(),
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(!ok, "mark_running rejection must fail before writing");
+    assert!(stderr.contains("claim rejected"), "stderr={stderr}");
+    let (ok, stdout, _) = run(&[
+        "db",
+        "exec",
+        &format!("SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"),
     ]);
     if ok {
         assert!(stdout.contains(": 0") || stdout.contains(":0"));

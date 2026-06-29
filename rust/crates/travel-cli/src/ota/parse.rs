@@ -50,8 +50,18 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         .await?
         .ok_or_else(|| format!("Error: job_id '{job_id}' not found"))?;
     if job.claim_token.as_deref() != Some(claim_token.as_str()) {
+        return Err(format!("Error: claim_token mismatch for job_id={job_id}"));
+    }
+    if job.source_id != source_id {
         return Err(format!(
-            "Error: claim_token mismatch for job_id={job_id}"
+            "Error: job source_id='{}' does not match --source='{source_id}'",
+            job.source_id
+        ));
+    }
+    if job.product_type != product_type {
+        return Err(format!(
+            "Error: job product_type='{}' does not match --product-type='{product_type}'",
+            job.product_type
         ));
     }
 
@@ -114,7 +124,12 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    let _ = ota_jobs::mark_running(&conn, job_id, &claim_token, &started_at).await?;
+    let affected = ota_jobs::mark_running(&conn, job_id, &claim_token, &started_at).await?;
+    if affected != 1 {
+        return Err(format!(
+            "Error: claim rejected before parse write — job_id={job_id} token may have been reclaimed"
+        ));
+    }
 
     let mut inserted_count = 0i64;
     let mut deduped_count = 0i64;
@@ -167,7 +182,8 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await?;
 
-    let affected = ota_jobs::finish(&conn, job_id, &claim_token, "succeeded", None, &finished_at).await?;
+    let affected =
+        ota_jobs::finish(&conn, job_id, &claim_token, "succeeded", None, &finished_at).await?;
     if affected == 0 {
         return Err(format!(
             "Error: finish rejected after parse — job_id={job_id} token may have been reclaimed"

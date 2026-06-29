@@ -108,46 +108,46 @@ pub async fn claim(
     now: &str,
     lease_expires_at: &str,
 ) -> Result<Option<ClaimResult>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT job_id, source_id, product_type FROM ota_jobs \
-             WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1",
-            (),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    let Some(row) = rows.next().await.map_err(|e| e.to_string())? else {
-        return Ok(None);
-    };
-    let job_id: String = row.get(0).map_err(|e| e.to_string())?;
-    let source_id: String = row.get(1).map_err(|e| e.to_string())?;
-    let product_type: String = row.get(2).map_err(|e| e.to_string())?;
-    let claim_token = new_run_id();
+    loop {
+        let mut rows = conn
+            .query(
+                "SELECT job_id, source_id, product_type FROM ota_jobs \
+                 WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1",
+                (),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(row) = rows.next().await.map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        let job_id: String = row.get(0).map_err(|e| e.to_string())?;
+        let source_id: String = row.get(1).map_err(|e| e.to_string())?;
+        let product_type: String = row.get(2).map_err(|e| e.to_string())?;
+        let claim_token = new_run_id();
 
-    let affected = conn
-        .execute(
-            "UPDATE ota_jobs SET status = 'claimed', claimed_by = ?1, claim_token = ?2, \
-             claimed_at = ?3, heartbeat_at = ?3, lease_expires_at = ?4, updated_at = ?3 \
-             WHERE job_id = ?5 AND status = 'queued'",
-            libsql::params![
-                worker_id.to_string(),
-                claim_token.clone(),
-                now.to_string(),
-                lease_expires_at.to_string(),
-                job_id.clone(),
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if affected == 1 {
-        Ok(Some(ClaimResult {
-            job_id,
-            claim_token,
-            source_id,
-            product_type,
-        }))
-    } else {
-        Ok(None)
+        let affected = conn
+            .execute(
+                "UPDATE ota_jobs SET status = 'claimed', claimed_by = ?1, claim_token = ?2, \
+                 claimed_at = ?3, heartbeat_at = ?3, lease_expires_at = ?4, updated_at = ?3 \
+                 WHERE job_id = ?5 AND status = 'queued'",
+                libsql::params![
+                    worker_id.to_string(),
+                    claim_token.clone(),
+                    now.to_string(),
+                    lease_expires_at.to_string(),
+                    job_id.clone(),
+                ],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        if affected == 1 {
+            return Ok(Some(ClaimResult {
+                job_id,
+                claim_token,
+                source_id,
+                product_type,
+            }));
+        }
     }
 }
 
