@@ -2304,8 +2304,19 @@ dependencies = [
  "sha1",
  "sha2",
  "tokio",
+ "travel-db",
  "turso-util",
  "url",
+]
+
+[[package]]
+name = "travel-db"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libsql",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]

@@ -17,6 +17,7 @@ mod freshness;
 mod import_offers;
 mod leave;
 mod offers;
+mod ota; // rust-first OTA execution (enqueue/claim/parse/write-offers)
 mod ota_status; // ota-status DB-native provider coverage view
 mod plan;
 mod promote_offers;
@@ -177,6 +178,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "ota-status" => {
             ota_status::run(rest).await
         }
+        [group, sub, rest @ ..] if group == "ota" => ota::dispatch(sub, rest).await,
         [cmd, rest @ ..] if cmd == "add-offer" => {
             add_offer::run(rest).await
         }
