@@ -156,15 +156,15 @@ pub async fn run(rest: &[String]) -> Result<(), String> {
         raw_flight_outbound: None,
         raw_flight_return: None,
         notes,
-        product_kind: Some("fit".to_string()),
+        product_kind: Some("group_tour".to_string()),
     };
 
     // Connect to DB and insert
     let conn = crate::db::connect_write().await?;
     insert_tour_group_offers(&conn, &[row]).await?;
 
-    println!("✅ BestTour offer saved directly to Turso");
-    println!("   {depart} → {return_date} ({nights}n) | {price} TWD/pax | {hotel}");
+    println!("BestTour offer saved directly to Turso");
+    println!("   {depart} -> {return_date} ({nights}n) | {price} TWD/pax | {hotel}");
     println!("   run: {run_id}");
     println!("   url: {url}");
 

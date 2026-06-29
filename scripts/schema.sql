@@ -563,8 +563,8 @@ CREATE TABLE ota_sources (
 );
 
 CREATE TABLE parser_rules (
-                    source_id TEXT PRIMARY KEY,
-                    product_kind TEXT DEFAULT 'fit',
+                    source_id TEXT NOT NULL,
+                    product_type TEXT NOT NULL DEFAULT 'fit',
                     date_range_rx TEXT NOT NULL,
                     nights_rx TEXT NOT NULL,
                     nights_is_days INTEGER DEFAULT 0,
@@ -577,8 +577,11 @@ CREATE TABLE parser_rules (
                     currency TEXT DEFAULT 'TWD',
                     has_custom_parser INTEGER DEFAULT 0,
                     source_url TEXT,
-                    fetched_at TEXT
-                 , airline_rx TEXT DEFAULT '', hotel_name_rx TEXT DEFAULT '');
+                    fetched_at TEXT,
+                    airline_rx TEXT DEFAULT '',
+                    hotel_name_rx TEXT DEFAULT '',
+                    PRIMARY KEY (source_id, product_type)
+                 );
 
 CREATE TABLE plan_budget (
   plan_id TEXT PRIMARY KEY,

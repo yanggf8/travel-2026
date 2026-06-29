@@ -691,6 +691,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
     seed_ota_sources(&conn).await;
     seed_ota_catalog(&conn).await;
+    migrate_parser_rules_product_type(&conn).await;
 
     // Shaping Stage research tables.
     for sql in SHAPING_RESEARCH_TABLES {
@@ -1260,6 +1261,91 @@ async fn seed_ota_catalog(conn: &libsql::Connection) {
         }
         exec_lenient(conn, s).await;
     }
+}
+
+async fn migrate_parser_rules_product_type(conn: &libsql::Connection) {
+    let new_schema = r#"CREATE TABLE IF NOT EXISTS parser_rules (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL DEFAULT 'fit',
+  date_range_rx TEXT NOT NULL,
+  nights_rx TEXT NOT NULL,
+  nights_is_days INTEGER DEFAULT 0,
+  price_marker TEXT NOT NULL,
+  price_amount_rx TEXT NOT NULL,
+  price_basis TEXT DEFAULT 'total',
+  pax_divisor INTEGER DEFAULT 2,
+  flight_rx TEXT NOT NULL,
+  hotel_anchor_rx TEXT NOT NULL,
+  currency TEXT DEFAULT 'TWD',
+  has_custom_parser INTEGER DEFAULT 0,
+  source_url TEXT,
+  fetched_at TEXT,
+  airline_rx TEXT DEFAULT '',
+  hotel_name_rx TEXT DEFAULT '',
+  PRIMARY KEY (source_id, product_type)
+)"#;
+
+    if !table_exists(conn, "parser_rules").await {
+        exec_create(conn, new_schema).await;
+        return;
+    }
+
+    let has_old_col = has_column(conn, "parser_rules", "product_kind").await;
+    let has_new_col = has_column(conn, "parser_rules", "product_type").await;
+    if !has_old_col || has_new_col {
+        return;
+    }
+
+    exec_lenient(conn, "DROP TABLE IF EXISTS parser_rules_new;").await;
+    exec_create(
+        conn,
+        r#"CREATE TABLE parser_rules_new (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL DEFAULT 'fit',
+  date_range_rx TEXT NOT NULL,
+  nights_rx TEXT NOT NULL,
+  nights_is_days INTEGER DEFAULT 0,
+  price_marker TEXT NOT NULL,
+  price_amount_rx TEXT NOT NULL,
+  price_basis TEXT DEFAULT 'total',
+  pax_divisor INTEGER DEFAULT 2,
+  flight_rx TEXT NOT NULL,
+  hotel_anchor_rx TEXT NOT NULL,
+  currency TEXT DEFAULT 'TWD',
+  has_custom_parser INTEGER DEFAULT 0,
+  source_url TEXT,
+  fetched_at TEXT,
+  airline_rx TEXT DEFAULT '',
+  hotel_name_rx TEXT DEFAULT '',
+  PRIMARY KEY (source_id, product_type)
+)"#,
+    )
+    .await;
+
+    exec_lenient(
+        conn,
+        r#"INSERT OR REPLACE INTO parser_rules_new (
+  source_id, product_type, date_range_rx, nights_rx, nights_is_days, price_marker,
+  price_amount_rx, price_basis, pax_divisor, flight_rx, hotel_anchor_rx, currency,
+  has_custom_parser, source_url, fetched_at, airline_rx, hotel_name_rx
+)
+SELECT
+  source_id,
+  CASE
+    WHEN source_id IN ('besttour', 'travel4u') THEN 'group_tour'
+    WHEN product_kind = 'package' THEN 'fit'
+    WHEN product_kind IN ('flight', 'hotel', 'fit', 'group_tour') THEN product_kind
+    ELSE 'fit'
+  END AS product_type,
+  date_range_rx, nights_rx, COALESCE(nights_is_days, 0), price_marker,
+  price_amount_rx, COALESCE(price_basis, 'total'), COALESCE(pax_divisor, 2),
+  flight_rx, hotel_anchor_rx, COALESCE(currency, 'TWD'), COALESCE(has_custom_parser, 0),
+  source_url, fetched_at, COALESCE(airline_rx, ''), COALESCE(hotel_name_rx, '')
+FROM parser_rules;"#,
+    )
+    .await;
+    exec_lenient(conn, "DROP TABLE parser_rules;").await;
+    exec_lenient(conn, "ALTER TABLE parser_rules_new RENAME TO parser_rules;").await;
 }
 
 async fn seed_ota_sources(conn: &libsql::Connection) {
