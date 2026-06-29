@@ -719,6 +719,83 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     backfill_ota_notes_audit(&conn).await;
     migrate_parser_rules_product_type(&conn).await;
 
+    // OTA execution job lifecycle (rust-first OTA architecture, spec 2026-06-29).
+    // No FK clauses (repo doesn't enable PRAGMA foreign_keys; validity is CLI + validate).
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_jobs (
+  job_id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','claimed','running','succeeded','failed','blocked')),
+  claimed_by TEXT,
+  claimed_at TEXT,
+  claim_token TEXT,
+  lease_expires_at TEXT,
+  heartbeat_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  next_retry_at TEXT,
+  blocked_reason_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK(status!='blocked' OR blocked_reason_code IS NOT NULL)
+)"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_job_params (
+  job_id TEXT NOT NULL,
+  param_key TEXT NOT NULL CHECK(param_key IN ('depart_date','return_date','nights','pax','region_code','region_label')),
+  param_value TEXT NOT NULL,
+  PRIMARY KEY (job_id, param_key)
+)"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_attempts (
+  attempt_id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL,
+  claim_token TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK(outcome IN ('succeeded','failed','blocked')),
+  capture_id TEXT,
+  candidate_count INTEGER NOT NULL DEFAULT 0,
+  inserted_count INTEGER NOT NULL DEFAULT 0,
+  deduped_count INTEGER NOT NULL DEFAULT 0,
+  error_detail TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  UNIQUE(job_id, attempt_no)
+)"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_observations (
+  observation_id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  product_type TEXT,
+  job_id TEXT,
+  attempt_id TEXT,
+  observation_type TEXT NOT NULL CHECK(observation_type IN ('block','captcha','login_wall','render_error','rate_limit','parse_warning','freshness','empty_result')),
+  block_reason_code TEXT,
+  severity TEXT NOT NULL DEFAULT 'warn' CHECK(severity IN ('info','warn','error')),
+  http_status INTEGER,
+  field_name TEXT,
+  selector TEXT,
+  expected_value TEXT,
+  observed_value TEXT,
+  duration_ms INTEGER,
+  freshness_reference_at TEXT,
+  detail TEXT,
+  observed_at TEXT NOT NULL
+)"#,
+    )
+    .await;
+
     // Shaping Stage research tables.
     for sql in SHAPING_RESEARCH_TABLES {
         exec_lenient(&conn, sql).await;
