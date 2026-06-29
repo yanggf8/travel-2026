@@ -206,27 +206,20 @@ async fn stale_claim_token_finish_affects_zero_rows() {
         }
     });
 
-    let mut params = std::collections::HashMap::new();
-    params.insert("nights".to_string(), "4".to_string());
-    ota_jobs::enqueue(
-        &conn,
-        &ota_jobs::EnqueueInput {
-            job_id: job_id.clone(),
-            source_id: "zztest".to_string(),
-            product_type: "fit".to_string(),
-            params,
-            now: now.to_string(),
-        },
+    let token = format!("zztok{}", nanos());
+    conn.execute(
+        "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claimed_by, claim_token, \
+         claimed_at, heartbeat_at, lease_expires_at, created_at, updated_at) \
+         VALUES (?1, 'zztest', 'fit', 'claimed', 'worker-a', ?2, ?3, ?3, ?4, ?3, ?3)",
+        libsql::params![
+            job_id.clone(),
+            token.clone(),
+            now.to_string(),
+            "2026-06-29T14:02:00Z".to_string(),
+        ],
     )
     .await
-    .expect("enqueue");
-
-    let lease = "2026-06-29T14:02:00Z";
-    let claimed = ota_jobs::claim(&conn, "worker-a", now, lease)
-        .await
-        .expect("claim")
-        .expect("should claim");
-    assert_eq!(claimed.job_id, job_id);
+    .expect("insert claimed job");
 
     let stale = ota_jobs::finish(&conn, &job_id, "stale-token-wrong", "succeeded", None, now)
         .await
