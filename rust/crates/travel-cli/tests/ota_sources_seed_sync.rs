@@ -1,20 +1,25 @@
-//! Regression: `db migrate` must SYNC the committed OTA_SOURCES seed metadata
-//! (status/scraper_script/url_template/notes) onto existing live `ota_sources` rows,
-//! not just create missing ones. The original `seed_ota_sources` used INSERT OR IGNORE,
-//! so once a row existed its notes/status drifted forever from the committed seed — every
-//! live row kept its pre-sweep notes while the seed array carried the authoritative
-//! "PROVEN REAL"/"DEFERRED" decisions. Turso is the source of truth, so the live rows
-//! must reflect the committed seed after a migrate.
-//!
-//! Real-Turso integration test; skips cleanly if creds absent.
+//! Regression: `db migrate` must NOT overwrite live OTA catalog edits.
+//! The seed data is cold-start bootstrap only; once rows exist, Turso is authoritative.
+//! Real-Turso integration test; skips cleanly if creds absent and restores real rows via Guard.
 
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+mod common;
+use common::Guard;
 
 static SEED_LOCK: Mutex<()> = Mutex::new(());
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
+}
+
+fn nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
 }
 
 fn is_credless(stderr: &str) -> bool {
@@ -25,7 +30,10 @@ fn is_credless(stderr: &str) -> bool {
 }
 
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin().args(args).output().unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
+    let out = bin()
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -33,7 +41,6 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-/// Single-cell scalar from `db exec` ("col: value" lines).
 fn cell(sql: &str) -> Option<String> {
     let out = bin().args(["db", "exec", sql]).output().expect("db exec");
     if !out.status.success() {
@@ -45,45 +52,78 @@ fn cell(sql: &str) -> Option<String> {
         panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
-    stdout.lines().find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+    stdout
+        .lines()
+        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+}
+
+fn restore_besttour(original_status: &str, test_region: &str) {
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!("UPDATE ota_sources SET status='{original_status}' WHERE source_id='besttour'"),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "DELETE FROM ota_source_regions WHERE source_id='besttour' AND region='{test_region}'"
+        ),
+    ]);
 }
 
 #[tokio::test]
-async fn db_migrate_syncs_ota_source_notes() {
-    let _guard = SEED_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+async fn db_migrate_preserves_live_ota_source_edits() {
+    let _lock = SEED_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-    // Skip cleanly if no creds.
-    if cell("SELECT COUNT(*) AS n FROM ota_sources WHERE source_id='besttour'").is_none() {
+    let Some(original_status) = cell("SELECT status FROM ota_sources WHERE source_id='besttour'")
+    else {
         return;
-    }
+    };
+    let test_region = format!("zzregion{}", nanos());
+    let _g = Guard::new({
+        let original_status = original_status.clone();
+        let test_region = test_region.clone();
+        move || restore_besttour(&original_status, &test_region)
+    });
 
-    // Corrupt the live besttour note (simulate a stale pre-sweep row).
-    let (ok, _o, e) = run(&[
+    let live_status = if original_status == "active" {
+        "inactive"
+    } else {
+        "active"
+    };
+    let (ok, _stdout, stderr) = run(&["set-ota-source", "besttour", "--status", live_status]);
+    assert!(
+        ok,
+        "set-ota-source should live-edit besttour status; err={stderr}"
+    );
+    let (ok, _stdout, stderr) = run(&[
         "db",
         "exec",
-        "UPDATE ota_sources SET notes='STALE_TEST_SENTINEL' WHERE source_id='besttour'",
+        &format!(
+            "INSERT INTO ota_source_regions (source_id, region) VALUES ('besttour', '{test_region}')"
+        ),
     ]);
-    assert!(ok, "setup UPDATE should succeed; err={e}");
-    assert_eq!(
-        cell("SELECT notes FROM ota_sources WHERE source_id='besttour'").as_deref(),
-        Some("STALE_TEST_SENTINEL"),
-        "sentinel set"
-    );
+    assert!(ok, "test child region insert should succeed; err={stderr}");
 
-    // Run migrate — must resync the seed metadata onto the existing row.
     let (ok, stdout, stderr) = run(&["db", "migrate"]);
-    assert!(ok, "db migrate should succeed; stdout={stdout} stderr={stderr}");
-
-    // The committed besttour seed note begins with "PROVEN REAL"; the stale sentinel must
-    // be gone (proving the upsert updated the existing row, not just ignored it).
-    let notes = cell("SELECT notes FROM ota_sources WHERE source_id='besttour'");
-    assert_ne!(
-        notes.as_deref(),
-        Some("STALE_TEST_SENTINEL"),
-        "db migrate must overwrite a stale ota_sources note with the committed seed (was INSERT OR IGNORE)"
-    );
     assert!(
-        notes.as_deref().map(|n| n.contains("PROVEN REAL")).unwrap_or(false),
-        "besttour note should be resynced to the committed 'PROVEN REAL' seed; got {notes:?}"
+        ok,
+        "db migrate should succeed; stdout={stdout} stderr={stderr}"
+    );
+
+    assert_eq!(
+        cell("SELECT status FROM ota_sources WHERE source_id='besttour'").as_deref(),
+        Some(live_status),
+        "db migrate must not overwrite a live-edited ota_sources status"
+    );
+    assert_eq!(
+        cell(&format!(
+            "SELECT count(*) AS n FROM ota_source_regions \
+             WHERE source_id='besttour' AND region='{test_region}'"
+        ))
+        .as_deref(),
+        Some("1"),
+        "db migrate must not delete and reinsert child region rows"
     );
 }
