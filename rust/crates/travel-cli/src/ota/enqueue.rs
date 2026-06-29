@@ -5,7 +5,17 @@ use travel_db::ids::new_run_id;
 use travel_db::repo::ota_jobs;
 
 pub async fn run(args: &[String]) -> Result<(), String> {
-    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let positional = common::positionals(
+        args,
+        &[
+            "--depart",
+            "--return",
+            "--nights",
+            "--pax",
+            "--region-code",
+            "--region-label",
+        ],
+    );
     if positional.len() < 2 {
         return Err(
             "Usage: travel ota enqueue <source_id> <product_type> \

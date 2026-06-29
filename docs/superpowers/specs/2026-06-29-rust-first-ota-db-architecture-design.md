@@ -1,7 +1,13 @@
 # Design: Rust-First OTA Execution — Jobs, Observations, Offers & the Shared DAL
 
 **Date:** 2026-06-29
-**Status:** DRAFT — pending Codex corroboration + Yang review. Companion to the committed
+**Status:** LARGELY IMPLEMENTED (as of 2026-06-30). Phases A–E shipped (schema, `travel-db` DAL
+crate + core repos, `enqueue`/`claim`/`heartbeat`/`finish`/`reap-stale`, `parse` incl. the **settour
+custom parser** in `ota/settour_parse.rs`, `write-offers`, `observations` view), hardened by a
+multi-agent xhigh code review (14 defects fixed). Phase F (DAL adoption) STARTED — `view_bookings`
+migrated to `repo::bookings`. Still open: live end-to-end WSLg per-source verification, the
+`besttour`/`travel4u` custom-parser ports, the gradual DAL migration of the remaining ~57 modules,
+and the gated Phase G D1 pilot. Companion to the committed
 `2026-06-29-db-centric-provider-architecture-design.md` (the *catalog* spec); this spec covers the
 *execution* layer the catalog spec explicitly left out.
 **Author:** Claude (with Yang)
@@ -317,16 +323,20 @@ Phased so each phase ships independently and nothing existing breaks:
 
 1. **Phase A — schema (additive).** `CREATE TABLE IF NOT EXISTS` for `ota_jobs`, `ota_job_params`,
    `ota_attempts`, `ota_observations` in `db_migrate.rs` (mirror the catalog tables at
-   `db_migrate.rs:647-683`); add nullable `capture_id`/`produced_by_job_id`/`parser_method` to
-   `offers`. No behavior change; real-Turso integration test asserts the tables/columns exist
-   (panic-safe `Guard` teardown per CLAUDE.md).
-2. **Phase B — `travel-db` crate skeleton + the offer repo.** Stand up the DAL with `OfferRow` +
-   `repo::offers::insert/latest`; route the new `ota` commands through it from day one (DAL-first).
-3. **Phase C — `travel ota parse`/`write-offers` for `settour`.** The G1 milestone: capture→offer in
-   Rust, stamped with provenance, writing `ota_attempts`/`ota_observations`. Oracle: parity with the
-   gwebcdb Python parse on the same capture (settour custom-parser).
-4. **Phase D — job lifecycle.** `enqueue`/`claim`/`reap-stale` + the conditional-UPDATE claim; tests
-   assert exactly one of N concurrent claims wins (affected-rows==1) and stale-lease reclaim works.
+   `db_migrate.rs:647-683`); add nullable `capture_id`/`produced_by_job_id`/
+   `produced_by_attempt_id`/`parser_method`/`capture_checksum`/`parser_rule_checksum`/
+   `normalizer_version` to `offers`. No behavior change; real-Turso integration test asserts the
+   tables/columns exist (panic-safe `Guard` teardown per CLAUDE.md).
+2. **Phase B — `travel-db` crate skeleton + core repos.** Stand up the DAL with typed repos for offers,
+   captures, parser_rules, observations, jobs, and attempts; route the new `ota` commands through it
+   from day one (DAL-first).
+3. **Phase D — job lifecycle before parsing.** `enqueue`/`claim`/`heartbeat`/`finish`/`reap-stale` +
+   token-guarded conditional UPDATEs; tests assert exactly one of N concurrent claims wins, stale-token
+   terminal updates no-op, and heartbeat prevents reap.
+4. **Phase C — `travel ota parse`/`write-offers` for `settour`, under a real claimed job.** The G1
+   milestone: capture→offer in Rust, stamped with job/attempt/checksum provenance, writing
+   `ota_attempts`/`ota_observations`. Oracle: parity with the gwebcdb Python parse on the same capture
+   (settour custom-parser).
 5. **Phase E — observations + CLI view.** `travel ota observations [--source …]` plain-text view;
    repoint any prose status to the view (consistent with the catalog spec's docs-demotion).
 6. **Phase F (gradual, ongoing) — DAL adoption for existing commands.** Migrate inline-SQL modules to
@@ -362,13 +372,14 @@ Phased so each phase ships independently and nothing existing breaks:
   Task 1 note; omit `REFERENCES`). Enforcement is CLI SELECT-validate + `validate data`.
 
 **Task A2: offer provenance columns [Claude]**
-- Files: `db_migrate.rs` (ALTER `offers` ADD COLUMN ×3, idempotent guard); test `tests/offers_provenance_cols.rs`.
+- Files: `db_migrate.rs` (ALTER `offers` ADD COLUMN ×7, idempotent guard); test `tests/offers_provenance_cols.rs`.
 - Why Claude: `offers` is a live, load-bearing table on the shared production Turso DB; adding columns
   must be idempotent and must not disturb the composite PK `(id, scraped_at)` or existing
   `import_offers`/`promote_offers`/`select_offer` reads.
-- Add nullable `capture_id TEXT`, `produced_by_job_id TEXT`,
-  `parser_method TEXT CHECK(parser_method IS NULL OR parser_method IN ('agent_parse','regex'))`.
-- Steps: failing test asserts the 3 columns exist and existing offer inserts still succeed → run-red →
+- Add nullable `capture_id TEXT`, `produced_by_job_id TEXT`, `produced_by_attempt_id TEXT`,
+  `parser_method TEXT CHECK(parser_method IS NULL OR parser_method IN ('agent_parse','regex'))`,
+  `capture_checksum TEXT`, `parser_rule_checksum TEXT`, `normalizer_version TEXT`.
+- Steps: failing test asserts the 7 columns exist and existing offer inserts still succeed → run-red →
   add columns with an "already exists" tolerant exec (the repo's `exec_lenient` pattern) → run-green →
   commit `feat(db): add capture_id/job/parser_method provenance to offers`.
 
@@ -390,41 +401,18 @@ Phased so each phase ships independently and nothing existing breaks:
   `travel-cli::cascade::common` and composes repo calls. Write this contract as a doc-comment in
   `travel-db/src/lib.rs` so it's enforced by review.
 
-**Task B2: offer repository (`repo::offers`) [→ Grok]**
+**Task B2: core repositories (`repo::offers`, `captures`, `parser_rules`, `observations`, `ota_jobs`) [Claude]**
 - Files: `rust/crates/travel-db/src/repo/offers.rs`; test `tests/repo_offers.rs`.
-- Produces: `OfferRow` struct (typed columns incl. the new provenance fields) + `repo::offers::insert(conn, &OfferRow)`
-  and `repo::offers::latest(conn, dest, filters) -> Vec<OfferRow>` — **bound params only** (`libsql::params!`),
-  the latest-snapshot self-join from `promote_offers.rs:308` lifted into one place.
-- Steps: failing test seeds offers via the binary, calls `repo::offers::latest`, asserts the rows +
-  provenance columns map correctly; `insert` round-trips → run-red → implement → run-green →
-  commit `feat(travel-db): offers repository (typed rows, bound params)`.
-
-### Phase C — OTA execution: capture→parse→offer in Rust (the G1 milestone)
-
-**Task C1: `travel ota parse <capture_id> --source <id>` (regex path) [Claude]**
-- Files: new `rust/crates/travel-cli/src/ota/mod.rs` + `ota/parse.rs`; `main.rs` dispatch arm
-  (mirror the `promote-offers` arm); test `tests/ota_parse.rs`.
-- Why Claude: this is the load-bearing port of the gwebcdb Python parse path; correctness is judged
-  against a Python oracle, not a self-contained spec.
-- Behavior: load `captures.raw_text` (via `repo::captures::get`), load the `parser_rules` row for
-  `(source_id, product_type)` (re-keyed by the catalog plan Task 6), apply the regex ruleset, write
-  `offers` via `repo::offers::insert` stamped `capture_id`/`produced_by_job_id`(NULL here)/
-  `parser_method='regex'`; write one `ota_attempts` row and an `ota_observations` row per parse warning;
-  `--dry-run` previews. `affected_row_count==0` on the offer INSERT = real ON-CONFLICT dedup, NOT failure.
-- Oracle: parity with `gwebcdb/bridge/ota_parse.py` on the SAME capture (start with a `settour` capture —
-  the only `has_custom_parser=1` source, exercising both branches).
-- Steps: failing test (seed a known capture + parser_rules, run `ota parse`, assert the expected offers
-  rows with provenance) → run-red → implement → run-green → commit `feat(cli): travel ota parse — Rust capture→offer (regex)`.
-
-**Task C2: `travel ota write-offers --job <id> --tsv <path>` (agent-parse path) [Claude]**
-- Files: `ota/write_offers.rs`; `main.rs` arm; test `tests/ota_write_offers.rs`.
-- Why Claude: normalizes the agent's free-text TSV → typed offers (the Rust analogue of
-  `gwebcdb/bridge/ota_write_llm_offers.py`); the TSV→column mapping needs care to stay non-JSON.
-- Behavior: read a TSV file (the allowed free-text artifact *before* normalization), validate columns,
-  write typed `offers` rows via `repo::offers::insert` stamped `parser_method='agent_parse'` +
-  `produced_by_job_id`; one `ota_attempts` row.
-- Steps: failing test (fixture TSV → assert typed rows) → run-red → implement → run-green →
-  commit `feat(cli): travel ota write-offers — agent TSV → typed offers`.
+- Produces: `OfferRow` struct (typed columns incl. the new provenance fields) +
+  `repo::offers::{insert,latest}`, `repo::captures::get`, `repo::parser_rules::get(source, product_type)`,
+  `repo::observations::record`, and `repo::ota_jobs` primitives for enqueue/claim/heartbeat/finish/reap.
+  **Bound params only** (`libsql::params!`). `repo::offers::latest` lifts the latest-snapshot self-join
+  from `promote_offers.rs:308`; parser-rule checksum generation must use a deterministic ordered field
+  string, not debug formatting.
+- Steps: failing tests assert offers round-trip with provenance, parser_rules lookup requires
+  product_type, stale claim-token terminal update affects zero rows, and repo calls use bound params →
+  run-red → implement → run-green →
+  commit `feat(travel-db): OTA core repositories (typed rows, bound params)`.
 
 ### Phase D — job lifecycle + claim semantics
 
@@ -437,17 +425,49 @@ Phased so each phase ships independently and nothing existing breaks:
 - Steps: failing test (enqueue, assert one queued job + the param rows; bad param-key fails loud) →
   run-red → implement → run-green → commit `feat(cli): travel ota enqueue — OTA job queue`.
 
-**Task D2: `travel ota claim` + `reap-stale` — conditional-UPDATE claim [Claude]**
+**Task D2: `travel ota claim` + `heartbeat` + `finish` + `reap-stale` — token-guarded conditional UPDATE claim [Claude]**
 - Files: `repo::ota_jobs::{claim,reap_stale}`; `ota/claim.rs`; `main.rs` arms; test `tests/ota_claim.rs`.
 - Why Claude: concurrency correctness — the claim must be race-safe on libSQL remote AND portable to D1.
-- Behavior: `claim` runs `UPDATE ota_jobs SET status='claimed', claimed_by=?, claimed_at=?, updated_at=?
-  WHERE job_id=? AND status='queued'` and treats `execute() == 1` as "we own it", `0` as "lost the race".
-  `reap-stale` re-queues jobs where `status IN ('claimed','running') AND claimed_at < now - lease_ttl`
-  via the same conditional-UPDATE guarded on the stale `claimed_at` (TTL ~15 min — Open Q3).
-- Steps: failing test — enqueue 1 job, fire N concurrent `claim` calls (spawn N tokio tasks against the
-  same job_id), assert **exactly one** returns owned and the row is `claimed`; a second test sets
-  `claimed_at` in the past and asserts `reap-stale` re-queues it. → run-red → implement → run-green →
-  commit `feat(cli): travel ota claim/reap-stale — race-safe conditional-UPDATE lease`.
+- Behavior: `claim` runs the §1 token-guarded `UPDATE ota_jobs SET status='claimed', claimed_by=?,
+  claim_token=?, claimed_at=?, heartbeat_at=?, lease_expires_at=?, updated_at=? WHERE job_id=? AND
+  status='queued'` and treats `execute() == 1` as "we own it", `0` as "lost the race". `heartbeat` and
+  terminal `finish` update only when `claim_token` matches. `reap-stale` requeues only rows where
+  `lease_expires_at < now` and clears `claim_token`; do NOT use the old `claimed_at < now - ttl` rule.
+- Steps: failing tests — enqueue 1 job, fire N concurrent `claim` calls through separate write
+  connections, assert **exactly one** returns owned and the row is `claimed`; heartbeat prevents reap;
+  reap clears the token; stale-token heartbeat/finish affects zero rows; blocked finish requires
+  `blocked_reason_code`. → run-red → implement → run-green →
+  commit `feat(cli): travel ota claim lifecycle — token-guarded lease`.
+
+### Phase C — OTA execution: capture→parse→offer in Rust (the G1 milestone)
+
+**Task C1: `travel ota parse <job_id> <capture_id> --source <id> --product-type <type> --claim-token <token>` (regex path) [Claude]**
+- Files: new `rust/crates/travel-cli/src/ota/mod.rs` + `ota/parse.rs`; `main.rs` dispatch arm
+  (mirror the `promote-offers` arm); test `tests/ota_parse.rs`.
+- Why Claude: this is the load-bearing port of the gwebcdb Python parse path; correctness is judged
+  against a Python oracle, not a self-contained spec.
+- Behavior: validate the job exists and `claim_token` still owns it; load `captures.raw_text` (via
+  `repo::captures::get`); load the `parser_rules` row for `(source_id, product_type)`; compute
+  `capture_checksum`, `parser_rule_checksum`, and `normalizer_version`; apply the regex ruleset; write
+  `offers` via `repo::offers::insert` stamped with capture/job/attempt/checksum provenance and
+  `parser_method='regex'`; write one `ota_attempts` row and an `ota_observations` row per parse warning;
+  finish the job token-guarded unless `--dry-run`. `affected_row_count==0` on the offer INSERT = real
+  ON-CONFLICT dedup, NOT failure.
+- Oracle: parity with `gwebcdb/bridge/ota_parse.py` on the SAME capture (start with a `settour` capture —
+  the only `has_custom_parser=1` source, exercising both branches).
+- Steps: failing test (seed a known capture + parser_rules, run `ota parse`, assert the expected offers
+  rows with provenance) → run-red → implement → run-green → commit `feat(cli): travel ota parse — Rust capture→offer (regex)`.
+
+**Task C2: `travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>` (agent-parse path) [Claude]**
+- Files: `ota/write_offers.rs`; `main.rs` arm; test `tests/ota_write_offers.rs`.
+- Why Claude: normalizes the agent's free-text TSV → typed offers (the Rust analogue of
+  `gwebcdb/bridge/ota_write_llm_offers.py`); the TSV→column mapping needs care to stay non-JSON.
+- Behavior: validate the job exists and `claim_token` still owns it; read a TSV file (the allowed
+  free-text artifact *before* normalization); validate columns; write typed `offers` rows via
+  `repo::offers::insert` stamped `parser_method='agent_parse'`, capture/job/attempt/checksum provenance;
+  write one `ota_attempts` row with candidate/inserted/deduped counts and finish token-guarded.
+- Steps: failing test (fixture TSV → assert typed rows) → run-red → implement → run-green →
+  commit `feat(cli): travel ota write-offers — agent TSV → typed offers`.
 
 ### Phase E — observations read view
 
@@ -484,8 +504,8 @@ execution time after a go decision.
   §1 claim semantics → D2 ✓; §5 DAL crate → B1 + B2 + F1 ✓; §6 workspace split → B1 (member add) +
   the `chromeport` drop (Open Q4, folded into B1 or a trailing chore) ✓; §7 Turso-now/D1-later → G
   (gated placeholder) ✓.
-- Delegation split: A1, B2, D1, E1 are self-contained new tables/commands/views with clear oracles →
-  Grok-able. A2, B1, C1, C2, D2, F1 touch live data / concurrency / cross-crate wiring / behavior
+- Delegation split: A1, D1, E1 are self-contained new tables/commands/views with clear oracles →
+  Grok-able. A2, B1, B2, C1, C2, D2, F1 touch live data / concurrency / cross-crate wiring / behavior
   parity → Claude.
 - Depends on the catalog plan's **Task 6** (`parser_rules` re-key to `(source_id, product_type)`) landing
   first — C1 reads the per-`product_type` rule. Sequence the catalog plan's T6 before Phase C.

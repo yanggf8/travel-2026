@@ -97,6 +97,40 @@ fn insert_claimed_job(job_id: &str, token: &str, worker: &str, lease: &str) {
     assert!(ok, "insert_claimed_job failed: {stderr}");
 }
 
+fn insert_claimed_job_with_attempts(job_id: &str, lease: &str, attempts: i64, max_attempts: i64) {
+    let now = "2026-06-29T15:10:00Z";
+    let token = format!("zztok{}", nanos());
+    let (ok, _, stderr) = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claimed_by, claim_token, \
+             claimed_at, heartbeat_at, lease_expires_at, attempts, max_attempts, created_at, updated_at) \
+             VALUES ('{job_id}', 'zztest', 'fit', 'claimed', 'w-att', '{token}', \
+             '{now}', '{now}', '{lease}', {attempts}, {max_attempts}, '{now}', '{now}')"
+        ),
+    ]);
+    assert!(ok, "insert_claimed_job_with_attempts failed: {stderr}");
+}
+
+fn job_status(job_id: &str) -> Option<String> {
+    let (ok, stdout, _) = run(&[
+        "db",
+        "exec",
+        &format!("SELECT status FROM ota_jobs WHERE job_id='{job_id}'"),
+    ]);
+    if !ok {
+        return None;
+    }
+    // db exec prints `status: <value>`; just probe for the status keyword.
+    for kw in ["queued", "failed", "claimed", "running", "succeeded", "blocked"] {
+        if stdout.contains(kw) {
+            return Some(kw.to_string());
+        }
+    }
+    None
+}
+
 #[tokio::test]
 async fn concurrent_claims_exactly_one_wins() {
     let _lock = claim_test_lock();
@@ -268,4 +302,49 @@ async fn blocked_finish_requires_valid_blocked_code() {
         "captcha",
     ]);
     assert!(ok, "blocked with valid code should succeed: {stderr}");
+}
+
+#[tokio::test]
+async fn reap_parks_exhausted_job_and_requeues_retriable() {
+    let _lock = claim_test_lock();
+    let exhausted = format!("zzclaimx{}", nanos());
+    let retriable = format!("zzclaimr{}", nanos());
+    teardown_job(&exhausted);
+    teardown_job(&retriable);
+    // Both leases already expired at the reap time below.
+    insert_claimed_job_with_attempts(&exhausted, "2026-06-29T15:09:00Z", 3, 3);
+    insert_claimed_job_with_attempts(&retriable, "2026-06-29T15:09:00Z", 1, 3);
+    let _g = Guard::new({
+        let (a, b) = (exhausted.clone(), retriable.clone());
+        move || {
+            teardown_job(&a);
+            teardown_job(&b);
+        }
+    });
+
+    let (ok, stdout, stderr) = run(&["ota", "reap-stale", "--now", "2026-06-29T15:10:02Z"]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "reap failed: {stderr}");
+    // At least our two jobs are acted on; the exhausted one is parked, the retriable requeued.
+    let failed: i64 = field(&stdout, "failed").unwrap_or_default().parse().unwrap_or(0);
+    let requeued: i64 = field(&stdout, "requeued").unwrap_or_default().parse().unwrap_or(0);
+    assert!(failed >= 1, "expected >=1 parked-as-failed; stdout={stdout}");
+    assert!(requeued >= 1, "expected >=1 requeued; stdout={stdout}");
+
+    assert_eq!(job_status(&exhausted).as_deref(), Some("failed"), "ceiling job must be parked");
+    assert_eq!(job_status(&retriable).as_deref(), Some("queued"), "retriable job must requeue");
+}
+
+#[tokio::test]
+async fn reap_stale_rejects_loose_now_format() {
+    // --now is validated BEFORE connecting to Turso, so this needs no creds.
+    let (ok, _stdout, stderr) = run(&["ota", "reap-stale", "--now", "2026-6-29 10:00"]);
+    assert!(!ok, "loose --now must be rejected; stderr={stderr}");
+    assert!(
+        stderr.contains("invalid timestamp") || stderr.contains("expected YYYY"),
+        "stderr={stderr}"
+    );
 }

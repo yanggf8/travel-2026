@@ -68,44 +68,21 @@ fn parse_dest(args: &[String]) -> Option<String> {
     None
 }
 
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
-}
-
 async fn fetch_book_by(
     view: &PlanView,
     plan_id: &str,
 ) -> Result<HashMap<(i64, String, i64), String>, String> {
     // Use the already-resolved plan_id (from --plan-id / $TRAVEL_PLAN_ID /
-    // active / upcoming / most-recent) for the book_by deadline query.
-    let plan_id_esc = sql_quote(plan_id);
-    let dest_esc = sql_quote(&view.active_destination);
+    // active / upcoming / most-recent) for the book_by deadline query. SQL +
+    // row mapping live in the DAL (travel-db) with bound params; this module
+    // only keys the rows into the position triple the renderer uses.
     let conn = db::connect_read().await?;
-    let mut rows = conn
-        .query(
-            &format!(
-                "SELECT day_number, session_type, sort_order, book_by \
-                 FROM activities \
-                 WHERE plan_id = '{plan_id_esc}' AND destination = '{dest_esc}' \
-                   AND book_by IS NOT NULL AND book_by != ''"
-            ),
-            (),
-        )
-        .await
-        .map_err(|e| format!("activities book_by: {e}"))?;
+    let rows =
+        travel_db::repo::bookings::book_by_deadlines(&conn, plan_id, &view.active_destination)
+            .await?;
     let mut map: HashMap<(i64, String, i64), String> = HashMap::new();
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("activities book_by row: {e}"))?
-    {
-        let day: i64 = r.get(0).unwrap_or(0);
-        let session: String = r.get(1).unwrap_or_default();
-        let sort: i64 = r.get(2).unwrap_or(0);
-        let by: String = r.get(3).unwrap_or_default();
-        if !by.is_empty() {
-            map.insert((day, session, sort), by);
-        }
+    for r in rows {
+        map.insert((r.day_number, r.session_type, r.sort_order), r.book_by);
     }
     Ok(map)
 }

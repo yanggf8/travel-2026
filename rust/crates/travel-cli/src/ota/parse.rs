@@ -1,11 +1,12 @@
 use crate::db;
 use crate::ota::common::{self, NORMALIZER_VERSION};
 use crate::ota::regex_parse;
+use crate::ota::settour_parse;
 use travel_db::ids::new_run_id;
-use travel_db::repo::{captures, offers, ota_attempts, ota_jobs, parser_rules};
+use travel_db::repo::{captures, ota_jobs, parser_rules};
 
 pub async fn run(args: &[String]) -> Result<(), String> {
-    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let positional = common::positionals(args, &["--source", "--product-type", "--claim-token"]);
     if positional.len() < 2 {
         return Err(
             "Usage: travel ota parse <job_id> <capture_id> --source <id> \
@@ -87,9 +88,14 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let parser_rule_checksum = parser_rules::checksum(&rule);
 
     let parsed = if rule.has_custom_parser {
-        return Err(format!(
-            "Error: custom parser for source_id='{source_id}' not yet ported to Rust; use write-offers"
-        ));
+        match source_id.as_str() {
+            "settour" => settour_parse::parse_settour(&cap.raw_text, &rule)?,
+            other => {
+                return Err(format!(
+                    "Error: custom parser for source_id='{other}' not yet ported to Rust; use write-offers"
+                ));
+            }
+        }
     } else {
         regex_parse::parse_generic(&cap.raw_text, &rule)?
     };
@@ -124,78 +130,56 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    let affected = ota_jobs::mark_running(&conn, job_id, &claim_token, &started_at).await?;
-    if affected != 1 {
-        return Err(format!(
-            "Error: claim rejected before parse write — job_id={job_id} token may have been reclaimed"
-        ));
-    }
+    let rows: Vec<_> = parsed
+        .iter()
+        .map(|p| {
+            common::parsed_to_offer_row(
+                &source_id,
+                &p.product_type,
+                url,
+                capture_id,
+                &scraped_at,
+                Some(&p.departure_date),
+                Some(&p.return_date),
+                p.nights,
+                p.price_per_person,
+                &p.currency,
+                p.hotel_name.as_deref(),
+                p.airline.as_deref(),
+                p.flight_outbound.as_deref(),
+                p.flight_return.as_deref(),
+                job_id,
+                &attempt_id,
+                "regex",
+                &capture_checksum,
+                Some(&parser_rule_checksum),
+                NORMALIZER_VERSION,
+            )
+        })
+        .collect();
 
-    let mut inserted_count = 0i64;
-    let mut deduped_count = 0i64;
-    for p in &parsed {
-        let row = common::parsed_to_offer_row(
-            &source_id,
-            &p.product_type,
-            url,
-            capture_id,
-            &scraped_at,
-            Some(&p.departure_date),
-            Some(&p.return_date),
-            p.nights,
-            p.price_per_person,
-            &p.currency,
-            p.hotel_name.as_deref(),
-            p.airline.as_deref(),
-            p.flight_outbound.as_deref(),
-            p.flight_return.as_deref(),
-            job_id,
-            &attempt_id,
-            "regex",
-            &capture_checksum,
-            Some(&parser_rule_checksum),
-            NORMALIZER_VERSION,
-        );
-        let result = offers::insert(&conn, &row).await?;
-        inserted_count += result.inserted as i64;
-        deduped_count += result.deduped as i64;
-    }
-
-    let finished_at = common::now_iso();
-    let attempt_no = ota_jobs::next_attempt_no(&conn, job_id).await?;
-    ota_attempts::record(
+    let out = common::write_offers(
         &conn,
-        &ota_attempts::AttemptInput {
-            attempt_id: attempt_id.clone(),
-            job_id: job_id.to_string(),
-            attempt_no,
-            claim_token: claim_token.clone(),
-            outcome: "succeeded".to_string(),
-            capture_id: Some(capture_id.to_string()),
+        common::WriteOffersInput {
+            job_id,
+            claim_token: &claim_token,
+            source_id: &source_id,
+            product_type: &product_type,
+            attempt_id: &attempt_id,
+            capture_id,
+            started_at: &started_at,
             candidate_count,
-            inserted_count,
-            deduped_count,
-            error_detail: None,
-            started_at: started_at.clone(),
-            finished_at: finished_at.clone(),
+            rows,
         },
     )
     .await?;
-
-    let affected =
-        ota_jobs::finish(&conn, job_id, &claim_token, "succeeded", None, &finished_at).await?;
-    if affected == 0 {
-        return Err(format!(
-            "Error: finish rejected after parse — job_id={job_id} token may have been reclaimed"
-        ));
-    }
 
     println!("job_id\t{job_id}");
     println!("attempt_id\t{attempt_id}");
     println!("capture_id\t{capture_id}");
     println!("candidates\t{candidate_count}");
-    println!("inserted\t{inserted_count}");
-    println!("deduped\t{deduped_count}");
+    println!("inserted\t{}", out.inserted);
+    println!("deduped\t{}", out.deduped);
     println!("capture_checksum\t{capture_checksum}");
     println!("parser_rule_checksum\t{parser_rule_checksum}");
     println!("status\tsucceeded");

@@ -91,7 +91,14 @@ fn extract_rule_nights(raw_text: &str, rule: &ParserRuleRow) -> Result<i64, Stri
     let group_text = if rule.nights_is_days {
         caps.get(1).map(|m| m.as_str())
     } else {
-        caps.iter().flatten().last().map(|m| m.as_str())
+        // Python parity: m.lastindex — the highest-numbered CAPTURE group (>=1) that
+        // participated in the match. Group 0 (the whole match) is excluded, so a regex whose
+        // declared groups all failed to participate yields None and fails the parse (rather
+        // than silently extracting nights from the entire matched text).
+        (1..caps.len())
+            .rev()
+            .find_map(|i| caps.get(i))
+            .map(|m| m.as_str())
     };
     let group_text = group_text.ok_or_else(|| {
         format!("rule '{}' nights_rx did not capture a group", rule.source_id)
@@ -269,4 +276,46 @@ pub fn parse_generic(raw_text: &str, rule: &ParserRuleRow) -> Result<Vec<ParsedO
         airline,
         hotel_name: hotel,
     }])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule_with_nights_rx(rx: &str) -> ParserRuleRow {
+        ParserRuleRow {
+            source_id: "zztest".to_string(),
+            product_type: "package".to_string(),
+            date_range_rx: String::new(),
+            nights_rx: rx.to_string(),
+            nights_is_days: false,
+            price_marker: String::new(),
+            price_amount_rx: String::new(),
+            price_basis: "total".to_string(),
+            pax_divisor: 2,
+            flight_rx: String::new(),
+            hotel_anchor_rx: String::new(),
+            airline_rx: String::new(),
+            hotel_name_rx: String::new(),
+            currency: "TWD".to_string(),
+            has_custom_parser: false,
+        }
+    }
+
+    #[test]
+    fn nights_uses_last_participating_capture_group() {
+        // Two capture groups; only group 2 participates (the digits). lastindex == 2.
+        let rule = rule_with_nights_rx(r"(\d+)?日(\d+)夜");
+        let n = extract_rule_nights("行程5日4夜", &rule).unwrap();
+        assert_eq!(n, 4);
+    }
+
+    #[test]
+    fn nights_fails_when_no_capture_group_participates() {
+        // Declared alternation groups, but the match comes from neither — Python raises
+        // "did not capture a group"; we must NOT fall back to group 0 (the whole match).
+        let rule = rule_with_nights_rx(r"(?:(早鳥)|(晚鳥))?共\d+晚");
+        let err = extract_rule_nights("共7晚", &rule).unwrap_err();
+        assert!(err.contains("did not capture a group"), "got: {err}");
+    }
 }

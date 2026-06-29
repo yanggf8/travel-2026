@@ -133,6 +133,136 @@ fn seed_parse_fixtures(capture_id: &str) {
     ]);
 }
 
+fn teardown_settour(job_id: &str, capture_id: &str) {
+    for sql in [
+        format!("DELETE FROM offers WHERE produced_by_job_id='{job_id}' OR capture_id='{capture_id}'"),
+        format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"),
+        format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"),
+        format!("DELETE FROM captures WHERE capture_id='{capture_id}'"),
+        "DELETE FROM parser_rules WHERE source_id='settour' AND product_type='fit'".to_string(),
+    ] {
+        let _ = run(&["db", "exec", &sql]);
+    }
+}
+
+fn seed_settour_fixtures(capture_id: &str) {
+    let now = "2026-06-29T15:26:00Z";
+    // Real settour FIT capture text (oracle: settour-test-0620). The 飯店…入住 anchor and the
+    // hotel name must be on SEPARATE lines, so the line breaks are injected with SQL char(10)
+    // (db exec stores a literal `\n` as backslash-n, not a newline).
+    let line1 = concat!(
+        "台灣桃園機場TPE大阪關西國際機場KIX ",
+        "2026/06/20(六)~2026/06/24(三) 1間客房，2成人 ",
+        "去程：2026/06/20 (六) 台灣虎航 IT212 15:15 TPE 直 19:00 KIX ",
+        "回程：2026/06/24 (三) 台灣虎航 IT211 11:15 KIX 直 13:10 TPE ",
+        "共4晚 機加酒未稅總價 36,587 元起"
+    );
+    let raw_expr = format!(
+        "'{line1}' || char(10) || '飯店 京都 入住：2026/06/20' || char(10) || \
+         '微笑飯店京都烏丸五條' || char(10) || '房型 雙人房'"
+    );
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO captures (capture_id, source_id, url, captured_at, raw_text) \
+             VALUES ('{capture_id}', 'settour', 'https://www.settour.com.tw/fit/{capture_id}', '{now}', {raw_expr})"
+        ),
+    ]);
+    // settour owns the only has_custom_parser=1 rule; the regex columns are unused by the custom
+    // scanner but the row must satisfy NOT NULL columns.
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT OR REPLACE INTO parser_rules \
+             (source_id, product_type, date_range_rx, nights_rx, nights_is_days, price_marker, \
+              price_amount_rx, price_basis, pax_divisor, flight_rx, hotel_anchor_rx, currency, \
+              has_custom_parser) \
+             VALUES ('settour', 'fit', '(unused)', '(unused)', 0, '機加酒未稅總價', '(unused)', \
+              'total', 2, '(unused)', '飯店', 'TWD', 1)"
+        ),
+    ]);
+}
+
+#[tokio::test]
+async fn parse_settour_custom_parser_writes_oracle_offer() {
+    let _lock = parse_test_lock();
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let suffix = nanos();
+    let capture_id = format!("zzsetcap{suffix}");
+    let job_id = format!("zzsetjob{suffix}");
+    teardown_settour(&job_id, &capture_id);
+    seed_settour_fixtures(&capture_id);
+
+    let now = "2026-06-29T15:26:00Z";
+    let token = format!("zzsettok{suffix}");
+    let lease = "2026-06-29T16:00:00Z";
+    let (ok, _out, stderr) = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claimed_by, claim_token, \
+             claimed_at, heartbeat_at, lease_expires_at, created_at, updated_at) \
+             VALUES ('{job_id}', 'settour', 'fit', 'claimed', 'set-w', '{token}', \
+             '{now}', '{now}', '{lease}', '{now}', '{now}')"
+        ),
+    ]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "seed settour job failed: {stderr}");
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown_settour(&job_id, &capture_id)
+    });
+
+    let (ok, stdout, stderr) = run(&[
+        "ota",
+        "parse",
+        &job_id,
+        &capture_id,
+        "--source",
+        "settour",
+        "--product-type",
+        "fit",
+        "--claim-token",
+        &token,
+    ]);
+    assert!(ok, "settour parse failed: {stderr}");
+    assert!(stdout.contains("candidates\t1"), "stdout={stdout}");
+    assert!(stdout.contains("inserted\t1"), "stdout={stdout}");
+
+    // Oracle values from gwebcdb test_settour_oracle_full_offer.
+    let (ok, stdout, _) = run(&[
+        "db",
+        "exec",
+        &format!(
+            "SELECT departure_date, return_date, nights, price_per_person, flight_outbound, \
+             flight_return, hotel_name, airline, parser_method \
+             FROM offers WHERE produced_by_job_id='{job_id}' LIMIT 1"
+        ),
+    ]);
+    assert!(ok, "settour offer select failed");
+    for expected in [
+        "2026-06-20",
+        "2026-06-24",
+        "18294",
+        "IT212",
+        "IT211",
+        "微笑飯店京都烏丸五條",
+        "regex",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected:?} in {stdout}");
+    }
+}
+
 #[tokio::test]
 async fn parse_under_job_writes_provenance() {
     let _lock = parse_test_lock();

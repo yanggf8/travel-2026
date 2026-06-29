@@ -45,58 +45,70 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    println!(
-        "observation_id\tsource_id\tproduct_type\tjob_id\tattempt_id\tobservation_type\tseverity\thttp_status\tfield_name\texpected_value\tobserved_value\tdetail\tobserved_at"
-    );
+    let header = [
+        "observation_id",
+        "source_id",
+        "product_type",
+        "job_id",
+        "attempt_id",
+        "observation_type",
+        "block_reason_code",
+        "severity",
+        "http_status",
+        "field_name",
+        "selector",
+        "expected_value",
+        "observed_value",
+        "duration_ms",
+        "freshness_reference_at",
+        "detail",
+        "observed_at",
+    ];
+    println!("{}", header.join("\t"));
     for r in &rows {
-        print_cell(&r.observation_id);
-        print!("\t");
-        print_cell(&r.source_id);
-        print!("\t");
-        print_opt(&r.product_type);
-        print!("\t");
-        print_opt(&r.job_id);
-        print!("\t");
-        print_opt(&r.attempt_id);
-        print!("\t");
-        print_cell(&r.observation_type);
-        print!("\t");
-        print_cell(&r.severity);
-        print!("\t");
-        print_opt_i64(r.http_status);
-        print!("\t");
-        print_opt(&r.field_name);
-        print!("\t");
-        print_opt(&r.expected_value);
-        print!("\t");
-        print_opt(&r.observed_value);
-        print!("\t");
-        print_opt(&r.detail);
-        print!("\t");
-        println!("{}", r.observed_at);
+        let cells = [
+            cell(&r.observation_id),
+            cell(&r.source_id),
+            opt(&r.product_type),
+            opt(&r.job_id),
+            opt(&r.attempt_id),
+            cell(&r.observation_type),
+            opt(&r.block_reason_code),
+            cell(&r.severity),
+            opt_i64(r.http_status),
+            opt(&r.field_name),
+            opt(&r.selector),
+            opt(&r.expected_value),
+            opt(&r.observed_value),
+            opt_i64(r.duration_ms),
+            opt(&r.freshness_reference_at),
+            opt(&r.detail),
+            cell(&r.observed_at),
+        ];
+        println!("{}", cells.join("\t"));
     }
     println!("observations\t{}", rows.len());
     Ok(())
 }
 
-fn print_cell(s: &str) {
+fn cell(s: &str) -> String {
     if s.is_empty() {
-        print!("-");
+        "-".to_string()
     } else {
-        print!("{s}");
+        s.to_string()
     }
 }
 
-fn print_opt(s: &Option<String>) {
+fn opt(s: &Option<String>) -> String {
     match s {
-        Some(v) if !v.is_empty() => print!("{v}"),
-        _ => print!("-"),
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => "-".to_string(),
     }
 }
 
-fn print_opt_i64(v: Option<i64>) {
+fn opt_i64(v: Option<i64>) -> String {
     match v {
-        Some(n) => print!("{n}"),
-        None => print!("-"),
+        Some(n) => n.to_string(),
+        None => "-".to_string(),
     }
 }

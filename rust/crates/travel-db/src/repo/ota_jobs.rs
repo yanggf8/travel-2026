@@ -109,10 +109,13 @@ pub async fn claim(
     lease_expires_at: &str,
 ) -> Result<Option<ClaimResult>, String> {
     loop {
+        // Only claim jobs that still have attempts left; a poison job at its ceiling is parked
+        // as 'failed' by reap_stale, so max_attempts is a real give-up bound.
         let mut rows = conn
             .query(
                 "SELECT job_id, source_id, product_type FROM ota_jobs \
-                 WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1",
+                 WHERE status = 'queued' AND attempts < max_attempts \
+                 ORDER BY created_at ASC LIMIT 1",
                 (),
             )
             .await
@@ -129,7 +132,7 @@ pub async fn claim(
             .execute(
                 "UPDATE ota_jobs SET status = 'claimed', claimed_by = ?1, claim_token = ?2, \
                  claimed_at = ?3, heartbeat_at = ?3, lease_expires_at = ?4, updated_at = ?3 \
-                 WHERE job_id = ?5 AND status = 'queued'",
+                 WHERE job_id = ?5 AND status = 'queued' AND attempts < max_attempts",
                 libsql::params![
                     worker_id.to_string(),
                     claim_token.clone(),
@@ -189,6 +192,23 @@ pub async fn mark_running(
     .map_err(|e| e.to_string())
 }
 
+/// Increment a job's `attempts` counter (token-guarded). Call once per attempt, after a
+/// successful `mark_running`, so `max_attempts` is enforceable. Returns affected row count.
+pub async fn bump_attempts(
+    conn: &Connection,
+    job_id: &str,
+    claim_token: &str,
+    now: &str,
+) -> Result<u64, String> {
+    conn.execute(
+        "UPDATE ota_jobs SET attempts = attempts + 1, updated_at = ?1 \
+         WHERE job_id = ?2 AND claim_token = ?3 AND status IN ('claimed', 'running')",
+        libsql::params![now.to_string(), job_id.to_string(), claim_token.to_string()],
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Token-guarded terminal update. Returns affected row count.
 pub async fn finish(
     conn: &Connection,
@@ -213,16 +233,40 @@ pub async fn finish(
     .map_err(|e| e.to_string())
 }
 
-/// Requeue jobs with expired leases; clears token and lease fields.
-pub async fn reap_stale(conn: &Connection, now: &str) -> Result<u64, String> {
-    conn.execute(
-        "UPDATE ota_jobs SET status = 'queued', claimed_by = NULL, claim_token = NULL, \
-         claimed_at = NULL, lease_expires_at = NULL, updated_at = ?1 \
-         WHERE status IN ('claimed', 'running') AND lease_expires_at < ?1",
-        libsql::params![now.to_string()],
-    )
-    .await
-    .map_err(|e| e.to_string())
+/// Outcome of a reap pass: jobs requeued for retry vs. jobs parked as `failed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReapResult {
+    pub requeued: u64,
+    pub failed: u64,
+}
+
+/// Reap jobs with expired leases. A job that still has attempts left is requeued (token/lease
+/// cleared); a job that has reached `max_attempts` is parked as `failed` so it stops
+/// re-occupying the front of the queue. Lexical comparison of `lease_expires_at < now` is safe
+/// because callers validate `now` as a canonical `%Y-%m-%dT%H:%M:%SZ` timestamp.
+pub async fn reap_stale(conn: &Connection, now: &str) -> Result<ReapResult, String> {
+    // Park exhausted jobs first so the requeue pass doesn't re-arm them.
+    let failed = conn
+        .execute(
+            "UPDATE ota_jobs SET status = 'failed', claimed_by = NULL, claim_token = NULL, \
+             claimed_at = NULL, lease_expires_at = NULL, updated_at = ?1 \
+             WHERE status IN ('claimed', 'running') AND lease_expires_at < ?1 \
+             AND attempts >= max_attempts",
+            libsql::params![now.to_string()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let requeued = conn
+        .execute(
+            "UPDATE ota_jobs SET status = 'queued', claimed_by = NULL, claim_token = NULL, \
+             claimed_at = NULL, lease_expires_at = NULL, updated_at = ?1 \
+             WHERE status IN ('claimed', 'running') AND lease_expires_at < ?1 \
+             AND attempts < max_attempts",
+            libsql::params![now.to_string()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ReapResult { requeued, failed })
 }
 
 /// Next 1-based attempt number for a job.

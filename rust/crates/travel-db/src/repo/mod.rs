@@ -1,3 +1,4 @@
+pub mod bookings;
 pub mod captures;
 pub mod observations;
 pub mod offers;

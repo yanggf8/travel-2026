@@ -26,6 +26,12 @@ pub async fn run_claim(args: &[String]) -> Result<(), String> {
             _ => i += 1,
         }
     }
+    if lease_seconds <= 0 {
+        return Err(format!(
+            "Error: --lease-seconds must be > 0 (got {lease_seconds}); a non-positive lease would \
+             expire before now and be reaped immediately"
+        ));
+    }
 
     let conn = db::connect_write().await?;
     let now = common::now_iso();
@@ -48,7 +54,7 @@ pub async fn run_claim(args: &[String]) -> Result<(), String> {
 }
 
 pub async fn run_heartbeat(args: &[String]) -> Result<(), String> {
-    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let positional = common::positionals(args, &["--lease-seconds"]);
     if positional.len() < 2 {
         return Err(
             "Usage: travel ota heartbeat <job_id> <claim_token> [--lease-seconds N]".to_string(),
@@ -70,6 +76,11 @@ pub async fn run_heartbeat(args: &[String]) -> Result<(), String> {
             i += 1;
         }
     }
+    if lease_seconds <= 0 {
+        return Err(format!(
+            "Error: --lease-seconds must be > 0 (got {lease_seconds})"
+        ));
+    }
 
     let conn = db::connect_write().await?;
     let now = common::now_iso();
@@ -87,7 +98,7 @@ pub async fn run_heartbeat(args: &[String]) -> Result<(), String> {
 }
 
 pub async fn run_finish(args: &[String]) -> Result<(), String> {
-    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let positional = common::positionals(args, &["--status", "--blocked"]);
     if positional.len() < 2 {
         return Err(
             "Usage: travel ota finish <job_id> <claim_token> \
@@ -175,10 +186,16 @@ pub async fn run_reap_stale(args: &[String]) -> Result<(), String> {
             i += 1;
         }
     }
+    // reap_stale compares --now lexically against stored ISO leases; a non-canonical form
+    // would mis-order. Reject anything but %Y-%m-%dT%H:%M:%SZ.
+    common::validate_iso_z(&now)?;
 
     let conn = db::connect_write().await?;
     let reaped = ota_jobs::reap_stale(&conn, &now).await?;
-    println!("reaped\t{reaped}");
+    // `reaped` = total leases acted on (requeued + parked-as-failed); the breakdown follows.
+    println!("reaped\t{}", reaped.requeued + reaped.failed);
+    println!("requeued\t{}", reaped.requeued);
+    println!("failed\t{}", reaped.failed);
     println!("now\t{now}");
     Ok(())
 }

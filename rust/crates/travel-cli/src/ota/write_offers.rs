@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use travel_db::checksum::sha256_hex;
 use travel_db::ids::new_run_id;
-use travel_db::repo::{captures, offers, ota_attempts, ota_jobs};
+use travel_db::repo::{captures, ota_jobs};
 
 const VALID_TYPES: &[&str] = &["package", "flight", "hotel"];
 const PRICE_CEILING: i64 = 10_000_000;
@@ -30,7 +30,13 @@ fn normalize_date(value: &str) -> Result<String, String> {
         return Ok(String::new());
     }
     let s = t.replace('/', "-");
-    if s.len() == 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-') {
+    if s.len() == 10
+        && s.as_bytes().get(4) == Some(&b'-')
+        && s.as_bytes().get(7) == Some(&b'-')
+        && s[..4].chars().all(|c| c.is_ascii_digit())
+        && s[5..7].chars().all(|c| c.is_ascii_digit())
+        && s[8..10].chars().all(|c| c.is_ascii_digit())
+    {
         Ok(s)
     } else {
         Err(format!("invalid date {value:?}; expected YYYY-MM-DD"))
@@ -53,6 +59,13 @@ fn parse_tsv(path: &Path) -> Result<Vec<ParsedOffer>, String> {
             ));
         }
     }
+    // Reject a repeated header column: the row HashMap keeps only the rightmost value, so a dup
+    // would silently use the wrong field. (Python parse_tsv: len(set(header)) != len(header).)
+    for (i, h) in headers.iter().enumerate() {
+        if headers[i + 1..].contains(h) {
+            return Err(format!("Error: duplicate TSV header column '{h}'"));
+        }
+    }
     if !headers.iter().any(|h| *h == "type") {
         return Err("Error: TSV header must include 'type'".to_string());
     }
@@ -63,6 +76,16 @@ fn parse_tsv(path: &Path) -> Result<Vec<ParsedOffer>, String> {
     let mut offers = Vec::new();
     for (idx, line) in lines.enumerate() {
         let cols: Vec<&str> = line.split('\t').collect();
+        // A row whose field count != header count would silently shift every later column
+        // (wrong price/date written). Hard-error like Python parse_tsv ("TSV columns must align").
+        if cols.len() != headers.len() {
+            return Err(format!(
+                "Error: offer[{idx}] has {} fields but header has {} (row={line:?}); \
+                 TSV columns must align",
+                cols.len(),
+                headers.len()
+            ));
+        }
         let mut row: HashMap<String, String> = HashMap::new();
         for (i, h) in headers.iter().enumerate() {
             if let Some(v) = cols.get(i) {
@@ -104,14 +127,20 @@ fn parse_tsv(path: &Path) -> Result<Vec<ParsedOffer>, String> {
             ));
         }
 
-        let nights = row.get("nights").and_then(|s| {
-            let t = s.trim();
-            if t.is_empty() || t == "-" {
-                None
-            } else {
-                t.parse().ok()
+        let nights = match row.get("nights").map(|s| s.trim()) {
+            Some(t) if !t.is_empty() && t != "-" => {
+                let n: i64 = t
+                    .parse()
+                    .map_err(|_| format!("Error: offer[{idx}] nights={t:?} not an int"))?;
+                if n < 0 {
+                    return Err(format!(
+                        "Error: offer[{idx}] nights must be >= 0 (got {n})"
+                    ));
+                }
+                Some(n)
             }
-        });
+            _ => None,
+        };
 
         let cell = |key: &str| -> Option<String> {
             row.get(key).and_then(|v| {
@@ -141,7 +170,7 @@ fn parse_tsv(path: &Path) -> Result<Vec<ParsedOffer>, String> {
 }
 
 pub async fn run(args: &[String]) -> Result<(), String> {
-    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let positional = common::positionals(args, &["--capture", "--claim-token", "--tsv"]);
     if positional.is_empty() {
         return Err(
             "Usage: travel ota write-offers <job_id> --capture <capture_id> \
@@ -217,78 +246,56 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let started_at = scraped_at.clone();
     let source_id = job.source_id.clone();
 
-    let affected = ota_jobs::mark_running(&conn, job_id, &claim_token, &started_at).await?;
-    if affected != 1 {
-        return Err(format!(
-            "Error: claim rejected before write-offers — job_id={job_id} token may have been reclaimed"
-        ));
-    }
+    let rows: Vec<_> = parsed
+        .iter()
+        .map(|p| {
+            common::parsed_to_offer_row(
+                &source_id,
+                &p.product_type,
+                url,
+                &capture_id,
+                &scraped_at,
+                Some(&p.departure_date),
+                Some(&p.return_date),
+                p.nights,
+                p.price_per_person,
+                &p.currency,
+                p.hotel_name.as_deref(),
+                p.airline.as_deref(),
+                p.flight_outbound.as_deref(),
+                p.flight_return.as_deref(),
+                job_id,
+                &attempt_id,
+                "agent_parse",
+                &capture_checksum,
+                parser_rule_checksum.as_deref(),
+                AGENT_NORMALIZER_VERSION,
+            )
+        })
+        .collect();
 
-    let mut inserted_count = 0i64;
-    let mut deduped_count = 0i64;
-    for p in &parsed {
-        let row = common::parsed_to_offer_row(
-            &source_id,
-            &p.product_type,
-            url,
-            &capture_id,
-            &scraped_at,
-            Some(&p.departure_date),
-            Some(&p.return_date),
-            p.nights,
-            p.price_per_person,
-            &p.currency,
-            p.hotel_name.as_deref(),
-            p.airline.as_deref(),
-            p.flight_outbound.as_deref(),
-            p.flight_return.as_deref(),
-            job_id,
-            &attempt_id,
-            "agent_parse",
-            &capture_checksum,
-            parser_rule_checksum.as_deref(),
-            AGENT_NORMALIZER_VERSION,
-        );
-        let result = offers::insert(&conn, &row).await?;
-        inserted_count += result.inserted as i64;
-        deduped_count += result.deduped as i64;
-    }
-
-    let finished_at = common::now_iso();
-    let attempt_no = ota_jobs::next_attempt_no(&conn, job_id).await?;
-    ota_attempts::record(
+    let out = common::write_offers(
         &conn,
-        &ota_attempts::AttemptInput {
-            attempt_id: attempt_id.clone(),
-            job_id: job_id.to_string(),
-            attempt_no,
-            claim_token: claim_token.clone(),
-            outcome: "succeeded".to_string(),
-            capture_id: Some(capture_id.clone()),
+        common::WriteOffersInput {
+            job_id,
+            claim_token: &claim_token,
+            source_id: &source_id,
+            product_type: &job.product_type,
+            attempt_id: &attempt_id,
+            capture_id: &capture_id,
+            started_at: &started_at,
             candidate_count,
-            inserted_count,
-            deduped_count,
-            error_detail: None,
-            started_at: started_at.clone(),
-            finished_at: finished_at.clone(),
+            rows,
         },
     )
     .await?;
-
-    let affected =
-        ota_jobs::finish(&conn, job_id, &claim_token, "succeeded", None, &finished_at).await?;
-    if affected == 0 {
-        return Err(format!(
-            "Error: finish rejected after write-offers — job_id={job_id}"
-        ));
-    }
 
     println!("job_id\t{job_id}");
     println!("attempt_id\t{attempt_id}");
     println!("capture_id\t{capture_id}");
     println!("candidates\t{candidate_count}");
-    println!("inserted\t{inserted_count}");
-    println!("deduped\t{deduped_count}");
+    println!("inserted\t{}", out.inserted);
+    println!("deduped\t{}", out.deduped);
     println!("parser_method\tagent_parse");
     println!("status\tsucceeded");
     Ok(())

@@ -4,6 +4,7 @@ mod enqueue;
 mod observations;
 mod parse;
 mod regex_parse;
+mod settour_parse;
 mod write_offers;
 
 pub async fn dispatch(sub: &str, rest: &[String]) -> Result<(), String> {
