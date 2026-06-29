@@ -68,6 +68,16 @@ fn teardown(job_id: &str, capture_id: &str) {
         "exec",
         &format!("DELETE FROM captures WHERE capture_id='{capture_id}'"),
     ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        "DELETE FROM ota_source_coverage WHERE source_id='zztest'",
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        "DELETE FROM ota_sources WHERE source_id='zztest'",
+    ]);
 }
 
 #[tokio::test]
@@ -94,6 +104,15 @@ async fn write_offers_from_fixture_tsv() {
         &format!(
             "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
              VALUES ('zztest', 'ZZ Test', 'active', '{now}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT OR IGNORE INTO ota_source_coverage \
+             (source_id, product_type, status, method, updated_at) \
+             VALUES ('zztest', 'fit', 'active', 'agent_parse', '{now}')"
         ),
     ]);
     let _ = run(&[

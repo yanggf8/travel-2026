@@ -78,6 +78,16 @@ fn teardown_all(job_id: &str, capture_id: &str, offer_prefix: &str) {
         "exec",
         "DELETE FROM parser_rules WHERE source_id='zztest' AND product_type='fit'",
     ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        "DELETE FROM ota_source_coverage WHERE source_id='zztest'",
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        "DELETE FROM ota_sources WHERE source_id='zztest'",
+    ]);
 }
 
 fn seed_parse_fixtures(capture_id: &str) {
@@ -88,6 +98,15 @@ fn seed_parse_fixtures(capture_id: &str) {
         &format!(
             "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
              VALUES ('zztest', 'ZZ Test', 'active', '{now}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT OR IGNORE INTO ota_source_coverage \
+             (source_id, product_type, status, method, updated_at) \
+             VALUES ('zztest', 'fit', 'active', 'regex', '{now}')"
         ),
     ]);
     let raw = "出發 2026/09/01 回程 2026/09/05\n5天4夜\n總價 NT$20000\nCI100 CI101\n飯店\nHOTEL ZZTEST";
