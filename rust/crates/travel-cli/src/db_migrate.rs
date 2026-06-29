@@ -796,6 +796,19 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // OTA offer provenance (rust-first OTA architecture, spec 2026-06-29).
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN capture_id TEXT;").await;
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN produced_by_job_id TEXT;").await;
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN produced_by_attempt_id TEXT;").await;
+    add_column(
+        &conn,
+        "ALTER TABLE offers ADD COLUMN parser_method TEXT CHECK(parser_method IS NULL OR parser_method IN ('agent_parse','regex'));",
+    )
+    .await;
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN capture_checksum TEXT;").await;
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN parser_rule_checksum TEXT;").await;
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN normalizer_version TEXT;").await;
+
     // Shaping Stage research tables.
     for sql in SHAPING_RESEARCH_TABLES {
         exec_lenient(&conn, sql).await;

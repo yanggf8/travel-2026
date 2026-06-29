@@ -513,7 +513,7 @@ CREATE TABLE location_zone_candidates (
     PRIMARY KEY (plan_id, destination, sort_order)
   );
 
-CREATE TABLE "offers" (id TEXT NOT NULL, source_id TEXT NOT NULL, type TEXT CHECK(type IN ('package', 'flight', 'hotel')), name TEXT, price_per_person INTEGER, currency TEXT DEFAULT 'TWD', region TEXT, destination TEXT, departure_date TEXT, return_date TEXT, nights INTEGER, availability TEXT CHECK(availability IN ('available', 'sold_out', 'limited')), hotel_name TEXT, hotel_area TEXT, airline TEXT, flight_outbound TEXT, flight_return TEXT, includes TEXT, scraped_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, source_file TEXT, PRIMARY KEY (id, scraped_at));
+CREATE TABLE "offers" (id TEXT NOT NULL, source_id TEXT NOT NULL, type TEXT CHECK(type IN ('package', 'flight', 'hotel')), name TEXT, price_per_person INTEGER, currency TEXT DEFAULT 'TWD', region TEXT, destination TEXT, departure_date TEXT, return_date TEXT, nights INTEGER, availability TEXT CHECK(availability IN ('available', 'sold_out', 'limited')), hotel_name TEXT, hotel_area TEXT, airline TEXT, flight_outbound TEXT, flight_return TEXT, includes TEXT, scraped_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, source_file TEXT, capture_id TEXT, produced_by_job_id TEXT, produced_by_attempt_id TEXT, parser_method TEXT CHECK(parser_method IS NULL OR parser_method IN ('agent_parse','regex')), capture_checksum TEXT, parser_rule_checksum TEXT, normalizer_version TEXT, PRIMARY KEY (id, scraped_at));
 
 CREATE TABLE operation_runs (
   run_id TEXT PRIMARY KEY,
