@@ -1,0 +1,1 @@
+//! `ota_jobs` / `ota_job_params` table access (placeholder — filled in T4).

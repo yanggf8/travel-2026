@@ -1,0 +1,1 @@
+//! `parser_rules` table access (placeholder — filled in T4).

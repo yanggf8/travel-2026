@@ -1,0 +1,1 @@
+//! `ota_observations` table access (placeholder — filled in T4).

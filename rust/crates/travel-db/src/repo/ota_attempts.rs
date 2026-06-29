@@ -1,0 +1,1 @@
+//! `ota_attempts` table access (placeholder — filled in T4).
