@@ -72,7 +72,7 @@ fn exec_must_fail(sql: &str, label: &str) {
     }
     let combined = format!("{stdout}{stderr}").to_lowercase();
     assert!(
-        !ok || combined.contains("constraint") || combined.contains("check"),
+        !ok && (combined.contains("constraint") || combined.contains("check")),
         "{label} must be rejected by CHECK; ok={ok} stdout={stdout} stderr={stderr}"
     );
 }
