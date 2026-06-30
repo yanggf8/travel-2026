@@ -143,6 +143,13 @@ one `match` arm + one async fn + one `custom:` DB row. The door is open without 
   untouched. (No trait until a real one exists.)
 
 ## Migration / sequencing (Tier 1 only; additive)
+0. **PREREQUISITE the spec missed (Codex impl-plan, corroborated):** the resolver keys token lookups
+   on a `destination` standard input, but **neither the CLI nor the schema has one today** —
+   `VALID_PARAM_KEYS` (`ota/common.rs:9`) and `ota_job_params.param_key` CHECK (`db_migrate.rs:739`)
+   both list only `depart_date/return_date/nights/pax/region_code/region_label`. So first: add
+   `--destination` parsing in `ota/run.rs`, add `"destination"` to `VALID_PARAM_KEYS`, and **widen the
+   `ota_job_params.param_key` CHECK** to include `destination` (a table-rebuild migration — see hazard
+   below). Without this, no token lookup can run.
 1. NEW `ota_source_url_token` table (with `input_key`). Hand-seed the known tokens for the 3 verified
    sources at `destination=tokyo` (besttour region_id=295; settour region_id=179900 + dest_code=NRT;
    eztravel dest_code=TYO) in a checked-in seed. Leave `ota_source_region_codes` untouched (no
@@ -155,6 +162,13 @@ one `match` arm + one async fn + one `custom:` DB row. The door is open without 
 4. `set-ota-workflow` + `set-ota-url-token` registration commands (mirror `set-ota-region`).
 5. (DEFERRED, not now) the first `custom:` strategy — a plain `match` arm + async fn — only when a
    real diverged source needs it.
+
+> **CHECK-widening hazard (Codex impl-plan, corroborated):** `CREATE TABLE IF NOT EXISTS` does NOT
+> alter a CHECK on an already-existing table, and SQLite can't `ALTER` a CHECK. BOTH widenings
+> (`ota_job_params.param_key` in step 0, `ota_source_workflow.nav_kind` in step 3) hit live tables, so
+> each needs an explicit **table-rebuild migration** (create `*_new` with the new CHECK → copy rows →
+> drop old → rename), run idempotently in `db migrate`. A plain `CREATE TABLE IF NOT EXISTS` edit is a
+> silent no-op on the live DB.
 
 ## Open questions — RESOLVED by the Codex review
 1. **Token input** — v1 keys on `input_key='destination'` only; the `input_key` column keeps it
