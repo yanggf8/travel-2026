@@ -1,155 +1,118 @@
-# Design: OTA resolver extension — common standard inputs + union token set
+# Design: OTA resolver — product_type input contract (type covers IN → PROCESS → OUT)
 
-**Date:** 2026-07-01 · **Status:** DRAFT — Codex-reviewed (ACCEPT-WITH-CHANGES), corroborated, folded in.
-**Builds on:** `2026-07-01-ota-source-registry-and-strategies.md` (Tier-1, shipped commit `089407a`:
-`ota_source_url_token` + generic destination-keyed resolver).
+**Date:** 2026-07-01 · **Status:** DRAFT — Codex-reviewed + corroborated. **Supersedes** this doc's own
+earlier "flat COMMON map + ad-hoc input_key" approach (never built — the redirect below replaces it).
+**Builds on:** `2026-07-01-ota-source-registry-and-strategies.md` (Tier-1, shipped `089407a`).
 
-## Codex review (2026-07-01): ACCEPT-WITH-CHANGES — corroborated by Claude
-Every factual claim verified vs source; the load-bearing ones:
+## The model (Yang's direction): the 4 product_types ARE the type system
+`product_type ∈ {flight, hotel, fit, group_tour}` is the organizing contract across the whole pipeline —
+"**type covers IN → PROCESS → OUT**":
+- **IN** — each product_type declares its canonical inputs: which COMMON standard inputs it takes, and
+  which DISTINCT **token-key roles** it needs. This contract lives in a **DB table** (`product_type_inputs`).
+- **PROCESS** — the resolver dispatches on the source's product_type, reads that type's contract, fills
+  COMMON from the standard-input map (+ DB defaults), and fills each DISTINCT role from
+  `ota_source_url_token`.
+- **OUT** — product_type already determines the offer kind (`offer_row_kind`: flight→flight, hotel→hotel,
+  else→package — common.rs:79; used at common.rs:398, validated write_offers.rs:242). Already type-driven.
 
-| Claim | Verdict | Evidence |
-|-------|---------|----------|
-| Tier-1 resolver is destination-only (`run.rs` "get" arm calls `url_token(...,"destination",...)`) | CONFIRMED | run.rs:174/188/192 |
-| `ota_source_url_token` already has `input_key` (PK incl. it); adding `hotel` is NO schema change | CONFIRMED | db_migrate.rs:892; repo ota_source_workflow.rs:71; no CHECK on input_key |
-| `set-ota-url-token` hard-rejects non-`destination` | CONFIRMED | set_ota_catalog.rs:301 |
-| New inputs need `VALID_PARAM_KEYS` + `ota_job_params.param_key` CHECK widened (table-rebuild) | CONFIRMED | common.rs:9; db_migrate.rs:823; rebuild pattern db_migrate.rs:108 |
-| **Origin/currency defaults ALREADY live in DB — must NOT hardcode** | CONFIRMED | `global_config.default_origin=taiwan` → `origin_config[taiwan].currency=TWD` (verified live); CLAUDE.md:390 "config in Turso" |
-| travel4u/agoda/google_flights need workflow+token registration (travel4u registered LIVE but not in seed) | CONFIRMED | seed has only settour/eztravel/besttour (ota_source_workflow.seed.sql) |
+### The crux Codex resolved (corroborated): TYPE owns the contract, SOURCE owns the placeholder
+A per-type contract must NOT enumerate literal placeholder names, because sources of the **same type use
+different placeholder spellings**:
+- `besttour/group_tour` → `{region_id}` vs `travel4u/group_tour` → `{area_code}` — both `group_tour`,
+  both `input_key=destination`, different placeholder (corroborated live in `ota_source_url_token`).
+- `settour/fit` has `{region_id}` but `eztravel/fit` does not — same divergence within `fit`.
 
-**Four open questions — RESOLVED (folded into the design below):**
-1. **DISTINCT input_key discovery → option (b)** data-driven, WITH an ambiguity guard: query the
-   distinct `input_key`s registered for `(source,product_type,placeholder)`, try only keys whose caller
-   value is present, require **exactly one** to resolve; if `destination` AND `hotel` rows both exist and
-   both caller values are present, fail loud unless only one yields a token. No name-convention, no
-   binding table until ambiguity becomes real.
-2. **`checkin` alias of `depart`** → keep (package: equal; hotel-only: trip start = depart).
-3. **Defaults from DB, NOT hardcoded** → `origin`/`currency` resolve from `global_config.default_origin`
-   → `origin_config`; only `rooms=1` may default in code (query shape, not provider/project data).
-   Hardcoding `TPE`/`TWD` would violate no-hardcode and duplicate a DB fact.
-4. **COMMON alias table stays CODE** → `depart→depart_date/checkin`, `return→return_date`, `pax→adults`
-   are semantic API aliases (mapping logic), not provider data.
+So: **TYPE owns canonical inputs + token-key ROLES; SOURCE owns its placeholder→value binding** (the
+existing `ota_source_url_token` rows). `group_tour` declares "needs a `destination` token_key"; besttour
+binds that role to `{region_id}`, travel4u to `{area_code}`.
 
-**Build-blocking gaps (must be in the plan):** `ota run` doesn't accept/persist `--origin`/`--currency`/
-`--rooms`/`--hotel`; `VALID_PARAM_KEYS` + the CHECK lack them; `set-ota-url-token` rejects `hotel`; the
-resolver always passes `"destination"`; no repo query for registered input_keys; and travel4u/agoda/
-google_flights need workflow+token registration (+ seed) before the 6-source acceptance test passes.
+## Keying: deterministic-when-clear, **LLM judge when ambiguous** (Yang)
+`ota_source_url_token.input_key` SURVIVES as the physical lookup key (it is already a PK component;
+hotel tokens need a different namespace than destination tokens). The keying is a 3-tier fallback:
+1. **Type contract (deterministic, authoritative):** the resolver knows from `product_type_inputs`
+   which token-key roles the type uses, and looks up each DISTINCT placeholder's token by that key. This
+   handles every clean case (all 6 sources today).
+2. **Fail loud** when a required token row is missing (naming the placeholder + role).
+3. **LLM-judge fallback when keying is genuinely AMBIGUOUS** — e.g. a placeholder that could resolve via
+   more than one registered key, or a binding the contract can't disambiguate. Rather than stacking
+   brittle precedence heuristics, the resolver surfaces the ambiguity to the agent (the coding agent
+   already driving `ota run` + extraction is the parser/judge). No silent guessing, no fragile rule.
+   (Today no source is ambiguous; this is the designed escape hatch, not built-now machinery — like the
+   Tier-2 `custom:` seam.)
 
-## The requirement (Yang's, restated)
-> *"First extract the common fields and map them, then keep a union set per distinct field."*
-
-Tier-1 resolves every non-standard placeholder via ONE rule: a token row keyed on `destination`. That
-covers besttour/settour/eztravel/travel4u, but **google_flights** and **agoda** have placeholders that
-are neither standard dates/pax NOR destination-keyed: `{origin}`, `{currency}`, `{adults}`, `{rooms}`,
-`{nights}`, `{checkin}` (caller/global inputs) and `{hotel_slug}` (keyed on a *hotel*, not a
-destination). This extension generalizes the resolver so those two onboard as pure DB data too — no
-per-source code.
-
-## The classification (data-driven, from the real templates)
-
-Placeholder universe across all 6 sources (besttour, settour, eztravel, travel4u, google_flights,
-agoda):
-
-| Class | Placeholders | Filled from |
-|-------|--------------|-------------|
-| **COMMON** (a recurring search input — map ONCE, applies to every source) | `depart` / `depart_date`, `return` / `return_date`, `pax`, `adults`, `rooms`, `nights`, `checkin`, `origin`, `currency` | the standard-input map (caller flags + defaults) |
-| **DISTINCT** (per-source/per-entity — accumulate in the UNION token set) | `dest`, `dest_code`, `city_slug`, `country`, `region_id`, `area_code` (destination-keyed); `hotel_slug` (hotel-keyed) | `ota_source_url_token`, looked up by the placeholder's `input_key` |
-
-Two lookups, in order, for each placeholder:
-1. **COMMON** → fill from the standard-input map (below). No DB.
-2. **DISTINCT** → look up in `ota_source_url_token` for this `(source, product_type, placeholder)`,
-   matching whatever `input_key` is registered for it (`destination` or `hotel`), using the caller's
-   value for that input_key. Fail loud naming the placeholder if neither hits.
-
-No `if source ==` anywhere; no precedence guessing — a placeholder is either a known COMMON name or a
-registered DISTINCT token, else it is a fail-loud config error.
-
-## Part 1 — COMMON: the standard-input map (extract once)
-
-The caller passes generic search inputs; the resolver builds a map covering every COMMON placeholder,
-with **aliases** (one input fills several placeholder spellings) and **defaults** (so a source can use
-a global field the caller didn't pass):
-
-| Standard input | CLI flag | Fills placeholders | Default if unset |
-|----------------|----------|--------------------|------------------|
-| destination | `--destination` | (keys DISTINCT tokens; not itself a placeholder) | — (required when any DISTINCT token is destination-keyed) |
-| depart | `--depart` | `depart`, `depart_date`, `checkin` | — |
-| return | `--return` | `return`, `return_date` | — |
-| nights | `--nights` | `nights` | — |
-| pax | `--pax` | `pax`, `adults` | — |
-| rooms | `--rooms` | `rooms` | `1` |
-| origin | `--origin` | `origin` | **from DB**: `global_config.default_origin` → `origin_config` airport |
-| currency | `--currency` | `currency` | **from DB**: `origin_config[default_origin].currency` (= TWD) |
-
-- Aliases are a fixed, code-level table (e.g. `depart` → also fills `depart_date`/`checkin`). This is
-  the "extract the common fields and map them" step — one shared mapping, not per-source. (Codex #4:
-  semantic API aliases are mapping logic, not provider data → code, not DB.)
-- **Origin/currency defaults come from DB, never hardcoded** (Codex #3, corroborated): resolve
-  `global_config.default_origin` (`taiwan`) → `origin_config` row for currency (`TWD`) and the origin
-  airport. `rooms` defaults to `1` in code (query shape, not provider/project data). Hardcoding `TPE`/
-  `TWD` would violate the no-hardcode rule and duplicate a DB fact.
-  - *Note:* `origin_config` carries `currency`/`country_code`/`timezone` but NOT the airport code (`TPE`).
-    The plan must locate the origin-airport source (likely an `origin_config` column to add, or an
-    existing per-origin field) — currency is unambiguously DB-sourced; airport source is a plan TODO.
-- A COMMON placeholder the caller didn't supply, with no DB default and no code default → fail loud
-  naming it (dates/destination/pax always fail loud; origin/currency/rooms have a default).
-- `pax` derives `adults`. (No child-count modelling yet — YAGNI; add when a source needs `{child}`.)
-
-## Part 2 — DISTINCT: the union token set (already built, add `input_key='hotel'`)
-
-The union set IS the existing `ota_source_url_token` table; its `input_key` column already supports
-this (Tier-1 reserved it). Extension:
-- v1 supported `input_key='destination'` only. Add **`input_key='hotel'`** as the second allowed value,
-  for `{hotel_slug}`-style per-entity tokens. The resolver, for a DISTINCT placeholder, reads the
-  token row by the `input_key` the registration used and the caller's value for that key.
-- `--hotel <slug-key>` becomes a caller input (the key side, e.g. `--hotel hotel-azat-naha`); the token
-  row maps `(agoda, hotel, hotel_slug, hotel, <key>) → <real agoda slug>`. (For agoda, `city_slug` and
-  `country` are destination-keyed tokens; `hotel_slug` is hotel-keyed.)
-- `set-ota-url-token` accepts `input_key ∈ {destination, hotel}` (was destination-only). The resolver
-  must know, per placeholder, WHICH input_key to use — see Open Question 1.
-
-## How the two new sources onboard (the acceptance test)
-
-**google_flights** (`flight`): all placeholders are COMMON except `{dest}` (destination token).
+## `product_type_inputs` — the DB contract table (Codex's minimal schema)
+```sql
+CREATE TABLE product_type_inputs (
+  product_type   TEXT NOT NULL,
+  input_name     TEXT NOT NULL,                      -- canonical input/role name (NOT a placeholder spelling)
+  input_class    TEXT NOT NULL CHECK(input_class IN ('common','token_key')),
+  required       INTEGER NOT NULL DEFAULT 1 CHECK(required IN (0,1)),
+  default_source TEXT CHECK(default_source IS NULL OR default_source IN ('caller','db','code')),
+  sort_order     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (product_type, input_name)
+);
 ```
-set-ota-workflow google_flights flight --nav get --url-template '…{dest}…{origin}…{depart_date}…{return_date}…{currency}…'
-set-ota-url-token google_flights flight dest destination tokyo NRT   # or the slug Google expects
-ota run --capture-only google_flights flight --destination tokyo --origin TPE --depart … --return …
-   → {origin}=TPE (default ok), {currency}=TWD (default), dates from flags, {dest} from token. Resolves.
-```
-**agoda** (`hotel`): `{checkin}`/`{nights}`/`{adults}`/`{rooms}`/`{currency}` COMMON; `{city_slug}`/
-`{country}` destination-tokens; `{hotel_slug}` hotel-token.
-```
-set-ota-url-token agoda hotel city_slug destination tokyo tokyo-jp
-set-ota-url-token agoda hotel country   destination tokyo jp
-set-ota-url-token agoda hotel hotel_slug hotel hotel-azat-naha azat-naha-the-real-agoda-slug
-ota run --capture-only agoda hotel --destination tokyo --hotel hotel-azat-naha --depart … --nights 4 --pax 2
-```
-Zero Rust per source.
+Seed (the 4 type contracts; data, so a 5th type = INSERT, no rebuild):
 
-## What changes / what stays
-- **CHANGE:** the resolver's per-placeholder fill — COMMON map (with aliases + defaults) first, then
-  union-token lookup by `input_key`; new caller flags `--rooms`/`--origin`/`--currency`/`--hotel`;
-  `VALID_PARAM_KEYS` gains the new inputs; `set-ota-url-token` accepts `input_key ∈ {destination,hotel}`.
-- **KEEP:** `ota_source_url_token` table shape (no schema change — `input_key` already exists),
-  `resolve_url` (pure), the job lifecycle, `nav_kind` match, the audit triad, all Tier-1 tests.
-- **DEFER:** child pax, multi-currency-per-destination, any `input_key` beyond destination/hotel,
-  Tier-2 `custom:` strategies.
+| product_type | rows (`input_name` `input_class` [default_source]) |
+|---|---|
+| `flight` | `destination` token_key · `depart` common · `return` common · `origin` common db · `currency` common db |
+| `hotel` | `destination` token_key · `hotel` token_key · `depart` common · `nights` common · `pax` common · `rooms` common code · `currency` common db |
+| `fit` | `destination` token_key · `depart` common · `return` common · `pax` common |
+| `group_tour` | `destination` token_key |
 
-## DISTINCT input_key discovery — the resolver algorithm (Codex #1, option b + guard)
-For a DISTINCT placeholder `p` of `(source, product_type)`:
-1. Query the registered input_keys: `SELECT DISTINCT input_key FROM ota_source_url_token WHERE
-   source_id=? AND product_type=? AND placeholder=p`.
-2. For each such `input_key`, if the caller supplied a value for that key (`destination` from
-   `--destination`, `hotel` from `--hotel`), look up the token row. Collect the hits.
-3. **Exactly one hit** → use it. **Zero** → fail loud "no url-token for {p} (tried input_keys …)".
-   **More than one** (both `destination` and `hotel` rows resolve) → fail loud as ambiguous. This
-   ambiguity guard means a placeholder must resolve to a single token; no silent precedence.
-Data-driven: the token rows themselves declare which input_key a placeholder uses; no name-convention,
-no binding table (defer (c) until ambiguity is real domain data).
+- `common` inputs are filled from the standard-input map; `token_key` roles from `ota_source_url_token`.
+- `default_source`: `caller` = must be passed/required; `db` = read from DB defaults; `code` = code default.
+- The table declares **canonical inputs/roles, never placeholder spellings** (those stay per-source).
 
-## Open questions — RESOLVED by the Codex review
-1. **input_key discovery** → option (b) data-driven + ambiguity guard (algorithm above). (Codex #1)
-2. **`checkin` alias of `depart`** → keep; equal for packages, = trip start for hotel-only. (Codex #2)
-3. **Defaults** → `origin`/`currency` from DB (`global_config.default_origin`→`origin_config`), never
-   hardcoded; `rooms=1` in code (query shape); dates/destination/pax fail loud. (Codex #3, corroborated)
-4. **COMMON alias table** → code (semantic API aliases, not provider data). (Codex #4)
+## COMMON standard-input map (aliases in CODE, defaults from DB)
+The resolver builds a map covering COMMON inputs; aliases are a fixed code table, defaults are DB-sourced:
+- **Aliases (code):** `depart` → `depart`/`depart_date`/`checkin`; `return` → `return`/`return_date`;
+  `pax` → `pax`/`adults`. (Semantic API aliases = mapping logic, not provider data — Codex #4.)
+- **Defaults from DB (never hardcoded — Codex #3, corroborated live):** `origin` ← `origin_airports`
+  WHERE slug=`global_config.default_origin` ORDER BY sort_order LIMIT 1 (= TPE); `currency` ←
+  `origin_config[default_origin].currency` (= TWD). `rooms` defaults to `1` in CODE (query shape, not
+  provider/project data). Dates/destination/pax fail loud if unsupplied.
+- A small `travel-db` reader (e.g. `repo::origin::default_origin_airport_and_currency(conn)`) supplies
+  the DB defaults — the resolver is the first CLI consumer of these.
+
+## How a source resolves (PROCESS, end to end)
+For `ota run --capture-only <source> <product_type> --destination … [--hotel …] [--depart …] …`:
+1. Load the workflow row; `match nav_kind` "get".
+2. Read `product_type_inputs` for `<product_type>` → the canonical input contract.
+3. For each COMMON input: fill from caller flag, else DB default (origin/currency), else code default
+   (rooms), else fail loud if required. Apply code aliases so every placeholder spelling is covered.
+4. For each `token_key` role: for every URL placeholder bound to that role, look up
+   `ota_source_url_token(source, product_type, placeholder, input_key=<role>, input_value=<caller value>)`.
+   Exactly-one clean hit → use it; missing → fail loud; **ambiguous → LLM-judge fallback** (above).
+5. `resolve_url(template, map)` (pure; already fails loud naming any still-missing placeholder).
+
+## What changes / stays / defers
+- **CHANGE:** new `product_type_inputs` table + seed; new caller flags `--origin`/`--currency`/`--rooms`/
+  `--hotel`; `VALID_PARAM_KEYS` + `ota_job_params.param_key` CHECK widened (idempotent table-rebuild,
+  same hazard class as Tier-1 — mirror `migrate_ota_job_params_destination`); a `travel-db` DB-default
+  reader; the resolver loop rewritten to be contract-driven; `set-ota-url-token` accepts
+  `input_key ∈ {destination, hotel}`.
+- **KEEP:** `ota_source_url_token` table shape (no change — `input_key` already exists), `resolve_url`/
+  `find_placeholders`/`insert_param`, the job lifecycle, `nav_kind` match, the audit triad, all Tier-1
+  tests, `offer_row_kind` (OUT already type-driven).
+- **DEFER:** the LLM-judge ambiguity path is a documented seam (no source needs it yet); child pax;
+  per-destination currency; any `input_key` beyond destination/hotel; Tier-2 `custom:` strategies.
+
+## Build decomposition (2 sequential plans — Codex; Yang approved)
+- **Plan 1 — contract + resolver mechanics:** `product_type_inputs` (+seed the 4 contracts), widen
+  inputs/flags/CHECK, the DB-default reader, the contract-driven resolver loop with deterministic keying
+  + the fail-loud/agent-fallback boundary, `set-ota-url-token` hotel support. Verified against the 4
+  already-registered sources (no behavior change for them) + unit tests.
+- **Plan 2 — source onboarding (data):** register `travel4u` (seed it — it is live but not in seed),
+  `google_flights`, `agoda` as workflow+token rows (agoda needs `input_key='hotel'` for `{hotel_slug}`;
+  real slug/dest values come from each source's live capture, not invented), + the 6-source acceptance
+  test. Honest-seed rule: seed only proven values.
+
+## Open items folded from review (no longer open)
+- `input_key` survives (Codex #1, option a + contract validation). `checkin` aliases `depart` (Codex #2).
+  Defaults DB-sourced (Codex #3). Aliases in code (Codex #4). group_tour/fit placeholder variance handled
+  by TYPE-owns-role / SOURCE-owns-placeholder. `product_types` is closed by seed discipline (no CHECK).
+- **Honest-seed risk (Codex):** agoda `{hotel_slug}` and google_flights `{dest}` real values are NOT
+  known from the design — they come from each source's proven capture. Plan 2 seeds only proven values;
+  do not invent slugs.
