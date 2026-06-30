@@ -20,6 +20,7 @@
 // Verified no-cascade: cascade_dirty_flags UNCHANGED.
 
 use libsql::Connection;
+use travel_db::repo::flight_legs;
 
 #[derive(Default, Debug)]
 struct FlightInput {
@@ -400,53 +401,35 @@ async fn update_flight_leg(
     input: &FlightInput,
     now_db: &str,
 ) -> Result<(), String> {
-    let mut sets: Vec<String> = Vec::new();
-    let mut vals: Vec<String> = Vec::new();
-    let mut p: i32 = 1;
+    // (column, value) pairs for the leg-level fields the user provided. The DAL
+    // appends updated_at and does the INSERT…ON CONFLICT upsert.
+    let mut cols: Vec<(&str, String)> = Vec::new();
     if let Some(v) = &input.flight_number {
-        sets.push(format!("flight_number = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("flight_number", v.clone()));
     }
     if let Some(v) = &input.departure_code {
-        sets.push(format!("departure_code = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("departure_code", v.clone()));
     }
     if let Some(v) = &input.departure_terminal {
-        sets.push(format!("departure_terminal = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("departure_terminal", v.clone()));
     }
     if let Some(v) = &input.departure_time {
-        sets.push(format!("departure_time = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("departure_time", v.clone()));
     }
     if let Some(v) = &input.arrival_code {
-        sets.push(format!("arrival_code = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("arrival_code", v.clone()));
     }
     if let Some(v) = &input.arrival_terminal {
-        sets.push(format!("arrival_terminal = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("arrival_terminal", v.clone()));
     }
     if let Some(v) = &input.arrival_time {
-        sets.push(format!("arrival_time = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("arrival_time", v.clone()));
     }
     if let Some(v) = &input.date {
-        sets.push(format!("flight_date = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("flight_date", v.clone()));
     }
-    sets.push(format!("updated_at = ?{p}"));
-    vals.push(now_db.to_string());
 
-    upsert_flight_leg(conn, plan_id, destination, direction, &sets, &vals)
+    flight_legs::upsert_leg(conn, plan_id, destination, direction, &cols, now_db)
         .await
         .map_err(|e| format!("flight_legs upsert ({direction}) failed: {e}"))
 }
@@ -459,101 +442,21 @@ async fn update_flight_shared(
     input: &FlightInput,
     now_db: &str,
 ) -> Result<(), String> {
-    let mut sets: Vec<String> = Vec::new();
-    let mut vals: Vec<String> = Vec::new();
-    let mut p: i32 = 1;
+    // Shared flight-level fields apply to BOTH legs (see execute step 1b).
+    let mut cols: Vec<(&str, String)> = Vec::new();
     if let Some(v) = &input.airline {
-        sets.push(format!("airline = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("airline", v.clone()));
     }
     if let Some(v) = &input.airline_code {
-        sets.push(format!("airline_code = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("airline_code", v.clone()));
     }
     if let Some(v) = &input.booked_date {
-        sets.push(format!("booked_date = ?{p}"));
-        vals.push(v.clone());
-        p += 1;
+        cols.push(("booked_date", v.clone()));
     }
-    sets.push(format!("updated_at = ?{p}"));
-    vals.push(now_db.to_string());
 
-    upsert_flight_leg(conn, plan_id, destination, direction, &sets, &vals)
+    flight_legs::upsert_leg(conn, plan_id, destination, direction, &cols, now_db)
         .await
         .map_err(|e| format!("flight_legs shared upsert ({direction}) failed: {e}"))
-}
-
-/// Upsert a single flight leg by its PK (plan_id, destination, direction,
-/// leg_order=0). `sets`/`vals` are the `col = ?N` assignment fragments and
-/// matching values (1-based, in order) produced by the caller, with the
-/// trailing `updated_at = ?` already appended.
-///
-/// A plain UPDATE silently no-ops when the leg row doesn't exist yet — which
-/// is exactly the case for a booking-first plan that never adopted an offer
-/// (the offer cascade is what normally seeds the skeleton legs). We instead
-/// INSERT the row keyed on its PK and, on conflict, apply the same assignments
-/// — so the command persists whether or not a skeleton row pre-exists.
-async fn upsert_flight_leg(
-    conn: &Connection,
-    plan_id: &str,
-    destination: &str,
-    direction: &str,
-    sets: &[String],
-    vals: &[String],
-) -> Result<(), String> {
-    // Column names the caller wants to write, parsed from the `col = ?N`
-    // fragments (the `?N` numbering in `sets` is the caller's UPDATE numbering;
-    // we re-number below, so only the column names matter here).
-    let cols: Vec<&str> = sets
-        .iter()
-        .filter_map(|s| s.split(" = ").next())
-        .collect();
-
-    // INSERT row = PK columns (plan_id, destination, direction, leg_order=0)
-    // followed by every provided column. ON CONFLICT re-applies the provided
-    // columns with a second copy of the same values, numbered after the
-    // INSERT params.
-    let mut insert_cols: Vec<String> = vec![
-        "plan_id".into(),
-        "destination".into(),
-        "direction".into(),
-        "leg_order".into(),
-    ];
-    insert_cols.extend(cols.iter().map(|c| c.to_string()));
-
-    let mut params: Vec<libsql::Value> = vec![
-        libsql::Value::Text(plan_id.to_string()),
-        libsql::Value::Text(destination.to_string()),
-        libsql::Value::Text(direction.to_string()),
-        libsql::Value::Integer(0),
-    ];
-    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
-
-    let insert_ph: Vec<String> = (1..=insert_cols.len()).map(|n| format!("?{n}")).collect();
-
-    // DO UPDATE SET uses a fresh copy of the provided values, numbered after
-    // the INSERT params.
-    let base = params.len();
-    let update_sets: Vec<String> = cols
-        .iter()
-        .enumerate()
-        .map(|(idx, c)| format!("{c} = ?{}", base + 1 + idx))
-        .collect();
-    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
-
-    let sql = format!(
-        "INSERT INTO flight_legs ({}) VALUES ({}) \
-         ON CONFLICT(plan_id, destination, direction, leg_order) DO UPDATE SET {}",
-        insert_cols.join(", "),
-        insert_ph.join(", "),
-        update_sets.join(", "),
-    );
-    conn.execute(&sql, params)
-        .await
-        .map_err(|e| format!("flight_legs upsert failed: {e}"))?;
-    Ok(())
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {

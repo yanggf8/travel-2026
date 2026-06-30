@@ -171,6 +171,63 @@ fn set_flight_persists_on_fresh_plan() {
     );
 }
 
+// ── set-flight: --airline (shared) hits BOTH legs; a later leg-only update
+//    preserves it. Locks the repo::flight_legs::upsert_leg semantics:
+//    update_flight_shared writes outbound+return, and a partial leg update must
+//    not clobber the previously-set shared airline. ───────────────────────────
+#[test]
+fn set_flight_shared_airline_hits_both_legs_and_persists() {
+    let tag = nanos();
+    let plan_id = format!("test-setbug-flightshared-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
+    let dest = format!("setbugflsh_{tag}");
+    if !seed_bare(&plan_id, &dest) {
+        return;
+    }
+
+    // 1. Set outbound leg fields + a SHARED airline. The airline must land on
+    //    both the outbound AND return legs (update_flight_shared loops both).
+    let (ok, _o, e) = run_cmd(
+        &plan_id,
+        &[
+            "set-flight", "outbound", "--dest", &dest,
+            "--flight", "CI120", "--airline", "China Airlines", "--airline-code", "CI",
+            "--from", "TPE", "--to", "OKA", "--date", "2026-06-12",
+        ],
+    );
+    assert!(ok, "initial set-flight must succeed; stderr={e}");
+    assert_eq!(
+        count(&format!(
+            "SELECT COUNT(*) AS n FROM flight_legs \
+             WHERE plan_id = '{plan_id}' AND airline = 'China Airlines'"
+        )),
+        Some(2),
+        "shared --airline must be written to BOTH legs (outbound + return)"
+    );
+
+    // 2. A leg-only update to the return leg must NOT clobber its airline.
+    let (ok, _o, e) = run_cmd(
+        &plan_id,
+        &["set-flight", "return", "--dest", &dest, "--flight", "CI121", "--date", "2026-06-16"],
+    );
+    assert!(ok, "return leg-only set-flight must succeed; stderr={e}");
+    let ret = match db_exec(&format!(
+        "SELECT flight_number, airline FROM flight_legs \
+         WHERE plan_id = '{plan_id}' AND direction = 'return'"
+    )) {
+        Some(r) => r,
+        None => return,
+    };
+    assert!(ret.contains("CI121"), "return leg flight number updated; got {ret}");
+    assert!(
+        ret.contains("China Airlines"),
+        "shared airline must be PRESERVED on a leg-only update; got {ret}"
+    );
+}
+
 // ── Bug 1: set-hotel upserts on a fresh plan (no skeleton row) ───────────────
 #[test]
 fn set_hotel_persists_on_fresh_plan() {

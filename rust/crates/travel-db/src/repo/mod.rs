@@ -2,6 +2,7 @@ pub mod bookings;
 pub mod captures;
 pub mod days;
 pub mod destination_ref;
+pub mod flight_legs;
 pub mod freshness;
 pub mod hotels;
 pub mod observations;

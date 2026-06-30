@@ -527,6 +527,11 @@ LEAVE the audit triad (`plan_events`/`plan_event_data`/`operation_runs`/`plans.v
   columns + the `hotel_access_lines` DELETE/replace); audit stays in the command. Added an
   access-only-preserve integration test (`set_hotel_access_only_preserves_scalars`): a later
   `--access`-only call replaces the access lines but must NOT clobber `name`/`check_in`. 2026-06-30.
+- `set-flight` → `repo::flight_legs` (`upsert_leg` — INSERT…ON CONFLICT over the provided
+  `(column, value)` pairs keyed on the leg PK; cleaner than the old `col = ?N`-string-parsing
+  helper); audit stays in the command. Added an integration test
+  (`set_flight_shared_airline_hits_both_legs_and_persists`): shared `--airline` lands on both legs,
+  and a leg-only update preserves it. 2026-06-30.
 
 `repo::days::exists` is the shared "days row exists" guard for itinerary mutations — reuse it, don't
 re-roll a `SELECT 1 FROM days`. The other `set_*`/`mark_*`/`swap_days` mutations remain inline
