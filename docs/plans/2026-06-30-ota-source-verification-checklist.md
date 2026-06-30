@@ -34,10 +34,16 @@ travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --ts
 - [x] **settour** (`fit`) — `fit.settour.com.tw/product/v2` (direct GET; per-person `每人機加酒含稅`). 1 combo.
 - [x] **eztravel** (`fit`) — `packages.eztravel.com.tw/roundtrip-TPE-<dest>?checkin=…` (GET; SPA ignores the
   GET dates → record the dates the PAGE shows). 10 combos → proved disambiguation in prod.
+- [x] **besttour** (`group_tour`) — `besttour.com.tw/e_web/search?v=//////<region_id>///////` (GET; group-tour
+  LISTING, not a combo). 13 priced tours → distinct ids by date+nights+price; per-tour fields: 產品編號 code,
+  title, departure date, N 天 (nights = days−1), price `元起`; `滿`/`-` (full) tours have no price → skip.
+
+> **Form-driving finding (2026-06-30):** all 3 sources verified so far (settour, eztravel, besttour) are
+> **direct GET** — none needed form-driving. The `nav_kind='form'` + `ota_source_form_step` machinery in
+> the workflow-nodes spec has ZERO proven need yet; defer it until a source actually requires it.
 
 ### ⬜ Proven on OLD path, NOT yet Rust-verified (the actionable queue — agent-parse, no per-source code)
 - [ ] **agoda** (`hotel`) — `agoda.com/{hotel_slug}/hotel/{city_slug}-{country}.html?checkIn=…&los=<nights>&adults=…`
-- [ ] **besttour** (`group_tour`) — `besttour.com.tw/e_web/search?v=//////<region_id>///////`
 - [ ] **google_flights** (`flight`) — `google.com/travel/flights?q=Flights+to+<dest>+from+<origin>+on+<depart>+through+<return>`
 - [ ] **travel4u** (`group_tour`) — `travel4u.com.tw/group/area/<area_code>/japan/`
 

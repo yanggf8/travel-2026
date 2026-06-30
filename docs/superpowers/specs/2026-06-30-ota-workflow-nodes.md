@@ -85,9 +85,12 @@ Relates to (does not duplicate) `ota_source_coverage` (which stays the *status/r
 proven/proven_at/method/blocked_reason_code). The new table holds the *how-to-capture* recipe,
 keyed the same `(source_id, product_type)`:
 
-> ⚠️ **Form schema NOT FROZEN** — the `ota_source_form_step.action` enum below is a first cut. Do not
-> freeze it until it has been validated against one real nontrivial form (besttour group_tour is the
-> candidate). Expect to need at least the wait/assert/tab actions shown.
+> ⚠️ **Form schema NOT FROZEN — and now UNPROVEN.** **Validation finding (2026-06-30):** all 3 sources
+> verified live so far (settour, eztravel, **besttour**) are **direct GET** — none needed form-driving.
+> So `nav_kind='form'` + `ota_source_form_step` have **zero proven need**. **Recommendation: build the
+> GET-only path first** (`nav_kind` can be a fixed `'get'`, or even omitted) and **DEFER the entire form
+> sub-schema** until a real source actually requires a form-drive. The `action` enum below stays a
+> sketch, not a build target, until then.
 
 ```
 ota_source_workflow
