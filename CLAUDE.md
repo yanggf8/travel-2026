@@ -28,7 +28,7 @@ Turso: 28+ fully-normalized tables, no JSON blobs. Schema: `scripts/schema.sql`;
 | `process_3_4_packages_selected` | populate P3+P4 from chosen offer | current destination |
 
 ### Data Flow
-`URL → gwebcdb on WSLg (navigate + ota_capture, CDP) → ota_cli parse (parser_rules) → Turso offers → normalize (CanonicalOffer[]) → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)` — (capture+parse formerly chromeport; now gwebcdb Python bridge tools)
+`URL → gwebcdb on WSLg (navigate + ota_capture, CDP) → captures.raw_text → AGENT reads + extracts → travel ota write-offers (TSV → Turso offers + provenance) → normalize (CanonicalOffer[]) → selectOffer() → cascade (populate P3+P4) → save() (normalized tables → bookings sync)` — extraction is agent-first (the coding agent is the parser); the old in-CLI regex/`parser_rules` parse step is RETIRED (see URL Routing).
 
 ### CLI Architecture (Rust, fine-grained SQL)
 ```
@@ -201,28 +201,27 @@ first — gwebcdb's `turso_db.py` has no `.env` loader):
 
 | URL Contains | Action |
 |-------------|--------|
-| Any OTA (besttour / liontravel / lifetour / settour / …) | Start Chrome, drive the page, then capture → verify → parse: <br>`./scripts/start-chrome-cdp-wslg.sh` (idempotent; CDP on :9222) <br>→ `python bridge/navigate.py "<url>"` (+ `form_fill`/`combo_select`/`form_click` for SPA searches) <br>→ `python bridge/ota_capture.py --source <id> [--url-contains <s>]` (UNREDACTED text → `captures`; prints `capture_id`) <br>→ `python bridge/ota_cli.py verify <capture_id> --source <id>` (read-only regex diagnostics) <br>→ `python bridge/ota_cli.py parse <capture_id> --source <id>` (writes `offers`; `--dry-run` to preview) |
+| Any OTA (besttour / liontravel / lifetour / settour / …) | Start Chrome, drive the page, capture, then **the agent reads the capture text and writes offers** (no in-CLI parser): <br>`./scripts/start-chrome-cdp-wslg.sh` (idempotent; CDP on :9222) <br>→ `python bridge/navigate.py "<url>"` (+ `form_fill`/`combo_select`/`form_click` for SPA searches; let async price/hotel SPAs settle ~25s) <br>→ `python bridge/ota_capture.py --source <id> [--url-contains <s>]` (UNREDACTED text → `captures`; prints `capture_id`) <br>→ **agent reads `captures.raw_text`, extracts the offers, emits TSV** <br>→ `./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>` (under a claimed `ota_jobs` job; writes `offers` + provenance + attempt audit) |
 | Non-OTA URL | Use WebFetch as normal |
 
 The bridge navigates/clicks the actual UI (no fragile URL templates). Captures live in the Turso
-`captures` table; offers go to the `offers` table; parser rules per OTA in `parser_rules`. NOTE:
-every source uses the generic regex parser (`has_custom_parser=0`) EXCEPT `settour`, whose
-override `parse_settour` is wired on (`has_custom_parser=1`); the generic parser has
-flight/hotel-specific required fields. `parse_settour` exists in BOTH the gwebcdb Python path
-(`bridge/ota_parse.py`) AND the Rust `travel ota parse` path
-(`rust/crates/travel-cli/src/ota/settour_parse.rs`, char-by-char scanner, oracle-parity-tested);
-`travel ota parse` dispatches `has_custom_parser=1` sources to it (other custom sources still
-fail-loud → use `write-offers`). The Phase 0 Python port is SHIPPED + tested (settour oracle
-parity). **`settour` is now live-verified end-to-end on WSLg (2026-06-30)** — the FIRST source to
-clear that bar — but via the **agent-parse (`write-offers`) path, NOT custom `parse_settour`**:
-the live DB has no settour `parser_rules` row, and the custom parser is known to mis-read the real
-`/product/v2` page (divides the un-taxed total by pax instead of using the per-person `含稅` figure;
-grabs UI chrome as the hotel). Use the page's `每人機加酒含稅$NN,NNN` value. Full recipe (debug
-binary only; TSV `type`=offer-kind `package`, not the `fit` product_type): memory
-`settour-live-verified-agent-parse`. The other sources still need a real live WSLg capture +
-`verify`/`parse`-or-`write-offers` before their archived Python parsers can be deleted. Guard:
-`verify`/`parse` FAIL on a capture↔`--source` mismatch (pass `--allow-source-override` for an
-intentional re-parse). `affected_row_count==0` on parse is a real ON-CONFLICT dedup, not a failure.
+`captures` table; offers go to the `offers` table.
+
+**Extraction is agent-first — the coding agent IS the parser (2026-06-30).** The in-CLI
+regex/custom-parser path is **RETIRED**: `travel ota parse`, the generic regex parser, the
+per-source custom parsers (e.g. `parse_settour`), and the `parser_rules` table are gone from
+travel-cli (`travel ota parse` now fail-louds → "use write-offers"; an orphaned `parser_rules`
+table may remain on the live DB, unread). The CLI's job is to **fetch the capture** (gwebcdb) and
+**persist the offers the agent hands back** (`ota write-offers`: TSV → normalized `offers` rows +
+`agent_parse` provenance + token-guarded `ota_jobs`/`ota_attempts` audit). There is no text the
+agent can't parse after the capture returns, so no in-CLI parser is needed — and the old regex path
+was strictly worse (the retired `parse_settour` mis-read the real settour `/product/v2`: it divided
+the un-taxed total by pax and grabbed UI chrome as the hotel; the correct value is the page's
+`每人機加酒含稅$NN,NNN`). **`settour` is live-verified end-to-end on WSLg via this agent-parse path
+(2026-06-30)** — the first source to clear that bar. Recipe + gotchas (`ota` is in the DEBUG binary
+until the next `make build`; TSV `type` is the offer KIND `package|flight|hotel`, NOT the job's
+`product_type` like `fit`): memory `settour-live-verified-agent-parse`. `affected_row_count==0` on a
+write is a real ON-CONFLICT dedup, not a failure.
 
 Full skill reference: `src/skills/scrape-ota/SKILL.md`
 
@@ -293,10 +292,10 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 # Shaping Stage (pre-plan triangle research)
 ./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2]
-# After shaping-init: scrape offers via gwebcdb (WSLg), then import + compare:
+# After shaping-init: capture offers via gwebcdb (WSLg), agent-extract, then import + compare:
 #   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
-#   → python bridge/ota_capture.py --source <id>   # → capture_id
-#   → python bridge/ota_cli.py parse <capture_id> --source <id>   # writes offers
+#   → python bridge/ota_capture.py --source <id>   # → capture_id (UNREDACTED → captures)
+#   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job> --capture <id> --claim-token <tok> --tsv <path>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id>
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
@@ -312,14 +311,15 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 ./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
 ./bin/travel validate-itinerary --dest tokyo_2026
 
-# Scraping — Python scrapers DECOMMISSIONED + chromeport RETIRED; use gwebcdb (WSLg) from ~/b/gwebcdb:
+# Scraping — Python scrapers DECOMMISSIONED + chromeport RETIRED; use gwebcdb (WSLg) from ~/b/gwebcdb.
+# Extraction is AGENT-FIRST: capture, then the coding agent reads raw_text and writes offers (no in-CLI parser).
 #   export TURSO_URL=$(grep '^TURSO_URL=' ~/b/travel-2026/.env | cut -d= -f2-)
 #   export TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ~/b/travel-2026/.env | cut -d= -f2-)
 #   ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
 #   → python bridge/ota_capture.py --source <id>            # → capture_id (UNREDACTED → captures)
-#   → python bridge/ota_cli.py verify <capture_id> --source <id>   # read-only diagnostics
-#   → python bridge/ota_cli.py parse  <capture_id> --source <id>   # imports to Turso offers
-# See URL Routing + gwebcdb CLAUDE.md "OTA scraping — end-to-end usage" + src/skills/scrape-ota/SKILL.md.
+#   → AGENT reads captures.raw_text, extracts offers, emits TSV
+#   → ./bin/travel ota write-offers <job> --capture <capture_id> --claim-token <tok> --tsv <path>  # → Turso offers + provenance
+# (`travel ota parse` / the regex parser_rules path is RETIRED.) See URL Routing + gwebcdb CLAUDE.md + src/skills/scrape-ota/SKILL.md.
 
 # Tour-group / FIT offers (manual entry for sources without a full scraper)
 ./bin/travel import-tour-group-offers --run <run_id> --file <path>
@@ -478,5 +478,5 @@ Remaining agenda (none blocking — the project is between trips and the live DB
 - **`--dest` honored in view commands** (small) — `bookings`/`itinerary`/`transport` parse `--dest` but ignore it (`plan::load` always keys on `active_destination`). Harmless today (all plans are single-destination) but a parity regression. Minimal fix: fail-loud on a mismatching `--dest`; full fix when a multi-destination plan exists.
 - **Worker `workers-rs` port — DONE & DEPLOYED** (PR #4, merged to master). The Rust dashboard lives at `workers/trip-dashboard-rs/` and is live at `trip-dashboard-rs.yanggf.workers.dev` (keyless maps, token auth, meal-pin links). The old TS worker (`workers/trip-dashboard/`) still exists and still serves the original URL; the `-rs` worker is meant to eventually reclaim it (a separate cutover, not yet done). See "Trip Dashboard — two workers" below.
 - **OTA scraping pipeline (gwebcdb / WSLg).** Agent-parse reads capture `raw_text` → TSV → `bridge/ota_write_llm_offers.py`; regex `ota_cli parse` is the fallback. Per-agent Chrome uses `bridge/chrome_session.py acquire`. `chromeport` is RETIRED — don't run/repair it. The `promote-offers` bridge moves global `offers` into plan-scoped `plan_offers` for `select-offer`; spec: `docs/superpowers/specs/2026-06-28-promote-offers-bridge-design.md`. Provider coverage is DB data — run `travel ota-status` (catalog edited via `travel set-ota-*`). Form-driving recipe: gwebcdb `CLAUDE.md` "OTA scraping — end-to-end usage". Plan + gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
-- **Rust-first OTA execution layer (SHIPPED + hardened).** The capture→parse→offer path is now Rust: `travel ota enqueue|claim|heartbeat|finish|reap-stale|parse|write-offers|observations` (modules under `rust/crates/travel-cli/src/ota/`), token-guarded job lifecycle on the normalized `ota_jobs`/`ota_job_params`/`ota_attempts`/`ota_observations` tables + provenance columns on `offers` (`capture_id`/`produced_by_*`/`parser_method`/`*_checksum`/`normalizer_version`). Spec: `docs/superpowers/specs/2026-06-29-rust-first-ota-db-architecture-design.md`. A multi-agent xhigh code review (2026-06-30) found + fixed 14 defects: PK-collision disambiguation (Python `_disambiguate_ids` parity), job-failure recording so a mid-loop error parks the job `failed` (not wedged `running`), `attempts`/`max_attempts` enforced (claim skips exhausted; `reap-stale` parks them), `observations::record` wired into the failure path + the view renders all 17 columns, restored TSV guards (alignment/dup-header/digit-dates/negative-nights), flag-aware positional parsing, `--now`/`--lease-seconds` validation, airline-inference-from-flight#, `nights` `lastindex`, 36-char UUID. **settour custom parser is ported to Rust** (`ota/settour_parse.rs`, char-by-char, oracle-parity-tested) and `travel ota parse` dispatches `has_custom_parser=1` to it. **DAL (`travel-db`) adoption IN PROGRESS** (spec Phase F, with a `sql_quote()` migration ledger): `view_bookings` (`repo::bookings::book_by_deadlines`), the four offer-query commands `query-offers`/`db query-offers`/`compare dates`/`compare true-cost` (shared `repo::offers::OfferFilter` parameterized WHERE builder, incl. `departure_window`/`fresh_within_hours`), `check-freshness` (`repo::freshness`, both offers + plan-provenance paths), `query-bookings` (`repo::bookings::query_current` — this migration also **fixed a latent prod bug**: the old SELECT referenced a phantom `payload_text` column, so `query-bookings` errored "no such column"; now works), `query-destination-ref` (`repo::destination_ref`, 9 slug-keyed reads), and `plan.rs` (the load-bearing reader — all 16 reads now extracted into `repo::plan`; `plan::load` keeps only the `PlanView` assembly; golden byte-identical across `status --full`/`itinerary`/`bookings`/`transport`) are migrated. **`sql_quote()` is fully retired** — `grep -rn sql_quote rust/crates/travel-cli/src/` returns nothing; every dynamic business-table query binds its values. The DAL boundary for the read views is complete: all four view commands now read through `travel-db` repos. **Mutation-command DAL adoption has started** (optional consistency refactor — mutations already bind params, were never `sql_quote` offenders): `set-route-segment`/`-bulk` → `repo::route_segments`, `set-day-theme` → `repo::days`, `set-hotel` → `repo::hotels`, and `set-flight` → `repo::flight_legs` (domain writes moved; the audit triad `plan_events`/`operation_runs`/`plans.version` deliberately left in `cascade::common` per the DAL boundary contract). `repo::days::exists` is the shared "days row exists" guard for itinerary mutations (reuse it). Pattern for the rest: domain writes → `travel-db` repo, audit stays in `cascade::common`. Operational/diagnostic SQL like `db_migrate`/`db exec` is EXEMPT — stays inline. Add new offer predicates to `OfferFilter`, not a fresh `sql_quote`. Still open: live end-to-end WSLg verification per source; `besttour`/`travel4u` custom-parser ports if needed; the gated D1 read-mirror pilot.
+- **Rust-first OTA execution layer (SHIPPED + hardened; extraction is agent-first).** The capture→offer path: gwebcdb captures the page → **the coding agent reads `captures.raw_text` and extracts offers** → `travel ota write-offers` persists them (TSV → normalized `offers` + provenance + token-guarded audit). Commands: `travel ota enqueue|claim|heartbeat|finish|reap-stale|write-offers|observations` (modules under `rust/crates/travel-cli/src/ota/`), token-guarded job lifecycle on the normalized `ota_jobs`/`ota_job_params`/`ota_attempts`/`ota_observations` tables + provenance columns on `offers` (`capture_id`/`produced_by_*`/`parser_method`/`*_checksum`/`normalizer_version`). Spec: `docs/superpowers/specs/2026-06-29-rust-first-ota-db-architecture-design.md`. A multi-agent xhigh code review (2026-06-30) found + fixed 14 defects: PK-collision disambiguation (Python `_disambiguate_ids` parity), job-failure recording so a mid-loop error parks the job `failed` (not wedged `running`), `attempts`/`max_attempts` enforced (claim skips exhausted; `reap-stale` parks them), `observations::record` wired into the failure path + the view renders all 17 columns, restored TSV guards (alignment/dup-header/digit-dates/negative-nights), flag-aware positional parsing, `--now`/`--lease-seconds` validation, airline-inference-from-flight#, 36-char UUID. **The in-CLI regex/custom-parser path is RETIRED (2026-06-30)** — `travel ota parse`, the generic regex parser, the per-source custom parsers (`parse_settour`), and the `parser_rules` table were deleted from travel-cli; the agent is the parser. settour is live-verified end-to-end via the agent-parse (`write-offers`) path. **DAL (`travel-db`) adoption IN PROGRESS** (spec Phase F, with a `sql_quote()` migration ledger): `view_bookings` (`repo::bookings::book_by_deadlines`), the four offer-query commands `query-offers`/`db query-offers`/`compare dates`/`compare true-cost` (shared `repo::offers::OfferFilter` parameterized WHERE builder, incl. `departure_window`/`fresh_within_hours`), `check-freshness` (`repo::freshness`, both offers + plan-provenance paths), `query-bookings` (`repo::bookings::query_current` — this migration also **fixed a latent prod bug**: the old SELECT referenced a phantom `payload_text` column, so `query-bookings` errored "no such column"; now works), `query-destination-ref` (`repo::destination_ref`, 9 slug-keyed reads), and `plan.rs` (the load-bearing reader — all 16 reads now extracted into `repo::plan`; `plan::load` keeps only the `PlanView` assembly; golden byte-identical across `status --full`/`itinerary`/`bookings`/`transport`) are migrated. **`sql_quote()` is fully retired** — `grep -rn sql_quote rust/crates/travel-cli/src/` returns nothing; every dynamic business-table query binds its values. The DAL boundary for the read views is complete: all four view commands now read through `travel-db` repos. **Mutation-command DAL adoption has started** (optional consistency refactor — mutations already bind params, were never `sql_quote` offenders): `set-route-segment`/`-bulk` → `repo::route_segments`, `set-day-theme` → `repo::days`, `set-hotel` → `repo::hotels`, and `set-flight` → `repo::flight_legs` (domain writes moved; the audit triad `plan_events`/`operation_runs`/`plans.version` deliberately left in `cascade::common` per the DAL boundary contract). `repo::days::exists` is the shared "days row exists" guard for itinerary mutations (reuse it). Pattern for the rest: domain writes → `travel-db` repo, audit stays in `cascade::common`. Operational/diagnostic SQL like `db_migrate`/`db exec` is EXEMPT — stays inline. Add new offer predicates to `OfferFilter`, not a fresh `sql_quote`. Still open: live end-to-end WSLg verification per source; `besttour`/`travel4u` custom-parser ports if needed; the gated D1 read-mirror pilot.
 - **Product / Okinawa trip (ADOPTED)** — the `shaping-20260525-093508` run was adopted into the active **`okinawa-2026`** plan (Naha, 2026-06-12 → 06-16; `okinawa_2026` now in `destination_config`; CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). Day 1 lunch is deliberately light/unbooked (CI120 serves an in-flight meal; hotel restaurant is breakfast-only — see hotel notes). Remaining polish is per-day itinerary detail, not structural.

@@ -1,16 +1,31 @@
 # Design: Rust-First OTA Execution — Jobs, Observations, Offers & the Shared DAL
 
 **Date:** 2026-06-29
-**Status:** LARGELY IMPLEMENTED (as of 2026-06-30). Phases A–E shipped (schema, `travel-db` DAL
-crate + core repos, `enqueue`/`claim`/`heartbeat`/`finish`/`reap-stale`, `parse` incl. the **settour
-custom parser** in `ota/settour_parse.rs`, `write-offers`, `observations` view), hardened by a
-multi-agent xhigh code review (14 defects fixed). Phase F (DAL adoption) STARTED — `view_bookings`
-migrated to `repo::bookings`. Still open: live end-to-end WSLg per-source verification, the
-`besttour`/`travel4u` custom-parser ports, the gradual DAL migration of the remaining ~57 modules,
-and the gated Phase G D1 pilot. Companion to the committed
+**Status:** LARGELY IMPLEMENTED (as of 2026-06-30), with one DESIGN PIVOT — see the banner below.
+Phases A–E shipped (schema, `travel-db` DAL crate + core repos, `enqueue`/`claim`/`heartbeat`/
+`finish`/`reap-stale`, `write-offers`, `observations` view), hardened by a multi-agent xhigh code
+review (14 defects fixed). Phase F (DAL adoption) DONE for the read views + started for mutations.
+Still open: live end-to-end WSLg per-source verification (settour done), the gradual DAL migration
+of the remaining mutation modules, and the gated Phase G D1 pilot. Companion to the committed
 `2026-06-29-db-centric-provider-architecture-design.md` (the *catalog* spec); this spec covers the
 *execution* layer the catalog spec explicitly left out.
 **Author:** Claude (with Yang)
+
+> **⚠️ DESIGN PIVOT (2026-06-30) — extraction is AGENT-FIRST; the regex/custom-parser path is
+> RETIRED.** §4 below originally proposed an in-CLI parser: `travel ota parse` loading a
+> `parser_rules` row and applying a regex ruleset (or a per-source custom parser like
+> `parse_settour`). **That whole path was deleted.** Rationale (Yang's call): *we run inside the
+> agent — we ARE the LLM. The CLI is agent-first: it fetches the capture and persists what we hand
+> back. There is no page text we can't parse once it's returned, so an in-CLI regex parser is dead
+> weight that only ever parses worse* (the ported `parse_settour` literally mis-read the real
+> settour `/product/v2`: divided the un-taxed total by pax, grabbed UI chrome as the hotel).
+> **What remains:** `ota_capture` (gwebcdb) + `travel ota write-offers` (agent's TSV → normalized
+> `offers` + provenance + token-guarded `ota_jobs`/`ota_attempts` audit). **Deleted from
+> travel-cli:** `ota/parse.rs`, `ota/regex_parse.rs`, `ota/settour_parse.rs`, `repo::parser_rules`,
+> the `migrate_parser_rules_product_type` migration, and the `ota parse` dispatch (now a fail-loud
+> "use write-offers"). The `parser_rules` table is left orphaned on the live DB (unread; chromeport
+> is retired anyway). `offers.parser_method` is now always `agent_parse`. Read §4/Task-C1 below as
+> HISTORICAL design context, not current code.
 
 > **Scope orientation (read first).** Plan tools are **already** Rust (`./bin/travel` is the sole
 > write path; the TS CLI is archived read-only — CLAUDE.md "CLI Execution"). The provider *catalog &

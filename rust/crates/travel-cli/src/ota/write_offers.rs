@@ -1,6 +1,5 @@
 use crate::db;
 use crate::ota::common::{self, AGENT_NORMALIZER_VERSION};
-use crate::ota::regex_parse::ParsedOffer;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -10,6 +9,23 @@ use travel_db::repo::{captures, ota_jobs};
 
 const VALID_TYPES: &[&str] = &["package", "flight", "hotel"];
 const PRICE_CEILING: i64 = 10_000_000;
+
+/// One agent-extracted offer (the parsed shape of a TSV row). Built by `parse_tsv` and mapped to
+/// an `OfferRow` for insert. (Was shared with the retired regex parser; now owned here, the sole
+/// consumer — the agent IS the parser, so there is no in-CLI text parser to share it with.)
+#[derive(Debug, Clone)]
+pub struct ParsedOffer {
+    pub product_type: String,
+    pub departure_date: String,
+    pub return_date: String,
+    pub nights: Option<i64>,
+    pub price_per_person: i64,
+    pub currency: String,
+    pub flight_outbound: Option<String>,
+    pub flight_return: Option<String>,
+    pub airline: Option<String>,
+    pub hotel_name: Option<String>,
+}
 
 const KNOWN_HEADERS: &[&str] = &[
     "type",

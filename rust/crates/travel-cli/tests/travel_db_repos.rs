@@ -2,9 +2,7 @@
 
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use travel_db::repo::{
-    captures, offers, ota_jobs, parser_rules,
-};
+use travel_db::repo::{captures, offers, ota_jobs};
 
 mod common;
 use common::Guard;
@@ -137,47 +135,6 @@ async fn offer_insert_round_trips_provenance() {
     let dup = offers::insert(&conn, &row).await.expect("dedup insert");
     assert_eq!(dup.inserted, 0);
     assert_eq!(dup.deduped, 1);
-}
-
-#[tokio::test]
-async fn parser_rules_requires_product_type() {
-    let conn = match connect_write().await {
-        Ok(c) => c,
-        Err(e) if is_credless(&e) => {
-            eprintln!("skipping parser_rules test: {e}");
-            return;
-        }
-        Err(e) => panic!("connect failed: {e}"),
-    };
-
-    // zztest source unlikely to have a bogus product_type row
-    let missing = parser_rules::get(&conn, "zznonexistent", "fit")
-        .await
-        .expect("get");
-    assert!(missing.is_none());
-
-    // Deterministic checksum is stable for same input
-    let rule = parser_rules::ParserRuleRow {
-        source_id: "zztest".to_string(),
-        product_type: "fit".to_string(),
-        date_range_rx: "rx1".to_string(),
-        nights_rx: "rx2".to_string(),
-        nights_is_days: false,
-        price_marker: "marker".to_string(),
-        price_amount_rx: "rx3".to_string(),
-        price_basis: "total".to_string(),
-        pax_divisor: 2,
-        flight_rx: "rx4".to_string(),
-        hotel_anchor_rx: "rx5".to_string(),
-        airline_rx: String::new(),
-        hotel_name_rx: String::new(),
-        currency: "TWD".to_string(),
-        has_custom_parser: false,
-    };
-    let c1 = parser_rules::checksum(&rule);
-    let c2 = parser_rules::checksum(&rule);
-    assert_eq!(c1, c2);
-    assert_eq!(c1.len(), 64);
 }
 
 #[tokio::test]

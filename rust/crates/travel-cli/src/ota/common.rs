@@ -4,7 +4,6 @@ use travel_db::repo::offers::{self, OfferRow};
 use travel_db::repo::observations::{self, ObservationInput};
 use travel_db::repo::{ota_attempts, ota_jobs};
 
-pub const NORMALIZER_VERSION: &str = "travel-ota-regex-v1";
 pub const AGENT_NORMALIZER_VERSION: &str = "travel-ota-agent-v1";
 
 pub const VALID_PARAM_KEYS: &[&str] = &[

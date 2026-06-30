@@ -1,7 +1,7 @@
 ---
 name: scrape-ota
-description: Scrape OTA pages via the Rust CDP driver against real Chrome. (Python scrapers decommissioned.)
-version: 3.0.0
+description: Capture OTA pages via gwebcdb on WSLg, then the agent extracts offers and writes them with `travel ota write-offers`. (Python scrapers + chromeport + the in-CLI regex parser are all retired.)
+version: 4.0.0
 requires_skills: [travel-shared]
 requires_processes: []
 provides_processes: []
@@ -9,187 +9,101 @@ provides_processes: []
 
 # /scrape-ota
 
-> **⚠️ DECOMMISSIONED PYTHON — DO NOT RUN ANY `python scripts/scrape_*.py`.**
-> All Python scrapers are archived under `archive/broken-python-scrapers/`: their
-> constructed URLs 404 / land on the wrong page. **Use the Rust CDP driver instead:**
-> ```
-> # 1) drive the real OTA page in Chrome (clicks/fills the actual UI — no URL templates)
-> ./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step 'click:SEL' --step 'fill:SEL=VALUE'
-> #    (or, if you've already navigated the tab manually:)
-> ./rust/target/debug/chromeport browser snapshot --page <N> --source <id>
-> # 2) parse the captured page (rule-driven via the parser_rules Turso table) + import to Turso
-> ./rust/target/debug/chromeport parse capture <capture-id> --source <id>
-> ```
-> Captures → Turso `captures` table; offers → `offers` table. Per-OTA rules → `parser_rules`.
-> Flight/hotel-only OTAs (tigerair, google_flights, trip, agoda, eztravel) are seeded
-> `has_custom_parser=1` and currently fail loud — they need a flight/hotel rule shape first.
-> Everything below describes this chromeport CDP flow (the Python pipeline is fully retired).
+> **⚠️ DO NOT run `python scripts/scrape_*.py` (archived) and DO NOT run `./bin/chromeport` (retired).**
+> The OTA pipeline lives in **gwebcdb on WSLg** (`~/b/gwebcdb`). Extraction is **agent-first**: the
+> coding agent reads the captured page text and writes the offers — there is no in-CLI parser.
+> The former regex/`parser_rules`/custom-`parse_settour` path is **retired** (`travel ota parse`
+> fail-louds → use `write-offers`).
 
-## Shared references
-
-Read first unless request is a single known-URL scrape:
-- `../travel-shared/references/ota-registry.md` — source IDs, region codes, rate limits
-- OTA baggage rules / booking notes — from Turso tables `airlines`, `booking_types`, `platform_behaviors`, `comparison_rules` (query directly, e.g. `./bin/travel db exec "SELECT * FROM airlines"`)
-- `references/adding-ota.md` — step-by-step guide for registering a new OTA parser (read only when adding new OTA support)
-
-## Role in Process Flow
+## The model (read this first)
 
 ```
-P1 Dates → P2 Destination → [/scrape-ota] → P3+P4 Packages → P5 Itinerary
-                                   ↑
-                            Data acquisition layer
-                            Used by /p3p4-packages and /p3-flights
+gwebcdb (WSLg Chrome)          travel CLI (agent-first)         YOU (the agent)
+─────────────────────          ────────────────────────        ─────────────────
+navigate → ota_capture   ──▶   captures.raw_text         ──▶   read it, extract offers
+                                                                emit TSV
+                          ◀──   travel ota write-offers   ◀──   (TSV on --tsv)
+                               → offers + provenance + audit
 ```
 
-This skill is the **shared data acquisition layer** for all OTA interactions.
-Other skills reference this skill instead of duplicating scraper commands.
+**The CLI does not parse.** Its job is (a) fetch the capture (via gwebcdb) and (b) persist the
+offers you hand back as TSV (`write-offers`: normalized `offers` rows + `agent_parse` provenance +
+a token-guarded `ota_jobs`/`ota_attempts` audit trail). You are the parser — there is no page text
+you can't read once the capture returns.
 
-## When to Use
+## When to use
 
-- User provides an OTA URL (besttour, liontravel, lifetour, settour, etc.)
+- User provides an OTA URL (besttour, liontravel, lifetour, settour, eztravel, …)
 - `/p3p4-packages` or `/p3-flights` needs OTA data
 - WebFetch fails due to JavaScript rendering
-- Need structured tour data (flights, hotel, itinerary, pricing)
-- Comparing packages across multiple OTAs
 
-## Supported OTAs
+## End-to-end flow (the verified path)
 
-Capture every OTA via the chromeport CDP driver (`--source <id>`); parsing is rule-driven
-from the `parser_rules` Turso table (no per-OTA Python module).
-
-| OTA | Display Name | URL Pattern | chromeport `--source` |
-|-----|--------------|-------------|-----------------------|
-| `besttour` | 喜鴻假期 | `besttour.com.tw/itinerary/*` | `besttour` |
-| `liontravel` | 雄獅旅遊 | `liontravel.com/*`, `vacation.liontravel.com/*` | `liontravel` |
-| `lifetour` | 五福旅遊 | `tour.lifetour.com.tw/detail*` | `lifetour` |
-| `settour` | 東南旅遊 | `tour.settour.com.tw/product/*` | `settour` |
-| `tigerair` | 台灣虎航 | `booking.tigerairtw.com/*` | `tigerair` |
-| `trip` | Trip.com | `trip.com/flights/*` | `trip` |
-| `google_flights` | Google Flights | `google.com/travel/flights*` | `google_flights` |
-| `agoda` | Agoda | `agoda.com/*` | `agoda` |
-
-### Unsupported OTAs
-
-| OTA | Display Name | Status | Reason |
-|-----|--------------|--------|--------|
-| `skyscanner` | Skyscanner | ❌ Blocked | Hard captcha redirect on all requests. Stealth flags don't help. Last tested: 2026-02-06 |
-
-## Module Architecture
-
-```
-rust/crates/chromeport/        # Rust CDP driver (attaches to real Chrome :9222)
-  src/                         # fetch interact / browser snapshot / verify / parse capture
-captures (Turso table)         # plain-text captures landed by the driver
-parser_rules (Turso table)     # per-OTA parse rules (keyed by source_id) — drives `parse capture`
-offers (Turso table)           # rule-parsed offers (the source-of-truth output)
-```
-
-### Key Design Principles
-
-- **Drives the real UI**: the driver navigates/clicks/fills the actual OTA page in Chrome — no fragile URL templates
-- **Capture/parse separated**: `fetch interact` / `browser snapshot` land a plain-text capture; `parse capture` rule-parses it (no browser needed)
-- **Rule-driven parsing**: per-OTA rules live in the `parser_rules` Turso table, not in code
-- **Turso source of truth**: captures → `captures`, offers → `offers`; no JSON files in the pipeline
-
-## URL → source_id
-
-`--source <id>` selects the OTA. Match the URL against the **Supported OTAs** table above to
-pick the `source_id` (e.g. a `trip.com/flights/*` URL → `--source trip`), then pass it to both
-`fetch interact` and `parse capture`. Parse rules for that source are looked up in `parser_rules`.
-
-## Workflow
-
-### 0. Pre-flight checks (REQUIRED)
-
-Before any capture, confirm the driver is built and a real Chrome is listening on CDP:
+Run gwebcdb steps from `~/b/gwebcdb`; export Turso creds first (`turso_db.py` has no `.env` loader):
 
 ```bash
-# Build the chromeport CDP driver if needed
-cd rust && cargo build -p chromeport
-
-# A real Chrome must be reachable at 127.0.0.1:9222 (the driver attaches to it)
-./rust/target/debug/chromeport browser tabs   # lists open tabs — fails loud if Chrome :9222 is down
+export TURSO_URL=$(grep '^TURSO_URL=' ~/b/travel-2026/.env | cut -d= -f2-)
+export TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ~/b/travel-2026/.env | cut -d= -f2-)
 ```
 
-**Why this matters:**
-- No Chrome on :9222 → the driver fails loud (it attaches, it does not launch a hidden browser)
-- OTA site changes → update the source's rows in the `parser_rules` Turso table, not code
-- Captures are plain text landed in the `captures` table — inspect there if a parse looks wrong
+1. **Queue + claim a job** (travel CLI — `ota` is in the debug binary until the next `make build`):
+   ```bash
+   ./rust/target/debug/travel ota enqueue <source_id> <product_type> [--depart … --return … --nights …]
+   ./rust/target/debug/travel ota claim --worker <name> --lease-seconds 900   # → job_id + claim_token
+   ```
+2. **Drive the page + capture** (gwebcdb on WSLg):
+   ```bash
+   ./scripts/start-chrome-cdp-wslg.sh                 # idempotent; CDP on :9222 (WSLg-native Chrome)
+   python bridge/navigate.py "<url>"                  # + form_fill/combo_select/form_click for SPA searches
+   # For async price/hotel SPAs, let the page settle (~25s) before capturing — a too-early capture
+   # shows placeholders like 正在努力查詢最優惠的價格.. and an amount of `--`.
+   python bridge/ota_capture.py --source <source_id> [--url-contains <substr>]   # → capture_id (UNREDACTED → captures)
+   ```
+3. **You extract** — read `captures.raw_text` and pull the offer fields:
+   ```bash
+   ./bin/travel db exec "SELECT raw_text FROM captures WHERE capture_id='<capture_id>'"
+   ```
+   Read the real, decision-relevant numbers off the page (e.g. settour shows the per-person price as
+   `每人機加酒含稅$NN,NNN` — use THAT, not an un-taxed total ÷ pax). Pull the real hotel name, the
+   flight codes, dates, nights.
+4. **Write the offers** (travel CLI persists your TSV):
+   ```bash
+   printf 'type\tprice_per_person\tdeparture_date\treturn_date\tnights\tairline\tflight_outbound\tflight_return\thotel_name\tcurrency\n%s\n' \
+     "package\t16937\t2026-09-04\t2026-09-08\t4\t台灣虎航\tIT202\tIT201\tAPA飯店〈東日本橋站前〉\tTWD" \
+     > /tmp/offer.tsv
+   ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv /tmp/offer.tsv
+   ```
 
-### 1. Detect OTA and capture the page
+### TSV columns
 
-Pick `--source <id>` from the Supported OTAs table, drive the real page, then parse the capture:
+Header (first line) names the columns; each later line is one offer. Known columns:
+`type`, `price_per_person`, `departure_date`, `return_date`, `nights`, `airline`,
+`flight_outbound`, `flight_return`, `hotel_name`, `currency`.
 
-```bash
-# Drive + capture (clicks/fills the actual UI — no URL templates)
-./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step 'click:SEL' --step 'fill:SEL=VALUE'
+- **`type` is the OFFER KIND** — `package | flight | hotel` — NOT the job's `product_type`. A
+  flight+hotel combo (settour `fit`, eztravel `fit`) is **`package`**. `write-offers` rejects
+  anything else.
+- `price_per_person` required, > 0, no thousands-confusion (commas are stripped).
+- dates are `YYYY-MM-DD` (or `YYYY/MM/DD`); the row's field count must match the header.
+- Multiple offers (e.g. a flight list) → one TSV line each; `write-offers` disambiguates the
+  offer ids in-batch so distinct offers don't collapse.
 
-# Or, if you already navigated the tab manually, snapshot the open page:
-./rust/target/debug/chromeport browser snapshot --page <N> --source <id>
+## Agent-first, escalate-on-block
 
-# Read-only regex diagnostics on a capture (optional)
-./rust/target/debug/chromeport verify <id> <capture-id>
+Drive the loop yourself. Only WARN the human on a real blocker: Chrome not on :9222, a login wall,
+or a captcha (for sign-in OTAs the human logs in / settles 2FA in the WSLg Chrome window, or use
+gwebcdb's approval-gated `login_assist`). Never default to "human-in-the-loop".
 
-# Parse the capture (rule-driven via parser_rules) → Turso offers
-./rust/target/debug/chromeport parse capture <capture-id> --source <id>
-```
+## Sources
 
-Examples (same flow, different `--source`): `--source liontravel` for Lion Travel,
-`--source tigerair` for Tigerair, `--source trip` for Trip.com, `--source google_flights`
-for Google Flights, `--source agoda` for an Agoda hotel page.
+Provider coverage is DB data: `./bin/travel ota-status` (and `ota_sources` / `ota_source_coverage`
+in Turso). settour is live-verified end-to-end via this agent-parse path (2026-06-30). The other
+sources each still need their own live WSLg capture + `write-offers` before their archived parsers
+can be deleted.
 
-### 2. Read the parsed output
+## Reference
 
-`parse capture` writes rows into the Turso `offers` table. Inspect them with the CLI:
-
-```bash
-./bin/travel query-offers --source <id>
-# or raw: ./bin/travel db exec "SELECT * FROM offers WHERE source_id='<id>' ORDER BY rowid DESC LIMIT 20"
-```
-
-The raw plain-text capture stays in the `captures` table if you need to debug a parse rule.
-
-### 3. Extract structured data
-
-Each parsed offer row carries the normalized fields (flight, hotel, price, dates,
-inclusions, date-pricing, itinerary). Per-source field extraction is governed by the
-`parser_rules` Turso table — adjust rules there, not in code.
-
-## Offer Fields (conceptual)
-
-The `offers` table holds the normalized equivalents of:
-- **flight** — outbound/return: date, flight_number, airline, departure_time, arrival_time, departure_code, arrival_code
-- **hotel** — name, area, access, room_type, bed_width_cm
-- **price** — per_person, currency, deposit, seats_available, min_travelers
-- **dates** — duration_days, duration_nights, year, departure_month, departure_day
-- **inclusions** — breakfast, travel_insurance, airport_tax, …
-- **date_pricing** — per-date price / availability / seats_remaining
-- **itinerary** — per-day content (is_free / is_guided)
-
-## Testing
-
-Parse rules are exercised against real captures in the `captures` table. To re-run a parse:
-```bash
-./rust/target/debug/chromeport parse capture <capture-id> --source <id>
-```
-
-## Requirements
-
-- The chromeport CDP driver built: `cd rust && cargo build -p chromeport`
-- A real Chrome reachable at `127.0.0.1:9222` (the driver attaches; it does not launch its own)
-- No Python / Playwright — those scrapers are decommissioned
-
-## Registry Reference
-
-OTA configuration lives in the `ota_sources` table in Turso (no JSON files):
-```bash
-./bin/travel db exec "SELECT source_id, name, status, url_template FROM ota_sources"
-```
-- `source_id`: Unique identifier (used as `--source <id>` for chromeport)
-- `name`: Display name
-- `status`: `active` once a live capture path exists
-- `url_template`: Base/listing URL for the source
-
-## Adding New OTA Support
-
-See `references/adding-ota.md` for the full step-by-step guide.
+- gwebcdb `CLAUDE.md` → "OTA scraping — end-to-end usage" (form-driving recipe, per-agent Chrome
+  sessions, backends)
+- travel `CLAUDE.md` → "URL Routing" (the canonical table) + the OTA agenda bullet
+- `../travel-shared/references/ota-registry.md` — source IDs, region codes
