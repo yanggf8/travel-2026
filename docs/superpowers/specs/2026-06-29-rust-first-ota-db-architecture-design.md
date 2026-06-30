@@ -499,7 +499,9 @@ is EXEMPT (Codex Part D) — it stays inline in `travel-cli`.
 | `freshness.rs` | `repo::freshness` (`offers_freshness` via `OfferFilter` + `plan_provenance_freshness`) | ✅ done (2026-06-30) — both query paths parameterized; golden byte-identical (legacy + plan) |
 | `bookings.rs` (`query-bookings`) | `repo::bookings::query_current` (`BookingsCurrentFilter`) | ✅ done (2026-06-30) — **also fixed a latent prod bug**: the SELECT referenced a phantom `payload_text` column that does not exist on `bookings_current` (17 cols), so `query-bookings` errored "no such column" in production; the migrated projection drops it and the command now works |
 | `destination_ref.rs` | `repo::destination_ref` (9 slug-keyed reads) | ✅ done (2026-06-30) — all 9 queries `?1`-bound; golden byte-identical across all 6 slugs + unknown/quote/positional cases |
-| `plan.rs` | `repo::plan` (load path: plan_id/dest/offer interpolations at :275/:305/:601) | ⬜ pending — **the last one**; load-bearing reader, migrate carefully and golden the full `status --full`/`itinerary`/`bookings`/`transport` views |
+| `plan.rs` | `plan::load` (16 reads, parameterized in place) | ✅ done (2026-06-30) — all 16 queries now `?1/?2[/?3]`-bound (plan_id/destination[/offer_id]); golden byte-identical across `status --full`/`itinerary`/`bookings`/`transport` for okinawa/tokyo/kyoto + unknown-plan fail-loud. The 16-query reads stay inline in `travel-cli` for now (a full `repo::plan` extraction is a larger, separate refinement — the security-shaped `sql_quote` anti-pattern is gone, which was the goal) |
+
+**`sql_quote()` is fully retired** — `grep -rn 'sql_quote' rust/crates/travel-cli/src/` returns nothing as of 2026-06-30. Every dynamic business-table query now binds its values. (Remaining inline business SQL that already used bound params or has no interpolated values was never part of this anti-pattern sweep.)
 
 `repo::offers::OfferFilter` is the shared parameterized WHERE builder (`destination`/`region`/
 `offer_type`/`source_id`/`source_id_in_csv`/`departure_from`/`departure_to`/`max_price`) covering the

@@ -272,13 +272,12 @@ pub fn assert_dest_matches(dest_opt: Option<&str>, active_destination: &str) -> 
 
 pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let conn = db::connect_read().await?;
-    let esc = sql_quote(plan_id);
 
     // 1. plan_metadata
     let mut rows = conn
         .query(
-            &format!("SELECT schema_version, active_destination FROM plan_metadata WHERE plan_id = '{esc}'"),
-            (),
+            "SELECT schema_version, active_destination FROM plan_metadata WHERE plan_id = ?1",
+            libsql::params![plan_id.to_string()],
         )
         .await
         .map_err(|e| format!("plan_metadata: {e}"))?;
@@ -302,14 +301,13 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
 
     // 2 + 3. process_statuses + cascade_dirty_flags keyed by process_id (for
     // the active destination; the TS only reads statuses for `dest`).
-    let dest_esc = sql_quote(&active_destination);
+    // Every remaining query is keyed on (plan_id, destination) — bind both as ?1/?2.
+    let pd = || libsql::params![plan_id.to_string(), active_destination.clone()];
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT process_id, status FROM process_statuses \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
-            ),
-            (),
+            "SELECT process_id, status FROM process_statuses \
+             WHERE plan_id = ?1 AND destination = ?2",
+            pd(),
         )
         .await
         .map_err(|e| format!("process_statuses: {e}"))?;
@@ -326,11 +324,9 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     }
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT process_id, dirty FROM cascade_dirty_flags \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
-            ),
-            (),
+            "SELECT process_id, dirty FROM cascade_dirty_flags \
+             WHERE plan_id = ?1 AND destination = ?2",
+            pd(),
         )
         .await
         .map_err(|e| format!("cascade_dirty_flags: {e}"))?;
@@ -351,11 +347,9 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // the active dest).
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT destination, start_date, end_date, days FROM date_anchors \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
-            ),
-            (),
+            "SELECT destination, start_date, end_date, days FROM date_anchors \
+             WHERE plan_id = ?1 AND destination = ?2",
+            pd(),
         )
         .await
         .map_err(|e| format!("date_anchors: {e}"))?;
@@ -379,15 +373,13 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let mut booked_date = String::new();
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT direction, leg_order, flight_number, airline, airline_code, \
-                        departure_code, departure_terminal, departure_time, \
-                        arrival_code, arrival_terminal, arrival_time, flight_date, booked_date \
-                 FROM flight_legs \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                 ORDER BY direction, leg_order"
-            ),
-            (),
+            "SELECT direction, leg_order, flight_number, airline, airline_code, \
+                    departure_code, departure_terminal, departure_time, \
+                    arrival_code, arrival_terminal, arrival_time, flight_date, booked_date \
+             FROM flight_legs \
+             WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY direction, leg_order",
+            pd(),
         )
         .await
         .map_err(|e| format!("flight_legs: {e}"))?;
@@ -441,14 +433,12 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 6. airport_transfers (one row per direction; selected_* scalar cols).
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT direction, status, selected_title, selected_route, \
-                        selected_duration_min, selected_price_yen, selected_schedule, \
-                        selected_booking_url, selected_notes, selected_id \
-                 FROM airport_transfers \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
-            ),
-            (),
+            "SELECT direction, status, selected_title, selected_route, \
+                    selected_duration_min, selected_price_yen, selected_schedule, \
+                    selected_booking_url, selected_notes, selected_id \
+             FROM airport_transfers \
+             WHERE plan_id = ?1 AND destination = ?2",
+            pd(),
         )
         .await
         .map_err(|e| format!("airport_transfers: {e}"))?;
@@ -490,14 +480,12 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 7. airport_transfer_candidates (child rows, ordered by sort_order).
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT direction, candidate_id, title, route, duration_min, \
-                        price_yen, schedule, booking_url, notes, sort_order \
-                 FROM airport_transfer_candidates \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                 ORDER BY direction, sort_order"
-            ),
-            (),
+            "SELECT direction, candidate_id, title, route, duration_min, \
+                    price_yen, schedule, booking_url, notes, sort_order \
+             FROM airport_transfer_candidates \
+             WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY direction, sort_order",
+            pd(),
         )
         .await
         .map_err(|e| format!("airport_transfer_candidates: {e}"))?;
@@ -525,11 +513,8 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 8 + 9. hotels + hotel_access_lines.
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT name FROM hotels \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
-            ),
-            (),
+            "SELECT name FROM hotels WHERE plan_id = ?1 AND destination = ?2",
+            pd(),
         )
         .await
         .map_err(|e| format!("hotels: {e}"))?;
@@ -545,12 +530,10 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     }
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT sort_order, line FROM hotel_access_lines \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                 ORDER BY sort_order"
-            ),
-            (),
+            "SELECT sort_order, line FROM hotel_access_lines \
+             WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY sort_order",
+            pd(),
         )
         .await
         .map_err(|e| format!("hotel_access_lines: {e}"))?;
@@ -570,12 +553,10 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 10 + 11. plan_offer_selection + plan_offer_includes.
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT selected_offer_id, selected_date, selected_at \
-                 FROM plan_offer_selection \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
-            ),
-            (),
+            "SELECT selected_offer_id, selected_date, selected_at \
+             FROM plan_offer_selection \
+             WHERE plan_id = ?1 AND destination = ?2",
+            pd(),
         )
         .await
         .map_err(|e| format!("plan_offer_selection: {e}"))?;
@@ -598,16 +579,16 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
         }
     }
     if !selected_offer_id.is_empty() {
-        let offer_esc = sql_quote(&selected_offer_id);
         let mut rows = conn
             .query(
-                &format!(
-                    "SELECT sort_order, item FROM plan_offer_includes \
-                     WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                       AND offer_id = '{offer_esc}' \
-                     ORDER BY sort_order"
-                ),
-                (),
+                "SELECT sort_order, item FROM plan_offer_includes \
+                 WHERE plan_id = ?1 AND destination = ?2 AND offer_id = ?3 \
+                 ORDER BY sort_order",
+                libsql::params![
+                    plan_id.to_string(),
+                    active_destination.clone(),
+                    selected_offer_id.clone()
+                ],
             )
             .await
             .map_err(|e| format!("plan_offer_includes: {e}"))?;
@@ -626,15 +607,13 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 12. days.
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT day_number, date, theme, day_type, weather_label, temp_low_c, \
-                        temp_high_c, precipitation_pct, weather_code, weather_source_id, \
-                        weather_sourced_at \
-                 FROM days \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                 ORDER BY day_number"
-            ),
-            (),
+            "SELECT day_number, date, theme, day_type, weather_label, temp_low_c, \
+                    temp_high_c, precipitation_pct, weather_code, weather_source_id, \
+                    weather_sourced_at \
+             FROM days \
+             WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY day_number",
+            pd(),
         )
         .await
         .map_err(|e| format!("days: {e}"))?;
@@ -674,13 +653,11 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 13. timesofday (key: day_number -> SessionView).
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT day_number, session_type, time_range_start, time_range_end, \
-                        transit_notes, focus \
-                 FROM timesofday \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}'"
-            ),
-            (),
+            "SELECT day_number, session_type, time_range_start, time_range_end, \
+                    transit_notes, focus \
+             FROM timesofday \
+             WHERE plan_id = ?1 AND destination = ?2",
+            pd(),
         )
         .await
         .map_err(|e| format!("timesofday: {e}"))?;
@@ -710,14 +687,12 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // by sort_order for stable output when the TS iterates the array).
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT day_number, session_type, sort_order, title, booking_required, \
-                        booking_status, booking_ref, is_fixed_time, start_time, end_time, book_by \
-                 FROM activities \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                 ORDER BY day_number, session_type, sort_order"
-            ),
-            (),
+            "SELECT day_number, session_type, sort_order, title, booking_required, \
+                    booking_status, booking_ref, is_fixed_time, start_time, end_time, book_by \
+             FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY day_number, session_type, sort_order",
+            pd(),
         )
         .await
         .map_err(|e| format!("activities: {e}"))?;
@@ -751,13 +726,11 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // SessionView.meals (Vec<String>) by (day_number, session_type).
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT day_number, session_type, sort_order, meal \
-                 FROM session_meals \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                 ORDER BY day_number, session_type, sort_order"
-            ),
-            (),
+            "SELECT day_number, session_type, sort_order, meal \
+             FROM session_meals \
+             WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY day_number, session_type, sort_order",
+            pd(),
         )
         .await
         .map_err(|e| format!("session_meals: {e}"))?;
@@ -782,14 +755,12 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 16. day_route_segments (per-day ROUTE block). Grouped by day_number.
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT day_number, sort_order, from_place, to_place, mode, \
-                        duration_min, notes, start_time \
-                 FROM day_route_segments \
-                 WHERE plan_id = '{esc}' AND destination = '{dest_esc}' \
-                 ORDER BY day_number, sort_order"
-            ),
-            (),
+            "SELECT day_number, sort_order, from_place, to_place, mode, \
+                    duration_min, notes, start_time \
+             FROM day_route_segments \
+             WHERE plan_id = ?1 AND destination = ?2 \
+             ORDER BY day_number, sort_order",
+            pd(),
         )
         .await
         .map_err(|e| format!("day_route_segments: {e}"))?;
@@ -814,10 +785,6 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     }
 
     Ok(view)
-}
-
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
 }
 
 #[cfg(test)]
