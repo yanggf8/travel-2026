@@ -7,6 +7,7 @@
 // cascade_dirty_flags UNCHANGED.
 
 use libsql::Connection;
+use travel_db::repo::route_segments;
 
 #[derive(Default, Debug)]
 struct SegmentInput {
@@ -405,7 +406,7 @@ async fn execute_single(
     //    below would write an orphan row and still emit a `completed` audit —
     //    fail loud instead so a ✅/completed audit always implies the parent
     //    day was real.
-    if !day_exists(conn, plan_id, destination, day).await? {
+    if !route_segments::day_exists(conn, plan_id, destination, day).await? {
         return Err(format!(
             "no days row for plan={plan_id} destination={destination} day={day}; \
              scaffold the itinerary first (travel scaffold-itinerary)"
@@ -415,46 +416,32 @@ async fn execute_single(
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
-    // 1. DELETE the existing segment for (day, sort_order), then
-    //    INSERT the new one. The TS path also touches days.updated_at
+    // 1. DELETE the existing segment for (day, sort_order), then INSERT the new
+    //    one (domain writes via the DAL). The TS path also touches days.updated_at
     //    for the affected day; we mirror that.
-    conn.execute(
-        "DELETE FROM day_route_segments \
-         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND sort_order = ?4",
-        libsql::params![plan_id.to_string(), destination.to_string(), day, sort_order],
+    route_segments::delete_slot(conn, plan_id, destination, day, sort_order).await?;
+    route_segments::insert_segment(
+        conn,
+        plan_id,
+        destination,
+        day,
+        sort_order,
+        &route_segments::SegmentWrite {
+            from_place: from.to_string(),
+            to_place: to.to_string(),
+            mode: mode.to_string(),
+            duration_min: duration,
+            notes: notes.map(str::to_string),
+            start_time: start_time.map(str::to_string),
+        },
+        "",
     )
-    .await
-    .map_err(|e| format!("day_route_segments DELETE failed: {e}"))?;
-    conn.execute(
-        "INSERT INTO day_route_segments \
-            (plan_id, destination, day_number, sort_order, from_place, to_place, \
-             mode, duration_min, notes, start_time) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        libsql::params![
-            plan_id.to_string(),
-            destination.to_string(),
-            day,
-            sort_order,
-            from.to_string(),
-            to.to_string(),
-            mode.to_string(),
-            duration,
-            notes.map(str::to_string),
-            start_time.map(str::to_string)
-        ],
-    )
-    .await
-    .map_err(|e| format!("day_route_segments INSERT failed: {e}"))?;
+    .await?;
 
     // 2. Touch days.updated_at for the affected day (TS does this via
     //    touchItinerary → process_5_daily_itinerary.updated_at, which
     //    sync_normalized_tables propagates to the days row).
-    conn.execute(
-        "UPDATE days SET updated_at = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
-        libsql::params![now_db.clone(), plan_id.to_string(), destination.to_string(), day],
-    )
-    .await
-    .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
+    route_segments::touch_day(conn, plan_id, destination, day, &now_db).await?;
 
     // 3. plan_events + plan_event_data.
     let dest_process_so = next_dest_process_sort_order(
@@ -553,7 +540,7 @@ async fn execute_bulk(
     let now_db = now_db_datetime();
 
     // 0. The target `days` row MUST pre-exist (see execute_single).
-    if !day_exists(conn, plan_id, destination, day).await? {
+    if !route_segments::day_exists(conn, plan_id, destination, day).await? {
         return Err(format!(
             "no days row for plan={plan_id} destination={destination} day={day}; \
              scaffold the itinerary first (travel scaffold-itinerary)"
@@ -563,44 +550,30 @@ async fn execute_bulk(
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
-    // 1. DELETE ALL segments for (plan, dest, day) + INSERT new.
-    conn.execute(
-        "DELETE FROM day_route_segments \
-         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
-        libsql::params![plan_id.to_string(), destination.to_string(), day],
-    )
-    .await
-    .map_err(|e| format!("day_route_segments DELETE failed: {e}"))?;
+    // 1. DELETE ALL segments for (plan, dest, day) + INSERT new (domain writes via the DAL).
+    route_segments::delete_all_for_day(conn, plan_id, destination, day).await?;
     for (i, s) in segments.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO day_route_segments \
-                (plan_id, destination, day_number, sort_order, from_place, to_place, \
-                 mode, duration_min, notes, start_time) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            libsql::params![
-                plan_id.to_string(),
-                destination.to_string(),
-                day,
-                i as i64,
-                s.from.clone(),
-                s.to.clone(),
-                s.mode.clone(),
-                s.duration,
-                s.notes.clone(),
-                s.start_time.clone()
-            ],
+        route_segments::insert_segment(
+            conn,
+            plan_id,
+            destination,
+            day,
+            i as i64,
+            &route_segments::SegmentWrite {
+                from_place: s.from.clone(),
+                to_place: s.to.clone(),
+                mode: s.mode.clone(),
+                duration_min: s.duration,
+                notes: s.notes.clone(),
+                start_time: s.start_time.clone(),
+            },
+            &format!("[{i}]"),
         )
-        .await
-        .map_err(|e| format!("day_route_segments INSERT[{i}] failed: {e}"))?;
+        .await?;
     }
 
     // 2. Touch days.updated_at.
-    conn.execute(
-        "UPDATE days SET updated_at = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
-        libsql::params![now_db.clone(), plan_id.to_string(), destination.to_string(), day],
-    )
-    .await
-    .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
+    route_segments::touch_day(conn, plan_id, destination, day, &now_db).await?;
 
     // 3. plan_events + plan_event_data.
     let dest_process_so = next_dest_process_sort_order(
@@ -676,26 +649,6 @@ async fn execute_bulk(
     .await?;
 
     Ok(version_after)
-}
-
-async fn day_exists(
-    conn: &Connection,
-    plan_id: &str,
-    destination: &str,
-    day: i64,
-) -> Result<bool, String> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM days WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
-            libsql::params![plan_id.to_string(), destination.to_string(), day],
-        )
-        .await
-        .map_err(|e| format!("days existence query failed: {e}"))?;
-    Ok(rows
-        .next()
-        .await
-        .map_err(|e| format!("days existence row read failed: {e}"))?
-        .is_some())
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {

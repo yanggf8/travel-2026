@@ -508,6 +508,20 @@ is EXEMPT (Codex Part D) — it stays inline in `travel-cli`.
 common offer-query predicates; new offer predicates get a `with_*` method there, not a fresh
 `sql_quote`. Subsequent modules migrate one per commit, same byte-identical discipline; no big-bang.
 
+**Mutation-command DAL adoption (the read views are done; mutations are the next, optional, layer).**
+Mutations were never `sql_quote` offenders (they already bind params), so this is a consistency
+refactor, not a bug fix. The pattern: move the **domain-table** writes into a `travel-db` repo, and
+LEAVE the audit triad (`plan_events`/`plan_event_data`/`operation_runs`/`plans.version`) in
+`travel-cli` (`cascade::common`) per the §5 boundary contract. Started:
+- `set-route-segment` / `set-route-segments-bulk` → `repo::route_segments`
+  (`day_exists` guard + `delete_slot`/`delete_all_for_day`/`insert_segment`/`touch_day`); the
+  `plan_events`/`operation_runs`/version bump stay in the command. Verified by the existing
+  `route_segment_guard` (8) + `set_mutation_bugs` (11) integration tests (single + bulk happy-path
+  persist, missing-day fail-loud, whole-batch-reject, `--plan-id` honoring). 2026-06-30.
+
+The other `set_*`/`mark_*`/`swap_days` mutations remain inline (bound-param, safe); migrate
+opportunistically with the same domain-writes-to-repo / audit-stays-in-cascade split.
+
 ### Phase G — D1 read-mirror pilot [deferred, gated — do NOT start without sign-off]
 
 Placeholder boundary only (not delegated, not scheduled). When/if pursued: a read-only mirror of 1–2
