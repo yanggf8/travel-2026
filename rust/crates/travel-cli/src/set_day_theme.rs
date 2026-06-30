@@ -12,6 +12,7 @@
 // Verified to be no-cascade: cascade_dirty_flags is UNCHANGED.
 
 use libsql::Connection;
+use travel_db::repo::days;
 
 /// CLI entry: `travel set-day-theme <day> [theme] [--zh "<zh>"] [--dest <slug>]`.
 pub async fn run(
@@ -193,7 +194,7 @@ async fn execute(
     //    scaffold, not this command). A plain UPDATE would silently no-op on a
     //    missing day and still write a `completed` audit — fail loud instead so
     //    a ✅/completed audit always implies a row actually changed.
-    if !day_exists(conn, plan_id, destination, day).await? {
+    if !days::exists(conn, plan_id, destination, day).await? {
         return Err(format!(
             "no days row for plan={plan_id} destination={destination} day={day}; \
              scaffold the itinerary first (travel scaffold-itinerary)"
@@ -204,56 +205,11 @@ async fn execute(
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
-    // 2. UPDATE days.theme / theme_zh / updated_at. (Other days' rows
-    //    are NOT touched — unlike syncNormalizedTables which rewrites
-    //    every day row. The non-target day rows keep their previous
-    //    updated_at; the diff script normalizes updated_at anyway.)
-    //
-    //    The TS path also updates theme_zh if provided; the same here.
-    //    If neither is provided, only updated_at is bumped (touchItinerary).
-    if let Some(t) = theme {
-        if let Some(tz) = theme_zh {
-            conn.execute(
-                "UPDATE days SET theme = ?1, theme_zh = ?2, updated_at = ?3 \
-                 WHERE plan_id = ?4 AND destination = ?5 AND day_number = ?6",
-                libsql::params![
-                    t.to_string(),
-                    tz.to_string(),
-                    now_db.clone(),
-                    plan_id.to_string(),
-                    destination.to_string(),
-                    day
-                ],
-            )
-            .await
-            .map_err(|e| format!("days UPDATE (theme+zh) failed: {e}"))?;
-        } else {
-            conn.execute(
-                "UPDATE days SET theme = ?1, updated_at = ?2 \
-                 WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5",
-                libsql::params![t.to_string(), now_db.clone(), plan_id.to_string(), destination.to_string(), day],
-            )
-            .await
-            .map_err(|e| format!("days UPDATE (theme) failed: {e}"))?;
-        }
-    } else if let Some(tz) = theme_zh {
-        conn.execute(
-            "UPDATE days SET theme_zh = ?1, updated_at = ?2 \
-             WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5",
-            libsql::params![tz.to_string(), now_db.clone(), plan_id.to_string(), destination.to_string(), day],
-        )
-        .await
-        .map_err(|e| format!("days UPDATE (theme_zh) failed: {e}"))?;
-    } else {
-        // touchItinerary only — bump updated_at
-        conn.execute(
-            "UPDATE days SET updated_at = ?1 \
-             WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
-            libsql::params![now_db.clone(), plan_id.to_string(), destination.to_string(), day],
-        )
-        .await
-        .map_err(|e| format!("days UPDATE (touch) failed: {e}"))?;
-    }
+    // 2. UPDATE days.theme / theme_zh / updated_at via the DAL (only the target
+    //    day's row is touched). theme+zh / theme / theme_zh / touch-only are the
+    //    four variants — set_theme picks by which fields are Some; updated_at is
+    //    always bumped (touchItinerary).
+    days::set_theme(conn, plan_id, destination, day, theme, theme_zh, &now_db).await?;
 
     // 3. INSERT 2 plan_events + 6 plan_event_data rows. Sort-order
     //    assignment: per-bucket max+1 (dest_process) and global max+1
@@ -351,26 +307,6 @@ async fn execute(
     .map_err(|e| format!("plans UPDATE failed: {e}"))?;
 
     Ok(version_after)
-}
-
-async fn day_exists(
-    conn: &Connection,
-    plan_id: &str,
-    destination: &str,
-    day: i64,
-) -> Result<bool, String> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM days WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
-            libsql::params![plan_id.to_string(), destination.to_string(), day],
-        )
-        .await
-        .map_err(|e| format!("days existence query failed: {e}"))?;
-    Ok(rows
-        .next()
-        .await
-        .map_err(|e| format!("days existence row read failed: {e}"))?
-        .is_some())
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {

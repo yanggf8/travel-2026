@@ -516,11 +516,18 @@ LEAVE the audit triad (`plan_events`/`plan_event_data`/`operation_runs`/`plans.v
 - `set-route-segment` / `set-route-segments-bulk` → `repo::route_segments`
   (`day_exists` guard + `delete_slot`/`delete_all_for_day`/`insert_segment`/`touch_day`); the
   `plan_events`/`operation_runs`/version bump stay in the command. Verified by the existing
-  `route_segment_guard` (8) + `set_mutation_bugs` (11) integration tests (single + bulk happy-path
+  `route_segment_guard` (8) + `set_mutation_bugs` integration tests (single + bulk happy-path
   persist, missing-day fail-loud, whole-batch-reject, `--plan-id` honoring). 2026-06-30.
+- `set-day-theme` → `repo::days` (`exists` guard + `set_theme` — the theme+zh / theme / theme_zh /
+  touch-only 4-way variant); audit stays in the command. `repo::days::exists` is now the single
+  `days`-existence query (`route_segments::day_exists` delegates to it). Added a happy-path
+  integration test (`set_day_theme_persists_and_preserves_zh`): theme+zh persists, and a theme-only
+  follow-up must NOT clobber `theme_zh` — coverage the command lacked before. 2026-06-30.
 
-The other `set_*`/`mark_*`/`swap_days` mutations remain inline (bound-param, safe); migrate
-opportunistically with the same domain-writes-to-repo / audit-stays-in-cascade split.
+`repo::days::exists` is the shared "days row exists" guard for itinerary mutations — reuse it, don't
+re-roll a `SELECT 1 FROM days`. The other `set_*`/`mark_*`/`swap_days` mutations remain inline
+(bound-param, safe); migrate opportunistically with the same domain-writes-to-repo /
+audit-stays-in-cascade split.
 
 ### Phase G — D1 read-mirror pilot [deferred, gated — do NOT start without sign-off]
 

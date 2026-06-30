@@ -17,27 +17,15 @@ pub struct SegmentWrite {
     pub start_time: Option<String>,
 }
 
-/// True if a `days` row exists for `(plan_id, destination, day)`. The route-segment writes require
-/// the parent day to pre-exist (scaffolded separately) so a `completed` audit always implies a real
-/// day — callers fail loud when this is false.
+/// True if a `days` row exists for `(plan_id, destination, day)` — the route-segment writes require
+/// the parent day to pre-exist. Thin re-export of `repo::days::exists` (single source of truth).
 pub async fn day_exists(
     conn: &Connection,
     plan_id: &str,
     destination: &str,
     day: i64,
 ) -> Result<bool, String> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM days WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
-            libsql::params![plan_id.to_string(), destination.to_string(), day],
-        )
-        .await
-        .map_err(|e| format!("days existence query failed: {e}"))?;
-    Ok(rows
-        .next()
-        .await
-        .map_err(|e| format!("days existence row read failed: {e}"))?
-        .is_some())
+    crate::repo::days::exists(conn, plan_id, destination, day).await
 }
 
 /// Delete the segment at one `(day, sort_order)` slot (single-segment path).

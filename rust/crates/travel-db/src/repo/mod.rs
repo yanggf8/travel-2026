@@ -1,5 +1,6 @@
 pub mod bookings;
 pub mod captures;
+pub mod days;
 pub mod destination_ref;
 pub mod freshness;
 pub mod observations;

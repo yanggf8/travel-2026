@@ -326,6 +326,70 @@ fn set_day_theme_fails_loud_when_day_missing() {
     );
 }
 
+// ── Happy path: set-day-theme persists theme + theme_zh; theme-only keeps zh ─
+// Locks the repo::days::set_theme migration (the 4-way variant): theme+zh sets
+// both; a follow-up theme-only update must NOT clobber the existing theme_zh.
+#[test]
+fn set_day_theme_persists_and_preserves_zh() {
+    let tag = nanos();
+    let plan_id = format!("test-setbug-themeok-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
+    let dest = format!("setbugthemeok_{tag}");
+    if !seed_bare(&plan_id, &dest) {
+        return;
+    }
+    // Seed the parent day (theme/theme_zh start empty).
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type, updated_at) \
+         VALUES ('{plan_id}', '{dest}', 1, '2026-09-01', 'full', '2020-01-01 00:00:00')"
+    ))
+    .is_none()
+    {
+        return;
+    }
+
+    // 1. theme + --zh → both set.
+    let (ok, stdout, stderr) = run_cmd(
+        &plan_id,
+        &["set-day-theme", "1", "Explore Naha", "--zh", "探索那霸", "--dest", &dest],
+    );
+    assert!(ok, "set-day-theme (theme+zh) must succeed; stdout={stdout} stderr={stderr}");
+    assert_eq!(
+        count(&format!(
+            "SELECT COUNT(*) AS n FROM operation_runs \
+             WHERE plan_id = '{plan_id}' AND command_type = 'set-day-theme' AND status = 'completed'"
+        )),
+        Some(1),
+        "one completed audit row after a real write"
+    );
+    let row = match db_exec(&format!(
+        "SELECT theme, theme_zh FROM days WHERE plan_id = '{plan_id}' AND day_number = 1"
+    )) {
+        Some(r) => r,
+        None => return,
+    };
+    assert!(row.contains("Explore Naha"), "theme persisted; got {row}");
+    assert!(row.contains("探索那霸"), "theme_zh persisted; got {row}");
+
+    // 2. theme-only update → theme changes, theme_zh PRESERVED (not clobbered).
+    let (ok, _o, e) = run_cmd(&plan_id, &["set-day-theme", "1", "Naha Day", "--dest", &dest]);
+    assert!(ok, "set-day-theme (theme only) must succeed; stderr={e}");
+    let row2 = match db_exec(&format!(
+        "SELECT theme, theme_zh FROM days WHERE plan_id = '{plan_id}' AND day_number = 1"
+    )) {
+        Some(r) => r,
+        None => return,
+    };
+    assert!(row2.contains("Naha Day"), "theme updated; got {row2}");
+    assert!(
+        row2.contains("探索那霸"),
+        "theme_zh must be PRESERVED on a theme-only update; got {row2}"
+    );
+}
+
 // ── Bug 1 fail-loud: set-tod-focus on a missing session → no completed audit ─
 #[test]
 fn set_tod_focus_fails_loud_when_session_missing() {
