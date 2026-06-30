@@ -271,27 +271,14 @@ pub fn assert_dest_matches(dest_opt: Option<&str>, active_destination: &str) -> 
 }
 
 pub async fn load(plan_id: &str) -> Result<PlanView, String> {
+    use travel_db::repo::plan as repo;
     let conn = db::connect_read().await?;
 
-    // 1. plan_metadata
-    let mut rows = conn
-        .query(
-            "SELECT schema_version, active_destination FROM plan_metadata WHERE plan_id = ?1",
-            libsql::params![plan_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("plan_metadata: {e}"))?;
-    let meta = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_metadata row: {e}"))?
-        .ok_or_else(|| {
-            format!(
-                "[turso] Plan \"{plan_id}\" not found in normalized tables. Run migration first."
-            )
-        })?;
-    let schema_version: String = meta.get(0).unwrap_or_default();
-    let active_destination: String = meta.get(1).unwrap_or_default();
+    // 1. plan_metadata (fail loud if the plan is unknown — matches the TS message).
+    let (schema_version, active_destination) = repo::metadata(&conn, plan_id).await?.ok_or_else(
+        || format!("[turso] Plan \"{plan_id}\" not found in normalized tables. Run migration first."),
+    )?;
+    let dest = active_destination.as_str();
 
     let mut view = PlanView {
         schema_version,
@@ -301,42 +288,12 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
 
     // 2 + 3. process_statuses + cascade_dirty_flags keyed by process_id (for
     // the active destination; the TS only reads statuses for `dest`).
-    // Every remaining query is keyed on (plan_id, destination) — bind both as ?1/?2.
-    let pd = || libsql::params![plan_id.to_string(), active_destination.clone()];
-    let mut rows = conn
-        .query(
-            "SELECT process_id, status FROM process_statuses \
-             WHERE plan_id = ?1 AND destination = ?2",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("process_statuses: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("process_statuses row: {e}"))?
-    {
-        let pid: String = r.get(0).unwrap_or_default();
-        let st: String = r.get(1).unwrap_or_default();
+    for (pid, st) in repo::process_statuses(&conn, plan_id, dest).await? {
         if !pid.is_empty() {
             view.process_status.insert(pid, st);
         }
     }
-    let mut rows = conn
-        .query(
-            "SELECT process_id, dirty FROM cascade_dirty_flags \
-             WHERE plan_id = ?1 AND destination = ?2",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("cascade_dirty_flags: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("cascade_dirty_flags row: {e}"))?
-    {
-        let pid: String = r.get(0).unwrap_or_default();
-        let dirty: i64 = r.get(1).unwrap_or(0);
+    for (pid, dirty) in repo::cascade_dirty_flags(&conn, plan_id, dest).await? {
         if !pid.is_empty() {
             view.dirty_flags.insert(pid, dirty != 0);
         }
@@ -345,23 +302,8 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     // 4. date_anchors (one row per destination; we keep the one for the
     // active destination; status.ts calls `sm.getDateAnchor()` which uses
     // the active dest).
-    let mut rows = conn
-        .query(
-            "SELECT destination, start_date, end_date, days FROM date_anchors \
-             WHERE plan_id = ?1 AND destination = ?2",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("date_anchors: {e}"))?;
-    if let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("date_anchors row: {e}"))?
-    {
-        let start: String = r.get(1).unwrap_or_default();
-        let end: String = r.get(2).unwrap_or_default();
-        let days: i64 = r.get(3).unwrap_or(0);
-        view.dates = Some(DateAnchor { start_date: start, end_date: end, days });
+    if let Some((start_date, end_date, days)) = repo::date_anchor(&conn, plan_id, dest).await? {
+        view.dates = Some(DateAnchor { start_date, end_date, days });
     }
 
     // 5. flight_legs (ordered by direction, leg_order; the assembler takes
@@ -371,50 +313,27 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     let mut airline = String::new();
     let mut airline_code = String::new();
     let mut booked_date = String::new();
-    let mut rows = conn
-        .query(
-            "SELECT direction, leg_order, flight_number, airline, airline_code, \
-                    departure_code, departure_terminal, departure_time, \
-                    arrival_code, arrival_terminal, arrival_time, flight_date, booked_date \
-             FROM flight_legs \
-             WHERE plan_id = ?1 AND destination = ?2 \
-             ORDER BY direction, leg_order",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("flight_legs: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("flight_legs row: {e}"))?
-    {
-        let direction: String = r.get(0).unwrap_or_default();
-        let flight_number: String = r.get(2).unwrap_or_default();
-        let leg_airline: String = r.get(3).unwrap_or_default();
-        let leg_airline_code: String = r.get(4).unwrap_or_default();
-        if airline.is_empty() && !leg_airline.is_empty() {
-            airline = leg_airline.clone();
+    for leg_row in repo::flight_legs(&conn, plan_id, dest).await? {
+        if airline.is_empty() && !leg_row.airline.is_empty() {
+            airline = leg_row.airline.clone();
         }
-        if airline_code.is_empty() && !leg_airline_code.is_empty() {
-            airline_code = leg_airline_code.clone();
+        if airline_code.is_empty() && !leg_row.airline_code.is_empty() {
+            airline_code = leg_row.airline_code.clone();
         }
-        if booked_date.is_empty() {
-            let bd: String = r.get(12).unwrap_or_default();
-            if !bd.is_empty() {
-                booked_date = bd;
-            }
+        if booked_date.is_empty() && !leg_row.booked_date.is_empty() {
+            booked_date = leg_row.booked_date.clone();
         }
         let leg = FlightLegView {
-            flight_number,
-            departure_airport_code: r.get(5).unwrap_or_default(),
-            departure_terminal: r.get(6).unwrap_or_default(),
-            departure_time: r.get(7).unwrap_or_default(),
-            arrival_airport_code: r.get(8).unwrap_or_default(),
-            arrival_terminal: r.get(9).unwrap_or_default(),
-            arrival_time: r.get(10).unwrap_or_default(),
-            date: r.get(11).unwrap_or_default(),
+            flight_number: leg_row.flight_number,
+            departure_airport_code: leg_row.departure_code,
+            departure_terminal: leg_row.departure_terminal,
+            departure_time: leg_row.departure_time,
+            arrival_airport_code: leg_row.arrival_code,
+            arrival_terminal: leg_row.arrival_terminal,
+            arrival_time: leg_row.arrival_time,
+            date: leg_row.flight_date,
         };
-        match direction.as_str() {
+        match leg_row.direction.as_str() {
             "outbound" if outbound.is_none() => outbound = Some(leg),
             "return" if inbound.is_none() => inbound = Some(leg),
             _ => {}
@@ -431,119 +350,53 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     }
 
     // 6. airport_transfers (one row per direction; selected_* scalar cols).
-    let mut rows = conn
-        .query(
-            "SELECT direction, status, selected_title, selected_route, \
-                    selected_duration_min, selected_price_yen, selected_schedule, \
-                    selected_booking_url, selected_notes, selected_id \
-             FROM airport_transfers \
-             WHERE plan_id = ?1 AND destination = ?2",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("airport_transfers: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("airport_transfers row: {e}"))?
-    {
-        let direction: String = r.get(0).unwrap_or_default();
-        let status: String = r.get(1).unwrap_or_default();
-        let sel_title: String = r.get(2).unwrap_or_default();
-        let sel_route: String = r.get(3).unwrap_or_default();
-        let sel_dur: Option<i64> = r.get(4).ok();
-        let sel_price: Option<i64> = r.get(5).ok();
-        let sel_sched: String = r.get(6).unwrap_or_default();
-        let sel_url: String = r.get(7).unwrap_or_default();
-        let sel_notes: String = r.get(8).unwrap_or_default();
-        let sel_id: String = r.get(9).unwrap_or_default();
-        let selected = if !sel_title.is_empty() || !sel_id.is_empty() {
+    for t in repo::airport_transfers(&conn, plan_id, dest).await? {
+        let selected = if !t.selected_title.is_empty() || !t.selected_id.is_empty() {
             Some(TransferOption {
-                id: sel_id,
-                title: sel_title,
-                route: sel_route,
-                duration_min: sel_dur,
-                price_yen: sel_price,
-                schedule: sel_sched,
-                booking_url: sel_url,
-                notes: sel_notes,
+                id: t.selected_id,
+                title: t.selected_title,
+                route: t.selected_route,
+                duration_min: t.selected_duration_min,
+                price_yen: t.selected_price_yen,
+                schedule: t.selected_schedule,
+                booking_url: t.selected_booking_url,
+                notes: t.selected_notes,
             })
         } else {
             None
         };
         view.transfers.insert(
-            direction.clone(),
-            TransferDir { status, selected, candidates: Vec::new() },
+            t.direction,
+            TransferDir { status: t.status, selected, candidates: Vec::new() },
         );
     }
 
     // 7. airport_transfer_candidates (child rows, ordered by sort_order).
-    let mut rows = conn
-        .query(
-            "SELECT direction, candidate_id, title, route, duration_min, \
-                    price_yen, schedule, booking_url, notes, sort_order \
-             FROM airport_transfer_candidates \
-             WHERE plan_id = ?1 AND destination = ?2 \
-             ORDER BY direction, sort_order",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("airport_transfer_candidates: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("airport_transfer_candidates row: {e}"))?
-    {
-        let direction: String = r.get(0).unwrap_or_default();
+    for c in repo::transfer_candidates(&conn, plan_id, dest).await? {
         let cand = TransferOption {
-            id: r.get(1).unwrap_or_default(),
-            title: r.get(2).unwrap_or_default(),
-            route: r.get(3).unwrap_or_default(),
-            duration_min: r.get(4).ok(),
-            price_yen: r.get(5).ok(),
-            schedule: r.get(6).unwrap_or_default(),
-            booking_url: r.get(7).unwrap_or_default(),
-            notes: r.get(8).unwrap_or_default(),
+            id: c.candidate_id,
+            title: c.title,
+            route: c.route,
+            duration_min: c.duration_min,
+            price_yen: c.price_yen,
+            schedule: c.schedule,
+            booking_url: c.booking_url,
+            notes: c.notes,
         };
-        if let Some(td) = view.transfers.get_mut(&direction) {
+        if let Some(td) = view.transfers.get_mut(&c.direction) {
             td.candidates.push(cand);
         }
     }
 
     // 8 + 9. hotels + hotel_access_lines.
-    let mut rows = conn
-        .query(
-            "SELECT name FROM hotels WHERE plan_id = ?1 AND destination = ?2",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("hotels: {e}"))?;
-    if let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("hotels row: {e}"))?
+    if let Some(name) = repo::hotel_name(&conn, plan_id, dest).await?
+        && !name.is_empty()
     {
-        let name: String = r.get(0).unwrap_or_default();
-        if !name.is_empty() {
-            view.hotel = Some(HotelSummary { name, access: Vec::new() });
-        }
+        view.hotel = Some(HotelSummary { name, access: Vec::new() });
     }
-    let mut rows = conn
-        .query(
-            "SELECT sort_order, line FROM hotel_access_lines \
-             WHERE plan_id = ?1 AND destination = ?2 \
-             ORDER BY sort_order",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("hotel_access_lines: {e}"))?;
+    let access_lines = repo::hotel_access_lines(&conn, plan_id, dest).await?;
     if let Some(h) = view.hotel.as_mut() {
-        while let Some(r) = rows
-            .next()
-            .await
-            .map_err(|e| format!("hotel_access_lines row: {e}"))?
-        {
-            let line: String = r.get(1).unwrap_or_default();
+        for line in access_lines {
             if !line.is_empty() {
                 h.access.push(line);
             }
@@ -551,53 +404,19 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     }
 
     // 10 + 11. plan_offer_selection + plan_offer_includes.
-    let mut rows = conn
-        .query(
-            "SELECT selected_offer_id, selected_date, selected_at \
-             FROM plan_offer_selection \
-             WHERE plan_id = ?1 AND destination = ?2",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("plan_offer_selection: {e}"))?;
     let mut selected_offer_id = String::new();
-    if let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_offer_selection row: {e}"))?
+    if let Some((id, date, at)) = repo::offer_selection(&conn, plan_id, dest).await?
+        && !id.is_empty()
     {
-        let id: String = r.get(0).unwrap_or_default();
-        let date: String = r.get(1).unwrap_or_default();
-        let at: String = r.get(2).unwrap_or_default();
-        if !id.is_empty() {
-            view.selected_offer = Some(SelectedOffer {
-                id: id.clone(),
-                date,
-                selected_at: at,
-            });
-            selected_offer_id = id;
-        }
+        view.selected_offer = Some(SelectedOffer {
+            id: id.clone(),
+            date,
+            selected_at: at,
+        });
+        selected_offer_id = id;
     }
     if !selected_offer_id.is_empty() {
-        let mut rows = conn
-            .query(
-                "SELECT sort_order, item FROM plan_offer_includes \
-                 WHERE plan_id = ?1 AND destination = ?2 AND offer_id = ?3 \
-                 ORDER BY sort_order",
-                libsql::params![
-                    plan_id.to_string(),
-                    active_destination.clone(),
-                    selected_offer_id.clone()
-                ],
-            )
-            .await
-            .map_err(|e| format!("plan_offer_includes: {e}"))?;
-        while let Some(r) = rows
-            .next()
-            .await
-            .map_err(|e| format!("plan_offer_includes row: {e}"))?
-        {
-            let item: String = r.get(1).unwrap_or_default();
+        for item in repo::offer_includes(&conn, plan_id, dest, &selected_offer_id).await? {
             if !item.is_empty() {
                 view.offer_includes.push(item);
             }
@@ -605,77 +424,40 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     }
 
     // 12. days.
-    let mut rows = conn
-        .query(
-            "SELECT day_number, date, theme, day_type, weather_label, temp_low_c, \
-                    temp_high_c, precipitation_pct, weather_code, weather_source_id, \
-                    weather_sourced_at \
-             FROM days \
-             WHERE plan_id = ?1 AND destination = ?2 \
-             ORDER BY day_number",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("days: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("days row: {e}"))?
-    {
-        let day_number: i64 = r.get(0).unwrap_or(0);
-        let date: String = r.get(1).unwrap_or_default();
-        let theme: String = r.get(2).unwrap_or_default();
-        let day_type: String = r.get(3).unwrap_or_default();
-        let weather_label: String = r.get(4).unwrap_or_default();
-        let weather = if weather_label.is_empty() {
+    for d in repo::days(&conn, plan_id, dest).await? {
+        let weather = if d.weather_label.is_empty() {
             None
         } else {
             Some(DayWeather {
-                weather_label,
-                temp_low_c: r.get::<f64>(5).unwrap_or(0.0),
-                temp_high_c: r.get::<f64>(6).unwrap_or(0.0),
-                precipitation_pct: r.get::<f64>(7).unwrap_or(0.0),
-                weather_code: r.get::<i64>(8).unwrap_or(0),
-                source_id: r.get(9).unwrap_or_default(),
-                sourced_at: r.get(10).unwrap_or_default(),
+                weather_label: d.weather_label,
+                temp_low_c: d.temp_low_c,
+                temp_high_c: d.temp_high_c,
+                precipitation_pct: d.precipitation_pct,
+                weather_code: d.weather_code,
+                source_id: d.weather_source_id,
+                sourced_at: d.weather_sourced_at,
             })
         };
         view.days.push(DayView {
-            day_number,
-            date,
-            theme,
-            day_type,
+            day_number: d.day_number,
+            date: d.date,
+            theme: d.theme,
+            day_type: d.day_type,
             weather,
             sessions: HashMap::new(),
         });
     }
 
     // 13. timesofday (key: day_number -> SessionView).
-    let mut rows = conn
-        .query(
-            "SELECT day_number, session_type, time_range_start, time_range_end, \
-                    transit_notes, focus \
-             FROM timesofday \
-             WHERE plan_id = ?1 AND destination = ?2",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("timesofday: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("timesofday row: {e}"))?
-    {
-        let day_number: i64 = r.get(0).unwrap_or(0);
-        let session_type: String = r.get(1).unwrap_or_default();
-        if let Some(d) = view.days.iter_mut().find(|d| d.day_number == day_number) {
+    for t in repo::timesofday(&conn, plan_id, dest).await? {
+        if let Some(d) = view.days.iter_mut().find(|d| d.day_number == t.day_number) {
             d.sessions.insert(
-                session_type,
+                t.session_type,
                 SessionView {
-                    time_range_start: r.get(2).unwrap_or_default(),
-                    time_range_end: r.get(3).unwrap_or_default(),
-                    transit_notes: r.get(4).unwrap_or_default(),
-                    focus: r.get(5).unwrap_or_default(),
+                    time_range_start: t.time_range_start,
+                    time_range_end: t.time_range_end,
+                    transit_notes: t.transit_notes,
+                    focus: t.focus,
                     meals: Vec::new(),
                     activities: Vec::new(),
                 },
@@ -685,38 +467,20 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
 
     // 14. activities (key: day_number, session_type -> activity rows; order
     // by sort_order for stable output when the TS iterates the array).
-    let mut rows = conn
-        .query(
-            "SELECT day_number, session_type, sort_order, title, booking_required, \
-                    booking_status, booking_ref, is_fixed_time, start_time, end_time, book_by \
-             FROM activities \
-             WHERE plan_id = ?1 AND destination = ?2 \
-             ORDER BY day_number, session_type, sort_order",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("activities: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("activities row: {e}"))?
-    {
-        let day_number: i64 = r.get(0).unwrap_or(0);
-        let session_type: String = r.get(1).unwrap_or_default();
-        let sort_order: i64 = r.get(2).unwrap_or(0);
+    for a in repo::activities(&conn, plan_id, dest).await? {
         let act = ActivityView {
-            title: r.get(3).unwrap_or_default(),
-            booking_required: r.get::<i64>(4).unwrap_or(0) != 0,
-            booking_status: r.get(5).unwrap_or_default(),
-            booking_ref: r.get(6).unwrap_or_default(),
-            is_fixed_time: r.get::<i64>(7).unwrap_or(0) != 0,
-            start_time: r.get(8).unwrap_or_default(),
-            end_time: r.get(9).unwrap_or_default(),
-            book_by: r.get(10).unwrap_or_default(),
-            sort_order,
+            title: a.title,
+            booking_required: a.booking_required != 0,
+            booking_status: a.booking_status,
+            booking_ref: a.booking_ref,
+            is_fixed_time: a.is_fixed_time != 0,
+            start_time: a.start_time,
+            end_time: a.end_time,
+            book_by: a.book_by,
+            sort_order: a.sort_order,
         };
-        if let Some(d) = view.days.iter_mut().find(|d| d.day_number == day_number)
-            && let Some(s) = d.sessions.get_mut(&session_type)
+        if let Some(d) = view.days.iter_mut().find(|d| d.day_number == a.day_number)
+            && let Some(s) = d.sessions.get_mut(&a.session_type)
         {
             s.activities.push(act);
         }
@@ -724,62 +488,29 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
 
     // 15. session_meals (child rows; ordered by sort_order). Grouped into
     // SessionView.meals (Vec<String>) by (day_number, session_type).
-    let mut rows = conn
-        .query(
-            "SELECT day_number, session_type, sort_order, meal \
-             FROM session_meals \
-             WHERE plan_id = ?1 AND destination = ?2 \
-             ORDER BY day_number, session_type, sort_order",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("session_meals: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("session_meals row: {e}"))?
-    {
-        let day_number: i64 = r.get(0).unwrap_or(0);
-        let session_type: String = r.get(1).unwrap_or_default();
-        let meal: String = r.get(3).unwrap_or_default();
-        if meal.is_empty() {
+    for m in repo::session_meals(&conn, plan_id, dest).await? {
+        if m.meal.is_empty() {
             continue;
         }
-        if let Some(d) = view.days.iter_mut().find(|d| d.day_number == day_number)
-            && let Some(s) = d.sessions.get_mut(&session_type)
+        if let Some(d) = view.days.iter_mut().find(|d| d.day_number == m.day_number)
+            && let Some(s) = d.sessions.get_mut(&m.session_type)
         {
-            s.meals.push(meal);
+            s.meals.push(m.meal);
         }
     }
 
     // 16. day_route_segments (per-day ROUTE block). Grouped by day_number.
-    let mut rows = conn
-        .query(
-            "SELECT day_number, sort_order, from_place, to_place, mode, \
-                    duration_min, notes, start_time \
-             FROM day_route_segments \
-             WHERE plan_id = ?1 AND destination = ?2 \
-             ORDER BY day_number, sort_order",
-            pd(),
-        )
-        .await
-        .map_err(|e| format!("day_route_segments: {e}"))?;
-    while let Some(r) = rows
-        .next()
-        .await
-        .map_err(|e| format!("day_route_segments row: {e}"))?
-    {
-        let day_number: i64 = r.get(0).unwrap_or(0);
+    for r in repo::day_route_segments(&conn, plan_id, dest).await? {
         let seg = RouteSegment {
-            from_place: r.get(2).unwrap_or_default(),
-            to_place: r.get(3).unwrap_or_default(),
-            mode: r.get(4).unwrap_or_default(),
-            duration_min: r.get::<Option<i64>>(5).ok().flatten(),
-            notes: r.get::<Option<String>>(6).ok().flatten(),
-            start_time: r.get::<Option<String>>(7).ok().flatten(),
+            from_place: r.from_place,
+            to_place: r.to_place,
+            mode: r.mode,
+            duration_min: r.duration_min,
+            notes: r.notes,
+            start_time: r.start_time,
         };
         view.route_segments
-            .entry(day_number as i32)
+            .entry(r.day_number as i32)
             .or_default()
             .push(seg);
     }
