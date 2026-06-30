@@ -495,7 +495,7 @@ is EXEMPT (Codex Part D) — it stays inline in `travel-cli`.
 | `offers.rs` (`query-offers`) | `repo::offers::OfferFilter` (parameterized WHERE builder) | ✅ done (2026-06-30) |
 | `compare_dates.rs` | `repo::offers::OfferFilter` | ✅ done (2026-06-30) |
 | `compare_true_cost.rs` | `repo::offers::OfferFilter` | ✅ done (2026-06-30) |
-| `db_query_offers.rs` | `repo::offers::OfferFilter` (+ `include_undated`/`fresh_hours`/`name` predicates to add) | ⬜ pending (has its own `build_where`/`build_sql` unit tests — extend the builder, keep them green) |
+| `db_query_offers.rs` | `repo::offers::OfferFilter` (+ `departure_window`/`fresh_within_hours`) | ✅ done (2026-06-30) — added `build_where`/`build_sql` unit tests (none existed); `--sql` debug output now shows `?N` placeholders + a `PARAMS:` line (rendered rows unchanged) |
 | `freshness.rs` | `repo::offers` / `repo::freshness` | ⬜ pending |
 | `destination_ref.rs` | `repo::destination_ref` | ⬜ pending (single `slug` interpolation) |
 | `plan.rs` | `repo::plan` (load path: plan_id/dest/offer interpolations at :275/:305/:601) | ⬜ pending (load-bearing reader; migrate carefully, golden the full `status --full`/`itinerary`/`bookings`/`transport` views) |

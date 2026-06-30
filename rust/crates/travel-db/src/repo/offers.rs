@@ -115,6 +115,59 @@ impl OfferFilter {
         self
     }
 
+    /// A departure-date window with optional inclusion of undated offers.
+    ///
+    /// When `start`/`end` are both `None` this is a no-op. Otherwise, with `include_undated=false`
+    /// it adds a `departure_date IS NOT NULL` guard plus tight `>= ?`/`<= ?` bounds; with
+    /// `include_undated=true` it drops the guard and widens each bound to
+    /// `(departure_date IS NULL OR departure_date >= ?)`. Mirrors the `db query-offers` date block.
+    pub fn departure_window(
+        mut self,
+        start: Option<&str>,
+        end: Option<&str>,
+        include_undated: bool,
+    ) -> Self {
+        if start.is_none() && end.is_none() {
+            return self;
+        }
+        if !include_undated {
+            self.conds.push("departure_date IS NOT NULL".to_string());
+        }
+        if let Some(s) = start {
+            let n = self.next_placeholder();
+            if include_undated {
+                self.conds
+                    .push(format!("(departure_date IS NULL OR departure_date >= ?{n})"));
+            } else {
+                self.conds.push(format!("departure_date >= ?{n}"));
+            }
+            self.params.push(libsql::Value::Text(s.to_string()));
+        }
+        if let Some(e) = end {
+            let n = self.next_placeholder();
+            if include_undated {
+                self.conds
+                    .push(format!("(departure_date IS NULL OR departure_date <= ?{n})"));
+            } else {
+                self.conds.push(format!("departure_date <= ?{n}"));
+            }
+            self.params.push(libsql::Value::Text(e.to_string()));
+        }
+        self
+    }
+
+    /// Only offers scraped within the last `hours` (and with a non-null `scraped_at`).
+    /// `scraped_at IS NOT NULL AND julianday(scraped_at) >= (julianday('now') - (? / 24.0))`.
+    pub fn fresh_within_hours(mut self, hours: i64) -> Self {
+        self.conds.push("scraped_at IS NOT NULL".to_string());
+        let n = self.next_placeholder();
+        self.conds.push(format!(
+            "julianday(scraped_at) >= (julianday('now') - (?{n} / 24.0))"
+        ));
+        self.params.push(libsql::Value::Integer(hours));
+        self
+    }
+
     /// `source_id IN (?, ?, …)` from a comma-separated list (trimmed, empties dropped).
     /// A no-op when the list is empty (so the caller's other predicates still apply).
     pub fn source_id_in_csv(mut self, csv: &str) -> Self {
@@ -325,5 +378,68 @@ mod tests {
         let w = OfferFilter::new().destination("o'brien").build();
         assert_eq!(w.clause, "WHERE destination = ?1");
         assert_eq!(text(&w.params[0]), Some("o'brien"));
+    }
+
+    #[test]
+    fn departure_window_none_is_noop() {
+        let w = OfferFilter::new().departure_window(None, None, false).build();
+        assert_eq!(w.clause, "");
+        assert!(w.params.is_empty());
+    }
+
+    #[test]
+    fn departure_window_tight_adds_not_null_guard() {
+        let w = OfferFilter::new()
+            .departure_window(Some("2026-09-01"), Some("2026-09-30"), false)
+            .build();
+        assert_eq!(
+            w.clause,
+            "WHERE departure_date IS NOT NULL AND departure_date >= ?1 \
+             AND departure_date <= ?2"
+        );
+        assert_eq!(text(&w.params[0]), Some("2026-09-01"));
+        assert_eq!(text(&w.params[1]), Some("2026-09-30"));
+    }
+
+    #[test]
+    fn departure_window_undated_widens_bounds_and_drops_guard() {
+        let w = OfferFilter::new()
+            .departure_window(Some("2026-09-01"), None, true)
+            .build();
+        assert_eq!(
+            w.clause,
+            "WHERE (departure_date IS NULL OR departure_date >= ?1)"
+        );
+        assert_eq!(text(&w.params[0]), Some("2026-09-01"));
+    }
+
+    #[test]
+    fn fresh_within_hours_binds_the_hour_count() {
+        let w = OfferFilter::new().fresh_within_hours(24).build();
+        assert_eq!(
+            w.clause,
+            "WHERE scraped_at IS NOT NULL AND \
+             julianday(scraped_at) >= (julianday('now') - (?1 / 24.0))"
+        );
+        assert!(matches!(w.params[0], libsql::Value::Integer(24)));
+    }
+
+    #[test]
+    fn placeholders_keep_numbering_across_mixed_predicates() {
+        // destination(?1) + window(?2,?3) + fresh(?4) — numbering must stay sequential.
+        let w = OfferFilter::new()
+            .destination("tokyo_2026")
+            .departure_window(Some("2026-09-01"), Some("2026-09-30"), true)
+            .fresh_within_hours(48)
+            .build();
+        assert_eq!(
+            w.clause,
+            "WHERE destination = ?1 AND \
+             (departure_date IS NULL OR departure_date >= ?2) AND \
+             (departure_date IS NULL OR departure_date <= ?3) AND \
+             scraped_at IS NOT NULL AND \
+             julianday(scraped_at) >= (julianday('now') - (?4 / 24.0))"
+        );
+        assert_eq!(w.params.len(), 4);
     }
 }

@@ -134,82 +134,35 @@ fn is_iso_date(s: &str) -> bool {
         && b[8..10].iter().all(u8::is_ascii_digit)
 }
 
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
-}
-
-fn sql_quote_literal(v: &str) -> String {
-    format!("'{}'", sql_quote(v))
-}
-
-fn build_where(o: &QueryOffersArgs) -> String {
-    let mut conds: Vec<String> = Vec::new();
+/// Build the parameterized WHERE fragment + bound params via the shared DAL builder
+/// (same predicate order as before, so placeholder numbering is deterministic).
+fn build_where(o: &QueryOffersArgs) -> travel_db::repo::offers::OfferWhere {
+    let mut filter = travel_db::repo::offers::OfferFilter::new();
     if let Some(d) = &o.destination {
-        conds.push(format!("destination = {}", sql_quote_literal(d)));
+        filter = filter.destination(d);
     }
     if let Some(r) = &o.region {
-        conds.push(format!("region = {}", sql_quote_literal(r)));
+        filter = filter.region(r);
     }
-    if o.start.is_some() || o.end.is_some() {
-        if !o.include_undated {
-            conds.push("departure_date IS NOT NULL".to_string());
-        }
-        if let Some(s) = &o.start {
-            let cond = if o.include_undated {
-                format!(
-                    "(departure_date IS NULL OR departure_date >= {})",
-                    sql_quote_literal(s)
-                )
-            } else {
-                format!("departure_date >= {}", sql_quote_literal(s))
-            };
-            conds.push(cond);
-        }
-        if let Some(e) = &o.end {
-            let cond = if o.include_undated {
-                format!(
-                    "(departure_date IS NULL OR departure_date <= {})",
-                    sql_quote_literal(e)
-                )
-            } else {
-                format!("departure_date <= {}", sql_quote_literal(e))
-            };
-            conds.push(cond);
-        }
-    }
+    filter = filter.departure_window(o.start.as_deref(), o.end.as_deref(), o.include_undated);
     if let Some(csv) = &o.sources {
-        let list: Vec<String> = csv
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(sql_quote_literal)
-            .collect();
-        if !list.is_empty() {
-            conds.push(format!("source_id IN ({})", list.join(",")));
-        }
+        filter = filter.source_id_in_csv(csv);
     }
     if let Some(t) = &o.kind {
-        conds.push(format!("type = {}", sql_quote_literal(t)));
+        filter = filter.offer_type(t);
     }
     if let Some(p) = o.max_price {
-        conds.push(format!("price_per_person <= {p}"));
+        filter = filter.max_price(p);
     }
     if let Some(f) = o.fresh_hours {
-        conds.push("scraped_at IS NOT NULL".to_string());
-        conds.push(format!(
-            "julianday(scraped_at) >= (julianday('now') - ({} / 24.0))",
-            f
-        ));
+        filter = filter.fresh_within_hours(f);
     }
-    if conds.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conds.join(" AND "))
-    }
+    filter.build()
 }
 
-fn build_sql(o: &QueryOffersArgs) -> String {
-    let where_clause = build_where(o);
+/// Build the full SQL string + its bound params (placeholders in `?N` form).
+fn build_sql(o: &QueryOffersArgs) -> (String, Vec<libsql::Value>) {
+    let where_built = build_where(o);
     // Single-line SQL to match TS .trim().replace(/\s+/g, ' ') behavior.
     let mut sql = String::from(
         "SELECT id, source_id, type, name, price_per_person, currency, \
@@ -217,9 +170,9 @@ fn build_sql(o: &QueryOffersArgs) -> String {
          (julianday('now') - julianday(scraped_at)) * 24.0 AS age_hours \
          FROM offers",
     );
-    if !where_clause.is_empty() {
+    if !where_built.clause.is_empty() {
         sql.push(' ');
-        sql.push_str(&where_clause);
+        sql.push_str(&where_built.clause);
     }
     sql.push_str(
         " ORDER BY \
@@ -229,7 +182,7 @@ fn build_sql(o: &QueryOffersArgs) -> String {
          LIMIT ",
     );
     sql.push_str(&o.limit.to_string());
-    sql
+    (sql, where_built.params)
 }
 
 fn value_to_string(v: &Value) -> String {
@@ -239,6 +192,14 @@ fn value_to_string(v: &Value) -> String {
         Value::Real(f) => f.to_string(),
         Value::Text(s) => s.clone(),
         Value::Blob(b) => format!("<blob {} bytes>", b.len()),
+    }
+}
+
+/// Render one bound param for the `--sql` debug line (quotes text, bare ints).
+fn render_param(v: &Value) -> String {
+    match v {
+        Value::Text(s) => format!("'{s}'"),
+        other => value_to_string(other),
     }
 }
 
@@ -295,14 +256,20 @@ fn parse_iso_to_ms(raw: &str) -> Option<i64> {
 }
 
 pub async fn run(opts: &QueryOffersArgs) -> Result<(), String> {
-    let sql = build_sql(opts);
+    let (sql, params) = build_sql(opts);
     if opts.show_sql {
-        println!("SQL: {sql}\n");
+        // Parameterized SQL: values are bound (?N), not inlined. Show both for debugging.
+        println!("SQL: {sql}");
+        if !params.is_empty() {
+            let rendered: Vec<String> = params.iter().map(render_param).collect();
+            println!("PARAMS: [{}]", rendered.join(", "));
+        }
+        println!();
     }
 
     let conn = db::connect_read().await?;
     let mut rows = conn
-        .query(&sql, ())
+        .query(&sql, params)
         .await
         .map_err(|err| format!("failed to query offers from Turso: {err}"))?;
 
@@ -445,4 +412,97 @@ fn print_usage() {
          Output columns:\n  \
            SOURCE, TYPE, PRICE, DATE, AGE, NAME"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn param_texts(params: &[Value]) -> Vec<String> {
+        params
+            .iter()
+            .map(|v| match v {
+                Value::Text(s) => s.clone(),
+                Value::Integer(n) => n.to_string(),
+                _ => String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn build_where_empty_when_no_filters() {
+        let w = build_where(&QueryOffersArgs {
+            limit: DEFAULT_LIMIT,
+            ..Default::default()
+        });
+        assert_eq!(w.clause, "");
+        assert!(w.params.is_empty());
+    }
+
+    #[test]
+    fn build_where_orders_predicates_and_binds_values() {
+        let o = QueryOffersArgs {
+            destination: Some("osaka_2026".to_string()),
+            region: Some("kansai".to_string()),
+            start: Some("2026-02-24".to_string()),
+            end: Some("2026-02-28".to_string()),
+            sources: Some("besttour, liontravel".to_string()),
+            kind: Some("package".to_string()),
+            max_price: Some(40000),
+            fresh_hours: Some(24),
+            limit: 10,
+            include_undated: false,
+            show_sql: false,
+        };
+        let w = build_where(&o);
+        assert_eq!(
+            w.clause,
+            "WHERE destination = ?1 AND region = ?2 AND departure_date IS NOT NULL \
+             AND departure_date >= ?3 AND departure_date <= ?4 \
+             AND source_id IN (?5,?6) AND type = ?7 AND price_per_person <= ?8 \
+             AND scraped_at IS NOT NULL \
+             AND julianday(scraped_at) >= (julianday('now') - (?9 / 24.0))"
+        );
+        assert_eq!(
+            param_texts(&w.params),
+            vec![
+                "osaka_2026",
+                "kansai",
+                "2026-02-24",
+                "2026-02-28",
+                "besttour",
+                "liontravel",
+                "package",
+                "40000",
+                "24",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_where_include_undated_widens_bounds() {
+        let o = QueryOffersArgs {
+            start: Some("2026-09-01".to_string()),
+            include_undated: true,
+            limit: DEFAULT_LIMIT,
+            ..Default::default()
+        };
+        let w = build_where(&o);
+        assert_eq!(w.clause, "WHERE (departure_date IS NULL OR departure_date >= ?1)");
+        assert_eq!(param_texts(&w.params), vec!["2026-09-01"]);
+    }
+
+    #[test]
+    fn build_sql_wraps_where_with_select_order_limit() {
+        let o = QueryOffersArgs {
+            region: Some("kansai".to_string()),
+            limit: 7,
+            ..Default::default()
+        };
+        let (sql, params) = build_sql(&o);
+        assert!(sql.starts_with("SELECT id, source_id, type, name, price_per_person"));
+        assert!(sql.contains("FROM offers WHERE region = ?1 ORDER BY"));
+        assert!(sql.trim_end().ends_with("LIMIT 7"));
+        assert_eq!(param_texts(&params), vec!["kansai"]);
+    }
 }
