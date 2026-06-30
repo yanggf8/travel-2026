@@ -45,7 +45,7 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn columns_of(table: &str) -> Option<Vec<String>> {
+fn schema_stdout(table: &str) -> Option<String> {
     let (ok, stdout, stderr) = run(&["db", "schema", table]);
     if !ok {
         if is_credless(&stderr) {
@@ -54,10 +54,24 @@ fn columns_of(table: &str) -> Option<Vec<String>> {
         }
         panic!("db schema {table} failed: {}", stderr.trim());
     }
+    Some(stdout)
+}
+
+fn columns_of(table: &str) -> Option<Vec<String>> {
     Some(
-        stdout
+        schema_stdout(table)?
             .lines()
             .filter(|l| l.starts_with("  ") && !l.contains("columns)"))
+            .filter_map(|l| l.split_whitespace().next().map(|s| s.to_string()))
+            .collect(),
+    )
+}
+
+fn pk_columns_of(table: &str) -> Option<Vec<String>> {
+    Some(
+        schema_stdout(table)?
+            .lines()
+            .filter(|l| l.starts_with("  ") && l.contains("[PK"))
             .filter_map(|l| l.split_whitespace().next().map(|s| s.to_string()))
             .collect(),
     )
@@ -81,12 +95,17 @@ fn teardown(source_id: &str) {
     let _ = run(&[
         "db",
         "exec",
+        &format!("DELETE FROM ota_source_url_token WHERE source_id='{source_id}'"),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
         &format!("DELETE FROM ota_source_workflow WHERE source_id='{source_id}'"),
     ]);
 }
 
 #[tokio::test]
-async fn workflow_table_exists_with_seed_rows_and_get_only_check() {
+async fn workflow_and_url_token_schema_seed_rows_and_nav_kind_check() {
     let _lock = workflow_schema_test_lock();
     let (ok, _stdout, stderr) = run(&["db", "migrate"]);
     if !ok && is_credless(&stderr) {
@@ -114,6 +133,39 @@ async fn workflow_table_exists_with_seed_rows_and_get_only_check() {
             "ota_source_workflow must have column {col}; got {cols:?}"
         );
     }
+
+    let Some(token_cols) = columns_of("ota_source_url_token") else {
+        return;
+    };
+    for col in [
+        "source_id",
+        "product_type",
+        "placeholder",
+        "input_key",
+        "input_value",
+        "token_value",
+        "updated_at",
+    ] {
+        assert!(
+            token_cols.iter().any(|c| c == col),
+            "ota_source_url_token must have column {col}; got {token_cols:?}"
+        );
+    }
+
+    let Some(token_pk) = pk_columns_of("ota_source_url_token") else {
+        return;
+    };
+    assert_eq!(
+        token_pk,
+        vec![
+            "source_id".to_string(),
+            "product_type".to_string(),
+            "placeholder".to_string(),
+            "input_key".to_string(),
+            "input_value".to_string(),
+        ],
+        "ota_source_url_token must have 5-column PK"
+    );
 
     let expected = [
         (
@@ -168,11 +220,37 @@ async fn workflow_table_exists_with_seed_rows_and_get_only_check() {
         assert_eq!(got_settle_ms, settle_ms, "{source_id}/{product_type} settle_ms");
     }
 
-    let bad_source_id = format!("zzwf{}", nanos());
-    teardown(&bad_source_id);
+    for (source_id, product_type, placeholder, token_value) in [
+        ("besttour", "group_tour", "region_id", "295"),
+        ("settour", "fit", "region_id", "179900"),
+        ("settour", "fit", "dest_code", "NRT"),
+        ("eztravel", "fit", "dest_code", "TYO"),
+    ] {
+        let Some(got_token) = scalar(&format!(
+            "SELECT token_value FROM ota_source_url_token \
+             WHERE source_id='{source_id}' AND product_type='{product_type}' \
+               AND placeholder='{placeholder}' AND input_key='destination' AND input_value='tokyo'"
+        )) else {
+            return;
+        };
+        assert_eq!(
+            got_token, token_value,
+            "{source_id}/{product_type}/{placeholder}/destination/tokyo token"
+        );
+    }
+
+    let suffix = nanos();
+    let custom_source_id = format!("zzwf{suffix}custom");
+    let form_source_id = format!("zzwf{suffix}form");
+    teardown(&custom_source_id);
+    teardown(&form_source_id);
     let _g = Guard::new({
-        let bad_source_id = bad_source_id.clone();
-        move || teardown(&bad_source_id)
+        let custom_source_id = custom_source_id.clone();
+        let form_source_id = form_source_id.clone();
+        move || {
+            teardown(&custom_source_id);
+            teardown(&form_source_id);
+        }
     });
 
     let (ok, stdout, stderr) = run(&[
@@ -181,7 +259,32 @@ async fn workflow_table_exists_with_seed_rows_and_get_only_check() {
         &format!(
             "INSERT INTO ota_source_workflow \
              (source_id, product_type, nav_kind, url_template, settle_ms) \
-             VALUES ('{bad_source_id}', 'fit', 'form', 'https://example.com/', 0)"
+             VALUES ('{custom_source_id}', 'fit', 'custom:test', 'https://example.com/', 0)"
+        ),
+    ]);
+    if is_credless(&stderr) {
+        eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+        return;
+    }
+    assert!(
+        ok,
+        "nav_kind='custom:test' must be accepted; stdout={stdout} stderr={stderr}"
+    );
+
+    let Some(got_nav_kind) = scalar(&format!(
+        "SELECT nav_kind FROM ota_source_workflow WHERE source_id='{custom_source_id}' AND product_type='fit'"
+    )) else {
+        return;
+    };
+    assert_eq!(got_nav_kind, "custom:test");
+
+    let (ok, stdout, stderr) = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_source_workflow \
+             (source_id, product_type, nav_kind, url_template, settle_ms) \
+             VALUES ('{form_source_id}', 'fit', 'form', 'https://example.com/', 0)"
         ),
     ]);
     if is_credless(&stderr) {
@@ -194,4 +297,3 @@ async fn workflow_table_exists_with_seed_rows_and_get_only_check() {
         "nav_kind='form' must be rejected by CHECK; ok={ok} stdout={stdout} stderr={stderr}"
     );
 }
-

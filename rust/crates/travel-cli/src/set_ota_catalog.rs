@@ -1,4 +1,5 @@
-// `travel set-ota-source` / `set-ota-coverage` / `set-ota-region` — audited mutations of the
+// `travel set-ota-source` / `set-ota-coverage` / `set-ota-region` / `set-ota-workflow` /
+// `set-ota-url-token` — audited mutations of the
 // normalized OTA provider catalog (DB-centric provider architecture, spec 2026-06-29).
 //
 // These are the write surface that makes the DB the source of truth for the provider catalog
@@ -176,6 +177,169 @@ pub async fn run_set_region(args: &[String]) -> Result<(), String> {
     )
     .await?;
     println!("ota_source_region_codes upserted: {source_id}/{product_type}/{region_label}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// set-ota-workflow <source> <product_type> --nav <kind> --url-template <t>
+//                  [--capture-url-contains s] [--settle-ms N] [--settle-marker m] [--note ...]
+// ---------------------------------------------------------------------------
+pub async fn run_set_workflow(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "Usage:\n  travel set-ota-workflow <source> <product_type> --nav <kind> \
+             --url-template <t> [--capture-url-contains s] [--settle-ms N] [--settle-marker m] [--note ...]"
+        );
+        return Ok(());
+    }
+    let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    if pos.len() < 2 {
+        return Err(
+            "Error: set-ota-workflow requires <source> <product_type> --nav <kind> --url-template <t>"
+                .to_string(),
+        );
+    }
+    let source_id = pos[0].to_string();
+    let product_type = pos[1].to_string();
+    let nav = opt_val(args, "--nav")
+        .ok_or_else(|| "Error: set-ota-workflow requires --nav <kind>".to_string())?;
+    let url_template = opt_val(args, "--url-template")
+        .ok_or_else(|| "Error: set-ota-workflow requires --url-template <t>".to_string())?;
+    if url_template.trim().is_empty() {
+        return Err("Error: --url-template must be non-empty".to_string());
+    }
+    if nav != "get" && !nav.starts_with("custom:") {
+        return Err(format!(
+            "Error: --nav must be get or custom:<name> (got {nav})"
+        ));
+    }
+    let capture_url_contains = opt_val(args, "--capture-url-contains");
+    let settle_marker = opt_val(args, "--settle-marker");
+    let settle_ms_raw = opt_val(args, "--settle-ms");
+    let settle_ms: Option<i64> = if let Some(ref raw) = settle_ms_raw {
+        Some(
+            raw.parse::<i64>()
+                .map_err(|e| format!("Error: --settle-ms must be an integer (got {raw}: {e})"))?,
+        )
+    } else {
+        None
+    };
+    let note = opt_val(args, "--note");
+
+    let conn = db::connect_write().await?;
+    if !exists(&conn, "product_types", "code", &product_type).await? {
+        return Err(format!(
+            "Error: product_type '{product_type}' not in product_types (flight|hotel|fit|group_tour)"
+        ));
+    }
+
+    let now = now_db_datetime();
+    conn.execute(
+        "INSERT INTO ota_source_workflow \
+            (source_id, product_type, nav_kind, url_template, capture_url_contains, \
+             settle_marker, settle_ms, agent_extraction_note, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, 0), ?8, ?9) \
+         ON CONFLICT(source_id, product_type) DO UPDATE SET \
+            nav_kind = COALESCE(?3, ota_source_workflow.nav_kind), \
+            url_template = COALESCE(?4, ota_source_workflow.url_template), \
+            capture_url_contains = COALESCE(?5, ota_source_workflow.capture_url_contains), \
+            settle_marker = COALESCE(?6, ota_source_workflow.settle_marker), \
+            settle_ms = COALESCE(?7, ota_source_workflow.settle_ms), \
+            agent_extraction_note = COALESCE(?8, ota_source_workflow.agent_extraction_note), \
+            updated_at = ?9",
+        libsql::params![
+            source_id.clone(),
+            product_type.clone(),
+            nav.clone(),
+            url_template.clone(),
+            capture_url_contains.clone(),
+            settle_marker.clone(),
+            settle_ms,
+            note.clone(),
+            now,
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    record_catalog_run(
+        &conn,
+        "set-ota-workflow",
+        &format!("{source_id}/{product_type}"),
+    )
+    .await?;
+    println!("ota_source_workflow upserted: {source_id}/{product_type}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// set-ota-url-token <source> <product_type> <placeholder> <input_key> <input_value> <token_value>
+// ---------------------------------------------------------------------------
+pub async fn run_set_url_token(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "Usage:\n  travel set-ota-url-token <source> <product_type> <placeholder> \
+             <input_key> <input_value> <token_value>"
+        );
+        return Ok(());
+    }
+    let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    if pos.len() < 6 {
+        return Err(
+            "Error: set-ota-url-token requires <source> <product_type> <placeholder> \
+             <input_key> <input_value> <token_value>"
+                .to_string(),
+        );
+    }
+    let source_id = pos[0].to_string();
+    let product_type = pos[1].to_string();
+    let placeholder = pos[2].to_string();
+    let input_key = pos[3].to_string();
+    let input_value = pos[4].to_string();
+    let token_value = pos[5].to_string();
+
+    if input_key != "destination" {
+        return Err(format!(
+            "Error: input_key must be destination (v1 only; got {input_key})"
+        ));
+    }
+
+    let conn = db::connect_write().await?;
+    if !exists(&conn, "product_types", "code", &product_type).await? {
+        return Err(format!(
+            "Error: product_type '{product_type}' not in product_types (flight|hotel|fit|group_tour)"
+        ));
+    }
+
+    let now = now_db_datetime();
+    conn.execute(
+        "INSERT INTO ota_source_url_token \
+            (source_id, product_type, placeholder, input_key, input_value, token_value, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT(source_id, product_type, placeholder, input_key, input_value) DO UPDATE SET \
+            token_value = ?6, updated_at = ?7",
+        libsql::params![
+            source_id.clone(),
+            product_type.clone(),
+            placeholder.clone(),
+            input_key.clone(),
+            input_value.clone(),
+            token_value.clone(),
+            now,
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    record_catalog_run(
+        &conn,
+        "set-ota-url-token",
+        &format!("{source_id}/{product_type}"),
+    )
+    .await?;
+    println!(
+        "ota_source_url_token upserted: {source_id}/{product_type}/{placeholder}/{input_key}/{input_value}"
+    );
     Ok(())
 }
 

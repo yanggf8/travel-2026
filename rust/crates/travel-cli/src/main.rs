@@ -24,7 +24,7 @@ mod promote_offers;
 mod plan_resolver;
 mod plans;
 mod scrape_parser;
-mod set_ota_catalog; // set-ota-source/coverage/region audited catalog mutations
+mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-token catalog mutations
 mod set_activity;
 mod set_activity_poi;
 mod set_airport_transfer;
@@ -174,6 +174,12 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-ota-region" => {
             set_ota_catalog::run_set_region(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "set-ota-workflow" => {
+            set_ota_catalog::run_set_workflow(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "set-ota-url-token" => {
+            set_ota_catalog::run_set_url_token(rest).await
         }
         [cmd, rest @ ..] if cmd == "ota-status" => {
             ota_status::run(rest).await

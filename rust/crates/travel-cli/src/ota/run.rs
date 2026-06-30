@@ -14,7 +14,12 @@ const PARAM_FLAGS: &[&str] = &[
     "--pax",
     "--region-code",
     "--region-label",
+    "--destination",
 ];
+
+const RUN_USAGE: &str = "Usage: travel ota run --capture-only <source_id> <product_type> \
+             [--destination <slug>] [--depart YYYY-MM-DD] [--return YYYY-MM-DD] [--nights N] \
+             [--pax N] [--region-code C] [--region-label L]";
 
 /// Pure URL template interpolation: replace every `{name}` from `params`.
 pub fn resolve_url(template: &str, params: &BTreeMap<String, String>) -> Result<String, String> {
@@ -77,22 +82,12 @@ fn insert_param(map: &mut BTreeMap<String, String>, key: &str, value: String) ->
 
 pub async fn run(args: &[String]) -> Result<(), String> {
     if !args.iter().any(|a| a == "--capture-only") {
-        return Err(
-            "Usage: travel ota run --capture-only <source_id> <product_type> \
-             [--depart YYYY-MM-DD] [--return YYYY-MM-DD] [--nights N] [--pax N] \
-             [--region-code C] [--region-label L]"
-                .to_string(),
-        );
+        return Err(RUN_USAGE.to_string());
     }
 
     let positional = common::positionals(args, PARAM_FLAGS);
     if positional.len() < 2 {
-        return Err(
-            "Usage: travel ota run --capture-only <source_id> <product_type> \
-             [--depart YYYY-MM-DD] [--return YYYY-MM-DD] [--nights N] [--pax N] \
-             [--region-code C] [--region-label L]"
-                .to_string(),
-        );
+        return Err(RUN_USAGE.to_string());
     }
     let source_id = positional[0].as_str();
     let product_type = positional[1].as_str();
@@ -129,6 +124,11 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             "--region-label" => {
                 let v = args.get(i + 1).ok_or("missing value for --region-label")?;
                 params.insert("region_label".to_string(), v.clone());
+                i += 2;
+            }
+            "--destination" => {
+                let v = args.get(i + 1).ok_or("missing value for --destination")?;
+                params.insert("destination".to_string(), v.clone());
                 i += 2;
             }
             _ => i += 1,
@@ -171,83 +171,102 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             format!("no workflow row for ({source_id},{product_type}); add one")
         })?;
 
-    let mut map: BTreeMap<String, String> = ota_jobs::get_params(&conn, &job_id)
-        .await?
-        .into_iter()
-        .collect();
+    match workflow.nav_kind.as_str() {
+        "get" => {
+            let mut map: BTreeMap<String, String> = ota_jobs::get_params(&conn, &job_id)
+                .await?
+                .into_iter()
+                .collect();
 
-    if let Some(depart) = map.get("depart_date").cloned() {
-        insert_param(&mut map, "depart", depart)?;
+            if let Some(depart) = map.get("depart_date").cloned() {
+                insert_param(&mut map, "depart", depart)?;
+            }
+            if let Some(ret) = map.get("return_date").cloned() {
+                insert_param(&mut map, "return", ret)?;
+            }
+
+            for placeholder in find_placeholders(&workflow.url_template) {
+                if map.contains_key(&placeholder) {
+                    continue;
+                }
+                let destination = map
+                    .get("destination")
+                    .ok_or("missing --destination for token resolution")?;
+                let token = ota_source_workflow::url_token(
+                    &conn,
+                    source_id,
+                    product_type,
+                    &placeholder,
+                    "destination",
+                    destination,
+                )
+                .await?
+                .ok_or_else(|| {
+                    format!(
+                        "no url-token for placeholder {placeholder} (source={source_id}, destination={destination})"
+                    )
+                })?;
+                insert_param(&mut map, &placeholder, token)?;
+            }
+
+            let url = resolve_url(&workflow.url_template, &map)?;
+
+            let gwebcdb_dir =
+                std::env::var("GWEBCDB_DIR").unwrap_or_else(|_| "/home/yanggf/b/gwebcdb".to_string());
+
+            let nav_out = Command::new("python")
+                .current_dir(&gwebcdb_dir)
+                .arg("bridge/navigate.py")
+                .arg(&url)
+                .output()
+                .map_err(|e| format!("failed to run navigate.py: {e}"))?;
+            if !nav_out.status.success() {
+                return Err(format!(
+                    "navigate.py failed: {}",
+                    String::from_utf8_lossy(&nav_out.stderr)
+                ));
+            }
+
+            thread::sleep(Duration::from_millis(workflow.settle_ms as u64));
+
+            let mut capture_cmd = Command::new("python");
+            capture_cmd
+                .current_dir(&gwebcdb_dir)
+                .arg("bridge/ota_capture.py")
+                .arg("--source")
+                .arg(source_id);
+            if let Some(ref contains) = workflow.capture_url_contains {
+                capture_cmd.arg("--url-contains").arg(contains);
+            }
+            let capture_out = capture_cmd
+                .output()
+                .map_err(|e| format!("failed to run ota_capture.py: {e}"))?;
+            if !capture_out.status.success() {
+                return Err(format!(
+                    "ota_capture.py failed: {}",
+                    String::from_utf8_lossy(&capture_out.stderr)
+                ));
+            }
+
+            let stdout = String::from_utf8_lossy(&capture_out.stdout);
+            let capture_id = stdout
+                .lines()
+                .find_map(|l| l.strip_prefix("capture_id\t").map(|v| v.trim().to_string()))
+                .ok_or_else(|| format!("ota_capture.py did not print capture_id; stdout={stdout}"))?;
+
+            println!("job_id\t{}", claimed.job_id);
+            println!("claim_token\t{}", claimed.claim_token);
+            println!("capture_id\t{capture_id}");
+            println!("source_id\t{source_id}");
+            println!("product_type\t{product_type}");
+            println!(
+                "agent_extraction_note\t{}",
+                workflow.agent_extraction_note.as_deref().unwrap_or("")
+            );
+            Ok(())
+        }
+        other => Err(format!("nav_kind '{other}' has no registered strategy")),
     }
-    if let Some(ret) = map.get("return_date").cloned() {
-        insert_param(&mut map, "return", ret)?;
-    }
-
-    if workflow.url_template.contains("{region_id}") {
-        let region_label = map
-            .get("region_label")
-            .ok_or("missing region_label for {region_id} lookup")?;
-        let rid = ota_source_workflow::region_id(&conn, source_id, product_type, region_label)
-            .await?
-            .ok_or_else(|| format!("no region_id for region_label={region_label}"))?;
-        insert_param(&mut map, "region_id", rid)?;
-    }
-
-    let url = resolve_url(&workflow.url_template, &map)?;
-
-    let gwebcdb_dir =
-        std::env::var("GWEBCDB_DIR").unwrap_or_else(|_| "/home/yanggf/b/gwebcdb".to_string());
-
-    let nav_out = Command::new("python")
-        .current_dir(&gwebcdb_dir)
-        .arg("bridge/navigate.py")
-        .arg(&url)
-        .output()
-        .map_err(|e| format!("failed to run navigate.py: {e}"))?;
-    if !nav_out.status.success() {
-        return Err(format!(
-            "navigate.py failed: {}",
-            String::from_utf8_lossy(&nav_out.stderr)
-        ));
-    }
-
-    thread::sleep(Duration::from_millis(workflow.settle_ms as u64));
-
-    let mut capture_cmd = Command::new("python");
-    capture_cmd
-        .current_dir(&gwebcdb_dir)
-        .arg("bridge/ota_capture.py")
-        .arg("--source")
-        .arg(source_id);
-    if let Some(ref contains) = workflow.capture_url_contains {
-        capture_cmd.arg("--url-contains").arg(contains);
-    }
-    let capture_out = capture_cmd
-        .output()
-        .map_err(|e| format!("failed to run ota_capture.py: {e}"))?;
-    if !capture_out.status.success() {
-        return Err(format!(
-            "ota_capture.py failed: {}",
-            String::from_utf8_lossy(&capture_out.stderr)
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&capture_out.stdout);
-    let capture_id = stdout
-        .lines()
-        .find_map(|l| l.strip_prefix("capture_id\t").map(|v| v.trim().to_string()))
-        .ok_or_else(|| format!("ota_capture.py did not print capture_id; stdout={stdout}"))?;
-
-    println!("job_id\t{}", claimed.job_id);
-    println!("claim_token\t{}", claimed.claim_token);
-    println!("capture_id\t{capture_id}");
-    println!("source_id\t{source_id}");
-    println!("product_type\t{product_type}");
-    println!(
-        "agent_extraction_note\t{}",
-        workflow.agent_extraction_note.as_deref().unwrap_or("")
-    );
-    Ok(())
 }
 
 #[cfg(test)]
@@ -319,5 +338,64 @@ mod tests {
             resolve_url(template, &params).expect("static url"),
             template
         );
+    }
+
+    #[test]
+    fn standard_input_aliases_still_fill_depart_and_return_placeholders() {
+        let mut params = map(&[
+            ("depart_date", "2026-09-01"),
+            ("return_date", "2026-09-05"),
+            ("pax", "2"),
+        ]);
+
+        if let Some(depart) = params.get("depart_date").cloned() {
+            insert_param(&mut params, "depart", depart).expect("depart alias");
+        }
+        if let Some(ret) = params.get("return_date").cloned() {
+            insert_param(&mut params, "return", ret).expect("return alias");
+        }
+
+        assert_eq!(
+            resolve_url(
+                "https://example.com/search?depart={depart}&return={return}&pax={pax}",
+                &params
+            )
+            .expect("aliased url"),
+            "https://example.com/search?depart=2026-09-01&return=2026-09-05&pax=2"
+        );
+    }
+
+    #[test]
+    fn token_fill_uses_destination_derived_values_in_param_map() {
+        let mut params = map(&[
+            ("destination", "tokyo"),
+            ("depart", "2026-09-01"),
+            ("return", "2026-09-05"),
+            ("pax", "2"),
+        ]);
+
+        insert_param(&mut params, "dest_code", "NRT".to_string()).expect("dest_code token");
+        insert_param(&mut params, "region_id", "179900".to_string()).expect("region_id token");
+
+        assert_eq!(
+            resolve_url(
+                "https://example.com/search?dest={dest_code}&region={region_id}&depart={depart}&return={return}&pax={pax}",
+                &params
+            )
+            .expect("token-filled url"),
+            "https://example.com/search?dest=NRT&region=179900&depart=2026-09-01&return=2026-09-05&pax=2"
+        );
+    }
+
+    #[test]
+    fn insert_param_rejects_conflicting_token_value() {
+        let mut params = map(&[("dest_code", "TYO")]);
+
+        let err = insert_param(&mut params, "dest_code", "NRT".to_string())
+            .expect_err("conflicting token should fail");
+
+        assert!(err.contains("dest_code"), "err={err}");
+        assert!(err.contains("TYO"), "err={err}");
+        assert!(err.contains("NRT"), "err={err}");
     }
 }

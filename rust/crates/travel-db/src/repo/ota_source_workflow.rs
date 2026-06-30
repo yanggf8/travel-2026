@@ -66,3 +66,33 @@ pub async fn region_id(
     };
     Ok(Some(row.get(0).map_err(|e| e.to_string())?))
 }
+
+/// Look up a URL-template placeholder token from a standard input key/value pair.
+pub async fn url_token(
+    conn: &Connection,
+    source_id: &str,
+    product_type: &str,
+    placeholder: &str,
+    input_key: &str,
+    input_value: &str,
+) -> Result<Option<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT token_value FROM ota_source_url_token \
+             WHERE source_id = ?1 AND product_type = ?2 AND placeholder = ?3 \
+               AND input_key = ?4 AND input_value = ?5",
+            libsql::params![
+                source_id.to_string(),
+                product_type.to_string(),
+                placeholder.to_string(),
+                input_key.to_string(),
+                input_value.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(row) = rows.next().await.map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    Ok(Some(row.get(0).map_err(|e| e.to_string())?))
+}

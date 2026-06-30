@@ -3,8 +3,8 @@
 
 use std::net::{SocketAddr, TcpStream};
 use std::process::Command;
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 mod common;
 use common::Guard;
@@ -19,13 +19,6 @@ fn run_capture_only_test_lock() -> std::sync::MutexGuard<'static, ()> {
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
 }
 
 fn is_credless(stderr: &str) -> bool {
@@ -86,78 +79,37 @@ fn scalar(sql: &str) -> Option<String> {
         .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
 }
 
-fn teardown() {
+fn teardown_job(job_id: &str, capture_id: &str) {
     let _ = run(&[
         "db",
         "exec",
-        "DELETE FROM offers WHERE produced_by_job_id IN \
-         (SELECT job_id FROM ota_jobs WHERE source_id='zztest')",
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        "DELETE FROM ota_observations WHERE job_id IN \
-         (SELECT job_id FROM ota_jobs WHERE source_id='zztest')",
+        &format!("DELETE FROM offers WHERE produced_by_job_id='{job_id}'"),
     ]);
     let _ = run(&[
         "db",
         "exec",
-        "DELETE FROM ota_attempts WHERE job_id IN \
-         (SELECT job_id FROM ota_jobs WHERE source_id='zztest')",
+        &format!("DELETE FROM ota_observations WHERE job_id='{job_id}'"),
     ]);
     let _ = run(&[
         "db",
         "exec",
-        "DELETE FROM ota_job_params WHERE job_id IN \
-         (SELECT job_id FROM ota_jobs WHERE source_id='zztest')",
-    ]);
-    let _ = run(&["db", "exec", "DELETE FROM ota_jobs WHERE source_id='zztest'"]);
-    let _ = run(&[
-        "db",
-        "exec",
-        "DELETE FROM captures WHERE source_id='zztest' AND url LIKE 'https://example.com%'",
+        &format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"),
     ]);
     let _ = run(&[
         "db",
         "exec",
-        "DELETE FROM ota_source_workflow WHERE source_id='zztest'",
+        &format!("DELETE FROM ota_job_params WHERE job_id='{job_id}'"),
     ]);
+    let _ = run(&["db", "exec", &format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'")]);
     let _ = run(&[
         "db",
         "exec",
-        "DELETE FROM ota_source_coverage WHERE source_id='zztest'",
+        &format!("DELETE FROM captures WHERE capture_id='{capture_id}'"),
     ]);
-    let _ = run(&["db", "exec", "DELETE FROM ota_sources WHERE source_id='zztest'"]);
-}
-
-fn seed_workflow() {
-    let now = "2026-06-30T10:30:00Z";
-    let (ok, _stdout, stderr) = run(&[
-        "db",
-        "exec",
-        &format!(
-            "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
-             VALUES ('zztest', 'ZZ Test', 'active', '{now}')"
-        ),
-    ]);
-    assert!(ok, "seed ota_sources failed: {stderr}");
-
-    let (ok, _stdout, stderr) = run(&[
-        "db",
-        "exec",
-        &format!(
-            "INSERT INTO ota_source_workflow \
-             (source_id, product_type, nav_kind, url_template, capture_url_contains, \
-              settle_ms, agent_extraction_note, updated_at) \
-             VALUES ('zztest', 'fit', 'get', 'https://example.com/', 'example.com', \
-              0, 'zztest capture-only simple page', '{now}')"
-        ),
-    ]);
-    assert!(ok, "seed ota_source_workflow failed: {stderr}");
 }
 
 #[tokio::test]
-async fn run_capture_only_claims_job_captures_page_and_writes_no_offers() {
+async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
     let _lock = run_capture_only_test_lock();
 
     let (ok, _stdout, stderr) = run(&["db", "migrate"]);
@@ -172,56 +124,138 @@ async fn run_capture_only_claims_job_captures_page_and_writes_no_offers() {
         return;
     }
 
-    teardown();
-    let _g = Guard::new(teardown);
-    seed_workflow();
-
-    let (ok, stdout, stderr) = run(&["ota", "run", "--capture-only", "zztest", "fit"]);
-    if !ok && is_credless(&stderr) {
-        eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+    // The capture step shells out to gwebcdb's bridge/ota_capture.py, which reads TURSO_URL /
+    // TURSO_TOKEN directly from the environment (it has no .env loader — see CLAUDE.md "OTA
+    // scraping"). The Rust CLI uses TRAVEL_TURSO_* and can be credentialed without those, so gate
+    // on them explicitly and skip cleanly rather than fail when only the CLI creds are present.
+    if std::env::var("TURSO_URL").is_err() || std::env::var("TURSO_TOKEN").is_err() {
+        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for ota_capture.py)");
         return;
     }
-    assert!(ok, "ota run --capture-only failed: stdout={stdout} stderr={stderr}");
 
-    let job_id = field(&stdout, "job_id").expect("stdout must include job_id");
-    let claim_token = field(&stdout, "claim_token").expect("stdout must include claim_token");
-    let capture_id = field(&stdout, "capture_id").expect("stdout must include capture_id");
+    let produced: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let _g = Guard::new({
+        let produced = Arc::clone(&produced);
+        move || {
+            let rows = produced
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            for (job_id, capture_id) in rows {
+                teardown_job(&job_id, &capture_id);
+            }
+        }
+    });
 
-    assert!(!job_id.trim().is_empty(), "job_id must be non-empty");
-    assert!(!claim_token.trim().is_empty(), "claim_token must be non-empty");
-    assert!(!capture_id.trim().is_empty(), "capture_id must be non-empty");
-    assert!(stdout.contains("source_id\tzztest"), "stdout={stdout}");
-    assert!(stdout.contains("product_type\tfit"), "stdout={stdout}");
-    assert!(
-        stdout.contains("agent_extraction_note\tzztest capture-only simple page"),
-        "stdout={stdout}"
-    );
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("besttour", "group_tour", &["295"]),
+        ("settour", "fit", &["NRT", "179900"]),
+        ("eztravel", "fit", &["TYO"]),
+    ];
 
-    let Some(captures) = count(&format!(
-        "SELECT count(*) AS n FROM captures WHERE capture_id='{capture_id}' AND source_id='zztest'"
-    )) else {
-        return;
-    };
-    assert_eq!(captures, 1, "capture row must exist for capture_id={capture_id}");
+    for (source_id, product_type, expected_url_fragments) in cases {
+        let (ok, stdout, stderr) = run(&[
+            "ota",
+            "run",
+            "--capture-only",
+            source_id,
+            product_type,
+            "--destination",
+            "tokyo",
+            "--depart",
+            "2026-09-01",
+            "--return",
+            "2026-09-05",
+            "--pax",
+            "2",
+        ]);
+        if !ok && is_credless(&stderr) {
+            eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+            return;
+        }
 
-    let Some(status) = scalar(&format!(
-        "SELECT status FROM ota_jobs WHERE job_id='{job_id}'"
-    )) else {
-        return;
-    };
-    assert_eq!(status, "claimed", "capture-only job should remain claimed");
+        let combined = format!("{stdout}{stderr}");
+        let combined_lower = combined.to_lowercase();
+        assert!(
+            !combined_lower.contains("missing placeholder"),
+            "{source_id}/{product_type} must not fail URL interpolation; output={combined}"
+        );
+        assert!(
+            !combined_lower.contains("no token"),
+            "{source_id}/{product_type} must not fail URL-token lookup; output={combined}"
+        );
+        assert!(
+            !combined_lower.contains("missing --destination"),
+            "{source_id}/{product_type} received --destination tokyo; output={combined}"
+        );
+        assert!(
+            ok,
+            "ota run --capture-only {source_id} {product_type} failed: stdout={stdout} stderr={stderr}"
+        );
 
-    let Some(db_token) = scalar(&format!(
-        "SELECT claim_token FROM ota_jobs WHERE job_id='{job_id}'"
-    )) else {
-        return;
-    };
-    assert_eq!(db_token, claim_token, "printed token must match job row token");
+        let job_id = field(&stdout, "job_id").expect("stdout must include job_id");
+        let claim_token = field(&stdout, "claim_token").expect("stdout must include claim_token");
+        let capture_id = field(&stdout, "capture_id").expect("stdout must include capture_id");
 
-    let Some(offers) = count(&format!(
-        "SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"
-    )) else {
-        return;
-    };
-    assert_eq!(offers, 0, "capture-only must not write offers");
+        produced
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((job_id.clone(), capture_id.clone()));
+
+        assert!(!job_id.trim().is_empty(), "job_id must be non-empty");
+        assert!(!claim_token.trim().is_empty(), "claim_token must be non-empty");
+        assert!(!capture_id.trim().is_empty(), "capture_id must be non-empty");
+        assert!(
+            stdout.contains(&format!("source_id\t{source_id}")),
+            "stdout={stdout}"
+        );
+        assert!(
+            stdout.contains(&format!("product_type\t{product_type}")),
+            "stdout={stdout}"
+        );
+
+        let Some(captures) = count(&format!(
+            "SELECT count(*) AS n FROM captures WHERE capture_id='{capture_id}' AND source_id='{source_id}'"
+        )) else {
+            return;
+        };
+        assert_eq!(captures, 1, "capture row must exist for capture_id={capture_id}");
+
+        let Some(capture_url) = scalar(&format!(
+            "SELECT url FROM captures WHERE capture_id='{capture_id}'"
+        )) else {
+            return;
+        };
+        assert!(
+            !capture_url.contains('{') && !capture_url.contains('}'),
+            "resolved capture URL must not contain unresolved placeholders; url={capture_url}"
+        );
+        for fragment in *expected_url_fragments {
+            assert!(
+                capture_url.contains(fragment),
+                "{source_id}/{product_type} capture URL should include token fragment {fragment}; url={capture_url}"
+            );
+        }
+
+        let Some(status) = scalar(&format!(
+            "SELECT status FROM ota_jobs WHERE job_id='{job_id}'"
+        )) else {
+            return;
+        };
+        assert_eq!(status, "claimed", "capture-only job should remain claimed");
+
+        let Some(db_token) = scalar(&format!(
+            "SELECT claim_token FROM ota_jobs WHERE job_id='{job_id}'"
+        )) else {
+            return;
+        };
+        assert_eq!(db_token, claim_token, "printed token must match job row token");
+
+        let Some(offers) = count(&format!(
+            "SELECT count(*) AS n FROM offers WHERE produced_by_job_id='{job_id}'"
+        )) else {
+            return;
+        };
+        assert_eq!(offers, 0, "capture-only must not write offers");
+    }
 }

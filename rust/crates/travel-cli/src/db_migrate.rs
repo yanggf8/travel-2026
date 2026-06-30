@@ -95,6 +95,92 @@ async fn table_exists(conn: &libsql::Connection, name: &str) -> bool {
     matches!(rows.next().await, Ok(Some(_)))
 }
 
+/// Return the CREATE TABLE DDL for `name` from sqlite_master (None if absent).
+async fn table_ddl(conn: &libsql::Connection, name: &str) -> Option<String> {
+    let sql = format!("SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}'");
+    let Ok(mut rows) = conn.query(&sql, ()).await else {
+        return None;
+    };
+    let row = rows.next().await.ok()??;
+    row.get::<String>(0).ok()
+}
+
+/// Widen `ota_job_params.param_key` CHECK to include `destination` (idempotent table-rebuild).
+async fn migrate_ota_job_params_destination(conn: &libsql::Connection) -> Result<(), String> {
+    if !table_exists(conn, "ota_job_params").await {
+        return Ok(());
+    }
+    if table_ddl(conn, "ota_job_params")
+        .await
+        .is_some_and(|ddl| ddl.contains("destination"))
+    {
+        return Ok(());
+    }
+    exec(
+        conn,
+        r#"CREATE TABLE ota_job_params_new (
+  job_id TEXT NOT NULL,
+  param_key TEXT NOT NULL CHECK(param_key IN ('depart_date','return_date','nights','pax','region_code','region_label','destination')),
+  param_value TEXT NOT NULL,
+  PRIMARY KEY (job_id, param_key)
+)"#,
+    )
+    .await?;
+    exec(
+        conn,
+        "INSERT INTO ota_job_params_new SELECT * FROM ota_job_params",
+    )
+    .await?;
+    exec(conn, "DROP TABLE ota_job_params").await?;
+    exec(
+        conn,
+        "ALTER TABLE ota_job_params_new RENAME TO ota_job_params",
+    )
+    .await?;
+    Ok(())
+}
+
+/// Widen `ota_source_workflow.nav_kind` CHECK to allow `custom:%` (idempotent table-rebuild).
+async fn migrate_ota_source_workflow_nav_kind(conn: &libsql::Connection) -> Result<(), String> {
+    if !table_exists(conn, "ota_source_workflow").await {
+        return Ok(());
+    }
+    if table_ddl(conn, "ota_source_workflow")
+        .await
+        .is_some_and(|ddl| ddl.contains("custom:%"))
+    {
+        return Ok(());
+    }
+    exec(
+        conn,
+        r#"CREATE TABLE ota_source_workflow_new (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  nav_kind TEXT NOT NULL DEFAULT 'get' CHECK(nav_kind = 'get' OR nav_kind LIKE 'custom:%'),
+  url_template TEXT NOT NULL,
+  capture_url_contains TEXT,
+  settle_marker TEXT,
+  settle_ms INTEGER NOT NULL DEFAULT 0,
+  agent_extraction_note TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (source_id, product_type)
+)"#,
+    )
+    .await?;
+    exec(
+        conn,
+        "INSERT INTO ota_source_workflow_new SELECT * FROM ota_source_workflow",
+    )
+    .await?;
+    exec(conn, "DROP TABLE ota_source_workflow").await?;
+    exec(
+        conn,
+        "ALTER TABLE ota_source_workflow_new RENAME TO ota_source_workflow",
+    )
+    .await?;
+    Ok(())
+}
+
 /// SQL string-literal escaper (single quotes doubled), matching the TS `esc`.
 fn sq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -736,12 +822,13 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         &conn,
         r#"CREATE TABLE IF NOT EXISTS ota_job_params (
   job_id TEXT NOT NULL,
-  param_key TEXT NOT NULL CHECK(param_key IN ('depart_date','return_date','nights','pax','region_code','region_label')),
+  param_key TEXT NOT NULL CHECK(param_key IN ('depart_date','return_date','nights','pax','region_code','region_label','destination')),
   param_value TEXT NOT NULL,
   PRIMARY KEY (job_id, param_key)
 )"#,
     )
     .await;
+    migrate_ota_job_params_destination(&conn).await?;
     exec_create(
         &conn,
         r#"CREATE TABLE IF NOT EXISTS ota_attempts (
@@ -789,7 +876,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         r#"CREATE TABLE IF NOT EXISTS ota_source_workflow (
   source_id TEXT NOT NULL,
   product_type TEXT NOT NULL,
-  nav_kind TEXT NOT NULL DEFAULT 'get' CHECK(nav_kind IN ('get')),
+  nav_kind TEXT NOT NULL DEFAULT 'get' CHECK(nav_kind = 'get' OR nav_kind LIKE 'custom:%'),
   url_template TEXT NOT NULL,
   capture_url_contains TEXT,
   settle_marker TEXT,
@@ -800,7 +887,23 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 )"#,
     )
     .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_source_url_token (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  placeholder TEXT NOT NULL,
+  input_key TEXT NOT NULL,
+  input_value TEXT NOT NULL,
+  token_value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (source_id, product_type, placeholder, input_key, input_value)
+)"#,
+    )
+    .await;
+    migrate_ota_source_workflow_nav_kind(&conn).await?;
     seed_ota_workflow(&conn).await;
+    seed_ota_url_token(&conn).await;
 
     // OTA offer provenance (rust-first OTA architecture, spec 2026-06-29).
     add_column(&conn, "ALTER TABLE offers ADD COLUMN capture_id TEXT;").await;
@@ -1384,6 +1487,12 @@ async fn seed_ota_coverage(conn: &libsql::Connection) {
 async fn seed_ota_workflow(conn: &libsql::Connection) {
     const WORKFLOW_SEED: &str = include_str!("../../../../scripts/seed/ota_source_workflow.seed.sql");
     run_seed_file_stmts(conn, WORKFLOW_SEED).await;
+}
+
+async fn seed_ota_url_token(conn: &libsql::Connection) {
+    const URL_TOKEN_SEED: &str =
+        include_str!("../../../../scripts/seed/ota_source_url_token.seed.sql");
+    run_seed_file_stmts(conn, URL_TOKEN_SEED).await;
 }
 
 /// Run a checked-in seed SQL file statement-by-statement, insert-if-absent. Strips line comments

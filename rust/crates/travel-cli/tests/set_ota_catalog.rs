@@ -54,6 +54,12 @@ fn teardown(sid: &str) {
     let _ = run(&["db", "exec", &format!("DELETE FROM catalog_runs WHERE command_summary LIKE '{sid}%'")]);
 }
 
+fn teardown_tier1(sid: &str) {
+    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_url_token WHERE source_id='{sid}'")]);
+    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_workflow WHERE source_id='{sid}'")]);
+    teardown(sid);
+}
+
 #[tokio::test]
 async fn set_coverage_proven_requires_date_and_method() {
     let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -111,4 +117,211 @@ async fn set_coverage_proven_requires_date_and_method() {
         return;
     };
     assert!(audit.parse::<i64>().unwrap_or(0) >= 1, "a catalog_runs audit row was written");
+}
+
+#[tokio::test]
+async fn set_ota_workflow_round_trip_writes_row_and_audit() {
+    let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let sid = format!("zztest{}", nanos());
+    teardown_tier1(&sid);
+    let _g = Guard::new({
+        let sid = sid.clone();
+        move || teardown_tier1(&sid)
+    });
+
+    let (ok, _o, err) = run(&["set-ota-source", &sid, "--name", "ZZ Test", "--status", "active"]);
+    assert!(ok, "set-ota-source should succeed; err={err}");
+
+    let template = "https://example.com/search?dest={dest_code}&depart={depart}&return={return}";
+    let (ok, stdout, stderr) = run(&[
+        "set-ota-workflow",
+        &sid,
+        "fit",
+        "--nav",
+        "get",
+        "--url-template",
+        template,
+        "--capture-url-contains",
+        "example.com/search",
+        "--settle-ms",
+        "25000",
+        "--settle-marker",
+        "ready",
+        "--note",
+        "zz workflow note",
+    ]);
+    assert!(
+        ok,
+        "set-ota-workflow should succeed; stdout={stdout} stderr={stderr}"
+    );
+
+    assert_eq!(
+        scalar(&format!(
+            "SELECT nav_kind FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
+        ))
+        .as_deref(),
+        Some("get"),
+        "nav_kind landed"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT url_template FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
+        ))
+        .as_deref(),
+        Some(template),
+        "url_template landed"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT capture_url_contains FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
+        ))
+        .as_deref(),
+        Some("example.com/search"),
+        "capture_url_contains landed"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT settle_marker FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
+        ))
+        .as_deref(),
+        Some("ready"),
+        "settle_marker landed"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT settle_ms FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
+        ))
+        .as_deref(),
+        Some("25000"),
+        "settle_ms landed"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT agent_extraction_note FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
+        ))
+        .as_deref(),
+        Some("zz workflow note"),
+        "agent_extraction_note landed"
+    );
+
+    let Some(audit) = scalar(&format!(
+        "SELECT count(*) AS n FROM catalog_runs \
+         WHERE command_type='set-ota-workflow' AND command_summary LIKE '{sid}/fit%'"
+    )) else {
+        return;
+    };
+    assert!(
+        audit.parse::<i64>().unwrap_or(0) >= 1,
+        "set-ota-workflow wrote a catalog_runs audit row"
+    );
+}
+
+#[tokio::test]
+async fn set_ota_url_token_round_trip_writes_row_and_audit() {
+    let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let sid = format!("zztest{}", nanos());
+    teardown_tier1(&sid);
+    let _g = Guard::new({
+        let sid = sid.clone();
+        move || teardown_tier1(&sid)
+    });
+
+    let (ok, _o, err) = run(&["set-ota-source", &sid, "--name", "ZZ Test", "--status", "active"]);
+    assert!(ok, "set-ota-source should succeed; err={err}");
+
+    let (ok, stdout, stderr) = run(&[
+        "set-ota-url-token",
+        &sid,
+        "fit",
+        "dest_code",
+        "destination",
+        "tokyo",
+        "TYO",
+    ]);
+    assert!(
+        ok,
+        "set-ota-url-token should succeed; stdout={stdout} stderr={stderr}"
+    );
+
+    assert_eq!(
+        scalar(&format!(
+            "SELECT token_value FROM ota_source_url_token \
+             WHERE source_id='{sid}' AND product_type='fit' AND placeholder='dest_code' \
+               AND input_key='destination' AND input_value='tokyo'"
+        ))
+        .as_deref(),
+        Some("TYO"),
+        "token row landed"
+    );
+
+    let Some(audit) = scalar(&format!(
+        "SELECT count(*) AS n FROM catalog_runs \
+         WHERE command_type='set-ota-url-token' AND command_summary LIKE '{sid}/fit%'"
+    )) else {
+        return;
+    };
+    assert!(
+        audit.parse::<i64>().unwrap_or(0) >= 1,
+        "set-ota-url-token wrote a catalog_runs audit row"
+    );
+}
+
+#[tokio::test]
+async fn set_ota_url_token_rejects_non_destination_input_key_and_writes_nothing() {
+    let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let sid = format!("zztest{}", nanos());
+    teardown_tier1(&sid);
+    let _g = Guard::new({
+        let sid = sid.clone();
+        move || teardown_tier1(&sid)
+    });
+
+    let (ok, _o, err) = run(&["set-ota-source", &sid, "--name", "ZZ Test", "--status", "active"]);
+    assert!(ok, "set-ota-source should succeed; err={err}");
+
+    let (ok, stdout, stderr) = run(&[
+        "set-ota-url-token",
+        &sid,
+        "fit",
+        "dest_code",
+        "origin",
+        "tokyo",
+        "TYO",
+    ]);
+    assert!(
+        !ok,
+        "non-destination input_key must fail; stdout={stdout} stderr={stderr}"
+    );
+
+    let Some(rows) = scalar(&format!(
+        "SELECT count(*) AS n FROM ota_source_url_token WHERE source_id='{sid}'"
+    )) else {
+        return;
+    };
+    assert_eq!(rows, "0", "failed set-ota-url-token must write no token row");
+
+    let Some(audit) = scalar(&format!(
+        "SELECT count(*) AS n FROM catalog_runs WHERE command_type='set-ota-url-token' AND command_summary LIKE '{sid}%'"
+    )) else {
+        return;
+    };
+    assert_eq!(audit, "0", "failed set-ota-url-token must write no audit row");
 }
