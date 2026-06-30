@@ -1,5 +1,6 @@
 pub mod bookings;
 pub mod captures;
+pub mod freshness;
 pub mod observations;
 pub mod offers;
 pub mod ota_attempts;

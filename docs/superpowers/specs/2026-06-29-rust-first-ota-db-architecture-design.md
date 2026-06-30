@@ -491,12 +491,13 @@ is EXEMPT (Codex Part D) — it stays inline in `travel-cli`.
 
 | Module | Repo fn | Status |
 |--------|---------|--------|
-| `view_bookings.rs` | `repo::bookings::book_by_deadlines` | ✅ done (2026-06-30) |
+| `view_bookings.rs` (`bookings` view) | `repo::bookings::book_by_deadlines` | ✅ done (2026-06-30) |
 | `offers.rs` (`query-offers`) | `repo::offers::OfferFilter` (parameterized WHERE builder) | ✅ done (2026-06-30) |
 | `compare_dates.rs` | `repo::offers::OfferFilter` | ✅ done (2026-06-30) |
 | `compare_true_cost.rs` | `repo::offers::OfferFilter` | ✅ done (2026-06-30) |
 | `db_query_offers.rs` | `repo::offers::OfferFilter` (+ `departure_window`/`fresh_within_hours`) | ✅ done (2026-06-30) — added `build_where`/`build_sql` unit tests (none existed); `--sql` debug output now shows `?N` placeholders + a `PARAMS:` line (rendered rows unchanged) |
-| `freshness.rs` | `repo::offers` / `repo::freshness` | ⬜ pending |
+| `freshness.rs` | `repo::freshness` (`offers_freshness` via `OfferFilter` + `plan_provenance_freshness`) | ✅ done (2026-06-30) — both query paths parameterized; golden byte-identical (legacy + plan) |
+| `bookings.rs` (`query-bookings`) | `repo::bookings::query_current` (`BookingsCurrentFilter`) | ✅ done (2026-06-30) — **also fixed a latent prod bug**: the SELECT referenced a phantom `payload_text` column that does not exist on `bookings_current` (17 cols), so `query-bookings` errored "no such column" in production; the migrated projection drops it and the command now works |
 | `destination_ref.rs` | `repo::destination_ref` | ⬜ pending (single `slug` interpolation) |
 | `plan.rs` | `repo::plan` (load path: plan_id/dest/offer interpolations at :275/:305/:601) | ⬜ pending (load-bearing reader; migrate carefully, golden the full `status --full`/`itinerary`/`bookings`/`transport` views) |
 

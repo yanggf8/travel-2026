@@ -72,10 +72,6 @@ impl FreshnessArgs {
     }
 }
 
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
-}
-
 struct FreshnessResult {
     age_hours: Option<f64>,
     offer_count: i64,
@@ -84,53 +80,33 @@ struct FreshnessResult {
 }
 
 pub async fn run(opts: &FreshnessArgs) -> Result<(), String> {
-    let sql = if let (Some(plan_id), Some(dest)) = (&opts.plan_id, &opts.destination) {
-        // Plan-based path: plan_offer_provenance.
-        format!(
-            "SELECT MAX(scraped_at) as newest, SUM(COALESCE(offer_count, 0)) as cnt \
-             FROM plan_offer_provenance \
-             WHERE plan_id = '{}' AND destination = '{}' AND source_id = '{}'",
-            sql_quote(plan_id),
-            sql_quote(dest),
-            sql_quote(&opts.source),
-        )
-    } else {
-        // Legacy path: offers table.
-        let mut conds: Vec<String> = vec![format!("source_id = '{}'", sql_quote(&opts.source))];
-        if let Some(r) = &opts.region {
-            conds.push(format!("region = '{}'", sql_quote(r)));
-        }
-        if let Some(s) = &opts.start {
-            conds.push(format!("departure_date >= '{}'", sql_quote(s)));
-        }
-        if let Some(e) = &opts.end {
-            conds.push(format!("departure_date <= '{}'", sql_quote(e)));
-        }
-        format!(
-            "SELECT COUNT(*) as cnt, MAX(scraped_at) as newest FROM offers WHERE {}",
-            conds.join(" AND ")
-        )
-    };
+    use travel_db::repo::{freshness, offers::OfferFilter};
 
     let conn = db::connect_read().await?;
-    let mut rows = conn
-        .query(sql.as_str(), ())
-        .await
-        .map_err(|err| format!("failed to query freshness from Turso: {err}"))?;
+    let counted = if let (Some(plan_id), Some(dest)) = (&opts.plan_id, &opts.destination) {
+        // Plan-based path: plan_offer_provenance.
+        freshness::plan_provenance_freshness(&conn, plan_id, dest, &opts.source).await?
+    } else {
+        // Legacy path: offers table (source_id is always present, plus optional region/dates).
+        let mut filter = OfferFilter::new().source_id(&opts.source);
+        if let Some(r) = &opts.region {
+            filter = filter.region(r);
+        }
+        if let Some(s) = &opts.start {
+            filter = filter.departure_from(s);
+        }
+        if let Some(e) = &opts.end {
+            filter = filter.departure_to(e);
+        }
+        freshness::offers_freshness(&conn, filter.build()).await?
+    };
 
-    // Pull cnt + newest by column name regardless of SELECT order.
-    let (mut count, mut newest): (i64, Option<String>) = (0, None);
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|err| format!("failed to read freshness row: {err}"))?
-    {
-        // Both paths alias the columns `cnt` and `newest`.
-        count = column_i64(&row, "cnt").unwrap_or(0);
-        newest = column_string(&row, "newest").filter(|s| !s.is_empty());
-    }
-
-    let result = compute(count, newest.as_deref(), opts.max_age_hours, opts.region.clone());
+    let result = compute(
+        counted.count,
+        counted.newest.as_deref(),
+        opts.max_age_hours,
+        opts.region.clone(),
+    );
 
     println!("Source:  {}", opts.source);
     if let Some(r) = &result.region {
@@ -209,27 +185,4 @@ fn parse_scraped_at(raw: &str) -> Option<i64> {
         }
     }
     None
-}
-
-fn column_i64(row: &libsql::Row, name: &str) -> Option<i64> {
-    let idx = column_index(row, name)?;
-    match row.get_value(idx).ok()? {
-        libsql::Value::Integer(n) => Some(n),
-        libsql::Value::Real(f) => Some(f as i64),
-        libsql::Value::Text(s) => s.parse().ok(),
-        _ => None,
-    }
-}
-
-fn column_string(row: &libsql::Row, name: &str) -> Option<String> {
-    let idx = column_index(row, name)?;
-    match row.get_value(idx).ok()? {
-        libsql::Value::Text(s) => Some(s),
-        _ => None,
-    }
-}
-
-fn column_index(row: &libsql::Row, name: &str) -> Option<i32> {
-    let n = row.column_count();
-    (0..n).find(|&i| row.column_name(i) == Some(name))
 }

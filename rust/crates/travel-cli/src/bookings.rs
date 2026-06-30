@@ -47,67 +47,34 @@ impl QueryBookingsArgs {
     }
 }
 
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
-}
-
 pub async fn run(opts: &QueryBookingsArgs) -> Result<(), String> {
-    let mut conds: Vec<String> = Vec::new();
-    if let Some(v) = &opts.trip_id {
-        conds.push(format!("trip_id = '{}'", sql_quote(v)));
-    }
-    if let Some(v) = &opts.destination {
-        conds.push(format!("destination = '{}'", sql_quote(v)));
-    }
-    if let Some(v) = &opts.category {
-        conds.push(format!("category = '{}'", sql_quote(v)));
-    }
-    if let Some(v) = &opts.status {
-        conds.push(format!("status = '{}'", sql_quote(v)));
-    }
-    let where_clause = if conds.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conds.join(" AND "))
-    };
-
-    // Match the TS SELECT column order + ORDER BY exactly so row ordering is identical.
-    let sql = format!(
-        "SELECT booking_key, trip_id, destination, category, subtype, title, status, reference, \
-         book_by, booked_at, source_id, offer_id, selected_date, price_amount, price_currency, \
-         origin_path, payload_text, updated_at FROM bookings_current {where_clause} \
-         ORDER BY category, destination, updated_at DESC LIMIT {}",
-        opts.limit
-    );
+    use travel_db::repo::bookings::{self, BookingsCurrentFilter};
 
     let conn = db::connect_read().await?;
-    let mut rows = conn
-        .query(sql.as_str(), ())
-        .await
-        .map_err(|err| format!("failed to query bookings from Turso: {err}"))?;
+    let dal_rows = bookings::query_current(
+        &conn,
+        &BookingsCurrentFilter {
+            trip_id: opts.trip_id.as_deref(),
+            destination: opts.destination.as_deref(),
+            category: opts.category.as_deref(),
+            status: opts.status.as_deref(),
+        },
+        opts.limit,
+    )
+    .await?;
 
     // Only the columns the table renders: category, status, title, price, book_by, reference.
-    let mut out: Vec<BookingRow> = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|err| format!("failed to read booking row: {err}"))?
-    {
-        let category: String = row.get(3).unwrap_or_default();
-        let title: String = row.get(5).unwrap_or_default();
-        let status: String = row.get(6).unwrap_or_default();
-        let reference: String = row.get(7).unwrap_or_default();
-        let book_by: String = row.get(8).unwrap_or_default();
-        let price: Option<i64> = row.get(13).ok();
-        out.push(BookingRow {
-            category,
-            status,
-            title,
-            reference,
-            book_by,
-            price,
-        });
-    }
+    let out: Vec<BookingRow> = dal_rows
+        .into_iter()
+        .map(|r| BookingRow {
+            category: r.category,
+            status: r.status,
+            title: r.title,
+            reference: r.reference,
+            book_by: r.book_by,
+            price: r.price,
+        })
+        .collect();
 
     print_bookings_table(&out);
     Ok(())
