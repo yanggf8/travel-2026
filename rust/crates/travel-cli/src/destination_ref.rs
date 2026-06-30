@@ -9,7 +9,6 @@
 // element, ordered by sort_order. Fail loud if the slug is unknown.
 
 use crate::db;
-use std::collections::BTreeMap;
 
 pub struct DestRefArgs {
     pub slug: String,
@@ -45,10 +44,6 @@ impl DestRefArgs {
         })?;
         Ok(DestRefArgs { slug })
     }
-}
-
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
 }
 
 struct Area {
@@ -90,144 +85,83 @@ struct Transit {
 }
 
 pub async fn run(opts: &DestRefArgs) -> Result<(), String> {
+    use travel_db::repo::destination_ref as repo;
+
     let conn = db::connect_read().await?;
-    let esc = sql_quote(&opts.slug);
+    let slug = opts.slug.as_str();
 
     // Config scalars (fail loud if missing).
-    let mut cfg_rows = conn
-        .query(
-            &format!("SELECT display_name, timezone, currency FROM destination_config WHERE slug = '{esc}'"),
-            (),
-        )
-        .await
-        .map_err(|e| format!("failed to query destination_config: {e}"))?;
-    let cfg = cfg_rows
-        .next()
-        .await
-        .map_err(|e| format!("failed to read destination_config: {e}"))?
-        .ok_or_else(|| format!("destination_config slug={} not found", opts.slug))?;
-    let display_name: String = cfg.get(0).unwrap_or_default();
-    let timezone: String = cfg.get(1).unwrap_or_default();
-    let currency: String = cfg.get(2).unwrap_or_default();
+    let (display_name, timezone, currency) = repo::config_scalars(&conn, slug)
+        .await?
+        .ok_or_else(|| format!("destination_config slug={slug} not found"))?;
 
     // List child rows → grouped maps (BTreeMap keeps deterministic key order;
     // within a key, rows arrive in sort_order from the ORDER BY).
-    let stations_by_area = group_pairs(&conn, &format!(
-        "SELECT area_id, station FROM destination_area_stations WHERE slug = '{esc}' ORDER BY area_id, sort_order")).await?;
-    let best_for_by_area = group_pairs(&conn, &format!(
-        "SELECT area_id, tag FROM destination_area_best_for WHERE slug = '{esc}' ORDER BY area_id, sort_order")).await?;
+    let stations_by_area = repo::stations_by_area(&conn, slug).await?;
+    let best_for_by_area = repo::best_for_by_area(&conn, slug).await?;
     // POI tags exist in destination_poi_tags but the TS renderer does not print
     // them, so they are intentionally not fetched here (output parity).
-    let pois_by_cluster = group_pairs(&conn, &format!(
-        "SELECT cluster_id, poi_id FROM destination_cluster_pois WHERE slug = '{esc}' ORDER BY cluster_id, sort_order")).await?;
-    let tips = flat_list(&conn, &format!(
-        "SELECT tip FROM destination_tips WHERE slug = '{esc}' ORDER BY sort_order")).await?;
-    let airports = flat_list(&conn, &format!(
-        "SELECT airport FROM destination_airports WHERE slug = '{esc}' ORDER BY sort_order")).await?;
+    let pois_by_cluster = repo::pois_by_cluster(&conn, slug).await?;
+    let tips = repo::tips(&conn, slug).await?;
+    let airports = repo::airports(&conn, slug).await?;
 
-    // Areas.
-    let mut areas: Vec<Area> = Vec::new();
-    let mut rows = conn
-        .query(&format!("SELECT area_id, name, type, vibe FROM destination_areas WHERE slug = '{esc}' ORDER BY area_id"), ())
-        .await
-        .map_err(|e| format!("failed to query destination_areas: {e}"))?;
-    while let Some(r) = rows.next().await.map_err(|e| format!("area row: {e}"))? {
-        let id: String = r.get(0).unwrap_or_default();
-        areas.push(Area {
-            stations: stations_by_area.get(&id).cloned().unwrap_or_default(),
-            best_for: best_for_by_area.get(&id).cloned().unwrap_or_default(),
-            name: r.get(1).unwrap_or_default(),
-            typ: r.get(2).unwrap_or_default(),
-            vibe: r.get(3).unwrap_or_default(),
-        });
-    }
+    let areas: Vec<Area> = repo::areas(&conn, slug)
+        .await?
+        .into_iter()
+        .map(|a| Area {
+            stations: stations_by_area.get(&a.area_id).cloned().unwrap_or_default(),
+            best_for: best_for_by_area.get(&a.area_id).cloned().unwrap_or_default(),
+            name: a.name,
+            typ: a.typ,
+            vibe: a.vibe,
+        })
+        .collect();
 
-    // POIs.
-    let mut pois: Vec<Poi> = Vec::new();
-    let mut rows = conn
-        .query(&format!(
-            "SELECT poi_id, title, area, nearest_station, duration_min, booking_required, booking_url, cost_estimate, notes, hours \
-             FROM destination_pois WHERE slug = '{esc}' ORDER BY poi_id"), ())
-        .await
-        .map_err(|e| format!("failed to query destination_pois: {e}"))?;
-    while let Some(r) = rows.next().await.map_err(|e| format!("poi row: {e}"))? {
-        pois.push(Poi {
-            title: r.get(1).unwrap_or_default(),
-            area: r.get(2).unwrap_or_default(),
-            nearest_station: r.get(3).unwrap_or_default(),
-            duration_min: r.get(4).ok(),
-            booking_required: r.get::<i64>(5).unwrap_or(0) == 1,
-            booking_url: opt_string(&r, 6),
-            cost_estimate: r.get(7).ok(),
-            notes: opt_string(&r, 8),
-            hours: opt_string(&r, 9),
-        });
-    }
+    let pois: Vec<Poi> = repo::pois(&conn, slug)
+        .await?
+        .into_iter()
+        .map(|p| Poi {
+            title: p.title,
+            area: p.area,
+            nearest_station: p.nearest_station,
+            duration_min: p.duration_min,
+            booking_required: p.booking_required,
+            booking_url: p.booking_url,
+            cost_estimate: p.cost_estimate,
+            notes: p.notes,
+            hours: p.hours,
+        })
+        .collect();
 
-    // Clusters.
-    let mut clusters: Vec<Cluster> = Vec::new();
-    let mut rows = conn
-        .query(&format!("SELECT cluster_id, name, description, duration_min, best_area FROM destination_clusters WHERE slug = '{esc}' ORDER BY cluster_id"), ())
-        .await
-        .map_err(|e| format!("failed to query destination_clusters: {e}"))?;
-    while let Some(r) = rows.next().await.map_err(|e| format!("cluster row: {e}"))? {
-        let cluster_id: String = r.get(0).unwrap_or_default();
-        clusters.push(Cluster {
-            pois: pois_by_cluster.get(&cluster_id).cloned().unwrap_or_default(),
-            id: cluster_id.clone(),
-            name: r.get(1).unwrap_or_default(),
-            description: r.get(2).unwrap_or_default(),
-            duration_min: r.get(3).ok(),
-            best_area: opt_string(&r, 4),
-        });
-    }
+    let clusters: Vec<Cluster> = repo::clusters(&conn, slug)
+        .await?
+        .into_iter()
+        .map(|c| Cluster {
+            pois: pois_by_cluster.get(&c.cluster_id).cloned().unwrap_or_default(),
+            id: c.cluster_id,
+            name: c.name,
+            description: c.description,
+            duration_min: c.duration_min,
+            best_area: c.best_area,
+        })
+        .collect();
 
     // Transit (split into estimates vs inter_city, matching TS).
-    let mut transit: Vec<Transit> = Vec::new();
-    let mut rows = conn
-        .query(&format!("SELECT pair_key, kind, minutes, line, station_from, station_to FROM destination_transit WHERE slug = '{esc}' ORDER BY kind, pair_key"), ())
-        .await
-        .map_err(|e| format!("failed to query destination_transit: {e}"))?;
-    while let Some(r) = rows.next().await.map_err(|e| format!("transit row: {e}"))? {
-        transit.push(Transit {
-            pair_key: r.get(0).unwrap_or_default(),
-            kind: r.get(1).unwrap_or_default(),
-            minutes: r.get(2).unwrap_or(0),
-            line: r.get(3).unwrap_or_default(),
-            station_from: opt_string(&r, 4),
-            station_to: opt_string(&r, 5),
-        });
-    }
+    let transit: Vec<Transit> = repo::transit(&conn, slug)
+        .await?
+        .into_iter()
+        .map(|t| Transit {
+            pair_key: t.pair_key,
+            kind: t.kind,
+            minutes: t.minutes,
+            line: t.line,
+            station_from: t.station_from,
+            station_to: t.station_to,
+        })
+        .collect();
 
     print_ref(&opts.slug, &display_name, &timezone, &currency, &airports, &areas, &pois, &clusters, &transit, &tips);
     Ok(())
-}
-
-async fn group_pairs(conn: &libsql::Connection, sql: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
-    let mut rows = conn.query(sql, ()).await.map_err(|e| format!("query: {e}"))?;
-    let mut m: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    while let Some(r) = rows.next().await.map_err(|e| format!("row: {e}"))? {
-        let k: String = r.get(0).unwrap_or_default();
-        let v: String = r.get(1).unwrap_or_default();
-        m.entry(k).or_default().push(v);
-    }
-    Ok(m)
-}
-
-async fn flat_list(conn: &libsql::Connection, sql: &str) -> Result<Vec<String>, String> {
-    let mut rows = conn.query(sql, ()).await.map_err(|e| format!("query: {e}"))?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next().await.map_err(|e| format!("row: {e}"))? {
-        out.push(r.get::<String>(0).unwrap_or_default());
-    }
-    Ok(out)
-}
-
-fn opt_string(row: &libsql::Row, idx: i32) -> Option<String> {
-    match row.get_value(idx).ok()? {
-        libsql::Value::Text(s) if !s.is_empty() => Some(s),
-        _ => None,
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
