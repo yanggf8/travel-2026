@@ -212,9 +212,15 @@ flight/hotel-specific required fields. `parse_settour` exists in BOTH the gwebcd
 (`bridge/ota_parse.py`) AND the Rust `travel ota parse` path
 (`rust/crates/travel-cli/src/ota/settour_parse.rs`, char-by-char scanner, oracle-parity-tested);
 `travel ota parse` dispatches `has_custom_parser=1` sources to it (other custom sources still
-fail-loud → use `write-offers`). The Phase 0 Python port is SHIPPED + tested
-(settour oracle parity), but **no source is live-verified end-to-end yet** — each still needs a real
-live WSLg capture + `verify` + `parse` before its archived Python parser can be deleted. Guard:
+fail-loud → use `write-offers`). The Phase 0 Python port is SHIPPED + tested (settour oracle
+parity). **`settour` is now live-verified end-to-end on WSLg (2026-06-30)** — the FIRST source to
+clear that bar — but via the **agent-parse (`write-offers`) path, NOT custom `parse_settour`**:
+the live DB has no settour `parser_rules` row, and the custom parser is known to mis-read the real
+`/product/v2` page (divides the un-taxed total by pax instead of using the per-person `含稅` figure;
+grabs UI chrome as the hotel). Use the page's `每人機加酒含稅$NN,NNN` value. Full recipe (debug
+binary only; TSV `type`=offer-kind `package`, not the `fit` product_type): memory
+`settour-live-verified-agent-parse`. The other sources still need a real live WSLg capture +
+`verify`/`parse`-or-`write-offers` before their archived Python parsers can be deleted. Guard:
 `verify`/`parse` FAIL on a capture↔`--source` mismatch (pass `--allow-source-override` for an
 intentional re-parse). `affected_row_count==0` on parse is a real ON-CONFLICT dedup, not a failure.
 
