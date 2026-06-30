@@ -9,5 +9,6 @@ pub mod observations;
 pub mod offers;
 pub mod ota_attempts;
 pub mod ota_jobs;
+pub mod ota_source_workflow;
 pub mod plan;
 pub mod route_segments;

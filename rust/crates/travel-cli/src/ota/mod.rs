@@ -2,6 +2,7 @@ mod claim;
 mod common;
 mod enqueue;
 mod observations;
+mod run;
 mod write_offers;
 
 // Agent-first extraction: the coding agent IS the parser. The CLI fetches the capture
@@ -17,6 +18,7 @@ pub async fn dispatch(sub: &str, rest: &[String]) -> Result<(), String> {
         "reap-stale" => claim::run_reap_stale(rest).await,
         "write-offers" => write_offers::run(rest).await,
         "observations" => observations::run(rest).await,
+        "run" => run::run(rest).await,
         "parse" => Err(
             "Error: `travel ota parse` (regex/custom parser) is retired. The coding agent is the \
              parser: read the capture's raw_text and pass offers as TSV to `travel ota write-offers`."
@@ -24,7 +26,7 @@ pub async fn dispatch(sub: &str, rest: &[String]) -> Result<(), String> {
         ),
         _ => Err(format!(
             "unknown ota subcommand: {sub}\n\
-             Usage: travel ota {{enqueue|claim|heartbeat|finish|reap-stale|write-offers|observations}} ..."
+             Usage: travel ota {{enqueue|claim|heartbeat|finish|reap-stale|run|write-offers|observations}} ..."
         )),
     }
 }

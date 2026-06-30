@@ -101,6 +101,70 @@ pub struct ClaimResult {
     pub product_type: String,
 }
 
+/// Load param key/value pairs for a job.
+pub async fn get_params(conn: &Connection, job_id: &str) -> Result<Vec<(String, String)>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT param_key, param_value FROM ota_job_params WHERE job_id = ?1",
+            libsql::params![job_id.to_string()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.push((
+            row.get(0).map_err(|e| e.to_string())?,
+            row.get(1).map_err(|e| e.to_string())?,
+        ));
+    }
+    Ok(out)
+}
+
+/// Claim a specific queued job by id. Returns `None` when the job is not queued or lost the race.
+pub async fn claim_specific(
+    conn: &Connection,
+    job_id: &str,
+    worker_id: &str,
+    now: &str,
+    lease_expires_at: &str,
+) -> Result<Option<ClaimResult>, String> {
+    let claim_token = new_run_id();
+    let affected = conn
+        .execute(
+            "UPDATE ota_jobs SET status = 'claimed', claimed_by = ?1, claim_token = ?2, \
+             claimed_at = ?3, heartbeat_at = ?3, lease_expires_at = ?4, updated_at = ?3 \
+             WHERE job_id = ?5 AND status = 'queued'",
+            libsql::params![
+                worker_id.to_string(),
+                claim_token.clone(),
+                now.to_string(),
+                lease_expires_at.to_string(),
+                job_id.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if affected != 1 {
+        return Ok(None);
+    }
+    let mut rows = conn
+        .query(
+            "SELECT source_id, product_type FROM ota_jobs WHERE job_id = ?1",
+            libsql::params![job_id.to_string()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(row) = rows.next().await.map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    Ok(Some(ClaimResult {
+        job_id: job_id.to_string(),
+        claim_token,
+        source_id: row.get(0).map_err(|e| e.to_string())?,
+        product_type: row.get(1).map_err(|e| e.to_string())?,
+    }))
+}
+
 /// Claim the oldest queued job. Returns `None` when no job is available or lost the race.
 pub async fn claim(
     conn: &Connection,

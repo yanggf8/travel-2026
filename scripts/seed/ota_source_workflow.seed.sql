@@ -1,0 +1,9 @@
+-- OTA source workflow seed: GET-only URL templates for agent-first capture (spec 2026-06-30).
+-- INSERT OR IGNORE: fills an empty catalog, never clobbers a live edit. One statement per line.
+-- The run_seed_file_stmts splitter splits on the semicolon BEFORE stripping comments, so a
+-- semicolon ANYWHERE (a comment OR a quoted value) breaks the statement. Also avoid an
+-- apostrophe in a comment. Keep both out of comment lines AND value literals.
+
+INSERT OR IGNORE INTO ota_source_workflow (source_id, product_type, nav_kind, url_template, capture_url_contains, settle_marker, settle_ms, agent_extraction_note) VALUES ('settour','fit','get','https://fit.settour.com.tw/product/v2?tripType=RT&directFlightOnly=true&roomQty=1&depAirportCode=TPE&arrAirportCode={dest_code}&depDate={depart},{return}&hotelCheckInDate={depart}&hotelCheckOutDate={return}&adtCount={pax}&chdCount=0&regionId={region_id}','product/v2','正在努力查詢',25000,'per-person price = 每人機加酒含稅, NOT untaxed total/pax');
+INSERT OR IGNORE INTO ota_source_workflow (source_id, product_type, nav_kind, url_template, capture_url_contains, settle_marker, settle_ms, agent_extraction_note) VALUES ('eztravel','fit','get','https://packages.eztravel.com.tw/roundtrip-TPE-{dest_code}?checkin={depart}&checkout={return}&adult={pax}&child=0','roundtrip-TPE',NULL,25000,'SPA ignores GET dates — record the page dates');
+INSERT OR IGNORE INTO ota_source_workflow (source_id, product_type, nav_kind, url_template, capture_url_contains, settle_marker, settle_ms, agent_extraction_note) VALUES ('besttour','group_tour','get','https://www.besttour.com.tw/e_web/search?v=//////{region_id}///////','e_web/search',NULL,25000,'group-tour listing — skip 滿/no-price tours');

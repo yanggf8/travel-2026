@@ -784,6 +784,23 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 )"#,
     )
     .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS ota_source_workflow (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  nav_kind TEXT NOT NULL DEFAULT 'get' CHECK(nav_kind IN ('get')),
+  url_template TEXT NOT NULL,
+  capture_url_contains TEXT,
+  settle_marker TEXT,
+  settle_ms INTEGER NOT NULL DEFAULT 0,
+  agent_extraction_note TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (source_id, product_type)
+)"#,
+    )
+    .await;
+    seed_ota_workflow(&conn).await;
 
     // OTA offer provenance (rust-first OTA architecture, spec 2026-06-29).
     add_column(&conn, "ALTER TABLE offers ADD COLUMN capture_id TEXT;").await;
@@ -1362,6 +1379,11 @@ async fn seed_ota_catalog(conn: &libsql::Connection) {
 async fn seed_ota_coverage(conn: &libsql::Connection) {
     const COVERAGE_SEED: &str = include_str!("../../../../scripts/seed/ota_coverage.seed.sql");
     run_seed_file_stmts(conn, COVERAGE_SEED).await;
+}
+
+async fn seed_ota_workflow(conn: &libsql::Connection) {
+    const WORKFLOW_SEED: &str = include_str!("../../../../scripts/seed/ota_source_workflow.seed.sql");
+    run_seed_file_stmts(conn, WORKFLOW_SEED).await;
 }
 
 /// Run a checked-in seed SQL file statement-by-statement, insert-if-absent. Strips line comments
