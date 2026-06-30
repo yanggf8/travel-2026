@@ -481,14 +481,29 @@ Phased so each phase ships independently and nothing existing breaks:
 
 ### Phase F — gradual DAL adoption (ongoing, no deadline)
 
-**Task F1: migrate `view_bookings` to the DAL [→ Grok, then Claude reviews]**
-- Files: `repo/bookings.rs` (new `book_by(plan_id, dest)` with **bound params**); modify
-  `rust/crates/travel-cli/src/view_bookings.rs:71-95` to call it; delete the local `sql_quote()`.
-- Why first: it's the canonical scattered-SQL example (`format!`+`sql_quote`, F8 in the review). CLI
-  output must be **byte-identical** before/after (golden-output test).
-- Steps: failing test = golden snapshot of current `bookings` output → implement repo fn + repoint →
-  assert identical output → commit `refactor(travel-db): route view_bookings through DAL, drop sql_quote`.
-- Subsequent modules migrate one per commit, same golden-output discipline; no big-bang (scope guard).
+**Discipline:** delete `sql_quote()` + value-interpolating `format!` SQL over business tables; replace
+with a `travel-db` repo fn using **bound params**; verify CLI output is **byte-identical**
+(committed `./bin/travel` vs new build, with a transient-Turso re-read guard). Operational/diagnostic
+SQL (`db migrate`/`db exec`/`db schema`/`validate`/`db_seed*`/`db_sync_events`/`db_fetch_holidays`)
+is EXEMPT (Codex Part D) — it stays inline in `travel-cli`.
+
+**`sql_quote()` migration ledger** (the business-table offenders the review flagged):
+
+| Module | Repo fn | Status |
+|--------|---------|--------|
+| `view_bookings.rs` | `repo::bookings::book_by_deadlines` | ✅ done (2026-06-30) |
+| `offers.rs` (`query-offers`) | `repo::offers::OfferFilter` (parameterized WHERE builder) | ✅ done (2026-06-30) |
+| `compare_dates.rs` | `repo::offers::OfferFilter` | ✅ done (2026-06-30) |
+| `compare_true_cost.rs` | `repo::offers::OfferFilter` | ✅ done (2026-06-30) |
+| `db_query_offers.rs` | `repo::offers::OfferFilter` (+ `include_undated`/`fresh_hours`/`name` predicates to add) | ⬜ pending (has its own `build_where`/`build_sql` unit tests — extend the builder, keep them green) |
+| `freshness.rs` | `repo::offers` / `repo::freshness` | ⬜ pending |
+| `destination_ref.rs` | `repo::destination_ref` | ⬜ pending (single `slug` interpolation) |
+| `plan.rs` | `repo::plan` (load path: plan_id/dest/offer interpolations at :275/:305/:601) | ⬜ pending (load-bearing reader; migrate carefully, golden the full `status --full`/`itinerary`/`bookings`/`transport` views) |
+
+`repo::offers::OfferFilter` is the shared parameterized WHERE builder (`destination`/`region`/
+`offer_type`/`source_id`/`source_id_in_csv`/`departure_from`/`departure_to`/`max_price`) covering the
+common offer-query predicates; new offer predicates get a `with_*` method there, not a fresh
+`sql_quote`. Subsequent modules migrate one per commit, same byte-identical discipline; no big-bang.
 
 ### Phase G — D1 read-mirror pilot [deferred, gated — do NOT start without sign-off]
 

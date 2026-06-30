@@ -66,10 +66,6 @@ impl CompareDatesArgs {
     }
 }
 
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
-}
-
 fn parse_date(s: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| format!("invalid date: {s}"))
 }
@@ -114,27 +110,29 @@ async fn query_offers(
     opts: &CompareDatesArgs,
     kind: &str,
 ) -> Result<Vec<Offer>, String> {
-    let mut conds: Vec<String> = vec![format!("type = '{}'", sql_quote(kind))];
-    if let Some(r) = &opts.region {
-        conds.push(format!("region = '{}'", sql_quote(r)));
-    }
-    if let Some(d) = &opts.destination {
-        conds.push(format!("destination = '{}'", sql_quote(d)));
-    }
     // start..addDays(end, nights) inclusive window (matches TS commonFilters).
     let window_end = add_days(&opts.end, opts.nights)?;
-    conds.push(format!("departure_date >= '{}'", sql_quote(&opts.start)));
-    conds.push(format!("departure_date <= '{}'", sql_quote(&window_end)));
+    let mut filter = travel_db::repo::offers::OfferFilter::new().offer_type(kind);
+    if let Some(r) = &opts.region {
+        filter = filter.region(r);
+    }
+    if let Some(d) = &opts.destination {
+        filter = filter.destination(d);
+    }
+    let where_built = filter
+        .departure_from(&opts.start)
+        .departure_to(&window_end)
+        .build();
 
     let sql = format!(
         "SELECT source_id, departure_date, price_per_person, airline, hotel_name, name \
-         FROM offers WHERE {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT 500",
-        conds.join(" AND ")
+         FROM offers {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT 500",
+        where_built.clause
     );
 
     let conn = db::connect_read().await?;
     let mut rows = conn
-        .query(sql.as_str(), ())
+        .query(sql.as_str(), where_built.params)
         .await
         .map_err(|e| format!("failed to query offers: {e}"))?;
     let mut out = Vec::new();

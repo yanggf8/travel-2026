@@ -38,6 +38,114 @@ pub struct InsertResult {
     pub deduped: u64,
 }
 
+/// A parameterized `WHERE` fragment over the `offers` table plus its bound values, so callers
+/// build dynamic offer queries without string-interpolating values (the `sql_quote()`+`format!`
+/// anti-pattern this DAL retires). `clause` is `""` or `"WHERE …"` with `?1`,`?2`,… placeholders;
+/// `params` are the matching values in order.
+#[derive(Debug, Default, Clone)]
+pub struct OfferWhere {
+    pub clause: String,
+    pub params: Vec<libsql::Value>,
+}
+
+/// Builder for an `offers` `WHERE` clause with bound parameters. Each `with_*` call appends one
+/// predicate and its placeholder; `build()` joins them with ` AND `.
+#[derive(Debug, Default)]
+pub struct OfferFilter {
+    conds: Vec<String>,
+    params: Vec<libsql::Value>,
+}
+
+impl OfferFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn next_placeholder(&self) -> usize {
+        self.params.len() + 1
+    }
+
+    fn push_text(&mut self, col_op: &str, value: &str) {
+        let n = self.next_placeholder();
+        self.conds.push(format!("{col_op} ?{n}"));
+        self.params.push(libsql::Value::Text(value.to_string()));
+    }
+
+    /// `destination = ?`
+    pub fn destination(mut self, value: &str) -> Self {
+        self.push_text("destination =", value);
+        self
+    }
+
+    /// `region = ?`
+    pub fn region(mut self, value: &str) -> Self {
+        self.push_text("region =", value);
+        self
+    }
+
+    /// `type = ?`
+    pub fn offer_type(mut self, value: &str) -> Self {
+        self.push_text("type =", value);
+        self
+    }
+
+    /// `source_id = ?`
+    pub fn source_id(mut self, value: &str) -> Self {
+        self.push_text("source_id =", value);
+        self
+    }
+
+    /// `departure_date >= ?`
+    pub fn departure_from(mut self, value: &str) -> Self {
+        self.push_text("departure_date >=", value);
+        self
+    }
+
+    /// `departure_date <= ?`
+    pub fn departure_to(mut self, value: &str) -> Self {
+        self.push_text("departure_date <=", value);
+        self
+    }
+
+    /// `price_per_person <= ?`
+    pub fn max_price(mut self, value: i64) -> Self {
+        let n = self.next_placeholder();
+        self.conds.push(format!("price_per_person <= ?{n}"));
+        self.params.push(libsql::Value::Integer(value));
+        self
+    }
+
+    /// `source_id IN (?, ?, …)` from a comma-separated list (trimmed, empties dropped).
+    /// A no-op when the list is empty (so the caller's other predicates still apply).
+    pub fn source_id_in_csv(mut self, csv: &str) -> Self {
+        let items: Vec<&str> = csv.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        if items.is_empty() {
+            return self;
+        }
+        let mut placeholders = Vec::with_capacity(items.len());
+        for item in items {
+            let n = self.next_placeholder();
+            placeholders.push(format!("?{n}"));
+            self.params.push(libsql::Value::Text(item.to_string()));
+        }
+        self.conds.push(format!("source_id IN ({})", placeholders.join(",")));
+        self
+    }
+
+    /// Build the final `WHERE …`/empty fragment + the bound params in placeholder order.
+    pub fn build(self) -> OfferWhere {
+        let clause = if self.conds.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", self.conds.join(" AND "))
+        };
+        OfferWhere {
+            clause,
+            params: self.params,
+        }
+    }
+}
+
 /// Insert one offer row. Returns inserted=1 or deduped=1 on ON CONFLICT DO NOTHING.
 pub async fn insert(conn: &Connection, row: &OfferRow) -> Result<InsertResult, String> {
     let affected = conn
@@ -159,5 +267,63 @@ mod tests {
         };
         assert_eq!(row.source_id, "zztest");
         assert_eq!(row.offer_type, "package");
+    }
+
+    fn text(v: &libsql::Value) -> Option<&str> {
+        match v {
+            libsql::Value::Text(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn offer_filter_empty_is_no_where() {
+        let w = OfferFilter::new().build();
+        assert_eq!(w.clause, "");
+        assert!(w.params.is_empty());
+    }
+
+    #[test]
+    fn offer_filter_numbers_placeholders_in_order() {
+        let w = OfferFilter::new()
+            .destination("tokyo_2026")
+            .region("kanto")
+            .max_price(30000)
+            .departure_from("2026-09-01")
+            .build();
+        assert_eq!(
+            w.clause,
+            "WHERE destination = ?1 AND region = ?2 AND price_per_person <= ?3 \
+             AND departure_date >= ?4"
+        );
+        assert_eq!(text(&w.params[0]), Some("tokyo_2026"));
+        assert_eq!(text(&w.params[1]), Some("kanto"));
+        assert!(matches!(w.params[2], libsql::Value::Integer(30000)));
+        assert_eq!(text(&w.params[3]), Some("2026-09-01"));
+    }
+
+    #[test]
+    fn offer_filter_source_csv_expands_to_in_list() {
+        let w = OfferFilter::new()
+            .source_id_in_csv(" besttour , settour ,, ")
+            .build();
+        assert_eq!(w.clause, "WHERE source_id IN (?1,?2)");
+        assert_eq!(text(&w.params[0]), Some("besttour"));
+        assert_eq!(text(&w.params[1]), Some("settour"));
+    }
+
+    #[test]
+    fn offer_filter_empty_csv_adds_no_condition() {
+        let w = OfferFilter::new().source_id_in_csv("  , ,").destination("x").build();
+        assert_eq!(w.clause, "WHERE destination = ?1");
+        assert_eq!(w.params.len(), 1);
+    }
+
+    #[test]
+    fn offer_filter_quote_chars_are_bound_not_interpolated() {
+        // A value with a single quote must NOT need escaping — it's a bound param.
+        let w = OfferFilter::new().destination("o'brien").build();
+        assert_eq!(w.clause, "WHERE destination = ?1");
+        assert_eq!(text(&w.params[0]), Some("o'brien"));
     }
 }

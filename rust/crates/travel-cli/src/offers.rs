@@ -54,51 +54,39 @@ impl OffersArgs {
     }
 }
 
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
-}
-
 pub async fn run(opts: &OffersArgs) -> Result<(), String> {
-    let mut conds: Vec<String> = Vec::new();
+    // Dynamic WHERE + bound params via the DAL (no sql_quote / string interpolation).
+    let mut filter = travel_db::repo::offers::OfferFilter::new();
     if let Some(d) = &opts.destination {
-        conds.push(format!("destination = '{}'", sql_quote(d)));
+        filter = filter.destination(d);
     }
     if let Some(r) = &opts.region {
-        conds.push(format!("region = '{}'", sql_quote(r)));
+        filter = filter.region(r);
     }
     if let Some(s) = &opts.source {
         // comma-separated source list → IN (...)
-        let list = s
-            .split(',')
-            .map(|x| format!("'{}'", sql_quote(x.trim())))
-            .collect::<Vec<_>>()
-            .join(",");
-        conds.push(format!("source_id IN ({list})"));
+        filter = filter.source_id_in_csv(s);
     }
     if let Some(mp) = opts.max_price {
-        conds.push(format!("price_per_person <= {mp}"));
+        filter = filter.max_price(mp);
     }
     if let Some(s) = &opts.start {
-        conds.push(format!("departure_date >= '{}'", sql_quote(s)));
+        filter = filter.departure_from(s);
     }
     if let Some(e) = &opts.end {
-        conds.push(format!("departure_date <= '{}'", sql_quote(e)));
+        filter = filter.departure_to(e);
     }
-    let where_clause = if conds.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conds.join(" AND "))
-    };
+    let where_built = filter.build();
 
     let sql = format!(
         "SELECT source_id, type, price_per_person, hotel_name, airline, departure_date, scraped_at \
-         FROM offers {where_clause} ORDER BY scraped_at DESC, price_per_person ASC LIMIT {}",
-        opts.limit
+         FROM offers {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT {}",
+        where_built.clause, opts.limit
     );
 
     let conn = db::connect_read().await?;
     let mut rows = conn
-        .query(sql.as_str(), ())
+        .query(sql.as_str(), where_built.params)
         .await
         .map_err(|err| format!("failed to query offers from Turso: {err}"))?;
 

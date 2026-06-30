@@ -45,10 +45,6 @@ impl TrueCostArgs {
     }
 }
 
-fn sql_quote(v: &str) -> String {
-    v.replace('\'', "''")
-}
-
 // JS Math.round: half rounds toward +Infinity (not away-from-zero).
 fn js_round(x: f64) -> i64 {
     (x + 0.5).floor() as i64
@@ -131,19 +127,24 @@ pub async fn run(opts: &TrueCostArgs) -> Result<(), String> {
     }
 
     // --- offers (package, region, optional exact date) ---
-    let mut conds = vec![format!("region = '{}'", sql_quote(&opts.region)), "type = 'package'".to_string()];
+    let mut filter = travel_db::repo::offers::OfferFilter::new()
+        .region(&opts.region)
+        .offer_type("package");
     if let Some(d) = &opts.date {
-        conds.push(format!("departure_date >= '{}'", sql_quote(d)));
-        conds.push(format!("departure_date <= '{}'", sql_quote(d)));
+        filter = filter.departure_from(d).departure_to(d);
     }
+    let where_built = filter.build();
     let sql = format!(
         "SELECT id, source_id, price_per_person, currency, airline, hotel_name, name FROM offers \
-         WHERE {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT 500",
-        conds.join(" AND ")
+         {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT 500",
+        where_built.clause
     );
     let mut offers: Vec<RawOffer> = Vec::new();
     {
-        let mut rows = conn.query(sql.as_str(), ()).await.map_err(|e| format!("offers query: {e}"))?;
+        let mut rows = conn
+            .query(sql.as_str(), where_built.params)
+            .await
+            .map_err(|e| format!("offers query: {e}"))?;
         while let Some(r) = rows.next().await.map_err(|e| format!("offer row: {e}"))? {
             let ppp: Option<i64> = r.get(2).ok();
             let Some(price) = ppp else { continue };
