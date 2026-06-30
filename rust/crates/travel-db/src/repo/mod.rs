@@ -3,6 +3,7 @@ pub mod captures;
 pub mod days;
 pub mod destination_ref;
 pub mod freshness;
+pub mod hotels;
 pub mod observations;
 pub mod offers;
 pub mod ota_attempts;

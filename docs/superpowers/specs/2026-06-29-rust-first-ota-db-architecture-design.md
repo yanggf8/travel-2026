@@ -523,6 +523,10 @@ LEAVE the audit triad (`plan_events`/`plan_event_data`/`operation_runs`/`plans.v
   `days`-existence query (`route_segments::day_exists` delegates to it). Added a happy-path
   integration test (`set_day_theme_persists_and_preserves_zh`): theme+zh persists, and a theme-only
   follow-up must NOT clobber `theme_zh` — coverage the command lacked before. 2026-06-30.
+- `set-hotel` → `repo::hotels` (`upsert` — the dynamic INSERT…ON CONFLICT over the provided
+  columns + the `hotel_access_lines` DELETE/replace); audit stays in the command. Added an
+  access-only-preserve integration test (`set_hotel_access_only_preserves_scalars`): a later
+  `--access`-only call replaces the access lines but must NOT clobber `name`/`check_in`. 2026-06-30.
 
 `repo::days::exists` is the shared "days row exists" guard for itinerary mutations — reuse it, don't
 re-roll a `SELECT 1 FROM days`. The other `set_*`/`mark_*`/`swap_days` mutations remain inline

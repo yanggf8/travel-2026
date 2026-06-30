@@ -17,6 +17,7 @@
 // Verified no-cascade: cascade_dirty_flags UNCHANGED.
 
 use libsql::Connection;
+use travel_db::repo::hotels;
 
 #[derive(Default, Debug)]
 struct HotelInput {
@@ -170,41 +171,24 @@ async fn execute(
     let version_before = read_version(conn, plan_id).await?;
     let version_after = version_before + 1;
 
-    // 1. UPSERT hotels — write only the columns the user provided, keyed on
-    //    the (plan_id, destination) PK. A plain UPDATE silently no-ops when
-    //    the hotels row doesn't exist yet, which is exactly the booking-first
-    //    case: a hand-scaffolded plan that never adopted an offer (the offer
-    //    cascade is what normally seeds the skeleton hotels row). We INSERT
-    //    the row and, on conflict, apply the provided columns — so set-hotel
-    //    persists whether or not a skeleton row pre-exists. We always run the
-    //    upsert (even for an --access-only call) so the hotels row exists and
-    //    the access lines below are never orphaned.
-    upsert_hotel(conn, plan_id, destination, input, &now_db).await?;
-
-    // 2. hotel_access_lines — DELETE-then-reinsert (mirrors sync).
-    if !input.access.is_empty() {
-        conn.execute(
-            "DELETE FROM hotel_access_lines WHERE plan_id = ?1 AND destination = ?2",
-            libsql::params![plan_id.to_string(), destination.to_string()],
-        )
-        .await
-        .map_err(|e| format!("hotel_access_lines DELETE failed: {e}"))?;
-        for (i, line) in input.access.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                libsql::params![
-                    plan_id.to_string(),
-                    destination.to_string(),
-                    i as i64,
-                    line.clone(),
-                    now_db.clone()
-                ],
-            )
-            .await
-            .map_err(|e| format!("hotel_access_lines INSERT failed: {e}"))?;
-        }
-    }
+    // 1 + 2. UPSERT hotels (only the provided columns, keyed on the
+    //    (plan_id, destination) PK) + replace hotel_access_lines — domain writes
+    //    via the DAL. The upsert handles the booking-first case (a hand-scaffolded
+    //    plan with no skeleton hotels row) by INSERT…ON CONFLICT, and always runs
+    //    so the access lines are never orphaned.
+    hotels::upsert(
+        conn,
+        plan_id,
+        destination,
+        &hotels::HotelWrite {
+            name: input.name.clone(),
+            check_in: input.check_in.clone(),
+            notes: input.notes.clone(),
+            access: input.access.clone(),
+        },
+        &now_db,
+    )
+    .await?;
 
     // 3. plan_events + plan_event_data.
     let dest_process_so = next_dest_process_sort_order(
@@ -318,71 +302,6 @@ async fn execute(
     .map_err(|e| format!("plans UPDATE failed: {e}"))?;
 
     Ok(version_after)
-}
-
-/// Upsert the hotels row keyed on (plan_id, destination). Writes only the
-/// scalar columns the user provided; on conflict re-applies them. When the
-/// user passed only `--access` (no scalar fields), this still ensures the
-/// hotels row exists (INSERT a bare row; on conflict just bump updated_at) so
-/// the access lines are never orphaned.
-async fn upsert_hotel(
-    conn: &Connection,
-    plan_id: &str,
-    destination: &str,
-    input: &HotelInput,
-    now_db: &str,
-) -> Result<(), String> {
-    // (column, value) pairs the user provided, plus updated_at.
-    let mut cols: Vec<&str> = Vec::new();
-    let mut vals: Vec<String> = Vec::new();
-    if let Some(n) = &input.name {
-        cols.push("name");
-        vals.push(n.clone());
-    }
-    if let Some(c) = &input.check_in {
-        cols.push("check_in");
-        vals.push(c.clone());
-    }
-    if let Some(no) = &input.notes {
-        cols.push("notes");
-        vals.push(no.clone());
-    }
-    cols.push("updated_at");
-    vals.push(now_db.to_string());
-
-    // INSERT columns = PK (plan_id, destination) + provided columns.
-    let mut insert_cols: Vec<String> = vec!["plan_id".into(), "destination".into()];
-    insert_cols.extend(cols.iter().map(|c| c.to_string()));
-
-    let mut params: Vec<libsql::Value> = vec![
-        libsql::Value::Text(plan_id.to_string()),
-        libsql::Value::Text(destination.to_string()),
-    ];
-    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
-
-    let insert_ph: Vec<String> = (1..=insert_cols.len()).map(|n| format!("?{n}")).collect();
-
-    // DO UPDATE SET re-applies the provided columns with a fresh copy of the
-    // values, numbered after the INSERT params.
-    let base = params.len();
-    let update_sets: Vec<String> = cols
-        .iter()
-        .enumerate()
-        .map(|(idx, c)| format!("{c} = ?{}", base + 1 + idx))
-        .collect();
-    params.extend(vals.iter().map(|v| libsql::Value::Text(v.clone())));
-
-    let sql = format!(
-        "INSERT INTO hotels ({}) VALUES ({}) \
-         ON CONFLICT(plan_id, destination) DO UPDATE SET {}",
-        insert_cols.join(", "),
-        insert_ph.join(", "),
-        update_sets.join(", "),
-    );
-    conn.execute(&sql, params)
-        .await
-        .map_err(|e| format!("hotels upsert failed: {e}"))?;
-    Ok(())
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {

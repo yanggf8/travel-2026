@@ -213,6 +213,60 @@ fn set_hotel_persists_on_fresh_plan() {
     assert_eq!(access_count, Some(1), "the access line must be persisted");
 }
 
+// ── set-hotel: a later --access-only call must NOT clobber name/check_in ─────
+// Locks the repo::hotels::upsert partial-write semantics (the upsert writes only
+// the provided columns; an access-only call must leave existing scalars intact
+// while replacing the access lines).
+#[test]
+fn set_hotel_access_only_preserves_scalars() {
+    let tag = nanos();
+    let plan_id = format!("test-setbug-hotelacc-{tag}");
+    let _g = Guard::new({
+        let plan_id = plan_id.clone();
+        move || teardown(&plan_id)
+    });
+    let dest = format!("setbughotelacc_{tag}");
+    if !seed_bare(&plan_id, &dest) {
+        return;
+    }
+
+    // 1. Full write: name + check_in + one access line.
+    let (ok, _o, e) = run_cmd(
+        &plan_id,
+        &[
+            "set-hotel", "--dest", &dest,
+            "--name", "Hotel Collective", "--check-in", "2026-06-21",
+            "--access", "Kokusai-dori 2min",
+        ],
+    );
+    assert!(ok, "initial set-hotel must succeed; stderr={e}");
+
+    // 2. Access-only update: REPLACE the access lines, scalars untouched.
+    let (ok, _o, e) = run_cmd(
+        &plan_id,
+        &["set-hotel", "--dest", &dest, "--access", "Makishi Station 6min|Near food market"],
+    );
+    assert!(ok, "access-only set-hotel must succeed; stderr={e}");
+
+    let row = match db_exec(&format!(
+        "SELECT name, check_in FROM hotels WHERE plan_id = '{plan_id}'"
+    )) {
+        Some(r) => r,
+        None => return,
+    };
+    assert!(row.contains("Hotel Collective"), "name preserved after access-only; got {row}");
+    assert!(row.contains("2026-06-21"), "check_in preserved after access-only; got {row}");
+
+    // Access lines fully replaced (the two new lines, not the old single one).
+    assert_eq!(
+        count(&format!(
+            "SELECT COUNT(*) AS n FROM hotel_access_lines WHERE plan_id = '{plan_id}'"
+        )),
+        Some(2),
+        "access lines must be REPLACED (2 new lines), not appended"
+    );
+}
+
 // ── Bug 2: set-flight accepts --dest (advertised in the Example) ─────────────
 // (covered by set_flight_persists_on_fresh_plan, which passes --dest; this
 //  asserts the parser specifically does not reject it.)
