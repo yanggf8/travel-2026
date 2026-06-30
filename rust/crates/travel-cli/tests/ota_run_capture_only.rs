@@ -4,7 +4,7 @@
 use std::net::{SocketAddr, TcpStream};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod common;
 use common::Guard;
@@ -105,6 +105,82 @@ fn teardown_job(job_id: &str, capture_id: &str) {
         "db",
         "exec",
         &format!("DELETE FROM captures WHERE capture_id='{capture_id}'"),
+    ]);
+}
+
+fn nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+}
+
+fn exec_sql(sql: &str) -> (bool, String, String) {
+    run(&["db", "exec", sql])
+}
+
+fn teardown_source(source_id: &str) {
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "DELETE FROM offers WHERE produced_by_job_id IN \
+             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "DELETE FROM ota_observations WHERE job_id IN \
+             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "DELETE FROM ota_attempts WHERE job_id IN \
+             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "DELETE FROM ota_job_params WHERE job_id IN \
+             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!("DELETE FROM ota_jobs WHERE source_id='{source_id}'"),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!("DELETE FROM captures WHERE source_id='{source_id}'"),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!("DELETE FROM ota_source_url_token WHERE source_id='{source_id}'"),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!("DELETE FROM ota_source_workflow WHERE source_id='{source_id}'"),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!("DELETE FROM ota_sources WHERE source_id='{source_id}'"),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!("DELETE FROM catalog_runs WHERE command_summary LIKE '{source_id}%'"),
     ]);
 }
 
@@ -258,4 +334,213 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
         };
         assert_eq!(offers, 0, "capture-only must not write offers");
     }
+}
+
+#[tokio::test]
+async fn run_capture_only_rejects_ambiguous_token_candidates_before_navigation() {
+    let _lock = run_capture_only_test_lock();
+
+    let (ok, _stdout, stderr) = run(&["db", "migrate"]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "db migrate should succeed; stderr={stderr}");
+
+    if !chrome_available() {
+        eprintln!("skipping (Chrome remote debugging not available on 127.0.0.1:9222)");
+        return;
+    }
+    if std::env::var("TURSO_URL").is_err() || std::env::var("TURSO_TOKEN").is_err() {
+        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for ota_capture.py)");
+        return;
+    }
+
+    let source_id = format!("zzambig{}", nanos());
+    teardown_source(&source_id);
+    let _g = Guard::new({
+        let source_id = source_id.clone();
+        move || teardown_source(&source_id)
+    });
+
+    let (ok, _stdout, stderr) = run(&[
+        "set-ota-source",
+        &source_id,
+        "--name",
+        "ZZ Ambiguous",
+        "--status",
+        "active",
+    ]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "set-ota-source should succeed; stderr={stderr}");
+
+    for sql in [
+        format!(
+            "INSERT INTO ota_source_workflow \
+             (source_id, product_type, nav_kind, url_template, capture_url_contains, settle_ms) \
+             VALUES ('{source_id}', 'hotel', 'get', \
+             'https://example.com/hotels/{{hotel_slug}}?checkin={{checkin}}&rooms={{rooms}}&currency={{currency}}', \
+             'example.com/hotels', 0)"
+        ),
+        format!(
+            "INSERT INTO ota_source_url_token \
+             (source_id, product_type, placeholder, input_key, input_value, token_value) \
+             VALUES ('{source_id}', 'hotel', 'hotel_slug', 'destination', 'tokyo', 'dest-token')"
+        ),
+        format!(
+            "INSERT INTO ota_source_url_token \
+             (source_id, product_type, placeholder, input_key, input_value, token_value) \
+             VALUES ('{source_id}', 'hotel', 'hotel_slug', 'hotel', 'my-hotel', 'hotel-token')"
+        ),
+    ] {
+        let (ok, stdout, stderr) = exec_sql(&sql);
+        if !ok && is_credless(&stderr) {
+            eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+            return;
+        }
+        assert!(ok, "seed SQL should succeed; stdout={stdout} stderr={stderr}\nSQL: {sql}");
+    }
+
+    let (ok, stdout, stderr) = run(&[
+        "ota",
+        "run",
+        "--capture-only",
+        &source_id,
+        "hotel",
+        "--destination",
+        "tokyo",
+        "--hotel",
+        "my-hotel",
+        "--depart",
+        "2026-09-01",
+        "--nights",
+        "4",
+        "--pax",
+        "2",
+        "--rooms",
+        "1",
+        "--currency",
+        "TWD",
+    ]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+        return;
+    }
+
+    let combined = format!("{stdout}{stderr}");
+    let lower = combined.to_lowercase();
+    assert!(!ok, "ambiguous token candidates must fail; output={combined}");
+    assert!(lower.contains("ambiguous"), "output={combined}");
+    assert!(combined.contains("hotel_slug"), "output={combined}");
+    assert!(lower.contains("destination"), "output={combined}");
+    assert!(lower.contains("hotel"), "output={combined}");
+    assert!(
+        !lower.contains("navigate.py") && !lower.contains("ota_capture.py"),
+        "validation should fail before navigation/capture; output={combined}"
+    );
+}
+
+#[tokio::test]
+async fn run_capture_only_rejects_url_token_input_key_not_declared_for_product_type() {
+    let _lock = run_capture_only_test_lock();
+
+    let (ok, _stdout, stderr) = run(&["db", "migrate"]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "db migrate should succeed; stderr={stderr}");
+
+    if !chrome_available() {
+        eprintln!("skipping (Chrome remote debugging not available on 127.0.0.1:9222)");
+        return;
+    }
+    if std::env::var("TURSO_URL").is_err() || std::env::var("TURSO_TOKEN").is_err() {
+        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for ota_capture.py)");
+        return;
+    }
+
+    let source_id = format!("zzbadkey{}", nanos());
+    teardown_source(&source_id);
+    let _g = Guard::new({
+        let source_id = source_id.clone();
+        move || teardown_source(&source_id)
+    });
+
+    let (ok, _stdout, stderr) = run(&[
+        "set-ota-source",
+        &source_id,
+        "--name",
+        "ZZ Bad Key",
+        "--status",
+        "active",
+    ]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "set-ota-source should succeed; stderr={stderr}");
+
+    for sql in [
+        format!(
+            "INSERT INTO ota_source_workflow \
+             (source_id, product_type, nav_kind, url_template, capture_url_contains, settle_ms) \
+             VALUES ('{source_id}', 'hotel', 'get', \
+             'https://example.com/hotels/{{hotel_slug}}?checkin={{checkin}}&rooms={{rooms}}&currency={{currency}}', \
+             'example.com/hotels', 0)"
+        ),
+        format!(
+            "INSERT INTO ota_source_url_token \
+             (source_id, product_type, placeholder, input_key, input_value, token_value) \
+             VALUES ('{source_id}', 'hotel', 'hotel_slug', 'origin', 'TPE', 'bad-origin-token')"
+        ),
+    ] {
+        let (ok, stdout, stderr) = exec_sql(&sql);
+        if !ok && is_credless(&stderr) {
+            eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+            return;
+        }
+        assert!(ok, "seed SQL should succeed; stdout={stdout} stderr={stderr}\nSQL: {sql}");
+    }
+
+    let (ok, stdout, stderr) = run(&[
+        "ota",
+        "run",
+        "--capture-only",
+        &source_id,
+        "hotel",
+        "--destination",
+        "tokyo",
+        "--hotel",
+        "my-hotel",
+        "--depart",
+        "2026-09-01",
+        "--nights",
+        "4",
+        "--pax",
+        "2",
+        "--rooms",
+        "1",
+        "--currency",
+        "TWD",
+    ]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+        return;
+    }
+
+    let combined = format!("{stdout}{stderr}");
+    let lower = combined.to_lowercase();
+    assert!(!ok, "undeclared token input_key must fail; output={combined}");
+    assert!(lower.contains("input_key"), "output={combined}");
+    assert!(lower.contains("origin"), "output={combined}");
+    assert!(lower.contains("token_key"), "output={combined}");
+    assert!(lower.contains("hotel"), "output={combined}");
+    assert!(
+        !lower.contains("navigate.py") && !lower.contains("ota_capture.py"),
+        "validation should fail before navigation/capture; output={combined}"
+    );
 }

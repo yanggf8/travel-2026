@@ -5,7 +5,9 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 use travel_db::ids::new_run_id;
-use travel_db::repo::{ota_jobs, ota_source_workflow};
+use travel_db::repo::{
+    origin, ota_jobs, ota_source_workflow, product_type_inputs,
+};
 
 const PARAM_FLAGS: &[&str] = &[
     "--depart",
@@ -15,11 +17,16 @@ const PARAM_FLAGS: &[&str] = &[
     "--region-code",
     "--region-label",
     "--destination",
+    "--origin",
+    "--currency",
+    "--rooms",
+    "--hotel",
 ];
 
 const RUN_USAGE: &str = "Usage: travel ota run --capture-only <source_id> <product_type> \
-             [--destination <slug>] [--depart YYYY-MM-DD] [--return YYYY-MM-DD] [--nights N] \
-             [--pax N] [--region-code C] [--region-label L]";
+             [--destination <slug>] [--hotel <slug>] [--depart YYYY-MM-DD] [--return YYYY-MM-DD] \
+             [--nights N] [--pax N] [--origin <code>] [--currency <code>] [--rooms N] \
+             [--region-code C] [--region-label L]";
 
 /// Pure URL template interpolation: replace every `{name}` from `params`.
 pub fn resolve_url(template: &str, params: &BTreeMap<String, String>) -> Result<String, String> {
@@ -80,6 +87,160 @@ fn insert_param(map: &mut BTreeMap<String, String>, key: &str, value: String) ->
     Ok(())
 }
 
+fn caller_value(job_params: &BTreeMap<String, String>, input_name: &str) -> Option<String> {
+    let keys: &[&str] = match input_name {
+        "depart" => &["depart_date", "depart"],
+        "return" => &["return_date", "return"],
+        _ => &[input_name],
+    };
+    for key in keys {
+        if let Some(v) = job_params.get(*key) {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn apply_common_aliases(map: &mut BTreeMap<String, String>) -> Result<(), String> {
+    if let Some(depart) = map.get("depart_date").cloned() {
+        insert_param(map, "depart", depart.clone())?;
+        insert_param(map, "checkin", depart)?;
+    }
+    if let Some(depart) = map.get("depart").cloned() {
+        insert_param(map, "checkin", depart)?;
+    }
+    if let Some(ret) = map.get("return_date").cloned() {
+        insert_param(map, "return", ret)?;
+    }
+    if let Some(pax) = map.get("pax").cloned() {
+        insert_param(map, "adults", pax)?;
+    }
+    Ok(())
+}
+
+async fn fill_common_inputs(
+    conn: &libsql::Connection,
+    contract: &[product_type_inputs::ProductTypeInputRow],
+    job_params: &BTreeMap<String, String>,
+    map: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    let db_defaults = origin::default_origin_airport_and_currency(conn).await?;
+
+    for row in contract.iter().filter(|r| r.input_class == "common") {
+        let value = if let Some(v) = caller_value(job_params, &row.input_name) {
+            Some(v)
+        } else if row.default_source.as_deref() == Some("db") {
+            match row.input_name.as_str() {
+                "origin" => Some(db_defaults.airport.clone()),
+                "currency" => Some(db_defaults.currency.clone()),
+                other => {
+                    return Err(format!(
+                        "no DB default for common input '{other}' (product_type={})",
+                        row.product_type
+                    ));
+                }
+            }
+        } else if row.default_source.as_deref() == Some("code") && row.input_name == "rooms" {
+            Some("1".to_string())
+        } else {
+            None
+        };
+
+        let value = match value {
+            Some(v) => v,
+            None if row.required != 0 => {
+                return Err(format!(
+                    "missing required common input '{}' for product_type {}",
+                    row.input_name, row.product_type
+                ));
+            }
+            None => continue,
+        };
+
+        insert_param(map, &row.input_name, value)?;
+    }
+
+    apply_common_aliases(map)
+}
+
+async fn resolve_token_placeholders(
+    conn: &libsql::Connection,
+    source_id: &str,
+    product_type: &str,
+    url_template: &str,
+    contract: &[product_type_inputs::ProductTypeInputRow],
+    map: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    let legal_roles: BTreeSet<String> = contract
+        .iter()
+        .filter(|r| r.input_class == "token_key")
+        .map(|r| r.input_name.clone())
+        .collect();
+
+    for placeholder in find_placeholders(url_template) {
+        if map.contains_key(&placeholder) {
+            continue;
+        }
+
+        let registered_keys =
+            ota_source_workflow::url_token_input_keys(conn, source_id, product_type, &placeholder)
+                .await?;
+        for key in &registered_keys {
+            if !legal_roles.contains(key) {
+                return Err(format!(
+                    "input_key '{key}' registered for placeholder '{placeholder}' is not a declared token_key for product_type '{product_type}' (legal token_key roles: {})",
+                    legal_roles
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+
+        let mut hits: Vec<(String, String)> = Vec::new();
+        for role in &legal_roles {
+            let Some(value) = map.get(role).cloned() else {
+                continue;
+            };
+            if let Some(token) = ota_source_workflow::url_token(
+                conn,
+                source_id,
+                product_type,
+                &placeholder,
+                role,
+                &value,
+            )
+            .await?
+            {
+                hits.push((role.clone(), token));
+            }
+        }
+
+        match hits.len() {
+            0 => {
+                let roles: Vec<&str> = legal_roles.iter().map(|r| r.as_str()).collect();
+                return Err(format!(
+                    "no url-token for placeholder '{placeholder}' (source={source_id}, product_type={product_type}, tried token_key roles: {})",
+                    roles.join(", ")
+                ));
+            }
+            1 => {
+                insert_param(map, &placeholder, hits[0].1.clone())?;
+            }
+            _ => {
+                let roles: Vec<&str> = hits.iter().map(|(r, _)| r.as_str()).collect();
+                return Err(format!(
+                    "ambiguous token resolution for placeholder '{placeholder}' (source={source_id}, product_type={product_type}): multiple token_key roles matched ({})",
+                    roles.join(", ")
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn run(args: &[String]) -> Result<(), String> {
     if !args.iter().any(|a| a == "--capture-only") {
         return Err(RUN_USAGE.to_string());
@@ -131,6 +292,26 @@ pub async fn run(args: &[String]) -> Result<(), String> {
                 params.insert("destination".to_string(), v.clone());
                 i += 2;
             }
+            "--origin" => {
+                let v = args.get(i + 1).ok_or("missing value for --origin")?;
+                params.insert("origin".to_string(), v.clone());
+                i += 2;
+            }
+            "--currency" => {
+                let v = args.get(i + 1).ok_or("missing value for --currency")?;
+                params.insert("currency".to_string(), v.clone());
+                i += 2;
+            }
+            "--rooms" => {
+                let v = args.get(i + 1).ok_or("missing value for --rooms")?;
+                params.insert("rooms".to_string(), v.clone());
+                i += 2;
+            }
+            "--hotel" => {
+                let v = args.get(i + 1).ok_or("missing value for --hotel")?;
+                params.insert("hotel".to_string(), v.clone());
+                i += 2;
+            }
             _ => i += 1,
         }
     }
@@ -173,41 +354,29 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 
     match workflow.nav_kind.as_str() {
         "get" => {
-            let mut map: BTreeMap<String, String> = ota_jobs::get_params(&conn, &job_id)
+            let job_params: BTreeMap<String, String> = ota_jobs::get_params(&conn, &job_id)
                 .await?
                 .into_iter()
                 .collect();
 
-            if let Some(depart) = map.get("depart_date").cloned() {
-                insert_param(&mut map, "depart", depart)?;
-            }
-            if let Some(ret) = map.get("return_date").cloned() {
-                insert_param(&mut map, "return", ret)?;
+            let contract = product_type_inputs::list_for_type(&conn, product_type).await?;
+            if contract.is_empty() {
+                return Err(format!(
+                    "no product_type_inputs contract for product_type '{product_type}'"
+                ));
             }
 
-            for placeholder in find_placeholders(&workflow.url_template) {
-                if map.contains_key(&placeholder) {
-                    continue;
-                }
-                let destination = map
-                    .get("destination")
-                    .ok_or("missing --destination for token resolution")?;
-                let token = ota_source_workflow::url_token(
-                    &conn,
-                    source_id,
-                    product_type,
-                    &placeholder,
-                    "destination",
-                    destination,
-                )
-                .await?
-                .ok_or_else(|| {
-                    format!(
-                        "no url-token for placeholder {placeholder} (source={source_id}, destination={destination})"
-                    )
-                })?;
-                insert_param(&mut map, &placeholder, token)?;
-            }
+            let mut map = job_params.clone();
+            fill_common_inputs(&conn, &contract, &job_params, &mut map).await?;
+            resolve_token_placeholders(
+                &conn,
+                source_id,
+                product_type,
+                &workflow.url_template,
+                &contract,
+                &mut map,
+            )
+            .await?;
 
             let url = resolve_url(&workflow.url_template, &map)?;
 
@@ -397,5 +566,85 @@ mod tests {
         assert!(err.contains("dest_code"), "err={err}");
         assert!(err.contains("TYO"), "err={err}");
         assert!(err.contains("NRT"), "err={err}");
+    }
+
+    #[test]
+    fn common_contract_aliases_and_defaults_resolve_provider_placeholders() {
+        let mut params = map(&[
+            ("depart_date", "2026-09-01"),
+            ("return_date", "2026-09-05"),
+            ("pax", "2"),
+        ]);
+
+        insert_param(&mut params, "origin", "TPE".to_string()).expect("db default origin");
+        insert_param(&mut params, "currency", "TWD".to_string()).expect("db default currency");
+        insert_param(&mut params, "rooms", "1".to_string()).expect("code default rooms");
+
+        if let Some(depart) = params.get("depart_date").cloned() {
+            insert_param(&mut params, "depart", depart.clone()).expect("depart alias");
+            insert_param(&mut params, "checkin", depart).expect("checkin alias");
+        }
+        if let Some(ret) = params.get("return_date").cloned() {
+            insert_param(&mut params, "return", ret.clone()).expect("return alias");
+        }
+        if let Some(pax) = params.get("pax").cloned() {
+            insert_param(&mut params, "adults", pax).expect("adults alias");
+        }
+
+        assert_eq!(
+            resolve_url(
+                "https://example.com/search?from={origin}&checkin={checkin}&depart={depart}&return={return}&adults={adults}&rooms={rooms}&currency={currency}",
+                &params
+            )
+            .expect("common-filled url"),
+            "https://example.com/search?from=TPE&checkin=2026-09-01&depart=2026-09-01&return=2026-09-05&adults=2&rooms=1&currency=TWD"
+        );
+    }
+
+    #[test]
+    fn caller_common_values_override_db_and_code_defaults() {
+        let mut params = map(&[
+            ("origin", "KHH"),
+            ("currency", "JPY"),
+            ("rooms", "2"),
+            ("depart_date", "2026-09-01"),
+        ]);
+
+        if !params.contains_key("origin") {
+            insert_param(&mut params, "origin", "TPE".to_string()).expect("db default origin");
+        }
+        if !params.contains_key("currency") {
+            insert_param(&mut params, "currency", "TWD".to_string()).expect("db default currency");
+        }
+        if !params.contains_key("rooms") {
+            insert_param(&mut params, "rooms", "1".to_string()).expect("code default rooms");
+        }
+        if let Some(depart) = params.get("depart_date").cloned() {
+            insert_param(&mut params, "depart", depart.clone()).expect("depart alias");
+            insert_param(&mut params, "checkin", depart).expect("checkin alias");
+        }
+
+        assert_eq!(
+            resolve_url(
+                "https://example.com/search?from={origin}&checkin={checkin}&rooms={rooms}&currency={currency}",
+                &params
+            )
+            .expect("caller overrides"),
+            "https://example.com/search?from=KHH&checkin=2026-09-01&rooms=2&currency=JPY"
+        );
+    }
+
+    #[test]
+    fn required_common_input_missing_fails_loud_via_unresolved_placeholder() {
+        let params = map(&[("destination", "tokyo")]);
+
+        let err = resolve_url(
+            "https://example.com/search?depart={depart}&dest={destination}",
+            &params,
+        )
+        .expect_err("missing required common input should fail");
+
+        assert!(err.contains("missing placeholders"), "err={err}");
+        assert!(err.contains("depart"), "err={err}");
     }
 }

@@ -279,7 +279,63 @@ async fn set_ota_url_token_round_trip_writes_row_and_audit() {
 }
 
 #[tokio::test]
-async fn set_ota_url_token_rejects_non_destination_input_key_and_writes_nothing() {
+async fn set_ota_url_token_hotel_round_trip_writes_row_and_audit() {
+    let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let sid = format!("zztest{}", nanos());
+    teardown_tier1(&sid);
+    let _g = Guard::new({
+        let sid = sid.clone();
+        move || teardown_tier1(&sid)
+    });
+
+    let (ok, _o, err) = run(&["set-ota-source", &sid, "--name", "ZZ Test", "--status", "active"]);
+    assert!(ok, "set-ota-source should succeed; err={err}");
+
+    let (ok, stdout, stderr) = run(&[
+        "set-ota-url-token",
+        &sid,
+        "hotel",
+        "hotel_slug",
+        "hotel",
+        "my-hotel",
+        "tok",
+    ]);
+    assert!(
+        ok,
+        "set-ota-url-token hotel should succeed; stdout={stdout} stderr={stderr}"
+    );
+
+    assert_eq!(
+        scalar(&format!(
+            "SELECT token_value FROM ota_source_url_token \
+             WHERE source_id='{sid}' AND product_type='hotel' AND placeholder='hotel_slug' \
+               AND input_key='hotel' AND input_value='my-hotel'"
+        ))
+        .as_deref(),
+        Some("tok"),
+        "hotel token row landed"
+    );
+
+    let Some(audit) = scalar(&format!(
+        "SELECT count(*) AS n FROM catalog_runs \
+         WHERE command_type='set-ota-url-token' AND command_summary LIKE '{sid}/hotel%'"
+    )) else {
+        return;
+    };
+    assert!(
+        audit.parse::<i64>().unwrap_or(0) >= 1,
+        "set-ota-url-token hotel wrote a catalog_runs audit row"
+    );
+}
+
+#[tokio::test]
+async fn set_ota_url_token_rejects_origin_input_key_and_writes_nothing() {
     let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (ok, _o, err) = run(&["db", "migrate"]);
     if !ok && is_credless(&err) {

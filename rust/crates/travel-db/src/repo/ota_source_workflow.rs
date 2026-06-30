@@ -96,3 +96,30 @@ pub async fn url_token(
     };
     Ok(Some(row.get(0).map_err(|e| e.to_string())?))
 }
+
+/// Distinct `input_key` values registered for a URL placeholder on a source/product_type pair.
+pub async fn url_token_input_keys(
+    conn: &Connection,
+    source_id: &str,
+    product_type: &str,
+    placeholder: &str,
+) -> Result<Vec<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT input_key FROM ota_source_url_token \
+             WHERE source_id = ?1 AND product_type = ?2 AND placeholder = ?3 \
+             ORDER BY input_key",
+            libsql::params![
+                source_id.to_string(),
+                product_type.to_string(),
+                placeholder.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.push(row.get(0).map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}

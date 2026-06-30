@@ -298,9 +298,9 @@ pub async fn run_set_url_token(args: &[String]) -> Result<(), String> {
     let input_value = pos[4].to_string();
     let token_value = pos[5].to_string();
 
-    if input_key != "destination" {
+    if input_key != "destination" && input_key != "hotel" {
         return Err(format!(
-            "Error: input_key must be destination (v1 only; got {input_key})"
+            "Error: input_key must be destination or hotel (got {input_key})"
         ));
     }
 

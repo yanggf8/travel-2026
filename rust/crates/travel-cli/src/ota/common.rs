@@ -14,6 +14,10 @@ pub const VALID_PARAM_KEYS: &[&str] = &[
     "region_code",
     "region_label",
     "destination",
+    "origin",
+    "currency",
+    "rooms",
+    "hotel",
 ];
 
 pub fn now_iso() -> String {

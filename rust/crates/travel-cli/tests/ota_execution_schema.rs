@@ -223,6 +223,30 @@ async fn execution_check_constraints_reject_invalid_rows() {
     }
     assert!(ok, "seed ota_jobs row should succeed; err={err}");
 
+    for (param_key, param_value) in [
+        ("origin", "TPE"),
+        ("currency", "TWD"),
+        ("rooms", "1"),
+        ("hotel", "my-hotel"),
+    ] {
+        let (ok, stdout, stderr) = run(&[
+            "db",
+            "exec",
+            &format!(
+                "INSERT INTO ota_job_params (job_id, param_key, param_value) \
+                 VALUES ('{job_id}', '{param_key}', '{param_value}')"
+            ),
+        ]);
+        if !ok && is_credless(&stderr) {
+            eprintln!("skipping (no creds mid-test): {}", stderr.trim());
+            return;
+        }
+        assert!(
+            ok,
+            "ota_job_params.param_key='{param_key}' should be accepted; stdout={stdout} stderr={stderr}"
+        );
+    }
+
     // Bad ota_job_params.param_key
     exec_must_fail(
         &format!(

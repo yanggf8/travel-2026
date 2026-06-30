@@ -167,6 +167,49 @@ async fn workflow_and_url_token_schema_seed_rows_and_nav_kind_check() {
         "ota_source_url_token must have 5-column PK"
     );
 
+    let Some(input_cols) = columns_of("product_type_inputs") else {
+        return;
+    };
+    for col in [
+        "product_type",
+        "input_name",
+        "input_class",
+        "required",
+        "default_source",
+        "sort_order",
+    ] {
+        assert!(
+            input_cols.iter().any(|c| c == col),
+            "product_type_inputs must have column {col}; got {input_cols:?}"
+        );
+    }
+
+    let Some(input_pk) = pk_columns_of("product_type_inputs") else {
+        return;
+    };
+    assert_eq!(
+        input_pk,
+        vec!["product_type".to_string(), "input_name".to_string()],
+        "product_type_inputs must have product_type/input_name PK"
+    );
+
+    for (product_type, want_count) in [
+        ("flight", "5"),
+        ("hotel", "7"),
+        ("fit", "4"),
+        ("group_tour", "1"),
+    ] {
+        let Some(got_count) = scalar(&format!(
+            "SELECT count(*) AS n FROM product_type_inputs WHERE product_type='{product_type}'"
+        )) else {
+            return;
+        };
+        assert_eq!(
+            got_count, want_count,
+            "product_type_inputs seeded row count for {product_type}"
+        );
+    }
+
     let expected = [
         (
             "settour",

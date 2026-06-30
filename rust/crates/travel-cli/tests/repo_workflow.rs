@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use travel_db::repo::{ota_jobs, ota_source_workflow};
+use travel_db::repo::{origin, ota_jobs, ota_source_workflow, product_type_inputs};
 
 mod common;
 use common::Guard;
@@ -388,5 +388,122 @@ async fn url_token_looks_up_seeded_token_and_missing_returns_none() {
     .await
     .expect("missing url token lookup");
     assert!(missing.is_none(), "missing token row must return None");
+}
+
+#[tokio::test]
+async fn product_type_inputs_list_for_type_returns_seeded_contracts_in_order() {
+    let _lock = repo_workflow_test_lock();
+    let (ok, _stdout, stderr) = run(&["db", "migrate"]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "db migrate should succeed; stderr={stderr}");
+
+    let conn = match connect_write().await {
+        Ok(c) => c,
+        Err(e) if is_credless(&e) => {
+            eprintln!("skipping repo workflow test: {e}");
+            return;
+        }
+        Err(e) => panic!("connect failed: {e}"),
+    };
+
+    let cases: Vec<(&str, Vec<(&str, &str, i64, Option<&str>)>)> = vec![
+        (
+            "flight",
+            vec![
+                ("destination", "token_key", 1, None),
+                ("depart", "common", 1, Some("caller")),
+                ("return", "common", 1, Some("caller")),
+                ("origin", "common", 1, Some("db")),
+                ("currency", "common", 1, Some("db")),
+            ],
+        ),
+        (
+            "hotel",
+            vec![
+                ("destination", "token_key", 1, None),
+                ("hotel", "token_key", 1, None),
+                ("depart", "common", 1, Some("caller")),
+                ("nights", "common", 1, Some("caller")),
+                ("pax", "common", 1, Some("caller")),
+                ("rooms", "common", 1, Some("code")),
+                ("currency", "common", 1, Some("db")),
+            ],
+        ),
+        (
+            "fit",
+            vec![
+                ("destination", "token_key", 1, None),
+                ("depart", "common", 1, Some("caller")),
+                ("return", "common", 1, Some("caller")),
+                ("pax", "common", 1, Some("caller")),
+            ],
+        ),
+        (
+            "group_tour",
+            vec![("destination", "token_key", 1, None)],
+        ),
+    ];
+
+    for (product_type, expected) in cases {
+        let rows = product_type_inputs::list_for_type(&conn, product_type)
+            .await
+            .expect("list product_type_inputs");
+
+        assert!(
+            rows.iter().all(|r| r.product_type == product_type),
+            "all rows must be scoped to {product_type}: {rows:?}"
+        );
+        assert!(
+            rows.windows(2).all(|pair| {
+                (pair[0].sort_order, pair[0].input_name.as_str())
+                    <= (pair[1].sort_order, pair[1].input_name.as_str())
+            }),
+            "rows must be ordered by sort_order, input_name: {rows:?}"
+        );
+
+        let got: Vec<(&str, &str, i64, Option<&str>)> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.input_name.as_str(),
+                    r.input_class.as_str(),
+                    r.required,
+                    r.default_source.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(got, expected, "contract rows for {product_type}");
+    }
+}
+
+#[tokio::test]
+async fn origin_default_origin_airport_and_currency_reads_seeded_defaults() {
+    let _lock = repo_workflow_test_lock();
+    let (ok, _stdout, stderr) = run(&["db", "migrate"]);
+    if !ok && is_credless(&stderr) {
+        eprintln!("skipping (no creds): {}", stderr.trim());
+        return;
+    }
+    assert!(ok, "db migrate should succeed; stderr={stderr}");
+
+    let conn = match connect_write().await {
+        Ok(c) => c,
+        Err(e) if is_credless(&e) => {
+            eprintln!("skipping repo workflow test: {e}");
+            return;
+        }
+        Err(e) => panic!("connect failed: {e}"),
+    };
+
+    let got = origin::default_origin_airport_and_currency(&conn)
+        .await
+        .expect("default origin airport/currency");
+
+    assert_eq!(got.slug, "taiwan");
+    assert_eq!(got.airport, "TPE");
+    assert_eq!(got.currency, "TWD");
 }
 
