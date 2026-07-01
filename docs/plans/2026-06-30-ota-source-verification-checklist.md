@@ -42,10 +42,13 @@ travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --ts
 > **direct GET** — none needed form-driving. The `nav_kind='form'` + `ota_source_form_step` machinery in
 > the workflow-nodes spec has ZERO proven need yet; defer it until a source actually requires it.
 
-### ⬜ Proven on OLD path, NOT yet Rust-verified (the actionable queue — agent-parse, no per-source code)
-- [ ] **agoda** (`hotel`) — `agoda.com/{hotel_slug}/hotel/{city_slug}-{country}.html?checkIn=…&los=<nights>&adults=…`
-- [ ] **google_flights** (`flight`) — `google.com/travel/flights?q=Flights+to+<dest>+from+<origin>+on+<depart>+through+<return>`
-- [ ] **travel4u** (`group_tour`) — `travel4u.com.tw/group/area/<area_code>/japan/`
+### 🟡 Resolver-onboarded (Plan 2, 2026-07-01) — URL resolves via `ota run --capture-only`, write-offers still pending
+These 3 are now DB-registered (workflow + url_param seed rows) and resolve end-to-end through the
+product_type contract resolver, verified by a live capture (real page, no unresolved braces). They are
+NOT yet ✅ Rust-verified — that requires a full `ota write-offers` (agent reads raw_text → TSV → offers).
+- [~] **travel4u** (`group_tour`) — seed `area_code/destination/tokyo→41`; resolves `group/area/41/japan/`.
+- [~] **google_flights** (`flight`) — seed `dest/destination/tokyo→Tokyo`; resolves `Flights+to+Tokyo+from+TPE+…` (capture `google_flights-20260701T094041Z`, 32 results, TWD prices).
+- [~] **agoda** (`hotel`) — seed `hotel_slug/hotel/shinjuku-washington-hotel-main-building`, `city_slug/destination/tokyo→tokyo`, `country/destination/tokyo→jp`; resolves the Shinjuku Washington hotel page (capture `agoda-20260701T094115Z`). hotel_slug is HOTEL-keyed (avoids the ambiguity branch).
 
 ### ⛔ Blocked / deferred (each carries a `blocked_reason_code` — needs a human or is parked)
 - [ ] **liontravel** (`fit`) — `renderer_wedge` (Chrome under WSLg wedges on the page; parked)

@@ -239,6 +239,20 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
             "group/area",
             "25000",
         ),
+        (
+            "google_flights",
+            "flight",
+            "https://www.google.com/travel/flights?q=Flights+to+{dest}+from+{origin}+on+{depart_date}+through+{return_date}&curr={currency}&hl=zh-TW",
+            "travel/flights",
+            "25000",
+        ),
+        (
+            "agoda",
+            "hotel",
+            "https://www.agoda.com/{hotel_slug}/hotel/{city_slug}-{country}.html?checkIn={checkin}&los={nights}&adults={adults}&rooms={rooms}&currency={currency}",
+            "/hotel/",
+            "30000",
+        ),
     ];
 
     for (source_id, product_type, url_template, capture_url_contains, settle_ms) in expected {
@@ -276,6 +290,9 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
         ("settour", "fit", "dest_code", "NRT"),
         ("eztravel", "fit", "dest_code", "TYO"),
         ("travel4u", "group_tour", "area_code", "41"),
+        ("google_flights", "flight", "dest", "Tokyo"),
+        ("agoda", "hotel", "city_slug", "tokyo"),
+        ("agoda", "hotel", "country", "jp"),
     ] {
         let Some(got_url_value) = scalar(&format!(
             "SELECT url_value FROM ota_source_url_param \
@@ -287,6 +304,19 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
         assert_eq!(
             got_url_value, url_value,
             "{source_id}/{product_type}/{url_param_name}/destination/tokyo token"
+        );
+    }
+
+    // agoda hotel_slug is HOTEL-keyed (input_name='hotel'), not destination — assert it separately so
+    // the destination-only loop above stays correct and this row isn't silently missed.
+    if let Some(got_hotel_slug) = scalar(
+        "SELECT url_value FROM ota_source_url_param \
+         WHERE source_id='agoda' AND product_type='hotel' AND url_param_name='hotel_slug' \
+           AND input_name='hotel' AND input_value='shinjuku-washington-hotel-main-building'",
+    ) {
+        assert_eq!(
+            got_hotel_slug, "shinjuku-washington-hotel-main-building",
+            "agoda hotel_slug hotel-keyed url_param"
         );
     }
 

@@ -223,15 +223,34 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
         }
     });
 
-    let cases: &[(&str, &str, &[&str])] = &[
-        ("besttour", "group_tour", &["295"]),
-        ("settour", "fit", &["NRT", "179900"]),
-        ("eztravel", "fit", &["TYO"]),
-        ("travel4u", "group_tour", &["41"]),
+    // (source, product_type, extra CLI args beyond the shared `--destination tokyo`, expected URL fragments)
+    let date_args: &[&str] = &["--depart", "2026-09-01", "--return", "2026-09-05", "--pax", "2"];
+    let agoda_args: &[&str] = &[
+        "--hotel",
+        "shinjuku-washington-hotel-main-building",
+        "--depart",
+        "2026-09-01",
+        "--nights",
+        "4",
+        "--pax",
+        "2",
+    ];
+    let cases: &[(&str, &str, &[&str], &[&str])] = &[
+        ("besttour", "group_tour", date_args, &["295"]),
+        ("settour", "fit", date_args, &["NRT", "179900"]),
+        ("eztravel", "fit", date_args, &["TYO"]),
+        ("travel4u", "group_tour", date_args, &["41"]),
+        ("google_flights", "flight", date_args, &["Tokyo", "TPE"]),
+        (
+            "agoda",
+            "hotel",
+            agoda_args,
+            &["shinjuku-washington-hotel-main-building", "tokyo-jp"],
+        ),
     ];
 
-    for (source_id, product_type, expected_url_fragments) in cases {
-        let (ok, stdout, stderr) = run(&[
+    for (source_id, product_type, extra_args, expected_url_fragments) in cases {
+        let mut args: Vec<&str> = vec![
             "ota",
             "run",
             "--capture-only",
@@ -239,13 +258,9 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
             product_type,
             "--destination",
             "tokyo",
-            "--depart",
-            "2026-09-01",
-            "--return",
-            "2026-09-05",
-            "--pax",
-            "2",
-        ]);
+        ];
+        args.extend_from_slice(extra_args);
+        let (ok, stdout, stderr) = run(&args);
         if !ok && is_credless(&stderr) {
             eprintln!("skipping (no creds mid-test): {}", stderr.trim());
             return;

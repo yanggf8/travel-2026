@@ -9,3 +9,7 @@ INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_n
 INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('settour','fit','dest_code','destination','tokyo','NRT');
 INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('eztravel','fit','dest_code','destination','tokyo','TYO');
 INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('travel4u','group_tour','area_code','destination','tokyo','41');
+INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('google_flights','flight','dest','destination','tokyo','Tokyo');
+INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('agoda','hotel','city_slug','destination','tokyo','tokyo');
+INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('agoda','hotel','country','destination','tokyo','jp');
+INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('agoda','hotel','hotel_slug','hotel','shinjuku-washington-hotel-main-building','shinjuku-washington-hotel-main-building');
