@@ -308,17 +308,22 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
     }
 
     // agoda hotel_slug is HOTEL-keyed (input_name='hotel'), not destination — assert it separately so
-    // the destination-only loop above stays correct and this row isn't silently missed.
-    if let Some(got_hotel_slug) = scalar(
-        "SELECT url_value FROM ota_source_url_param \
+    // the destination-only loop above stays correct. A plain `SELECT url_value` returns None BOTH when
+    // credless AND when the row is missing, which would silently skip a dropped seed row. So first assert
+    // the COUNT (a COUNT query returns Some("0") when creds are present but the row is absent → fails
+    // loud; None only when credless → skip), then check the value.
+    let Some(hotel_slug_count) = scalar(
+        "SELECT count(*) AS n FROM ota_source_url_param \
          WHERE source_id='agoda' AND product_type='hotel' AND url_param_name='hotel_slug' \
-           AND input_name='hotel' AND input_value='shinjuku-washington-hotel-main-building'",
-    ) {
-        assert_eq!(
-            got_hotel_slug, "shinjuku-washington-hotel-main-building",
-            "agoda hotel_slug hotel-keyed url_param"
-        );
-    }
+           AND input_name='hotel' AND input_value='shinjuku-washington-hotel-main-building' \
+           AND url_value='shinjuku-washington-hotel-main-building'",
+    ) else {
+        return; // credless — scalar already logged the skip
+    };
+    assert_eq!(
+        hotel_slug_count, "1",
+        "agoda hotel_slug must be seeded exactly once as a HOTEL-keyed url_param (input_name='hotel')"
+    );
 
     let suffix = nanos();
     let custom_source_id = format!("zzwf{suffix}custom");

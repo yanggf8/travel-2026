@@ -1,6 +1,7 @@
 # Plan 2: OTA resolver — source onboarding
 
-**Date:** 2026-07-01 · **Status:** READY TO BUILD, CAPTURE-GATED.
+**Date:** 2026-07-01 · **Status:** ✅ DONE (Track A `94894de`, Track B `0dd5429`). All 6 sources
+onboarded + resolve via `ota run --capture-only`; agoda/google_flights values from live captures.
 **Design:** `docs/superpowers/specs/2026-07-01-ota-resolver-extension-design.md` (Plan 2 source onboarding).
 **Builds on:** `docs/plans/2026-07-01-ota-resolver-plan1-contract-mechanics.md`.
 **Scope:** data onboarding only. No resolver/schema/command changes expected.
