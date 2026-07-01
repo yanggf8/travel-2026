@@ -165,7 +165,7 @@ fn teardown_source(source_id: &str) {
     let _ = run(&[
         "db",
         "exec",
-        &format!("DELETE FROM ota_source_url_token WHERE source_id='{source_id}'"),
+        &format!("DELETE FROM ota_source_url_param WHERE source_id='{source_id}'"),
     ]);
     let _ = run(&[
         "db",
@@ -386,13 +386,13 @@ async fn run_capture_only_rejects_ambiguous_token_candidates_before_navigation()
              'example.com/hotels', 0)"
         ),
         format!(
-            "INSERT INTO ota_source_url_token \
-             (source_id, product_type, placeholder, input_key, input_value, token_value) \
+            "INSERT INTO ota_source_url_param \
+             (source_id, product_type, url_param_name, input_name, input_value, url_value) \
              VALUES ('{source_id}', 'hotel', 'hotel_slug', 'destination', 'tokyo', 'dest-token')"
         ),
         format!(
-            "INSERT INTO ota_source_url_token \
-             (source_id, product_type, placeholder, input_key, input_value, token_value) \
+            "INSERT INTO ota_source_url_param \
+             (source_id, product_type, url_param_name, input_name, input_value, url_value) \
              VALUES ('{source_id}', 'hotel', 'hotel_slug', 'hotel', 'my-hotel', 'hotel-token')"
         ),
     ] {
@@ -444,7 +444,7 @@ async fn run_capture_only_rejects_ambiguous_token_candidates_before_navigation()
 }
 
 #[tokio::test]
-async fn run_capture_only_rejects_url_token_input_key_not_declared_for_product_type() {
+async fn run_capture_only_rejects_url_param_input_name_not_declared_for_product_type() {
     let _lock = run_capture_only_test_lock();
 
     let (ok, _stdout, stderr) = run(&["db", "migrate"]);
@@ -493,8 +493,8 @@ async fn run_capture_only_rejects_url_token_input_key_not_declared_for_product_t
              'example.com/hotels', 0)"
         ),
         format!(
-            "INSERT INTO ota_source_url_token \
-             (source_id, product_type, placeholder, input_key, input_value, token_value) \
+            "INSERT INTO ota_source_url_param \
+             (source_id, product_type, url_param_name, input_name, input_value, url_value) \
              VALUES ('{source_id}', 'hotel', 'hotel_slug', 'origin', 'TPE', 'bad-origin-token')"
         ),
     ] {
@@ -534,8 +534,8 @@ async fn run_capture_only_rejects_url_token_input_key_not_declared_for_product_t
 
     let combined = format!("{stdout}{stderr}");
     let lower = combined.to_lowercase();
-    assert!(!ok, "undeclared token input_key must fail; output={combined}");
-    assert!(lower.contains("input_key"), "output={combined}");
+    assert!(!ok, "undeclared token input_name must fail; output={combined}");
+    assert!(lower.contains("input_name"), "output={combined}");
     assert!(lower.contains("origin"), "output={combined}");
     assert!(lower.contains("token_key"), "output={combined}");
     assert!(lower.contains("hotel"), "output={combined}");

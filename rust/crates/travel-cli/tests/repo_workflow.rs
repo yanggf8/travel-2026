@@ -87,9 +87,9 @@ fn teardown(source_id: &str) {
     ));
 }
 
-fn teardown_url_token(source_id: &str) {
+fn teardown_url_param(source_id: &str) {
     exec_sql(&format!(
-        "DELETE FROM ota_source_url_token WHERE source_id='{source_id}'"
+        "DELETE FROM ota_source_url_param WHERE source_id='{source_id}'"
     ));
     teardown(source_id);
 }
@@ -330,7 +330,7 @@ async fn claim_specific_claims_exact_job_and_region_id_looks_up_provider_code() 
 }
 
 #[tokio::test]
-async fn url_token_looks_up_seeded_token_and_missing_returns_none() {
+async fn url_param_value_looks_up_seeded_value_and_missing_returns_none() {
     let _lock = repo_workflow_test_lock();
     let (ok, _stdout, stderr) = run(&["db", "migrate"]);
     if !ok && is_credless(&stderr) {
@@ -350,22 +350,22 @@ async fn url_token_looks_up_seeded_token_and_missing_returns_none() {
 
     let suffix = nanos();
     let source_id = format!("zztest{suffix}");
-    teardown_url_token(&source_id);
+    teardown_url_param(&source_id);
     let _g = Guard::new({
         let source_id = source_id.clone();
-        move || teardown_url_token(&source_id)
+        move || teardown_url_param(&source_id)
     });
 
     conn.execute(
-        "INSERT INTO ota_source_url_token \
-         (source_id, product_type, placeholder, input_key, input_value, token_value) \
+        "INSERT INTO ota_source_url_param \
+         (source_id, product_type, url_param_name, input_name, input_value, url_value) \
          VALUES (?1, 'fit', 'dest_code', 'destination', 'tokyo', 'TYO')",
         libsql::params![source_id.clone()],
     )
     .await
     .expect("insert url token");
 
-    let got = ota_source_workflow::url_token(
+    let got = ota_source_workflow::url_param_value(
         &conn,
         &source_id,
         "fit",
@@ -377,7 +377,7 @@ async fn url_token_looks_up_seeded_token_and_missing_returns_none() {
     .expect("url token lookup");
     assert_eq!(got.as_deref(), Some("TYO"));
 
-    let missing = ota_source_workflow::url_token(
+    let missing = ota_source_workflow::url_param_value(
         &conn,
         &source_id,
         "fit",

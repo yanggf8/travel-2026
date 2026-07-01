@@ -219,6 +219,26 @@ async fn migrate_ota_source_workflow_nav_kind(conn: &libsql::Connection) -> Resu
     Ok(())
 }
 
+/// Rename `ota_source_url_token` → `ota_source_url_param` (clearer column naming, spec 2026-07-01):
+/// placeholder→url_param_name, input_key→input_name, token_value→url_value. Rebuild-and-copy so any
+/// live-only rows (e.g. a CLI-registered travel4u) are preserved via INSERT ... SELECT. Idempotent:
+/// the new table is created first (above); this only migrates + drops the OLD table if it still exists.
+async fn migrate_ota_source_url_token_to_url_param(conn: &libsql::Connection) -> Result<(), String> {
+    if !table_exists(conn, "ota_source_url_token").await {
+        return Ok(());
+    }
+    exec(
+        conn,
+        "INSERT OR IGNORE INTO ota_source_url_param \
+           (source_id, product_type, url_param_name, input_name, input_value, url_value, updated_at) \
+         SELECT source_id, product_type, placeholder, input_key, input_value, token_value, updated_at \
+         FROM ota_source_url_token",
+    )
+    .await?;
+    exec(conn, "DROP TABLE ota_source_url_token").await?;
+    Ok(())
+}
+
 /// SQL string-literal escaper (single quotes doubled), matching the TS `esc`.
 fn sq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -930,18 +950,19 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
     exec_create(
         &conn,
-        r#"CREATE TABLE IF NOT EXISTS ota_source_url_token (
+        r#"CREATE TABLE IF NOT EXISTS ota_source_url_param (
   source_id TEXT NOT NULL,
   product_type TEXT NOT NULL,
-  placeholder TEXT NOT NULL,
-  input_key TEXT NOT NULL,
+  url_param_name TEXT NOT NULL,
+  input_name TEXT NOT NULL,
   input_value TEXT NOT NULL,
-  token_value TEXT NOT NULL,
+  url_value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (source_id, product_type, placeholder, input_key, input_value)
+  PRIMARY KEY (source_id, product_type, url_param_name, input_name, input_value)
 )"#,
     )
     .await;
+    migrate_ota_source_url_token_to_url_param(&conn).await?;
     exec_create(
         &conn,
         r#"CREATE TABLE IF NOT EXISTS product_type_inputs (
@@ -957,7 +978,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
     migrate_ota_source_workflow_nav_kind(&conn).await?;
     seed_ota_workflow(&conn).await;
-    seed_ota_url_token(&conn).await;
+    seed_ota_url_param(&conn).await;
     seed_product_type_inputs(&conn).await;
 
     // OTA offer provenance (rust-first OTA architecture, spec 2026-06-29).
@@ -1544,10 +1565,10 @@ async fn seed_ota_workflow(conn: &libsql::Connection) {
     run_seed_file_stmts(conn, WORKFLOW_SEED).await;
 }
 
-async fn seed_ota_url_token(conn: &libsql::Connection) {
-    const URL_TOKEN_SEED: &str =
-        include_str!("../../../../scripts/seed/ota_source_url_token.seed.sql");
-    run_seed_file_stmts(conn, URL_TOKEN_SEED).await;
+async fn seed_ota_url_param(conn: &libsql::Connection) {
+    const URL_PARAM_SEED: &str =
+        include_str!("../../../../scripts/seed/ota_source_url_param.seed.sql");
+    run_seed_file_stmts(conn, URL_PARAM_SEED).await;
 }
 
 async fn seed_product_type_inputs(conn: &libsql::Connection) {

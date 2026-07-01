@@ -1,5 +1,5 @@
 // `travel set-ota-source` / `set-ota-coverage` / `set-ota-region` / `set-ota-workflow` /
-// `set-ota-url-token` — audited mutations of the
+// `set-ota-url-param` — audited mutations of the
 // normalized OTA provider catalog (DB-centric provider architecture, spec 2026-06-29).
 //
 // These are the write surface that makes the DB the source of truth for the provider catalog
@@ -273,34 +273,34 @@ pub async fn run_set_workflow(args: &[String]) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// set-ota-url-token <source> <product_type> <placeholder> <input_key> <input_value> <token_value>
+// set-ota-url-param <source> <product_type> <url_param_name> <input_name> <input_value> <url_value>
 // ---------------------------------------------------------------------------
-pub async fn run_set_url_token(args: &[String]) -> Result<(), String> {
+pub async fn run_set_url_param(args: &[String]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "Usage:\n  travel set-ota-url-token <source> <product_type> <placeholder> \
-             <input_key> <input_value> <token_value>"
+            "Usage:\n  travel set-ota-url-param <source> <product_type> <url_param_name> \
+             <input_name> <input_value> <url_value>"
         );
         return Ok(());
     }
     let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if pos.len() < 6 {
         return Err(
-            "Error: set-ota-url-token requires <source> <product_type> <placeholder> \
-             <input_key> <input_value> <token_value>"
+            "Error: set-ota-url-param requires <source> <product_type> <url_param_name> \
+             <input_name> <input_value> <url_value>"
                 .to_string(),
         );
     }
     let source_id = pos[0].to_string();
     let product_type = pos[1].to_string();
-    let placeholder = pos[2].to_string();
-    let input_key = pos[3].to_string();
+    let url_param_name = pos[2].to_string();
+    let input_name = pos[3].to_string();
     let input_value = pos[4].to_string();
-    let token_value = pos[5].to_string();
+    let url_value = pos[5].to_string();
 
-    if input_key != "destination" && input_key != "hotel" {
+    if input_name != "destination" && input_name != "hotel" {
         return Err(format!(
-            "Error: input_key must be destination or hotel (got {input_key})"
+            "Error: input_name must be destination or hotel (got {input_name})"
         ));
     }
 
@@ -313,18 +313,18 @@ pub async fn run_set_url_token(args: &[String]) -> Result<(), String> {
 
     let now = now_db_datetime();
     conn.execute(
-        "INSERT INTO ota_source_url_token \
-            (source_id, product_type, placeholder, input_key, input_value, token_value, updated_at) \
+        "INSERT INTO ota_source_url_param \
+            (source_id, product_type, url_param_name, input_name, input_value, url_value, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-         ON CONFLICT(source_id, product_type, placeholder, input_key, input_value) DO UPDATE SET \
-            token_value = ?6, updated_at = ?7",
+         ON CONFLICT(source_id, product_type, url_param_name, input_name, input_value) DO UPDATE SET \
+            url_value = ?6, updated_at = ?7",
         libsql::params![
             source_id.clone(),
             product_type.clone(),
-            placeholder.clone(),
-            input_key.clone(),
+            url_param_name.clone(),
+            input_name.clone(),
             input_value.clone(),
-            token_value.clone(),
+            url_value.clone(),
             now,
         ],
     )
@@ -333,12 +333,12 @@ pub async fn run_set_url_token(args: &[String]) -> Result<(), String> {
 
     record_catalog_run(
         &conn,
-        "set-ota-url-token",
+        "set-ota-url-param",
         &format!("{source_id}/{product_type}"),
     )
     .await?;
     println!(
-        "ota_source_url_token upserted: {source_id}/{product_type}/{placeholder}/{input_key}/{input_value}"
+        "ota_source_url_param upserted: {source_id}/{product_type}/{url_param_name}/{input_name}/{input_value}"
     );
     Ok(())
 }

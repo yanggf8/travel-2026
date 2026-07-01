@@ -55,7 +55,7 @@ fn teardown(sid: &str) {
 }
 
 fn teardown_tier1(sid: &str) {
-    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_url_token WHERE source_id='{sid}'")]);
+    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_url_param WHERE source_id='{sid}'")]);
     let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_workflow WHERE source_id='{sid}'")]);
     teardown(sid);
 }
@@ -223,7 +223,7 @@ async fn set_ota_workflow_round_trip_writes_row_and_audit() {
 }
 
 #[tokio::test]
-async fn set_ota_url_token_round_trip_writes_row_and_audit() {
+async fn set_ota_url_param_round_trip_writes_row_and_audit() {
     let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (ok, _o, err) = run(&["db", "migrate"]);
     if !ok && is_credless(&err) {
@@ -242,7 +242,7 @@ async fn set_ota_url_token_round_trip_writes_row_and_audit() {
     assert!(ok, "set-ota-source should succeed; err={err}");
 
     let (ok, stdout, stderr) = run(&[
-        "set-ota-url-token",
+        "set-ota-url-param",
         &sid,
         "fit",
         "dest_code",
@@ -252,14 +252,14 @@ async fn set_ota_url_token_round_trip_writes_row_and_audit() {
     ]);
     assert!(
         ok,
-        "set-ota-url-token should succeed; stdout={stdout} stderr={stderr}"
+        "set-ota-url-param should succeed; stdout={stdout} stderr={stderr}"
     );
 
     assert_eq!(
         scalar(&format!(
-            "SELECT token_value FROM ota_source_url_token \
-             WHERE source_id='{sid}' AND product_type='fit' AND placeholder='dest_code' \
-               AND input_key='destination' AND input_value='tokyo'"
+            "SELECT url_value FROM ota_source_url_param \
+             WHERE source_id='{sid}' AND product_type='fit' AND url_param_name='dest_code' \
+               AND input_name='destination' AND input_value='tokyo'"
         ))
         .as_deref(),
         Some("TYO"),
@@ -268,18 +268,18 @@ async fn set_ota_url_token_round_trip_writes_row_and_audit() {
 
     let Some(audit) = scalar(&format!(
         "SELECT count(*) AS n FROM catalog_runs \
-         WHERE command_type='set-ota-url-token' AND command_summary LIKE '{sid}/fit%'"
+         WHERE command_type='set-ota-url-param' AND command_summary LIKE '{sid}/fit%'"
     )) else {
         return;
     };
     assert!(
         audit.parse::<i64>().unwrap_or(0) >= 1,
-        "set-ota-url-token wrote a catalog_runs audit row"
+        "set-ota-url-param wrote a catalog_runs audit row"
     );
 }
 
 #[tokio::test]
-async fn set_ota_url_token_hotel_round_trip_writes_row_and_audit() {
+async fn set_ota_url_param_hotel_round_trip_writes_row_and_audit() {
     let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (ok, _o, err) = run(&["db", "migrate"]);
     if !ok && is_credless(&err) {
@@ -298,7 +298,7 @@ async fn set_ota_url_token_hotel_round_trip_writes_row_and_audit() {
     assert!(ok, "set-ota-source should succeed; err={err}");
 
     let (ok, stdout, stderr) = run(&[
-        "set-ota-url-token",
+        "set-ota-url-param",
         &sid,
         "hotel",
         "hotel_slug",
@@ -308,14 +308,14 @@ async fn set_ota_url_token_hotel_round_trip_writes_row_and_audit() {
     ]);
     assert!(
         ok,
-        "set-ota-url-token hotel should succeed; stdout={stdout} stderr={stderr}"
+        "set-ota-url-param hotel should succeed; stdout={stdout} stderr={stderr}"
     );
 
     assert_eq!(
         scalar(&format!(
-            "SELECT token_value FROM ota_source_url_token \
-             WHERE source_id='{sid}' AND product_type='hotel' AND placeholder='hotel_slug' \
-               AND input_key='hotel' AND input_value='my-hotel'"
+            "SELECT url_value FROM ota_source_url_param \
+             WHERE source_id='{sid}' AND product_type='hotel' AND url_param_name='hotel_slug' \
+               AND input_name='hotel' AND input_value='my-hotel'"
         ))
         .as_deref(),
         Some("tok"),
@@ -324,18 +324,18 @@ async fn set_ota_url_token_hotel_round_trip_writes_row_and_audit() {
 
     let Some(audit) = scalar(&format!(
         "SELECT count(*) AS n FROM catalog_runs \
-         WHERE command_type='set-ota-url-token' AND command_summary LIKE '{sid}/hotel%'"
+         WHERE command_type='set-ota-url-param' AND command_summary LIKE '{sid}/hotel%'"
     )) else {
         return;
     };
     assert!(
         audit.parse::<i64>().unwrap_or(0) >= 1,
-        "set-ota-url-token hotel wrote a catalog_runs audit row"
+        "set-ota-url-param hotel wrote a catalog_runs audit row"
     );
 }
 
 #[tokio::test]
-async fn set_ota_url_token_rejects_origin_input_key_and_writes_nothing() {
+async fn set_ota_url_param_rejects_origin_input_name_and_writes_nothing() {
     let _guard = CATALOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let (ok, _o, err) = run(&["db", "migrate"]);
     if !ok && is_credless(&err) {
@@ -354,7 +354,7 @@ async fn set_ota_url_token_rejects_origin_input_key_and_writes_nothing() {
     assert!(ok, "set-ota-source should succeed; err={err}");
 
     let (ok, stdout, stderr) = run(&[
-        "set-ota-url-token",
+        "set-ota-url-param",
         &sid,
         "fit",
         "dest_code",
@@ -364,20 +364,20 @@ async fn set_ota_url_token_rejects_origin_input_key_and_writes_nothing() {
     ]);
     assert!(
         !ok,
-        "non-destination input_key must fail; stdout={stdout} stderr={stderr}"
+        "non-destination input_name must fail; stdout={stdout} stderr={stderr}"
     );
 
     let Some(rows) = scalar(&format!(
-        "SELECT count(*) AS n FROM ota_source_url_token WHERE source_id='{sid}'"
+        "SELECT count(*) AS n FROM ota_source_url_param WHERE source_id='{sid}'"
     )) else {
         return;
     };
-    assert_eq!(rows, "0", "failed set-ota-url-token must write no token row");
+    assert_eq!(rows, "0", "failed set-ota-url-param must write no url_param row");
 
     let Some(audit) = scalar(&format!(
-        "SELECT count(*) AS n FROM catalog_runs WHERE command_type='set-ota-url-token' AND command_summary LIKE '{sid}%'"
+        "SELECT count(*) AS n FROM catalog_runs WHERE command_type='set-ota-url-param' AND command_summary LIKE '{sid}%'"
     )) else {
         return;
     };
-    assert_eq!(audit, "0", "failed set-ota-url-token must write no audit row");
+    assert_eq!(audit, "0", "failed set-ota-url-param must write no audit row");
 }

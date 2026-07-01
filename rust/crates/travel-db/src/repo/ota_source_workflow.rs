@@ -67,25 +67,25 @@ pub async fn region_id(
     Ok(Some(row.get(0).map_err(|e| e.to_string())?))
 }
 
-/// Look up a URL-template placeholder token from a standard input key/value pair.
-pub async fn url_token(
+/// Look up the actual URL value for a URL parameter, keyed by an internal input name/value pair.
+pub async fn url_param_value(
     conn: &Connection,
     source_id: &str,
     product_type: &str,
-    placeholder: &str,
-    input_key: &str,
+    url_param_name: &str,
+    input_name: &str,
     input_value: &str,
 ) -> Result<Option<String>, String> {
     let mut rows = conn
         .query(
-            "SELECT token_value FROM ota_source_url_token \
-             WHERE source_id = ?1 AND product_type = ?2 AND placeholder = ?3 \
-               AND input_key = ?4 AND input_value = ?5",
+            "SELECT url_value FROM ota_source_url_param \
+             WHERE source_id = ?1 AND product_type = ?2 AND url_param_name = ?3 \
+               AND input_name = ?4 AND input_value = ?5",
             libsql::params![
                 source_id.to_string(),
                 product_type.to_string(),
-                placeholder.to_string(),
-                input_key.to_string(),
+                url_param_name.to_string(),
+                input_name.to_string(),
                 input_value.to_string(),
             ],
         )
@@ -97,22 +97,22 @@ pub async fn url_token(
     Ok(Some(row.get(0).map_err(|e| e.to_string())?))
 }
 
-/// Distinct `input_key` values registered for a URL placeholder on a source/product_type pair.
-pub async fn url_token_input_keys(
+/// Distinct internal `input_name` values registered for a URL parameter on a source/product_type pair.
+pub async fn url_param_input_names(
     conn: &Connection,
     source_id: &str,
     product_type: &str,
-    placeholder: &str,
+    url_param_name: &str,
 ) -> Result<Vec<String>, String> {
     let mut rows = conn
         .query(
-            "SELECT DISTINCT input_key FROM ota_source_url_token \
-             WHERE source_id = ?1 AND product_type = ?2 AND placeholder = ?3 \
-             ORDER BY input_key",
+            "SELECT DISTINCT input_name FROM ota_source_url_param \
+             WHERE source_id = ?1 AND product_type = ?2 AND url_param_name = ?3 \
+             ORDER BY input_name",
             libsql::params![
                 source_id.to_string(),
                 product_type.to_string(),
-                placeholder.to_string(),
+                url_param_name.to_string(),
             ],
         )
         .await

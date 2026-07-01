@@ -95,7 +95,7 @@ fn teardown(source_id: &str) {
     let _ = run(&[
         "db",
         "exec",
-        &format!("DELETE FROM ota_source_url_token WHERE source_id='{source_id}'"),
+        &format!("DELETE FROM ota_source_url_param WHERE source_id='{source_id}'"),
     ]);
     let _ = run(&[
         "db",
@@ -105,7 +105,7 @@ fn teardown(source_id: &str) {
 }
 
 #[tokio::test]
-async fn workflow_and_url_token_schema_seed_rows_and_nav_kind_check() {
+async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
     let _lock = workflow_schema_test_lock();
     let (ok, _stdout, stderr) = run(&["db", "migrate"]);
     if !ok && is_credless(&stderr) {
@@ -134,37 +134,37 @@ async fn workflow_and_url_token_schema_seed_rows_and_nav_kind_check() {
         );
     }
 
-    let Some(token_cols) = columns_of("ota_source_url_token") else {
+    let Some(param_cols) = columns_of("ota_source_url_param") else {
         return;
     };
     for col in [
         "source_id",
         "product_type",
-        "placeholder",
-        "input_key",
+        "url_param_name",
+        "input_name",
         "input_value",
-        "token_value",
+        "url_value",
         "updated_at",
     ] {
         assert!(
-            token_cols.iter().any(|c| c == col),
-            "ota_source_url_token must have column {col}; got {token_cols:?}"
+            param_cols.iter().any(|c| c == col),
+            "ota_source_url_param must have column {col}; got {param_cols:?}"
         );
     }
 
-    let Some(token_pk) = pk_columns_of("ota_source_url_token") else {
+    let Some(param_pk) = pk_columns_of("ota_source_url_param") else {
         return;
     };
     assert_eq!(
-        token_pk,
+        param_pk,
         vec![
             "source_id".to_string(),
             "product_type".to_string(),
-            "placeholder".to_string(),
-            "input_key".to_string(),
+            "url_param_name".to_string(),
+            "input_name".to_string(),
             "input_value".to_string(),
         ],
-        "ota_source_url_token must have 5-column PK"
+        "ota_source_url_param must have 5-column PK"
     );
 
     let Some(input_cols) = columns_of("product_type_inputs") else {
@@ -263,22 +263,22 @@ async fn workflow_and_url_token_schema_seed_rows_and_nav_kind_check() {
         assert_eq!(got_settle_ms, settle_ms, "{source_id}/{product_type} settle_ms");
     }
 
-    for (source_id, product_type, placeholder, token_value) in [
+    for (source_id, product_type, url_param_name, url_value) in [
         ("besttour", "group_tour", "region_id", "295"),
         ("settour", "fit", "region_id", "179900"),
         ("settour", "fit", "dest_code", "NRT"),
         ("eztravel", "fit", "dest_code", "TYO"),
     ] {
-        let Some(got_token) = scalar(&format!(
-            "SELECT token_value FROM ota_source_url_token \
+        let Some(got_url_value) = scalar(&format!(
+            "SELECT url_value FROM ota_source_url_param \
              WHERE source_id='{source_id}' AND product_type='{product_type}' \
-               AND placeholder='{placeholder}' AND input_key='destination' AND input_value='tokyo'"
+               AND url_param_name='{url_param_name}' AND input_name='destination' AND input_value='tokyo'"
         )) else {
             return;
         };
         assert_eq!(
-            got_token, token_value,
-            "{source_id}/{product_type}/{placeholder}/destination/tokyo token"
+            got_url_value, url_value,
+            "{source_id}/{product_type}/{url_param_name}/destination/tokyo token"
         );
     }
 

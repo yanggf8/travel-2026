@@ -182,13 +182,13 @@ async fn resolve_token_placeholders(
             continue;
         }
 
-        let registered_keys =
-            ota_source_workflow::url_token_input_keys(conn, source_id, product_type, &placeholder)
+        let registered_input_names =
+            ota_source_workflow::url_param_input_names(conn, source_id, product_type, &placeholder)
                 .await?;
-        for key in &registered_keys {
-            if !legal_roles.contains(key) {
+        for input_name in &registered_input_names {
+            if !legal_roles.contains(input_name) {
                 return Err(format!(
-                    "input_key '{key}' registered for placeholder '{placeholder}' is not a declared token_key for product_type '{product_type}' (legal token_key roles: {})",
+                    "input_name '{input_name}' registered for url_param '{placeholder}' is not a declared token_key for product_type '{product_type}' (legal token_key roles: {})",
                     legal_roles
                         .iter()
                         .cloned()
@@ -203,7 +203,7 @@ async fn resolve_token_placeholders(
             let Some(value) = map.get(role).cloned() else {
                 continue;
             };
-            if let Some(token) = ota_source_workflow::url_token(
+            if let Some(url_value) = ota_source_workflow::url_param_value(
                 conn,
                 source_id,
                 product_type,
@@ -213,7 +213,7 @@ async fn resolve_token_placeholders(
             )
             .await?
             {
-                hits.push((role.clone(), token));
+                hits.push((role.clone(), url_value));
             }
         }
 
@@ -221,7 +221,7 @@ async fn resolve_token_placeholders(
             0 => {
                 let roles: Vec<&str> = legal_roles.iter().map(|r| r.as_str()).collect();
                 return Err(format!(
-                    "no url-token for placeholder '{placeholder}' (source={source_id}, product_type={product_type}, tried token_key roles: {})",
+                    "no url_param value for '{placeholder}' (source={source_id}, product_type={product_type}, tried token_key roles: {})",
                     roles.join(", ")
                 ));
             }
@@ -231,7 +231,7 @@ async fn resolve_token_placeholders(
             _ => {
                 let roles: Vec<&str> = hits.iter().map(|(r, _)| r.as_str()).collect();
                 return Err(format!(
-                    "ambiguous token resolution for placeholder '{placeholder}' (source={source_id}, product_type={product_type}): multiple token_key roles matched ({})",
+                    "ambiguous url_param resolution for '{placeholder}' (source={source_id}, product_type={product_type}): multiple token_key roles matched ({})",
                     roles.join(", ")
                 ));
             }
