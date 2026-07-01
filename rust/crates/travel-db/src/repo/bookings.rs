@@ -1,6 +1,11 @@
-//! `activities` + `bookings_current` table access for the bookings views.
+//! `activities` + `bookings_*` table access for bookings views and `sync-bookings` writes.
+//!
+//! DAL boundary: owns the `bookings_current` / `bookings_current_payload` / `bookings_events` /
+//! `bookings_event_data` domain-table SQL. The audit triad stays in `travel-cli` (`cascade::common`)
+//! — sync-bookings writes no audit triad.
 
 use libsql::Connection;
+use std::collections::HashMap;
 
 /// One `activities` row carrying a non-empty `book_by` deadline, keyed by its
 /// `(day_number, session_type, sort_order)` position.
@@ -132,6 +137,204 @@ pub async fn query_current(
         });
     }
     Ok(out)
+}
+
+/// Prior `bookings_current` row fields used for created-vs-updated diffing in `sync-bookings`.
+#[derive(Debug, Clone)]
+pub struct ExistingBooking {
+    pub status: Option<String>,
+    pub reference: Option<String>,
+    pub book_by: Option<String>,
+    pub price_amount: Option<i64>,
+    pub title: Option<String>,
+}
+
+/// Typed payload for a `bookings_current` upsert (+ payload KV child rows).
+#[derive(Debug, Clone)]
+pub struct BookingCurrentWrite {
+    pub booking_key: String,
+    pub trip_id: String,
+    pub destination: String,
+    pub category: String,
+    pub subtype: Option<String>,
+    pub title: String,
+    pub status: String,
+    pub reference: Option<String>,
+    pub book_by: Option<String>,
+    pub booked_at: Option<String>,
+    pub source_id: Option<String>,
+    pub offer_id: Option<String>,
+    pub selected_date: Option<String>,
+    pub price_amount: Option<i64>,
+    pub price_currency: String,
+    pub origin_path: String,
+    pub payload_kv: Vec<(String, String)>,
+}
+
+/// Typed payload for a `bookings_events` insert (+ event_data KV child rows).
+#[derive(Debug, Clone)]
+pub struct BookingEventWrite {
+    pub booking_key: String,
+    pub event_type: String,
+    pub new_status: String,
+    pub reference: Option<String>,
+    pub book_by: Option<String>,
+    pub amount: Option<i64>,
+    pub currency: String,
+    pub payload_kv: Vec<(String, String)>,
+}
+
+/// Snapshot existing `bookings_current` rows for the given trip_ids (diff read — must run BEFORE
+/// stale deletes).
+pub async fn current_snapshot_for_trips(
+    conn: &Connection,
+    trip_ids: &[String],
+) -> Result<HashMap<String, ExistingBooking>, String> {
+    let mut existing: HashMap<String, ExistingBooking> = HashMap::new();
+    for tid in trip_ids {
+        let mut rows = conn
+            .query(
+                "SELECT booking_key, status, reference, book_by, price_amount, title \
+                 FROM bookings_current WHERE trip_id = ?1",
+                libsql::params![tid.clone()],
+            )
+            .await
+            .map_err(|e| format!("bookings_current existing query failed: {e}"))?;
+        while let Some(r) = rows
+            .next()
+            .await
+            .map_err(|e| format!("bookings_current existing row read failed: {e}"))?
+        {
+            let key: String = r.get(0).unwrap_or_default();
+            existing.insert(
+                key.clone(),
+                ExistingBooking {
+                    status: r.get(1).ok().flatten(),
+                    reference: r.get(2).ok().flatten(),
+                    book_by: r.get(3).ok().flatten(),
+                    price_amount: r.get(4).ok().flatten(),
+                    title: r.get(5).ok().flatten(),
+                },
+            );
+        }
+    }
+    Ok(existing)
+}
+
+/// Delete stale `bookings_current` rows for one trip_id (payload child rows first).
+pub async fn delete_current_for_trip(conn: &Connection, trip_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM bookings_current_payload WHERE booking_key IN \
+         (SELECT booking_key FROM bookings_current WHERE trip_id = ?1)",
+        libsql::params![trip_id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("bookings_current_payload DELETE failed: {e}"))?;
+    conn.execute(
+        "DELETE FROM bookings_current WHERE trip_id = ?1",
+        libsql::params![trip_id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("bookings_current DELETE failed: {e}"))?;
+    Ok(())
+}
+
+/// Upsert one `bookings_current` row and replace its payload KV child rows.
+pub async fn upsert_current(conn: &Connection, row: &BookingCurrentWrite) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO bookings_current \
+            (booking_key, trip_id, destination, category, subtype, title, status, \
+             reference, book_by, booked_at, source_id, offer_id, selected_date, \
+             price_amount, price_currency, origin_path, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now')) \
+         ON CONFLICT(booking_key) DO UPDATE SET \
+            status = ?7, reference = ?8, book_by = ?9, booked_at = ?10, \
+            price_amount = ?14, updated_at = datetime('now')",
+        libsql::params![
+            row.booking_key.clone(),
+            row.trip_id.clone(),
+            row.destination.clone(),
+            row.category.clone(),
+            opt(&row.subtype),
+            row.title.clone(),
+            row.status.clone(),
+            opt(&row.reference),
+            opt(&row.book_by),
+            opt(&row.booked_at),
+            opt(&row.source_id),
+            opt(&row.offer_id),
+            opt(&row.selected_date),
+            opt_int(row.price_amount),
+            row.price_currency.clone(),
+            row.origin_path.clone(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("bookings_current upsert failed: {e}"))?;
+
+    conn.execute(
+        "DELETE FROM bookings_current_payload WHERE booking_key = ?1",
+        libsql::params![row.booking_key.clone()],
+    )
+    .await
+    .map_err(|e| format!("bookings_current_payload DELETE failed: {e}"))?;
+
+    for (i, (k, v)) in row.payload_kv.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO bookings_current_payload (booking_key, sort_order, key, value) \
+             VALUES (?1, ?2, ?3, ?4)",
+            libsql::params![row.booking_key.clone(), i as i64, k.clone(), v.clone()],
+        )
+        .await
+        .map_err(|e| format!("bookings_current_payload INSERT failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Insert one `bookings_events` row and its event_data KV child rows (correlated subquery).
+pub async fn insert_event(conn: &Connection, event: &BookingEventWrite) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO bookings_events \
+            (booking_key, event_type, new_status, reference, book_by, amount, currency, event_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+        libsql::params![
+            event.booking_key.clone(),
+            event.event_type.clone(),
+            event.new_status.clone(),
+            opt(&event.reference),
+            opt(&event.book_by),
+            opt_int(event.amount),
+            event.currency.clone(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("bookings_events INSERT failed: {e}"))?;
+
+    for (i, (k, v)) in event.payload_kv.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO bookings_event_data (booking_key, event_at, sort_order, key, value) \
+             SELECT ?1, event_at, ?2, ?3, ?4 FROM bookings_events \
+             WHERE booking_key = ?1 ORDER BY event_at DESC LIMIT 1",
+            libsql::params![event.booking_key.clone(), i as i64, k.clone(), v.clone()],
+        )
+        .await
+        .map_err(|e| format!("bookings_event_data INSERT failed: {e}"))?;
+    }
+    Ok(())
+}
+
+fn opt(v: &Option<String>) -> libsql::Value {
+    match v {
+        Some(s) => libsql::Value::Text(s.clone()),
+        None => libsql::Value::Null,
+    }
+}
+
+fn opt_int(v: Option<i64>) -> libsql::Value {
+    match v {
+        Some(n) => libsql::Value::Integer(n),
+        None => libsql::Value::Null,
+    }
 }
 
 #[cfg(test)]
