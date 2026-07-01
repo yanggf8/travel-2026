@@ -31,17 +31,19 @@ const SESSIONS_IN_ORDER: &[&str] = &["morning", "noon", "afternoon", "evening"];
 pub async fn run(args: &[String]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "Usage:\n  travel transport [--dest slug]\n  \
+            "Usage:\n  travel transport [--dest slug]   (--dest is validation-only: must match the \
+             plan's active destination, else errors)\n  \
              (plan resolution: TRAVEL_PLAN_ID env var only for now)"
         );
         return Ok(());
     }
-    // Parse --dest for parity with TS `args.optionValue('--dest')`. The TS
-    // uses sm.resolveDestination(destOpt) which falls back to the active
-    // destination. For this slice we only validate presence — plan.rs
-    // currently keys on active_destination from plan_metadata, so a future
-    // override would require either an extra query or a thin wrapper around
-    // plan::load() that re-keys transfers/days.
+    // `--dest` is VALIDATION-ONLY by design (resolved-by-design 2026-07-02). Every plan is
+    // single-destination, so this view always renders the active destination; a `--dest` that
+    // matches is a no-op and a mismatching one fails loud (assert_dest_matches below). It does NOT
+    // render a non-active destination — plan::load keys on plan_metadata.active_destination and has
+    // no dest param. Rendering a non-active dest is deferred until a real multi-destination plan
+    // exists (recipe: thread a dest override through plan::load + the ~15 dest-keyed repo reads +
+    // plan_resolver::ResolveInput). See CLAUDE.md "Next Steps" → --dest item.
     let dest_opt: Option<String> = parse_dest(args);
     let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
     let view = plan::load(&plan_id).await?;
