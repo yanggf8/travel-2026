@@ -227,6 +227,7 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
         ("besttour", "group_tour", &["295"]),
         ("settour", "fit", &["NRT", "179900"]),
         ("eztravel", "fit", &["TYO"]),
+        ("travel4u", "group_tour", &["41"]),
     ];
 
     for (source_id, product_type, expected_url_fragments) in cases {

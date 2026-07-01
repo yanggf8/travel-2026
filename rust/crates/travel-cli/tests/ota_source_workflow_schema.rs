@@ -232,6 +232,13 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
             "e_web/search",
             "25000",
         ),
+        (
+            "travel4u",
+            "group_tour",
+            "https://www.travel4u.com.tw/group/area/{area_code}/japan/",
+            "group/area",
+            "25000",
+        ),
     ];
 
     for (source_id, product_type, url_template, capture_url_contains, settle_ms) in expected {
@@ -268,6 +275,7 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
         ("settour", "fit", "region_id", "179900"),
         ("settour", "fit", "dest_code", "NRT"),
         ("eztravel", "fit", "dest_code", "TYO"),
+        ("travel4u", "group_tour", "area_code", "41"),
     ] {
         let Some(got_url_value) = scalar(&format!(
             "SELECT url_value FROM ota_source_url_param \

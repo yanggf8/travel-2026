@@ -8,3 +8,4 @@ INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_n
 INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('settour','fit','region_id','destination','tokyo','179900');
 INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('settour','fit','dest_code','destination','tokyo','NRT');
 INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('eztravel','fit','dest_code','destination','tokyo','TYO');
+INSERT OR IGNORE INTO ota_source_url_param (source_id, product_type, url_param_name, input_name, input_value, url_value) VALUES ('travel4u','group_tour','area_code','destination','tokyo','41');
