@@ -58,6 +58,7 @@ fn column(stdout: &str) -> Vec<String> {
 
 /// Insert one global `offers` row. price<0 / date empty means "NULL" (skip-NULL test).
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn seed_offer(
     dest: &str,
     id: &str,
@@ -67,6 +68,7 @@ fn seed_offer(
     hotel: Option<&str>,
     flight_out: Option<&str>,
     flight_ret: Option<&str>,
+    includes: &str,
     scraped_at: &str,
 ) {
     let price_sql = price.map(|p| p.to_string()).unwrap_or_else(|| "NULL".into());
@@ -80,7 +82,7 @@ fn seed_offer(
           departure_date, return_date, nights, availability, hotel_name, hotel_area, \
           airline, flight_outbound, flight_return, includes, scraped_at, source_file) \
          VALUES ('{id}', '{source}', 'package', '', {price}, 'TWD', '{dest}', \
-          {date}, NULL, 4, 'available', {hotel}, '', NULL, {fout}, {fret}, '', \
+          {date}, NULL, 4, 'available', {hotel}, '', NULL, {fout}, {fret}, '{includes}', \
           '{scraped}', 'test:promote')",
         id = id,
         source = source,
@@ -90,6 +92,7 @@ fn seed_offer(
         hotel = hotel_sql,
         fout = fout_sql,
         fret = fret_sql,
+        includes = includes,
         scraped = scraped_at,
     ));
 }
@@ -194,20 +197,21 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
     });
     seed_plan(&plan, &dest);
 
-    // 1. hotel-only offer (the real case: hotel + NULL flights).
+    // 1. hotel-only offer (the real case: hotel + NULL flights). Non-empty delimited `includes`
+    //    with mixed delimiters + a blank item — locks the split + skip-empty behavior.
     seed_offer(&dest, &hotel_id, "eztravel", Some(15498), Some("2026-09-04"),
-               Some("Test Hotel Ginza"), None, None, "2026-06-26T00:00:00Z");
+               Some("Test Hotel Ginza"), None, None, "含早餐; 機場接送、; WiFi", "2026-06-26T00:00:00Z");
     // 2. offer WITH both flight columns (proves the flight branch).
     seed_offer(&dest, &flight_id, "google_flights", Some(9000), Some("2026-09-05"),
-               Some("Test Hotel B"), Some("CI100"), Some("CI101"), "2026-06-26T00:00:00Z");
+               Some("Test Hotel B"), Some("CI100"), Some("CI101"), "", "2026-06-26T00:00:00Z");
     // 3. NULL price → must be skipped.
     seed_offer(&dest, &null_id, "settour", None, Some("2026-09-06"),
-               Some("Test Hotel C"), None, None, "2026-06-26T00:00:00Z");
+               Some("Test Hotel C"), None, None, "", "2026-06-26T00:00:00Z");
     // 4. duplicate id with two snapshots → only the latest (higher price) promotes.
     seed_offer(&dest, &dup_id, "besttour", Some(20000), Some("2026-09-07"),
-               Some("Old Snapshot"), None, None, "2026-06-25T00:00:00Z");
+               Some("Old Snapshot"), None, None, "", "2026-06-25T00:00:00Z");
     seed_offer(&dest, &dup_id, "besttour", Some(22000), Some("2026-09-07"),
-               Some("New Snapshot"), None, None, "2026-06-26T00:00:00Z");
+               Some("New Snapshot"), None, None, "", "2026-06-26T00:00:00Z");
 
     // --- 5. dry-run writes nothing ---
     let (ok, out, err) = run_promote(&plan, &dest, &["--dry-run"]);
@@ -264,6 +268,22 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
         "SELECT COUNT(*) FROM plan_offer_flights WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{flight_id}'"
     ));
     assert_eq!(scalar(&fn_flight).as_deref(), Some("2"), "flight offer has outbound+return rows");
+
+    // plan_offer_includes: the hotel offer's `含早餐; 機場接送、; WiFi` splits on ; and 、, trims,
+    // and SKIPS the blank item → exactly 3 ordered rows. Locks the split/skip-empty behavior.
+    let (_, inc, _) = db_exec(&format!(
+        "SELECT sort_order || ':' || item AS li FROM plan_offer_includes \
+         WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{hotel_id}' ORDER BY sort_order"
+    ));
+    assert_eq!(
+        column(&inc),
+        vec!["0:含早餐", "1:機場接送", "2:WiFi"],
+        "includes split + skip-empty, ordered by sort_order; out={inc}"
+    );
+    let (_, inc_flight, _) = db_exec(&format!(
+        "SELECT COUNT(*) FROM plan_offer_includes WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{flight_id}'"
+    ));
+    assert_eq!(scalar(&inc_flight).as_deref(), Some("0"), "empty-includes offer writes no includes rows");
 
     // P3_4 status = researched.
     let (_, p34, _) = db_exec(&format!(
