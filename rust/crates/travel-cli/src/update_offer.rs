@@ -34,11 +34,12 @@
 // started_at/completed_at, event_at.
 
 use super::cascade::common::{
-    insert_event, insert_kv_rows, new_run_id, next_dest_process_sort_order,
-    next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version,
+    insert_event, insert_kv_rows, next_dest_process_sort_order, next_timeline_sort_order,
+    now_db_datetime, now_rfc3339, read_version, record_operation,
 };
 use crate::status::format_date;
 use libsql::Connection;
+use travel_db::repo::plan_offers;
 
 const P34: &str = "process_3_4_packages";
 const VALID_AVAILABILITY: &[&str] = &["available", "sold_out", "limited"];
@@ -130,26 +131,10 @@ async fn execute(
     let merged_seats = seats.or(existing.seats_remaining);
 
     // --- 1. plan_offer_date_pricing UPSERT (one row) ---
-    conn.execute(
-        "INSERT INTO plan_offer_date_pricing \
-            (plan_id, destination, offer_id, date, price, availability, seats_remaining, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-         ON CONFLICT(plan_id, destination, offer_id, date) DO UPDATE SET \
-            price = excluded.price, availability = excluded.availability, \
-            seats_remaining = excluded.seats_remaining, updated_at = excluded.updated_at",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            offer_id.to_string(),
-            date.to_string(),
-            merged_price,
-            availability.to_string(),
-            merged_seats,
-            now_db.clone()
-        ],
+    plan_offers::upsert_date_pricing(
+        conn, plan_id, dest, offer_id, date, merged_price, availability, merged_seats, &now_db,
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     // --- 2. offer_availability_updated event (dest_process + timeline) ---
     // KV value rendering mirrors TS `String(value)`: omitted price/seats
@@ -183,33 +168,18 @@ async fn execute(
     .await?;
     insert_kv_rows(conn, plan_id, "timeline", "", P34, tl_so, &kv).await?;
 
-    // --- 3. operation_runs ---
-    let run_id = new_run_id();
+    // --- 3. operation_runs audit row + plans.version bump (shared audit-triad back half) ---
     let summary = format!("{offer_id} {date} {availability}");
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'update-offer', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            summary,
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    record_operation(
+        conn,
+        plan_id,
+        "update-offer",
+        &summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // --- 4. plans.version +1 ---
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(version_after)
 }

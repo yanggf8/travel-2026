@@ -188,6 +188,45 @@ pub async fn insert_offer(
     Ok(())
 }
 
+/// Point-UPSERT one `plan_offer_date_pricing` (offer, date) row — used by `update-offer` to change a
+/// single date's price/availability/seats. Distinct from `insert_offer`'s bulk INSERT: this ON CONFLICT
+/// updates only price/availability/seats_remaining/updated_at and never touches `currency`. Caller has
+/// already merged omitted values against the existing row.
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_date_pricing(
+    conn: &Connection,
+    plan_id: &str,
+    dest: &str,
+    offer_id: &str,
+    date: &str,
+    price: i64,
+    availability: &str,
+    seats_remaining: Option<i64>,
+    now_db: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO plan_offer_date_pricing \
+            (plan_id, destination, offer_id, date, price, availability, seats_remaining, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         ON CONFLICT(plan_id, destination, offer_id, date) DO UPDATE SET \
+            price = excluded.price, availability = excluded.availability, \
+            seats_remaining = excluded.seats_remaining, updated_at = excluded.updated_at",
+        libsql::params![
+            plan_id.to_string(),
+            dest.to_string(),
+            offer_id.to_string(),
+            date.to_string(),
+            price,
+            availability.to_string(),
+            seats_remaining,
+            now_db.to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Upsert one `process_statuses` row (P3_4 → researched transition, etc.).
 pub async fn upsert_process_status(
     conn: &Connection,
