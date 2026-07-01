@@ -13,6 +13,7 @@
 use worker::*;
 
 mod auth;
+mod d1_compare;
 mod i18n;
 mod model;
 mod render;

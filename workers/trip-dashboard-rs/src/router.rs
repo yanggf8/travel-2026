@@ -3,7 +3,7 @@
 //! exception — it's a pure R2 passthrough with no auth (map images are low-stakes
 //! and the page already links to them; gating them would just add latency).
 
-use crate::{auth, model, render, turso};
+use crate::{auth, d1_compare, model, render, turso};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -114,6 +114,23 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         .as_deref()
         .and_then(|c| gho::verify_session(&secret, &allowed, allowed_id, c));
     let is_owner_session = session_login.is_some();
+
+    // /diag/d1-compare — D1 read-mirror pilot (Phase G, compare-only). Owner-only; 404 unless the
+    // pilot is explicitly enabled AND a MIRROR_DB D1 binding exists, so a normal deploy is unaffected.
+    // Reads the same tables from Turso + D1 and returns a plain-text delta. Never serves from D1.
+    if path == "/diag/d1-compare" {
+        if !is_owner_session {
+            return Response::error("Forbidden", 403);
+        }
+        if !d1_compare::enabled(&env) {
+            return Response::error("D1 compare pilot not enabled", 404);
+        }
+        let report = d1_compare::compare(&env, &turso_url, &turso_token).await;
+        let h = Headers::new();
+        h.set("Content-Type", "text/plain; charset=utf-8")?;
+        h.set("Cache-Control", "private, no-store")?;
+        return Ok(Response::ok(report)?.with_headers(h));
+    }
 
     if path == "/grants/create" || path == "/grants/deactivate" {
         // Owner-session (403) and method (405) gate. These two checks need a live

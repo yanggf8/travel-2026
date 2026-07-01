@@ -23,3 +23,26 @@ bucket_name = "trip-dashboard-maps"
 [[r2_buckets]]
 binding = "VOUCHERS"
 bucket_name = "trip-dashboard-vouchers"
+
+# ── Cutover env: reclaim the trip-dashboard.yanggf.workers.dev URL from the legacy TS worker ──
+# `npx wrangler deploy --env production` ships THIS worker under name="trip-dashboard".
+# Runbook (incl. the PUBLIC_ORIGIN secret + GitHub OAuth callback update — do NOT skip):
+# docs/plans/2026-07-02-dashboard-cutover-ts-to-rs.md
+# NOTE: wrangler env blocks do NOT inherit top-level bindings/vars, so they are re-declared here.
+# Secrets (SESSION_SECRET/GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET/PUBLIC_ORIGIN/TURSO_URL/TURSO_TOKEN)
+# are env-scoped: set them with `wrangler secret put <NAME> --env production`. PUBLIC_ORIGIN MUST be
+# https://trip-dashboard.yanggf.workers.dev for OAuth callback to resolve.
+[env.production]
+name = "trip-dashboard"
+
+[env.production.vars]
+ALLOWED_LOGIN = "yanggf8"
+ALLOWED_GITHUB_ID = "48974237"
+
+[[env.production.r2_buckets]]
+binding = "MAPS"
+bucket_name = "trip-dashboard-maps"
+
+[[env.production.r2_buckets]]
+binding = "VOUCHERS"
+bucket_name = "trip-dashboard-vouchers"
