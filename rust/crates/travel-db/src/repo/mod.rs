@@ -7,6 +7,7 @@ pub mod freshness;
 pub mod hotels;
 pub mod observations;
 pub mod offers;
+pub mod plan_offers;
 pub mod origin;
 pub mod ota_attempts;
 pub mod ota_jobs;

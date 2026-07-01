@@ -26,6 +26,9 @@ use crate::cascade::common::{
     now_db_datetime, now_rfc3339, read_version, record_operation,
 };
 use libsql::Connection;
+use travel_db::repo::plan_offers::{
+    self, PlanOfferFlightWrite, PlanOfferHotelWrite, PlanOfferWrite,
+};
 
 const P34: &str = "process_3_4_packages";
 
@@ -201,8 +204,9 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
 
     // --- Write each promotable offer (merge-by-id: delete then reinsert). ---
     for o in &to_write {
-        delete_offer_rows(&conn, &opts.plan_id, &opts.dest, &o.id).await?;
-        insert_offer(&conn, &opts.plan_id, &opts.dest, o, opts.pax, &now_db).await?;
+        plan_offers::delete_offer_rows(&conn, &opts.plan_id, &opts.dest, &o.id).await?;
+        let write = build_plan_offer_write(&opts.plan_id, &opts.dest, o, opts.pax);
+        plan_offers::insert_offer(&conn, &write, &now_db).await?;
     }
 
     // --- P3_4 → researched if null/pending/researching (UPSERT). ---
@@ -211,7 +215,8 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
         None | Some("pending") | Some("researching") => "researched",
         Some(s) => s,
     };
-    upsert_process_status(&conn, &opts.plan_id, &opts.dest, P34, new_status, &now_db).await?;
+    plan_offers::upsert_process_status(&conn, &opts.plan_id, &opts.dest, P34, new_status, &now_db)
+        .await?;
 
     // --- Events: package_offers_promoted (dest_process + timeline), per source. ---
     for src in &order {
@@ -359,48 +364,14 @@ async fn read_source_offers(
     Ok(out)
 }
 
-/// Delete all rows for one offer_id across the plan_offer_* family (merge-by-id:
-/// DELETE then reinsert). Copied from import_offers.rs:407-438 (that fn is private).
-async fn delete_offer_rows(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    offer_id: &str,
-) -> Result<(), String> {
-    let tables = [
-        "plan_offer_includes",
-        "plan_offer_hotel_access",
-        "plan_offer_date_pricing",
-        "plan_offer_best_value",
-        "plan_offer_flights",
-        "plan_offer_hotels",
-        "plan_offers",
-    ];
-    for table in &tables {
-        conn.execute(
-            &format!(
-                "DELETE FROM {table} WHERE plan_id = ?1 AND destination = ?2 AND {} = ?3",
-                if *table == "plan_offers" { "id" } else { "offer_id" }
-            ),
-            libsql::params![plan_id.to_string(), dest.to_string(), offer_id.to_string()],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// Insert one promotable offer + its child rows (plan_offers, date_pricing, hotel,
-/// flights-if-present, includes-if-present). Caller has already filtered out NULL
-/// price/date, so unwraps here are safe.
-async fn insert_offer(
-    conn: &Connection,
+/// Map a promotable `SourceOffer` to the DAL write payload. Business decisions
+/// (title fallback, hotel/flight presence, includes split) stay in the command.
+fn build_plan_offer_write(
     plan_id: &str,
     dest: &str,
     o: &SourceOffer,
     pax: i64,
-    now_db: &str,
-) -> Result<(), String> {
+) -> PlanOfferWrite {
     let price = o.price_per_person.expect("filtered: price non-NULL");
     let departure_date = o.departure_date.clone().expect("filtered: date non-NULL");
     let title = match o.name.as_deref() {
@@ -409,125 +380,63 @@ async fn insert_offer(
     };
     let price_total = price * pax;
 
-    // plan_offers
-    conn.execute(
-        "INSERT INTO plan_offers \
-            (plan_id, destination, id, source_id, type, title, price_per_person, currency, \
-             availability, url, scraped_at, product_code, duration_days, price_total, \
-             seats_remaining, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, NULL, NULL, ?11, NULL, ?12)",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            o.id.clone(),
-            o.source_id.clone(),
-            o.offer_type.clone(),
-            title,
-            price,
-            o.currency.clone(),
-            o.availability.clone(),
-            o.scraped_at.clone(),
-            price_total,
-            now_db.to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // plan_offer_date_pricing — one synthesized row (price is NOT NULL).
-    conn.execute(
-        "INSERT INTO plan_offer_date_pricing \
-            (plan_id, destination, offer_id, date, price, availability, seats_remaining, \
-             currency, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            o.id.clone(),
-            departure_date,
-            price,
-            o.availability.clone(),
-            o.currency.clone(),
-            now_db.to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // plan_offer_hotels — only if hotel_name present.
-    if let Some(ref hotel_name) = o.hotel_name {
-        if !hotel_name.is_empty() {
+    let hotel = o.hotel_name.as_ref().and_then(|hotel_name| {
+        if hotel_name.is_empty() {
+            None
+        } else {
             let area = match o.hotel_area.as_deref() {
                 Some(a) if !a.is_empty() => Some(a.to_string()),
                 _ => None,
             };
-            conn.execute(
-                "INSERT INTO plan_offer_hotels \
-                    (plan_id, destination, offer_id, name, slug, area, star_rating, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6)",
-                libsql::params![
-                    plan_id.to_string(),
-                    dest.to_string(),
-                    o.id.clone(),
-                    hotel_name.clone(),
-                    area,
-                    now_db.to_string(),
-                ],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
+            Some(PlanOfferHotelWrite {
+                name: hotel_name.clone(),
+                area,
+            })
         }
-    }
+    });
 
-    // plan_offer_flights — only if BOTH flight columns are non-NULL (no fabrication).
-    if let (Some(outbound), Some(ret)) = (&o.flight_outbound, &o.flight_return) {
-        for (dir, fnum) in [("outbound", outbound), ("return", ret)] {
-            conn.execute(
-                "INSERT INTO plan_offer_flights \
-                    (plan_id, destination, offer_id, direction, flight_number, airline, \
-                     airline_code, departure_code, departure_time, arrival_code, arrival_time, \
-                     updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, NULL, NULL, NULL, ?6)",
-                libsql::params![
-                    plan_id.to_string(),
-                    dest.to_string(),
-                    o.id.clone(),
-                    dir.to_string(),
-                    fnum.clone(),
-                    now_db.to_string(),
-                ],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-    }
+    let flights = match (&o.flight_outbound, &o.flight_return) {
+        (Some(outbound), Some(ret)) => Some([
+            PlanOfferFlightWrite {
+                direction: "outbound".to_string(),
+                flight_number: outbound.clone(),
+            },
+            PlanOfferFlightWrite {
+                direction: "return".to_string(),
+                flight_number: ret.clone(),
+            },
+        ]),
+        _ => None,
+    };
 
-    // plan_offer_includes — split `includes` on common delimiters; skip if empty.
-    if let Some(ref inc) = o.includes {
-        let items: Vec<&str> = inc
-            .split(['\n', ';', '、', ','])
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        for (ii, item) in items.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO plan_offer_includes \
-                    (plan_id, destination, offer_id, sort_order, item) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                libsql::params![
-                    plan_id.to_string(),
-                    dest.to_string(),
-                    o.id.clone(),
-                    ii as i64,
-                    item.to_string(),
-                ],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-    }
+    let includes = o
+        .includes
+        .as_ref()
+        .map(|inc| {
+            inc.split(['\n', ';', '、', ','])
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
 
-    Ok(())
+    PlanOfferWrite {
+        plan_id: plan_id.to_string(),
+        destination: dest.to_string(),
+        offer_id: o.id.clone(),
+        source_id: o.source_id.clone(),
+        offer_type: o.offer_type.clone(),
+        title,
+        price_per_person: price,
+        currency: o.currency.clone(),
+        availability: o.availability.clone(),
+        scraped_at: o.scraped_at.clone(),
+        price_total,
+        departure_date,
+        hotel,
+        flights,
+        includes,
+    }
 }
 
 async fn read_process_status(
@@ -552,32 +461,6 @@ async fn read_process_status(
         return Ok(Some(status));
     }
     Ok(None)
-}
-
-async fn upsert_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-    status: &str,
-    now_db: &str,
-) -> Result<(), String> {
-    conn.execute(
-        "INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(plan_id, destination, process_id) DO UPDATE SET \
-            status = excluded.status, updated_at = excluded.updated_at",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now_db.to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// Map a libsql column read to Option<String>, treating NULL/error and the empty
