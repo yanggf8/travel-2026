@@ -42,11 +42,38 @@ test `rust/crates/travel-cli/tests/flow_decision.rs`.
 - `decision` ∈ `enter | skip | mode`.
 - `--mode` ∈ `shop | ingest-known | defer` (required when `decision=mode`, else rejected).
 - `--reason` free text (e.g. `known_flights`, `flexible`, `already_booked`). One human string only.
-- Writes, via `cascade::common` (mirror `catalog_audit.rs` / `set_activity.rs`):
-  - one `plan_events` row (scope `timeline`, event `flow_decision`),
-  - `plan_event_data` KV: `stage`, `decision`, `mode`(if any), `reason`(if any), `source`(if any),
-  - `record_operation(command_type='flow-decision', …)` → `operation_runs` row + `plans.version +1`.
-- Fail loud: unknown plan_id, invalid stage/decision/mode, `decision=mode` without `--mode`.
+  Trim; if empty after trim, omit the KV (don't write a blank `reason`). Same for `--source`.
+
+**Implementation — mirror `set_activity.rs` (plan-scoped triad), NOT `catalog_audit.rs`.**
+`catalog_audit.rs` is the GLOBAL pattern (`catalog_runs`, **NO `plans.version` bump**) — WRONG for a
+plan-scoped recorder (Codex review 2026-07-02, corroborated: `catalog_audit.rs:7` says "NO version
+bump"; `set_activity.rs:753-806` is the correct template). Exact call sequence Grok must follow:
+```
+parse + validate ALL args (fail loud before any write)
+plan_id = plan_resolver::resolve_plan_id(args)            # honors --plan-id / $TRAVEL_PLAN_ID
+conn = db::connect_write()
+version_before = cascade::common::read_version(conn, plan_id)      # ALSO proves the plan exists (fail loud if not)
+version_after  = version_before + 1
+sort_order = cascade::common::next_timeline_sort_order(conn, plan_id)
+now_iso = cascade::common::now_rfc3339();  now_db = cascade::common::now_db_datetime()
+insert_event(conn, plan_id, "timeline", "", "", sort_order, "flow_decision", &now_iso, None, None)
+insert_kv_rows(conn, plan_id, "timeline", "", "", sort_order, &kv)   # kv: stage,decision,[mode],[reason],[source]
+record_operation(conn, plan_id, "flow-decision", &summary, version_before, version_after, &now_db)
+```
+- **`plan_events` keying (scope `timeline`):** `destination=""`, `process_id=""`, `sort_order` from
+  `next_timeline_sort_order` (MAX+1 — no PK collision on repeated calls; no new concurrency handling
+  expected — same race posture as every other timeline writer).
+- **`operation_runs.command_summary` format (specified, not guessed):** `"{stage} {decision}"`, plus
+  ` mode={mode}` / ` reason={reason}` when present. e.g. `"shop mode mode=ingest-known reason=known_flights"`.
+- **Version bump IS correct** (Codex-recommended): storage is plan-scoped `plan_events` + `operation_runs`,
+  so it must use the full triad; a non-bump here would invent a third audit pattern. (This is a durable
+  plan-history entry, not global telemetry.)
+- **Accepted-value constants live in `flow_decision.rs`** (`STAGES`, `DECISIONS`, `MODES`) as `pub`
+  slices, so T4/T5 doc-consistency tests can assert the docs match the command (no drift).
+- **Fail loud on:** unknown/absent plan_id (via `read_version`), `stage ∉ STAGES`, `decision ∉ DECISIONS`,
+  `mode ∉ MODES`, `decision=mode` WITHOUT `--mode`, `--mode` supplied WHEN `decision != mode`, unknown
+  flags, and any flag missing its value. `--reason` is NOT required for `skip` (routing docs show
+  reasonless calls). No write occurs if any validation fails.
 
 **This is the F6 prerequisite:** it lets P0/P4 record WHY a stage was entered/skipped/moded, so future
 history is unambiguous (the whole reason this analysis was needed). It changes NO existing command's
@@ -58,7 +85,12 @@ behavior — it's a pure recorder the agent calls at routing points.
   `stage=shop`/`decision=mode`/`mode=ingest-known`/`reason=known_flights`, ONE `operation_runs`
   row (command_type=`flow-decision`), and `plans.version` bumped by 1.
 - assert `flow-decision shop mode` WITHOUT `--mode` exits non-zero, writes nothing.
+- assert `flow-decision shaping enter --mode shop` (`--mode` when `decision!=mode`) exits non-zero.
 - assert an invalid `stage` exits non-zero. Guard teardown (plan_events/plan_event_data/operation_runs).
+- assert a happy `enter`/`skip` (no `--mode`) also writes the triad + bumps version (not just `mode`).
+- constants-drift guard: a test that `STAGES`/`DECISIONS`/`MODES` are exactly
+  `{shaping,itinerary,shop,publish}` / `{enter,skip,mode}` / `{shop,ingest-known,defer}` (T4/T5 assert
+  the docs match these).
 - **Commit:** `feat(cli): flow-decision — audited stage entry/skip/mode recorder (F6)`.
 
 ## T2 — Fix the Okinawa doc drift (P2) [→ Grok] + a validate check [Claude]
