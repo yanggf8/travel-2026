@@ -109,8 +109,13 @@ this trip went through Shaping rather than the known-flights fast-path:
 ### Step 4 — Run the aggregator (flights) and/or gather FIT offers
 
 ```bash
-python scripts/shaping_research.py --run <run_id>            # flight candidates
-# FIT/tour-group offers: scrape → import-tour-group-offers --run <run_id> --file ...
+# Flight candidates: capture via gwebcdb on WSLg (e.g. --source google_flights), agent-extract TSV,
+# write offers, then import into the run:
+#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<flights-url>"
+#   → python bridge/ota_capture.py --source google_flights   # → capture_id
+#   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
+#   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
+# FIT/tour-group offers: capture via gwebcdb → import-tour-group-offers --run <run_id> --file ...
 ```
 
 ### Step 5 — Show the ranking against the shaping
@@ -120,6 +125,18 @@ python scripts/shaping_research.py --run <run_id>            # flight candidates
 ./bin/travel shaping-baseline --run <run_id>            # FIT-vs-group methodology view
 ```
 Present the ranked table; judge every option against the HARD constraints.
+
+
+**If the run has package / FIT offers (gathered in Step 4), score them before locking.**
+`shaping-purchase-matrix` is read-only: it scores every option (the flight candidate + each package)
+against THIS run's shaping rules — hard constraints are GATES (a violation ⇒ DISQUALIFIED), soft
+preferences are NUDGES (score adjustments). Skip this if the run is flight-only (no offers to score).
+```bash
+./bin/travel shaping-purchase-matrix --run <run_id>                    # full matrix (disqualified shown last)
+./bin/travel shaping-purchase-matrix --run <run_id> --qualified-only   # hide disqualified options
+```
+Use it to pick the candidate/offer to hand off in Step 7 — it makes the "which option best fits the
+rules" call explicit instead of eyeballing the ranking.
 
 ### Step 6 — Iterate (new run on any input change)
 

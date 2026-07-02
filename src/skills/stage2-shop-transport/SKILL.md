@@ -80,6 +80,14 @@ flights on adjacent dates would change the trip, return to `/shaping-research`.
    Shortlist only offers whose flight times, hotel location, room type,
    cancellation terms, and lodging topology match the Stage 1 draft.
 
+   **If this plan is backed by a shaping run** (it came from `/shaping-research` /
+   `shaping-adopt`), score the options against that run's rules before comparing:
+   ```bash
+   ./bin/travel shaping-purchase-matrix --run <run_id> [--qualified-only]
+   ```
+   Read-only; GATES on hard constraints, NUDGES on soft preferences. Skip it for a
+   plain plan with no shaping run behind it.
+
 4. **Compare direct booking**
 
    Use `/p3-flights` for flight-only search and `/separate-bookings` for the

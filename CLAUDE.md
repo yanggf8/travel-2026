@@ -173,6 +173,7 @@ User intent                          → Skill / Action
   stale/no data?                        → /p3p4-packages (scrape + auto-import)
 "find flights only"                  → /stage2-shop-transport — mode `shop` (uses /p3-flights)
 "compare offers"                     → /stage2-shop-transport — mode `shop`
+"which offer should we take" / "compare purchase options"  → ./bin/travel shaping-purchase-matrix --run <run_id> (when a shaping run has offers; read-only GATE/NUDGE scoring vs shaping_rules)
 "flights/hotel already booked"       → /stage2-shop-transport — mode `ingest-known` (record + VALIDATE, no shopping)
 "skip shopping for now"              → /stage2-shop-transport — mode `defer` (log skip reason)
   # Stage 2 has MODES (P4): shop | ingest-known | defer. Package/direct COMPARISON is optional;
