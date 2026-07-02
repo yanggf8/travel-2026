@@ -1276,6 +1276,7 @@ pub async fn run_export(args: &[String]) -> Result<(), String> {
 // from the Turso holiday calendar, inserts candidates, then ranks the run.
 
 pub async fn run_import(args: &[String]) -> Result<(), String> {
+    use travel_db::repo::shaping as repo_shaping;
     if has_flag(args, "--help") || has_flag(args, "-h") {
         println!("Usage:\n  travel shaping-import --run <run_id> --file <path>");
         return Ok(());
@@ -1336,22 +1337,17 @@ pub async fn run_import(args: &[String]) -> Result<(), String> {
         let status = a.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
         let cc = a.get("candidateCount").and_then(|v| v.as_i64());
         let err = a.get("error").and_then(|v| v.as_str());
-        conn.execute(
-            "INSERT OR REPLACE INTO shaping_scrape_attempts
-              (run_id, dest_code, nights, status, candidate_count, error, attempted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                run_id.clone(),
-                dc.to_string(),
-                n,
-                status.to_string(),
-                cc,
-                err.map(|s| s.to_string()),
-                now_rfc3339(),
-            ],
+        repo_shaping::upsert_scrape_attempt(
+            &conn,
+            &run_id,
+            dc,
+            n,
+            status,
+            cc,
+            err,
+            &now_rfc3339(),
         )
-        .await
-        .map_err(|e| format!("upsert scrape attempt failed: {e}"))?;
+        .await?;
     }
 
     // Insert candidates (leave-days from the Turso holiday calendar, market=taiwan).
@@ -1367,25 +1363,21 @@ pub async fn run_import(args: &[String]) -> Result<(), String> {
 
         let leave_days = compute_leave_days(depart, ret).await?;
 
-        conn.execute(
-            "INSERT INTO shaping_candidates
-              (candidate_id, run_id, dest_code, depart_date, return_date, nights,
-               flight_total_twd, leave_days, rank, verdict, adopted_plan_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, NULL)",
-            params![
-                candidate_id.to_string(),
-                run_id.clone(),
-                dest_code.to_string(),
-                depart.to_string(),
-                ret.to_string(),
+        repo_shaping::insert_candidate(
+            &conn,
+            &repo_shaping::CandidateWrite {
+                candidate_id: candidate_id.to_string(),
+                run_id: run_id.clone(),
+                dest_code: dest_code.to_string(),
+                depart_date: depart.to_string(),
+                return_date: ret.to_string(),
                 nights,
-                flight_total,
+                flight_total_twd: flight_total,
                 leave_days,
-                verdict.map(|s| s.to_string()),
-            ],
+                verdict: verdict.map(|s| s.to_string()),
+            },
         )
-        .await
-        .map_err(|e| format!("insert shaping_candidates failed: {e}"))?;
+        .await?;
 
         // candidate flights
         if let Some(flights) = c.get("flights").and_then(|v| v.as_array()) {
@@ -1397,23 +1389,20 @@ pub async fn run_import(args: &[String]) -> Result<(), String> {
                 let duration = f.get("duration").and_then(|v| v.as_str());
                 let nonstop = f.get("nonstop").and_then(|v| v.as_bool()).map(|b| if b { 1i64 } else { 0 });
                 let price = f.get("priceTotalTwd").and_then(|v| v.as_i64());
-                conn.execute(
-                    "INSERT INTO shaping_candidate_flights
-                      (candidate_id, direction, airline, depart_time, arrive_time, duration, nonstop, price_total_twd)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    params![
-                        candidate_id.to_string(),
-                        direction.to_string(),
-                        airline.map(|s| s.to_string()),
-                        depart_time.map(|s| s.to_string()),
-                        arrive_time.map(|s| s.to_string()),
-                        duration.map(|s| s.to_string()),
+                repo_shaping::insert_candidate_flight(
+                    &conn,
+                    &repo_shaping::CandidateFlightWrite {
+                        candidate_id: candidate_id.to_string(),
+                        direction: direction.to_string(),
+                        airline: airline.map(|s| s.to_string()),
+                        depart_time: depart_time.map(|s| s.to_string()),
+                        arrive_time: arrive_time.map(|s| s.to_string()),
+                        duration: duration.map(|s| s.to_string()),
                         nonstop,
-                        price,
-                    ],
+                        price_total_twd: price,
+                    },
                 )
-                .await
-                .map_err(|e| format!("insert shaping_candidate_flights failed: {e}"))?;
+                .await?;
             }
         }
         inserted += 1;
@@ -1422,12 +1411,7 @@ pub async fn run_import(args: &[String]) -> Result<(), String> {
     // Rank if any candidates exist; otherwise mark failed.
     let all = get_candidates(&conn, &run_id).await?;
     if all.is_empty() {
-        conn.execute(
-            "UPDATE shaping_research_runs SET status = 'failed', updated_at = ?1 WHERE run_id = ?2",
-            params![now_rfc3339(), run_id.clone()],
-        )
-        .await
-        .map_err(|e| format!("update status failed: {e}"))?;
+        repo_shaping::set_run_status(&conn, &run_id, "failed", &now_rfc3339()).await?;
         println!("⚠️  No candidates for {run_id} — run marked failed.");
         return Ok(());
     }
@@ -1446,21 +1430,7 @@ async fn delete_candidates_for_pair(
     dest_code: &str,
     nights: i64,
 ) -> Result<(), String> {
-    conn.execute(
-        "DELETE FROM shaping_candidate_flights WHERE candidate_id IN
-          (SELECT candidate_id FROM shaping_candidates
-           WHERE run_id = ?1 AND dest_code = ?2 AND nights = ?3)",
-        params![run_id.to_string(), dest_code.to_string(), nights],
-    )
-    .await
-    .map_err(|e| format!("delete candidate flights failed: {e}"))?;
-    conn.execute(
-        "DELETE FROM shaping_candidates WHERE run_id = ?1 AND dest_code = ?2 AND nights = ?3",
-        params![run_id.to_string(), dest_code.to_string(), nights],
-    )
-    .await
-    .map_err(|e| format!("delete candidates failed: {e}"))?;
-    Ok(())
+    travel_db::repo::shaping::delete_pair(conn, run_id, dest_code, nights).await
 }
 
 async fn compute_leave_days(depart: &str, ret: &str) -> Result<Option<i64>, String> {
@@ -1501,18 +1471,8 @@ async fn rank_run(conn: &Connection, run_id: &str) -> Result<(), String> {
             .then_with(|| a.3.cmp(&b.3))
     });
     for (i, (cid, _, _, _)) in list.iter().enumerate() {
-        conn.execute(
-            "UPDATE shaping_candidates SET rank = ?1 WHERE candidate_id = ?2",
-            params![(i as i64) + 1, cid.clone()],
-        )
-        .await
-        .map_err(|e| format!("update rank failed: {e}"))?;
+        travel_db::repo::shaping::set_rank(conn, cid, (i as i64) + 1).await?;
     }
-    conn.execute(
-        "UPDATE shaping_research_runs SET status = 'ranked', updated_at = ?1 WHERE run_id = ?2",
-        params![now_rfc3339(), run_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("update run status failed: {e}"))?;
+    travel_db::repo::shaping::set_run_status(conn, run_id, "ranked", &now_rfc3339()).await?;
     Ok(())
 }
