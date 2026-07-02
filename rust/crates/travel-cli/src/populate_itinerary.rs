@@ -21,6 +21,7 @@
 
 use libsql::Connection;
 use std::collections::BTreeMap;
+use travel_db::repo::itinerary;
 
 #[derive(Default, Debug)]
 struct ParsedArgs {
@@ -681,20 +682,8 @@ async fn set_day_theme(
     day: i64,
     theme: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE days SET theme = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5",
-        libsql::params![
-            theme.to_string(),
-            now_db_datetime(),
-            plan_id.to_string(),
-            destination.to_string(),
-            day
-        ],
-    )
-    .await
-    .map_err(|e| format!("days theme UPDATE failed: {e}"))?;
-    Ok(())
+    itinerary::set_day_theme_populate(conn, plan_id, destination, day, theme, &now_db_datetime())
+        .await
 }
 
 async fn read_session_focus(
@@ -730,21 +719,16 @@ async fn set_session_focus(
     session: &str,
     focus: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE timesofday SET focus = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 AND session_type = ?6",
-        libsql::params![
-            focus.to_string(),
-            now_db_datetime(),
-            plan_id.to_string(),
-            destination.to_string(),
-            day,
-            session.to_string()
-        ],
+    itinerary::set_session_focus_populate(
+        conn,
+        plan_id,
+        destination,
+        day,
+        session,
+        focus,
+        &now_db_datetime(),
     )
     .await
-    .map_err(|e| format!("timesofday focus UPDATE failed: {e}"))?;
-    Ok(())
 }
 
 async fn session_has_title(
@@ -784,23 +768,7 @@ async fn next_sort_order(
     day: i64,
     session: &str,
 ) -> Result<i64, String> {
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(MAX(sort_order), -1) FROM activities \
-             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
-            libsql::params![plan_id.to_string(), destination.to_string(), day, session.to_string()],
-        )
-        .await
-        .map_err(|e| format!("activities MAX(sort_order) query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("activities MAX(sort_order) row read failed: {e}"))?
-    {
-        let m: i64 = row.get(0).unwrap_or(-1);
-        return Ok(m + 1);
-    }
-    Ok(0)
+    itinerary::next_sort_order(conn, plan_id, destination, day, session).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -823,41 +791,29 @@ async fn add_activity(
 ) -> Result<String, String> {
     let id = new_activity_id();
     let sort_order = next_sort_order(conn, plan_id, destination, day, session).await?;
-    conn.execute(
-        "INSERT INTO activities \
-            (id, plan_id, destination, day_number, session_type, sort_order, title, area, \
-             nearest_station, duration_min, booking_required, booking_url, cost_estimate, \
-             notes, priority, is_fixed_time, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16)",
-        libsql::params![
-            id.clone(),
-            plan_id.to_string(),
-            destination.to_string(),
-            day,
-            session.to_string(),
-            sort_order,
-            title.to_string(),
-            area.to_string(),
-            nearest_station.map(|s| s.to_string()),
-            duration_min,
-            if booking_required { 1i64 } else { 0i64 },
-            booking_url.map(|s| s.to_string()),
-            cost_estimate,
-            notes.map(|s| s.to_string()),
-            priority.to_string(),
-            now_db_datetime()
-        ],
+    itinerary::insert_populated_activity(
+        conn,
+        &id,
+        plan_id,
+        destination,
+        day,
+        session,
+        sort_order,
+        title,
+        area,
+        nearest_station,
+        duration_min,
+        booking_required,
+        booking_url,
+        cost_estimate,
+        notes,
+        priority,
+        &now_db_datetime(),
     )
-    .await
-    .map_err(|e| format!("activities INSERT failed: {e}"))?;
+    .await?;
 
     for tag in tags {
-        conn.execute(
-            "INSERT OR IGNORE INTO activity_tags (activity_id, tag) VALUES (?1, ?2)",
-            libsql::params![id.clone(), tag.clone()],
-        )
-        .await
-        .map_err(|e| format!("activity_tags INSERT failed: {e}"))?;
+        itinerary::insert_activity_tag_ignore(conn, &id, tag).await?;
     }
     Ok(id)
 }
@@ -894,13 +850,7 @@ async fn touch_day(
     destination: &str,
     day: i64,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE days SET updated_at = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
-        libsql::params![now_db_datetime(), plan_id.to_string(), destination.to_string(), day],
-    )
-    .await
-    .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
-    Ok(())
+    itinerary::touch_day(conn, plan_id, destination, day, &now_db_datetime()).await
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -973,30 +923,16 @@ async fn flush_events(
         timeline_so += 1;
     }
 
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?6, ?7, ?7)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            command_type.to_string(),
-            command_summary.to_string(),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        command_type,
+        command_summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
     Ok(())
 }
 
@@ -1141,24 +1077,6 @@ async fn insert_kv(
         .map_err(|e| format!("plan_event_data INSERT failed: {e}"))?;
     }
     Ok(())
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", p1, p2, p3, p4, p5)
 }
 
 fn now_rfc3339() -> String {

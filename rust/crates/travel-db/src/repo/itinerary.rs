@@ -711,3 +711,183 @@ pub async fn set_activity_poi(
     .await
     .map_err(|e| format!("activities UPDATE poi_id failed: {e}"))
 }
+
+// ─────────────────────────────────────────────────────────────────
+// populate-itinerary domain writes on the `days`, `timesofday`, `activities`,
+// and `activity_tags` tables. SQL copied verbatim from `populate_itinerary.rs`;
+// caller passes `now` for `updated_at` (fresh `now_db_datetime()` per write,
+// matching the prior inline timing). NOTE: populate's `activities` INSERT and
+// `next_*_sort_order` SELECT have a DISTINCT column set / SQL text from the
+// set-activity family above — they are their own functions, not shared. The
+// audit triad + event emission + allocation/pacing stay in `travel-cli` —
+// this module never touches them.
+// ─────────────────────────────────────────────────────────────────
+
+/// UPDATE a `days.theme` (bumping `updated_at`) for a `(plan, dest, day)` row —
+/// populate-itinerary's day-theme setter (sets `updated_at`, unlike swap-days'
+/// theme swap). SQL copied verbatim from `populate_itinerary::set_day_theme`.
+/// Caller passes `now`.
+pub async fn set_day_theme_populate(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    theme: &str,
+    now: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE days SET theme = ?1, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5",
+        libsql::params![
+            theme.to_string(),
+            now.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day
+        ],
+    )
+    .await
+    .map_err(|e| format!("days theme UPDATE failed: {e}"))?;
+    Ok(())
+}
+
+/// UPDATE a `timesofday.focus` (bumping `updated_at`) for a
+/// `(plan, dest, day, session)` row — populate-itinerary's session-focus setter.
+/// SQL copied verbatim from `populate_itinerary::set_session_focus`. Caller
+/// passes `now`.
+#[allow(clippy::too_many_arguments)]
+pub async fn set_session_focus_populate(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    focus: &str,
+    now: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE timesofday SET focus = ?1, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 AND session_type = ?6",
+        libsql::params![
+            focus.to_string(),
+            now.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("timesofday focus UPDATE failed: {e}"))?;
+    Ok(())
+}
+
+/// MAX(sort_order)+1 for a `(plan, dest, day, session)` — populate-itinerary's
+/// next append slot (returns 0 for an empty session, via
+/// `COALESCE(MAX(...), -1) + 1`). SQL copied verbatim from
+/// `populate_itinerary::next_sort_order` — note this SELECT has NO `AS m` alias
+/// (distinct SQL text from [`next_activity_sort_order`] above), so it is its own
+/// function rather than a reuse.
+pub async fn next_sort_order(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+) -> Result<i64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities MAX(sort_order) query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("activities MAX(sort_order) row read failed: {e}"))?
+    {
+        let m: i64 = row.get(0).unwrap_or(-1);
+        return Ok(m + 1);
+    }
+    Ok(0)
+}
+
+/// INSERT a brand-new `activities` row for populate-itinerary. SQL copied
+/// verbatim from `populate_itinerary::add_activity` — this is a DISTINCT column
+/// set from [`insert_activity`] above: it carries `booking_url` + `cost_estimate`,
+/// has NO `start_time`/`end_time`, binds `booking_required` (1/0) as a param, and
+/// hard-codes `is_fixed_time` to 0 in the SQL. Caller passes `now` for
+/// `updated_at`.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_populated_activity(
+    conn: &Connection,
+    activity_id: &str,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    sort_order: i64,
+    title: &str,
+    area: &str,
+    nearest_station: Option<&str>,
+    duration_min: Option<i64>,
+    booking_required: bool,
+    booking_url: Option<&str>,
+    cost_estimate: Option<i64>,
+    notes: Option<&str>,
+    priority: &str,
+    now: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO activities \
+            (id, plan_id, destination, day_number, session_type, sort_order, title, area, \
+             nearest_station, duration_min, booking_required, booking_url, cost_estimate, \
+             notes, priority, is_fixed_time, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16)",
+        libsql::params![
+            activity_id.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            sort_order,
+            title.to_string(),
+            area.to_string(),
+            nearest_station.map(|s| s.to_string()),
+            duration_min,
+            if booking_required { 1i64 } else { 0i64 },
+            booking_url.map(|s| s.to_string()),
+            cost_estimate,
+            notes.map(|s| s.to_string()),
+            priority.to_string(),
+            now.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities INSERT failed: {e}"))?;
+    Ok(())
+}
+
+/// `INSERT OR IGNORE` one `activity_tags` child row (2 columns: `activity_id`,
+/// `tag` — NO `updated_at`). SQL copied verbatim from the inline tag loop in
+/// `populate_itinerary::add_activity`.
+pub async fn insert_activity_tag_ignore(
+    conn: &Connection,
+    activity_id: &str,
+    tag: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO activity_tags (activity_id, tag) VALUES (?1, ?2)",
+        libsql::params![activity_id.to_string(), tag.to_string()],
+    )
+    .await
+    .map_err(|e| format!("activity_tags INSERT failed: {e}"))?;
+    Ok(())
+}
