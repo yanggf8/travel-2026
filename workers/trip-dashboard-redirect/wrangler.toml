@@ -1,0 +1,6 @@
+# Redirect worker — reclaims the retired `trip-dashboard` workers.dev name to 301-forward the old
+# dashboard URL to the live -rs worker (path + query preserved). Deploy: `npx wrangler deploy`.
+name = "trip-dashboard"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+workers_dev = true
