@@ -750,86 +750,28 @@ async fn adopt_candidate_to_new_plan(
         .join("; ");
     let session = &ts[..10.min(ts.len())];
 
-    // Sequential inserts (mirrors adoptCandidateToNewPlan executeMany order).
-    let stmts: Vec<(&str, Vec<libsql::Value>)> = vec![
-        (
-            "INSERT INTO plans (plan_id, schema_version, updated_at) VALUES (?1, ?2, datetime('now'))",
-            vec![plan_id.into(), schema_version.into()],
-        ),
-        (
-            "INSERT INTO plan_metadata (plan_id, schema_version, active_destination, updated_at)
-             VALUES (?1, ?2, ?3, datetime('now'))",
-            vec![plan_id.into(), schema_version.into(), dest_slug.into()],
-        ),
-        (
-            "INSERT INTO plan_destinations (plan_id, slug, display_name, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'active', ?4, ?5)",
-            vec![plan_id.into(), dest_slug.into(), display_name.clone().into(), ts.clone().into(), ts.clone().into()],
-        ),
-        (
-            "INSERT INTO destination_details (plan_id, destination, origin_city, region, primary_airport, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
-            vec![
-                plan_id.into(),
-                dest_slug.into(),
-                origin_code.clone().map(libsql::Value::from).unwrap_or(libsql::Value::Null),
-                region.clone().into(),
-                primary_airport.clone().into(),
-            ],
-        ),
-        (
-            "INSERT INTO destination_cities (plan_id, destination, city_slug, display_name, role, nights, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'primary', ?5, datetime('now'))",
-            vec![plan_id.into(), dest_slug.into(), dest_slug.into(), display_name.clone().into(), nights.into()],
-        ),
-        (
-            "INSERT INTO date_anchors (plan_id, destination, start_date, end_date, days, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
-            vec![plan_id.into(), dest_slug.into(), start_date.clone().into(), end_date.clone().into(), days.into()],
-        ),
-    ];
-    for (sql, p) in stmts {
-        conn.execute(sql, params_from_iter(p))
-            .await
-            .map_err(|e| format!("adopt insert failed ({sql:.40}): {e}"))?;
-    }
-
-    // process_statuses
-    let proc_rows: [(&str, &str); 7] = [
-        ("process_1_date_anchor", "confirmed"),
-        ("process_2_destination", "confirmed"),
-        ("process_3_transportation", "pending"),
-        ("process_3_4_packages", "pending"),
-        ("process_4_accommodation", "pending"),
-        ("process_5_daily_itinerary", "pending"),
-        // (TS lists 6 rows; only the above; keep array sized 7 but last unused)
-        ("", ""),
-    ];
-    for (pid, st) in proc_rows.iter().filter(|(p, _)| !p.is_empty()) {
-        conn.execute(
-            "INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-            params![plan_id, dest_slug, *pid, *st],
-        )
-        .await
-        .map_err(|e| format!("insert process_statuses failed: {e}"))?;
-    }
-
-    // event log
-    conn.execute(
-        "INSERT INTO event_log_state (plan_id, session, project, version, current_focus, active_destination)
-         VALUES (?1, ?2, 'japan-travel', '3.0', '', ?3)",
-        params![plan_id, session, dest_slug],
+    // Create-plan seed (plans/metadata/destinations/details/cities/anchors + the 6
+    // process_statuses rows + event_log_state/destinations) — one repo call, byte-identical
+    // ordered SQL. Event emission, record_operation, pointers, and the bridge stay below.
+    travel_db::repo::plan_lifecycle::create_plan_seed(
+        conn,
+        &travel_db::repo::plan_lifecycle::PlanSeed {
+            plan_id: plan_id.to_string(),
+            schema_version: schema_version.to_string(),
+            dest_slug: dest_slug.to_string(),
+            display_name: display_name.clone(),
+            origin_code: origin_code.clone(),
+            region: region.clone(),
+            primary_airport: primary_airport.clone(),
+            nights,
+            start_date: start_date.clone(),
+            end_date: end_date.clone(),
+            days,
+            session: session.to_string(),
+            ts: ts.clone(),
+        },
     )
-    .await
-    .map_err(|e| format!("insert event_log_state failed: {e}"))?;
-    conn.execute(
-        "INSERT INTO event_log_destinations (plan_id, destination, status)
-         VALUES (?1, ?2, 'active')",
-        params![plan_id, dest_slug],
-    )
-    .await
-    .map_err(|e| format!("insert event_log_destinations failed: {e}"))?;
+    .await?;
 
     // plan_events + plan_event_data KV
     conn.execute(
@@ -874,19 +816,8 @@ async fn adopt_candidate_to_new_plan(
     )
     .await?;
 
-    // pointers
-    conn.execute(
-        "UPDATE shaping_candidates SET adopted_plan_id = ?1 WHERE candidate_id = ?2",
-        params![plan_id, candidate_id],
-    )
-    .await
-    .map_err(|e| format!("update shaping_candidates failed: {e}"))?;
-    conn.execute(
-        "UPDATE shaping_research_runs SET status = 'adopted', updated_at = ?1 WHERE run_id = ?2",
-        params![ts, run_id.clone()],
-    )
-    .await
-    .map_err(|e| format!("update shaping_research_runs failed: {e}"))?;
+    // pointers (same helper the simple-adopt path uses)
+    travel_db::repo::shaping::set_adopted(conn, candidate_id, plan_id, &run_id, &ts).await?;
 
     // Bridge the tour-group baseline audit set into the new plan (matches the TS
     // adoptCandidateToNewPlan flow). Region = destination_config.ref_id. Non-fatal:
