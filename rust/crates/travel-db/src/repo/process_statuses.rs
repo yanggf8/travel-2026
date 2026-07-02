@@ -3,9 +3,9 @@
 //! DAL boundary: owns the `process_statuses` UPSERT SQL. The audit triad stays in `travel-cli`
 //! (`cascade::common`).
 //!
-//! This is the long-term home for the process-status upsert (it is a cross-domain concern used by
-//! the offer cascade, promote/import, etc. — see `repo::plan_offers::upsert_process_status`, which
-//! carries a byte-identical copy for the offer-family callers pending their consolidation here).
+//! This is the sole home for the process-status upsert (a cross-domain concern used by the offer
+//! cascade, promote/import, scaffold, etc.). The former byte-identical copy in `repo::plan_offers`
+//! was consolidated here (2026-07-02); do not re-introduce a per-module duplicate.
 
 use libsql::Connection;
 

@@ -275,7 +275,7 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
             None | Some("pending") | Some("researching") => "researched",
             Some(s) => s,
         };
-        plan_offers::upsert_process_status(&conn, &opts.plan_id, &dest, P34, new_status, &now_db)
+        travel_db::repo::process_statuses::upsert(&conn, &opts.plan_id, &dest, P34, new_status, &now_db)
             .await?;
 
         // Emit events: package_offers_imported (dest_process + timeline)

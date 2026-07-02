@@ -262,33 +262,6 @@ pub async fn set_selection(
     Ok(())
 }
 
-/// Upsert one `process_statuses` row (P3_4 → researched transition, etc.).
-pub async fn upsert_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-    status: &str,
-    now_db: &str,
-) -> Result<(), String> {
-    conn.execute(
-        "INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(plan_id, destination, process_id) DO UPDATE SET \
-            status = excluded.status, updated_at = excluded.updated_at",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now_db.to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// Payload for one imported offer + all its child rows (import-offers shape:
 /// url present, multi-row date_pricing without currency, full hotel + access,
 /// full flights, best_value). Distinct from `PlanOfferWrite` (promote's shape).

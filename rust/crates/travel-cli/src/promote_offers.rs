@@ -215,7 +215,7 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
         None | Some("pending") | Some("researching") => "researched",
         Some(s) => s,
     };
-    plan_offers::upsert_process_status(&conn, &opts.plan_id, &opts.dest, P34, new_status, &now_db)
+    travel_db::repo::process_statuses::upsert(&conn, &opts.plan_id, &opts.dest, P34, new_status, &now_db)
         .await?;
 
     // --- Events: package_offers_promoted (dest_process + timeline), per source. ---
