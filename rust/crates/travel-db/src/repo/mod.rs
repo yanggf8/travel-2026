@@ -1,3 +1,4 @@
+pub mod airport_transfers;
 pub mod bookings;
 pub mod captures;
 pub mod days;
@@ -7,6 +8,8 @@ pub mod freshness;
 pub mod hotels;
 pub mod observations;
 pub mod offers;
+pub mod ota_catalog;
+pub mod plan_lifecycle;
 pub mod plan_offers;
 pub mod origin;
 pub mod ota_attempts;
