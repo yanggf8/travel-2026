@@ -141,14 +141,35 @@ Pre-commit hook (installed by `make hooks`) runs the Rust build check + `validat
 - Prefer `./bin/travel` subcommands over direct SQL for reusable content edits (raw `db exec` is fine for one-shot migrations/backfills — see "DB Operation Decision")
 - Every output: current status, what changed, single best next action
 
+### Trip-intake router (classify the trip FIRST — P0/P1, 2026-07-02)
+
+**Agent-driven routing table, NOT a code router.** Classify every new trip up front, then follow the
+route. Each class records its choice with `travel flow-decision` (the F6 recorder) so the plan history
+shows WHY a stage was entered/skipped. Vocabulary (`stage`/`decision`/`--mode`) MUST match the
+`flow_decision.rs` constants: stages `shaping|itinerary|shop|publish`, decisions `enter|skip|mode`,
+modes `shop|ingest-known|defer`.
+
+| Intake class | Signal | Route | Record |
+|---|---|---|---|
+| flexible research | no dates/dest/flights fixed | `/shaping-research` (triangle) | `travel flow-decision shaping enter --reason flexible` |
+| fixed dates/destination | dates+dest known, flights not | create/verify plan → `/p1-dates` + `/p2-destination` → shop | `travel flow-decision shop enter` |
+| **known flights** (fast-path) | flights+hotel already chosen | create plan → `set-dates` + `set-flight`/`set-hotel` → straight to itinerary; **Shaping OPTIONAL** | `travel flow-decision shaping skip --reason known_flights` |
+| known package | package booked | Stage 2 mode `ingest-known` (record + validate) | `travel flow-decision shop mode --mode ingest-known` |
+
+All 3 completed trips (tokyo/kyoto/okinawa) were the **known-flights** case — flights/hotel pre-decided
+and hand-entered; Shaping was NOT the mechanism. The fast-path is first-class, not a bypass. (Hedge:
+no automatic code router, no lifecycle state machine, no Shaping-breadth algorithm — see
+`docs/plans/2026-05-22-new-planning-flow.md`.)
+
 ### Skill Decision Tree
 ```
 User intent                          → Skill / Action
 ──────────────────────────────────────────────────────
-"plan a trip to [place]"             → Shaping Stage/1 staged flow
+"plan a trip to [place]"             → classify via Trip-intake router above, then:
   loose dates/destination/price?         → /shaping-research
   fixed dates + destination?             → create/verify plan, then /p1-dates + /p2-destination
-  destination missing?                  → /new-destination, then continue Shaping Stage/1
+  known flights + hotel?                 → fast-path: set-dates + set-flight/set-hotel → itinerary (flow-decision shaping skip --reason known_flights); Shaping OPTIONAL
+  destination missing?                  → /new-destination, then continue
 "cheapest week to go to X"           → /shaping-research (pre-lock triangle research)
 "Osaka or Tokyo, depends on price"   → /shaping-research (compare destinations + dates + price together)
 "what dates are cheapest"            → /shaping-research
@@ -156,11 +177,16 @@ User intent                          → Skill / Action
 "which city" / "how many nights"     → /p2-destination
 "lock this Shaping Stage candidate"        → ./bin/travel shaping-adopt <candidate_id> <new_plan_id> --create-plan --dest <slug>
 "draft the trip" / "rough itinerary" → /stage1-itinerary-draft
-"find packages" / "search OTA"       → /stage2-shop-transport (check freshness first)
+"find packages" / "search OTA"       → /stage2-shop-transport — mode `shop` (check freshness first)
   fresh data in Turso?                  → query-offers (show existing)
   stale/no data?                        → /p3p4-packages (scrape + auto-import)
-"find flights only"                  → /stage2-shop-transport (uses /p3-flights)
-"compare offers"                     → /stage2-shop-transport
+"find flights only"                  → /stage2-shop-transport — mode `shop` (uses /p3-flights)
+"compare offers"                     → /stage2-shop-transport — mode `shop`
+"flights/hotel already booked"       → /stage2-shop-transport — mode `ingest-known` (record + VALIDATE, no shopping)
+"skip shopping for now"              → /stage2-shop-transport — mode `defer` (log skip reason)
+  # Stage 2 has MODES (P4): shop | ingest-known | defer. Package/direct COMPARISON is optional;
+  # transport/accommodation VALIDATION is mandatory in every mode. Each mode records
+  # `travel flow-decision shop mode --mode <m>`. Modes match flow_decision.rs MODES.
 "query offers"                       → ./bin/travel query-offers --plan-id <id> --dest <slug>
 "import scraped files"               → ./bin/travel import-offers --dir scrapes --dest <slug>
 "use scraped OTA offers in a plan"   → ./bin/travel promote-offers --from-offers --dest <slug> --plan-id <id>  (global offers → plan_offers; then select-offer)

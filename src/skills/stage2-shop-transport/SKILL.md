@@ -13,14 +13,29 @@ Orchestration skill for **Stage 2 — Shop Flight / Package** of the adopted
 research-first planning flow (`docs/plans/2026-05-22-new-planning-flow.md`).
 
 Stage 2 starts after Stage 1 has produced a viable rough itinerary and lodging
-topology. Its job is to compare direct flight booking against flight+hotel
-packages, select the best booking path, and record the chosen transport and
-lodging state through the existing P3/P4 tools.
+topology. It records the chosen transport + lodging through the existing P3/P4
+tools.
+
+**Stage 2 has three MODES (P4, 2026-07-02) — `shop` | `ingest-known` | `defer`**
+(matching `flow_decision.rs` MODES). Record the mode with
+`travel flow-decision shop mode --mode <m>`:
+- **`shop`** — flexible/price-sensitive: compare direct flight booking against
+  flight+hotel packages and select the best booking path (the full workflow below).
+- **`ingest-known`** — flights/hotel ALREADY chosen/booked: record them
+  (`set-flight`/`set-hotel`) and validate; no shopping. (The common case — all 3
+  completed trips were this.)
+- **`defer`** — explicitly decline shopping for now; log the skip reason.
+
+**Package/direct COMPARISON is OPTIONAL (mode `shop` only); transport/accommodation
+VALIDATION is MANDATORY in every mode.** The package-vs-direct workflow below
+applies to mode `shop`.
 
 ## When to use
 
 - User says "find packages", "search OTA", "shop flights", "compare direct vs
-  package", "book separately", or "which offer should we take".
+  package", "book separately", "which offer should we take" (→ mode `shop`);
+  "flights already booked" / "just record my flights" (→ mode `ingest-known`);
+  "skip shopping for now" (→ mode `defer`).
 - Dates and destination are locked, and the rough itinerary has enough shape to
   know whether a single-base package can work.
 

@@ -134,13 +134,31 @@ Decide this before Stage 2 because it affects which packages are viable. Some pa
 
 ---
 
-## Stage 2 — Shop Flight (Book Transportation)
+## Stage 2 — Shop / Record Transportation (has MODES)
 
-**Goal:** Find the best flight option for the locked date + destination. Can be bought directly or as part of a package.
+**Goal:** Land the transport + accommodation for the locked date + destination.
 
-Use `/stage2-shop-transport` as the orchestration skill for this stage. It
-wraps `/p3-flights`, `/p3p4-packages`, and `/separate-bookings`, and owns the
-package-vs-direct decision.
+**Stage 2 has three MODES (P4, 2026-07-02 — evidence: all 3 completed trips had pre-decided flights,
+so a mandatory "compare direct vs package" stage did not fit reality):**
+- **`shop`** — flexible / price-sensitive: compare direct flights vs packages (`/p3-flights`,
+  `/p3p4-packages`, `/separate-bookings`). The full Path A/B flow below.
+- **`ingest-known`** — flights/hotel ALREADY chosen/booked: record them (`set-flight`/`set-hotel`) and
+  VALIDATE; no shopping. This is the common case (the known-flights fast-path from the trip-intake
+  router).
+- **`defer`** — explicitly decline shopping for now; log the skip reason.
+
+**Package/direct COMPARISON is OPTIONAL (only mode `shop`); transport/accommodation VALIDATION is
+MANDATORY in every mode.** Record the chosen mode with `travel flow-decision shop mode --mode <m>`
+(m ∈ `shop|ingest-known|defer`, matching `flow_decision.rs` MODES).
+
+Use `/stage2-shop-transport` as the orchestration skill; it wraps `/p3-flights`, `/p3p4-packages`, and
+`/separate-bookings`. The Path A/B flow below applies to mode `shop`.
+
+> **Non-goals (hedge, 2026-07-02):** these are docs/routing changes only. There is **no automatic code
+> router** (the trip-intake router is an agent-driven table, not code), **no lifecycle state machine**
+> (extend the existing PAST/ACTIVE/UPCOMING logic when pre/in/post-trip is modeled), and **no
+> Shaping-breadth algorithm** — deferred until at least one real flexible-flights trip exercises them.
+> Evidence so far is n=3, all pre-decided-flight. See `docs/plans/2026-07-02-planning-flow-improvement.md`.
 
 **Two paths:**
 

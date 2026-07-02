@@ -561,6 +561,50 @@ fn validate_claude_md_consistency(issues: &mut Vec<Issue>) {
             line: None,
         });
     }
+
+    // Planning-flow routing consistency (T3/T4/T5, 2026-07-02): the trip-intake router + Stage-2
+    // modes must be present and must use the flow_decision.rs vocabulary (so docs can't drift from
+    // the command). One narrow block, not per-phrase brittleness (Codex-advised minimal oracle).
+    for msg in planning_flow_doc_violations(&content) {
+        issues.push(Issue {
+            category: "claude-md".to_string(),
+            severity: Severity::Error,
+            message: msg,
+            file: Some("CLAUDE.md".to_string()),
+            line: None,
+        });
+    }
+}
+
+/// Pure matcher for the planning-flow routing docs (T3/T4/T5). Returns one message per missing
+/// required element. Asserts the intake router + known-flights fast-path + Stage-2 modes are present
+/// and use the flow_decision.rs vocabulary (`shaping skip --reason known_flights`; modes
+/// `shop`/`ingest-known`/`defer`; validation mandatory). Kept narrow + testable.
+fn planning_flow_doc_violations(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !content.contains("Trip-intake router") {
+        out.push("CLAUDE.md must contain the \"Trip-intake router\" classification table".to_string());
+    }
+    // known-flights fast-path must name its flow-decision record (ties docs to the shipped command).
+    if !content.contains("flow-decision shaping skip --reason known_flights") {
+        out.push(
+            "CLAUDE.md trip-intake router must name the known-flights record \
+             `flow-decision shaping skip --reason known_flights`"
+                .to_string(),
+        );
+    }
+    // Stage-2 modes must all appear + validation-mandatory stated (must match flow_decision.rs MODES).
+    for mode in ["shop", "ingest-known", "defer"] {
+        if !content.contains(mode) {
+            out.push(format!("CLAUDE.md must name Stage-2 mode `{mode}` (flow_decision.rs MODES)"));
+        }
+    }
+    if !content.contains("VALIDATION is mandatory") {
+        out.push(
+            "CLAUDE.md Stage-2 modes must state \"VALIDATION is mandatory in every mode\"".to_string(),
+        );
+    }
+    out
 }
 
 /// Pure matcher for the okinawa false-provenance drift (T2). Returns one message per FULL false
@@ -1180,6 +1224,35 @@ mod okinawa_provenance_tests {
                      adopted research-first staged planning model\n\
                      For a freshly created plan (e.g. `shaping-adopt`) pass version_before=0.";
         assert!(okinawa_false_provenance_violations(legit).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod planning_flow_doc_tests {
+    use super::*;
+
+    #[test]
+    fn complete_routing_docs_pass() {
+        let good = "### Trip-intake router\n\
+            | known flights | ... | flow-decision shaping skip --reason known_flights |\n\
+            Stage 2 modes: shop | ingest-known | defer. transport/accommodation VALIDATION is mandatory in every mode.";
+        assert!(planning_flow_doc_violations(good).is_empty());
+    }
+
+    #[test]
+    fn missing_router_flagged() {
+        let bad = "Stage 2 modes: shop | ingest-known | defer. VALIDATION is mandatory in every mode.\n\
+                   flow-decision shaping skip --reason known_flights";
+        let v = planning_flow_doc_violations(bad);
+        assert!(v.iter().any(|m| m.contains("Trip-intake router")), "{v:?}");
+    }
+
+    #[test]
+    fn missing_a_mode_flagged() {
+        let bad = "### Trip-intake router\nflow-decision shaping skip --reason known_flights\n\
+                   modes: shop | defer. VALIDATION is mandatory in every mode.";
+        let v = planning_flow_doc_violations(bad);
+        assert!(v.iter().any(|m| m.contains("ingest-known")), "{v:?}");
     }
 }
 
