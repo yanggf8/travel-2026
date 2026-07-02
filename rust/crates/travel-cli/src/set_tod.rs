@@ -10,6 +10,7 @@
 // `session_meals`.
 
 use libsql::Connection;
+use travel_db::repo::itinerary;
 
 #[derive(Default, Debug)]
 struct ParsedFocus {
@@ -337,35 +338,15 @@ pub async fn run_zh(
     // activities_zh: DELETE-then-reinsert session_activities_zh. `--clear-activities`
     // does the DELETE with no reinsert (empties the list without re-passing it).
     if parsed.clear_activities || parsed.activities_zh.is_some() {
-        conn.execute(
-            "DELETE FROM session_activities_zh \
-             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
-            libsql::params![
-                plan_id.to_string(),
-                destination.to_string(),
-                parsed.day,
-                parsed.session.clone()
-            ],
+        itinerary::replace_session_activities_zh(
+            &conn,
+            &plan_id,
+            &destination,
+            parsed.day,
+            &parsed.session,
+            parsed.activities_zh.as_deref().unwrap_or(&[]),
         )
-        .await
-        .map_err(|e| format!("session_activities_zh DELETE failed: {e}"))?;
-        for (i, a) in parsed.activities_zh.as_deref().unwrap_or(&[]).iter().enumerate() {
-            conn.execute(
-                "INSERT INTO session_activities_zh \
-                    (plan_id, destination, day_number, session_type, sort_order, activity) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                libsql::params![
-                    plan_id.to_string(),
-                    destination.to_string(),
-                    parsed.day,
-                    parsed.session.clone(),
-                    i as i64,
-                    a.clone()
-                ],
-            )
-            .await
-            .map_err(|e| format!("session_activities_zh INSERT failed: {e}"))?;
-        }
+        .await?;
     }
     // No ZH meals: session_meals (the EN/display `meal` column) is the single
     // meal source rendered for both languages — the ZH-meal path was dropped in
@@ -448,34 +429,16 @@ pub async fn run_meals(args: &[String], plan_id: String) -> Result<(), String> {
         parsed.meals.len()
     );
 
-    conn.execute(
-        "DELETE FROM session_meals \
-         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
-        libsql::params![
-            plan_id.to_string(),
-            destination.to_string(),
-            parsed.day,
-            parsed.session.clone()
-        ],
+    itinerary::replace_session_meals(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &parsed.meals,
     )
-    .await
-    .map_err(|e| format!("session_meals DELETE failed: {e}"))?;
-    for (i, meal) in parsed.meals.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO session_meals \
-                (plan_id, destination, day_number, session_type, sort_order, meal) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            libsql::params![
-                plan_id.to_string(),
-                destination.to_string(),
-                parsed.day,
-                parsed.session.clone(),
-                i as i64,
-                meal.clone()
-            ],
-        )
-        .await
-        .map_err(|e| format!("session_meals INSERT failed: {e}"))?;
+    .await?;
+    for meal in &parsed.meals {
         println!("   • {meal}");
     }
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
@@ -905,33 +868,19 @@ async fn apply_tod_field(
     field: &str,
     value: Option<String>,
 ) -> Result<(), String> {
-    // Mirror the TS sync INSERT OR REPLACE pattern. The Rust
-    // equivalent for an UPDATE of a single column.
-    let column = match field {
-        "focus" => "focus",
-        "focus_zh" => "focus_zh",
-        "transit_notes_zh" => "transit_notes_zh",
-        _ => return Err(format!("unsupported timesofday field: {field}")),
-    };
-    let sql = format!(
-        "UPDATE timesofday SET {column} = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 AND session_type = ?6"
-    );
-    conn.execute(
-        &sql,
-        libsql::params![
-            value,
-            now_db_datetime(),
-            plan_id.to_string(),
-            destination.to_string(),
-            day,
-            session.to_string()
-        ],
+    // Domain write (the timesofday single-column UPDATE + the trailing touch_day)
+    // now lives in the DAL; the CLI computes `now` per call (fresh now_db_datetime()).
+    itinerary::update_tod_field(
+        conn,
+        plan_id,
+        destination,
+        day,
+        session,
+        field,
+        value,
+        &now_db_datetime(),
     )
     .await
-    .map_err(|e| format!("timesofday UPDATE {field} failed: {e}"))?;
-    touch_day(conn, plan_id, destination, day).await?;
-    Ok(())
 }
 
 async fn apply_time_range(
@@ -943,22 +892,19 @@ async fn apply_time_range(
     start: &str,
     end: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE timesofday SET time_range_start = ?1, time_range_end = ?2, updated_at = ?3 \
-         WHERE plan_id = ?4 AND destination = ?5 AND day_number = ?6 AND session_type = ?7",
-        libsql::params![
-            start.to_string(),
-            end.to_string(),
-            now_db_datetime(),
-            plan_id.to_string(),
-            destination.to_string(),
-            day,
-            session.to_string()
-        ],
+    // Domain write moved to the DAL (does NOT touch the day — run_time_range touches
+    // separately). CLI computes a fresh `now` per call.
+    itinerary::update_tod_time_range(
+        conn,
+        plan_id,
+        destination,
+        day,
+        session,
+        start,
+        end,
+        &now_db_datetime(),
     )
     .await
-    .map_err(|e| format!("timesofday time_range UPDATE failed: {e}"))?;
-    Ok(())
 }
 
 async fn touch_day(
@@ -967,13 +913,7 @@ async fn touch_day(
     destination: &str,
     day: i64,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE days SET updated_at = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
-        libsql::params![now_db_datetime(), plan_id.to_string(), destination.to_string(), day],
-    )
-    .await
-    .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
-    Ok(())
+    itinerary::touch_day(conn, plan_id, destination, day, &now_db_datetime()).await
 }
 
 /// Fail loud unless the target `timesofday` session row pre-exists. These
