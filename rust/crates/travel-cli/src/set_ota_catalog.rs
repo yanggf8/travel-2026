@@ -11,6 +11,7 @@ use crate::catalog_audit::record_catalog_run;
 use crate::cascade::common::now_db_datetime;
 use crate::db;
 use libsql::Connection;
+use travel_db::repo::ota_catalog;
 
 // ---------------------------------------------------------------------------
 // set-ota-source <source_id> --name <n> --status active|inactive
@@ -37,17 +38,7 @@ pub async fn run_set_source(args: &[String]) -> Result<(), String> {
     let now = now_db_datetime();
     // UPSERT identity only (name/status). COALESCE keeps an existing value when a flag is
     // omitted, so a partial edit doesn't blank the other column.
-    conn.execute(
-        "INSERT INTO ota_sources (source_id, name, status, updated_at) \
-         VALUES (?1, COALESCE(?2, ?1), COALESCE(?3, 'active'), ?4) \
-         ON CONFLICT(source_id) DO UPDATE SET \
-            name = COALESCE(?2, ota_sources.name), \
-            status = COALESCE(?3, ota_sources.status), \
-            updated_at = ?4",
-        libsql::params![source_id.clone(), name.clone(), status.clone(), now],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    ota_catalog::upsert_source(&conn, &source_id, name.as_deref(), status.as_deref(), &now).await?;
 
     record_catalog_run(&conn, "set-ota-source", &source_id).await?;
     println!("ota_sources upserted: {source_id}");
@@ -104,30 +95,18 @@ pub async fn run_set_coverage(args: &[String]) -> Result<(), String> {
 
     let now = now_db_datetime();
     let proven_int: i64 = if proven { 1 } else { 0 };
-    conn.execute(
-        "INSERT INTO ota_source_coverage \
-            (source_id, product_type, proven, proven_at, method, search_url, blocked_reason_code, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-         ON CONFLICT(source_id, product_type) DO UPDATE SET \
-            proven = ?3, \
-            proven_at = COALESCE(?4, ota_source_coverage.proven_at), \
-            method = COALESCE(?5, ota_source_coverage.method), \
-            search_url = COALESCE(?6, ota_source_coverage.search_url), \
-            blocked_reason_code = ?7, \
-            updated_at = ?8",
-        libsql::params![
-            source_id.clone(),
-            product_type.clone(),
-            proven_int,
-            proven_at.clone(),
-            method.clone(),
-            search_url.clone(),
-            blocked.clone(),
-            now
-        ],
+    ota_catalog::upsert_coverage(
+        &conn,
+        &source_id,
+        &product_type,
+        proven_int,
+        proven_at.as_deref(),
+        method.as_deref(),
+        search_url.as_deref(),
+        blocked.as_deref(),
+        &now,
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     record_catalog_run(
         &conn,
@@ -161,14 +140,8 @@ pub async fn run_set_region(args: &[String]) -> Result<(), String> {
     if !exists(&conn, "product_types", "code", &product_type).await? {
         return Err(format!("Error: product_type '{product_type}' not in product_types"));
     }
-    conn.execute(
-        "INSERT INTO ota_source_region_codes (source_id, product_type, region_label, region_code) \
-         VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT(source_id, product_type, region_label) DO UPDATE SET region_code = ?4",
-        libsql::params![source_id.clone(), product_type.clone(), region_label.clone(), region_code],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    ota_catalog::upsert_region_code(&conn, &source_id, &product_type, &region_label, &region_code)
+        .await?;
 
     record_catalog_run(
         &conn,
@@ -312,24 +285,17 @@ pub async fn run_set_url_param(args: &[String]) -> Result<(), String> {
     }
 
     let now = now_db_datetime();
-    conn.execute(
-        "INSERT INTO ota_source_url_param \
-            (source_id, product_type, url_param_name, input_name, input_value, url_value, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-         ON CONFLICT(source_id, product_type, url_param_name, input_name, input_value) DO UPDATE SET \
-            url_value = ?6, updated_at = ?7",
-        libsql::params![
-            source_id.clone(),
-            product_type.clone(),
-            url_param_name.clone(),
-            input_name.clone(),
-            input_value.clone(),
-            url_value.clone(),
-            now,
-        ],
+    ota_catalog::upsert_url_param(
+        &conn,
+        &source_id,
+        &product_type,
+        &url_param_name,
+        &input_name,
+        &input_value,
+        &url_value,
+        &now,
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     record_catalog_run(
         &conn,
