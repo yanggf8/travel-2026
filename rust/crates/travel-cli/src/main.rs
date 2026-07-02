@@ -13,6 +13,7 @@ mod db_status;
 mod db_token_status;    // db token-status (diagnose Turso credential resolution)
 mod destination_ref;
 mod flights;
+mod flow_decision; // flow-decision — audited stage entry/skip/mode recorder (F6)
 mod freshness;
 mod import_offers;
 mod leave;
@@ -165,6 +166,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             let opts = promote_offers::parse_args(rest)?;
             promote_offers::run(opts).await.map_err(|e| e.to_string())?;
             Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "flow-decision" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!(
+                    "Usage:\n  travel flow-decision <stage> <decision> [--mode <m>] [--reason <r>] [--source <s>] [--plan-id <id>]"
+                );
+                return Ok(());
+            }
+            flow_decision::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "set-ota-source" => {
             set_ota_catalog::run_set_source(rest).await
