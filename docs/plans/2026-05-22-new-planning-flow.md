@@ -63,9 +63,12 @@ User picks a candidate OR asks to explore another date/destination
   --dest KIX:"Osaka/Kyoto (KIX)" --dest NRT:"Tokyo (NRT)" \
   --nights 6 --nights 7 --pax 2 --rate 32
 
-# Scrape offers via chromeport CDP driver, then import into shaping run:
-#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
-#   → ./bin/chromeport parse capture <capture-id> --source <id>
+# Capture offers via gwebcdb (WSLg), agent-extract, then import into the shaping run:
+#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh            # CDP on :9222
+#   → python bridge/navigate.py "<url>"                            # + form_fill/combo_select for SPAs; settle ~25s
+#   → python bridge/ota_capture.py --source <id>                   # → capture_id; UNREDACTED → captures
+#   → AGENT reads captures.raw_text, extracts offers, emits TSV
+#   → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 
 # Compare top candidates.
@@ -143,8 +146,8 @@ so a mandatory "compare direct vs package" stage did not fit reality):**
 - **`shop`** — flexible / price-sensitive: compare direct flights vs packages (`/p3-flights`,
   `/p3p4-packages`, `/separate-bookings`). The full Path A/B flow below.
 - **`ingest-known`** — flights/hotel ALREADY chosen/booked: record them (`set-flight`/`set-hotel`) and
-  VALIDATE; no shopping. This is the common case (the known-flights fast-path from the trip-intake
-  router).
+  VALIDATE; no shopping. This is the common case — the known-flights fast-path, which is the DEFAULT
+  planning path (Shaping is the optional side-tool for flexible/price-sensitive trips).
 - **`defer`** — explicitly decline shopping for now; log the skip reason.
 
 **Package/direct COMPARISON is OPTIONAL (only mode `shop`); transport/accommodation VALIDATION is
@@ -154,8 +157,8 @@ MANDATORY in every mode.** Record the chosen mode with `travel flow-decision sho
 Use `/stage2-shop-transport` as the orchestration skill; it wraps `/p3-flights`, `/p3p4-packages`, and
 `/separate-bookings`. The Path A/B flow below applies to mode `shop`.
 
-> **Non-goals (hedge, 2026-07-02):** these are docs/routing changes only. There is **no automatic code
-> router** (the trip-intake router is an agent-driven table, not code), **no lifecycle state machine**
+> **Non-goals (hedge, 2026-07-02):** these are docs/routing changes only. There is **no trip-classification
+> router** (the only routing concept is: default known-flights fast-path + Stage-2 purchase modes), **no lifecycle state machine**
 > (extend the existing PAST/ACTIVE/UPCOMING logic when pre/in/post-trip is modeled), and **no
 > Shaping-breadth algorithm** — deferred until at least one real flexible-flights trip exercises them.
 > Evidence so far is n=3, all pre-decided-flight. See `docs/plans/2026-07-02-planning-flow-improvement.md`.
@@ -164,11 +167,11 @@ Use `/stage2-shop-transport` as the orchestration skill; it wraps `/p3-flights`,
 
 ### Path A: Direct Flight Purchase
 ```bash
-# Search specific dates — June 18 → June 25 is a 7-night trip → --duration 8 (nights + 1)
-python scripts/scrape_date_range.py \
-  --depart-start 2026-06-18 --depart-end 2026-06-18 \
-  --origin tpe --dest kix --duration 8 --pax 2 \
-  -o scrapes/june18-outbound.json
+# Direct-flight prices come from the same gwebcdb capture path as packages (agent-first extraction).
+# Capture a flight source (e.g. google_flights) for the locked dates, agent-extract → TSV → write-offers:
+#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh
+#   → python bridge/navigate.py "<google-flights-url>"  → python bridge/ota_capture.py --source google_flights
+#   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 
 # Compare with package prices (Path B must run first to populate DB)
 ./bin/travel query-offers --region kansai --start 2026-06-18 --end 2026-06-25 --max-price 30000 --json
@@ -179,9 +182,12 @@ python scripts/scrape_date_range.py \
 ### Path B: Package (Flight + Hotel)
 ```bash
 # IMPORTANT: Run this BEFORE comparing direct vs package — Shaping Stage only has flight data
-# Search packages for the locked dates via the chromeport CDP driver (Python scrapers decommissioned):
-#   ./rust/target/debug/chromeport fetch interact "<ota-url>" --source <id> --step ...
-#   ./rust/target/debug/chromeport parse capture <capture-id> --source <id>   # imports to Turso
+# Search packages for the locked dates via gwebcdb (WSLg); extraction is agent-first (no in-CLI parser):
+#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh
+#   → python bridge/navigate.py "<ota-url>"  (+ form_fill/combo_select/form_click for SPA searches; settle ~25s)
+#   → python bridge/ota_capture.py --source <id>            # → capture_id; UNREDACTED → captures
+#   → AGENT reads captures.raw_text, extracts offers, emits TSV
+#   → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 # See src/skills/scrape-ota/SKILL.md and CLAUDE.md → URL Routing
 
 # Import and query
@@ -296,7 +302,7 @@ After any stage, user may want to iterate:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  STAGE 0: Triangle Research                             │
+│  OPTIONAL STAGE 0: Triangle Research                    │
 │  Departure dates + destination + flight price           │
 │  Research loop until candidate locked                   │
 └────────────────┬────────────────────────────────────────┘
@@ -310,8 +316,8 @@ After any stage, user may want to iterate:
                  │ itinerary fits
                  ▼
 ┌─────────────────────────────────────────────────────────┐
-│  STAGE 2: Shop Flight                                   │
-│  Direct booking OR package (flight + hotel)            │
+│  STAGE 2: Shop / Record Transport                       │
+│  ingest-known OR shop OR defer                          │
 │  If different dates cheaper → back to Shaping Stage          │
 └────────────────┬────────────────────────────────────────┘
                  │ flight confirmed
@@ -338,8 +344,8 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 
 | Stage | Existing skill(s) reused | What changes |
 |-------|--------------------------|--------------|
-| Shaping Stage — Triangle Research | `/shaping-research` (orchestration skill) + chromeport CDP scraping + `shaping-import` | `/shaping-research` owns pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
-| Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `shaping-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Shaping Stage handoff can seed the provisional P1/P2 lock; `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
+| Optional Shaping Stage — Triangle Research | `/shaping-research` (orchestration skill) + gwebcdb capture + agent TSV extraction + `ota write-offers` | `/shaping-research` owns optional pre-lock research — it has `requires_processes: []`, so it runs before dates/destination exist. `/p3-flights` still cannot be reused here (it requires P1/P2). |
+| Stage 1 — Itinerary Draft | `/stage1-itinerary-draft`, `shaping-adopt --create-plan`, `/p1-dates`, `/p2-destination`, `scaffold-itinerary` | Shaping Stage handoff can seed the provisional P1/P2 lock **but not transport/accommodation** — an adopted plan lands "dates+dest done, flights empty" and still needs Stage 2 (`ingest-known`/`shop`); `/stage1-itinerary-draft` owns the rough itinerary and viability check; `/p1-dates` and `/p2-destination` still handle manual or later revisions. |
 | Stage 2 — Shop Flight | `/stage2-shop-transport`, `/p3-flights`, `/p3p4-packages`, `/separate-bookings` | `/stage2-shop-transport` owns the package-vs-direct decision; lower-level P3/P4 skills remain the implementation tools. |
 | Stage 3 — Expand Itinerary | `/stage3-expand-itinerary`, `/p5-itinerary` | `/stage3-expand-itinerary` owns booking-aware detail expansion and validation; `/p5-itinerary` remains the implementation tool. |
 | Stage 4 — Publish | `/stage4-publish-dashboard`, `/deploy-dashboard`, `/weather-update` | `/stage4-publish-dashboard` owns explicit publish readiness and verification; `/deploy-dashboard` remains the implementation tool. |
@@ -352,12 +358,12 @@ The repo ships `/p1-dates`, `/p2-destination`, `/p3-flights`, `/p3p4-packages`, 
 
 | Area | Original Flow | Adopted Flow |
 |------|---------------|-------------------|
-| Overall model | Linear P1 → P2 → P3 → P4 → P5 | Iterative research-first loop |
-| First decision | Lock dates first | Explore dates, destination, and flight price together |
+| Overall model | Linear P1 → P2 → P3 → P4 → P5 | Known-flights fast-path by default; optional research-first loop when flights/dates are loose |
+| First decision | Lock dates first | Record known dates/flights when chosen; otherwise explore dates, destination, and flight price together |
 | Destination choice | Chosen after dates are set | Compared alongside flight/date options |
 | Flight prices | Checked after date/destination decisions | Used early as a primary decision signal |
 | Date flexibility | Low; going back is possible but awkward | Expected; dates can change during research |
-| Shaping Stage equivalent | No dedicated triangle research stage | New Shaping Stage researches date + destination + flight price |
+| Shaping Stage equivalent | No dedicated triangle research stage | Optional Shaping Stage researches date + destination + flight price |
 | Itinerary timing | Built late after transport/accommodation | Rough itinerary drafted before booking |
 | Package vs separate booking | P3 transport then P4 accommodation are separate sequential steps | Stage 2 chooses direct flight vs flight+hotel package |
 | Multi-city lodging | Usually handled later during itinerary planning | Decided before package/direct-booking choice |
