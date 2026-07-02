@@ -152,6 +152,31 @@ set (consistency between the command and the docs).
 4. Gate: `make check` + `cargo test -p travel-cli --test flow_decision --test validate_flow_doc` green;
    `./bin/travel validate data` 0 errors; `./bin/travel doctor` clean.
 
+## Pipeline model assignment (Codex-advised; capability smoke-tested 2026-07-02)
+
+**Capability verified** — the pipeline "plug" really handles the Claude 5 family: Claude Code 2.1.198
+supports Sonnet 5 (`claude-sonnet-5`) + Fable 5 (`claude-fable-5`); the subagent `model` param accepts
+`sonnet|opus|haiku|fable`; no local allowlist gates them (account/plan-gated only); the Grok plugin
+accepts `--model`. Live smoke tests through the subagent path PASSED: `fable-5 ok: 42`,
+`sonnet-5 ok: 72`.
+
+**Assignment (do NOT change the global `~/.claude/settings.json` "model": "opus[1m]" — keep Opus as the
+driver + final verifier):**
+
+| Task | Kind | Model | Why |
+|---|---|---|---|
+| T1 flow-decision command | audited Rust + audit-triad semantics | **Opus 4.8** (`[Claude]`) | new behavior + DB event contract — strongest model, and it's the final verifier's own work |
+| T2 validate guard | consistency-contract code | **Opus 4.8** (`[Claude]`) | touches `validate data` rules |
+| T2 doc edit / T3 / T5 | mechanical doc/routing wording | **Fable 5** or **Grok** (`[→ Grok]`) | cheap prose/routing edits; Fable-5 fits per Codex ("wording edits, routing-table prose") |
+| T4 router semantics | canonical routing table | **Opus 4.8** (`[Claude]`) | load-bearing classification the flow keys on |
+| Codex review pass | adversarial review | **Codex (gpt-5.x)** | unchanged pipeline role |
+| Grok implementation | code impl of specced tasks | **Grok** (`grok-composer-2.5-fast`) | unchanged pipeline role |
+| **Final line-by-line verify** | adversarial verify of all delegated output | **Opus 4.8** — NEVER downgrade | Codex: "would not make Sonnet the final verifier for this plan" |
+
+**Rule:** Sonnet 5 = cost-aware Claude planning/review where a strong-but-cheaper model suffices;
+Fable 5 = mechanical doc/prose only (NOT audited Rust, DB semantics, or final verify); Opus stays the
+verifier. Per-task overrides via the subagent `model` param / `--model`; no global setting change.
+
 ## Explicitly deferred (do NOT build here)
 - **P3** Stage1+3 wording polish (keep the draft→validate gate; do not merge). Docs-only, later.
 - **P5** lifecycle STATE — extend existing PAST/ACTIVE/UPCOMING (`status.rs:50-57`) + `pre-trip-checklist`
