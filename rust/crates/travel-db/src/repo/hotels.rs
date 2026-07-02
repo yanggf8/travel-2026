@@ -115,3 +115,71 @@ async fn upsert_hotel_row(
         .map_err(|e| format!("hotels upsert failed: {e}"))?;
     Ok(())
 }
+
+/// The chosen package offer's hotel data (for `select-offer`'s populate cascade).
+#[derive(Debug, Clone)]
+pub struct OfferHotelWrite {
+    pub name: Option<String>,
+    pub check_in: String,
+    pub populated_from: String,
+    pub access: Vec<String>,
+}
+
+/// Replace the destination's hotel row + access lines from the chosen offer — the `select-offer`
+/// populate cascade. Byte-identical to the SQL that was inline in
+/// `cascade::select_offer::rewrite_hotel`: DELETE `hotels`, `INSERT OR REPLACE` the parent row
+/// (populated_from/name/check_in, `notes` explicit NULL), DELETE `hotel_access_lines`, then a
+/// FOUR-column `INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line)` — NO
+/// `updated_at` column (distinct from `hotels::upsert`, whose access insert writes it). Access
+/// lines are always rewritten (even when empty ⇒ the DELETE just clears them).
+pub async fn replace_from_offer(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    input: &OfferHotelWrite,
+    now_db: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM hotels WHERE plan_id = ?1 AND destination = ?2",
+        libsql::params![plan_id.to_string(), destination.to_string()],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO hotels \
+            (plan_id, destination, populated_from, name, check_in, notes, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            input.populated_from.clone(),
+            input.name.clone(),
+            input.check_in.clone(),
+            now_db.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "DELETE FROM hotel_access_lines WHERE plan_id = ?1 AND destination = ?2",
+        libsql::params![plan_id.to_string(), destination.to_string()],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    for (i, line) in input.access.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line) \
+             VALUES (?1, ?2, ?3, ?4)",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                i as i64,
+                line.clone()
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

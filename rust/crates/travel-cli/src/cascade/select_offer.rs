@@ -59,8 +59,8 @@
 //   - plan_events.event_at; plan_offer_selection.selected_at
 
 use super::common::{
-    insert_event, insert_kv_rows, new_run_id, next_dest_process_sort_order,
-    next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version,
+    insert_event, insert_kv_rows, next_dest_process_sort_order, next_timeline_sort_order,
+    now_db_datetime, now_rfc3339, read_version,
 };
 use crate::status::format_date;
 use libsql::Connection;
@@ -167,26 +167,8 @@ async fn execute(
     validate_transition(p34_from.as_deref(), "selected", dest, P34)?;
 
     // --- 1. plan_offer_selection (DELETE-then-insert). selected_date=NULL. ---
-    conn.execute(
-        "DELETE FROM plan_offer_selection WHERE plan_id = ?1 AND destination = ?2",
-        libsql::params![plan_id.to_string(), dest.to_string()],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO plan_offer_selection \
-            (plan_id, destination, selected_offer_id, selected_date, selected_at, updated_at) \
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            offer_id.to_string(),
-            now_iso.clone(),
-            now_db.clone()
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    travel_db::repo::plan_offers::set_selection(conn, plan_id, dest, offer_id, &now_iso, &now_db)
+        .await?;
 
     // --- 2. P3_4 researched→selected (UPDATE + status_changed) ---
     set_status(conn, plan_id, dest, P34, "selected", &now_db).await?;
@@ -260,32 +242,17 @@ async fn execute(
         .await?;
     }
 
-    // --- 5. operation_runs (append-only) ---
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'select-offer', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            offer_id.to_string(),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    // --- 5. operation_runs + plans.version (shared audit-triad back half) ---
+    super::common::record_operation(
+        conn,
+        plan_id,
+        "select-offer",
+        offer_id,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // --- 6. plans.version +1 ---
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(version_after)
 }
@@ -303,42 +270,32 @@ async fn rewrite_flight_legs(
     offer: &OfferData,
     now_db: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "DELETE FROM flight_legs WHERE plan_id = ?1 AND destination = ?2",
-        libsql::params![plan_id.to_string(), dest.to_string()],
+    use travel_db::repo::flight_legs::OfferFlightLegWrite;
+    let legs: Vec<OfferFlightLegWrite> = offer
+        .legs
+        .iter()
+        .map(|leg| OfferFlightLegWrite {
+            direction: leg.direction.clone(),
+            flight_number: leg.flight_number.clone(),
+            departure_code: leg.departure_code.clone(),
+            departure_time: leg.departure_time.clone(),
+            arrival_code: leg.arrival_code.clone(),
+            arrival_time: leg.arrival_time.clone(),
+        })
+        .collect();
+    let populated_from = format!("package:{offer_id}");
+    travel_db::repo::flight_legs::replace_from_offer(
+        conn,
+        plan_id,
+        dest,
+        &legs,
+        offer.airline.as_deref(),
+        offer.airline_code.as_deref(),
+        &populated_from,
+        date,
+        now_db,
     )
     .await
-    .map_err(|e| e.to_string())?;
-    let populated_from = format!("package:{offer_id}");
-    for leg in &offer.legs {
-        conn.execute(
-            "INSERT OR REPLACE INTO flight_legs \
-                (plan_id, destination, direction, leg_order, flight_number, \
-                 airline, airline_code, departure_airport, departure_code, \
-                 departure_terminal, departure_time, arrival_airport, \
-                 arrival_code, arrival_terminal, arrival_time, flight_date, \
-                 populated_from, booked_date, updated_at) \
-             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, NULL, ?7, NULL, ?8, NULL, ?9, NULL, ?10, NULL, ?11, ?12, ?13)",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                leg.direction.clone(),
-                leg.flight_number.clone(),
-                offer.airline.clone(),
-                offer.airline_code.clone(),
-                leg.departure_code.clone(),
-                leg.departure_time.clone(),
-                leg.arrival_code.clone(),
-                leg.arrival_time.clone(),
-                populated_from.clone(),
-                date.to_string(),
-                now_db.to_string()
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 /// DELETE the destination's hotel row + access lines, reinsert from offer.
@@ -351,49 +308,13 @@ async fn rewrite_hotel(
     offer: &OfferData,
     now_db: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "DELETE FROM hotels WHERE plan_id = ?1 AND destination = ?2",
-        libsql::params![plan_id.to_string(), dest.to_string()],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO hotels \
-            (plan_id, destination, populated_from, name, check_in, notes, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            format!("package:{offer_id}"),
-            offer.hotel_name.clone(),
-            date.to_string(),
-            now_db.to_string()
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    conn.execute(
-        "DELETE FROM hotel_access_lines WHERE plan_id = ?1 AND destination = ?2",
-        libsql::params![plan_id.to_string(), dest.to_string()],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    for (i, line) in offer.hotel_access.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO hotel_access_lines (plan_id, destination, sort_order, line) \
-             VALUES (?1, ?2, ?3, ?4)",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                i as i64,
-                line.clone()
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let input = travel_db::repo::hotels::OfferHotelWrite {
+        name: offer.hotel_name.clone(),
+        check_in: date.to_string(),
+        populated_from: format!("package:{offer_id}"),
+        access: offer.hotel_access.clone(),
+    };
+    travel_db::repo::hotels::replace_from_offer(conn, plan_id, dest, &input, now_db).await
 }
 
 /// Emit a status_changed event to BOTH the dest_process and timeline
@@ -490,22 +411,7 @@ async fn set_status(
     // plan whose ladder lacks this process_id (e.g. seeded without it) would otherwise have
     // this write silently no-op, leaving the populate cascade invisible (GitHub issue #5).
     // INSERT-on-missing keeps the populate honest; ON CONFLICT preserves the UPDATE path.
-    conn.execute(
-        "INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(plan_id, destination, process_id) DO UPDATE SET \
-            status = excluded.status, updated_at = excluded.updated_at",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now_db.to_string()
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    travel_db::repo::process_statuses::upsert(conn, plan_id, dest, process_id, status, now_db).await
 }
 
 /// Mirror StateManager.isValidTransition + the throw in setProcessStatus.

@@ -71,3 +71,69 @@ pub async fn upsert_leg(
         .map_err(|e| format!("flight_legs upsert failed: {e}"))?;
     Ok(())
 }
+
+/// One flight leg from a chosen package offer (for `select-offer`'s populate cascade).
+#[derive(Debug, Clone)]
+pub struct OfferFlightLegWrite {
+    pub direction: String,
+    pub flight_number: Option<String>,
+    pub departure_code: Option<String>,
+    pub departure_time: Option<String>,
+    pub arrival_code: Option<String>,
+    pub arrival_time: Option<String>,
+}
+
+/// Replace ALL flight legs for `(plan_id, destination)` with the chosen offer's legs — the
+/// `select-offer` populate cascade. DELETE-then-`INSERT OR REPLACE` per leg, byte-identical to
+/// the SQL that was inline in `cascade::select_offer::rewrite_flight_legs`: fixed 19-column
+/// layout with `leg_order=0`, airline/airline_code from the offer (parent), per-leg
+/// number/dep+arr code+time, and explicit NULLs for departure_airport/terminal,
+/// arrival_airport/terminal, and flight_date.
+#[allow(clippy::too_many_arguments)]
+pub async fn replace_from_offer(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    legs: &[OfferFlightLegWrite],
+    airline: Option<&str>,
+    airline_code: Option<&str>,
+    populated_from: &str,
+    booked_date: &str,
+    now_db: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM flight_legs WHERE plan_id = ?1 AND destination = ?2",
+        libsql::params![plan_id.to_string(), destination.to_string()],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    for leg in legs {
+        conn.execute(
+            "INSERT OR REPLACE INTO flight_legs \
+                (plan_id, destination, direction, leg_order, flight_number, \
+                 airline, airline_code, departure_airport, departure_code, \
+                 departure_terminal, departure_time, arrival_airport, \
+                 arrival_code, arrival_terminal, arrival_time, flight_date, \
+                 populated_from, booked_date, updated_at) \
+             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, NULL, ?7, NULL, ?8, NULL, ?9, NULL, ?10, NULL, ?11, ?12, ?13)",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                leg.direction.clone(),
+                leg.flight_number.clone(),
+                airline.map(|s| s.to_string()),
+                airline_code.map(|s| s.to_string()),
+                leg.departure_code.clone(),
+                leg.departure_time.clone(),
+                leg.arrival_code.clone(),
+                leg.arrival_time.clone(),
+                populated_from.to_string(),
+                booked_date.to_string(),
+                now_db.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

@@ -15,6 +15,7 @@ pub mod origin;
 pub mod ota_attempts;
 pub mod ota_jobs;
 pub mod ota_source_workflow;
+pub mod process_statuses;
 pub mod product_type_inputs;
 pub mod plan;
 pub mod route_segments;

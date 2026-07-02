@@ -227,6 +227,41 @@ pub async fn upsert_date_pricing(
     Ok(())
 }
 
+/// Set the destination's chosen-offer selection — the `select-offer` keystone. DELETE-then-INSERT,
+/// byte-identical to the inline SQL in `cascade::select_offer`: `selected_date` is written NULL
+/// (the documented quirk — the CLI date arg is NOT stored here), `selected_at` = the run ISO
+/// timestamp.
+pub async fn set_selection(
+    conn: &Connection,
+    plan_id: &str,
+    dest: &str,
+    offer_id: &str,
+    selected_at_iso: &str,
+    now_db: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM plan_offer_selection WHERE plan_id = ?1 AND destination = ?2",
+        libsql::params![plan_id.to_string(), dest.to_string()],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO plan_offer_selection \
+            (plan_id, destination, selected_offer_id, selected_date, selected_at, updated_at) \
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
+        libsql::params![
+            plan_id.to_string(),
+            dest.to_string(),
+            offer_id.to_string(),
+            selected_at_iso.to_string(),
+            now_db.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Upsert one `process_statuses` row (P3_4 → researched transition, etc.).
 pub async fn upsert_process_status(
     conn: &Connection,
