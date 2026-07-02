@@ -1,5 +1,14 @@
 # Deploy-day checklist — dashboard cutover, then D1 pilot
 
+> **DECISION 2026-07-02: the cutover (Phase 1) is ABANDONED — do NOT run it.** The `-rs` worker
+> has served `trip-dashboard-rs.yanggf.workers.dev` for a long time and does everything; reclaiming
+> the *old* `trip-dashboard.yanggf.workers.dev` URL for it is cosmetic and puts OAuth in front of a
+> previously-open URL for no benefit. Instead: **the old TS worker was UNDEPLOYED** (`cd
+> workers/trip-dashboard && wrangler delete` — stops serving the old URL; its SOURCE stays in the
+> repo). Grace period until **2026-08-02**, then archive or delete `workers/trip-dashboard/` (task
+> tracked). Phase 1 below + `scripts/deploy-cutover.sh` are retained only as a record / in case the
+> decision is ever reversed. Phase 2 (D1 pilot) is independent and still optional.
+
 **Date:** 2026-07-02 · **Run order:** Phase 1 (cutover) → verify stable → Phase 2 (D1 pilot).
 Do them in this order (Codex-advised): cut over first and confirm it's healthy before layering the D1
 pilot on top. Each phase has a **STOP gate** — do not proceed if a gate fails; roll back instead.
