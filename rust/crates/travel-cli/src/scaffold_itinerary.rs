@@ -283,79 +283,27 @@ fn opt_text(row: &libsql::Row, idx: i32) -> Option<String> {
 
 // Delete the existing day skeleton (+ session/activity child rows) then
 // insert the fresh one. Mirrors syncNormalizedTables' delete-then-insert
-// for the itinerary tables, scoped to this destination.
+// for the itinerary tables, scoped to this destination. Domain writes live in
+// `repo::itinerary::replace_skeleton`; the single `now` is captured here and
+// used for ALL day + timesofday inserts.
 async fn write_skeleton(
     conn: &Connection,
     plan_id: &str,
     destination: &str,
     days: &[DayPlan],
 ) -> Result<(), String> {
-    // Stale child rows first (FK-free, so order is just for cleanliness).
-    conn.execute(
-        "DELETE FROM activity_tags WHERE activity_id IN \
-            (SELECT id FROM activities WHERE plan_id = ?1 AND destination = ?2)",
-        libsql::params![plan_id.to_string(), destination.to_string()],
-    )
-    .await
-    .map_err(|e| format!("activity_tags delete failed: {e}"))?;
-    for tbl in [
-        "session_meals",
-        "session_activities_zh",
-        "activities",
-        "timesofday",
-        "days",
-    ] {
-        conn.execute(
-            &format!("DELETE FROM {tbl} WHERE plan_id = ?1 AND destination = ?2"),
-            libsql::params![plan_id.to_string(), destination.to_string()],
-        )
-        .await
-        .map_err(|e| format!("{tbl} delete failed: {e}"))?;
-    }
-
     let now = now_db_datetime();
-    for d in days {
-        conn.execute(
-            "INSERT INTO days \
-                (plan_id, destination, day_number, date, theme, day_type, status, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'draft', ?6)",
-            libsql::params![
-                plan_id.to_string(),
-                destination.to_string(),
-                d.day_number,
-                d.date.clone(),
-                d.day_type.to_string(),
-                now.clone()
-            ],
-        )
-        .await
-        .map_err(|e| format!("days INSERT failed: {e}"))?;
-
-        for sess in ["morning", "noon", "afternoon", "evening"] {
-            let transit: Option<String> = match sess {
-                "morning" => d.morning_transit.clone(),
-                "evening" => d.evening_transit.clone(),
-                _ => None,
-            };
-            conn.execute(
-                "INSERT INTO timesofday \
-                    (plan_id, destination, day_number, session_type, focus, transit_notes, \
-                     booking_notes, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6)",
-                libsql::params![
-                    plan_id.to_string(),
-                    destination.to_string(),
-                    d.day_number,
-                    sess,
-                    transit,
-                    now.clone()
-                ],
-            )
-            .await
-            .map_err(|e| format!("timesofday INSERT failed: {e}"))?;
-        }
-    }
-    Ok(())
+    let skeleton: Vec<travel_db::repo::itinerary::SkeletonDay> = days
+        .iter()
+        .map(|d| travel_db::repo::itinerary::SkeletonDay {
+            day_number: d.day_number,
+            date: d.date.clone(),
+            day_type: d.day_type.to_string(),
+            morning_transit: d.morning_transit.clone(),
+            evening_transit: d.evening_transit.clone(),
+        })
+        .collect();
+    travel_db::repo::itinerary::replace_skeleton(conn, plan_id, destination, &skeleton, &now).await
 }
 
 // Enumerate inclusive YYYY-MM-DD dates from start to end.
@@ -425,21 +373,15 @@ async fn set_process_status(
     process_id: &str,
     status: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "INSERT OR REPLACE INTO process_statuses \
-            (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        libsql::params![
-            plan_id.to_string(),
-            destination.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now_db_datetime()
-        ],
+    travel_db::repo::itinerary::upsert_process_status_replace(
+        conn,
+        plan_id,
+        destination,
+        process_id,
+        status,
+        &now_db_datetime(),
     )
     .await
-    .map_err(|e| format!("process_statuses UPSERT failed: {e}"))?;
-    Ok(())
 }
 
 async fn clear_dirty(
@@ -448,20 +390,14 @@ async fn clear_dirty(
     destination: &str,
     process_id: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "INSERT OR REPLACE INTO cascade_dirty_flags \
-            (plan_id, destination, process_id, dirty, last_changed) \
-         VALUES (?1, ?2, ?3, 0, ?4)",
-        libsql::params![
-            plan_id.to_string(),
-            destination.to_string(),
-            process_id.to_string(),
-            now_db_datetime()
-        ],
+    travel_db::repo::itinerary::clear_dirty(
+        conn,
+        plan_id,
+        destination,
+        process_id,
+        &now_db_datetime(),
     )
     .await
-    .map_err(|e| format!("cascade_dirty_flags UPSERT failed: {e}"))?;
-    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -538,30 +474,16 @@ async fn execute_event(
     )
     .await?;
 
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?6, ?7, ?7)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            command_type.to_string(),
-            command_summary.to_string(),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        command_type,
+        command_summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
     Ok(())
 }
 
@@ -695,24 +617,6 @@ async fn insert_kv(
         .map_err(|e| format!("plan_event_data INSERT failed: {e}"))?;
     }
     Ok(())
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", p1, p2, p3, p4, p5)
 }
 
 fn now_rfc3339() -> String {

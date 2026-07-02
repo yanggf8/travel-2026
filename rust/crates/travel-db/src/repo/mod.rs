@@ -6,6 +6,7 @@ pub mod destination_ref;
 pub mod flight_legs;
 pub mod freshness;
 pub mod hotels;
+pub mod itinerary;
 pub mod observations;
 pub mod offers;
 pub mod ota_catalog;

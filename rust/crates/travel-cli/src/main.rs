@@ -60,6 +60,7 @@ mod ops;                // batch 3 (run-status / run-list)
 mod validate_itinerary; // batch 3
 mod check_hours;        // pre-trip open-hours check
 mod shaping;            // batch 4 (shaping-init/compare/adopt/baseline/export/import)
+mod shaping_purchase;   // shaping-purchase-matrix — read-only purchase decision matrix
 mod query_tour_group;   // batch 4 (query-tour-group-offers)
 mod tour_group_bridge;  // adopt-time audit-set bridge (used by shaping-adopt --create-plan)
 mod weather;            // batch 5 (fetch-weather)
@@ -592,6 +593,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "shaping-compare" => shaping::run_compare(rest).await,
         [cmd, rest @ ..] if cmd == "shaping-adopt" => shaping::run_adopt(rest).await,
         [cmd, rest @ ..] if cmd == "shaping-baseline" => shaping::run_baseline(rest).await,
+        [cmd, rest @ ..] if cmd == "shaping-purchase-matrix" => shaping_purchase::run(rest).await,
         [cmd, rest @ ..] if cmd == "shaping-export" => shaping::run_export(rest).await,
         [cmd, rest @ ..] if cmd == "shaping-import" => shaping::run_import(rest).await,
         [cmd, rest @ ..] if cmd == "query-tour-group-offers" => query_tour_group::run(rest).await,
