@@ -546,6 +546,44 @@ fn validate_claude_md_consistency(issues: &mut Vec<Issue>) {
             });
         }
     }
+
+    // Trip-provenance drift guard (T2 / P2, 2026-07-02): CLAUDE.md must not re-assert the FALSE
+    // claim that okinawa-2026 was created via shaping-adopt. The DB record shows it was NOT
+    // (shaping-20260525-093508: 0 candidates adopted; no shaping-adopt in operation_runs). Matches
+    // the FULL false phrase only — `shaping-adopt` / "adopted"/"Originated from" appear LEGITIMATELY
+    // elsewhere (the shaping-adopt command docs), so a bare-substring check would false-positive.
+    for msg in okinawa_false_provenance_violations(&content) {
+        issues.push(Issue {
+            category: "claude-md".to_string(),
+            severity: Severity::Error,
+            message: msg,
+            file: Some("CLAUDE.md".to_string()),
+            line: None,
+        });
+    }
+}
+
+/// Pure matcher for the okinawa false-provenance drift (T2). Returns one message per FULL false
+/// phrase found. Phrase-specific (not bare `adopt`/`shaping-adopt`, which are legit elsewhere) so it
+/// can be unit-tested without touching real docs.
+fn okinawa_false_provenance_violations(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if content.contains("Originated from the `shaping-20260525-093508`") {
+        out.push(
+            "CLAUDE.md falsely claims okinawa-2026 \"Originated from the `shaping-20260525-093508`\" \
+             run — the DB shows 0 candidates adopted, no shaping-adopt. State it was built from \
+             pre-decided flights/hotel entered directly."
+                .to_string(),
+        );
+    }
+    if content.contains("`shaping-20260525-093508` run was adopted into") {
+        out.push(
+            "CLAUDE.md falsely claims the `shaping-20260525-093508` run \"was adopted into\" \
+             okinawa-2026 — it was exploratory only (0 adopted). Correct the provenance."
+                .to_string(),
+        );
+    }
+    out
 }
 
 // --- Filesystem check: Python scripts ---
@@ -1111,6 +1149,39 @@ pub fn validate_date_range(start: &str, end: &str) -> Result<u32, String> {
 // NOTE: validate_iso_date now lives in crate::checks (single source of truth);
 // validate_date_range calls crate::checks::validate_iso_date. The error strings
 // are unchanged (still byte-identical to the TS originals).
+
+#[cfg(test)]
+mod okinawa_provenance_tests {
+    use super::*;
+
+    #[test]
+    fn flags_false_originated_from_phrase() {
+        let bad = "okinawa-2026 (Originated from the `shaping-20260525-093508` Shaping run.)";
+        assert_eq!(okinawa_false_provenance_violations(bad).len(), 1);
+    }
+
+    #[test]
+    fn flags_false_adopted_into_phrase() {
+        let bad = "the `shaping-20260525-093508` run was adopted into **`okinawa-2026`**";
+        assert_eq!(okinawa_false_provenance_violations(bad).len(), 1);
+    }
+
+    #[test]
+    fn corrected_wording_passes() {
+        let good = "Flights/hotel were pre-decided and entered directly via `set-flight`/`set-hotel`; \
+                    the `shaping-20260525-093508` run was exploratory only — 0 candidates adopted.";
+        assert!(okinawa_false_provenance_violations(good).is_empty());
+    }
+
+    #[test]
+    fn legit_shaping_adopt_command_docs_do_not_false_positive() {
+        // These are the LEGITIMATE uses elsewhere in CLAUDE.md — must NOT trip the guard.
+        let legit = "./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>\n\
+                     adopted research-first staged planning model\n\
+                     For a freshly created plan (e.g. `shaping-adopt`) pass version_before=0.";
+        assert!(okinawa_false_provenance_violations(legit).is_empty());
+    }
+}
 
 #[cfg(test)]
 mod date_range_tests {
