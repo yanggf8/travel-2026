@@ -891,3 +891,93 @@ pub async fn insert_activity_tag_ignore(
     .map_err(|e| format!("activity_tags INSERT failed: {e}"))?;
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────
+// swap-days domain writes on the `days` (theme/theme_zh only) and the four
+// session-scoped tables (day_number re-point). SQL copied verbatim from
+// `swap_days.rs`. NOTE: [`swap_day_theme`] writes theme/theme_zh ONLY with NO
+// `updated_at` column (distinct from [`set_day_theme_populate`] above) — the
+// observable `updated_at` change comes ONLY from the separate [`touch_day`] the
+// caller invokes on both days. The audit triad stays in `cascade::common`.
+// ─────────────────────────────────────────────────────────────────
+
+/// UPDATE a `days.theme` + `days.theme_zh` (2 columns, NO `updated_at`) for a
+/// `(plan, dest, day)` row — swap-days' theme swapper. SQL copied verbatim from
+/// `swap_days::set_day_theme`. Do NOT confuse with [`set_day_theme_populate`]
+/// (which DOES bump `updated_at`): swap-days deliberately leaves `updated_at`
+/// untouched here, relying on the separate [`touch_day`] calls.
+pub async fn swap_day_theme(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    theme: &Option<String>,
+    theme_zh: &Option<String>,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE days SET theme = ?1, theme_zh = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5",
+        libsql::params![
+            theme.clone(),
+            theme_zh.clone(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day
+        ],
+    )
+    .await
+    .map_err(|e| format!("days theme UPDATE failed: {e}"))?;
+    Ok(())
+}
+
+/// Swap the `day_number` ownership of every session-scoped table between
+/// `day_a` and `day_b`, using the out-of-range TMP day_number dance to avoid PK
+/// collisions during the flip. Owns the fixed `SESSION_TABLES` list, the
+/// `TMP = -999_999` constant, and the 3-step (a→TMP, b→a, TMP→b) sequence per
+/// table — all copied verbatim from `swap_days::swap_content`'s session-repoint
+/// loop. The `{table}` values are fixed literals (never user input).
+pub async fn swap_session_day_numbers(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day_a: i64,
+    day_b: i64,
+) -> Result<(), String> {
+    const SESSION_TABLES: &[&str] = &[
+        "timesofday",
+        "activities",
+        "session_meals",
+        "session_activities_zh",
+    ];
+    const TMP: i64 = -999_999;
+    for table in SESSION_TABLES {
+        repoint_day_number(conn, table, plan_id, destination, day_a, TMP).await?;
+        repoint_day_number(conn, table, plan_id, destination, day_b, day_a).await?;
+        repoint_day_number(conn, table, plan_id, destination, TMP, day_b).await?;
+    }
+    Ok(())
+}
+
+/// Re-point `day_number` from `from_day` to `to_day` for a `(plan, dest)` in one
+/// session-scoped `table`. SQL copied verbatim from `swap_days::repoint`; the
+/// `{table}` is a fixed `SESSION_TABLES` literal (never user input).
+async fn repoint_day_number(
+    conn: &Connection,
+    table: &str,
+    plan_id: &str,
+    destination: &str,
+    from_day: i64,
+    to_day: i64,
+) -> Result<(), String> {
+    let sql = format!(
+        "UPDATE {table} SET day_number = ?1 \
+         WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4"
+    );
+    conn.execute(
+        &sql,
+        libsql::params![to_day, plan_id.to_string(), destination.to_string(), from_day],
+    )
+    .await
+    .map_err(|e| format!("{table} re-point day_number failed: {e}"))?;
+    Ok(())
+}

@@ -19,6 +19,7 @@
 // plans.version + record an operation_runs audit row.
 
 use libsql::Connection;
+use travel_db::repo::itinerary;
 
 #[derive(Default, Debug)]
 struct ParsedArgs {
@@ -123,50 +124,19 @@ async fn swap_content(
     day_a: i64,
     day_b: i64,
 ) -> Result<(), String> {
-    // 1. Day-level fields: theme / theme_zh.
+    // 1. Day-level fields: theme / theme_zh (theme-only UPDATE, NO updated_at —
+    //    the observable updated_at change comes from the separate touch_day
+    //    calls the caller runs afterwards).
     let (theme_a, theme_zh_a) = read_day_theme(conn, plan_id, destination, day_a).await?;
     let (theme_b, theme_zh_b) = read_day_theme(conn, plan_id, destination, day_b).await?;
-    set_day_theme(conn, plan_id, destination, day_a, &theme_b, &theme_zh_b).await?;
-    set_day_theme(conn, plan_id, destination, day_b, &theme_a, &theme_zh_a).await?;
+    itinerary::swap_day_theme(conn, plan_id, destination, day_a, &theme_b, &theme_zh_b).await?;
+    itinerary::swap_day_theme(conn, plan_id, destination, day_b, &theme_a, &theme_zh_a).await?;
 
     // 2. Session-scoped rows: timesofday, activities, session_meals,
     //    session_activities_zh. Re-point day_number a → TMP, b → a, TMP → b.
     //    A negative TMP day_number can never collide with a real day and
     //    is removed by the third step.
-    const TMP: i64 = -999_999;
-    for table in SESSION_TABLES {
-        repoint(conn, table, plan_id, destination, day_a, TMP).await?;
-        repoint(conn, table, plan_id, destination, day_b, day_a).await?;
-        repoint(conn, table, plan_id, destination, TMP, day_b).await?;
-    }
-    Ok(())
-}
-
-const SESSION_TABLES: &[&str] = &[
-    "timesofday",
-    "activities",
-    "session_meals",
-    "session_activities_zh",
-];
-
-async fn repoint(
-    conn: &Connection,
-    table: &str,
-    plan_id: &str,
-    destination: &str,
-    from_day: i64,
-    to_day: i64,
-) -> Result<(), String> {
-    let sql = format!(
-        "UPDATE {table} SET day_number = ?1 \
-         WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4"
-    );
-    conn.execute(
-        &sql,
-        libsql::params![to_day, plan_id.to_string(), destination.to_string(), from_day],
-    )
-    .await
-    .map_err(|e| format!("{table} re-point day_number failed: {e}"))?;
+    itinerary::swap_session_day_numbers(conn, plan_id, destination, day_a, day_b).await?;
     Ok(())
 }
 
@@ -221,30 +191,6 @@ async fn read_day_theme(
     Err(format!("Day {day} disappeared"))
 }
 
-async fn set_day_theme(
-    conn: &Connection,
-    plan_id: &str,
-    destination: &str,
-    day: i64,
-    theme: &Option<String>,
-    theme_zh: &Option<String>,
-) -> Result<(), String> {
-    conn.execute(
-        "UPDATE days SET theme = ?1, theme_zh = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5",
-        libsql::params![
-            theme.clone(),
-            theme_zh.clone(),
-            plan_id.to_string(),
-            destination.to_string(),
-            day
-        ],
-    )
-    .await
-    .map_err(|e| format!("days theme UPDATE failed: {e}"))?;
-    Ok(())
-}
-
 // ─────────────────────────────────────────────────────────────────
 // Shared helpers (mirrors set_activity.rs / set_day_theme.rs)
 // ─────────────────────────────────────────────────────────────────
@@ -263,13 +209,7 @@ async fn touch_day(
     destination: &str,
     day: i64,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE days SET updated_at = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
-        libsql::params![now_db_datetime(), plan_id.to_string(), destination.to_string(), day],
-    )
-    .await
-    .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
-    Ok(())
+    itinerary::touch_day(conn, plan_id, destination, day, &now_db_datetime()).await
 }
 
 async fn execute_event(
@@ -334,30 +274,16 @@ async fn execute_event(
     )
     .await?;
 
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?6, ?7, ?7)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            command_type.to_string(),
-            command_summary.to_string(),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        command_type,
+        command_summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
     Ok(())
 }
 
@@ -491,24 +417,6 @@ async fn insert_kv(
         .map_err(|e| format!("plan_event_data INSERT failed: {e}"))?;
     }
     Ok(())
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", p1, p2, p3, p4, p5)
 }
 
 fn now_rfc3339() -> String {
