@@ -548,6 +548,77 @@ pub async fn insert_import_provenance(
     Ok(())
 }
 
+/// Payload for one tour-group bridged offer + its group_meta (shaping-adopt bridge).
+#[derive(Debug, Clone)]
+pub struct BridgeOfferWrite {
+    pub plan_id: String,
+    pub destination: String,
+    pub offer_id: String,
+    pub source_id: String,
+    pub title: String,
+    pub price_per_person: i64,
+    pub departure_status: Option<String>,
+    pub url: String,
+    pub scraped_at: String,
+    pub duration_days: i64,
+    pub meals_included_count: Option<i64>,
+    pub seats_available: Option<i64>,
+    pub min_group_size: Option<i64>,
+    pub group_size_cap: Option<i64>,
+    pub source_run_id: String,
+}
+
+/// Insert one bridged group-tour offer + its group_meta. BYTE-IDENTICAL to the
+/// inline SQL in tour_group_bridge.rs::bridge_audit_set.
+pub async fn insert_bridge_offer(
+    conn: &Connection,
+    w: &BridgeOfferWrite,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR REPLACE INTO plan_offers \
+            (plan_id, destination, id, source_id, type, title, price_per_person, currency, \
+             availability, url, scraped_at, duration_days, package_subtype) \
+         VALUES (?1, ?2, ?3, ?4, 'package', ?5, ?6, 'TWD', ?7, ?8, ?9, ?10, 'group_tour')",
+        libsql::params![
+            w.plan_id.clone(),
+            w.destination.clone(),
+            w.offer_id.clone(),
+            w.source_id.clone(),
+            w.title.clone(),
+            w.price_per_person,
+            w.departure_status.clone(),
+            w.url.clone(),
+            w.scraped_at.clone(),
+            w.duration_days,
+        ],
+    )
+    .await
+    .map_err(|e| format!("plan_offers insert failed for {}: {e}", w.offer_id))?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO plan_offer_group_meta \
+            (plan_id, destination, offer_id, meals_included_count, departure_status, \
+             seats_available, min_group_size, group_size_cap, source_offer_run_id, source_offer_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        libsql::params![
+            w.plan_id.clone(),
+            w.destination.clone(),
+            w.offer_id.clone(),
+            w.meals_included_count,
+            w.departure_status.clone(),
+            w.seats_available,
+            w.min_group_size,
+            w.group_size_cap,
+            w.source_run_id.clone(),
+            w.offer_id.clone(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("plan_offer_group_meta insert failed for {}: {e}", w.offer_id))?;
+
+    Ok(())
+}
+
 /// INSERT into plan_offer_warnings (warning_type hardcoded 'parse', offer_id omitted=NULL).
 pub async fn insert_warning(
     conn: &Connection,

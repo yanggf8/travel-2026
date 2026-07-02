@@ -12,6 +12,7 @@
 
 use libsql::{params, Connection};
 use std::collections::BTreeMap;
+use travel_db::repo::plan_offers::{self, BridgeOfferWrite};
 
 const DEFAULT_QUALITY_FLOOR: i64 = 4;
 
@@ -137,64 +138,27 @@ pub async fn bridge_audit_set(
     }
 
     for o in &audit {
-        conn.execute(
-            "INSERT OR REPLACE INTO plan_offers \
-                (plan_id, destination, id, source_id, type, title, price_per_person, currency, \
-                 availability, url, scraped_at, duration_days, package_subtype) \
-             VALUES (?1, ?2, ?3, ?4, 'package', ?5, ?6, 'TWD', ?7, ?8, ?9, ?10, 'group_tour')",
-            params![
-                plan_id.to_string(),
-                destination.to_string(),
-                o.offer_id.clone(),
-                o.source_id.clone(),
-                o.title.clone(),
-                o.price_per_person_twd,
-                opt_text(&o.departure_status),
-                o.url.clone(),
-                o.scraped_at.clone(),
-                o.nights + 1,
-            ],
-        )
-        .await
-        .map_err(|e| format!("plan_offers insert failed for {}: {e}", o.offer_id))?;
-
-        conn.execute(
-            "INSERT OR REPLACE INTO plan_offer_group_meta \
-                (plan_id, destination, offer_id, meals_included_count, departure_status, \
-                 seats_available, min_group_size, group_size_cap, source_offer_run_id, source_offer_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                plan_id.to_string(),
-                destination.to_string(),
-                o.offer_id.clone(),
-                opt_int(o.meals_included_count),
-                opt_text(&o.departure_status),
-                opt_int(o.seats_available),
-                opt_int(o.min_group_size),
-                opt_int(o.group_size_cap),
-                run_id.to_string(),
-                o.offer_id.clone(),
-            ],
-        )
-        .await
-        .map_err(|e| format!("plan_offer_group_meta insert failed for {}: {e}", o.offer_id))?;
+        let w = BridgeOfferWrite {
+            plan_id: plan_id.to_string(),
+            destination: destination.to_string(),
+            offer_id: o.offer_id.clone(),
+            source_id: o.source_id.clone(),
+            title: o.title.clone(),
+            price_per_person: o.price_per_person_twd,
+            departure_status: o.departure_status.clone(),
+            url: o.url.clone(),
+            scraped_at: o.scraped_at.clone(),
+            duration_days: o.nights + 1,
+            meals_included_count: o.meals_included_count,
+            seats_available: o.seats_available,
+            min_group_size: o.min_group_size,
+            group_size_cap: o.group_size_cap,
+            source_run_id: run_id.to_string(),
+        };
+        plan_offers::insert_bridge_offer(conn, &w).await?;
     }
 
     Ok(audit.len())
-}
-
-fn opt_text(v: &Option<String>) -> libsql::Value {
-    match v {
-        Some(s) => libsql::Value::Text(s.clone()),
-        None => libsql::Value::Null,
-    }
-}
-
-fn opt_int(v: Option<i64>) -> libsql::Value {
-    match v {
-        Some(n) => libsql::Value::Integer(n),
-        None => libsql::Value::Null,
-    }
 }
 
 #[cfg(test)]
