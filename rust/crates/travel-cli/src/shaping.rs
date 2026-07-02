@@ -308,9 +308,8 @@ pub async fn run_init(args: &[String]) -> Result<(), String> {
     }
 
     println!("\nRun created: {run_id}");
-    println!("Next: drive the real OTA pages with the Rust CDP scraper");
-    println!("  ./rust/target/debug/chromeport fetch interact <url> --source <id> --step ...");
-    println!("  ./rust/target/debug/chromeport parse capture <capture-id> --source <id>");
+    println!("Next: capture OTA pages with gwebcdb on WSLg, then agent-extract TSV");
+    println!("  ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>");
 
     Ok(())
 }

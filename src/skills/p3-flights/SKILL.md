@@ -10,10 +10,10 @@ provides_processes: [process_3_transportation]
 # /p3-flights
 
 > **⚠️ Python scrapers DECOMMISSIONED** (archived in `archive/broken-python-scrapers/`; constructed
-> URLs 404). Do NOT run `python scripts/scrape_*.py`. Get flight data via the Rust CDP driver:
-> `./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step ...` (or
-> `browser snapshot`) → `parse capture <id> --source <id>`. NOTE: flight-only sources currently
-> need a flight rule shape (parser_rules has_custom_parser=1). Python commands below are historical.
+> URLs 404). Do NOT run `python scripts/scrape_*.py`. Get flight data via gwebcdb on WSLg,
+> then have the agent extract offers from `captures.raw_text` and persist TSV with
+> `./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>`.
+> Python commands below are historical.
 
 Search and compare standalone flight options for P3 (transportation).
 
@@ -57,9 +57,8 @@ process_3_transportation: {
 ## CLI Commands
 
 ```bash
-# Capture flight prices via the chromeport CDP driver (Python scrapers decommissioned — see /scrape-ota)
-#   ./rust/target/debug/chromeport fetch interact "<trip.com url>" --source trip --step ...
-#   ./rust/target/debug/chromeport parse capture <id> --source trip
+# Capture flight prices via gwebcdb on WSLg, then agent-extract TSV and write offers (see /scrape-ota)
+#   ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
 # (Tigerair: same flow with --source tigerair)
 
 # Normalize and rank flight results
@@ -81,9 +80,8 @@ process_3_transportation: {
 # 1. Ensure dates are set (P1)
 ./bin/travel set-dates 2026-02-24 2026-02-28
 
-# 2. Capture flights from Trip.com via the chromeport CDP driver (see /scrape-ota)
-#   ./rust/target/debug/chromeport fetch interact "<trip.com url>" --source trip --step ...
-#   ./rust/target/debug/chromeport parse capture <id> --source trip
+# 2. Capture flights from Trip.com via gwebcdb, then agent-extract TSV and write offers (see /scrape-ota)
+#   ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
 
 # 3. Review ranked results
 ./bin/travel normalize flights scrapes/date-range-prices.json --top 5
@@ -105,9 +103,8 @@ process_3_transportation: {
 ### Example 2: Tigerair LCC Search
 
 ```bash
-# Capture Tigerair prices via the chromeport CDP driver (see /scrape-ota)
-#   ./rust/target/debug/chromeport fetch interact "<tigerair url>" --source tigerair --step ...
-#   ./rust/target/debug/chromeport parse capture <id> --source tigerair
+# Capture Tigerair prices via gwebcdb, then agent-extract TSV and write offers (see /scrape-ota)
+#   ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
 
 # Review output, then record best option
 ./bin/travel set-flight outbound --dest <slug> --flight IT201 --airline "Tigerair" ...

@@ -10,10 +10,10 @@ provides_processes: [process_3_4_packages, process_3_transportation, process_4_a
 # /p3p4-packages
 
 > **⚠️ Python scrapers DECOMMISSIONED** (archived in `archive/broken-python-scrapers/`; constructed
-> URLs 404). Do NOT run `python scripts/scrape_*.py`. Get OTA offers via the Rust CDP driver:
-> `./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step ...` (or
-> `browser snapshot`) → `parse capture <id> --source <id>` (imports to Turso). Python commands below
-> are historical reference only.
+> URLs 404). Do NOT run `python scripts/scrape_*.py`. Get OTA offers via gwebcdb on WSLg,
+> then have the agent extract offers from `captures.raw_text` and persist TSV with
+> `./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>`.
+> Python commands below are historical reference only.
 
 Search and select package deals (flight + hotel combined).
 
@@ -62,9 +62,8 @@ process_3_4_packages: {
 ## CLI Commands
 
 ```bash
-# Capture OTA packages via the chromeport CDP driver (Python scrapers decommissioned — see /scrape-ota)
-#   ./rust/target/debug/chromeport fetch interact "<url>" --source besttour --step ...
-#   ./rust/target/debug/chromeport parse capture <id> --source besttour   # imports directly to Turso offers
+# Capture OTA packages via gwebcdb on WSLg, then agent-extract TSV and write offers (see /scrape-ota)
+#   ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
 
 # Import scraped JSON files into Turso (legacy scrapes/ landing zone)
 ./bin/travel import-offers --dir scrapes --dest <slug>
@@ -83,7 +82,7 @@ process_3_4_packages: {
 
 | Command | Description | Required Args | Optional Args |
 |---------|-------------|---------------|---------------|
-| chromeport CDP capture | Capture an OTA page → Turso (see /scrape-ota) | `<url>`, `--source` | `--step` |
+| gwebcdb capture + `ota write-offers` | Capture an OTA page, agent-extract TSV, persist to Turso (see /scrape-ota) | `<url>`, `<job_id>`, `<capture_id>`, `<token>` | `--tsv` |
 | `import-offers` | Import scraped JSON into DB | `--dir`, `--dest` | `--start`, `--end`, `--dry-run` |
 | `query-offers` | List offers from DB | `--plan-id`, `--dest` | `--max-price` |
 | `check-freshness` | Check if scraped data is stale | `--source`, `--region` | `--plan-id` |
@@ -97,9 +96,8 @@ process_3_4_packages: {
 # 1. Set travel dates
 ./bin/travel set-dates 2026-02-24 2026-02-28
 
-# 2. Capture packages from OTAs via the chromeport CDP driver (see /scrape-ota)
-#   ./rust/target/debug/chromeport fetch interact "<url>" --source besttour --step ...
-#   ./rust/target/debug/chromeport parse capture <id> --source besttour
+# 2. Capture packages from OTAs via gwebcdb, then agent-extract TSV and write offers (see /scrape-ota)
+#   ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
 
 # 3. Import scraped files into DB (legacy scrapes/ landing zone)
 ./bin/travel import-offers --dir scrapes --dest kyoto_2026
@@ -117,7 +115,7 @@ process_3_4_packages: {
 ### Example 2: Budget-Constrained Search
 
 ```bash
-# Capture with the chromeport CDP driver (see /scrape-ota), then:
+# Capture with gwebcdb, then agent-extract TSV and write offers (see /scrape-ota), then:
 
 # Import and query with max-price filter
 ./bin/travel import-offers --dir scrapes --dest kyoto_2026
@@ -150,7 +148,7 @@ process_3_4_packages: {
 
 - **Required processes**: P1 (dates), P2 (destination)
 - **Required skills**: `/scrape-ota` for OTA integration
-- **External tools**: chromeport CDP driver (`rust/crates/chromeport`) — Python scrapers decommissioned (see `/scrape-ota`)
+- **External tools**: gwebcdb on WSLg (`~/b/gwebcdb`) + agent TSV extraction + `travel ota write-offers` (see `/scrape-ota`)
 - **Required DB**: `ota_sources` table in Turso (OTA registry — replaces removed `data/ota-sources.json`)
 
 ## Data Acquisition
@@ -159,21 +157,22 @@ process_3_4_packages: {
 
 | OTA | Type | Status | Capture |
 |-----|------|--------|---------|
-| BestTour (喜鴻假期) | Package | ✅ Full | chromeport `--source besttour` |
-| Lion Travel (雄獅旅遊) | Package | ✅ Base | chromeport `--source liontravel` |
-| ezTravel (易遊網) | Package | ⚠️ Limited | chromeport `--source eztravel` |
+| BestTour (喜鴻假期) | Package | ✅ Full | gwebcdb capture + `ota write-offers` (`source_id=besttour`) |
+| Lion Travel (雄獅旅遊) | Package | ✅ Base | gwebcdb capture + `ota write-offers` (`source_id=liontravel`) |
+| ezTravel (易遊網) | Package | ⚠️ Limited | gwebcdb capture + `ota write-offers` (`source_id=eztravel`) |
 
 ### Capture Commands
 
-Python scrapers are decommissioned. Drive the real OTA page in Chrome via the chromeport
-CDP driver, then parse the capture into Turso (full flow in `/scrape-ota`):
+Python scrapers are decommissioned. Drive the real OTA page with gwebcdb on WSLg, then have
+the agent read `captures.raw_text`, emit TSV, and persist offers (full flow in `/scrape-ota`):
 
 ```bash
-# Drive + capture a package page (clicks/fills the actual UI — no URL templates)
-./rust/target/debug/chromeport fetch interact "<url>" --source besttour --step 'click:SEL' --step 'fill:SEL=VALUE'
+# Drive + capture a package page in ~/b/gwebcdb (clicks/fills the actual UI — no URL templates)
+python bridge/navigate.py "<url>"
+python bridge/ota_capture.py --source besttour [--url-contains <substr>]   # → capture_id
 
-# Parse the capture (rule-driven via parser_rules) → Turso offers
-./rust/target/debug/chromeport parse capture <capture-id> --source besttour
+# Agent-extract TSV from captures.raw_text, then persist Turso offers
+./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
 ```
 
 ## DB Integration

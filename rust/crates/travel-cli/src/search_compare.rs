@@ -13,8 +13,8 @@
 // parity-correct value.
 //
 // search-offers: the OTA scrapers the TS globalRegistry would invoke are all
-// DECOMMISSIONED (Python URL scrapers archived; the live path is the Rust
-// chromeport CDP driver, a separate binary). There is no in-process scraper
+// DECOMMISSIONED (Python URL scrapers archived; the live path is gwebcdb capture
+// plus agent TSV persisted with `ota write-offers`). There is no in-process scraper
 // registry in travel-cli, so run_search validates inputs and reports that no
 // scraper is registered for the source — the same shape the TS registry
 // returns for an unknown/unregistered source (success=false, exit 1).
@@ -274,9 +274,8 @@ pub async fn run_search(args: &[String]) -> Result<(), String> {
              [--pax N] [--types package,flight,hotel] [--source <id>]\n\
              \n\
              Note: in-process OTA scrapers are DECOMMISSIONED. Live capture is done\n\
-             via the chromeport CDP driver (a separate binary):\n  \
-               ./rust/target/debug/chromeport fetch interact <url> --source <id> ...\n  \
-               ./rust/target/debug/chromeport parse capture <capture-id> --source <id>"
+             via gwebcdb on WSLg; the agent extracts captures.raw_text to TSV, then writes offers:\n  \
+               ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>"
         );
         return Ok(());
     }
@@ -387,7 +386,7 @@ pub async fn run_search(args: &[String]) -> Result<(), String> {
     println!("  FAIL {label}: 0 offer(s)");
     println!(
         "     Errors: No in-process scraper registered. OTA capture is DECOMMISSIONED — \
-         use the chromeport CDP driver (see --help)."
+         use gwebcdb capture + agent TSV + ota write-offers (see --help)."
     );
     println!();
 

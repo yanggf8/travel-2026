@@ -47,8 +47,8 @@ still comparing dates, destinations, or flight prices, use `/shaping-research`.
    `/p1-dates` and `/p2-destination` before continuing.
 
    **If this is the known-flights fast-path** (flights/hotel were pre-decided and entered directly via
-   `set-flight`/`set-hotel`, Shaping was NOT used — the common case, per the trip-intake router in
-   CLAUDE.md), record that routing choice so the plan history isn't ambiguous:
+   `set-flight`/`set-hotel`, Shaping was NOT used — the common case, i.e. the default known-flights
+   fast-path (CLAUDE.md)), record that routing choice so the plan history isn't ambiguous:
    ```bash
    ./bin/travel flow-decision shaping skip --reason known_flights --plan-id <plan_id>
    ```

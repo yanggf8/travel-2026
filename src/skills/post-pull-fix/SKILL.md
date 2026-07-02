@@ -45,9 +45,9 @@ grep -rn "<<<<<<< HEAD" src/ data/ --include="*.ts" --include="*.json" || echo "
 
 ### 5. Scraping environment
 
-The Python scrapers are decommissioned. OTA capture now runs through the chromeport
-CDP driver (`rust/crates/chromeport`) attaching to a real Chrome — no Playwright/Python
-setup. See `/scrape-ota` for the capture flow.
+The Python scrapers are decommissioned. OTA capture now runs through gwebcdb on WSLg,
+then agent-extracted TSV is persisted with `travel ota write-offers` — no Playwright/Python
+scraper setup. See `/scrape-ota` for the capture flow.
 
 ## Quick Command
 

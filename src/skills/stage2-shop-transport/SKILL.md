@@ -66,11 +66,11 @@ flights on adjacent dates would change the trip, return to `/shaping-research`.
    ```bash
    ./bin/travel check-freshness --source <source_id> --region <region>
    ```
-   If data is stale or missing, use `/p3p4-packages` to capture and import. Capture
-   live via the chromeport CDP driver (Python scrapers are decommissioned — see
-   `/scrape-ota`), then import:
+   If data is stale or missing, use `/p3p4-packages` to capture via gwebcdb on WSLg,
+   agent-extract TSV, and write offers (Python scrapers are decommissioned — see
+   `/scrape-ota`):
    ```bash
-   ./bin/travel import-offers --dir scrapes --dest <destination_slug>
+   ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
    ```
 
 3. **Query package options**

@@ -98,7 +98,7 @@ Note the `run_id` it prints. `shaping-init` warns if you pass **no** `--shaping`
 — that warning means you skipped Step 2; go back and record the constraints.
 
 **Then record the routing choice on the plan (F6 instrumentation).** Entering the Shaping Stage is the
-"flexible research" branch of the trip-intake router (CLAUDE.md); emit it so the plan history shows WHY
+flexible-research path (the optional Shaping side-tool, vs the default known-flights fast-path); emit it so the plan history shows WHY
 this trip went through Shaping rather than the known-flights fast-path:
 ```bash
 ./bin/travel flow-decision shaping enter --reason flexible --plan-id <plan-id>

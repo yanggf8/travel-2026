@@ -42,12 +42,12 @@ produce a side-by-side comparison.
 ### Flights (Trip.com)
 - Scrape outbound and return as separate one-way searches (`flighttype=ow`)
 - Prices in USD; convert to TWD using `src/config/constants.ts` exchange rate
-- Capture multi-date prices via the chromeport CDP driver (see `/scrape-ota`); Python scrapers are decommissioned
+- Capture multi-date prices via gwebcdb on WSLg, then agent-extract TSV and `ota write-offers` (see `/scrape-ota`); Python scrapers are decommissioned
 
 ### Hotels (Booking.com)
 - Use `zh-tw` locale, `selected_currency=TWD`
 - Requires `dest_id` parameter (not city name)
-- Capture hotel pages via the chromeport CDP driver (see `/scrape-ota`); Python scrapers are decommissioned
+- Capture hotel pages via gwebcdb on WSLg, then agent-extract TSV and `ota write-offers` (see `/scrape-ota`); Python scrapers are decommissioned
 
 ### Packages (OTA)
 - Use scraped data from `/p3p4-packages` or `/scrape-ota`

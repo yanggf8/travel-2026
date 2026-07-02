@@ -18,20 +18,22 @@ interface OtaSourceRegistryEntry {
 }
 ```
 
-## Capture Tool (chromeport CDP driver)
+## Capture Tool (gwebcdb + agent `ota write-offers`)
 
 The Python/Playwright scrapers are **decommissioned** (archived under
-`archive/broken-python-scrapers/`). OTA capture now runs through the chromeport CDP driver
-(`rust/crates/chromeport`), which attaches to a real Chrome, drives the page, and writes
-captures → Turso `captures`, then rule-parses them (`parser_rules`) → Turso `offers`.
+`archive/broken-python-scrapers/`). OTA capture now runs through gwebcdb on WSLg
+(`~/b/gwebcdb`), which drives the page and writes raw page text to Turso `captures`.
+The agent reads `captures.raw_text`, emits TSV, then persists normalized Turso `offers`
+with `travel ota write-offers`.
 
 **Usage** (full flow in `/scrape-ota`):
 ```bash
-# Drive + capture an OTA page (clicks/fills the actual UI — no URL templates)
-./rust/target/debug/chromeport fetch interact "<url>" --source <source_id> --step 'click:SEL' --step 'fill:SEL=VALUE'
+# Drive + capture an OTA page in ~/b/gwebcdb (clicks/fills the actual UI — no URL templates)
+python bridge/navigate.py "<url>"
+python bridge/ota_capture.py --source <source_id> [--url-contains <substr>]   # → capture_id
 
-# Parse the capture (rule-driven via parser_rules) → Turso offers
-./rust/target/debug/chromeport parse capture <capture-id> --source <source_id>
+# Agent-extract TSV from captures.raw_text, then persist Turso offers
+./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>
 ```
 
 **BestTour page structure:**
@@ -40,7 +42,7 @@ captures → Turso `captures`, then rule-parses them (`parser_rules`) → Turso 
 - `價格` → Per-person pricing, calendar availability
 
 **Known limitations:**
-- Pages are JS-rendered; the chromeport CDP driver attaches to a real Chrome to render them
+- Pages are JS-rendered; gwebcdb attaches to WSLg Chrome to render and capture them
 - Return flight may need manual extraction from raw_text
 - Date-specific pricing requires calendar interaction (drive via `--step` clicks)
 
