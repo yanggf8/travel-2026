@@ -123,30 +123,16 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     set_next_actions(&conn, &plan_id).await?;
     set_focus(&conn, &plan_id, &destination, &now_db).await?;
 
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'mark-booked', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        params![
-            run_id,
-            plan_id.clone(),
-            destination.clone(),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        &conn,
+        &plan_id,
+        "mark-booked",
+        &destination,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        params![version_after, now_db.clone(), plan_id.clone()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
 
     // Re-sync bookings (TS: save() → syncBookingsToDb()).
     let trip_id = plan_id.replace('-', "_");
@@ -167,66 +153,41 @@ async fn sync_bookings_inline(
     trip_id: &str,
 ) -> Result<(), String> {
     use crate::booking_integrity::{extract_bookings, payload_to_kv};
+    use travel_db::repo::bookings::{resync_current, BookingCurrentWrite};
 
     let (bookings, _warnings) = extract_bookings(conn, plan_id, trip_id).await?;
     if bookings.is_empty() {
         return Ok(());
     }
 
-    conn.execute(
-        "DELETE FROM bookings_current_payload WHERE booking_key IN \
-         (SELECT booking_key FROM bookings_current WHERE trip_id = ?1)",
-        params![trip_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("bookings_current_payload DELETE failed: {e}"))?;
-    conn.execute(
-        "DELETE FROM bookings_current WHERE trip_id = ?1",
-        params![trip_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("bookings_current DELETE failed: {e}"))?;
+    // Map the extracted bookings → the DAL write shape (1:1 with the old inline INSERT
+    // columns), then delegate the DELETE-then-plain-INSERT re-sync to the repo. Behavior
+    // is byte-identical: full trip delete, plain per-row INSERT (fail-loud on dup key),
+    // payload KV rows in `payload_to_kv` order.
+    let rows: Vec<BookingCurrentWrite> = bookings
+        .iter()
+        .map(|row| BookingCurrentWrite {
+            booking_key: row.booking_key.clone(),
+            trip_id: row.trip_id.clone(),
+            destination: row.destination.clone(),
+            category: row.category.clone(),
+            subtype: row.subtype.clone(),
+            title: row.title.clone(),
+            status: row.status.clone(),
+            reference: row.reference.clone(),
+            book_by: row.book_by.clone(),
+            booked_at: row.booked_at.clone(),
+            source_id: row.source_id.clone(),
+            offer_id: row.offer_id.clone(),
+            selected_date: row.selected_date.clone(),
+            price_amount: row.price_amount,
+            price_currency: row.price_currency.clone(),
+            origin_path: row.origin_path.clone(),
+            payload_kv: payload_to_kv(&row.payload),
+        })
+        .collect();
 
-    for row in &bookings {
-        conn.execute(
-            "INSERT INTO bookings_current \
-                (booking_key, trip_id, destination, category, subtype, title, status, \
-                 reference, book_by, booked_at, source_id, offer_id, selected_date, \
-                 price_amount, price_currency, origin_path, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'))",
-            params![
-                row.booking_key.clone(),
-                row.trip_id.clone(),
-                row.destination.clone(),
-                row.category.clone(),
-                opt(&row.subtype),
-                row.title.clone(),
-                row.status.clone(),
-                opt(&row.reference),
-                opt(&row.book_by),
-                opt(&row.booked_at),
-                opt(&row.source_id),
-                opt(&row.offer_id),
-                opt(&row.selected_date),
-                opt_int(row.price_amount),
-                row.price_currency.clone(),
-                row.origin_path.clone(),
-            ],
-        )
-        .await
-        .map_err(|e| format!("bookings_current INSERT failed: {e}"))?;
-
-        for (i, (k, v)) in payload_to_kv(&row.payload).into_iter().enumerate() {
-            conn.execute(
-                "INSERT INTO bookings_current_payload (booking_key, sort_order, key, value) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![row.booking_key.clone(), i as i64, k, v],
-            )
-            .await
-            .map_err(|e| format!("bookings_current_payload INSERT failed: {e}"))?;
-        }
-    }
-    Ok(())
+    resync_current(conn, trip_id, &rows).await
 }
 
 // ── status / focus / next-action writers ─────────────────────────────
@@ -458,38 +419,6 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
         i += 1;
     }
     None
-}
-
-fn opt(v: &Option<String>) -> libsql::Value {
-    match v {
-        Some(s) => libsql::Value::Text(s.clone()),
-        None => libsql::Value::Null,
-    }
-}
-
-fn opt_int(v: Option<i64>) -> libsql::Value {
-    match v {
-        Some(n) => libsql::Value::Integer(n),
-        None => libsql::Value::Null,
-    }
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", p1, p2, p3, p4, p5)
 }
 
 fn now_rfc3339() -> String {

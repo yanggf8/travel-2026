@@ -291,6 +291,59 @@ pub async fn upsert_current(conn: &Connection, row: &BookingCurrentWrite) -> Res
     Ok(())
 }
 
+/// Full trip-scoped re-sync of `bookings_current` (+ payload) — the `mark-booked` /
+/// `save()→syncBookingsToDb()` path. DELETEs the trip's rows (via `delete_current_for_trip`)
+/// then does a PLAIN `INSERT` per booking (NOT the `upsert_current` ON CONFLICT path — a
+/// duplicate booking_key must fail loud here, matching the pre-DAL inline code) plus its
+/// payload KV rows. Caller has already skipped the empty-list case (no rows ⇒ no delete/insert).
+pub async fn resync_current(
+    conn: &Connection,
+    trip_id: &str,
+    rows: &[BookingCurrentWrite],
+) -> Result<(), String> {
+    delete_current_for_trip(conn, trip_id).await?;
+    for row in rows {
+        conn.execute(
+            "INSERT INTO bookings_current \
+                (booking_key, trip_id, destination, category, subtype, title, status, \
+                 reference, book_by, booked_at, source_id, offer_id, selected_date, \
+                 price_amount, price_currency, origin_path, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'))",
+            libsql::params![
+                row.booking_key.clone(),
+                row.trip_id.clone(),
+                row.destination.clone(),
+                row.category.clone(),
+                opt(&row.subtype),
+                row.title.clone(),
+                row.status.clone(),
+                opt(&row.reference),
+                opt(&row.book_by),
+                opt(&row.booked_at),
+                opt(&row.source_id),
+                opt(&row.offer_id),
+                opt(&row.selected_date),
+                opt_int(row.price_amount),
+                row.price_currency.clone(),
+                row.origin_path.clone(),
+            ],
+        )
+        .await
+        .map_err(|e| format!("bookings_current INSERT failed: {e}"))?;
+
+        for (i, (k, v)) in row.payload_kv.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO bookings_current_payload (booking_key, sort_order, key, value) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                libsql::params![row.booking_key.clone(), i as i64, k.clone(), v.clone()],
+            )
+            .await
+            .map_err(|e| format!("bookings_current_payload INSERT failed: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Insert one `bookings_events` row and its event_data KV child rows (correlated subquery).
 pub async fn insert_event(conn: &Connection, event: &BookingEventWrite) -> Result<(), String> {
     conn.execute(
