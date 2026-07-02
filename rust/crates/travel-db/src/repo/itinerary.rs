@@ -648,3 +648,66 @@ pub async fn next_activity_sort_order(
     }
     Ok(0)
 }
+
+// ─────────────────────────────────────────────────────────────────
+// set-activity-poi domain read + write on the `destination_pois` (validation)
+// and `activities` (poi_id link) tables. SQL copied verbatim from
+// `set_activity_poi.rs`; caller passes `now` for `updated_at`. The audit triad
+// + event emission + activity-resolution stay in `travel-cli` — this module
+// never touches them.
+// ─────────────────────────────────────────────────────────────────
+
+/// True iff `poi_id` exists in `destination_pois` for `slug` (`destination`).
+/// A pure existence SELECT — SQL copied verbatim from `set_activity_poi::assert_poi_exists`;
+/// the caller raises the fail-loud error when this returns `false`.
+pub async fn poi_exists(
+    conn: &Connection,
+    destination: &str,
+    poi_id: &str,
+) -> Result<bool, String> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM destination_pois WHERE slug = ?1 AND poi_id = ?2",
+            libsql::params![destination.to_string(), poi_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("destination_pois existence query failed: {e}"))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| format!("destination_pois existence row read failed: {e}"))?
+        .is_some())
+}
+
+/// UPDATE one activity's `poi_id` (bumping `updated_at`) for a
+/// `(plan, dest, day, session, id)` row. Returns the rows_affected so the caller
+/// keeps its `== 1` fail-loud check. SQL copied verbatim from the inline block in
+/// `set_activity_poi::execute`. Caller passes `now`.
+#[allow(clippy::too_many_arguments)]
+pub async fn set_activity_poi(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+    poi_id: &str,
+    now: &str,
+) -> Result<u64, String> {
+    conn.execute(
+        "UPDATE activities SET poi_id = ?1, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+           AND session_type = ?6 AND id = ?7",
+        libsql::params![
+            poi_id.to_string(),
+            now.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            activity_id.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities UPDATE poi_id failed: {e}"))
+}

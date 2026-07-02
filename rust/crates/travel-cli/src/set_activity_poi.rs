@@ -15,6 +15,7 @@
 //      + plan_event_data KV + plans.version bump — same as set-activity-title.
 
 use libsql::Connection;
+use travel_db::repo::itinerary;
 
 #[derive(Default, Debug)]
 struct ParsedArgs {
@@ -198,19 +199,7 @@ async fn assert_poi_exists(
     destination: &str,
     poi_id: &str,
 ) -> Result<(), String> {
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM destination_pois WHERE slug = ?1 AND poi_id = ?2",
-            libsql::params![destination.to_string(), poi_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("destination_pois existence query failed: {e}"))?;
-    if rows
-        .next()
-        .await
-        .map_err(|e| format!("destination_pois existence row read failed: {e}"))?
-        .is_some()
-    {
+    if itinerary::poi_exists(conn, destination, poi_id).await? {
         return Ok(());
     }
     Err(format!(
@@ -245,23 +234,17 @@ async fn execute(
     let version_after = version_before + 1;
 
     // 3. UPDATE activities.poi_id — require rows_affected == 1.
-    let affected = conn
-        .execute(
-            "UPDATE activities SET poi_id = ?1, updated_at = ?2 \
-             WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-               AND session_type = ?6 AND id = ?7",
-            libsql::params![
-                parsed.poi_id.clone(),
-                now_db.clone(),
-                plan_id.to_string(),
-                destination.to_string(),
-                parsed.day,
-                parsed.session.clone(),
-                activity_id.clone()
-            ],
-        )
-        .await
-        .map_err(|e| format!("activities UPDATE poi_id failed: {e}"))?;
+    let affected = itinerary::set_activity_poi(
+        conn,
+        plan_id,
+        destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+        &parsed.poi_id,
+        &now_db,
+    )
+    .await?;
     if affected != 1 {
         return Err(format!(
             "activities UPDATE affected {affected} rows (expected 1) for id={activity_id}"
@@ -324,32 +307,17 @@ async fn execute(
     )
     .await?;
 
-    // operation_runs audit row.
-    let run_id = new_run_id();
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'set-activity-poi', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            format!("D{} {} → {}", parsed.day, parsed.session, parsed.poi_id),
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    // operation_runs audit row + plans.version bump (audit-triad back half).
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        "set-activity-poi",
+        &format!("D{} {} → {}", parsed.day, parsed.session, parsed.poi_id),
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-
-    // Bump plans.version.
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
 
     Ok(title)
 }
@@ -495,24 +463,6 @@ async fn insert_kv(
         .map_err(|e| format!("plan_event_data INSERT failed: {e}"))?;
     }
     Ok(())
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", p1, p2, p3, p4, p5)
 }
 
 fn now_rfc3339() -> String {
