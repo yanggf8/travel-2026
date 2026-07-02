@@ -7,6 +7,7 @@
 // emit a plan_event.
 
 use libsql::Connection;
+use travel_db::repo::itinerary;
 
 #[derive(Default, Debug)]
 struct ActivityTime {
@@ -231,29 +232,18 @@ pub async fn run_title(
         .filter(|p| !p.is_empty())
         .filter(|_| title_changed);
 
-    let update_sql = if stale_poi.is_some() {
-        "UPDATE activities SET title = ?1, poi_id = NULL, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-           AND session_type = ?6 AND id = ?7"
-    } else {
-        "UPDATE activities SET title = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-           AND session_type = ?6 AND id = ?7"
-    };
-    conn.execute(
-        update_sql,
-        libsql::params![
-            parsed.new_title.clone(),
-            now_db_datetime(),
-            plan_id.to_string(),
-            destination.to_string(),
-            parsed.day,
-            parsed.session.clone(),
-            activity_id.clone()
-        ],
+    itinerary::update_activity_title(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
+        &parsed.new_title,
+        stale_poi.is_some(),
+        &now_db_datetime(),
     )
-    .await
-    .map_err(|e| format!("activities UPDATE title failed: {e}"))?;
+    .await?;
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
 
     // event data: { day_number, session, activity_id, from_title,
@@ -697,26 +687,18 @@ async fn update_field(
     field: &str,
     value: Option<String>,
 ) -> Result<(), String> {
-    let sql = format!(
-        "UPDATE activities SET {field} = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-           AND session_type = ?6 AND id = ?7"
-    );
-    conn.execute(
-        &sql,
-        libsql::params![
-            value,
-            now_db_datetime(),
-            plan_id.to_string(),
-            destination.to_string(),
-            day,
-            session.to_string(),
-            activity_id.to_string()
-        ],
+    itinerary::update_activity_field(
+        conn,
+        plan_id,
+        destination,
+        day,
+        session,
+        activity_id,
+        field,
+        value,
+        &now_db_datetime(),
     )
     .await
-    .map_err(|e| format!("activities UPDATE {field} failed: {e}"))?;
-    Ok(())
 }
 
 async fn touch_day(
@@ -725,13 +707,9 @@ async fn touch_day(
     destination: &str,
     day: i64,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE days SET updated_at = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
-        libsql::params![now_db_datetime(), plan_id.to_string(), destination.to_string(), day],
-    )
-    .await
-    .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
-    Ok(())
+    // Domain write now lives in the DAL; CLI computes `now` fresh (now_db_datetime()),
+    // preserving the prior inline timing + byte-identical SQL.
+    itinerary::touch_day(conn, plan_id, destination, day, &now_db_datetime()).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1094,27 +1072,15 @@ pub async fn run_delete(args: &[String], plan_id: String) -> Result<(), String> 
     println!("\n🗑️  Deleting activity:");
     println!("   Day {} {}: \"{}\"", parsed.day, parsed.session, title);
 
-    conn.execute(
-        "DELETE FROM activities \
-         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
-           AND session_type = ?4 AND id = ?5",
-        libsql::params![
-            plan_id.to_string(),
-            destination.to_string(),
-            parsed.day,
-            parsed.session.clone(),
-            activity_id.clone()
-        ],
+    itinerary::delete_activity(
+        &conn,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        &activity_id,
     )
-    .await
-    .map_err(|e| format!("activities DELETE failed: {e}"))?;
-    // Clean up any tag child rows for the removed activity.
-    conn.execute(
-        "DELETE FROM activity_tags WHERE activity_id = ?1",
-        libsql::params![activity_id.clone()],
-    )
-    .await
-    .map_err(|e| format!("activity_tags DELETE failed: {e}"))?;
+    .await?;
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
 
     // event data mirrors removeActivity emitEvent:
@@ -1196,21 +1162,16 @@ pub async fn run_move(args: &[String], plan_id: String) -> Result<(), String> {
 
     // Re-key the row by id; every other column (poi_id, booking_*, tags via the
     // separate activity_tags table keyed on activity_id) is preserved untouched.
-    conn.execute(
-        "UPDATE activities \
-         SET day_number = ?1, session_type = ?2, sort_order = ?3 \
-         WHERE plan_id = ?4 AND destination = ?5 AND id = ?6",
-        libsql::params![
-            to_day,
-            parsed.to_session.clone(),
-            new_sort,
-            plan_id.to_string(),
-            destination.to_string(),
-            activity_id.clone()
-        ],
+    itinerary::move_activity(
+        &conn,
+        &plan_id,
+        &destination,
+        &activity_id,
+        to_day,
+        &parsed.to_session,
+        new_sort,
     )
-    .await
-    .map_err(|e| format!("activities move UPDATE failed: {e}"))?;
+    .await?;
 
     touch_day(&conn, &plan_id, &destination, from_day).await?;
     if to_day != from_day {
@@ -1509,51 +1470,39 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
             // Shift later rows up to free the (anchor_so + 1) slot. Descending
             // order is not required since +1 keeps values distinct, but the gap
             // must be opened before the INSERT.
-            conn.execute(
-                "UPDATE activities SET sort_order = sort_order + 1 \
-                 WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
-                   AND session_type = ?4 AND sort_order > ?5",
-                libsql::params![
-                    plan_id.to_string(),
-                    destination.to_string(),
-                    parsed.day,
-                    parsed.session.clone(),
-                    anchor_so
-                ],
+            itinerary::shift_activities_after(
+                &conn,
+                &plan_id,
+                &destination,
+                parsed.day,
+                &parsed.session,
+                anchor_so,
             )
-            .await
-            .map_err(|e| format!("activities sort_order shift failed: {e}"))?;
+            .await?;
             anchor_so + 1
         }
     };
 
-    conn.execute(
-        "INSERT INTO activities \
-            (id, plan_id, destination, day_number, session_type, sort_order, \
-             title, area, nearest_station, duration_min, start_time, end_time, \
-             is_fixed_time, priority, notes, booking_required, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16)",
-        libsql::params![
-            activity_id.clone(),
-            plan_id.to_string(),
-            destination.to_string(),
-            parsed.day,
-            parsed.session.clone(),
-            sort_order,
-            parsed.title.clone(),
-            parsed.area.clone(),
-            parsed.nearest_station.clone(),
-            parsed.duration_min,
-            parsed.start_time.clone(),
-            parsed.end_time.clone(),
-            if parsed.is_fixed_time { 1_i64 } else { 0_i64 },
-            parsed.priority.clone(),
-            parsed.notes.clone(),
-            now_db_datetime()
-        ],
+    itinerary::insert_activity(
+        &conn,
+        &activity_id,
+        &plan_id,
+        &destination,
+        parsed.day,
+        &parsed.session,
+        sort_order,
+        &parsed.title,
+        parsed.area.clone(),
+        parsed.nearest_station.clone(),
+        parsed.duration_min,
+        parsed.start_time.clone(),
+        parsed.end_time.clone(),
+        parsed.is_fixed_time,
+        &parsed.priority,
+        parsed.notes.clone(),
+        &now_db_datetime(),
     )
-    .await
-    .map_err(|e| format!("activities INSERT failed: {e}"))?;
+    .await?;
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
 
     let kv: Vec<(&str, String)> = vec![
@@ -1750,30 +1699,7 @@ async fn next_activity_sort_order(
     day: i64,
     session: &str,
 ) -> Result<i64, String> {
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(MAX(sort_order), -1) AS m FROM activities \
-             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
-            libsql::params![
-                plan_id.to_string(),
-                destination.to_string(),
-                day,
-                session.to_string()
-            ],
-        )
-        .await
-        .map_err(|e| format!("activities MAX(sort_order) query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("activities MAX(sort_order) row read failed: {e}"))?
-    {
-        let m: i64 = row
-            .get(0)
-            .map_err(|e| format!("activities MAX(sort_order) col read failed: {e}"))?;
-        return Ok(m + 1);
-    }
-    Ok(0)
+    itinerary::next_activity_sort_order(conn, plan_id, destination, day, session).await
 }
 
 // UUIDv4-shaped id for a new activity (same generator the audit run_id uses).
@@ -1836,22 +1762,17 @@ pub async fn run_reorder(args: &[String], plan_id: String) -> Result<(), String>
     // (plan,dest,day,session,sort_order) is unnecessary (sort_order isn't part
     // of the PK — id is), so a direct rewrite per id is safe.
     for (new_order, id) in resolved.iter().enumerate() {
-        conn.execute(
-            "UPDATE activities SET sort_order = ?1, updated_at = ?2 \
-             WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-               AND session_type = ?6 AND id = ?7",
-            libsql::params![
-                new_order as i64,
-                now_db_datetime(),
-                plan_id.to_string(),
-                destination.to_string(),
-                parsed.day,
-                parsed.session.clone(),
-                id.clone()
-            ],
+        itinerary::update_activity_sort_order(
+            &conn,
+            &plan_id,
+            &destination,
+            parsed.day,
+            &parsed.session,
+            id,
+            new_order as i64,
+            &now_db_datetime(),
         )
-        .await
-        .map_err(|e| format!("activities reorder UPDATE failed: {e}"))?;
+        .await?;
     }
     touch_day(&conn, &plan_id, &destination, parsed.day).await?;
 

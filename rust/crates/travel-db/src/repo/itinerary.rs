@@ -340,3 +340,311 @@ pub async fn replace_session_meals(
     }
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────
+// set-activity family (set-activity-time / -title / -booking, delete-activity,
+// move-activity, add-activity, reorder-activities) domain writes on the
+// `activities` + `activity_tags` tables. SQL copied verbatim from `set_activity.rs`;
+// caller passes `now` for `updated_at` (fresh `now_db_datetime()` per write, matching
+// the prior inline timing). The audit triad + event emission + activity-resolution
+// stay in `travel-cli` — this module never touches them.
+// ─────────────────────────────────────────────────────────────────
+
+/// UPDATE a single `activities` scalar column (`start_time`/`end_time`/`is_fixed_time`/
+/// `booking_status`/`booking_ref`/`book_by`/`booking_required`) for a
+/// `(plan, dest, day, session, id)` row, bumping `updated_at`. SQL copied verbatim from
+/// `set_activity::update_field` — the `{field}` is a fixed column name interpolated by the
+/// caller (never user input). Caller passes `now`.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_activity_field(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+    field: &str,
+    value: Option<String>,
+    now: &str,
+) -> Result<(), String> {
+    let sql = format!(
+        "UPDATE activities SET {field} = ?1, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+           AND session_type = ?6 AND id = ?7"
+    );
+    conn.execute(
+        &sql,
+        libsql::params![
+            value,
+            now.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            activity_id.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities UPDATE {field} failed: {e}"))?;
+    Ok(())
+}
+
+/// UPDATE an activity's `title` (bumping `updated_at`), optionally also clearing `poi_id` to NULL.
+/// SQL copied verbatim from `set_activity::run_title` — `clear_poi` selects between the two branches
+/// (clear-poi when the title actually changed AND the row had a poi_id). Caller passes `now`.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_activity_title(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+    new_title: &str,
+    clear_poi: bool,
+    now: &str,
+) -> Result<(), String> {
+    let update_sql = if clear_poi {
+        "UPDATE activities SET title = ?1, poi_id = NULL, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+           AND session_type = ?6 AND id = ?7"
+    } else {
+        "UPDATE activities SET title = ?1, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+           AND session_type = ?6 AND id = ?7"
+    };
+    conn.execute(
+        update_sql,
+        libsql::params![
+            new_title.to_string(),
+            now.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            activity_id.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities UPDATE title failed: {e}"))?;
+    Ok(())
+}
+
+/// DELETE one `activities` row (by `(plan, dest, day, session, id)`) then DELETE its
+/// `activity_tags` child rows (by `activity_id`), in that order. SQL copied verbatim from
+/// `set_activity::run_delete`.
+pub async fn delete_activity(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM activities \
+         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
+           AND session_type = ?4 AND id = ?5",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            activity_id.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities DELETE failed: {e}"))?;
+    // Clean up any tag child rows for the removed activity.
+    conn.execute(
+        "DELETE FROM activity_tags WHERE activity_id = ?1",
+        libsql::params![activity_id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("activity_tags DELETE failed: {e}"))?;
+    Ok(())
+}
+
+/// Move an activity to another `(day, session)` by re-keying its `day_number`/`session_type`/
+/// `sort_order` — every other column (id, poi_id, booking_*, updated_at) is preserved untouched
+/// (this UPDATE deliberately does NOT bump `updated_at`). SQL copied verbatim from
+/// `set_activity::run_move`.
+#[allow(clippy::too_many_arguments)]
+pub async fn move_activity(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    activity_id: &str,
+    to_day: i64,
+    to_session: &str,
+    new_sort: i64,
+) -> Result<(), String> {
+    // Re-key the row by id; every other column (poi_id, booking_*, tags via the
+    // separate activity_tags table keyed on activity_id) is preserved untouched.
+    conn.execute(
+        "UPDATE activities \
+         SET day_number = ?1, session_type = ?2, sort_order = ?3 \
+         WHERE plan_id = ?4 AND destination = ?5 AND id = ?6",
+        libsql::params![
+            to_day,
+            to_session.to_string(),
+            new_sort,
+            plan_id.to_string(),
+            destination.to_string(),
+            activity_id.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities move UPDATE failed: {e}"))?;
+    Ok(())
+}
+
+/// Shift `sort_order` up by one for every activity in a `(plan, dest, day, session)` positioned
+/// AFTER `anchor_sort_order` — opens the `anchor_sort_order + 1` gap for an `add-activity --after`
+/// insert. SQL copied verbatim from `set_activity::run_add`.
+pub async fn shift_activities_after(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    anchor_sort_order: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE activities SET sort_order = sort_order + 1 \
+         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
+           AND session_type = ?4 AND sort_order > ?5",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            anchor_sort_order
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities sort_order shift failed: {e}"))?;
+    Ok(())
+}
+
+/// INSERT a brand-new `activities` row. SQL copied verbatim from `set_activity::run_add`
+/// (`booking_required` is hard-coded to 0 in the SQL; `is_fixed_time` is bound as 1/0 by the
+/// caller). Caller passes `now` for `updated_at`.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_activity(
+    conn: &Connection,
+    activity_id: &str,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    sort_order: i64,
+    title: &str,
+    area: Option<String>,
+    nearest_station: Option<String>,
+    duration_min: Option<i64>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    is_fixed_time: bool,
+    priority: &str,
+    notes: Option<String>,
+    now: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO activities \
+            (id, plan_id, destination, day_number, session_type, sort_order, \
+             title, area, nearest_station, duration_min, start_time, end_time, \
+             is_fixed_time, priority, notes, booking_required, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16)",
+        libsql::params![
+            activity_id.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            sort_order,
+            title.to_string(),
+            area,
+            nearest_station,
+            duration_min,
+            start_time,
+            end_time,
+            if is_fixed_time { 1_i64 } else { 0_i64 },
+            priority.to_string(),
+            notes,
+            now.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities INSERT failed: {e}"))?;
+    Ok(())
+}
+
+/// UPDATE one activity's `sort_order` (bumping `updated_at`) for a `(plan, dest, day, session, id)`
+/// row — the per-id primitive `reorder-activities` calls once per id in the requested order. SQL
+/// copied verbatim from `set_activity::run_reorder`. Caller passes `now`.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_activity_sort_order(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+    sort_order: i64,
+    now: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE activities SET sort_order = ?1, updated_at = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+           AND session_type = ?6 AND id = ?7",
+        libsql::params![
+            sort_order,
+            now.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            activity_id.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("activities reorder UPDATE failed: {e}"))?;
+    Ok(())
+}
+
+/// MAX(sort_order)+1 for a `(plan, dest, day, session)` — the next append slot (returns 0 for an
+/// empty session, via `COALESCE(MAX(...), -1) + 1`). SQL copied verbatim from
+/// `set_activity::next_activity_sort_order`.
+pub async fn next_activity_sort_order(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+) -> Result<i64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(sort_order), -1) AS m FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities MAX(sort_order) query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("activities MAX(sort_order) row read failed: {e}"))?
+    {
+        let m: i64 = row
+            .get(0)
+            .map_err(|e| format!("activities MAX(sort_order) col read failed: {e}"))?;
+        return Ok(m + 1);
+    }
+    Ok(0)
+}
