@@ -18,5 +18,6 @@ pub mod ota_source_workflow;
 pub mod process_statuses;
 pub mod product_type_inputs;
 pub mod shaping;
+pub mod shaping_purchase;
 pub mod plan;
 pub mod route_segments;
