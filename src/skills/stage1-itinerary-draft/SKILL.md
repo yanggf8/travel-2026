@@ -46,6 +46,15 @@ still comparing dates, destinations, or flight prices, use `/shaping-research`.
    If the plan came from Shaping Stage, these rows should already exist. If not, run
    `/p1-dates` and `/p2-destination` before continuing.
 
+   **If this is the known-flights fast-path** (flights/hotel were pre-decided and entered directly via
+   `set-flight`/`set-hotel`, Shaping was NOT used — the common case, per the trip-intake router in
+   CLAUDE.md), record that routing choice so the plan history isn't ambiguous:
+   ```bash
+   ./bin/travel flow-decision shaping skip --reason known_flights --plan-id <plan_id>
+   ```
+   (Skip this if the plan came through `/shaping-research`, which already emitted
+   `flow-decision shaping enter`. Vocab fixed by `flow_decision.rs`: stage `shaping`, decision `skip`.)
+
 2. **Create the day skeleton**
    ```bash
    ./bin/travel scaffold-itinerary --plan-id <plan_id> --dest <destination_slug>

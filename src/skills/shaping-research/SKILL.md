@@ -97,6 +97,15 @@ If the user gave no explicit constraints, ask for at least the binding ones
 Note the `run_id` it prints. `shaping-init` warns if you pass **no** `--shaping`
 — that warning means you skipped Step 2; go back and record the constraints.
 
+**Then record the routing choice on the plan (F6 instrumentation).** Entering the Shaping Stage is the
+"flexible research" branch of the trip-intake router (CLAUDE.md); emit it so the plan history shows WHY
+this trip went through Shaping rather than the known-flights fast-path:
+```bash
+./bin/travel flow-decision shaping enter --reason flexible --plan-id <plan-id>
+```
+(Only once a plan exists — for a pre-plan run this is recorded at adopt time / when the plan is created.
+`flow-decision` vocab is fixed by `flow_decision.rs`: stage `shaping`, decision `enter`.)
+
 ### Step 4 — Run the aggregator (flights) and/or gather FIT offers
 
 ```bash

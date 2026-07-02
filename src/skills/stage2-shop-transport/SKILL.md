@@ -53,7 +53,16 @@ flights on adjacent dates would change the trip, return to `/shaping-research`.
    - P2 destination is confirmed.
    - Stage 1 has a rough day shape and lodging topology assumption.
 
-2. **Check package data freshness**
+1a. **Pick + RECORD the Stage 2 mode (F6 — do this before shopping).** Decide `shop` (flexible /
+   price-sensitive → run steps 2–6 below), `ingest-known` (flights/hotel already chosen → skip to
+   step 6, just record + validate), or `defer` (decline for now). Emit the routing record:
+   ```bash
+   ./bin/travel flow-decision shop mode --mode <shop|ingest-known|defer> [--reason <why>] --plan-id <plan_id>
+   ```
+   `--mode` is required and must be one of `flow_decision.rs` MODES. For `ingest-known`/`defer`, jump
+   past the shopping steps — but transport/accommodation VALIDATION (step 6) is mandatory in every mode.
+
+2. **Check package data freshness** *(mode `shop` only)*
    ```bash
    ./bin/travel check-freshness --source <source_id> --region <region>
    ```
