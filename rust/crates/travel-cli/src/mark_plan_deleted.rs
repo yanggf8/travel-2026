@@ -20,6 +20,7 @@
 // version_before-after). This mirrors the lightest audit a mutation can carry
 // while still recording who/what/when.
 
+use crate::cascade::common::now_db_datetime;
 use libsql::Connection;
 
 pub async fn run(args: &[String], _resolved_plan_id: String) -> Result<(), String> {
@@ -76,32 +77,24 @@ pub async fn run(args: &[String], _resolved_plan_id: String) -> Result<(), Strin
     // 4. Apply: set deleted_at, write audit row, bump version.
     let version_after = version_before + 1;
     let now_db = now_db_datetime();
-    let run_id = new_run_id();
 
-    conn.execute(
-        "UPDATE plans SET deleted_at = datetime('now'), version = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3",
-        libsql::params![version_after, now_db.clone(), parsed.plan_id.clone()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE (deleted_at) failed: {e}"))?;
+    travel_db::repo::plan_lifecycle::soft_delete(&conn, &parsed.plan_id, &now_db).await?;
 
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'mark-plan-deleted', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            parsed.plan_id.clone(),
-            if parsed.force { "soft-delete (forced)" } else { "soft-delete" },
-            version_before,
-            version_after,
-            now_db
-        ],
+    let summary = if parsed.force {
+        "soft-delete (forced)"
+    } else {
+        "soft-delete"
+    };
+    crate::cascade::common::record_operation(
+        &conn,
+        &parsed.plan_id,
+        "mark-plan-deleted",
+        summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
+    .await?;
 
     println!(
         "marked {} deleted (soft) — data retained; run 'db cleanup-deleted' to wipe",
@@ -211,46 +204,6 @@ async fn upcoming_anchor_end(
         return Ok(end.filter(|s| !s.is_empty()));
     }
     Ok(None)
-}
-
-fn now_db_datetime() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = d.as_secs() as i64;
-    let days = secs.div_euclid(86_400);
-    let sod = secs.rem_euclid(86_400) as u32;
-    let hour = sod / 3600;
-    let min = (sod % 3600) / 60;
-    let sec = sod % 60;
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d_ = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d_:02} {hour:02}:{min:02}:{sec:02}")
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", p1, p2, p3, p4, p5)
 }
 
 #[cfg(test)]
