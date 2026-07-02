@@ -141,34 +141,25 @@ Pre-commit hook (installed by `make hooks`) runs the Rust build check + `validat
 - Prefer `./bin/travel` subcommands over direct SQL for reusable content edits (raw `db exec` is fine for one-shot migrations/backfills — see "DB Operation Decision")
 - Every output: current status, what changed, single best next action
 
-### Trip-intake router (classify the trip FIRST — P0/P1, 2026-07-02)
+### Default path — known-flights fast-path (2026-07-02)
 
-**Agent-driven routing table, NOT a code router.** Classify every new trip up front, then follow the
-route. Each class records its choice with `travel flow-decision` (the F6 recorder) so the plan history
-shows WHY a stage was entered/skipped. Vocabulary (`stage`/`decision`/`--mode`) MUST match the
-`flow_decision.rs` constants: stages `shaping|itinerary|shop|publish`, decisions `enter|skip|mode`,
-modes `shop|ingest-known|defer`.
-
-| Intake class | Signal | Route | Record |
-|---|---|---|---|
-| flexible research | no dates/dest/flights fixed | `/shaping-research` (triangle) | `travel flow-decision shaping enter --reason flexible` |
-| fixed dates/destination | dates+dest known, flights not | create/verify plan → `/p1-dates` + `/p2-destination` → shop | `travel flow-decision shop enter` |
-| **known flights** (fast-path) | flights+hotel already chosen | create plan → `set-dates` + `set-flight`/`set-hotel` → straight to itinerary; **Shaping OPTIONAL** | `travel flow-decision shaping skip --reason known_flights` |
-| known package | package booked | Stage 2 mode `ingest-known` (record + validate) | `travel flow-decision shop mode --mode ingest-known` |
-
-All 3 completed trips (tokyo/kyoto/okinawa) were the **known-flights** case — flights/hotel pre-decided
-and hand-entered; Shaping was NOT the mechanism. The fast-path is first-class, not a bypass. (Hedge:
-no automatic code router, no lifecycle state machine, no Shaping-breadth algorithm — see
-`docs/plans/2026-05-22-new-planning-flow.md`.)
+Every real trip so far (tokyo/kyoto/okinawa/kyoto-jul) is the same shape: ~5-day Japan with **flights +
+hotel decided before the tool touches them.** So the **default path IS the fast-path**: create plan →
+`set-dates` + `set-flight`/`set-hotel` → straight to the itinerary. There is no "classify the trip"
+step — trips don't vary in kind. **Shaping and offer-shopping are OPTIONAL side-tools**, only for the
+rare trip where flights/dates are NOT yet decided (price-shopping "cheapest week", "Osaka vs Tokyo by
+price"). *How* you acquire transport is a **Stage 2 purchase mode** (`shop` | `ingest-known` | `defer`
+— see Stage 2), NOT a top-level router. (`travel flow-decision` optionally records the purchase mode;
+skip it if it's just noise on a single-pattern trip.)
 
 ### Skill Decision Tree
 ```
 User intent                          → Skill / Action
 ──────────────────────────────────────────────────────
-"plan a trip to [place]"             → classify via Trip-intake router above, then:
-  loose dates/destination/price?         → /shaping-research
+"plan a trip to [place]"             → DEFAULT: known-flights fast-path (below). Shaping only if flights/dates unknown.
+  known flights + hotel? (usual)         → create plan → set-dates + set-flight/set-hotel → /stage1-itinerary-draft
+  loose dates/destination/price?         → /shaping-research (optional pre-lock triangle research)
   fixed dates + destination?             → create/verify plan, then /p1-dates + /p2-destination
-  known flights + hotel?                 → fast-path: set-dates + set-flight/set-hotel → itinerary (flow-decision shaping skip --reason known_flights); Shaping OPTIONAL
   destination missing?                  → /new-destination, then continue
 "cheapest week to go to X"           → /shaping-research (pre-lock triangle research)
 "Osaka or Tokyo, depends on price"   → /shaping-research (compare destinations + dates + price together)

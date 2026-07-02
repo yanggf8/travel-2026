@@ -562,9 +562,10 @@ fn validate_claude_md_consistency(issues: &mut Vec<Issue>) {
         });
     }
 
-    // Planning-flow routing consistency (T3/T4/T5, 2026-07-02): the trip-intake router + Stage-2
-    // modes must be present and must use the flow_decision.rs vocabulary (so docs can't drift from
-    // the command). One narrow block, not per-phrase brittleness (Codex-advised minimal oracle).
+    // Planning-flow docs consistency (T5 + the 2026-07-02 walk-back): the known-flights FAST-PATH is
+    // the documented default (no "classify the trip" router — trips don't vary in kind), and Stage-2
+    // purchase modes must match the flow_decision.rs MODES. One narrow block, not per-phrase
+    // brittleness (Codex-advised minimal oracle).
     for msg in planning_flow_doc_violations(&content) {
         issues.push(Issue {
             category: "claude-md".to_string(),
@@ -576,24 +577,21 @@ fn validate_claude_md_consistency(issues: &mut Vec<Issue>) {
     }
 }
 
-/// Pure matcher for the planning-flow routing docs (T3/T4/T5). Returns one message per missing
-/// required element. Asserts the intake router + known-flights fast-path + Stage-2 modes are present
-/// and use the flow_decision.rs vocabulary (`shaping skip --reason known_flights`; modes
-/// `shop`/`ingest-known`/`defer`; validation mandatory). Kept narrow + testable.
+/// Pure matcher for the planning-flow docs. Returns one message per missing required element.
+/// Asserts the known-flights fast-path is documented as the default and the Stage-2 purchase modes
+/// (`shop`/`ingest-known`/`defer`, matching flow_decision.rs MODES) are present with
+/// validation-mandatory stated. The "trip-intake router" classification framing was REMOVED
+/// 2026-07-02 (it was a purchase-option matrix mis-framed as trip classification; all trips are the
+/// same known-flights shape), so this guard no longer requires it. Kept narrow + testable.
 fn planning_flow_doc_violations(content: &str) -> Vec<String> {
     let mut out = Vec::new();
-    if !content.contains("Trip-intake router") {
-        out.push("CLAUDE.md must contain the \"Trip-intake router\" classification table".to_string());
-    }
-    // known-flights fast-path must name its flow-decision record (ties docs to the shipped command).
-    if !content.contains("flow-decision shaping skip --reason known_flights") {
+    if !content.contains("known-flights fast-path") {
         out.push(
-            "CLAUDE.md trip-intake router must name the known-flights record \
-             `flow-decision shaping skip --reason known_flights`"
+            "CLAUDE.md must document the known-flights fast-path as the default planning path"
                 .to_string(),
         );
     }
-    // Stage-2 modes must all appear + validation-mandatory stated (must match flow_decision.rs MODES).
+    // Stage-2 purchase modes must all appear + validation-mandatory stated (must match MODES).
     for mode in ["shop", "ingest-known", "defer"] {
         if !content.contains(mode) {
             out.push(format!("CLAUDE.md must name Stage-2 mode `{mode}` (flow_decision.rs MODES)"));
@@ -1232,24 +1230,22 @@ mod planning_flow_doc_tests {
     use super::*;
 
     #[test]
-    fn complete_routing_docs_pass() {
-        let good = "### Trip-intake router\n\
-            | known flights | ... | flow-decision shaping skip --reason known_flights |\n\
+    fn complete_docs_pass() {
+        let good = "DEFAULT: known-flights fast-path (create plan → set-flight/set-hotel → itinerary).\n\
             Stage 2 modes: shop | ingest-known | defer. transport/accommodation VALIDATION is mandatory in every mode.";
         assert!(planning_flow_doc_violations(good).is_empty());
     }
 
     #[test]
-    fn missing_router_flagged() {
-        let bad = "Stage 2 modes: shop | ingest-known | defer. VALIDATION is mandatory in every mode.\n\
-                   flow-decision shaping skip --reason known_flights";
+    fn missing_fast_path_flagged() {
+        let bad = "Stage 2 modes: shop | ingest-known | defer. VALIDATION is mandatory in every mode.";
         let v = planning_flow_doc_violations(bad);
-        assert!(v.iter().any(|m| m.contains("Trip-intake router")), "{v:?}");
+        assert!(v.iter().any(|m| m.contains("known-flights fast-path")), "{v:?}");
     }
 
     #[test]
     fn missing_a_mode_flagged() {
-        let bad = "### Trip-intake router\nflow-decision shaping skip --reason known_flights\n\
+        let bad = "known-flights fast-path is the default.\n\
                    modes: shop | defer. VALIDATION is mandatory in every mode.";
         let v = planning_flow_doc_violations(bad);
         assert!(v.iter().any(|m| m.contains("ingest-known")), "{v:?}");
