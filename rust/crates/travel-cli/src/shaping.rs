@@ -235,77 +235,35 @@ pub async fn run_init(args: &[String]) -> Result<(), String> {
 
     let conn = db::connect_write().await?;
 
-    conn.execute(
-        "INSERT INTO shaping_research_runs
-          (run_id, origin_code, pax, window_start, window_end, currency,
-           exchange_rate_usd_twd, status, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'TWD', ?6, 'started', ?7, ?8)",
-        params![
-            run_id.clone(),
-            origin_uc.clone(),
-            pax,
-            start.clone(),
-            end.clone(),
-            rate,
-            ts.clone(),
-            ts.clone(),
-        ],
-    )
-    .await
-    .map_err(|e| format!("insert shaping_research_runs failed: {e}"))?;
+    use travel_db::repo::shaping as repo_shaping;
+
+    repo_shaping::insert_run(&conn, &run_id, &origin_uc, pax, &start, &end, rate, &ts).await?;
 
     for (i, (code, label)) in destinations.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO shaping_research_destinations (run_id, dest_code, dest_label, sort_order)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![run_id.clone(), code.clone(), label.clone(), i as i64],
-        )
-        .await
-        .map_err(|e| format!("insert shaping_research_destinations failed: {e}"))?;
+        repo_shaping::insert_destination(&conn, &run_id, code, label, i as i64).await?;
     }
 
     for nights in &durations {
-        conn.execute(
-            "INSERT INTO shaping_research_durations (run_id, nights, duration_days)
-             VALUES (?1, ?2, ?3)",
-            params![run_id.clone(), *nights, *nights + 1],
-        )
-        .await
-        .map_err(|e| format!("insert shaping_research_durations failed: {e}"))?;
+        repo_shaping::insert_duration(&conn, &run_id, *nights, *nights + 1).await?;
     }
 
     for s in &shaping {
-        conn.execute(
-            "INSERT INTO shaping_rules
-               (run_id, aspect, role, kind, value_text, value_date, value_integer, notes, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                run_id.clone(),
-                s.aspect.clone(),
-                s.role.clone(),
-                s.kind.clone(),
-                s.value_text.clone(),
-                s.value_date.clone(),
-                s.value_integer,
-                s.notes.clone(),
-                ts.clone(),
-            ],
-        )
-        .await
-        .map_err(|e| format!("insert shaping_rules failed: {e}"))?;
+        let rule = repo_shaping::ShapingRuleWrite {
+            aspect: s.aspect.clone(),
+            role: s.role.clone(),
+            kind: s.kind.clone(),
+            value_text: s.value_text.clone(),
+            value_date: s.value_date.clone(),
+            value_integer: s.value_integer,
+            notes: s.notes.clone(),
+        };
+        repo_shaping::insert_rule(&conn, &run_id, &rule, &ts).await?;
     }
 
     // Seed one 'pending' scrape-attempt per (dest x duration).
     for (code, _) in &destinations {
         for nights in &durations {
-            conn.execute(
-                "INSERT INTO shaping_scrape_attempts
-                  (run_id, dest_code, nights, status, candidate_count, error, attempted_at)
-                 VALUES (?1, ?2, ?3, 'pending', NULL, NULL, NULL)",
-                params![run_id.clone(), code.clone(), *nights],
-            )
-            .await
-            .map_err(|e| format!("insert shaping_scrape_attempts failed: {e}"))?;
+            repo_shaping::insert_pending_attempt(&conn, &run_id, code, *nights).await?;
         }
     }
 
