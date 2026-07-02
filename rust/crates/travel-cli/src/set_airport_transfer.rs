@@ -16,6 +16,9 @@
 // Verified no-cascade: cascade_dirty_flags UNCHANGED.
 
 use libsql::Connection;
+use travel_db::repo::airport_transfers::{
+    self, AirportTransferCandidate, AirportTransferWrite,
+};
 
 #[derive(Default, Debug, Clone)]
 struct TransferOption {
@@ -339,71 +342,41 @@ async fn execute(
     //    seeds the transfer row). Upsert keyed on the PK so the command persists
     //    whether or not a skeleton row pre-exists, keeping the invariant: a
     //    ✅/completed audit always implies a row actually changed.
-    conn.execute(
-        "INSERT INTO airport_transfers \
-            (plan_id, destination, direction, status, selected_id, selected_title, \
-             selected_route, selected_duration_min, selected_price_yen, selected_schedule, \
-             selected_booking_url, selected_notes, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11) \
-         ON CONFLICT(plan_id, destination, direction) DO UPDATE SET \
-            status = ?4, \
-            selected_id = ?5, \
-            selected_title = ?6, \
-            selected_route = ?7, \
-            selected_duration_min = ?8, \
-            selected_price_yen = ?9, \
-            selected_schedule = ?10, \
-            selected_booking_url = NULL, \
-            selected_notes = NULL, \
-            updated_at = ?11",
-        libsql::params![
-            plan_id.to_string(),
-            destination.to_string(),
-            direction.to_string(),
-            status.to_string(),
-            selected.id.clone(),
-            selected.title.clone(),
-            selected.route.clone(),
-            selected.duration_min,
-            selected.price_yen,
-            selected.schedule.clone(),
-            now_db.clone()
-        ],
-    )
-    .await
-    .map_err(|e| format!("airport_transfers upsert failed: {e}"))?;
+    let w = AirportTransferWrite {
+        plan_id: plan_id.to_string(),
+        destination: destination.to_string(),
+        direction: direction.to_string(),
+        status: status.to_string(),
+        selected_id: selected.id.clone(),
+        selected_title: selected.title.clone(),
+        selected_route: selected.route.clone(),
+        selected_duration_min: selected.duration_min,
+        selected_price_yen: selected.price_yen,
+        selected_schedule: selected.schedule.clone(),
+    };
+    airport_transfers::upsert_transfer(conn, &w, &now_db).await?;
 
     // 2. DELETE-then-reinsert candidates.
-    conn.execute(
-        "DELETE FROM airport_transfer_candidates \
-         WHERE plan_id = ?1 AND destination = ?2 AND direction = ?3",
-        libsql::params![plan_id.to_string(), destination.to_string(), direction.to_string()],
+    let cands: Vec<AirportTransferCandidate> = candidates
+        .iter()
+        .map(|cand| AirportTransferCandidate {
+            candidate_id: cand.id.clone(),
+            title: cand.title.clone(),
+            route: cand.route.clone(),
+            duration_min: cand.duration_min,
+            price_yen: cand.price_yen,
+            schedule: cand.schedule.clone(),
+        })
+        .collect();
+    airport_transfers::replace_candidates(
+        conn,
+        plan_id,
+        destination,
+        direction,
+        &cands,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("airport_transfer_candidates DELETE failed: {e}"))?;
-    for (i, cand) in candidates.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO airport_transfer_candidates \
-                (plan_id, destination, direction, candidate_id, title, route, \
-                 duration_min, price_yen, schedule, booking_url, notes, sort_order, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, ?10, ?11)",
-            libsql::params![
-                plan_id.to_string(),
-                destination.to_string(),
-                direction.to_string(),
-                cand.id.clone(),
-                cand.title.clone(),
-                cand.route.clone(),
-                cand.duration_min,
-                cand.price_yen,
-                cand.schedule.clone(),
-                i as i64,
-                now_db.clone()
-            ],
-        )
-        .await
-        .map_err(|e| format!("airport_transfer_candidates INSERT failed: {e}"))?;
-    }
+    .await?;
 
     // 3. plan_events + plan_event_data.
     let dest_process_so = next_dest_process_sort_order(
@@ -471,31 +444,17 @@ async fn execute(
     .await?;
 
     // 4. operation_runs + plans.version.
-    let run_id = new_run_id();
     let summary = format!("{destination} {direction}");
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'set-airport-transfer', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![
-            run_id,
-            plan_id.to_string(),
-            summary,
-            version_before,
-            version_after,
-            now_db.clone()
-        ],
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        "set-airport-transfer",
+        &summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("operation_runs INSERT failed: {e}"))?;
-
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, plan_id.to_string()],
-    )
-    .await
-    .map_err(|e| format!("plans UPDATE failed: {e}"))?;
+    .await?;
 
     Ok(version_after)
 }
@@ -631,27 +590,6 @@ async fn insert_kv(
         .map_err(|e| format!("plan_event_data INSERT failed: {e}"))?;
     }
     Ok(())
-}
-
-fn new_run_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        ^ (n as u128);
-    let p1 = (nanos & 0xFFFF_FFFF) as u32;
-    let p2 = ((nanos >> 32) & 0xFFFF) as u16;
-    let p3 = ((nanos >> 48) & 0x0FFF) as u16;
-    let p4 = 0x8000 | (((nanos >> 60) & 0x3FFF) as u16);
-    let p5 = (nanos as u64) ^ 0xDEAD_BEEF_CAFE_F00D;
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        p1, p2, p3, p4, p5
-    )
 }
 
 fn now_rfc3339() -> String {
