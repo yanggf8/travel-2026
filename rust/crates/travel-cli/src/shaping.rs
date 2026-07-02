@@ -609,18 +609,7 @@ pub async fn run_adopt(args: &[String]) -> Result<(), String> {
     // simple adopt
     let run_id = candidate_run_id(&conn, &candidate_id).await?;
     let ts = now_rfc3339();
-    conn.execute(
-        "UPDATE shaping_candidates SET adopted_plan_id = ?1 WHERE candidate_id = ?2",
-        params![plan_id.clone(), candidate_id.clone()],
-    )
-    .await
-    .map_err(|e| format!("update shaping_candidates failed: {e}"))?;
-    conn.execute(
-        "UPDATE shaping_research_runs SET status = 'adopted', updated_at = ?1 WHERE run_id = ?2",
-        params![ts, run_id],
-    )
-    .await
-    .map_err(|e| format!("update shaping_research_runs failed: {e}"))?;
+    travel_db::repo::shaping::set_adopted(&conn, &candidate_id, &plan_id, &run_id, &ts).await?;
     println!("✅ Candidate {candidate_id} adopted into plan {plan_id}");
     println!("   Next: set the locked dates/destination via /p1-dates and /p2-destination");
     Ok(())

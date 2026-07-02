@@ -142,3 +142,27 @@ pub async fn insert_pending_attempt(
     .map_err(|e| format!("insert shaping_scrape_attempts failed: {e}"))?;
     Ok(())
 }
+
+/// Simple adopt: set `adopted_plan_id` on the candidate and mark the run adopted.
+/// Verbatim from `shaping::run_adopt` (without `--create-plan`).
+pub async fn set_adopted(
+    conn: &Connection,
+    candidate_id: &str,
+    plan_id: &str,
+    run_id: &str,
+    ts: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE shaping_candidates SET adopted_plan_id = ?1 WHERE candidate_id = ?2",
+        libsql::params![plan_id.to_string(), candidate_id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("update shaping_candidates failed: {e}"))?;
+    conn.execute(
+        "UPDATE shaping_research_runs SET status = 'adopted', updated_at = ?1 WHERE run_id = ?2",
+        libsql::params![ts.to_string(), run_id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("update shaping_research_runs failed: {e}"))?;
+    Ok(())
+}
