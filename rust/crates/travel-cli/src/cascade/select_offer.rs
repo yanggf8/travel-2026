@@ -59,8 +59,9 @@
 //   - plan_events.event_at; plan_offer_selection.selected_at
 
 use super::common::{
-    insert_event, insert_kv_rows, next_dest_process_sort_order, next_timeline_sort_order,
-    now_db_datetime, now_rfc3339, read_version,
+    emit_event_both, emit_status_changed, insert_event, insert_kv_rows,
+    next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version,
+    validate_transition,
 };
 use crate::status::format_date;
 use libsql::Connection;
@@ -317,62 +318,6 @@ async fn rewrite_hotel(
     travel_db::repo::hotels::replace_from_offer(conn, plan_id, dest, &input, now_db).await
 }
 
-/// Emit a status_changed event to BOTH the dest_process and timeline
-/// buckets, computing each bucket's next sort_order.
-async fn emit_status_changed(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-    from_state: Option<&str>,
-    to_state: &str,
-    now_iso: &str,
-) -> Result<(), String> {
-    emit_event_both(
-        conn,
-        plan_id,
-        dest,
-        process_id,
-        "status_changed",
-        now_iso,
-        from_state,
-        Some(to_state),
-        &[],
-    )
-    .await
-}
-
-/// Emit one event (+KV) to the dest_process bucket and an identical event
-/// (+KV) to the timeline bucket. Sort orders are computed independently.
-#[allow(clippy::too_many_arguments)]
-async fn emit_event_both(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-    event: &str,
-    now_iso: &str,
-    from_state: Option<&str>,
-    to_state: Option<&str>,
-    kv: &[(&str, String)],
-) -> Result<(), String> {
-    let dest_so = next_dest_process_sort_order(conn, plan_id, dest, process_id).await?;
-    insert_event(
-        conn, plan_id, "dest_process", dest, process_id, dest_so, event, now_iso, from_state,
-        to_state,
-    )
-    .await?;
-    insert_kv_rows(conn, plan_id, "dest_process", dest, process_id, dest_so, kv).await?;
-
-    let tl_so = next_timeline_sort_order(conn, plan_id).await?;
-    insert_event(
-        conn, plan_id, "timeline", "", process_id, tl_so, event, now_iso, from_state, to_state,
-    )
-    .await?;
-    insert_kv_rows(conn, plan_id, "timeline", "", process_id, tl_so, kv).await?;
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Status helpers
 // ---------------------------------------------------------------------------
@@ -412,40 +357,6 @@ async fn set_status(
     // this write silently no-op, leaving the populate cascade invisible (GitHub issue #5).
     // INSERT-on-missing keeps the populate honest; ON CONFLICT preserves the UPDATE path.
     travel_db::repo::process_statuses::upsert(conn, plan_id, dest, process_id, status, now_db).await
-}
-
-/// Mirror StateManager.isValidTransition + the throw in setProcessStatus.
-/// A None `from` is always allowed (no current status to validate).
-fn validate_transition(
-    from: Option<&str>,
-    to: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<(), String> {
-    let Some(from) = from else { return Ok(()) };
-    if from == to {
-        return Ok(()); // idempotent (no event in TS, but we never call it that way)
-    }
-    let allowed: &[&str] = match from {
-        "pending" => &["researching", "populated", "confirmed", "skipped"],
-        "researching" => &["researched", "pending", "skipped"],
-        "researched" => &["selecting", "selected", "researching", "skipped"],
-        "selecting" => &["selected", "researched", "skipped"],
-        "selected" => &["booking", "selecting", "populated", "skipped"],
-        "populated" => &["booking", "selected", "pending", "skipped"],
-        "booking" => &["booked", "selected", "skipped"],
-        "booked" => &["confirmed", "skipped"],
-        "confirmed" => &["skipped"],
-        "skipped" => &["pending"],
-        _ => &[],
-    };
-    if allowed.contains(&to) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Invalid transition: {from} → {to} for {dest}.{process_id}"
-        ))
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,355 @@
+//! Real-Turso behavior-LOCK integration test for `set-process-status`.
+//!
+//! Seeds a unique plan with process_statuses ladder rows, runs
+//! `set-process-status process_3_transportation booked`, asserts the shortest
+//! legal path (pending -> populated -> booking -> booked), dual-bucket events,
+//! operation_runs audit, and version bump. Also locks idempotent re-run and
+//! no-path failure on corrupted status.
+//!
+//! Skips cleanly if Turso creds are absent. Panic-safe teardown via Guard.
+
+use std::process::Command;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+mod common;
+use common::Guard;
+
+static SET_PROCESS_STATUS_LOCK: Mutex<()> = Mutex::new(());
+
+fn bin() -> &'static str {
+    env!("CARGO_BIN_EXE_travel")
+}
+
+fn nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+}
+
+fn is_credless(stderr: &str) -> bool {
+    stderr.contains("turso auth login")
+        || stderr.contains("Missing Turso")
+        || stderr.contains("Missing Turso data")
+        || stderr.contains("failed to connect to Turso")
+        || stderr.contains("TRAVEL_TURSO")
+}
+
+fn is_transient(stderr: &str) -> bool {
+    stderr.contains("Network is unreachable")
+        || stderr.contains("error trying to connect")
+        || stderr.contains("connection reset")
+        || stderr.contains("connection closed")
+}
+
+fn db_exec(sql: &str) -> Option<String> {
+    for attempt in 0..6 {
+        let out = Command::new(bin())
+            .args(["db", "exec", sql])
+            .env_remove("TRAVEL_PLAN_ID")
+            .output()
+            .expect("run db exec");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        if !out.status.success() && is_credless(&stderr) {
+            eprintln!(
+                "skipping set-process-status test (no Turso creds): {}",
+                stderr.trim()
+            );
+            return None;
+        }
+        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
+            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
+            continue;
+        }
+        if !out.status.success() {
+            panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
+        }
+        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    unreachable!()
+}
+
+fn run_cmd(args: &[&str]) -> Option<(bool, String, String)> {
+    for attempt in 0..6 {
+        let out = Command::new(bin())
+            .args(args)
+            .env_remove("TRAVEL_PLAN_ID")
+            .output()
+            .expect("run set-process-status");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        if !out.status.success() && is_credless(&stderr) {
+            eprintln!(
+                "skipping set-process-status test (no Turso creds): {}",
+                stderr.trim()
+            );
+            return None;
+        }
+        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
+            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
+            continue;
+        }
+        return Some((out.status.success(), stdout, stderr));
+    }
+    unreachable!()
+}
+
+fn scalar(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+}
+
+fn column(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+fn seed_plan(plan: &str, dest: &str) -> bool {
+    let sql = format!(
+        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan}', '4.2.0', 7); \
+         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) VALUES ('{plan}', '4.2.0', '{dest}'); \
+         INSERT INTO process_statuses (plan_id, destination, process_id, status) VALUES \
+         ('{plan}','{dest}','process_1_date_anchor','confirmed'), \
+         ('{plan}','{dest}','process_2_destination','confirmed'), \
+         ('{plan}','{dest}','process_3_transportation','pending'), \
+         ('{plan}','{dest}','process_3_4_packages','pending'), \
+         ('{plan}','{dest}','process_4_accommodation','pending'), \
+         ('{plan}','{dest}','process_5_daily_itinerary','pending');"
+    );
+    db_exec(&sql).is_some()
+}
+
+fn teardown(plan: &str, dest: &str) {
+    let sql = format!(
+        "DELETE FROM plan_event_data WHERE plan_id = '{plan}'; \
+         DELETE FROM plan_events WHERE plan_id = '{plan}'; \
+         DELETE FROM operation_runs WHERE plan_id = '{plan}'; \
+         DELETE FROM process_statuses WHERE plan_id = '{plan}'; \
+         DELETE FROM plan_metadata WHERE plan_id = '{plan}'; \
+         DELETE FROM plans WHERE plan_id = '{plan}';"
+    );
+    let _ = Command::new(bin())
+        .args(["db", "exec", &sql])
+        .env_remove("TRAVEL_PLAN_ID")
+        .output();
+    let _ = dest; // dest scoped in seed only; all rows keyed by plan_id
+}
+
+fn run_set_status(plan: &str, dest: &str, process_id: &str, target: &str) -> Option<(bool, String, String)> {
+    run_cmd(&[
+        "set-process-status",
+        process_id,
+        target,
+        "--dest",
+        dest,
+        "--plan-id",
+        plan,
+    ])
+}
+
+#[test]
+fn set_process_status_advances_shortest_path_and_audits() {
+    let _lock = SET_PROCESS_STATUS_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+
+    if db_exec("SELECT 1 AS n").is_none() {
+        return;
+    }
+
+    let tag = nanos();
+    let plan = format!("test-setstatus-{tag}");
+    let dest = format!("zz_setstatus_{tag}");
+
+    teardown(&plan, &dest);
+    let _g = Guard::new({
+        let plan = plan.clone();
+        let dest = dest.clone();
+        move || teardown(&plan, &dest)
+    });
+
+    assert!(seed_plan(&plan, &dest), "seed plan");
+
+    let (ok, stdout, stderr) = run_set_status(&plan, &dest, "process_3_transportation", "booked")
+        .expect("run set-process-status");
+    assert!(
+        ok,
+        "set-process-status should succeed; stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("Path:") && stdout.contains("pending") && stdout.contains("booked"),
+        "stdout should show path; stdout={stdout}"
+    );
+
+    // Final status
+    let status = db_exec(&format!(
+        "SELECT status FROM process_statuses WHERE plan_id='{plan}' AND destination='{dest}' AND process_id='process_3_transportation';"
+    ))
+    .unwrap();
+    assert_eq!(scalar(&status).as_deref(), Some("booked"), "final status; out={status}");
+
+    // Dest-process events
+    let dest_events = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events \
+         WHERE plan_id='{plan}' AND scope='dest_process' AND destination='{dest}' \
+           AND process_id='process_3_transportation' AND event='status_changed';"
+    ))
+    .unwrap();
+    assert_eq!(
+        scalar(&dest_events).as_deref(),
+        Some("3"),
+        "dest_process status_changed count; out={dest_events}"
+    );
+
+    // Timeline events
+    let tl_events = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events \
+         WHERE plan_id='{plan}' AND scope='timeline' AND destination='' \
+           AND process_id='process_3_transportation' AND event='status_changed';"
+    ))
+    .unwrap();
+    assert_eq!(
+        scalar(&tl_events).as_deref(),
+        Some("3"),
+        "timeline status_changed count; out={tl_events}"
+    );
+
+    // Hop order
+    let hops = db_exec(&format!(
+        "SELECT from_state || '->' || to_state AS hop FROM plan_events \
+         WHERE plan_id='{plan}' AND scope='dest_process' AND destination='{dest}' \
+           AND process_id='process_3_transportation' AND event='status_changed' \
+         ORDER BY sort_order;"
+    ))
+    .unwrap();
+    assert_eq!(
+        column(&hops),
+        vec![
+            "pending->populated".to_string(),
+            "populated->booking".to_string(),
+            "booking->booked".to_string(),
+        ],
+        "hop order; out={hops}"
+    );
+
+    // Operation/version
+    let op = db_exec(&format!(
+        "SELECT command_type || '|' || status || '|' || version_before || '|' || version_after || '|' || command_summary \
+         FROM operation_runs WHERE plan_id='{plan}' ORDER BY started_at DESC LIMIT 1;"
+    ))
+    .unwrap();
+    let op_line = scalar(&op).unwrap_or_default();
+    assert!(
+        op_line.starts_with("set-process-status|completed|7|8|"),
+        "operation_runs row; got={op_line}"
+    );
+    assert!(
+        op_line.contains("process_3_transportation") && op_line.contains("pending->booked"),
+        "command_summary; got={op_line}"
+    );
+
+    let version = db_exec(&format!(
+        "SELECT version FROM plans WHERE plan_id='{plan}';"
+    ))
+    .unwrap();
+    assert_eq!(scalar(&version).as_deref(), Some("8"), "plan version; out={version}");
+
+    // Idempotent re-run
+    let (ok2, stdout2, stderr2) = run_set_status(&plan, &dest, "process_3_transportation", "booked")
+        .expect("idempotent re-run");
+    assert!(
+        ok2,
+        "idempotent re-run should succeed; stdout={stdout2} stderr={stderr2}"
+    );
+    assert!(
+        stdout2.contains("No change") || stdout2.contains("already at"),
+        "idempotent stdout; stdout={stdout2}"
+    );
+
+    let dest_events2 = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events \
+         WHERE plan_id='{plan}' AND scope='dest_process' AND destination='{dest}' \
+           AND process_id='process_3_transportation' AND event='status_changed';"
+    ))
+    .unwrap();
+    assert_eq!(scalar(&dest_events2).as_deref(), Some("3"), "dest events unchanged");
+
+    let tl_events2 = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events \
+         WHERE plan_id='{plan}' AND scope='timeline' AND destination='' \
+           AND process_id='process_3_transportation' AND event='status_changed';"
+    ))
+    .unwrap();
+    assert_eq!(scalar(&tl_events2).as_deref(), Some("3"), "timeline events unchanged");
+
+    let op_count = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM operation_runs \
+         WHERE plan_id='{plan}' AND command_type='set-process-status';"
+    ))
+    .unwrap();
+    assert_eq!(
+        scalar(&op_count).as_deref(),
+        Some("1"),
+        "still one set-process-status operation; out={op_count}"
+    );
+
+    let version2 = db_exec(&format!(
+        "SELECT version FROM plans WHERE plan_id='{plan}';"
+    ))
+    .unwrap();
+    assert_eq!(scalar(&version2).as_deref(), Some("8"), "version unchanged");
+
+    // No-path failure: corrupted current value
+    db_exec(&format!(
+        "UPDATE process_statuses SET status='archived' \
+         WHERE plan_id='{plan}' AND destination='{dest}' AND process_id='process_4_accommodation';"
+    ))
+    .unwrap();
+
+    let events_before = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events \
+         WHERE plan_id='{plan}' AND scope='dest_process' AND destination='{dest}' \
+           AND process_id='process_4_accommodation' AND event='status_changed';"
+    ))
+    .unwrap();
+    let ops_before = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id='{plan}';"
+    ))
+    .unwrap();
+
+    let (ok_fail, _stdout_fail, stderr_fail) =
+        run_set_status(&plan, &dest, "process_4_accommodation", "booked").expect("failure run");
+    assert!(!ok_fail, "corrupted status should fail");
+    assert!(
+        stderr_fail.contains("unknown current status")
+            || stderr_fail.contains("no legal status path"),
+        "stderr should explain failure; stderr={stderr_fail}"
+    );
+
+    let events_after = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events \
+         WHERE plan_id='{plan}' AND scope='dest_process' AND destination='{dest}' \
+           AND process_id='process_4_accommodation' AND event='status_changed';"
+    ))
+    .unwrap();
+    assert_eq!(
+        scalar(&events_after),
+        scalar(&events_before),
+        "no P4 status_changed events added"
+    );
+
+    let ops_after = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id='{plan}';"
+    ))
+    .unwrap();
+    assert_eq!(
+        scalar(&ops_after),
+        scalar(&ops_before),
+        "no extra operation_runs"
+    );
+}

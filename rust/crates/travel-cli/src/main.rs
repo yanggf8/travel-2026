@@ -33,6 +33,7 @@ mod set_dates;
 mod set_day_theme;
 mod set_flight;
 mod set_hotel;
+mod set_process_status;
 mod set_route_segment;
 mod set_tod;
 mod share_token;
@@ -318,6 +319,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_flight::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-process-status" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-process-status <process_id> <target_status> [--dest <slug>] [--plan-id <id>]");
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_process_status::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "set-airport-transfer" => {

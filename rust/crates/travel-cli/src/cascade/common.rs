@@ -223,6 +223,102 @@ pub async fn insert_kv_rows(
     Ok(())
 }
 
+/// Emit a status_changed event to BOTH the dest_process and timeline
+/// buckets, computing each bucket's next sort_order.
+pub(crate) async fn emit_status_changed(
+    conn: &Connection,
+    plan_id: &str,
+    dest: &str,
+    process_id: &str,
+    from_state: Option<&str>,
+    to_state: &str,
+    now_iso: &str,
+) -> Result<(), String> {
+    emit_event_both(
+        conn,
+        plan_id,
+        dest,
+        process_id,
+        "status_changed",
+        now_iso,
+        from_state,
+        Some(to_state),
+        &[],
+    )
+    .await
+}
+
+/// Emit one event (+KV) to the dest_process bucket and an identical event
+/// (+KV) to the timeline bucket. Sort orders are computed independently.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn emit_event_both(
+    conn: &Connection,
+    plan_id: &str,
+    dest: &str,
+    process_id: &str,
+    event: &str,
+    now_iso: &str,
+    from_state: Option<&str>,
+    to_state: Option<&str>,
+    kv: &[(&str, String)],
+) -> Result<(), String> {
+    let dest_so = next_dest_process_sort_order(conn, plan_id, dest, process_id).await?;
+    insert_event(
+        conn, plan_id, "dest_process", dest, process_id, dest_so, event, now_iso, from_state,
+        to_state,
+    )
+    .await?;
+    insert_kv_rows(conn, plan_id, "dest_process", dest, process_id, dest_so, kv).await?;
+
+    let tl_so = next_timeline_sort_order(conn, plan_id).await?;
+    insert_event(
+        conn, plan_id, "timeline", "", process_id, tl_so, event, now_iso, from_state, to_state,
+    )
+    .await?;
+    insert_kv_rows(conn, plan_id, "timeline", "", process_id, tl_so, kv).await?;
+    Ok(())
+}
+
+pub(crate) fn allowed_transition_targets(from: &str) -> &'static [&'static str] {
+    match from {
+        "pending" => &["researching", "populated", "confirmed", "skipped"],
+        "researching" => &["researched", "pending", "skipped"],
+        "researched" => &["selecting", "selected", "researching", "skipped"],
+        "selecting" => &["selected", "researched", "skipped"],
+        "selected" => &["booking", "selecting", "populated", "skipped"],
+        "populated" => &["booking", "selected", "pending", "skipped"],
+        "booking" => &["booked", "selected", "skipped"],
+        "booked" => &["confirmed", "skipped"],
+        "confirmed" => &["skipped"],
+        "skipped" => &["pending"],
+        _ => &[],
+    }
+}
+
+/// Mirror StateManager.isValidTransition + the throw in setProcessStatus.
+/// A None `from` is always allowed (no current status to validate).
+pub(crate) fn validate_transition(
+    from: Option<&str>,
+    to: &str,
+    dest: &str,
+    process_id: &str,
+) -> Result<(), String> {
+    let Some(from) = from else {
+        return Ok(());
+    };
+    if from == to {
+        return Ok(()); // idempotent (no event in TS, but we never call it that way)
+    }
+    let allowed = allowed_transition_targets(from);
+    if allowed.contains(&to) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Invalid transition: {from} → {to} for {dest}.{process_id}"
+        ))
+    }
+}
+
 /// ISO-8601 / RFC 3339 timestamp for `event_at` / `selected_at` /
 /// `last_changed` (the TS path uses `new Date().toISOString()`).
 pub fn now_rfc3339() -> String {
