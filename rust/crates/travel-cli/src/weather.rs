@@ -389,30 +389,22 @@ async fn write_day_weather(
     sourced_at: &str,
 ) -> Result<(), String> {
     let now_db = now_db_datetime();
-    conn.execute(
-        "UPDATE days SET \
-            weather_label = ?1, temp_low_c = ?2, temp_high_c = ?3, \
-            feels_like_low_c = ?4, feels_like_high_c = ?5, precipitation_pct = ?6, \
-            weather_code = ?7, weather_source_id = 'open_meteo', weather_sourced_at = ?8, \
-            updated_at = ?9 \
-         WHERE plan_id = ?10 AND destination = ?11 AND day_number = ?12",
-        libsql::params![
-            f.weather_label.clone(),
-            f.temp_low_c,
-            f.temp_high_c,
-            f.feels_like_low_c,
-            f.feels_like_high_c,
-            f.precipitation_pct,
-            f.weather_code,
-            sourced_at.to_string(),
-            now_db,
-            plan_id.to_string(),
-            dest.to_string(),
-            day_number
-        ],
+    travel_db::repo::itinerary::set_day_weather(
+        conn,
+        plan_id,
+        dest,
+        day_number,
+        &f.weather_label,
+        f.temp_low_c,
+        f.temp_high_c,
+        f.feels_like_low_c,
+        f.feels_like_high_c,
+        f.precipitation_pct,
+        f.weather_code,
+        sourced_at,
+        &now_db,
     )
-    .await
-    .map_err(|e| format!("days weather UPDATE failed: {e}"))?;
+    .await?;
 
     // Emit weather_updated event (dest_process + timeline), like setDayWeather.
     let now_iso = now_rfc3339();

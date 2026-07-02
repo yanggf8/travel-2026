@@ -981,3 +981,52 @@ async fn repoint_day_number(
     .map_err(|e| format!("{table} re-point day_number failed: {e}"))?;
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────
+// set_day_weather domain write (migrated from weather.rs::write_day_weather).
+// The LAST inline-SQL domain write. SQL is verbatim; weather_source_id='open_meteo'
+// is a SQL LITERAL (not bound); updated_at binds the caller-supplied now_db;
+// weather_sourced_at binds a param. The audit triad (events + record_operation)
+// and the open-meteo fetch remain untouched in weather.rs.
+#[allow(clippy::too_many_arguments)]
+pub async fn set_day_weather(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day_number: i64,
+    weather_label: &str,
+    temp_low_c: f64,
+    temp_high_c: f64,
+    feels_like_low_c: Option<f64>,
+    feels_like_high_c: Option<f64>,
+    precipitation_pct: Option<f64>,
+    weather_code: i64,
+    sourced_at: &str,
+    now_db: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE days SET \
+            weather_label = ?1, temp_low_c = ?2, temp_high_c = ?3, \
+            feels_like_low_c = ?4, feels_like_high_c = ?5, precipitation_pct = ?6, \
+            weather_code = ?7, weather_source_id = 'open_meteo', weather_sourced_at = ?8, \
+            updated_at = ?9 \
+         WHERE plan_id = ?10 AND destination = ?11 AND day_number = ?12",
+        libsql::params![
+            weather_label.to_string(),
+            temp_low_c,
+            temp_high_c,
+            feels_like_low_c,
+            feels_like_high_c,
+            precipitation_pct,
+            weather_code,
+            sourced_at.to_string(),
+            now_db.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day_number
+        ],
+    )
+    .await
+    .map_err(|e| format!("days weather UPDATE failed: {e}"))?;
+    Ok(())
+}
