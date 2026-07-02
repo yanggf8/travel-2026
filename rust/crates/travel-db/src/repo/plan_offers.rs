@@ -1,5 +1,5 @@
-//! `plan_offers` family domain writes for `promote-offers` (and future
-//! `import_offers`/`select_offer` DAL migrations).
+//! `plan_offers` family domain writes for `promote-offers`, `import-offers`
+//! (and future `select_offer` DAL migrations).
 //!
 //! DAL boundary: owns the domain-table SQL (the `plan_offer_*` DELETE/INSERT +
 //! `process_statuses` upsert). The audit triad (`plan_events`/`plan_event_data`/
@@ -248,6 +248,283 @@ pub async fn upsert_process_status(
             status.to_string(),
             now_db.to_string(),
         ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Payload for one imported offer + all its child rows (import-offers shape:
+/// url present, multi-row date_pricing without currency, full hotel + access,
+/// full flights, best_value). Distinct from `PlanOfferWrite` (promote's shape).
+#[derive(Debug, Clone)]
+pub struct ImportPlanOfferWrite {
+    pub plan_id: String,
+    pub destination: String,
+    pub offer_id: String,
+    pub source_id: String,
+    pub offer_type: String,
+    pub title: String,
+    pub price_per_person: i64,
+    pub currency: String,
+    pub availability: String,
+    pub url: String,
+    pub scraped_at: String,
+    pub price_total: Option<i64>,
+    pub includes: Vec<String>,
+    pub flights: Option<ImportFlightPair>,
+    pub hotel: Option<ImportHotelWrite>,
+    pub date_pricing: Vec<ImportDatePricing>,
+    pub best_value: Option<ImportBestValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportFlightPair {
+    pub outbound: ImportFlightLeg,
+    pub return_leg: ImportFlightLeg,
+    pub airline: String,
+    pub airline_code: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportFlightLeg {
+    pub direction: String,
+    pub flight_number: String,
+    pub departure_code: String,
+    pub departure_time: String,
+    pub arrival_code: String,
+    pub arrival_time: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportHotelWrite {
+    pub name: String,
+    pub slug: Option<String>,
+    pub area: String,
+    pub star_rating: Option<i64>,
+    pub access: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportDatePricing {
+    pub date: String,
+    pub price: i64,
+    pub availability: String,
+    pub seats_remaining: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportBestValue {
+    pub date: String,
+    pub price: i64,
+    pub currency: String,
+}
+
+/// Insert one imported offer + all child rows. BYTE-IDENTICAL to the SQL that was inline in
+/// import_offers.rs::insert_offer.
+pub async fn insert_import_offer(
+    conn: &Connection,
+    w: &ImportPlanOfferWrite,
+    now_db: &str,
+) -> Result<(), String> {
+    // plan_offers
+    conn.execute(
+        "INSERT INTO plan_offers \
+            (plan_id, destination, id, source_id, type, title, price_per_person, currency, \
+             availability, url, scraped_at, product_code, duration_days, price_total, \
+             seats_remaining, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, ?12, NULL, ?13)",
+        libsql::params![
+            w.plan_id.clone(),
+            w.destination.clone(),
+            w.offer_id.clone(),
+            w.source_id.clone(),
+            w.offer_type.clone(),
+            w.title.clone(),
+            w.price_per_person,
+            w.currency.clone(),
+            w.availability.clone(),
+            w.url.clone(),
+            w.scraped_at.clone(),
+            w.price_total,
+            now_db.to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // includes → plan_offer_includes child rows
+    for (ii, item) in w.includes.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO plan_offer_includes \
+                (plan_id, destination, offer_id, sort_order, item) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            libsql::params![
+                w.plan_id.clone(),
+                w.destination.clone(),
+                w.offer_id.clone(),
+                ii as i64,
+                item.clone(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    // flights
+    if let Some(ref flight) = w.flights {
+        for (dir, leg) in [
+            ("outbound", &flight.outbound),
+            ("return", &flight.return_leg),
+        ] {
+            conn.execute(
+                "INSERT INTO plan_offer_flights \
+                    (plan_id, destination, offer_id, direction, flight_number, airline, \
+                     airline_code, departure_code, departure_time, arrival_code, arrival_time, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                libsql::params![
+                    w.plan_id.clone(),
+                    w.destination.clone(),
+                    w.offer_id.clone(),
+                    dir.to_string(),
+                    leg.flight_number.clone(),
+                    flight.airline.clone(),
+                    flight.airline_code.clone(),
+                    leg.departure_code.clone(),
+                    leg.departure_time.clone(),
+                    leg.arrival_code.clone(),
+                    leg.arrival_time.clone(),
+                    now_db.to_string(),
+                ],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // hotel
+    if let Some(ref hotel) = w.hotel {
+        conn.execute(
+            "INSERT INTO plan_offer_hotels \
+                (plan_id, destination, offer_id, name, slug, area, star_rating, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            libsql::params![
+                w.plan_id.clone(),
+                w.destination.clone(),
+                w.offer_id.clone(),
+                hotel.name.clone(),
+                hotel.slug.clone(),
+                hotel.area.clone(),
+                hotel.star_rating,
+                now_db.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // access lines
+        for (ai, line) in hotel.access.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO plan_offer_hotel_access \
+                    (plan_id, destination, offer_id, sort_order, line) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                libsql::params![
+                    w.plan_id.clone(),
+                    w.destination.clone(),
+                    w.offer_id.clone(),
+                    ai as i64,
+                    line.clone(),
+                ],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // date_pricing
+    for dp in &w.date_pricing {
+        conn.execute(
+            "INSERT INTO plan_offer_date_pricing \
+                (plan_id, destination, offer_id, date, price, availability, seats_remaining, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            libsql::params![
+                w.plan_id.clone(),
+                w.destination.clone(),
+                w.offer_id.clone(),
+                dp.date.clone(),
+                dp.price,
+                dp.availability.clone(),
+                dp.seats_remaining,
+                now_db.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    // best_value
+    if let Some(ref bv) = w.best_value {
+        conn.execute(
+            "INSERT INTO plan_offer_best_value \
+                (plan_id, destination, offer_id, best_date, best_price, currency, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            libsql::params![
+                w.plan_id.clone(),
+                w.destination.clone(),
+                w.offer_id.clone(),
+                bv.date.clone(),
+                bv.price,
+                bv.currency.clone(),
+                now_db.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// INSERT OR IGNORE into plan_offer_provenance.
+pub async fn insert_import_provenance(
+    conn: &Connection,
+    plan_id: &str,
+    dest: &str,
+    source_id: &str,
+    scraped_at: &str,
+    file_path: &str,
+    offer_count: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO plan_offer_provenance \
+            (plan_id, destination, source_id, scraped_at, file_path, offer_count, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+        libsql::params![
+            plan_id.to_string(),
+            dest.to_string(),
+            source_id.to_string(),
+            scraped_at.to_string(),
+            file_path.to_string(),
+            offer_count,
+        ],
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// INSERT into plan_offer_warnings (warning_type hardcoded 'parse', offer_id omitted=NULL).
+pub async fn insert_warning(
+    conn: &Connection,
+    plan_id: &str,
+    dest: &str,
+    message: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO plan_offer_warnings \
+            (plan_id, destination, warning_type, message) \
+         VALUES (?1, ?2, 'parse', ?3)",
+        libsql::params![plan_id.to_string(), dest.to_string(), message.to_string(),],
     )
     .await
     .map_err(|e| e.to_string())?;

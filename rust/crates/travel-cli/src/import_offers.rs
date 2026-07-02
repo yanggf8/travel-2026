@@ -38,13 +38,14 @@
 // Do NOT "fix" this to match the TS crash.
 
 use crate::cascade::common::{
-    insert_event, insert_kv_rows, new_run_id, next_dest_process_sort_order,
-    next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version,
+    insert_event, insert_kv_rows, next_dest_process_sort_order, next_timeline_sort_order,
+    now_db_datetime, now_rfc3339, read_version, record_operation,
 };
 use crate::scrape_parser;
 use crate::scrape_parser::CanonicalOffer;
 use libsql::Connection;
 use std::path::Path;
+use travel_db::repo::plan_offers;
 
 const P34: &str = "process_3_4_packages";
 
@@ -63,7 +64,9 @@ pub struct ImportOpts {
 /// Parse CLI args for import-offers.
 pub fn parse_args(rest: &[String]) -> Result<ImportOpts, String> {
     if rest.iter().any(|a| a == "--help" || a == "-h") {
-        println!("Usage:\n  travel import-offers [--dest <slug>] [--dir <path>] [--files <csv>] [--start <date>] [--end <date>] [--pax N] [--note <text>] [--dry-run]");
+        println!(
+            "Usage:\n  travel import-offers [--dest <slug>] [--dir <path>] [--files <csv>] [--start <date>] [--end <date>] [--pax N] [--note <text>] [--dry-run]"
+        );
         std::process::exit(0);
     }
     let mut dest = None;
@@ -114,8 +117,8 @@ pub fn parse_args(rest: &[String]) -> Result<ImportOpts, String> {
         i += 1;
     }
 
-    let plan_id = std::env::var("TRAVEL_PLAN_ID")
-        .unwrap_or_else(|_| "test-set-dates-2026".to_string());
+    let plan_id =
+        std::env::var("TRAVEL_PLAN_ID").unwrap_or_else(|_| "test-set-dates-2026".to_string());
 
     // Resolve destination: --dest wins, else active_destination from DB
     let dest_slug = dest.unwrap_or_else(|| {
@@ -240,16 +243,17 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
 
         // Delete existing offers for these offer IDs (merge-by-id semantics)
         for offer in &group.offers {
-            delete_offer_rows(&conn, &opts.plan_id, &dest, &offer.id).await?;
+            plan_offers::delete_offer_rows(&conn, &opts.plan_id, &dest, &offer.id).await?;
         }
 
         // Insert new offer rows
         for offer in &group.offers {
-            insert_offer(&conn, &opts.plan_id, &dest, offer, &now_db).await?;
+            let w = map_import_offer(&opts.plan_id, &dest, offer);
+            plan_offers::insert_import_offer(&conn, &w, &now_db).await?;
         }
 
         // Insert provenance
-        insert_provenance(
+        plan_offers::insert_import_provenance(
             &conn,
             &opts.plan_id,
             &dest,
@@ -262,7 +266,7 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
 
         // Insert warnings
         for w in &group.warnings {
-            insert_warning(&conn, &opts.plan_id, &dest, w).await?;
+            plan_offers::insert_warning(&conn, &opts.plan_id, &dest, w).await?;
         }
 
         // Update process_statuses: P3_4 → researched if null/pending/researching
@@ -271,15 +275,8 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
             None | Some("pending") | Some("researching") => "researched",
             Some(s) => s,
         };
-        upsert_process_status(
-            &conn,
-            &opts.plan_id,
-            &dest,
-            P34,
-            new_status,
-            &now_db,
-        )
-        .await?;
+        plan_offers::upsert_process_status(&conn, &opts.plan_id, &dest, P34, new_status, &now_db)
+            .await?;
 
         // Emit events: package_offers_imported (dest_process + timeline)
         let kv: Vec<(&str, String)> = vec![
@@ -327,22 +324,10 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
             None,
         )
         .await?;
-        insert_kv_rows(
-            &conn,
-            &opts.plan_id,
-            "timeline",
-            "",
-            P34,
-            tl_so,
-            &kv,
-        )
-        .await?;
+        insert_kv_rows(&conn, &opts.plan_id, "timeline", "", P34, tl_so, &kv).await?;
     }
 
     version_after += 1;
-
-    // operation_runs
-    let run_id = new_run_id();
     let summary = format!(
         "{}: {}",
         dest,
@@ -352,23 +337,16 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    conn.execute(
-        "INSERT INTO operation_runs \
-            (run_id, plan_id, command_type, command_summary, status, \
-             version_before, version_after, started_at, completed_at) \
-         VALUES (?1, ?2, 'import-offers', ?3, 'completed', ?4, ?5, ?6, ?6)",
-        libsql::params![run_id, opts.plan_id.clone(), summary, version_before, version_after, now_db.clone()],
+    record_operation(
+        &conn,
+        &opts.plan_id,
+        "import-offers",
+        &summary,
+        version_before,
+        version_after,
+        &now_db,
     )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // plans.version +1
-    conn.execute(
-        "UPDATE plans SET version = ?1, updated_at = ?2 WHERE plan_id = ?3",
-        libsql::params![version_after, now_db, opts.plan_id.clone()],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     println!("Saved to Turso (plan_offers).");
     Ok(())
@@ -378,10 +356,7 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
 // DB helpers
 // ============================================================================
 
-async fn resolve_active_destination(
-    conn: &Connection,
-    plan_id: &str,
-) -> Result<String, String> {
+async fn resolve_active_destination(conn: &Connection, plan_id: &str) -> Result<String, String> {
     let mut rows = conn
         .query(
             "SELECT active_destination FROM plan_metadata WHERE plan_id = ?1",
@@ -403,255 +378,76 @@ async fn resolve_active_destination(
     ))
 }
 
-/// Delete all rows for one offer_id across all offer tables (merge-by-id: DELETE then reinsert).
-async fn delete_offer_rows(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    offer_id: &str,
-) -> Result<(), String> {
-    let tables = [
-        "plan_offer_includes",
-        "plan_offer_hotel_access",
-        "plan_offer_date_pricing",
-        "plan_offer_best_value",
-        "plan_offer_flights",
-        "plan_offer_hotels",
-        "plan_offers",
-    ];
-    for table in &tables {
-        conn.execute(
-            &format!(
-                "DELETE FROM {table} WHERE plan_id = ?1 AND destination = ?2 AND {} = ?3",
-                if *table == "plan_offers" {
-                    "id"
-                } else {
-                    "offer_id"
-                }
-            ),
-            libsql::params![plan_id.to_string(), dest.to_string(), offer_id.to_string()],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// Insert one offer and all its child rows.
-async fn insert_offer(
-    conn: &Connection,
+fn map_import_offer(
     plan_id: &str,
     dest: &str,
     offer: &CanonicalOffer,
-    now_db: &str,
-) -> Result<(), String> {
-    // plan_offers
-    conn.execute(
-        "INSERT INTO plan_offers \
-            (plan_id, destination, id, source_id, type, title, price_per_person, currency, \
-             availability, url, scraped_at, product_code, duration_days, price_total, \
-             seats_remaining, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, ?12, NULL, ?13)",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            offer.id.clone(),
-            offer.source_id.clone(),
-            offer.offer_type.clone(),
-            offer.title.clone(),
-            offer.price_per_person,
-            offer.currency.clone(),
-            offer.availability.clone(),
-            offer.url.clone(),
-            offer.scraped_at.clone(),
-            offer.price_total,
-            now_db.to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+) -> plan_offers::ImportPlanOfferWrite {
+    let flights = offer.flight.as_ref().map(|flight| plan_offers::ImportFlightPair {
+        outbound: plan_offers::ImportFlightLeg {
+            direction: "outbound".to_string(),
+            flight_number: flight.outbound.flight_number.clone(),
+            departure_code: flight.outbound.departure_code.clone(),
+            departure_time: flight.outbound.departure_time.clone(),
+            arrival_code: flight.outbound.arrival_code.clone(),
+            arrival_time: flight.outbound.arrival_time.clone(),
+        },
+        return_leg: plan_offers::ImportFlightLeg {
+            direction: "return".to_string(),
+            flight_number: flight.return_leg.flight_number.clone(),
+            departure_code: flight.return_leg.departure_code.clone(),
+            departure_time: flight.return_leg.departure_time.clone(),
+            arrival_code: flight.return_leg.arrival_code.clone(),
+            arrival_time: flight.return_leg.arrival_time.clone(),
+        },
+        airline: flight.outbound.airline.clone(),
+        airline_code: flight.outbound.airline_code.clone(),
+    });
 
-    // includes → plan_offer_includes child rows
-    for (ii, item) in offer.includes.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO plan_offer_includes \
-                (plan_id, destination, offer_id, sort_order, item) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                offer.id.clone(),
-                ii as i64,
-                item.clone(),
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    let hotel = offer.hotel.as_ref().map(|h| plan_offers::ImportHotelWrite {
+        name: h.name.clone(),
+        slug: h.slug.clone(),
+        area: h.area.clone(),
+        star_rating: h.star_rating,
+        access: h.access.clone(),
+    });
+
+    let date_pricing = offer
+        .date_pricing
+        .iter()
+        .map(|dp| plan_offers::ImportDatePricing {
+            date: dp.date.clone(),
+            price: dp.price_per_person,
+            availability: dp.availability.clone(),
+            seats_remaining: dp.seats_remaining,
+        })
+        .collect();
+
+    let best_value = offer.best_value.as_ref().map(|bv| plan_offers::ImportBestValue {
+        date: bv.date.clone(),
+        price: bv.price_per_person,
+        currency: offer.currency.clone(),
+    });
+
+    plan_offers::ImportPlanOfferWrite {
+        plan_id: plan_id.to_string(),
+        destination: dest.to_string(),
+        offer_id: offer.id.clone(),
+        source_id: offer.source_id.clone(),
+        offer_type: offer.offer_type.clone(),
+        title: offer.title.clone(),
+        price_per_person: offer.price_per_person,
+        currency: offer.currency.clone(),
+        availability: offer.availability.clone(),
+        url: offer.url.clone(),
+        scraped_at: offer.scraped_at.clone(),
+        price_total: offer.price_total,
+        includes: offer.includes.clone(),
+        flights,
+        hotel,
+        date_pricing,
+        best_value,
     }
-
-    // flights
-    if let Some(ref flight) = offer.flight {
-        for (dir, leg) in [("outbound", &flight.outbound), ("return", &flight.return_leg)] {
-            conn.execute(
-                "INSERT INTO plan_offer_flights \
-                    (plan_id, destination, offer_id, direction, flight_number, airline, \
-                     airline_code, departure_code, departure_time, arrival_code, arrival_time, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                libsql::params![
-                    plan_id.to_string(),
-                    dest.to_string(),
-                    offer.id.clone(),
-                    dir.to_string(),
-                    leg.flight_number.clone(),
-                    // TS syncNormalizedTables reads `oflight.airline` / `oflight.airline_code`
-                    // (flight-object level). CanonicalOffer carries airline per-leg with no
-                    // flight-level field, so the representative value is the outbound leg's.
-                    flight.outbound.airline.clone(),
-                    flight.outbound.airline_code.clone(),
-                    leg.departure_code.clone(),
-                    leg.departure_time.clone(),
-                    leg.arrival_code.clone(),
-                    leg.arrival_time.clone(),
-                    now_db.to_string(),
-                ],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-    }
-
-    // hotel
-    if let Some(ref hotel) = offer.hotel {
-        conn.execute(
-            "INSERT INTO plan_offer_hotels \
-                (plan_id, destination, offer_id, name, slug, area, star_rating, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                offer.id.clone(),
-                hotel.name.clone(),
-                // TS flush writes sqlText(ohotel.slug) — NULL when slug is absent.
-                // mapHotel never emits slug, so this is NULL for scraped offers.
-                // Bind the Option directly (None => NULL), do NOT coerce to "".
-                hotel.slug.clone(),
-                hotel.area.clone(),
-                hotel.star_rating,
-                now_db.to_string(),
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-        // access lines
-        for (ai, line) in hotel.access.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO plan_offer_hotel_access \
-                    (plan_id, destination, offer_id, sort_order, line) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                libsql::params![
-                    plan_id.to_string(),
-                    dest.to_string(),
-                    offer.id.clone(),
-                    ai as i64,
-                    line.clone(),
-                ],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-    }
-
-    // date_pricing
-    for dp in &offer.date_pricing {
-        conn.execute(
-            "INSERT INTO plan_offer_date_pricing \
-                (plan_id, destination, offer_id, date, price, availability, seats_remaining, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                offer.id.clone(),
-                dp.date.clone(),
-                dp.price_per_person,
-                dp.availability.clone(),
-                dp.seats_remaining,
-                now_db.to_string(),
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-
-    // best_value
-    if let Some(ref bv) = offer.best_value {
-        conn.execute(
-            "INSERT INTO plan_offer_best_value \
-                (plan_id, destination, offer_id, best_date, best_price, currency, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                offer.id.clone(),
-                bv.date.clone(),
-                bv.price_per_person,
-                offer.currency.clone(),
-                now_db.to_string(),
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
-}
-
-async fn insert_provenance(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    source_id: &str,
-    scraped_at: &str,
-    file_path: &str,
-    offer_count: i64,
-) -> Result<(), String> {
-    conn.execute(
-        "INSERT OR IGNORE INTO plan_offer_provenance \
-            (plan_id, destination, source_id, scraped_at, file_path, offer_count, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            source_id.to_string(),
-            scraped_at.to_string(),
-            file_path.to_string(),
-            offer_count,
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-async fn insert_warning(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    message: &str,
-) -> Result<(), String> {
-    conn.execute(
-        "INSERT INTO plan_offer_warnings \
-            (plan_id, destination, warning_type, message) \
-         VALUES (?1, ?2, 'parse', ?3)",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            message.to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 async fn read_process_status(
@@ -680,30 +476,4 @@ async fn read_process_status(
         return Ok(Some(status));
     }
     Ok(None)
-}
-
-async fn upsert_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-    status: &str,
-    now_db: &str,
-) -> Result<(), String> {
-    conn.execute(
-        "INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(plan_id, destination, process_id) DO UPDATE SET \
-            status = excluded.status, updated_at = excluded.updated_at",
-        libsql::params![
-            plan_id.to_string(),
-            dest.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now_db.to_string(),
-        ],
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
