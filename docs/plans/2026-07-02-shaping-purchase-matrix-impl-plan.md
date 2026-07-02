@@ -61,46 +61,74 @@ package offer (`offer:<offer_id>`, KIND=`package`).
 - flight: `flight_total_twd` (already a party total).
 - package: `price_per_person_twd * run.pax` (per-person → party). Show per-person too.
 
-**GATES (hard_constraint → OK | FAIL | CHECK | N/A; any FAIL ⇒ VERDICT=DISQUALIFIED). Verified kinds:**
+**GATES (hard_constraint OR intrinsic purchasability → OK | FAIL | CHECK | N/A; any FAIL ⇒
+VERDICT=DISQUALIFIED). Verified kinds:**
+- **AVAILABILITY (SYSTEM gate — not a shaping rule; Codex review #1, top fix).** A package you cannot
+  buy is disqualified regardless of shaping rules. Verified: `departure_status` is populated on ALL
+  offers with values `available | guaranteed | limited_qiang_gou | limited_last_2_flight_seats |
+  booking_in_change | sold_out`.
+    - `departure_status = 'sold_out'` ⇒ **FAIL** (reason "sold out").
+    - `seats_available` present (non-null) AND `< run.pax` ⇒ **FAIL** (reason "seats N < pax M").
+    - `departure_status` starts with `limited_` ⇒ OK but flag in REASONS ("limited seats").
+    - `booking_in_change` or null/unknown ⇒ **CHECK** (never silent-pass).
+    - flight candidates ⇒ N/A (no availability data captured for the flight leg).
 - `date/hard_constraint/return_no_later_than` (value_date): option `return_date <= value_date` else FAIL.
 - `date/hard_constraint/exclude_depart` (value_date): option `depart_date == value_date` ⇒ FAIL.
 - `date/hard_constraint/depart_window` (value_text `YYYY-MM-DD..YYYY-MM-DD`): depart in window; if
   unparseable ⇒ CHECK (do NOT silently pass).
 - `lodging/hard_constraint/exclude_hotel` (value_text): package `hotel_name` matches ⇒ FAIL; flight ⇒ N/A.
 - `mobility/hard_constraint/*` (e.g. no-public-bus): FAIL only if the offer text/title explicitly
-  requires it; otherwise CHECK (we lack structured evidence — never silent-pass).
+  requires public bus; otherwise CHECK (no structured mobility column — do NOT treat tour-coach/bus
+  language as public bus; never silent-pass). Codex-confirmed CHECK is the honest default.
 - (Budget as a HARD ceiling only if a `budget/hard_constraint/*` rule exists — none today; see NUDGE.)
 
 **NUDGES (soft_preference → integer score delta). Verified kinds:**
-- `budget/soft_preference/flight_max_twd` (value_integer) — **note: it caps the FLIGHT leg, not the
-  package total** (corrected vs Codex's generic "ceiling"): flight option `flight_total_twd/pax <=
-  value` ⇒ +2 else −2; package ⇒ CHECK/0 (no comparable flight-only price) — do NOT penalize a package
-  on a flight-only cap.
+- `budget/soft_preference/flight_max_twd` (value_integer) — a **FLIGHT PARTY-TOTAL cap**, NUDGE only
+  (never disqualifies). Corroborated via the drill run: `flight_max_twd=18000` for `pax=2` vs
+  candidates whose `flight_total_twd` were ~15,800–18,900 → the value is the **party total**, NOT
+  per-person. So: flight option `flight_total_twd <= value_integer` ⇒ +2 else −2 (**no `/pax`** — party
+  vs party). Package ⇒ CHECK/0 (a package total is not comparable to a flight-only cap) — do NOT
+  penalize a package on it.
 - `channel/soft_preference/preferred_sources` (value_text CSV): package `source_id` ∈ list ⇒ +2;
   flight ⇒ 0; package with source not in list ⇒ −1.
 - `lodging/soft_preference/preferred_hotel_area` (value_text): package `hotel_name`/`title` contains
   it ⇒ +1; unknown ⇒ 0; known mismatch ⇒ −1; flight ⇒ 0.
 - `search_directive`/`observed_signal`/`hypothesis` roles: context only, no score.
 
-**Sort:** qualified first, then score desc, total-price asc, (flight) leave_days asc, depart asc.
+**Sort (Codex #6 — make it unambiguous):** primary key = `VERDICT != DISQUALIFIED` (**DISQUALIFIED
+rows ALWAYS sort last, regardless of score**); then score desc; then TOTAL_TWD asc; then (flight)
+leave_days asc; then depart asc. A `CHECK` gate leaves the option QUALIFIED unless another gate FAILs.
+
+**COST_SCOPE (Codex #2 — direct-flight vs package totals are apples-to-oranges).** Every row carries a
+`COST_SCOPE`: direct flight = `FLIGHT_ONLY` (excludes hotel); package = `PACKAGE_TOTAL`
+(flight+hotel). Never compare a `PACKAGE_TOTAL` to `flight_max_twd`. The price sort is within
+scope-awareness (don't present a FLIGHT_ONLY total as beating a PACKAGE_TOTAL on absolute price without
+the label making the basis clear).
 
 **Plain-text columns:**
 ```
-#  OPTION            KIND     SOURCE     DATES              N  PP_TWD  TOTAL_TWD  HOTEL          VERDICT  SCORE  GATES / REASONS
+#  OPTION            KIND     COST_SCOPE     SOURCE     DATES              N  PP_TWD  TOTAL_TWD  HOTEL          VERDICT  SCORE  GATES / REASONS
 ```
 DISQUALIFIED rows are shown by default (Codex: you must see WHY a cheap option isn't viable), e.g.
-`DISQUALIFIED  FAIL_LODGING: excluded hotel 水之都那霸`. `--qualified-only` hides them; `--limit N` caps.
+`DISQUALIFIED  FAIL_AVAIL: sold out` or `DISQUALIFIED  FAIL_LODGING: excluded hotel 水之都那霸`.
+`--qualified-only` hides them; `--limit N` caps.
 
 **Fail loud:** unknown `run_id` (empty header), no `--run`. Empty candidates+offers → print "(no
 options — import candidates/offers first)", exit 0.
 
 **Test oracle (`tests/shaping_purchase_matrix.rs`, real-Turso, Guard):** seed a `zz`-run with
-`preferred_sources`, a `flight_max_twd`, an `exclude_hotel`, an `exclude_depart`; seed one flight
-candidate + several offers (one on an excluded hotel, one from a preferred source, one over the flight
-cap). Assert: excluded-hotel + excluded-depart options print `DISQUALIFIED` with the reason; a
-preferred-source offer scores higher than a non-preferred one; the over-cap flight is nudged down but
-NOT disqualified; `--qualified-only` hides the DISQUALIFIED rows; output is plain text (no JSON).
-Guard-teardown the zz run rows.
+`preferred_sources`, a `flight_max_twd` (party total), an `exclude_hotel`, an `exclude_depart`; seed one
+flight candidate (over the party cap) + several offers: one on the excluded hotel, one from a preferred
+source (`departure_status='available'`), one `departure_status='sold_out'`, one on the excluded_depart
+date. Assert:
+- `sold_out` + excluded-hotel + excluded-depart options print `DISQUALIFIED` with the specific reason
+  (`FAIL_AVAIL` / `FAIL_LODGING` / `FAIL_DATE`);
+- the preferred-source `available` offer scores higher than a non-preferred one;
+- the over-party-cap flight is nudged down (−2) but NOT disqualified;
+- every row shows a `COST_SCOPE` (`FLIGHT_ONLY` for the candidate, `PACKAGE_TOTAL` for offers);
+- DISQUALIFIED rows sort AFTER all qualified rows regardless of score;
+- `--qualified-only` hides the DISQUALIFIED rows; output is plain text (no JSON).
+Guard-teardown the zz run rows (rules/candidates/offers).
 **Commit:** `feat(cli): shaping-purchase-matrix — score purchase options vs shaping constraints`.
 
 ## Sequence & delegation
@@ -127,3 +155,21 @@ Guard-teardown the zz run rows.
   (group_tour-vs-FIT methodology, `shaping.rs:908`) — the matrix's constraint-scoring is distinct, no
   duplication ✓.
 - Read-only + no-new-schema keeps it inside the repo's DB-only / plain-text / no-JSON rules ✓.
+
+## Codex spec-review — folded in (2026-07-02)
+Codex reviewed this spec (SPEC-NEEDS-FIXES). Every finding corroborated against live Turso before
+folding in:
+- **#1 (top fix) availability gate** — spec read `departure_status`/`seats_available` but didn't gate
+  on them. Corroborated: `departure_status` populated on all 130 offers (`sold_out`/`limited_*`/
+  `available`/`guaranteed`/`booking_in_change`). Added a SYSTEM purchasability GATE (`sold_out` ⇒
+  DISQUALIFIED; `seats_available < pax` ⇒ DISQUALIFIED; null ⇒ CHECK).
+- **#2 cost-basis** — direct-flight (transport-only) vs package (flight+hotel) totals are
+  apples-to-oranges. Added a `COST_SCOPE` column (`FLIGHT_ONLY`/`PACKAGE_TOTAL`); never compare a
+  package total to `flight_max_twd`.
+- **#3 `flight_max_twd` unit** — spec's `/pax` was WRONG. Corroborated via the drill run (18000 for
+  pax=2 vs ~15.8–18.9k party totals) → it's a **party-total** cap; changed to `flight_total_twd <=
+  value` (no `/pax`), NUDGE-only.
+- **#6 sort** — made explicit: DISQUALIFIED always sorts last regardless of score; CHECK stays
+  qualified unless another gate FAILs.
+- **Confirmed correct (no change):** `mobility/no-public-bus` CHECK-default; stars/meals are
+  nudge/display not gates; `flight_max_twd` never disqualifies.
