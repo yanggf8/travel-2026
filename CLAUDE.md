@@ -352,7 +352,9 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 # Full list (add-activity [--after], move-activity, reorder-activities,
 # delete-activity, set-meals, set-airport-transfer, set-activity-time,
 # set-day-theme, set-route-segment, set-tod-zh [--clear-activities],
-# set-tod-focus [--zh], swap-days, run-status, check-booking-integrity, …)
+# set-tod-focus [--zh], swap-days, run-status, check-booking-integrity,
+# set-process-status <proc> <status> (advance the ladder via the shortest legal
+#   path — the ingest-known ladder-mover; select-offer auto-advances P3/P4), …)
 # lives in docs/reference/CLI.md. Add new mutation examples THERE, not here.
 # Discover table columns with `db schema <table>` before any raw `db exec`.
 ./bin/travel set-dates 2026-02-13 2026-02-17

@@ -118,14 +118,21 @@ flights on adjacent dates would change the trip, return to `/shaping-research`.
    ./bin/travel query-bookings --category package
    ```
 
-   Separate path:
+   Separate path (also the `ingest-known` recording path):
    ```bash
    ./bin/travel set-flight outbound --dest <destination_slug> ...
    ./bin/travel set-flight return --dest <destination_slug> ...
    ./bin/travel set-hotel --dest <destination_slug> ...
+   # set-flight/set-hotel write the data but do NOT advance the ladder (no-cascade
+   # by design). Advance P3/P4 explicitly with the audited mover — it walks the
+   # legal state path (pending→populated→booking→booked) and records the events:
+   ./bin/travel set-process-status process_3_transportation booked --dest <destination_slug> --plan-id <plan_id>
+   ./bin/travel set-process-status process_4_accommodation booked --dest <destination_slug> --plan-id <plan_id>
    ./bin/travel transport
    ./bin/travel query-bookings
    ```
+   (The **package path** needs no manual status move — `select-offer` auto-advances
+   P3/P4 via its cascade. Only the separate/ingest-known path advances them by hand.)
 
 ## Output
 

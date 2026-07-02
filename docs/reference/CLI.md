@@ -117,6 +117,7 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ```bash
 ./bin/travel set-dates 2026-02-13 2026-02-17
 ./bin/travel select-offer <offer-id> <date>
+./bin/travel set-process-status <process_id> <target_status> [--dest slug] [--plan-id <id>]    # advance the process ladder to a status via the SHORTEST LEGAL path (BFS over the state machine); walks hop-by-hop (e.g. pending→populated→booking→booked) emitting one status_changed event per hop; idempotent no-op if already there. process_id: the 6 ids or aliases (p1/date, p2/destination, p34/packages, p3/transport/flight, p4/hotel, p5/itinerary). status: pending|researching|researched|selecting|selected|populated|booking|booked|confirmed|skipped. Used by the ingest-known path (set-flight/set-hotel are no-cascade); select-offer auto-advances P3/P4 so it needs no manual move.
 ./bin/travel set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
 ./bin/travel set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
 ./bin/travel set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
