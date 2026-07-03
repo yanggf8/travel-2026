@@ -14,43 +14,9 @@
 //! when Turso creds are absent. NEVER touches a real plan.
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; returns Some(stdout) on success, None on a credless skip,
-/// panics on a real failure.
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping set-activity-title-poi Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
 
 /// Seed `plans` + `plan_metadata` + a day + a session + ONE activity row whose
 /// id is `act_id` (unique per test so concurrent tests don't collide on the
@@ -63,15 +29,16 @@ fn seed_activity(
     title: &str,
     poi_id: Option<&str>,
 ) -> bool {
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
     let poi_clause = match poi_id {
         Some(p) => format!("'{p}'"),
         None => "NULL".to_string(),
     };
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}'); \
-         INSERT INTO days (plan_id, destination, day_number, date, day_type) \
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type) \
            VALUES ('{plan_id}', '{dest}', 1, '2026-06-12', 'full'); \
          INSERT INTO timesofday (plan_id, destination, day_number, session_type) \
            VALUES ('{plan_id}', '{dest}', 1, 'morning'); \
@@ -82,23 +49,13 @@ fn seed_activity(
     db_exec(&sql).is_some()
 }
 
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM activities WHERE plan_id = '{plan_id}'; \
-         DELETE FROM timesofday WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+fn teardown(plan_id: &str, dest: &str) {
+    teardown_plan(plan_id, dest);
 }
 
 /// Run a `travel` subcommand with TRAVEL_PLAN_ID set. Returns (ok, stdout, stderr).
 fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -113,29 +70,21 @@ fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
 /// Read the current poi_id of the seeded activity. Returns:
 ///   Some("<id>")  when set, Some("") when NULL/empty, None on a credless skip.
 fn read_poi_id(plan_id: &str, act_id: &str) -> Option<String> {
-    let out = db_exec(&format!(
+    let val = db_exec(&format!(
         "SELECT poi_id FROM activities WHERE plan_id = '{plan_id}' AND id = '{act_id}'"
-    ))?;
-    // Single-column `db exec` renders a NULL as `poi_id: ` (trailing empty) and
-    // a set value as `poi_id: <value>`.
-    let val = out
-        .lines()
-        .find_map(|l| l.strip_prefix("poi_id:"))
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    ))?
+    .scalar()
+    .unwrap_or_default();
     Some(val)
 }
 
 /// Read the current title of the seeded activity. None on a credless skip.
 fn read_title(plan_id: &str, act_id: &str) -> Option<String> {
-    let out = db_exec(&format!(
+    let val = db_exec(&format!(
         "SELECT title FROM activities WHERE plan_id = '{plan_id}' AND id = '{act_id}'"
-    ))?;
-    let val = out
-        .lines()
-        .find_map(|l| l.strip_prefix("title:"))
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    ))?
+    .scalar()
+    .unwrap_or_default();
     Some(val)
 }
 
@@ -147,8 +96,8 @@ fn title_change_clears_stale_poi_id_and_notifies() {
     let dest = format!("acttitleclear_{tag}");
     let act_id = format!("act-clear-{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
     if !seed_activity(&plan_id, &dest, &act_id, "Shikinaen Garden", Some("shikinaen")) {
         return;
@@ -194,8 +143,8 @@ fn idempotent_same_title_keeps_poi_id() {
     let dest = format!("acttitlesame_{tag}");
     let act_id = format!("act-same-{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
     if !seed_activity(&plan_id, &dest, &act_id, "Shuri Castle", Some("shuri_castle")) {
         return;
@@ -229,8 +178,8 @@ fn title_change_without_poi_id_just_retitles() {
     let dest = format!("acttitlenopoi_{tag}");
     let act_id = format!("act-nopoi-{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
     if !seed_activity(&plan_id, &dest, &act_id, "Free time", None) {
         return;

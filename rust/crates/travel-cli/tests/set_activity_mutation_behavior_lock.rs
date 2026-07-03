@@ -5,68 +5,29 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, seed_plan, teardown_plan, Guard};
 
 static LOCK: Mutex<()> = Mutex::new(());
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_skip(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
 
 fn sql_lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin()
-        .args(["db", "exec", sql])
-        .output()
-        .expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_skip(&stderr) {
-        eprintln!(
-            "skipping set-activity mutation lock (no Turso creds): {}",
-            stderr.trim()
-        );
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
-
-fn exec_ok(sql: &str) -> String {
+fn exec_ok(sql: &str) -> common::Rows {
     db_exec(sql).unwrap_or_else(|| panic!("db exec skipped unexpectedly for SQL: {sql}"))
 }
 
 fn run_cmd(args: &[&str]) -> Option<(String, String)> {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env_remove("TRAVEL_PLAN_ID")
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if !out.status.success() && is_skip(&stderr) {
+    if !out.status.success() && is_credless(&stderr) {
         eprintln!(
             "skipping set-activity mutation lock mid-test: {}",
             stderr.trim()
@@ -80,43 +41,20 @@ fn run_cmd(args: &[&str]) -> Option<(String, String)> {
     Some((stdout, stderr))
 }
 
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
-}
-
 fn teardown(plan: &str, dest: &str) {
     let p = sql_lit(plan);
     let d = sql_lit(dest);
-    let _ = db_exec(&format!(
-        "DELETE FROM activity_tags \
-           WHERE activity_id LIKE {p} || '-%' \
-              OR activity_id IN (SELECT id FROM activities WHERE plan_id = {p}); \
-         DELETE FROM session_meals WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM session_activities_zh WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM cascade_dirty_flags WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM process_statuses WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM plan_event_data WHERE plan_id = {p}; \
-         DELETE FROM plan_events WHERE plan_id = {p}; \
-         DELETE FROM operation_runs WHERE plan_id = {p}; \
-         DELETE FROM activities WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM timesofday WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM days WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM destination_poi_tags WHERE slug = {d}; \
+    // activity_tags FIRST (activity_id-keyed; subquery needs activities to still exist):
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM activity_tags WHERE activity_id LIKE {p} || '-%' \
+           OR activity_id IN (SELECT id FROM activities WHERE plan_id = {p});"));
+    teardown_plan(plan, dest);
+    // slug-keyed destination_* extras (order per source):
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM destination_poi_tags WHERE slug = {d}; \
          DELETE FROM destination_cluster_pois WHERE slug = {d}; \
          DELETE FROM destination_pois WHERE slug = {d}; \
-         DELETE FROM destination_config WHERE slug = {d}; \
-         DELETE FROM plan_metadata WHERE plan_id = {p}; \
-         DELETE FROM plans WHERE plan_id = {p};"
+         DELETE FROM destination_config WHERE slug = {d};"
     ));
 }
 
@@ -129,6 +67,10 @@ fn seed(
     act_delete: &str,
     act_title: &str,
 ) -> bool {
+    if db_exec("SELECT 1 AS n").is_none() {
+        return false;
+    }
+    seed_plan(plan, dest, 0);
     let p = sql_lit(plan);
     let d = sql_lit(dest);
     let alpha = sql_lit(act_alpha);
@@ -139,9 +81,7 @@ fn seed(
     let bait_title = sql_lit(&format!("Bait title mentions {act_exact}"));
     let stale_poi = sql_lit(&format!("stale_poi_{dest}"));
     db_exec(&format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ({p}, '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) VALUES ({p}, '4.2.0', {d}); \
-         INSERT INTO days (plan_id, destination, day_number, date, day_type, status, updated_at) \
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type, status, updated_at) \
            VALUES ({p}, {d}, 1, '2026-09-01', 'full', 'draft', '2020-01-01 00:00:00'); \
          INSERT INTO days (plan_id, destination, day_number, date, day_type, status, updated_at) \
            VALUES ({p}, {d}, 2, '2026-09-02', 'full', 'draft', '2020-01-01 00:00:00'); \
@@ -184,7 +124,7 @@ fn assert_audit(plan: &str, expected_count: i64, expected_version: i64, command_
         "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&count).as_deref(),
+        count.scalar().as_deref(),
         Some(expected_count.to_string().as_str())
     );
 
@@ -192,7 +132,7 @@ fn assert_audit(plan: &str, expected_count: i64, expected_version: i64, command_
         "SELECT version AS v FROM plans WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&version).as_deref(),
+        version.scalar().as_deref(),
         Some(expected_version.to_string().as_str())
     );
 
@@ -202,7 +142,7 @@ fn assert_audit(plan: &str, expected_count: i64, expected_version: i64, command_
          FROM operation_runs WHERE plan_id = {p} AND command_type = {cmd}"
     ));
     assert_eq!(
-        scalar(&row).as_deref(),
+        row.scalar().as_deref(),
         Some(format!("1|{}>{expected_version}|completed", expected_version - 1).as_str()),
         "one completed operation row for {command_type}; out={row}"
     );
@@ -218,7 +158,7 @@ fn activity_order(plan: &str, dest: &str, day: i64, session: &str) -> Vec<String
          WHERE plan_id = {p} AND destination = {d} AND day_number = {day} AND session_type = {s} \
          ORDER BY sort_order, id"
     ));
-    column(&out)
+    out.column()
 }
 
 #[test]
@@ -275,7 +215,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&act_delete)
     ));
     assert_eq!(
-        scalar(&deleted).as_deref(),
+        deleted.scalar().as_deref(),
         Some("0"),
         "deleted activity row is gone"
     );
@@ -284,7 +224,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&act_delete)
     ));
     assert_eq!(
-        scalar(&deleted_tags).as_deref(),
+        deleted_tags.scalar().as_deref(),
         Some("0"),
         "deleted activity tags are cleaned"
     );
@@ -317,7 +257,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&act_exact)
     ));
     assert_eq!(
-        scalar(&booking).as_deref(),
+        booking.scalar().as_deref(),
         Some("pending|CONF-LOCK-123|2026-08-15|1"),
         "booking fields are written on the exact-id row; out={booking}"
     );
@@ -327,7 +267,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&act_bait)
     ));
     assert_eq!(
-        scalar(&bait_booking).as_deref(),
+        bait_booking.scalar().as_deref(),
         Some("<NULL>|0"),
         "title-substring bait row must not be updated when token is an exact id"
     );
@@ -357,7 +297,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&plan),
         sql_lit(&dest)
     ));
-    assert_eq!(scalar(&bijection).as_deref(), Some("4|4|0|3"));
+    assert_eq!(bijection.scalar().as_deref(), Some("4|4|0|3"));
     assert_eq!(
         activity_order(&plan, &dest, 1, "morning"),
         vec![
@@ -393,7 +333,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&plan),
         sql_lit(&dest)
     ));
-    let inserted_id = scalar(&inserted_id).expect("new activity id");
+    let inserted_id = inserted_id.scalar().expect("new activity id");
     assert_eq!(
         activity_order(&plan, &dest, 1, "morning"),
         vec![
@@ -414,7 +354,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&plan),
         sql_lit(&dest)
     ));
-    let target_max = scalar(&target_max).unwrap().parse::<i64>().unwrap();
+    let target_max = target_max.scalar().unwrap().parse::<i64>().unwrap();
     let before_move = exec_ok(&format!(
         "SELECT id || '|' || title || '|' || COALESCE(area, '<NULL>') || '|' || \
                 COALESCE(nearest_station, '<NULL>') || '|' || COALESCE(duration_min, -1) || '|' || \
@@ -424,7 +364,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
          FROM activities WHERE id = {}",
         sql_lit(&act_exact)
     ));
-    let before_move = scalar(&before_move).expect("pre-move activity row");
+    let before_move = before_move.scalar().expect("pre-move activity row");
     if run_cmd(&[
         "move-activity",
         "1",
@@ -451,7 +391,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&act_exact)
     ));
     assert_eq!(
-        scalar(&moved).as_deref(),
+        moved.scalar().as_deref(),
         Some(format!("1|afternoon|{}|{before_move}", target_max + 1).as_str()),
         "move preserves id and other fields, appends at MAX(sort_order)+1, and does not bump updated_at; out={moved}"
     );
@@ -461,7 +401,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&act_exact)
     ));
     assert_eq!(
-        scalar(&source_count).as_deref(),
+        source_count.scalar().as_deref(),
         Some("0"),
         "moved row leaves source session"
     );
@@ -488,7 +428,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         sql_lit(&act_title)
     ));
     assert_eq!(
-        scalar(&title_row).as_deref(),
+        title_row.scalar().as_deref(),
         Some("Fresh POI Lock Title|<NULL>"),
         "title change must clear a stale poi_id; out={title_row}"
     );

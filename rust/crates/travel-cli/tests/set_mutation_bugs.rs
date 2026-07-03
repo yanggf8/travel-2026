@@ -19,79 +19,28 @@
 //! SELECT to assert, tear down. Skips cleanly when Turso creds are absent.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; returns Some(stdout) on success, None on a credless skip,
-/// panics on a real failure.
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping set-mutation Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, seed_plan, teardown_plan, Guard};
 
 /// Seed only `plans` + `plan_metadata` — a hand-scaffolded plan with NO
 /// flight_legs / hotels / days / timesofday / activities skeleton rows.
 /// Returns false on a credless skip.
 fn seed_bare(plan_id: &str, dest: &str) -> bool {
-    let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}');"
-    );
-    db_exec(&sql).is_some()
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
+    true
 }
 
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM hotel_access_lines WHERE plan_id = '{plan_id}'; \
-         DELETE FROM hotels WHERE plan_id = '{plan_id}'; \
-         DELETE FROM airport_transfer_candidates WHERE plan_id = '{plan_id}'; \
-         DELETE FROM airport_transfers WHERE plan_id = '{plan_id}'; \
-         DELETE FROM flight_legs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM day_route_segments WHERE plan_id = '{plan_id}'; \
-         DELETE FROM activities WHERE plan_id = '{plan_id}'; \
-         DELETE FROM timesofday WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+fn teardown(plan_id: &str, dest: &str) {
+    teardown_plan(plan_id, dest);
 }
 
 /// Run a `travel` subcommand with TRAVEL_PLAN_ID set. Returns (ok, stdout, stderr).
 fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -108,7 +57,7 @@ fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
 /// resolve the plan via the resolver ladder, not a hardcoded env-or-test-plan
 /// default). Returns (ok, stdout, stderr).
 fn run_cmd_no_env(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env_remove("TRAVEL_PLAN_ID")
         .output()
@@ -122,12 +71,9 @@ fn run_cmd_no_env(args: &[&str]) -> (bool, String, String) {
 
 /// COUNT(*) helper. Returns the integer count, or None on a credless skip.
 fn count(sql: &str) -> Option<i64> {
-    let out = db_exec(sql)?;
-    // db exec renders `SELECT COUNT(*) AS n ...` as `n: <count>`.
-    let n = out
-        .lines()
-        .find_map(|l| l.strip_prefix("n: "))
-        .map(|s| s.trim().parse::<i64>().unwrap_or(-1))
+    let n = db_exec(sql)?
+        .scalar()
+        .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
     Some(n)
 }
@@ -137,11 +83,11 @@ fn count(sql: &str) -> Option<i64> {
 fn set_flight_persists_on_fresh_plan() {
     let tag = nanos();
     let plan_id = format!("test-setbug-flight-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugflight_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -161,7 +107,7 @@ fn set_flight_persists_on_fresh_plan() {
     ));
     let flight = db_exec(&format!(
         "SELECT flight_number FROM flight_legs WHERE plan_id = '{plan_id}' AND direction = 'outbound'"
-    ));
+    )).map(|rows| rows.raw().to_string());
 
     assert!(ok, "set-flight should succeed on a fresh plan; stdout={stdout} stderr={stderr}");
     assert_eq!(row_count, Some(1), "an outbound flight_legs row must be persisted");
@@ -179,11 +125,11 @@ fn set_flight_persists_on_fresh_plan() {
 fn set_flight_shared_airline_hits_both_legs_and_persists() {
     let tag = nanos();
     let plan_id = format!("test-setbug-flightshared-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugflsh_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -218,7 +164,7 @@ fn set_flight_shared_airline_hits_both_legs_and_persists() {
         "SELECT flight_number, airline FROM flight_legs \
          WHERE plan_id = '{plan_id}' AND direction = 'return'"
     )) {
-        Some(r) => r,
+        Some(r) => r.raw().to_string(),
         None => return,
     };
     assert!(ret.contains("CI121"), "return leg flight number updated; got {ret}");
@@ -233,11 +179,11 @@ fn set_flight_shared_airline_hits_both_legs_and_persists() {
 fn set_hotel_persists_on_fresh_plan() {
     let tag = nanos();
     let plan_id = format!("test-setbug-hotel-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbughotel_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -256,7 +202,7 @@ fn set_hotel_persists_on_fresh_plan() {
     ));
     let name = db_exec(&format!(
         "SELECT name FROM hotels WHERE plan_id = '{plan_id}'"
-    ));
+    )).map(|rows| rows.raw().to_string());
     let access_count = count(&format!(
         "SELECT COUNT(*) AS n FROM hotel_access_lines WHERE plan_id = '{plan_id}'"
     ));
@@ -278,11 +224,11 @@ fn set_hotel_persists_on_fresh_plan() {
 fn set_hotel_access_only_preserves_scalars() {
     let tag = nanos();
     let plan_id = format!("test-setbug-hotelacc-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbughotelacc_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -308,7 +254,7 @@ fn set_hotel_access_only_preserves_scalars() {
     let row = match db_exec(&format!(
         "SELECT name, check_in FROM hotels WHERE plan_id = '{plan_id}'"
     )) {
-        Some(r) => r,
+        Some(r) => r.raw().to_string(),
         None => return,
     };
     assert!(row.contains("Hotel Collective"), "name preserved after access-only; got {row}");
@@ -331,11 +277,11 @@ fn set_hotel_access_only_preserves_scalars() {
 fn set_flight_accepts_dest_flag() {
     let tag = nanos();
     let plan_id = format!("test-setbug-fdest-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugfdest_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -360,11 +306,11 @@ fn set_flight_accepts_dest_flag() {
 fn set_airport_transfer_persists_on_fresh_plan() {
     let tag = nanos();
     let plan_id = format!("test-setbug-xfer-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugxfer_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -384,7 +330,7 @@ fn set_airport_transfer_persists_on_fresh_plan() {
     let title = db_exec(&format!(
         "SELECT selected_title FROM airport_transfers \
          WHERE plan_id = '{plan_id}' AND direction = 'arrival'"
-    ));
+    )).map(|rows| rows.raw().to_string());
 
     assert!(
         ok && !stderr.contains("unknown argument: --dest"),
@@ -406,11 +352,11 @@ fn set_airport_transfer_persists_on_fresh_plan() {
 fn set_day_theme_fails_loud_when_day_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-theme-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugtheme_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -444,11 +390,11 @@ fn set_day_theme_fails_loud_when_day_missing() {
 fn set_day_theme_persists_and_preserves_zh() {
     let tag = nanos();
     let plan_id = format!("test-setbug-themeok-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugthemeok_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -479,7 +425,7 @@ fn set_day_theme_persists_and_preserves_zh() {
     let row = match db_exec(&format!(
         "SELECT theme, theme_zh FROM days WHERE plan_id = '{plan_id}' AND day_number = 1"
     )) {
-        Some(r) => r,
+        Some(r) => r.raw().to_string(),
         None => return,
     };
     assert!(row.contains("Explore Naha"), "theme persisted; got {row}");
@@ -491,7 +437,7 @@ fn set_day_theme_persists_and_preserves_zh() {
     let row2 = match db_exec(&format!(
         "SELECT theme, theme_zh FROM days WHERE plan_id = '{plan_id}' AND day_number = 1"
     )) {
-        Some(r) => r,
+        Some(r) => r.raw().to_string(),
         None => return,
     };
     assert!(row2.contains("Naha Day"), "theme updated; got {row2}");
@@ -506,11 +452,11 @@ fn set_day_theme_persists_and_preserves_zh() {
 fn set_tod_focus_fails_loud_when_session_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-tod-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugtod_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -541,11 +487,11 @@ fn set_tod_focus_fails_loud_when_session_missing() {
 fn set_route_segment_fails_loud_when_day_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-route-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugroute_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -588,11 +534,11 @@ fn set_route_segment_fails_loud_when_day_missing() {
 fn set_activity_time_fails_loud_when_activity_missing() {
     let tag = nanos();
     let plan_id = format!("test-setbug-act-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugact_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -626,11 +572,11 @@ fn set_activity_time_fails_loud_when_activity_missing() {
 fn set_flight_honors_plan_id_flag() {
     let tag = nanos();
     let plan_id = format!("test-setbug-planid-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugplanid_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -662,11 +608,11 @@ fn set_flight_honors_plan_id_flag() {
 fn set_route_segment_honors_plan_id_flag() {
     let tag = nanos();
     let plan_id = format!("test-setbug-rsegplanid-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("setbugrsegplanid_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed_bare(&plan_id, &dest) {
         return;
     }
@@ -729,13 +675,10 @@ fn set_flight_fails_loud_for_unknown_plan_id() {
     if let Some(n) = leaked {
         if n > 0 {
             // Clean up any stray write so the assertion failure doesn't poison the real test plan.
-            let _ = bin()
-                .args([
-                    "db", "exec",
-                    "DELETE FROM flight_legs WHERE plan_id = 'test-set-dates-2026' \
-                     AND flight_number = 'CI120' AND departure_airport = 'TPE' AND arrival_airport = 'OKA'",
-                ])
-                .output();
+            let _ = db_exec_teardown(
+                "DELETE FROM flight_legs WHERE plan_id = 'test-set-dates-2026' \
+                 AND flight_number = 'CI120' AND departure_airport = 'TPE' AND arrival_airport = 'OKA'",
+            );
         }
         assert_eq!(
             n, 0,

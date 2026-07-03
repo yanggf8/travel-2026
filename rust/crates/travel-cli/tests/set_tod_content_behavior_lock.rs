@@ -18,66 +18,30 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, is_credless, nanos, seed_plan, teardown_plan, Guard};
 
 static LOCK: Mutex<()> = Mutex::new(());
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_skip(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
 
 fn sql_lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin()
-        .args(["db", "exec", sql])
-        .output()
-        .expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_skip(&stderr) {
-        eprintln!("skipping set-tod content lock (no Turso creds): {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
-
-fn exec_ok(sql: &str) -> String {
+fn exec_ok(sql: &str) -> common::Rows {
     db_exec(sql).unwrap_or_else(|| panic!("db exec skipped unexpectedly for SQL: {sql}"))
 }
 
 /// Run a mutation command; returns None on a credless mid-test skip.
 fn run_cmd(args: &[&str]) -> Option<(String, String)> {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env_remove("TRAVEL_PLAN_ID")
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if !out.status.success() && is_skip(&stderr) {
+    if !out.status.success() && is_credless(&stderr) {
         eprintln!("skipping set-tod content lock mid-test: {}", stderr.trim());
         return None;
     }
@@ -91,14 +55,14 @@ fn run_cmd(args: &[&str]) -> Option<(String, String)> {
 /// Run a command expected to FAIL (non-zero exit); returns (stdout, stderr).
 /// Distinguishes a real refusal from a credless skip.
 fn run_cmd_expect_fail(args: &[&str]) -> Option<(String, String)> {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env_remove("TRAVEL_PLAN_ID")
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if is_skip(&stderr) {
+    if is_credless(&stderr) {
         eprintln!("skipping set-tod content lock mid-test: {}", stderr.trim());
         return None;
     }
@@ -109,36 +73,8 @@ fn run_cmd_expect_fail(args: &[&str]) -> Option<(String, String)> {
     Some((stdout, stderr))
 }
 
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
-}
-
 fn teardown(plan: &str, dest: &str) {
-    let p = sql_lit(plan);
-    let d = sql_lit(dest);
-    let _ = db_exec(&format!(
-        "DELETE FROM session_meals WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM session_activities_zh WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM cascade_dirty_flags WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM process_statuses WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM plan_event_data WHERE plan_id = {p}; \
-         DELETE FROM plan_events WHERE plan_id = {p}; \
-         DELETE FROM operation_runs WHERE plan_id = {p}; \
-         DELETE FROM timesofday WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM days WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM plan_metadata WHERE plan_id = {p}; \
-         DELETE FROM plans WHERE plan_id = {p};"
-    ));
+    teardown_plan(plan, dest);
 }
 
 /// Seed a plan + plan_metadata + a scaffolded day 1 with the four sessions
@@ -147,10 +83,12 @@ fn teardown(plan: &str, dest: &str) {
 fn seed(plan: &str, dest: &str) -> bool {
     let p = sql_lit(plan);
     let d = sql_lit(dest);
+    if db_exec("SELECT 1 AS n").is_none() {
+        return false;
+    }
+    seed_plan(plan, dest, 0);
     db_exec(&format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ({p}, '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) VALUES ({p}, '4.2.0', {d}); \
-         INSERT INTO days (plan_id, destination, day_number, date, day_type, status, updated_at) \
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type, status, updated_at) \
            VALUES ({p}, {d}, 1, '2026-09-01', 'full', 'draft', '2020-01-01 00:00:00'); \
          INSERT INTO timesofday (plan_id, destination, day_number, session_type, updated_at) \
            VALUES ({p}, {d}, 1, 'morning', '2020-01-01 00:00:00'); \
@@ -182,14 +120,14 @@ fn assert_audit(
         "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&count).as_deref(),
+        count.scalar().as_deref(),
         Some(expected_count.to_string().as_str()),
         "operation_runs total count after {command_type}"
     );
 
     let version = exec_ok(&format!("SELECT version AS v FROM plans WHERE plan_id = {p}"));
     assert_eq!(
-        scalar(&version).as_deref(),
+        version.scalar().as_deref(),
         Some(expected_version.to_string().as_str()),
         "plans.version after {command_type}"
     );
@@ -200,7 +138,7 @@ fn assert_audit(
         "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id = {p} AND command_type = {cmd}"
     ));
     assert_eq!(
-        scalar(&cmd_count).as_deref(),
+        cmd_count.scalar().as_deref(),
         Some(cmd_type_rows.to_string().as_str()),
         "operation_runs row count for {command_type}"
     );
@@ -211,7 +149,7 @@ fn assert_audit(
          ORDER BY version_after DESC LIMIT 1"
     ));
     assert_eq!(
-        scalar(&row).as_deref(),
+        row.scalar().as_deref(),
         Some(format!("{}>{expected_version}|completed", expected_version - 1).as_str()),
         "latest completed operation row for {command_type} records the +1 bump; out={row}"
     );
@@ -266,7 +204,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'morning'"
     ));
     assert_eq!(
-        scalar(&focus_row).as_deref(),
+        focus_row.scalar().as_deref(),
         Some("Naha castle morning|那霸城早晨"),
         "set-tod-focus --zh must write both focus and focus_zh; out={focus_row}"
     );
@@ -277,7 +215,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'noon'"
     ));
     assert_eq!(
-        scalar(&noon_focus).as_deref(),
+        noon_focus.scalar().as_deref(),
         Some("<NULL>|<NULL>"),
         "focus edit is scoped to its session; out={noon_focus}"
     );
@@ -307,7 +245,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'morning'"
     ));
     assert_eq!(
-        scalar(&range_row).as_deref(),
+        range_row.scalar().as_deref(),
         Some("08:30|11:45"),
         "set-tod-time-range must write both time_range_start and time_range_end; out={range_row}"
     );
@@ -321,7 +259,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'noon'"
     ));
     assert_eq!(
-        scalar(&before_guard).as_deref(),
+        before_guard.scalar().as_deref(),
         Some("<NULL>|<NULL>"),
         "noon range starts empty; out={before_guard}"
     );
@@ -346,7 +284,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'noon'"
     ));
     assert_eq!(
-        scalar(&after_guard).as_deref(),
+        after_guard.scalar().as_deref(),
         Some("<NULL>|<NULL>"),
         "missing --end must write nothing to the noon range; out={after_guard}"
     );
@@ -384,7 +322,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'afternoon'"
     ));
     assert_eq!(
-        scalar(&zh_scalars).as_deref(),
+        zh_scalars.scalar().as_deref(),
         Some(format!("午後行程|安里駅 {arrow} 赤嶺駅").as_str()),
         "set-tod-zh must write focus_zh + transit_notes_zh; out={zh_scalars}"
     );
@@ -394,7 +332,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'afternoon' ORDER BY sort_order"
     ));
     assert_eq!(
-        column(&zh_acts),
+        zh_acts.column(),
         vec!["0=首里城".to_string(), "1=國際通".to_string()],
         "session_activities_zh holds exactly the two --activity-zh values in order 0,1; out={zh_acts}"
     );
@@ -404,7 +342,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'afternoon'"
     ));
     assert_eq!(
-        scalar(&meals_after_zh).as_deref(),
+        meals_after_zh.scalar().as_deref(),
         Some("0"),
         "set-tod-zh must not write session_meals; out={meals_after_zh}"
     );
@@ -430,7 +368,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'afternoon'"
     ));
     assert_eq!(
-        scalar(&zh_acts_cleared).as_deref(),
+        zh_acts_cleared.scalar().as_deref(),
         Some("0"),
         "--clear-activities removes all session_activities_zh rows; out={zh_acts_cleared}"
     );
@@ -460,7 +398,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
            AND day_number = 1 AND session_type = 'noon' ORDER BY sort_order"
     ));
     assert_eq!(
-        column(&meals),
+        meals.column(),
         vec!["0=Lunch: soba".to_string(), "1=Snack: sata andagi".to_string()],
         "session_meals holds exactly the two --meal values in order 0,1; out={meals}"
     );
@@ -470,7 +408,7 @@ fn set_tod_content_command_family_write_surface_is_locked() {
         "SELECT COUNT(*) AS n FROM session_activities_zh WHERE plan_id = {p} AND destination = {d}"
     ));
     assert_eq!(
-        scalar(&zh_acts_after_meals).as_deref(),
+        zh_acts_after_meals.scalar().as_deref(),
         Some("0"),
         "set-meals must not write session_activities_zh; out={zh_acts_after_meals}"
     );

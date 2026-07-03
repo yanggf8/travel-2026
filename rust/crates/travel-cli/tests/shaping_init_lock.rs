@@ -14,29 +14,16 @@
 use std::process::Command;
 use std::sync::Mutex;
 
-const BIN: &str = env!("CARGO_BIN_EXE_travel");
+mod common;
+use common::{bin, db_exec, db_exec_teardown, is_credless, is_transient, Guard};
 
 // Serialize this file's cases (each mints a second-granularity run id).
 static INIT_LOCK: Mutex<()> = Mutex::new(());
 
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn is_transient(stderr: &str) -> bool {
-    stderr.contains("Network is unreachable")
-        || stderr.contains("error trying to connect")
-        || stderr.contains("connection reset")
-        || stderr.contains("connection closed")
-}
-
 /// Run the binary; None ⇒ credless (skip). Retries transient network errors.
 fn run(args: &[&str]) -> Option<(bool, String, String)> {
     for attempt in 0..6 {
-        let out = Command::new(BIN).args(args).output().expect("spawn travel");
+        let out = Command::new(bin()).args(args).output().expect("spawn travel");
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         if !out.status.success() && is_credless(&stderr) {
@@ -73,52 +60,13 @@ fn run_init(args: &[&str]) -> Option<String> {
     panic!("shaping-init kept colliding on run id");
 }
 
-/// db exec helper; None ⇒ credless. Retries transient network errors.
-fn db_exec(sql: &str) -> Option<String> {
-    for attempt in 0..6 {
-        let out = Command::new(BIN)
-            .args(["db", "exec", sql])
-            .output()
-            .expect("spawn travel db exec");
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        if !out.status.success() && is_credless(&stderr) {
-            return None;
-        }
-        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
-            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
-            continue;
-        }
-        if !out.status.success() {
-            panic!("db exec failed: {sql}\n{stderr}");
-        }
-        return Some(String::from_utf8_lossy(&out.stdout).to_string());
-    }
-    unreachable!()
-}
-
-/// First `key: value` line's value.
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-/// Every non-empty `key: value` value, in output order.
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
-}
-
 fn sql_lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
 fn cleanup_run(run_id: &str) {
     let r = sql_lit(run_id);
-    let _ = db_exec(&format!(
+    let _ = db_exec_teardown(&format!(
         "DELETE FROM shaping_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM shaping_candidates WHERE run_id = {r}); \
          DELETE FROM shaping_candidates WHERE run_id = {r}; \
          DELETE FROM shaping_scrape_attempts WHERE run_id = {r}; \
@@ -128,17 +76,6 @@ fn cleanup_run(run_id: &str) {
          DELETE FROM shaping_tour_group_offers WHERE run_id = {r}; \
          DELETE FROM shaping_research_runs WHERE run_id = {r};"
     ));
-}
-
-/// Panic-safe teardown guard (mirrors tests/common::Guard; a leaked test row would
-/// pollute shared prod Turso, so teardown must run on panic too).
-struct Guard {
-    run_id: String,
-}
-impl Drop for Guard {
-    fn drop(&mut self) {
-        cleanup_run(&self.run_id);
-    }
 }
 
 #[test]
@@ -179,7 +116,10 @@ fn shaping_init_writes_full_research_surface() {
         eprintln!("skipping shaping-init lock (no Turso creds)");
         return;
     };
-    let _g = Guard { run_id: run_id.clone() };
+    let _g = Guard::new({
+        let run_id = run_id.clone();
+        move || cleanup_run(&run_id)
+    });
     let r = sql_lit(&run_id);
 
     // --- shaping_research_runs: the parent row (origin uppercased, currency TWD, status started) ---
@@ -190,7 +130,7 @@ fn shaping_init_writes_full_research_surface() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&run_row).as_deref(),
+        run_row.scalar().as_deref(),
         Some("TPE|3|2026-06-18|2026-06-20|TWD|31.5|started"),
         "shaping_research_runs parent row; out={run_row}"
     );
@@ -202,7 +142,7 @@ fn shaping_init_writes_full_research_surface() {
     ))
     .unwrap();
     assert_eq!(
-        column(&dests),
+        dests.column(),
         vec!["0:KIX:Osaka (KIX)", "1:NRT:Tokyo (NRT)"],
         "destinations persist in --dest order; out={dests}"
     );
@@ -214,7 +154,7 @@ fn shaping_init_writes_full_research_surface() {
     ))
     .unwrap();
     assert_eq!(
-        column(&durs),
+        durs.column(),
         vec!["6:7", "7:8"],
         "durations persist with duration_days = nights + 1; out={durs}"
     );
@@ -228,7 +168,7 @@ fn shaping_init_writes_full_research_surface() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&rule).as_deref(),
+        rule.scalar().as_deref(),
         Some("budget|max|integer|NULL|NULL|60000|cap per person"),
         "typed shaping rule persists into value_integer (text/date NULL); out={rule}"
     );
@@ -239,7 +179,7 @@ fn shaping_init_writes_full_research_surface() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&attempts_count).as_deref(),
+        attempts_count.scalar().as_deref(),
         Some("4"),
         "one scrape attempt per (2 dests × 2 durations) = 4; out={attempts_count}"
     );
@@ -251,7 +191,7 @@ fn shaping_init_writes_full_research_surface() {
     ))
     .unwrap();
     assert_eq!(
-        column(&attempts),
+        attempts.column(),
         vec![
             "KIX:6:pending:-1:NULL:NULL",
             "KIX:7:pending:-1:NULL:NULL",

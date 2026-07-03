@@ -15,28 +15,13 @@
 //! unchanged.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-const BIN: &str = env!("CARGO_BIN_EXE_travel");
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Transient network blips when many tests open Turso connections at once.
-fn is_transient(stderr: &str) -> bool {
-    stderr.contains("Network is unreachable")
-        || stderr.contains("error trying to connect")
-        || stderr.contains("connection reset")
-        || stderr.contains("connection closed")
-}
+mod common;
+use common::{bin, db_exec, db_exec_teardown, is_credless, is_transient, nanos, Guard};
 
 fn run(args: &[&str]) -> Option<(bool, String, String)> {
     for attempt in 0..6 {
-        let out = Command::new(BIN).args(args).output().expect("spawn travel");
+        let out = Command::new(bin()).args(args).output().expect("spawn travel");
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         if !out.status.success() && is_credless(&stderr) {
@@ -51,31 +36,8 @@ fn run(args: &[&str]) -> Option<(bool, String, String)> {
     unreachable!()
 }
 
-fn db_exec(sql: &str) -> Option<String> {
-    for attempt in 0..6 {
-        let out = Command::new(BIN)
-            .args(["db", "exec", sql])
-            .output()
-            .expect("spawn travel db exec");
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        if !out.status.success() && is_credless(&stderr) {
-            return None;
-        }
-        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
-            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
-            continue;
-        }
-        if !out.status.success() {
-            panic!("db exec failed: {sql}\n{stderr}");
-        }
-        return Some(String::from_utf8_lossy(&out.stdout).to_string());
-    }
-    unreachable!()
-}
-
 fn unique_run_id() -> String {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    format!("shaping-test-{nanos}")
+    format!("shaping-test-{}", nanos())
 }
 
 fn sql_lit(s: &str) -> String {
@@ -84,7 +46,7 @@ fn sql_lit(s: &str) -> String {
 
 fn cleanup(run_id: &str) {
     let r = sql_lit(run_id);
-    let _ = db_exec(&format!(
+    let _ = db_exec_teardown(&format!(
         "DELETE FROM shaping_tour_group_offers WHERE run_id = {r}; \
          DELETE FROM shaping_research_runs WHERE run_id = {r};"
     ));
@@ -164,6 +126,11 @@ async fn errors_when_run_does_not_exist() {
 #[tokio::test]
 async fn shows_empty_result_cleanly_when_no_offers_exist() {
     let run_id = unique_run_id();
+    cleanup(&run_id);
+    let _g = Guard::new({
+        let run_id = run_id.clone();
+        move || cleanup(&run_id)
+    });
     if seed_run(&run_id).is_none() {
         eprintln!("skipping: no Turso credentials");
         return;
@@ -175,7 +142,6 @@ async fn shows_empty_result_cleanly_when_no_offers_exist() {
         lc.contains("no offers") || lc.contains("no tour-group"),
         "expected empty message, got: {stdout}"
     );
-    cleanup(&run_id);
 }
 
 // ── grouping / cheapest-per-(date,kind) ──────────────────────────────
@@ -183,6 +149,11 @@ async fn shows_empty_result_cleanly_when_no_offers_exist() {
 #[tokio::test]
 async fn groups_by_product_kind_and_shows_cheapest_per_date_kind() {
     let run_id = unique_run_id();
+    cleanup(&run_id);
+    let _g = Guard::new({
+        let run_id = run_id.clone();
+        move || cleanup(&run_id)
+    });
     if seed_run(&run_id).is_none() {
         eprintln!("skipping: no Turso credentials");
         return;
@@ -203,13 +174,16 @@ async fn groups_by_product_kind_and_shows_cheapest_per_date_kind() {
     assert!(stdout.contains("12,999"), "cheapest FIT 6/21 missing: {stdout}");
     assert!(stdout.contains("26,900"), "cheapest group_tour 6/21 missing: {stdout}");
     assert!(stdout.to_lowercase().contains("okinawa"), "region missing: {stdout}");
-
-    cleanup(&run_id);
 }
 
 #[tokio::test]
 async fn computes_savings_when_both_fit_and_group_tour_exist_same_date() {
     let run_id = unique_run_id();
+    cleanup(&run_id);
+    let _g = Guard::new({
+        let run_id = run_id.clone();
+        move || cleanup(&run_id)
+    });
     if seed_run(&run_id).is_none() {
         eprintln!("skipping: no Turso credentials");
         return;
@@ -224,13 +198,16 @@ async fn computes_savings_when_both_fit_and_group_tour_exist_same_date() {
         stdout.contains("10,099") || lc.contains("savings") || lc.contains("cheaper"),
         "expected savings, got: {stdout}"
     );
-
-    cleanup(&run_id);
 }
 
 #[tokio::test]
 async fn filters_by_dest_region() {
     let run_id = unique_run_id();
+    cleanup(&run_id);
+    let _g = Guard::new({
+        let run_id = run_id.clone();
+        move || cleanup(&run_id)
+    });
     if seed_run(&run_id).is_none() {
         eprintln!("skipping: no Turso credentials");
         return;
@@ -241,8 +218,6 @@ async fn filters_by_dest_region() {
     let (_ok, stdout, _se) = run(&["shaping-baseline", "--run", &run_id, "--dest-region", "okinawa"]).unwrap();
     assert!(stdout.contains("11,900"), "okinawa price missing: {stdout}");
     assert!(!stdout.contains("22,888"), "kansai price should be filtered out: {stdout}");
-
-    cleanup(&run_id);
 }
 
 // Agent-first: shaping-baseline emits plain text only (the --json output was
@@ -250,6 +225,11 @@ async fn filters_by_dest_region() {
 #[tokio::test]
 async fn baseline_plain_text_shows_prices_and_savings() {
     let run_id = unique_run_id();
+    cleanup(&run_id);
+    let _g = Guard::new({
+        let run_id = run_id.clone();
+        move || cleanup(&run_id)
+    });
     if seed_run(&run_id).is_none() {
         eprintln!("skipping: no Turso credentials");
         return;
@@ -269,6 +249,4 @@ async fn baseline_plain_text_shows_prices_and_savings() {
     assert!(stdout.contains("2026-06-18"), "depart date missing: {stdout}");
     // And it must NOT be JSON.
     assert!(!stdout.trim_start().starts_with('{'), "output must be plain text, not JSON: {stdout}");
-
-    cleanup(&run_id);
 }
