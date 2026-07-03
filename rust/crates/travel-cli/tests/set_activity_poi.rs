@@ -14,52 +14,19 @@
 //! SELECT to assert, tear down. Skips cleanly when Turso creds are absent.
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, nanos, seed_plan, teardown_plan, Guard};
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; returns Some(stdout) on success, None on a credless skip,
-/// panics on a real failure.
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping set-activity-poi Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
-
-/// Seed `plans` + `plan_metadata` + a `days` row + activities + one POI.
+/// Seed a `days` row + activities + one POI.
 /// Returns false on a credless skip.
 fn seed(plan_id: &str, dest: &str) -> bool {
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}'); \
-         INSERT INTO days (plan_id, destination, day_number, date, day_type) \
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type) \
            VALUES ('{plan_id}', '{dest}', 2, '2026-06-13', 'full'); \
          INSERT INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title) \
            VALUES ('{plan_id}-a1', '{plan_id}', '{dest}', 2, 'morning', 0, \
@@ -74,22 +41,13 @@ fn seed(plan_id: &str, dest: &str) -> bool {
 }
 
 fn teardown(plan_id: &str, dest: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM activities WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM destination_pois WHERE slug = '{dest}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+    teardown_plan(plan_id, dest);
+    let _ = db_exec_teardown(&format!("DELETE FROM destination_pois WHERE slug = '{dest}';"));
 }
 
 /// Run a `travel` subcommand with TRAVEL_PLAN_ID set. Returns (ok, stdout, stderr).
 fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -103,11 +61,9 @@ fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
 
 /// COUNT(*) helper. Returns the integer count, or None on a credless skip.
 fn count(sql: &str) -> Option<i64> {
-    let out = db_exec(sql)?;
-    let n = out
-        .lines()
-        .find_map(|l| l.strip_prefix("n: "))
-        .map(|s| s.trim().parse::<i64>().unwrap_or(-1))
+    let n = db_exec(sql)?
+        .scalar()
+        .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
     Some(n)
 }
@@ -135,12 +91,14 @@ fn set_activity_poi_links_by_id_with_match_disambiguator() {
     let linked = db_exec(&format!(
         "SELECT poi_id FROM activities \
          WHERE plan_id = '{plan_id}' AND id = '{plan_id}-a1'"
-    ));
+    ))
+    .map(|rows| rows.raw().to_string());
     // The OTHER day-2-morning activity (Kinjo) must remain unlinked.
     let other = db_exec(&format!(
         "SELECT poi_id FROM activities \
          WHERE plan_id = '{plan_id}' AND id = '{plan_id}-a2'"
-    ));
+    ))
+    .map(|rows| rows.raw().to_string());
     let audit = count(&format!(
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan_id}' AND command_type = 'set-activity-poi' AND status = 'completed'"

@@ -5,30 +5,15 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, is_transient, nanos, Guard};
 
-const BIN: &str = env!("CARGO_BIN_EXE_travel");
 static LOCK: Mutex<()> = Mutex::new(());
-
-fn is_credless(s: &str) -> bool {
-    s.contains("turso auth login")
-        || s.contains("Missing Turso")
-        || s.contains("failed to connect to Turso")
-        || s.contains("TRAVEL_TURSO")
-}
-fn is_transient(s: &str) -> bool {
-    s.contains("Network is unreachable")
-        || s.contains("error trying to connect")
-        || s.contains("connection reset")
-        || s.contains("connection closed")
-}
 
 fn run(args: &[&str]) -> Option<(bool, String, String)> {
     for attempt in 0..6 {
-        let out = Command::new(BIN).args(args).output().expect("spawn travel");
+        let out = Command::new(bin()).args(args).output().expect("spawn travel");
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         if !out.status.success() && is_credless(&stderr) {
@@ -41,29 +26,6 @@ fn run(args: &[&str]) -> Option<(bool, String, String)> {
         return Some((out.status.success(), stdout, stderr));
     }
     unreachable!()
-}
-
-fn db_exec(sql: &str) -> Option<String> {
-    for attempt in 0..6 {
-        let out = Command::new(BIN).args(["db", "exec", sql]).output().expect("db exec");
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        if !out.status.success() && is_credless(&stderr) {
-            return None;
-        }
-        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
-            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
-            continue;
-        }
-        if !out.status.success() {
-            panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-        }
-        return Some(String::from_utf8_lossy(&out.stdout).to_string());
-    }
-    unreachable!()
-}
-
-fn nanos() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
 }
 
 fn seed(run_id: &str) {
@@ -115,7 +77,7 @@ fn seed(run_id: &str) {
 
 fn teardown(run_id: &str) {
     let r = format!("'{run_id}'");
-    let _ = db_exec(&format!(
+    let _ = db_exec_teardown(&format!(
         "DELETE FROM shaping_tour_group_offers WHERE run_id = {r}; \
          DELETE FROM shaping_candidates WHERE run_id = {r}; \
          DELETE FROM shaping_rules WHERE run_id = {r}; \

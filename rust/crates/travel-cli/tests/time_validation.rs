@@ -12,53 +12,20 @@
 //! `test-timeval-*` + a nanosecond tag, removed in teardown.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; Some(stdout) on success, None on a credless skip, panic on a
-/// real failure.
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping time-validation Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, db_exec_teardown, nanos, seed_plan, teardown_plan, Guard};
 
 /// Seed a plan with a day 1, a `morning` timesofday session, and one activity
 /// titled "checkout" so set-activity-time can resolve it. Returns false on a
 /// credless skip.
 fn seed_full(plan_id: &str, dest: &str) -> bool {
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}'); \
-         INSERT INTO days (plan_id, destination, day_number, date, day_type, updated_at) \
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type, updated_at) \
            VALUES ('{plan_id}', '{dest}', 1, '2026-06-12', 'full', datetime('now')); \
          INSERT INTO timesofday (plan_id, destination, day_number, session_type, updated_at) \
            VALUES ('{plan_id}', '{dest}', 1, 'morning', datetime('now')); \
@@ -68,35 +35,16 @@ fn seed_full(plan_id: &str, dest: &str) -> bool {
     db_exec(&sql).is_some()
 }
 
-/// Seed only plans + plan_metadata (for set-flight, which upserts a leg).
-fn seed_bare(plan_id: &str, dest: &str) -> bool {
-    let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}');"
-    );
-    db_exec(&sql).is_some()
-}
-
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM flight_legs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM activity_tags WHERE activity_id LIKE '{plan_id}%'; \
-         DELETE FROM activities WHERE plan_id = '{plan_id}'; \
-         DELETE FROM timesofday WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+fn teardown(plan_id: &str, dest: &str) {
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM activity_tags WHERE activity_id LIKE '{plan_id}%';"
+    ));
+    teardown_plan(plan_id, dest);
 }
 
 /// Run a `travel` subcommand with TRAVEL_PLAN_ID set. Returns (ok, stdout, stderr).
 fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -110,11 +58,9 @@ fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
 
 /// COUNT(*) helper. Returns the integer count, or None on a credless skip.
 fn count(sql: &str) -> Option<i64> {
-    let out = db_exec(sql)?;
-    let n = out
-        .lines()
-        .find_map(|l| l.strip_prefix("n: "))
-        .map(|s| s.trim().parse::<i64>().unwrap_or(-1))
+    let n = db_exec(sql)?
+        .scalar()
+        .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
     Some(n)
 }
@@ -129,8 +75,8 @@ fn set_activity_time_rejects_bad_time_writes_nothing() {
         return;
     }
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
 
     // 1. Bad time → non-zero, actionable error, NOTHING written.
@@ -144,7 +90,8 @@ fn set_activity_time_rejects_bad_time_writes_nothing() {
     ));
     let start_after_bad = db_exec(&format!(
         "SELECT start_time FROM activities WHERE plan_id = '{plan_id}' AND id = '{plan_id}-act1'"
-    ));
+    ))
+    .map(|rows| rows.raw().to_string());
 
     // 2. Good time → succeeds and persists.
     let (ok_good, _o2, e2) = run_cmd(
@@ -153,7 +100,8 @@ fn set_activity_time_rejects_bad_time_writes_nothing() {
     );
     let start_after_good = db_exec(&format!(
         "SELECT start_time FROM activities WHERE plan_id = '{plan_id}' AND id = '{plan_id}-act1'"
-    ));
+    ))
+    .map(|rows| rows.raw().to_string());
 
     assert!(
         !ok,
@@ -192,8 +140,8 @@ fn set_activity_time_rejects_start_after_end() {
         return;
     }
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
 
     let (ok, _stdout, stderr) = run_cmd(
@@ -226,8 +174,8 @@ fn add_activity_rejects_bad_time_writes_nothing() {
         return;
     }
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
 
     // Bad time → non-zero, no new activity row.
@@ -282,8 +230,8 @@ fn set_tod_time_range_validates_times() {
         return;
     }
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
 
     // Bad start.
@@ -309,7 +257,8 @@ fn set_tod_time_range_validates_times() {
     let stored = db_exec(&format!(
         "SELECT time_range_start, time_range_end FROM timesofday \
          WHERE plan_id = '{plan_id}' AND day_number = 1 AND session_type = 'morning'"
-    ));
+    ))
+    .map(|rows| rows.raw().to_string());
 
     assert!(!ok_bad, "bad --start must exit non-zero; stderr={e_bad}");
     assert!(e_bad.contains("--start") && e_bad.contains("8am"), "got: {e_bad}");
@@ -335,12 +284,13 @@ fn set_flight_validates_dep_arr_times() {
     let tag = nanos();
     let plan_id = format!("test-timeval-flight-{tag}");
     let dest = format!("timevalflight_{tag}");
-    if !seed_bare(&plan_id, &dest) {
+    if db_exec("SELECT 1").is_none() {
         return;
     }
+    seed_plan(&plan_id, &dest, 0);
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
     });
 
     // Bad --dep → non-zero, no leg row.
@@ -366,7 +316,8 @@ fn set_flight_validates_dep_arr_times() {
     );
     let dep_after_good = db_exec(&format!(
         "SELECT departure_time FROM flight_legs WHERE plan_id = '{plan_id}' AND direction = 'outbound'"
-    ));
+    ))
+    .map(|rows| rows.raw().to_string());
 
     assert!(!ok_bad, "bad --dep must exit non-zero; stderr={e_bad}");
     assert!(e_bad.contains("--dep") && e_bad.contains("9am"), "got: {e_bad}");

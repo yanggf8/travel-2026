@@ -8,66 +8,13 @@
 //! SELECT to assert, tear down. Skips cleanly when Turso creds are absent.
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; returns Some(stdout) on success, None on a credless skip,
-/// panics on a real failure.
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping share-token Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
-
-/// Seed only `plans` + `plan_metadata`. Returns false on a credless skip.
-fn seed_bare(plan_id: &str, dest: &str) -> bool {
-    let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}');"
-    );
-    db_exec(&sql).is_some()
-}
-
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_share_tokens WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
-}
 
 /// Run a `travel` subcommand with TRAVEL_PLAN_ID set. Returns (ok, stdout, stderr).
 fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -81,11 +28,9 @@ fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
 
 /// COUNT(*) helper. Returns the integer count, or None on a credless skip.
 fn count(sql: &str) -> Option<i64> {
-    let out = db_exec(sql)?;
-    let n = out
-        .lines()
-        .find_map(|l| l.strip_prefix("n: "))
-        .map(|s| s.trim().parse::<i64>().unwrap_or(-1))
+    let n = db_exec(sql)?
+        .scalar()
+        .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
     Some(n)
 }
@@ -96,12 +41,14 @@ fn share_token_mints_and_persists_a_view_scope_token() {
     let plan_id = format!("test-sharetoken-{tag}");
     let dest = format!("sharetoken_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
-    if !seed_bare(&plan_id, &dest) {
+    if db_exec("SELECT 1").is_none() {
+        eprintln!("skipping share-token Turso test (no Turso creds)");
         return;
     }
+    seed_plan(&plan_id, &dest, 0);
 
     // `share-token` resolves the plan via TRAVEL_PLAN_ID (set by run_cmd).
     let (ok, stdout, stderr) = run_cmd(&plan_id, &["share-token"]);
@@ -111,7 +58,8 @@ fn share_token_mints_and_persists_a_view_scope_token() {
     ));
     let token_row = db_exec(&format!(
         "SELECT token FROM plan_share_tokens WHERE plan_id = '{plan_id}'"
-    ));
+    ))
+    .map(|rows| rows.raw().to_string());
 
     assert!(ok, "share-token should succeed on a seeded plan; stdout={stdout} stderr={stderr}");
     assert_eq!(

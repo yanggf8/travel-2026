@@ -20,39 +20,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Returns false (credless skip) if the seed fails for missing creds.
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping itinerary-validator Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
 /// Compute today's civil date (UTC) the same way the Rust validator does, so
 /// "past" and "future" are unambiguous regardless of when the suite runs.
@@ -70,13 +38,6 @@ fn today_civil() -> (i64, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m as u32, d as u32)
-}
-
-fn seed_plan(plan_id: &str, dest: &str) -> Option<String> {
-    db_exec(&format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) VALUES ('{plan_id}', '4.2.0', '{dest}');"
-    ))
 }
 
 /// Seed one day + one booking-required activity (pending) with a passed deadline.
@@ -98,23 +59,14 @@ fn seed_day_with_pending_booking(
             duration_min, booking_required, booking_status, book_by, is_fixed_time, priority) \
          VALUES ('{act_id}', '{plan_id}', '{dest}', {day_number}, 'morning', 0, 'teamLab Borderless', \
             120, 1, 'pending', '{book_by}', 0, 'want');"
-    ));
-}
-
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM activities WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+    ))
+    .expect("seed day");
 }
 
 /// Run validate-itinerary for the throwaway plan/dest.
 /// Returns (success/exit0, stdout, stderr).
 fn validate(plan_id: &str, dest: &str) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(["validate-itinerary", "--dest", dest])
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -131,15 +83,17 @@ fn validate(plan_id: &str, dest: &str) -> (bool, String, String) {
 async fn historical_day_passes_past_deadline() {
     let tag = nanos();
     let plan_id = format!("test-validator-past-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("validatorpast_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
+    });
 
-    if seed_plan(&plan_id, &dest).is_none() {
-        return; // credless skip
+    if db_exec("SELECT 1").is_none() {
+        eprintln!("skipping itinerary-validator Turso test (no Turso creds)");
+        return;
     }
+    seed_plan(&plan_id, &dest, 0);
     // Day far in the past (year 2000) with a deadline before that.
     // The validator skips booking-deadline checks for days whose date < today.
     seed_day_with_pending_booking(&plan_id, &dest, 1, "2000-02-13", "2000-02-10");
@@ -160,15 +114,17 @@ async fn historical_day_passes_past_deadline() {
 async fn future_day_fails_passed_deadline() {
     let tag = nanos();
     let plan_id = format!("test-validator-future-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("validatorfuture_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
+    });
 
-    if seed_plan(&plan_id, &dest).is_none() {
-        return; // credless skip
+    if db_exec("SELECT 1").is_none() {
+        eprintln!("skipping itinerary-validator Turso test (no Turso creds)");
+        return;
     }
+    seed_plan(&plan_id, &dest, 0);
     // Day one year in the future relative to the actual run date, but with a
     // book_by deadline one year in the PAST → deadline already passed while the
     // itinerary day is still active/future. This is the TS "active/future day"
