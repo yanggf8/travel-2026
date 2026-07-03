@@ -3,12 +3,11 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use travel_db::repo::{origin, ota_jobs, ota_source_workflow, product_type_inputs};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec_teardown, is_credless, nanos, Guard};
 
 static REPO_WORKFLOW_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -18,27 +17,8 @@ fn repo_workflow_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(err: &str) -> bool {
-    err.contains("turso auth login")
-        || err.contains("Missing Turso")
-        || err.contains("failed to connect to Turso")
-        || err.contains("TRAVEL_TURSO")
-        || err.contains("database URL")
-}
-
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -50,7 +30,7 @@ fn run(args: &[&str]) -> (bool, String, String) {
 }
 
 fn exec_sql(sql: &str) {
-    let _ = bin().args(["db", "exec", sql]).output();
+    let _ = db_exec_teardown(sql);
 }
 
 async fn connect_write() -> Result<libsql::Connection, String> {

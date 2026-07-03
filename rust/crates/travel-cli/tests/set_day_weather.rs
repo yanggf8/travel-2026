@@ -7,33 +7,11 @@
 //! NOT an end-to-end CLI test (fetch-weather hits net + 16d window).
 //! Credless skip; zztest{nanos} ids; panic-safe Guard teardown.
 
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(err: &str) -> bool {
-    err.contains("turso auth login")
-        || err.contains("Missing Turso")
-        || err.contains("failed to connect to Turso")
-        || err.contains("TRAVEL_TURSO")
-        || err.contains("database URL")
-}
+use common::{db_exec_teardown, is_credless, nanos, Guard};
 
 fn exec_sql(sql: &str) {
-    let _ = bin().args(["db", "exec", sql]).output();
+    let _ = db_exec_teardown(sql);
 }
 
 async fn connect_write() -> Result<libsql::Connection, String> {
