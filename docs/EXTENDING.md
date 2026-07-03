@@ -123,9 +123,10 @@ Logical groupings for trip planning:
 > ./bin/travel shaping-init --origin TPE --start 2026-04-01 --end 2026-04-05 \
 >   --dest KIX:"Kyoto via KIX" --nights 4
 >
-> # 2. Scrape offers via chromeport, then import candidates
-> ./bin/chromeport fetch interact "<url>" --source <id> --step ...
-> → ./bin/chromeport parse capture <capture-id> --source <id>
+> # 2. Capture offers via gwebcdb (WSLg), agent-extract, then import candidates
+> cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
+> → python bridge/ota_capture.py --source <id>   # → capture_id
+> → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 > → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 >
 > # 3. Pick a candidate

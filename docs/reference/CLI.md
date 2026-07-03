@@ -36,19 +36,21 @@ The Python scrapers (`scraper:*`, `scrape_date_range.py`, `scrape_google_flights
 **DECOMMISSIONED and archived** under `archive/broken-python-scrapers/` — their URL/region/template
 construction 404s or lands on the wrong page. Do not run them.
 
-Replacement: the Rust **chromeport** CDP driver attaches to a real Chrome (`127.0.0.1:9222`),
-drives the live OTA page, captures plain text → Turso `captures`, then rule-parses → Turso `offers`.
+Replacement: **gwebcdb** on WSLg (`~/b/gwebcdb`) drives the live OTA page in a real Chrome
+(`127.0.0.1:9222`) and captures plain text → Turso `captures`. Extraction is **agent-first**: the
+coding agent reads `captures.raw_text`, emits TSV, then persists normalized `offers` via
+`travel ota write-offers` (there is no in-CLI parser — the `parser_rules`/regex path is retired).
 
 ```bash
-./bin/chromeport fetch interact "<url>" --source <id> --step ...   # drive the live page (or: browser snapshot)
-./bin/chromeport verify <source-id> <capture-id>                  # read-only regex diagnostics
-./bin/chromeport parse capture <capture-id> --source <id>         # rule-parse → import to Turso
-# verify/parse FAIL if the capture's stored source ≠ --source (guards against parsing a
-# capture under the wrong rules). Add --allow-source-override for an intentional re-parse
-# (e.g. re-sourcing an `unknown`-tagged snapshot).
+# from ~/b/gwebcdb (export TURSO_URL/TURSO_TOKEN from this repo's .env first)
+./scripts/start-chrome-cdp-wslg.sh                                # CDP on :9222
+python bridge/navigate.py "<url>"                                 # + form_fill/combo_select for SPAs; settle ~25s
+python bridge/ota_capture.py --source <id> [--url-contains <s>]   # → capture_id; UNREDACTED → captures
+# AGENT reads captures.raw_text, extracts offers, emits TSV, then:
+./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>   # → Turso offers + provenance
 ```
 
-See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper-migration.md`.
+See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-24-ota-migration-chromeport.md`.
 
 ## Turso DB
 ```bash
@@ -64,8 +66,8 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-05-rust-cdp-scraper
 ./bin/travel query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000]
 ./bin/travel check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
 ./bin/travel check-freshness --source besttour --region kansai
-# (the old `db:import:turso` raw-offers loader is retired — the chromeport CDP path now
-#  imports directly to Turso: `./bin/chromeport parse capture <id> --source <id>`. See Scraping.)
+# (the old `db:import:turso` raw-offers loader is retired — the gwebcdb capture + agent
+#  `ota write-offers` path writes offers directly to Turso. See Scraping.)
 ./bin/travel db status                           # show DB state
 ./bin/travel db token-status                      # diagnose Turso creds: which TRAVEL_TURSO_* env vars are set (values never printed) + live read/write probe; prints the export fix + exits 1 on failure
 ./bin/travel db migrate                          # create/upgrade tables (idempotent)
@@ -151,9 +153,10 @@ Explore departure date × destination × flight price together before any plan e
 ./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32] \
   [--shaping ASPECT:ROLE:KIND:VALUE[:NOTES] ...]   # e.g. date:hard_constraint:return_no_later_than:2026-06-27
-# After shaping-init: scrape via chromeport, then import + compare:
-#   ./bin/chromeport fetch interact "<url>" --source <id> --step ...
-#   → ./bin/chromeport parse capture <capture-id> --source <id>
+# After shaping-init: capture via gwebcdb (WSLg), agent-extract, then import + compare:
+#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
+#   → python bridge/ota_capture.py --source <id>   # → capture_id
+#   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id> [--limit N]
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>   # seed new plan with P1/P2
