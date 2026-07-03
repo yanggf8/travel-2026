@@ -7,61 +7,14 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, seed_plan, teardown_plan, Guard};
 
 static SCAFFOLD_ITINERARY_LOCK: Mutex<()> = Mutex::new(());
 
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_travel")
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn db_exec(sql: &str) -> (bool, String, String) {
-    let out = Command::new(bin())
-        .args(["db", "exec", sql])
-        .output()
-        .expect("run db exec");
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-fn exec_ok(sql: &str) -> String {
-    let (ok, out, err) = db_exec(sql);
-    assert!(ok, "db exec failed; err={err}\nsql={sql}");
-    out
-}
-
-fn is_skip(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
+fn exec_ok(sql: &str) -> common::Rows {
+    db_exec(sql).unwrap_or_else(|| panic!("db exec skipped unexpectedly for SQL: {sql}"))
 }
 
 fn sql_lit(s: &str) -> String {
@@ -72,40 +25,18 @@ fn teardown(plan: &str, dest: &str, stale_activity_id: &str) {
     let p = sql_lit(plan);
     let d = sql_lit(dest);
     let a = sql_lit(stale_activity_id);
-    let _ = db_exec(&format!(
+    let _ = db_exec_teardown(&format!(
         "DELETE FROM activity_tags WHERE activity_id = {a}; \
          DELETE FROM activity_tags WHERE activity_id IN \
-            (SELECT id FROM activities WHERE plan_id = {p} AND destination = {d}); \
-         DELETE FROM session_meals WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM session_activities_zh WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM activities WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM timesofday WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM days WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM booking_status WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM flight_legs WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM date_anchors WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM cascade_dirty_flags WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM process_statuses WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM plan_event_data WHERE plan_id = {p}; \
-         DELETE FROM plan_events WHERE plan_id = {p}; \
-         DELETE FROM operation_runs WHERE plan_id = {p}; \
-         DELETE FROM plan_metadata WHERE plan_id = {p}; \
-         DELETE FROM plan_destinations WHERE plan_id = {p}; \
-         DELETE FROM plans WHERE plan_id = {p};"
+            (SELECT id FROM activities WHERE plan_id = {p} AND destination = {d});"
     ));
+    teardown_plan(plan, dest);
 }
 
 fn seed_plan_anchor_and_flights(plan: &str, dest: &str) {
     let p = sql_lit(plan);
     let d = sql_lit(dest);
-    exec_ok(&format!(
-        "INSERT OR REPLACE INTO plans (plan_id, schema_version, version) \
-         VALUES ({p}, '4.2.0', 11)"
-    ));
-    exec_ok(&format!(
-        "INSERT OR REPLACE INTO plan_metadata (plan_id, schema_version, active_destination) \
-         VALUES ({p}, '4.2.0', {d})"
-    ));
+    seed_plan(plan, dest, 11);
     exec_ok(&format!(
         "INSERT OR REPLACE INTO plan_destinations (plan_id, slug, display_name, status) \
          VALUES ({p}, {d}, 'Scaffold Lock', 'draft')"
@@ -203,15 +134,10 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
         .lock()
         .unwrap_or_else(|p| p.into_inner());
 
-    let (ok, _out, err) = db_exec("SELECT 1 AS n");
-    if !ok && is_skip(&err) {
-        eprintln!(
-            "skipping scaffold-itinerary lock (no Turso creds): {}",
-            err.trim()
-        );
+    if db_exec("SELECT 1 AS n").is_none() {
+        eprintln!("skipping scaffold-itinerary lock (no Turso creds)");
         return;
     }
-    assert!(ok, "db exec probe failed; err={err}");
 
     let tag = nanos();
     let plan = format!("zztest-{tag}");
@@ -229,7 +155,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
     seed_stale_itinerary(&plan, &dest, &stale_activity_id);
 
     let (ok, out, err) = run_scaffold(&plan, &dest, false);
-    if !ok && is_skip(&err) {
+    if !ok && is_credless(&err) {
         eprintln!(
             "skipping scaffold-itinerary lock (no Turso creds): {}",
             err.trim()
@@ -259,7 +185,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
             (SELECT COUNT(*) FROM session_activities_zh WHERE plan_id = {p} AND destination = {d} AND day_number = 99) AS v"
     ));
     assert_eq!(
-        scalar(&refusal_rows).as_deref(),
+        refusal_rows.scalar().as_deref(),
         Some("1|1|1|1|1|1"),
         "no-force refusal must not clobber stale itinerary rows; out={refusal_rows}"
     );
@@ -269,13 +195,13 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
             (SELECT version FROM plans WHERE plan_id = {p}) AS v"
     ));
     assert_eq!(
-        scalar(&pre_audit).as_deref(),
+        pre_audit.scalar().as_deref(),
         Some("0|11"),
         "refusal must not audit or bump version; out={pre_audit}"
     );
 
     let (ok, out, err) = run_scaffold(&plan, &dest, true);
-    if !ok && is_skip(&err) {
+    if !ok && is_credless(&err) {
         eprintln!(
             "skipping scaffold-itinerary lock (no Turso creds): {}",
             err.trim()
@@ -297,7 +223,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
             (SELECT COUNT(*) FROM session_activities_zh WHERE plan_id = {p} AND destination = {d}) AS v"
     ));
     assert_eq!(
-        scalar(&stale_counts).as_deref(),
+        stale_counts.scalar().as_deref(),
         Some("0|0|0|0|0|0"),
         "forced scaffold should clear stale child rows and prove activity_tags were cleared before activities; out={stale_counts}"
     );
@@ -308,7 +234,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
          FROM days WHERE plan_id = {p} AND destination = {d} ORDER BY day_number"
     ));
     assert_eq!(
-        column(&days),
+        days.column(),
         vec![
             "1|2026-09-04|arrival|<NULL>|draft|1".to_string(),
             "2|2026-09-05|full|<NULL>|draft|1".to_string(),
@@ -323,7 +249,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
          GROUP BY day_number ORDER BY day_number"
     ));
     assert_eq!(
-        column(&session_counts),
+        session_counts.column(),
         vec!["1:4", "2:4", "3:4"],
         "each inserted day should have four sessions; out={session_counts}"
     );
@@ -337,7 +263,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
     ));
     let arrow = '\u{2192}';
     assert_eq!(
-        column(&sessions),
+        sessions.column(),
         vec![
             format!("1|morning|<NULL>|Arrive OKA 10:45 {arrow} hotel|<NULL>|1"),
             "1|noon|<NULL>|<NULL>|<NULL>|1".to_string(),
@@ -363,7 +289,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
              WHERE plan_id = {p} AND destination = {d} AND process_id = 'process_5_daily_itinerary') AS v"
     ));
     assert_eq!(
-        scalar(&status_dirty).as_deref(),
+        status_dirty.scalar().as_deref(),
         Some("researching|0"),
         "process_statuses and cascade_dirty_flags should land; out={status_dirty}"
     );
@@ -372,7 +298,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
         "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&operation_count).as_deref(),
+        operation_count.scalar().as_deref(),
         Some("1"),
         "one operation run total"
     );
@@ -382,7 +308,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
          FROM operation_runs WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&operation).as_deref(),
+        operation.scalar().as_deref(),
         Some(format!("scaffold-itinerary|{dest} 3 days|11>12|completed").as_str()),
         "operation_runs should record the current scaffold-itinerary audit row; out={operation}"
     );
@@ -390,7 +316,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
         "SELECT version AS v FROM plans WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&version).as_deref(),
+        version.scalar().as_deref(),
         Some("12"),
         "plans.version should bump by one"
     );
@@ -402,7 +328,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
          ORDER BY CASE scope WHEN 'dest_process' THEN 0 ELSE 1 END, sort_order"
     ));
     assert_eq!(
-        column(&events),
+        events.column(),
         vec![
             format!("dest_process|{dest}|process_5_daily_itinerary|0|itinerary_scaffolded|<NULL>><NULL>"),
             "timeline||process_5_daily_itinerary|0|itinerary_scaffolded|<NULL>><NULL>".to_string(),
@@ -417,7 +343,7 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
          ORDER BY CASE scope WHEN 'dest_process' THEN 0 ELSE 1 END, key"
     ));
     assert_eq!(
-        column(&event_data),
+        event_data.column(),
         vec![
             format!("dest_process|{dest}|process_5_daily_itinerary|0|day_types=arrival, full, departure"),
             format!("dest_process|{dest}|process_5_daily_itinerary|0|days_count=3"),

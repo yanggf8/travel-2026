@@ -7,66 +7,18 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, seed_plan, teardown_plan, Guard};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_travel")
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_skip(stderr: &str) -> bool {
-    let s = stderr.to_lowercase();
-    s.contains("turso")
-        || stderr.contains("Missing")
-        || stderr.contains("TRAVEL_TURSO")
-        || s.contains("failed to connect to turso")
-}
-
-fn db_exec(sql: &str) -> (bool, String, String) {
-    let out = Command::new(bin())
-        .args(["db", "exec", sql])
-        .output()
-        .expect("run db exec");
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-fn exec_ok(sql: &str) -> String {
-    let (ok, out, err) = db_exec(sql);
-    assert!(ok, "db exec failed; err={err}\nsql={sql}");
-    out
+fn exec_ok(sql: &str) -> common::Rows {
+    db_exec(sql).unwrap_or_else(|| panic!("db exec skipped unexpectedly for SQL: {sql}"))
 }
 
 fn sql_lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
-}
-
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
 }
 
 fn planned_count(stdout: &str) -> Option<String> {
@@ -80,22 +32,13 @@ fn planned_count(stdout: &str) -> Option<String> {
 fn teardown(plan: &str, dest: &str) {
     let p = sql_lit(plan);
     let d = sql_lit(dest);
-    let _ = db_exec(&format!(
+    let _ = db_exec_teardown(&format!(
         "DELETE FROM activity_tags \
-            WHERE activity_id IN (SELECT id FROM activities WHERE plan_id = {p} AND destination = {d}); \
-         DELETE FROM session_meals WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM session_activities_zh WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM activities WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM timesofday WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM days WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM cascade_dirty_flags WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM process_statuses WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM plan_event_data WHERE plan_id = {p}; \
-         DELETE FROM plan_events WHERE plan_id = {p}; \
-         DELETE FROM operation_runs WHERE plan_id = {p}; \
-         DELETE FROM plan_metadata WHERE plan_id = {p}; \
-         DELETE FROM plans WHERE plan_id = {p}; \
-         DELETE FROM destination_poi_tags WHERE slug = {d}; \
+            WHERE activity_id IN (SELECT id FROM activities WHERE plan_id = {p} AND destination = {d});"
+    ));
+    teardown_plan(plan, dest);
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM destination_poi_tags WHERE slug = {d}; \
          DELETE FROM destination_cluster_pois WHERE slug = {d}; \
          DELETE FROM destination_pois WHERE slug = {d}; \
          DELETE FROM destination_clusters WHERE slug = {d}; \
@@ -105,13 +48,10 @@ fn teardown(plan: &str, dest: &str) {
 }
 
 fn seed_plan_and_destination(plan: &str, dest: &str) {
-    let p = sql_lit(plan);
     let d = sql_lit(dest);
+    seed_plan(plan, dest, 40);
     exec_ok(&format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ({p}, '4.2.0', 40); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ({p}, '4.2.0', {d}); \
-         INSERT INTO destination_config (slug, display_name, ref_id, ref_path, timezone, currency, language, origin) \
+        "INSERT INTO destination_config (slug, display_name, ref_id, ref_path, timezone, currency, language, origin) \
            VALUES ({d}, 'Populate Lock Destination', 'zz-ref', 'turso:destination-ref/populate-lock', \
                    'Asia/Tokyo', 'JPY', 'ja', 'taiwan'); \
          INSERT INTO destination_areas (slug, area_id, name, type, vibe, source_url, fetched_at, confidence) VALUES \
@@ -226,7 +166,7 @@ fn assert_touched_days(plan: &str, dest: &str, expected: &[&str]) {
         sql_lit(dest)
     ));
     assert_eq!(
-        column(&touched),
+        touched.column(),
         expected,
         "touched days should be exact; out={touched}"
     );
@@ -248,7 +188,7 @@ fn assert_activity_order_after_first(plan: &str, dest: &str) {
         sql_lit(dest)
     ));
     assert_eq!(
-        column(&rows),
+        rows.column(),
         vec![
             "2|morning|0|alpha museum|Seed Area|<NULL>|-1|0|<NULL>|-1|<NULL>|want",
             "2|morning|1|Alpha Gallery|Alpha Ward|<NULL>|60|0|<NULL>|-1|Hours: 10:00-18:00|want",
@@ -293,19 +233,15 @@ fn event_rows(plan: &str, scope: &str, destination_filter: &str) -> Vec<String> 
         sql_lit(scope),
         sql_lit(destination_filter)
     ));
-    column(&rows)
+    rows.column()
 }
 
 #[test]
 fn populate_itinerary_locks_current_write_surface() {
     let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-    let (ok, _out, err) = db_exec("SELECT 1 AS n");
-    if !ok && is_skip(&err) {
-        eprintln!(
-            "skipping populate-itinerary behavior lock (no Turso creds): {}",
-            err.trim()
-        );
+    if db_exec("SELECT 1 AS n").is_none() {
+        eprintln!("skipping populate-itinerary behavior lock (no Turso creds)");
         return;
     }
 
@@ -323,7 +259,7 @@ fn populate_itinerary_locks_current_write_surface() {
     seed_itinerary_skeleton(&plan, &dest);
 
     let (ok, out, err) = run_populate(&plan, &[]);
-    if !ok && is_skip(&err) {
+    if !ok && is_credless(&err) {
         eprintln!(
             "skipping populate-itinerary behavior lock (no Turso creds): {}",
             err.trim()
@@ -352,7 +288,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&dest)
     ));
     assert_eq!(
-        column(&tags),
+        tags.column(),
         vec![
             "Alpha Cafe:food",
             "Beta Market:shopping",
@@ -392,7 +328,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&plan)
     ));
     assert_eq!(
-        column(&op),
+        op.column(),
         vec![format!(
             "populate-itinerary|{dest} 6 activities|40>41|completed"
         )],
@@ -402,7 +338,7 @@ fn populate_itinerary_locks_current_write_surface() {
         "SELECT version AS value_text FROM plans WHERE plan_id = {}",
         sql_lit(&plan)
     ));
-    assert_eq!(scalar(&version).as_deref(), Some("41"));
+    assert_eq!(version.scalar().as_deref(), Some("41"));
 
     exec_ok(&format!(
         "UPDATE days SET theme = 'Manual Theme', updated_at = '2000-01-01 00:00:00' \
@@ -438,7 +374,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&dest)
     ));
     assert_eq!(
-        scalar(&manual).as_deref(),
+        manual.scalar().as_deref(),
         Some("Manual Theme|Manual Focus"),
         "non-force run must not overwrite non-empty theme/focus; out={manual}"
     );
@@ -448,7 +384,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&dest)
     ));
     assert_eq!(
-        scalar(&count_after_second).as_deref(),
+        count_after_second.scalar().as_deref(),
         Some("7"),
         "seed + six first-run activities only"
     );
@@ -457,7 +393,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&plan)
     ));
     assert_eq!(
-        scalar(&event_count_after_second).as_deref(),
+        event_count_after_second.scalar().as_deref(),
         Some("15"),
         "empty pending event flush should not create event rows"
     );
@@ -485,7 +421,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&dest)
     ));
     assert_eq!(
-        scalar(&forced).as_deref(),
+        forced.scalar().as_deref(),
         Some("Alpha Cluster|Alpha Cluster"),
         "force run should overwrite non-empty theme/focus; out={forced}"
     );
@@ -499,7 +435,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&dest)
     ));
     assert_eq!(
-        scalar(&final_activity_counts).as_deref(),
+        final_activity_counts.scalar().as_deref(),
         Some("14|1|2"),
         "force should add seven duplicates, including Alpha Museum despite the lowercase seed; out={final_activity_counts}"
     );
@@ -512,7 +448,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&dest)
     ));
     assert_eq!(
-        scalar(&final_tag_count).as_deref(),
+        final_tag_count.scalar().as_deref(),
         Some("10"),
         "first run inserted four tags; force inserted six more"
     );
@@ -550,7 +486,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&plan)
     ));
     assert_eq!(
-        column(&operations),
+        operations.column(),
         vec![
             format!("populate-itinerary|{dest} 6 activities|40>41|completed"),
             format!("populate-itinerary|{dest} 0 activities|41>42|completed"),
@@ -563,7 +499,7 @@ fn populate_itinerary_locks_current_write_surface() {
         sql_lit(&plan)
     ));
     assert_eq!(
-        scalar(&final_version).as_deref(),
+        final_version.scalar().as_deref(),
         Some("43"),
         "final plan version"
     );
