@@ -5,36 +5,17 @@
 
 mod common;
 
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, is_transient, nanos, Guard};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-const BIN: &str = env!("CARGO_BIN_EXE_travel");
 
 static SHAPING_IMPORT_LOCK: Mutex<()> = Mutex::new(());
 
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn is_transient(stderr: &str) -> bool {
-    stderr.contains("Network is unreachable")
-        || stderr.contains("error trying to connect")
-        || stderr.contains("Temporary failure in name resolution")
-        || stderr.contains("dns error")
-        || stderr.contains("connection reset")
-        || stderr.contains("connection closed")
-}
-
 fn run(args: &[&str]) -> Option<(bool, String, String)> {
     for attempt in 0..6 {
-        let out = Command::new(BIN)
+        let out = Command::new(bin())
             .args(args)
             .output()
             .expect("spawn travel binary");
@@ -50,39 +31,6 @@ fn run(args: &[&str]) -> Option<(bool, String, String)> {
         return Some((out.status.success(), stdout, stderr));
     }
     unreachable!()
-}
-
-fn db_exec(sql: &str) -> Option<String> {
-    for attempt in 0..6 {
-        let out = Command::new(BIN)
-            .args(["db", "exec", sql])
-            .output()
-            .expect("spawn travel db exec");
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        if !out.status.success() && is_credless(&stderr) {
-            return None;
-        }
-        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
-            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
-            continue;
-        }
-        if !out.status.success() {
-            panic!("db exec failed: {sql}\n{stderr}");
-        }
-        return Some(String::from_utf8_lossy(&out.stdout).to_string());
-    }
-    unreachable!()
-}
-
-fn db_exec_ignore(sql: &str) {
-    let _ = Command::new(BIN).args(["db", "exec", sql]).output();
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
 }
 
 fn unique_run_id() -> String {
@@ -117,7 +65,7 @@ fn cleanup_run(run_id: &str) {
         format!("DELETE FROM shaping_tour_group_scrape_attempts WHERE run_id = {r};"),
         format!("DELETE FROM shaping_research_runs WHERE run_id = {r};"),
     ] {
-        db_exec_ignore(&sql);
+        let _ = db_exec_teardown(&sql);
     }
 }
 
@@ -264,7 +212,9 @@ async fn imports_candidate_and_flights_then_ranks_run() {
         sql_lit(&run_id),
         sql_lit(&candidate_id)
     ))
-    .unwrap();
+    .unwrap()
+    .raw()
+    .to_string();
     let c = first_row(&candidate);
     assert_eq!(c.get("candidate_id"), Some(&candidate_id));
     assert_eq!(c.get("run_id"), Some(&run_id));
@@ -290,7 +240,9 @@ async fn imports_candidate_and_flights_then_ranks_run() {
          ORDER BY direction",
         sql_lit(&candidate_id)
     ))
-    .unwrap();
+    .unwrap()
+    .raw()
+    .to_string();
     let flight_rows = rows(&flights);
     assert_eq!(
         flight_rows.len(),
@@ -343,7 +295,9 @@ async fn imports_candidate_and_flights_then_ranks_run() {
         "SELECT status FROM shaping_research_runs WHERE run_id = {}",
         sql_lit(&run_id)
     ))
-    .unwrap();
+    .unwrap()
+    .raw()
+    .to_string();
     let run_fields = first_row(&run_row);
     assert_eq!(run_fields.get("status"), Some(&"ranked".to_string()));
 }

@@ -12,68 +12,22 @@
 //! are nanos-tagged throwaways.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; returns Some((stdout, stderr)) on success, None on a credless
-/// skip, panics on a real failure.
-fn db_exec(sql: &str) -> Option<(String, String)> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if out.status.success() {
-        return Some((stdout, stderr));
-    }
-    if is_credless(&stderr) {
-        eprintln!("skipping soft-delete Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
 /// Seed only plans + plan_metadata for a throwaway plan (no date anchor → a
 /// junk-style plan that flags freely). Returns false on a credless skip.
 fn seed_bare(plan_id: &str, dest: &str) -> bool {
-    let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}');"
-    );
-    db_exec(&sql).is_some()
-}
-
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM date_anchors WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+    if db_exec("SELECT 1 AS n").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
+    true
 }
 
 fn run_cmd(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env_remove("TRAVEL_PLAN_ID")
         .output()
@@ -87,7 +41,7 @@ fn run_cmd(args: &[&str]) -> (bool, String, String) {
 
 /// SELECT one scalar via db exec, parsing the `<col>: <value>` plain-text line.
 fn scalar(sql: &str, col: &str) -> Option<String> {
-    let (stdout, _) = db_exec(sql)?;
+    let stdout = db_exec(sql)?.raw().to_string();
     let prefix = format!("{col}: ");
     Some(
         stdout
@@ -108,8 +62,8 @@ fn mark_plan_deleted_soft_deletes_and_hides() {
         return;
     }
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
 
     // Pre-condition: plan lists.
@@ -178,9 +132,11 @@ fn db_exec_zero_row_delete_warns() {
         return;
     }
     let nothing = format!("no-such-plan-{}", nanos());
-    let (stdout, stderr) =
+    let rows =
         db_exec(&format!("DELETE FROM plan_metadata WHERE plan_id = '{nothing}'"))
             .expect("db exec should succeed (0-row delete is not an error)");
+    let stdout = rows.raw().to_string();
+    let stderr = rows.stderr.clone();
     assert!(
         stdout.contains("0 row(s) affected"),
         "0-row mutation must print the count; stdout={stdout}"
@@ -201,8 +157,8 @@ fn db_cleanup_deleted_dry_run_then_wipe() {
         return;
     }
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
 
     // Seed a couple of plan-scoped child rows so there's something to count.

@@ -6,32 +6,15 @@
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-const BIN: &str = env!("CARGO_BIN_EXE_travel");
+use common::{bin, db_exec, db_exec_teardown, is_credless, is_transient, nanos, teardown_plan, Guard};
 
 static CREATE_PLAN_LOCK: Mutex<()> = Mutex::new(());
 
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn is_transient(stderr: &str) -> bool {
-    stderr.contains("Network is unreachable")
-        || stderr.contains("error trying to connect")
-        || stderr.contains("connection reset")
-        || stderr.contains("connection closed")
-}
-
 fn run(args: &[&str]) -> Option<(bool, String, String)> {
     for attempt in 0..6 {
-        let out = Command::new(BIN)
+        let out = Command::new(bin())
             .args(args)
             .output()
             .expect("spawn travel binary");
@@ -49,42 +32,12 @@ fn run(args: &[&str]) -> Option<(bool, String, String)> {
     unreachable!()
 }
 
-fn db_exec(sql: &str) -> Option<String> {
-    for attempt in 0..6 {
-        let out = Command::new(BIN)
-            .args(["db", "exec", sql])
-            .output()
-            .expect("spawn travel db exec");
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        if !out.status.success() && is_credless(&stderr) {
-            return None;
-        }
-        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
-            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
-            continue;
-        }
-        if !out.status.success() {
-            panic!("db exec failed: {sql}\n{stderr}");
-        }
-        return Some(String::from_utf8_lossy(&out.stdout).to_string());
-    }
-    unreachable!()
-}
-
-fn db_exec_ignore(sql: &str) {
-    let _ = Command::new(BIN).args(["db", "exec", sql]).output();
-}
-
 fn sql_lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
 fn unique_tag() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("zztest{nanos}")
+    format!("zztest{}", nanos())
 }
 
 fn rows(stdout: &str) -> Vec<BTreeMap<String, String>> {
@@ -105,14 +58,14 @@ fn rows(stdout: &str) -> Vec<BTreeMap<String, String>> {
 
 fn one_row(sql: &str) -> BTreeMap<String, String> {
     let stdout = db_exec(sql).expect("Turso credentials available");
-    let parsed = rows(&stdout);
+    let parsed = rows(stdout.raw());
     assert_eq!(parsed.len(), 1, "expected one row for {sql}, got: {stdout}");
     parsed.into_iter().next().unwrap()
 }
 
 fn all_rows(sql: &str) -> Vec<BTreeMap<String, String>> {
     let stdout = db_exec(sql).expect("Turso credentials available");
-    rows(&stdout)
+    rows(stdout.raw())
 }
 
 fn count_where(table: &str, where_sql: &str) -> String {
@@ -124,34 +77,12 @@ fn count_where(table: &str, where_sql: &str) -> String {
 
 fn teardown(run_id: &str, plan_id: &str, candidate_id: &str, dest_slug: &str) {
     let r = sql_lit(run_id);
-    let p = sql_lit(plan_id);
     let c = sql_lit(candidate_id);
     let d = sql_lit(dest_slug);
 
+    teardown_plan(plan_id, dest_slug);
+
     for sql in [
-        format!("DELETE FROM plan_event_data WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_events WHERE plan_id = {p};"),
-        format!("DELETE FROM operation_runs WHERE plan_id = {p};"),
-        format!("DELETE FROM event_log_destinations WHERE plan_id = {p};"),
-        format!("DELETE FROM event_log_state WHERE plan_id = {p};"),
-        format!("DELETE FROM process_statuses WHERE plan_id = {p};"),
-        format!("DELETE FROM date_anchors WHERE plan_id = {p};"),
-        format!("DELETE FROM destination_cities WHERE plan_id = {p};"),
-        format!("DELETE FROM destination_details WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_destinations WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_group_meta WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_selection WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_warnings WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_provenance WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_best_value WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_date_pricing WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_flights WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_hotels WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_hotel_access WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offer_includes WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_offers WHERE plan_id = {p};"),
-        format!("DELETE FROM plan_metadata WHERE plan_id = {p};"),
-        format!("DELETE FROM plans WHERE plan_id = {p};"),
         format!("DELETE FROM shaping_candidate_flights WHERE candidate_id = {c};"),
         format!(
             "DELETE FROM shaping_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM shaping_candidates WHERE run_id = {r});"
@@ -177,7 +108,7 @@ fn teardown(run_id: &str, plan_id: &str, candidate_id: &str, dest_slug: &str) {
         format!("DELETE FROM destination_airports WHERE slug = {d};"),
         format!("DELETE FROM destination_config WHERE slug = {d};"),
     ] {
-        db_exec_ignore(&sql);
+        let _ = db_exec_teardown(&sql);
     }
 }
 

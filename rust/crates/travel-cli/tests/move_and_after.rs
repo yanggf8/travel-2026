@@ -9,38 +9,11 @@
 //! the binary, SELECT to assert, tear down. Skips cleanly when creds are absent.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-fn nanos() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
-}
-fn is_credless(s: &str) -> bool {
-    s.contains("turso auth login")
-        || s.contains("Missing Turso data")
-        || s.contains("failed to connect to Turso")
-        || s.contains("TRAVEL_TURSO")
-}
-fn db_exec(sql: &str) -> Option<(String, String)> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run db exec");
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if out.status.success() {
-        return Some((stdout, stderr));
-    }
-    if is_credless(&stderr) {
-        eprintln!("skipping move/after Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, db_exec_teardown, nanos, seed_plan, teardown_plan, Guard};
 fn run_cmd(args: &[&str]) -> (bool, String, String) {
-    let out = bin().args(args).env_remove("TRAVEL_PLAN_ID").output().expect("run travel");
+    let out = Command::new(bin()).args(args).env_remove("TRAVEL_PLAN_ID").output().expect("run travel");
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -48,7 +21,7 @@ fn run_cmd(args: &[&str]) -> (bool, String, String) {
     )
 }
 fn scalar(sql: &str, col: &str) -> Option<String> {
-    let (stdout, _) = db_exec(sql)?;
+    let stdout = db_exec(sql)?.raw().to_string();
     let prefix = format!("{col}: ");
     Some(
         stdout
@@ -61,10 +34,12 @@ fn scalar(sql: &str, col: &str) -> Option<String> {
 
 /// Seed plan + metadata + two days, each with morning+afternoon timesofday rows.
 fn seed(plan_id: &str, dest: &str) -> bool {
+    if db_exec("SELECT 1 AS n").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) VALUES ('{plan_id}', '4.2.0', '{dest}'); \
-         INSERT INTO days (plan_id, destination, day_number, date, day_type, status) VALUES ('{plan_id}', '{dest}', 1, '2026-09-01', 'arrival', 'draft'); \
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type, status) VALUES ('{plan_id}', '{dest}', 1, '2026-09-01', 'arrival', 'draft'); \
          INSERT INTO days (plan_id, destination, day_number, date, day_type, status) VALUES ('{plan_id}', '{dest}', 2, '2026-09-02', 'full', 'draft'); \
          INSERT INTO timesofday (plan_id, destination, day_number, session_type) VALUES ('{plan_id}', '{dest}', 1, 'morning'); \
          INSERT INTO timesofday (plan_id, destination, day_number, session_type) VALUES ('{plan_id}', '{dest}', 1, 'afternoon'); \
@@ -72,19 +47,10 @@ fn seed(plan_id: &str, dest: &str) -> bool {
     );
     db_exec(&sql).is_some()
 }
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM activity_tags WHERE activity_id IN (SELECT id FROM activities WHERE plan_id='{plan_id}'); \
-         DELETE FROM activities WHERE plan_id='{plan_id}'; \
-         DELETE FROM plan_event_data WHERE plan_id='{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id='{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id='{plan_id}'; \
-         DELETE FROM timesofday WHERE plan_id='{plan_id}'; \
-         DELETE FROM days WHERE plan_id='{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id='{plan_id}'; \
-         DELETE FROM plans WHERE plan_id='{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+fn teardown(plan_id: &str, dest: &str) {
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM activity_tags WHERE activity_id IN (SELECT id FROM activities WHERE plan_id='{plan_id}');"));
+    teardown_plan(plan_id, dest);
 }
 
 // ── move-activity preserves the id while re-keying day/session ─────────────────
@@ -92,11 +58,11 @@ fn teardown(plan_id: &str) {
 fn move_activity_preserves_id_across_sessions() {
     let tag = nanos();
     let plan_id = format!("test-move-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("move_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
@@ -137,11 +103,11 @@ fn move_activity_preserves_id_across_sessions() {
 fn add_activity_after_inserts_in_order() {
     let tag = nanos();
     let plan_id = format!("test-after-{tag}");
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
     let dest = format!("after_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
@@ -158,10 +124,12 @@ fn add_activity_after_inserts_in_order() {
     assert!(ok, "add --after failed: {o}{e}");
 
     // Read titles ordered by sort_order.
-    let (rows, _) = db_exec(&format!(
+    let rows = db_exec(&format!(
         "SELECT title FROM activities WHERE plan_id='{plan_id}' AND day_number=1 AND session_type='morning' ORDER BY sort_order"
     ))
-    .expect("select ordered");
+    .expect("select ordered")
+    .raw()
+    .to_string();
     let order: Vec<String> = rows
         .lines()
         .filter_map(|l| l.strip_prefix("title: ").map(|s| s.trim().to_string()))

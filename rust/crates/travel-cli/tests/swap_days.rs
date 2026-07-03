@@ -11,47 +11,12 @@
 //! creds are absent. NEVER touches okinawa-2026 / tokyo-2026 / kyoto-2026.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; Some((stdout,stderr)) on success, None on a credless skip,
-/// panic on a real failure.
-fn db_exec(sql: &str) -> Option<(String, String)> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if out.status.success() {
-        return Some((stdout, stderr));
-    }
-    if is_credless(&stderr) {
-        eprintln!("skipping swap-days Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
 fn run_cmd(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env_remove("TRAVEL_PLAN_ID")
         .output()
@@ -65,7 +30,7 @@ fn run_cmd(args: &[&str]) -> (bool, String, String) {
 
 /// SELECT one scalar via db exec, parsing the `<col>: <value>` plain-text line.
 fn scalar(sql: &str, col: &str) -> Option<String> {
-    let (stdout, _) = db_exec(sql)?;
+    let stdout = db_exec(sql)?.raw().to_string();
     let prefix = format!("{col}: ");
     Some(
         stdout
@@ -79,28 +44,17 @@ fn scalar(sql: &str, col: &str) -> Option<String> {
 /// Seed plan + metadata + two themed days (day 1 = arrival, day 2 = departure).
 /// Returns false on a credless skip.
 fn seed_two_days(plan_id: &str, dest: &str) -> bool {
+    if db_exec("SELECT 1 AS n").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}'); \
-         INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
+        "INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
            VALUES ('{plan_id}', '{dest}', 1, '2026-09-01', 'THEME_ONE', 'arrival', 'draft'); \
          INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
            VALUES ('{plan_id}', '{dest}', 2, '2026-09-02', 'THEME_TWO', 'departure', 'draft');"
     );
     db_exec(&sql).is_some()
-}
-
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
 }
 
 // ── swap-days swaps day themes AND fires the full audit triad ──────────────────
@@ -113,8 +67,8 @@ fn swap_days_swaps_themes_and_writes_audit_triad() {
         return;
     }
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
 
     // Pre-conditions: themes as seeded, version starts at 0.
