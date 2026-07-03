@@ -4,10 +4,10 @@
 use std::net::{SocketAddr, TcpStream};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, Guard};
 
 static RUN_CAPTURE_ONLY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -17,24 +17,13 @@ fn run_capture_only_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
 fn chrome_available() -> bool {
     let addr: SocketAddr = "127.0.0.1:9222".parse().expect("valid chrome addr");
     TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
 }
 
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -52,67 +41,16 @@ fn field(stdout: &str, key: &str) -> Option<String> {
 }
 
 fn count(sql: &str) -> Option<i64> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            eprintln!("skipping (no creds mid-test): {}", stderr.trim());
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout
-        .lines()
-        .find_map(|l| l.strip_prefix("n: ").map(|s| s.trim().parse::<i64>().unwrap_or(-1)))
-}
-
-fn scalar(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            eprintln!("skipping (no creds mid-test): {}", stderr.trim());
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+    db_exec(sql).and_then(|r| r.scalar().map(|s| s.parse::<i64>().unwrap_or(-1)))
 }
 
 fn teardown_job(job_id: &str, capture_id: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM offers WHERE produced_by_job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_observations WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_job_params WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&["db", "exec", &format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'")]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM captures WHERE capture_id='{capture_id}'"),
-    ]);
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
+    let _ = db_exec_teardown(&format!("DELETE FROM offers WHERE produced_by_job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_observations WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_job_params WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM captures WHERE capture_id='{capture_id}'"));
 }
 
 fn exec_sql(sql: &str) -> (bool, String, String) {
@@ -120,68 +58,34 @@ fn exec_sql(sql: &str) -> (bool, String, String) {
 }
 
 fn teardown_source(source_id: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!(
-            "DELETE FROM offers WHERE produced_by_job_id IN \
-             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
-        ),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!(
-            "DELETE FROM ota_observations WHERE job_id IN \
-             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
-        ),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!(
-            "DELETE FROM ota_attempts WHERE job_id IN \
-             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
-        ),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!(
-            "DELETE FROM ota_job_params WHERE job_id IN \
-             (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
-        ),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_jobs WHERE source_id='{source_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM captures WHERE source_id='{source_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_source_url_param WHERE source_id='{source_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_source_workflow WHERE source_id='{source_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_sources WHERE source_id='{source_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM catalog_runs WHERE command_summary LIKE '{source_id}%'"),
-    ]);
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM offers WHERE produced_by_job_id IN \
+         (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+    ));
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM ota_observations WHERE job_id IN \
+         (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+    ));
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM ota_attempts WHERE job_id IN \
+         (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+    ));
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM ota_job_params WHERE job_id IN \
+         (SELECT job_id FROM ota_jobs WHERE source_id='{source_id}')"
+    ));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_jobs WHERE source_id='{source_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM captures WHERE source_id='{source_id}'"));
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM ota_source_url_param WHERE source_id='{source_id}'"
+    ));
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM ota_source_workflow WHERE source_id='{source_id}'"
+    ));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_sources WHERE source_id='{source_id}'"));
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM catalog_runs WHERE command_summary LIKE '{source_id}%'"
+    ));
 }
 
 #[tokio::test]
@@ -313,9 +217,10 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
         };
         assert_eq!(captures, 1, "capture row must exist for capture_id={capture_id}");
 
-        let Some(capture_url) = scalar(&format!(
+        let Some(capture_url) = db_exec(&format!(
             "SELECT url FROM captures WHERE capture_id='{capture_id}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert!(
@@ -329,16 +234,18 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
             );
         }
 
-        let Some(status) = scalar(&format!(
+        let Some(status) = db_exec(&format!(
             "SELECT status FROM ota_jobs WHERE job_id='{job_id}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(status, "claimed", "capture-only job should remain claimed");
 
-        let Some(db_token) = scalar(&format!(
+        let Some(db_token) = db_exec(&format!(
             "SELECT claim_token FROM ota_jobs WHERE job_id='{job_id}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(db_token, claim_token, "printed token must match job row token");

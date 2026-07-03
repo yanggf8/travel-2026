@@ -6,20 +6,12 @@
 
 use std::process::Command;
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
+mod common;
+use common::{bin, db_exec, db_exec_teardown, is_credless};
 
 /// Run a `travel` subcommand → (ok, stdout, stderr).
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin().args(args).output().unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
+    let out = Command::new(bin()).args(args).output().unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -94,18 +86,6 @@ async fn catalog_tables_exist_with_documented_columns() {
     }
 }
 
-/// `db exec` single-cell scalar ("col: value" lines) → the value.
-fn scalar(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout.lines().find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
 #[tokio::test]
 async fn catalog_lookups_seeded() {
     let (ok, _o, err) = run(&["db", "migrate"]);
@@ -115,15 +95,17 @@ async fn catalog_lookups_seeded() {
     }
     // product_types: the 4 canonical codes present.
     for code in ["flight", "hotel", "fit", "group_tour"] {
-        let Some(n) = scalar(&format!(
+        let Some(n) = db_exec(&format!(
             "SELECT count(*) AS n FROM product_types WHERE code='{code}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(n, "1", "product_types must contain '{code}'");
     }
     // coverage_block_reasons: the 6 codes present.
-    let Some(n) = scalar("SELECT count(*) AS n FROM coverage_block_reasons") else {
+    let Some(n) = db_exec("SELECT count(*) AS n FROM coverage_block_reasons")
+        .and_then(|r| r.scalar()) else {
         return;
     };
     assert!(
@@ -131,9 +113,10 @@ async fn catalog_lookups_seeded() {
         "coverage_block_reasons must have ≥6 rows; got {n}"
     );
     for code in ["renderer_wedge", "login_wall", "captcha", "cloudflare", "redundant", "unsupported"] {
-        let Some(c) = scalar(&format!(
+        let Some(c) = db_exec(&format!(
             "SELECT count(*) AS n FROM coverage_block_reasons WHERE code='{code}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(c, "1", "coverage_block_reasons must contain '{code}'");
@@ -162,5 +145,5 @@ async fn coverage_rejects_invalid_proven() {
         "proven=2 must be rejected by the CHECK; ok={ok} stdout={stdout} stderr={stderr}"
     );
     // Cleanup any stray row (in case the CHECK was somehow not enforced).
-    let _ = run(&["db", "exec", "DELETE FROM ota_source_coverage WHERE source_id='zzcheck'"]);
+    let _ = db_exec_teardown("DELETE FROM ota_source_coverage WHERE source_id='zzcheck'");
 }

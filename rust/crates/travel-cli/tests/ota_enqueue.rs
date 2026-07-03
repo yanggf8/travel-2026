@@ -3,21 +3,10 @@
 use std::process::Command;
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
+use common::{bin, db_exec, db_exec_teardown, is_credless, Guard};
 
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -28,30 +17,9 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn scalar(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
 fn teardown_job(job_id: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_job_params WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"),
-    ]);
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_job_params WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"));
 }
 
 fn ensure_zztest_source() {
@@ -76,16 +44,8 @@ fn ensure_zztest_source() {
 }
 
 fn teardown_zztest_source() {
-    let _ = run(&[
-        "db",
-        "exec",
-        "DELETE FROM ota_source_coverage WHERE source_id='zztest'",
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        "DELETE FROM ota_sources WHERE source_id='zztest'",
-    ]);
+    let _ = db_exec_teardown("DELETE FROM ota_source_coverage WHERE source_id='zztest'");
+    let _ = db_exec_teardown("DELETE FROM ota_sources WHERE source_id='zztest'");
 }
 
 #[tokio::test]
@@ -124,15 +84,17 @@ async fn enqueue_creates_job_and_params() {
     });
 
     assert!(stdout.contains("status\tqueued"));
-    let Some(n) = scalar(&format!(
+    let Some(n) = db_exec(&format!(
         "SELECT count(*) AS n FROM ota_jobs WHERE job_id='{job_id}'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert_eq!(n, "1");
-    let Some(p) = scalar(&format!(
+    let Some(p) = db_exec(&format!(
         "SELECT count(*) AS n FROM ota_job_params WHERE job_id='{job_id}'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert_eq!(p, "2");
@@ -146,7 +108,8 @@ async fn enqueue_rejects_bad_source_and_writes_nothing() {
         return;
     }
 
-    let before = scalar("SELECT count(*) AS n FROM ota_jobs WHERE source_id='zznonexistent999'")
+    let before = db_exec("SELECT count(*) AS n FROM ota_jobs WHERE source_id='zznonexistent999'")
+        .and_then(|r| r.scalar())
         .unwrap_or_else(|| "0".to_string());
     let (ok, _stdout, stderr) =
         run(&["ota", "enqueue", "zznonexistent999", "fit", "--nights", "4"]);
@@ -159,7 +122,8 @@ async fn enqueue_rejects_bad_source_and_writes_nothing() {
         stderr.contains("not found") || stderr.contains("Error"),
         "stderr={stderr}"
     );
-    let after = scalar("SELECT count(*) AS n FROM ota_jobs WHERE source_id='zznonexistent999'")
+    let after = db_exec("SELECT count(*) AS n FROM ota_jobs WHERE source_id='zznonexistent999'")
+        .and_then(|r| r.scalar())
         .unwrap_or_else(|| before.clone());
     assert_eq!(before, after);
 }

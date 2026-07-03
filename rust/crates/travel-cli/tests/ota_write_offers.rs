@@ -3,10 +3,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec_teardown, is_credless, nanos, Guard};
 
 // These tests share the global `zztest` row in ota_sources/ota_source_coverage, and each test's
 // teardown DELETEs it by that shared literal — so a concurrent test would have its source yanked
@@ -19,26 +18,8 @@ fn write_offers_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -54,36 +35,12 @@ fn fixture_tsv() -> PathBuf {
 }
 
 fn teardown(job_id: &str, capture_id: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM offers WHERE produced_by_job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM captures WHERE capture_id='{capture_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        "DELETE FROM ota_source_coverage WHERE source_id='zztest'",
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        "DELETE FROM ota_sources WHERE source_id='zztest'",
-    ]);
+    let _ = db_exec_teardown(&format!("DELETE FROM offers WHERE produced_by_job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM captures WHERE capture_id='{capture_id}'"));
+    let _ = db_exec_teardown("DELETE FROM ota_source_coverage WHERE source_id='zztest'");
+    let _ = db_exec_teardown("DELETE FROM ota_sources WHERE source_id='zztest'");
 }
 
 #[tokio::test]

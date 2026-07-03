@@ -1,10 +1,9 @@
 //! Integration test for `travel ota claim/heartbeat/finish/reap-stale`.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec_teardown, is_credless, nanos, Guard};
 use std::sync::Mutex;
 
 /// OTA claim tests mutate shared global queue state — serialize them.
@@ -16,26 +15,8 @@ fn claim_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -53,21 +34,9 @@ fn field(stdout: &str, key: &str) -> Option<String> {
 }
 
 fn teardown_job(job_id: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_job_params WHERE job_id='{job_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"),
-    ]);
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_attempts WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_job_params WHERE job_id='{job_id}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_jobs WHERE job_id='{job_id}'"));
 }
 
 fn seed_queued_job(job_id: &str) {

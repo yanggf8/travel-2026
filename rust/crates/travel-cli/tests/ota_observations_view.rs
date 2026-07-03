@@ -1,31 +1,12 @@
 //! Integration test for `travel ota observations` read-only view.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
+use common::{bin, db_exec_teardown, is_credless, nanos, Guard};
 
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -37,11 +18,7 @@ fn run(args: &[&str]) -> (bool, String, String) {
 }
 
 fn teardown(obs_id: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_observations WHERE observation_id='{obs_id}'"),
-    ]);
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_observations WHERE observation_id='{obs_id}'"));
 }
 
 #[tokio::test]

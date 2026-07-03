@@ -3,33 +3,14 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec_teardown, is_credless, nanos, Guard};
 
 static CATALOG_LOCK: Mutex<()> = Mutex::new(());
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -41,26 +22,10 @@ fn run(args: &[&str]) -> (bool, String, String) {
 }
 
 fn teardown(sid: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_source_region_codes WHERE source_id='{sid}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_source_coverage WHERE source_id='{sid}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_sources WHERE source_id='{sid}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM catalog_runs WHERE command_summary LIKE '{sid}%'"),
-    ]);
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_source_region_codes WHERE source_id='{sid}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_source_coverage WHERE source_id='{sid}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_sources WHERE source_id='{sid}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM catalog_runs WHERE command_summary LIKE '{sid}%'"));
 }
 
 #[tokio::test]
