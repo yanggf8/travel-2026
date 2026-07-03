@@ -10,34 +10,18 @@
 //! absent so credless CI stays green.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-const BIN: &str = env!("CARGO_BIN_EXE_travel");
+mod common;
+use common::{bin, db_exec, db_exec_teardown, is_credless, is_transient, nanos, teardown_plan};
 
 // ── credless skip detection ──────────────────────────────────────────
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Transient network blips when many tests open Turso connections at once.
-/// Retried (not treated as failures or credless skips).
-fn is_transient(stderr: &str) -> bool {
-    stderr.contains("Network is unreachable")
-        || stderr.contains("error trying to connect")
-        || stderr.contains("connection reset")
-        || stderr.contains("connection closed")
-}
 
 /// Run the binary; returns (success, stdout, stderr). Returns None if the call
 /// indicates missing credentials (caller should skip). Retries on transient
 /// network errors.
 fn run(args: &[&str]) -> Option<(bool, String, String)> {
     for attempt in 0..6 {
-        let out = Command::new(BIN)
+        let out = Command::new(bin())
             .args(args)
             .output()
             .expect("spawn travel binary");
@@ -79,44 +63,12 @@ fn run_init(args: &[&str]) -> Option<(String, String)> {
     panic!("shaping-init kept colliding on run id");
 }
 
-/// db exec helper. Returns plain-text stdout, or None when credless. Retries
-/// on transient network errors.
-fn db_exec(sql: &str) -> Option<String> {
-    for attempt in 0..6 {
-        let out = Command::new(BIN)
-            .args(["db", "exec", sql])
-            .output()
-            .expect("spawn travel db exec");
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        if !out.status.success() && is_credless(&stderr) {
-            return None;
-        }
-        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
-            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
-            continue;
-        }
-        if !out.status.success() {
-            panic!("db exec failed: {sql}\n{stderr}");
-        }
-        return Some(String::from_utf8_lossy(&out.stdout).to_string());
-    }
-    unreachable!()
-}
-
 fn unique_run_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("shaping-test-{nanos}")
+    format!("shaping-test-{}", nanos())
 }
 
 fn unique_plan_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("shaping-test-plan-{nanos}")
+    format!("shaping-test-plan-{}", nanos())
 }
 
 fn sql_lit(s: &str) -> String {
@@ -126,7 +78,7 @@ fn sql_lit(s: &str) -> String {
 /// Tear down all rows for a throwaway run id.
 fn cleanup_run(run_id: &str) {
     let r = sql_lit(run_id);
-    let _ = db_exec(&format!(
+    let _ = db_exec_teardown(&format!(
         "DELETE FROM shaping_candidate_flights WHERE candidate_id IN (SELECT candidate_id FROM shaping_candidates WHERE run_id = {r}); \
          DELETE FROM shaping_candidates WHERE run_id = {r}; \
          DELETE FROM shaping_scrape_attempts WHERE run_id = {r}; \
@@ -140,22 +92,7 @@ fn cleanup_run(run_id: &str) {
 
 /// Tear down all rows for a throwaway plan id (mirrors deletePlanRows in TS).
 fn cleanup_plan(plan_id: &str) {
-    let p = sql_lit(plan_id);
-    let _ = db_exec(&format!(
-        "DELETE FROM plan_event_data WHERE plan_id = {p}; \
-         DELETE FROM plan_events WHERE plan_id = {p}; \
-         DELETE FROM event_log_next_actions WHERE plan_id = {p}; \
-         DELETE FROM event_log_dest_processes WHERE plan_id = {p}; \
-         DELETE FROM event_log_destinations WHERE plan_id = {p}; \
-         DELETE FROM event_log_state WHERE plan_id = {p}; \
-         DELETE FROM process_statuses WHERE plan_id = {p}; \
-         DELETE FROM date_anchors WHERE plan_id = {p}; \
-         DELETE FROM destination_cities WHERE plan_id = {p}; \
-         DELETE FROM destination_details WHERE plan_id = {p}; \
-         DELETE FROM plan_destinations WHERE plan_id = {p}; \
-         DELETE FROM plan_metadata WHERE plan_id = {p}; \
-         DELETE FROM plans WHERE plan_id = {p};"
-    ));
+    teardown_plan(plan_id, "");
 }
 
 /// Seed a research run row directly (status='started') so commands can resolve
@@ -231,9 +168,9 @@ async fn creates_a_run_with_destinations_and_durations_reads_it_back() {
         sql_lit(&created)
     ))
     .expect("read run");
-    assert!(row.contains("origin_code: TPE"), "got: {row}");
-    assert!(row.contains("currency: TWD"), "got: {row}");
-    assert!(row.contains("status: started"), "got: {row}");
+    assert!(row.raw().contains("origin_code: TPE"), "got: {row}");
+    assert!(row.raw().contains("currency: TWD"), "got: {row}");
+    assert!(row.raw().contains("status: started"), "got: {row}");
 
     // 2 destinations.
     let dests = db_exec(&format!(
@@ -241,7 +178,7 @@ async fn creates_a_run_with_destinations_and_durations_reads_it_back() {
         sql_lit(&created)
     ))
     .unwrap();
-    assert!(dests.contains("n: 2"), "expected 2 destinations, got: {dests}");
+    assert!(dests.raw().contains("n: 2"), "expected 2 destinations, got: {dests}");
 
     // 2 durations; nights=6 → duration_days=7.
     let durs = db_exec(&format!(
@@ -249,7 +186,7 @@ async fn creates_a_run_with_destinations_and_durations_reads_it_back() {
         sql_lit(&created)
     ))
     .unwrap();
-    assert!(durs.contains("duration_days: 7"), "got: {durs}");
+    assert!(durs.raw().contains("duration_days: 7"), "got: {durs}");
 
     cleanup_run(&created);
 }
@@ -286,14 +223,14 @@ async fn creates_a_run_with_shaping_rules_and_reads_them_back() {
         sql_lit(&created)
     ))
     .unwrap();
-    assert!(count.contains("n: 4"), "expected 4 shaping rules, got: {count}");
+    assert!(count.raw().contains("n: 4"), "expected 4 shaping rules, got: {count}");
 
     let has_kind = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM shaping_rules WHERE run_id = {} AND kind = 'return_no_later_than'",
         sql_lit(&created)
     ))
     .unwrap();
-    assert!(has_kind.contains("n: 1"), "got: {has_kind}");
+    assert!(has_kind.raw().contains("n: 1"), "got: {has_kind}");
 
     cleanup_run(&created);
 }
@@ -327,13 +264,13 @@ async fn seeds_a_pending_scrape_attempt_per_destination_x_duration() {
         sql_lit(&created)
     ))
     .unwrap();
-    assert!(total.contains("n: 4"), "expected 4 attempts, got: {total}");
+    assert!(total.raw().contains("n: 4"), "expected 4 attempts, got: {total}");
     let pending = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM shaping_scrape_attempts WHERE run_id = {} AND status = 'pending'",
         sql_lit(&created)
     ))
     .unwrap();
-    assert!(pending.contains("n: 4"), "expected 4 pending, got: {pending}");
+    assert!(pending.raw().contains("n: 4"), "expected 4 pending, got: {pending}");
 
     cleanup_run(&created);
 }
@@ -384,7 +321,7 @@ async fn ranks_candidates_by_price_then_leave_days_then_depart_date() {
         sql_lit(&run_id)
     ))
     .unwrap();
-    let order: Vec<&str> = rows.lines().collect();
+    let order: Vec<&str> = rows.raw().lines().collect();
     assert_eq!(order.len(), 3, "expected 3 ranked rows, got: {rows}");
     assert!(order[0].contains(&c3) && order[0].contains("rank: 1"), "rank1: {}", order[0]);
     assert!(order[1].contains(&c2) && order[1].contains("rank: 2"), "rank2: {}", order[1]);
@@ -435,15 +372,15 @@ async fn records_scrape_attempts_and_reads_them_back() {
         sql_lit(&run_id)
     ))
     .unwrap();
-    assert!(count.contains("n: 1"), "expected exactly 1 attempt row, got: {count}");
+    assert!(count.raw().contains("n: 1"), "expected exactly 1 attempt row, got: {count}");
 
     let row = db_exec(&format!(
         "SELECT status, error FROM shaping_scrape_attempts WHERE run_id = {} AND dest_code = 'KIX' AND nights = 6",
         sql_lit(&run_id)
     ))
     .unwrap();
-    assert!(row.contains("status: failed"), "got: {row}");
-    assert!(row.contains("error: timeout"), "got: {row}");
+    assert!(row.raw().contains("status: failed"), "got: {row}");
+    assert!(row.raw().contains("error: timeout"), "got: {row}");
 
     cleanup_run(&run_id);
 }
@@ -471,14 +408,14 @@ async fn adopts_a_candidate_sets_adopted_plan_id_and_run_status() {
         sql_lit(&candidate_id)
     ))
     .unwrap();
-    assert!(cand.contains("adopted_plan_id: osaka-2026"), "got: {cand}");
+    assert!(cand.raw().contains("adopted_plan_id: osaka-2026"), "got: {cand}");
 
     let run_row = db_exec(&format!(
         "SELECT status FROM shaping_research_runs WHERE run_id = {}",
         sql_lit(&run_id)
     ))
     .unwrap();
-    assert!(run_row.contains("status: adopted"), "got: {run_row}");
+    assert!(run_row.raw().contains("status: adopted"), "got: {run_row}");
 
     cleanup_run(&run_id);
 }
@@ -508,7 +445,7 @@ async fn delete_candidates_for_pair_clears_prior_candidates() {
         sql_lit(&run_id)
     ))
     .unwrap();
-    assert!(before.contains("n: 1"), "got: {before}");
+    assert!(before.raw().contains("n: 1"), "got: {before}");
 
     // Re-scrape of the KIX/6n pair with zero candidates → must clear the pair.
     let tmp = std::env::temp_dir().join(format!("{run_id}-clear.json"));
@@ -530,13 +467,13 @@ async fn delete_candidates_for_pair_clears_prior_candidates() {
         sql_lit(&run_id)
     ))
     .unwrap();
-    assert!(after.contains("n: 0"), "expected 0 after clear, got: {after}");
+    assert!(after.raw().contains("n: 0"), "expected 0 after clear, got: {after}");
     let flights = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM shaping_candidate_flights WHERE candidate_id = {}",
         sql_lit(&candidate_id)
     ))
     .unwrap();
-    assert!(flights.contains("n: 0"), "expected 0 flight rows, got: {flights}");
+    assert!(flights.raw().contains("n: 0"), "expected 0 flight rows, got: {flights}");
 
     cleanup_run(&run_id);
 }
@@ -573,7 +510,7 @@ async fn adopts_a_candidate_into_a_newly_seeded_plan_with_locked_p1_p2_rows() {
         sql_lit(&plan_id)
     ))
     .unwrap();
-    assert!(meta.contains("active_destination: osaka_kyoto_2026"), "got: {meta}");
+    assert!(meta.raw().contains("active_destination: osaka_kyoto_2026"), "got: {meta}");
 
     // date anchor: start 2026-06-18, end 2026-06-24, days 7 (nights 6 + 1)
     let anchor = db_exec(&format!(
@@ -581,9 +518,9 @@ async fn adopts_a_candidate_into_a_newly_seeded_plan_with_locked_p1_p2_rows() {
         sql_lit(&plan_id)
     ))
     .unwrap();
-    assert!(anchor.contains("start_date: 2026-06-18"), "got: {anchor}");
-    assert!(anchor.contains("end_date: 2026-06-24"), "got: {anchor}");
-    assert!(anchor.contains("days: 7"), "got: {anchor}");
+    assert!(anchor.raw().contains("start_date: 2026-06-18"), "got: {anchor}");
+    assert!(anchor.raw().contains("end_date: 2026-06-24"), "got: {anchor}");
+    assert!(anchor.raw().contains("days: 7"), "got: {anchor}");
 
     // process statuses: P1/P2 confirmed, rest pending
     let statuses = db_exec(&format!(
@@ -591,10 +528,10 @@ async fn adopts_a_candidate_into_a_newly_seeded_plan_with_locked_p1_p2_rows() {
         sql_lit(&plan_id)
     ))
     .unwrap();
-    assert!(statuses.contains("process_id: process_1_date_anchor, status: confirmed"), "got: {statuses}");
-    assert!(statuses.contains("process_id: process_2_destination, status: confirmed"), "got: {statuses}");
-    assert!(statuses.contains("process_id: process_3_4_packages, status: pending"), "got: {statuses}");
-    assert!(statuses.contains("process_id: process_5_daily_itinerary, status: pending"), "got: {statuses}");
+    assert!(statuses.raw().contains("process_id: process_1_date_anchor, status: confirmed"), "got: {statuses}");
+    assert!(statuses.raw().contains("process_id: process_2_destination, status: confirmed"), "got: {statuses}");
+    assert!(statuses.raw().contains("process_id: process_3_4_packages, status: pending"), "got: {statuses}");
+    assert!(statuses.raw().contains("process_id: process_5_daily_itinerary, status: pending"), "got: {statuses}");
 
     // primary_airport = KIX
     let detail = db_exec(&format!(
@@ -602,7 +539,7 @@ async fn adopts_a_candidate_into_a_newly_seeded_plan_with_locked_p1_p2_rows() {
         sql_lit(&plan_id)
     ))
     .unwrap();
-    assert!(detail.contains("primary_airport: KIX"), "got: {detail}");
+    assert!(detail.raw().contains("primary_airport: KIX"), "got: {detail}");
 
     // candidate pointer + run status
     let cand = db_exec(&format!(
@@ -610,13 +547,13 @@ async fn adopts_a_candidate_into_a_newly_seeded_plan_with_locked_p1_p2_rows() {
         sql_lit(&candidate_id)
     ))
     .unwrap();
-    assert!(cand.contains(&format!("adopted_plan_id: {plan_id}")), "got: {cand}");
+    assert!(cand.raw().contains(&format!("adopted_plan_id: {plan_id}")), "got: {cand}");
     let run_row = db_exec(&format!(
         "SELECT status FROM shaping_research_runs WHERE run_id = {}",
         sql_lit(&run_id)
     ))
     .unwrap();
-    assert!(run_row.contains("status: adopted"), "got: {run_row}");
+    assert!(run_row.raw().contains("status: adopted"), "got: {run_row}");
 
     cleanup_plan(&plan_id);
     cleanup_run(&run_id);
@@ -658,7 +595,7 @@ async fn rejects_create_plan_adoption_when_destination_airports_do_not_match() {
         sql_lit(&plan_id)
     ))
     .unwrap();
-    assert!(n.contains("n: 0"), "expected no plan_metadata rows, got: {n}");
+    assert!(n.raw().contains("n: 0"), "expected no plan_metadata rows, got: {n}");
 
     cleanup_plan(&plan_id);
     cleanup_run(&run_id);

@@ -8,110 +8,36 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, seed_plan, teardown_plan, Guard};
 
 static LOCK: Mutex<()> = Mutex::new(());
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_travel")
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
 
 fn sql_lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-fn is_skip(stderr: &str) -> bool {
-    stderr.contains("turso")
-        || stderr.contains("Missing")
-        || stderr.contains("TRAVEL_TURSO")
-        || stderr.contains("failed to connect to Turso")
-}
-
-fn db_exec_raw(sql: &str) -> (bool, String, String) {
-    let out = Command::new(bin())
-        .args(["db", "exec", sql])
-        .output()
-        .expect("run travel db exec");
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-fn db_exec(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = db_exec_raw(sql);
-    if ok {
-        return Some(stdout);
-    }
-    if is_skip(&stderr) {
-        eprintln!(
-            "skipping swap-days repoint lock (no Turso creds): {}",
-            stderr.trim()
-        );
-        return None;
-    }
-    panic!("db exec failed; err={stderr}\nsql={sql}");
-}
-
-fn exec_ok(sql: &str) -> String {
+fn exec_ok(sql: &str) -> common::Rows {
     db_exec(sql).unwrap_or_else(|| panic!("db exec unexpectedly skipped after probe; sql={sql}"))
-}
-
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
 }
 
 fn teardown(plan: &str, dest: &str) {
     let p = sql_lit(plan);
     let d = sql_lit(dest);
-    let _ = db_exec_raw(&format!(
+    let _ = db_exec_teardown(&format!(
         "DELETE FROM activity_tags \
-           WHERE activity_id IN (SELECT id FROM activities WHERE plan_id = {p} AND destination = {d}); \
-         DELETE FROM session_activities_zh WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM session_meals WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM activities WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM timesofday WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM days WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM cascade_dirty_flags WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM process_statuses WHERE plan_id = {p} AND destination = {d}; \
-         DELETE FROM plan_event_data WHERE plan_id = {p}; \
-         DELETE FROM plan_events WHERE plan_id = {p}; \
-         DELETE FROM operation_runs WHERE plan_id = {p}; \
-         DELETE FROM plan_metadata WHERE plan_id = {p}; \
-         DELETE FROM plans WHERE plan_id = {p};"
+           WHERE activity_id IN (SELECT id FROM activities WHERE plan_id = {p} AND destination = {d});"
     ));
+    teardown_plan(plan, dest);
 }
 
 fn seed_plan_days_and_sessions(plan: &str, dest: &str) {
     let p = sql_lit(plan);
     let d = sql_lit(dest);
+    seed_plan(plan, dest, 41);
     exec_ok(&format!(
-        "INSERT INTO plans (plan_id, schema_version, version, updated_at) \
-           VALUES ({p}, '4.2.0', 41, '2001-01-01 00:00:00'); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination, updated_at) \
-           VALUES ({p}, '4.2.0', {d}, '2001-01-01 00:00:00'); \
-         INSERT INTO days \
+        "INSERT INTO days \
            (plan_id, destination, day_number, date, theme, theme_zh, day_type, status, updated_at) \
            VALUES \
            ({p}, {d}, 1, '2026-09-01', 'A_THEME', 'A_THEME_ZH', 'arrival', 'draft', '2001-01-01 00:00:00'), \
@@ -178,7 +104,7 @@ fn run_swap_days(plan: &str, dest: &str) -> (bool, String, String) {
 
 fn assert_values(sql: &str, expected: &[&str], context: &str) {
     let out = exec_ok(sql);
-    let values = column(&out);
+    let values = out.column();
     let expected = expected.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(values, expected, "{context}; out={out}");
 }
@@ -207,10 +133,10 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
     let before = exec_ok(&format!(
         "SELECT version AS v FROM plans WHERE plan_id = {p}"
     ));
-    assert_eq!(scalar(&before).as_deref(), Some("41"), "seed sanity");
+    assert_eq!(before.scalar().as_deref(), Some("41"), "seed sanity");
 
     let (ok, stdout, stderr) = run_swap_days(&plan, &dest);
-    if !ok && is_skip(&stderr) {
+    if !ok && is_credless(&stderr) {
         eprintln!(
             "skipping swap-days repoint lock mid-test: {}",
             stderr.trim()
@@ -228,7 +154,7 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
          FROM days WHERE plan_id = {p} AND destination = {d} ORDER BY day_number"
     ));
     assert_eq!(
-        column(&day_rows),
+        day_rows.column(),
         vec![
             "1|2026-09-01|arrival|draft|B_THEME|B_THEME_ZH".to_string(),
             "2|2026-09-02|departure|planned|A_THEME|A_THEME_ZH".to_string(),
@@ -243,7 +169,7 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
              OR (day_number = 2 AND updated_at = '2001-01-02 00:00:00'))"
     ));
     assert_eq!(
-        scalar(&old_timestamps).as_deref(),
+        old_timestamps.scalar().as_deref(),
         Some("0"),
         "current swap-days touches both day rows after the theme-only UPDATE; out={old_timestamps}"
     );
@@ -355,7 +281,7 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
              WHERE plan_id = {p} AND destination = {d} AND day_number = -999999"
         ));
         assert_eq!(
-            scalar(&out).as_deref(),
+            out.scalar().as_deref(),
             Some("0"),
             "{table} must not retain TMP rows; out={out}"
         );
@@ -365,7 +291,7 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
         "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&op_count).as_deref(),
+        op_count.scalar().as_deref(),
         Some("1"),
         "exactly one operation_runs row should be written; out={op_count}"
     );
@@ -375,7 +301,7 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
          FROM operation_runs WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&op).as_deref(),
+        op.scalar().as_deref(),
         Some("swap-days|completed|41>42"),
         "operation_runs should capture the swap-days audit row; out={op}"
     );
@@ -383,7 +309,7 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
         "SELECT version AS v FROM plans WHERE plan_id = {p}"
     ));
     assert_eq!(
-        scalar(&version).as_deref(),
+        version.scalar().as_deref(),
         Some("42"),
         "plans.version should bump by one; out={version}"
     );
