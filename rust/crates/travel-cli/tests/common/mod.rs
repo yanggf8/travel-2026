@@ -3,8 +3,15 @@
 //! `tests/common/mod.rs` is the Cargo idiom for code shared across integration test
 //! binaries WITHOUT it becoming its own test binary. Each test file opts in with
 //! `mod common;` and `use common::Guard;`.
+//!
+//! `allow(dead_code)`: this module is compiled fresh into EACH integration-test binary,
+//! and each binary uses only the subset of helpers its tests need — so every helper is
+//! "unused" from some binary's view. That's the standard `tests/common` idiom, not a bug.
+#![allow(dead_code)]
 
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PLAN_ID_TABLES_SQL: &str = "\
 SELECT m.name
@@ -15,8 +22,125 @@ WHERE m.type = 'table'
   )
 ORDER BY CASE WHEN m.name = 'plans' THEN 1 ELSE 0 END, m.name";
 
-fn bin() -> &'static str {
+pub fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_travel")
+}
+
+pub fn nanos() -> u128 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+}
+
+pub fn is_credless(stderr: &str) -> bool {
+    stderr.contains("turso auth login")
+        || stderr.contains("Missing Turso")
+        || stderr.contains("Missing Turso data")
+        || stderr.contains("failed to connect to Turso")
+        || stderr.contains("TRAVEL_TURSO")
+        || stderr.contains("database URL")
+}
+
+pub fn is_transient(stderr: &str) -> bool {
+    stderr.contains("Network is unreachable")
+        || stderr.contains("error trying to connect")
+        || stderr.contains("connection reset")
+        || stderr.contains("connection closed")
+}
+
+#[derive(Clone, Debug)]
+pub struct Rows {
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl Rows {
+    pub fn scalar(&self) -> Option<String> {
+        self.stdout
+            .lines()
+            .find_map(|line| strip_batch_prefix(line).split_once(':').map(|(_, v)| v.trim().to_string()))
+    }
+
+    pub fn column(&self) -> Vec<String> {
+        self.stdout
+            .lines()
+            .filter_map(|line| strip_batch_prefix(line).split_once(':').map(|(_, v)| v.trim().to_string()))
+            .filter(|v| !v.is_empty())
+            .collect()
+    }
+
+    pub fn raw(&self) -> &str {
+        &self.stdout
+    }
+}
+
+impl std::fmt::Display for Rows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.stdout)
+    }
+}
+
+fn strip_batch_prefix(line: &str) -> &str {
+    let line = line.trim_start();
+    let Some(rest) = line.strip_prefix('[') else {
+        return line;
+    };
+    let Some((prefix, after)) = rest.split_once("] ") else {
+        return line;
+    };
+    let Some((left, right)) = prefix.split_once('/') else {
+        return line;
+    };
+
+    if !left.is_empty()
+        && !right.is_empty()
+        && left.chars().all(|c| c.is_ascii_digit())
+        && right.chars().all(|c| c.is_ascii_digit())
+    {
+        after
+    } else {
+        line
+    }
+}
+
+pub fn db_exec(sql: &str) -> Option<Rows> {
+    for attempt in 0..6 {
+        let out = Command::new(bin())
+            .args(["db", "exec", sql])
+            .env_remove("TRAVEL_PLAN_ID")
+            .output()
+            .expect("run db exec");
+
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+        if !out.status.success() && is_credless(&stderr) {
+            return None;
+        }
+
+        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
+            thread::sleep(Duration::from_millis(400 * (attempt as u64 + 1)));
+            continue;
+        }
+
+        if !out.status.success() {
+            panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
+        }
+
+        return Some(Rows { stdout, stderr });
+    }
+
+    unreachable!()
+}
+
+pub fn seed_plan(plan: &str, dest: &str, version: i64) {
+    let plan = sql_lit(plan);
+    let dest = sql_lit(dest);
+    db_exec(&format!(
+        "INSERT OR REPLACE INTO plans (plan_id, schema_version, version) \
+         VALUES ({plan}, '4.2.0', {version}); \
+         INSERT OR REPLACE INTO plan_metadata (plan_id, schema_version, active_destination) \
+         VALUES ({plan}, '4.2.0', {dest});"
+    ))
+    .expect("seed plan");
 }
 
 fn sql_lit(s: &str) -> String {

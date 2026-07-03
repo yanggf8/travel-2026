@@ -9,52 +9,11 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, is_credless, nanos, seed_plan, teardown_offers, teardown_plan, Guard};
 
 static PROMOTE_LOCK: Mutex<()> = Mutex::new(());
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_travel")
-}
-
-fn nanos() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-}
-
-fn db_exec(sql: &str) -> (bool, String, String) {
-    let out = Command::new(bin())
-        .args(["db", "exec", sql])
-        .output()
-        .expect("run db exec");
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-fn is_skip(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-}
-
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
-}
 
 /// Insert one global `offers` row. price<0 / date empty means "NULL" (skip-NULL test).
 #[allow(clippy::too_many_arguments)]
@@ -94,22 +53,11 @@ fn seed_offer(
         fret = fret_sql,
         includes = includes,
         scraped = scraped_at,
-    ));
+    ))
+    .expect("creds");
 }
 
-fn seed_plan(plan: &str, dest: &str) {
-    db_exec(&format!(
-        "INSERT OR REPLACE INTO plans (plan_id, schema_version, version) \
-         VALUES ('{plan}', '4.2.0', 0)"
-    ));
-    db_exec(&format!(
-        "INSERT OR REPLACE INTO plan_metadata (plan_id, schema_version, active_destination) \
-         VALUES ('{plan}', '4.2.0', '{dest}')"
-    ));
-    // A real plan (shaping-adopt/seed) carries the full process_statuses ladder.
-    // select-offer's set_status is a bare UPDATE (select_offer.rs:477) — it no-ops if
-    // the P3/P4 row is absent — so the rows must pre-exist as 'pending' for select-offer
-    // to flip them to 'populated'. promote-offers itself flips P3_4 to 'researched'.
+fn seed_process_ladder(plan: &str, dest: &str) {
     for proc in [
         "process_1_date_anchor",
         "process_2_destination",
@@ -121,13 +69,14 @@ fn seed_plan(plan: &str, dest: &str) {
         db_exec(&format!(
             "INSERT OR REPLACE INTO process_statuses (plan_id, destination, process_id, status) \
              VALUES ('{plan}', '{dest}', '{proc}', 'pending')"
-        ));
+        ))
+        .expect("creds");
     }
 }
 
 fn teardown(plan: &str, dest: &str, ids: &[&str]) {
-    common::teardown_offers(ids);
-    common::teardown_plan(plan, dest);
+    teardown_offers(ids);
+    teardown_plan(plan, dest);
 }
 
 fn run_promote(plan: &str, dest: &str, extra: &[&str]) -> (bool, String, String) {
@@ -145,9 +94,8 @@ fn run_promote(plan: &str, dest: &str, extra: &[&str]) -> (bool, String, String)
 async fn promote_offers_bridges_into_plan_and_feeds_select() {
     let _guard = PROMOTE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-    let (ok, _o, err) = db_exec("SELECT 1");
-    if !ok && is_skip(&err) {
-        eprintln!("skipping promote-offers test (no Turso creds): {}", err.trim());
+    if db_exec("SELECT 1").is_none() {
+        eprintln!("skipping promote-offers test (no Turso creds)");
         return;
     }
 
@@ -170,7 +118,8 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
             teardown(&plan, &dest, &ids);
         }
     });
-    seed_plan(&plan, &dest);
+    seed_plan(&plan, &dest, 0);
+    seed_process_ladder(&plan, &dest);
 
     // 1. hotel-only offer (the real case: hotel + NULL flights). Non-empty delimited `includes`
     //    with mixed delimiters + a blank item — locks the split + skip-empty behavior.
@@ -190,25 +139,27 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
 
     // --- 5. dry-run writes nothing ---
     let (ok, out, err) = run_promote(&plan, &dest, &["--dry-run"]);
-    if !ok && is_skip(&err) {
+    if !ok && is_credless(&err) {
         eprintln!("skipping (no creds mid-test): {}", err.trim());
         return; // _cleanup Drop tears down
     }
     assert!(ok, "dry-run should succeed; err={err} out={out}");
-    let (_, cnt, _) = db_exec(&format!(
+    let cnt = db_exec(&format!(
         "SELECT COUNT(*) FROM plan_offers WHERE plan_id='{plan}' AND destination='{dest}'"
-    ));
-    assert_eq!(scalar(&cnt).as_deref(), Some("0"), "dry-run must write nothing; out={out}");
+    ))
+    .expect("creds");
+    assert_eq!(cnt.scalar().as_deref(), Some("0"), "dry-run must write nothing; out={out}");
 
     // --- 6. real run ---
     let (ok, out, err) = run_promote(&plan, &dest, &[]);
     assert!(ok, "promote should succeed; err={err} out={out}");
 
     // plan_offers: hotel_id, flight_id, dup_id promoted; null_id skipped → 3 rows.
-    let (_, ids_out, _) = db_exec(&format!(
+    let ids_out = db_exec(&format!(
         "SELECT id FROM plan_offers WHERE plan_id='{plan}' AND destination='{dest}' ORDER BY id"
-    ));
-    let got = column(&ids_out);
+    ))
+    .expect("creds");
+    let got = ids_out.column();
     assert!(got.iter().any(|i| i == &hotel_id), "hotel offer promoted; got {got:?}");
     assert!(got.iter().any(|i| i == &flight_id), "flight offer promoted; got {got:?}");
     assert!(got.iter().any(|i| i == &dup_id), "dup offer promoted; got {got:?}");
@@ -216,75 +167,87 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
     assert_eq!(got.len(), 3, "exactly 3 promoted; got {got:?}");
 
     // latest snapshot wins: dup offer title is the NEW snapshot.
-    let (_, title, _) = db_exec(&format!(
+    let title = db_exec(&format!(
         "SELECT title FROM plan_offers WHERE plan_id='{plan}' AND destination='{dest}' AND id='{dup_id}'"
-    ));
-    assert_eq!(scalar(&title).as_deref(), Some("New Snapshot"), "latest snapshot promoted");
+    ))
+    .expect("creds");
+    assert_eq!(title.scalar().as_deref(), Some("New Snapshot"), "latest snapshot promoted");
 
     // date_pricing: hotel offer has one row at its departure_date with its price.
-    let (_, dp, _) = db_exec(&format!(
+    let dp = db_exec(&format!(
         "SELECT price FROM plan_offer_date_pricing WHERE plan_id='{plan}' AND destination='{dest}' \
          AND offer_id='{hotel_id}' AND date='2026-09-04'"
-    ));
-    assert_eq!(scalar(&dp).as_deref(), Some("15498"), "date_pricing synthesized; out={dp}");
+    ))
+    .expect("creds");
+    assert_eq!(dp.scalar().as_deref(), Some("15498"), "date_pricing synthesized; out={dp}");
 
     // hotel row present.
-    let (_, hn, _) = db_exec(&format!(
+    let hn = db_exec(&format!(
         "SELECT name FROM plan_offer_hotels WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{hotel_id}'"
-    ));
-    assert_eq!(scalar(&hn).as_deref(), Some("Test Hotel Ginza"), "hotel mapped");
+    ))
+    .expect("creds");
+    assert_eq!(hn.scalar().as_deref(), Some("Test Hotel Ginza"), "hotel mapped");
 
     // flights: ONLY the flight_id offer has plan_offer_flights rows (2: outbound+return).
-    let (_, fn_hotel, _) = db_exec(&format!(
+    let fn_hotel = db_exec(&format!(
         "SELECT COUNT(*) FROM plan_offer_flights WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{hotel_id}'"
-    ));
-    assert_eq!(scalar(&fn_hotel).as_deref(), Some("0"), "hotel-only offer has no flight rows");
-    let (_, fn_flight, _) = db_exec(&format!(
+    ))
+    .expect("creds");
+    assert_eq!(fn_hotel.scalar().as_deref(), Some("0"), "hotel-only offer has no flight rows");
+    let fn_flight = db_exec(&format!(
         "SELECT COUNT(*) FROM plan_offer_flights WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{flight_id}'"
-    ));
-    assert_eq!(scalar(&fn_flight).as_deref(), Some("2"), "flight offer has outbound+return rows");
+    ))
+    .expect("creds");
+    assert_eq!(fn_flight.scalar().as_deref(), Some("2"), "flight offer has outbound+return rows");
 
     // plan_offer_includes: the hotel offer's `含早餐; 機場接送、; WiFi` splits on ; and 、, trims,
     // and SKIPS the blank item → exactly 3 ordered rows. Locks the split/skip-empty behavior.
-    let (_, inc, _) = db_exec(&format!(
+    let inc = db_exec(&format!(
         "SELECT sort_order || ':' || item AS li FROM plan_offer_includes \
          WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{hotel_id}' ORDER BY sort_order"
-    ));
+    ))
+    .expect("creds");
     assert_eq!(
-        column(&inc),
+        inc.column(),
         vec!["0:含早餐", "1:機場接送", "2:WiFi"],
         "includes split + skip-empty, ordered by sort_order; out={inc}"
     );
-    let (_, inc_flight, _) = db_exec(&format!(
+    let inc_flight = db_exec(&format!(
         "SELECT COUNT(*) FROM plan_offer_includes WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{flight_id}'"
-    ));
-    assert_eq!(scalar(&inc_flight).as_deref(), Some("0"), "empty-includes offer writes no includes rows");
+    ))
+    .expect("creds");
+    assert_eq!(inc_flight.scalar().as_deref(), Some("0"), "empty-includes offer writes no includes rows");
 
     // P3_4 status = researched.
-    let (_, p34, _) = db_exec(&format!(
+    let p34 = db_exec(&format!(
         "SELECT status FROM process_statuses WHERE plan_id='{plan}' AND destination='{dest}' AND process_id='process_3_4_packages'"
-    ));
-    assert_eq!(scalar(&p34).as_deref(), Some("researched"), "P3_4 → researched");
+    ))
+    .expect("creds");
+    assert_eq!(p34.scalar().as_deref(), Some("researched"), "P3_4 → researched");
 
     // operation_runs: exactly one promote-offers row; plans.version bumped to 1.
-    let (_, opn, _) = db_exec(&format!(
+    let opn = db_exec(&format!(
         "SELECT COUNT(*) FROM operation_runs WHERE plan_id='{plan}' AND command_type='promote-offers'"
-    ));
-    assert_eq!(scalar(&opn).as_deref(), Some("1"), "one promote-offers operation_run");
-    let (_, ver, _) = db_exec(&format!("SELECT version FROM plans WHERE plan_id='{plan}'"));
-    assert_eq!(scalar(&ver).as_deref(), Some("1"), "plans.version bumped by 1");
+    ))
+    .expect("creds");
+    assert_eq!(opn.scalar().as_deref(), Some("1"), "one promote-offers operation_run");
+    let ver = db_exec(&format!("SELECT version FROM plans WHERE plan_id='{plan}'"))
+        .expect("creds");
+    assert_eq!(ver.scalar().as_deref(), Some("1"), "plans.version bumped by 1");
 
     // --- 7. re-promote idempotency: no dup rows, P3_4 stays researched ---
     let (ok, out, err) = run_promote(&plan, &dest, &[]);
     assert!(ok, "re-promote should succeed; err={err} out={out}");
-    let (_, cnt2, _) = db_exec(&format!(
+    let cnt2 = db_exec(&format!(
         "SELECT COUNT(*) FROM plan_offers WHERE plan_id='{plan}' AND destination='{dest}'"
-    ));
-    assert_eq!(scalar(&cnt2).as_deref(), Some("3"), "re-promote: still 3 rows (merge-by-id)");
-    let (_, p34b, _) = db_exec(&format!(
+    ))
+    .expect("creds");
+    assert_eq!(cnt2.scalar().as_deref(), Some("3"), "re-promote: still 3 rows (merge-by-id)");
+    let p34b = db_exec(&format!(
         "SELECT status FROM process_statuses WHERE plan_id='{plan}' AND destination='{dest}' AND process_id='process_3_4_packages'"
-    ));
-    assert_eq!(scalar(&p34b).as_deref(), Some("researched"), "P3_4 still researched after re-promote");
+    ))
+    .expect("creds");
+    assert_eq!(p34b.scalar().as_deref(), Some("researched"), "P3_4 still researched after re-promote");
 
     // --- 8. end-to-end: select-offer feeds off the bridged rows ---
     //   hotel offer → P4 populated, P3 NOT populated (no flights).
@@ -295,15 +258,17 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
     let so_ok = out.status.success();
     let so_err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(so_ok, "select-offer on bridged hotel offer should succeed; err={so_err}");
-    let (_, p4, _) = db_exec(&format!(
+    let p4 = db_exec(&format!(
         "SELECT status FROM process_statuses WHERE plan_id='{plan}' AND destination='{dest}' AND process_id='process_4_accommodation'"
-    ));
-    assert_eq!(scalar(&p4).as_deref(), Some("populated"), "select-offer populated P4 from bridged hotel");
-    let (_, p3, _) = db_exec(&format!(
+    ))
+    .expect("creds");
+    assert_eq!(p4.scalar().as_deref(), Some("populated"), "select-offer populated P4 from bridged hotel");
+    let p3 = db_exec(&format!(
         "SELECT status FROM process_statuses WHERE plan_id='{plan}' AND destination='{dest}' AND process_id='process_3_transportation'"
-    ));
+    ))
+    .expect("creds");
     // P3 must NOT be 'populated' for a hotel-only offer (no flights to populate).
-    assert_ne!(scalar(&p3).as_deref(), Some("populated"), "hotel-only offer must not populate P3");
+    assert_ne!(p3.scalar().as_deref(), Some("populated"), "hotel-only offer must not populate P3");
 
     // _cleanup Drop runs teardown here (and on any panic above).
 }

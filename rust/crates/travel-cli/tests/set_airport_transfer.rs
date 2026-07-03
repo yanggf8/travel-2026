@@ -18,72 +18,11 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, is_credless, nanos, seed_plan, teardown_plan, Guard};
 
 static SET_AIRPORT_TRANSFER_LOCK: Mutex<()> = Mutex::new(());
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_travel")
-}
-
-fn nanos() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-}
-
-fn db_exec(sql: &str) -> (bool, String, String) {
-    let out = Command::new(bin())
-        .args(["db", "exec", sql])
-        .env_remove("TRAVEL_PLAN_ID")
-        .output()
-        .expect("run db exec");
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-fn is_skip(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn db_or_skip(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = db_exec(sql);
-    if ok {
-        return Some(stdout);
-    }
-    if is_skip(&stderr) {
-        eprintln!(
-            "skipping set-airport-transfer test (no Turso creds): {}",
-            stderr.trim()
-        );
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
-
-// db exec prints "col: value" per column; the value is everything after the
-// first ':'. Avoid reserved-word column aliases (row/order/key) — use n/v/li/rowval.
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
-}
 
 // --- verbatim ports of the id-building helpers from set_airport_transfer.rs so
 // --- we can assert the EXACT selected_id / candidate_id the command writes. ---
@@ -144,30 +83,12 @@ fn transfer_id(direction: &str, title: &str, route: &str) -> String {
     format!("{}_{}_{}", direction, slugify(title), hash_string(route))
 }
 
-fn seed_plan(plan: &str, dest: &str) -> bool {
-    let sql = format!(
-        "INSERT OR REPLACE INTO plans (plan_id, schema_version, version) \
-           VALUES ('{plan}', '4.2.0', 0); \
-         INSERT OR REPLACE INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan}', '4.2.0', '{dest}'); \
-         INSERT OR REPLACE INTO process_statuses (plan_id, destination, process_id, status) \
+fn seed_transport_status(plan: &str, dest: &str) {
+    db_exec(&format!(
+        "INSERT OR REPLACE INTO process_statuses (plan_id, destination, process_id, status) \
            VALUES ('{plan}', '{dest}', 'process_3_transportation', 'pending');"
-    );
-    db_or_skip(&sql).is_some()
-}
-
-fn teardown(plan: &str, dest: &str) {
-    let sql = format!(
-        "DELETE FROM airport_transfer_candidates WHERE plan_id = '{plan}' AND destination = '{dest}'; \
-         DELETE FROM airport_transfers WHERE plan_id = '{plan}' AND destination = '{dest}'; \
-         DELETE FROM process_statuses WHERE plan_id = '{plan}'; \
-         DELETE FROM plan_event_data WHERE plan_id = '{plan}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan}'; \
-         DELETE FROM plans WHERE plan_id = '{plan}';"
-    );
-    let _ = db_exec(&sql);
+    ))
+    .expect("creds");
 }
 
 fn run_set(
@@ -210,7 +131,8 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
         .lock()
         .unwrap_or_else(|p| p.into_inner());
 
-    if db_or_skip("SELECT 1 AS n").is_none() {
+    if db_exec("SELECT 1 AS n").is_none() {
+        eprintln!("skipping set-airport-transfer test (no Turso creds)");
         return;
     }
 
@@ -218,14 +140,15 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
     let plan = format!("zztest{tag}");
     let dest = format!("zztest_dest_{tag}");
 
-    teardown(&plan, &dest);
+    teardown_plan(&plan, &dest);
     let _g = Guard::new({
         let plan = plan.clone();
         let dest = dest.clone();
-        move || teardown(&plan, &dest)
+        move || teardown_plan(&plan, &dest)
     });
 
-    assert!(seed_plan(&plan, &dest), "seed plan");
+    seed_plan(&plan, &dest, 0);
+    seed_transport_status(&plan, &dest);
 
     // Representative arg set: arrival + booked, one --selected + two --candidate.
     let direction = "arrival";
@@ -254,7 +177,7 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
         selected_spec,
         &[cand0_spec, cand1_spec],
     );
-    if !ok && is_skip(&stderr) {
+    if !ok && is_credless(&stderr) {
         eprintln!(
             "skipping set-airport-transfer test (no Turso creds): {}",
             stderr.trim()
@@ -271,7 +194,7 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
     );
 
     // --- airport_transfers row: selected_* columns + status; booking_url/notes NULL ---
-    let transfer = db_or_skip(&format!(
+    let transfer = db_exec(&format!(
         "SELECT status || '|' || selected_id || '|' || selected_title || '|' || \
                 selected_route || '|' || selected_duration_min || '|' || selected_price_yen || \
                 '|' || selected_schedule || '|' || \
@@ -280,9 +203,9 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
          FROM airport_transfers \
          WHERE plan_id = '{plan}' AND destination = '{dest}' AND direction = '{direction}'"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        scalar(&transfer).as_deref(),
+        transfer.scalar().as_deref(),
         Some(
             format!(
                 "{status}|{selected_id}|Limousine Bus|NRT T1 → Shiodome|85|3200|19:40 → ~21:05|NULL|NULL"
@@ -293,19 +216,19 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
     );
 
     // exactly one airport_transfers row for this plan/dest/direction.
-    let transfer_count = db_or_skip(&format!(
+    let transfer_count = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM airport_transfers \
          WHERE plan_id = '{plan}' AND destination = '{dest}'"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        scalar(&transfer_count).as_deref(),
+        transfer_count.scalar().as_deref(),
         Some("1"),
         "exactly one airport_transfers row; out={transfer_count}"
     );
 
     // --- airport_transfer_candidates: two rows, sort_order = index, booking_url/notes NULL ---
-    let cands = db_or_skip(&format!(
+    let cands = db_exec(&format!(
         "SELECT sort_order || '|' || candidate_id || '|' || title || '|' || route || '|' || \
                 duration_min || '|' || price_yen || '|' || \
                 CASE WHEN schedule IS NULL THEN 'NULL' ELSE schedule END || '|' || \
@@ -315,9 +238,9 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
          WHERE plan_id = '{plan}' AND destination = '{dest}' AND direction = '{direction}' \
          ORDER BY sort_order"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        column(&cands),
+        cands.column(),
         vec![
             format!(
                 "0|{cand0_id}|Narita Express|NRT → Tokyo Station|60|3070|19:44 → ~20:47|NULL|NULL"
@@ -328,50 +251,50 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
     );
 
     // --- plan_events: dest_process row + timeline row, event=airport_transfer_updated ---
-    let dest_event = db_or_skip(&format!(
+    let dest_event = db_exec(&format!(
         "SELECT event AS v FROM plan_events \
          WHERE plan_id = '{plan}' AND scope = 'dest_process' AND destination = '{dest}' \
            AND process_id = 'process_3_transportation'"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        scalar(&dest_event).as_deref(),
+        dest_event.scalar().as_deref(),
         Some("airport_transfer_updated"),
         "dest_process plan_event must be airport_transfer_updated; out={dest_event}"
     );
 
-    let timeline_event = db_or_skip(&format!(
+    let timeline_event = db_exec(&format!(
         "SELECT event || '|' || process_id AS v FROM plan_events \
          WHERE plan_id = '{plan}' AND scope = 'timeline' AND destination = ''"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        scalar(&timeline_event).as_deref(),
+        timeline_event.scalar().as_deref(),
         Some("airport_transfer_updated|process_3_transportation"),
         "timeline plan_event must be airport_transfer_updated on process_3_transportation; out={timeline_event}"
     );
 
     // exactly two plan_events rows total for this plan (dest_process + timeline).
-    let event_count = db_or_skip(&format!(
+    let event_count = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}'"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        scalar(&event_count).as_deref(),
+        event_count.scalar().as_deref(),
         Some("2"),
         "exactly two plan_events rows (dest_process + timeline); out={event_count}"
     );
 
     // --- plan_event_data KV: {direction, status, selected_id, candidates_count} on each scope ---
-    let dest_kv = db_or_skip(&format!(
+    let dest_kv = db_exec(&format!(
         "SELECT key || '=' || value AS li FROM plan_event_data \
          WHERE plan_id = '{plan}' AND scope = 'dest_process' AND destination = '{dest}' \
            AND process_id = 'process_3_transportation' \
          ORDER BY key"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        column(&dest_kv),
+        dest_kv.column(),
         vec![
             "candidates_count=2".to_string(),
             format!("direction={direction}"),
@@ -381,14 +304,14 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
         "dest_process plan_event_data KV must match {{direction,status,selected_id,candidates_count}}; out={dest_kv}"
     );
 
-    let timeline_kv = db_or_skip(&format!(
+    let timeline_kv = db_exec(&format!(
         "SELECT key || '=' || value AS li FROM plan_event_data \
          WHERE plan_id = '{plan}' AND scope = 'timeline' AND destination = '' \
          ORDER BY key"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        column(&timeline_kv),
+        timeline_kv.column(),
         vec![
             "candidates_count=2".to_string(),
             format!("direction={direction}"),
@@ -399,24 +322,24 @@ fn set_airport_transfer_writes_transfer_candidates_events_and_audit() {
     );
 
     // --- operation_runs: exactly one set-airport-transfer row ---
-    let op_runs = db_or_skip(&format!(
+    let op_runs = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM operation_runs \
          WHERE plan_id = '{plan}' AND command_type = 'set-airport-transfer'"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        scalar(&op_runs).as_deref(),
+        op_runs.scalar().as_deref(),
         Some("1"),
         "exactly one set-airport-transfer operation_run; out={op_runs}"
     );
 
     // --- plans.version bumped by one (seeded at 0) ---
-    let version = db_or_skip(&format!(
+    let version = db_exec(&format!(
         "SELECT version AS v FROM plans WHERE plan_id = '{plan}'"
     ))
-    .unwrap();
+    .expect("creds");
     assert_eq!(
-        scalar(&version).as_deref(),
+        version.scalar().as_deref(),
         Some("1"),
         "plans.version should bump by one; out={version}"
     );
