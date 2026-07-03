@@ -125,19 +125,7 @@ fn seed_plan(plan: &str, dest: &str) -> bool {
 }
 
 fn teardown(plan: &str, dest: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan}'; \
-         DELETE FROM process_statuses WHERE plan_id = '{plan}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan}'; \
-         DELETE FROM plans WHERE plan_id = '{plan}';"
-    );
-    let _ = Command::new(bin())
-        .args(["db", "exec", &sql])
-        .env_remove("TRAVEL_PLAN_ID")
-        .output();
-    let _ = dest; // dest scoped in seed only; all rows keyed by plan_id
+    common::teardown_plan(plan, dest);
 }
 
 fn run_set_status(plan: &str, dest: &str, process_id: &str, target: &str) -> Option<(bool, String, String)> {

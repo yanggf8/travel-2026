@@ -126,33 +126,8 @@ fn seed_plan(plan: &str, dest: &str) {
 }
 
 fn teardown(plan: &str, dest: &str, ids: &[&str]) {
-    for id in ids {
-        let _ = db_exec(&format!("DELETE FROM offers WHERE id = '{id}'"));
-    }
-    for tbl in [
-        "plan_offer_includes",
-        "plan_offer_hotel_access",
-        "plan_offer_date_pricing",
-        "plan_offer_best_value",
-        "plan_offer_flights",
-        "plan_offer_hotels",
-        "plan_offers",
-        "plan_offer_selection",
-    ] {
-        let _ = db_exec(&format!(
-            "DELETE FROM {tbl} WHERE plan_id = '{plan}' AND destination = '{dest}'"
-        ));
-    }
-    for tbl in [
-        "process_statuses",
-        "plan_events",
-        "plan_event_data",
-        "operation_runs",
-        "plan_metadata",
-        "plans",
-    ] {
-        let _ = db_exec(&format!("DELETE FROM {tbl} WHERE plan_id = '{plan}'"));
-    }
+    common::teardown_offers(ids);
+    common::teardown_plan(plan, dest);
 }
 
 fn run_promote(plan: &str, dest: &str, extra: &[&str]) -> (bool, String, String) {
