@@ -1,84 +1,37 @@
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, teardown_plan, Guard};
 
 const ACTIVITY_TITLE: &str = "Reservation Lock Activity";
 const AREA: &str = "Harbor Deck";
 const BOOKING_URL: &str = "https://example.test/sync-bookings";
 const BOOK_BY: &str = "2026-06-15";
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping sync-bookings Turso test: {}", stderr.trim());
-        return None;
-    }
-
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
-
 fn cleanup(plan_id: &str, trip_id: &str, booking_key: &str, panic_on_failure: bool) -> bool {
-    let sql = format!(
+    if panic_on_failure && db_exec("SELECT 1").is_none() {
+        return false;
+    }
+
+    let booking_sql = format!(
         "DELETE FROM bookings_event_data WHERE booking_key = '{booking_key}'; \
          DELETE FROM bookings_events WHERE booking_key = '{booking_key}'; \
          DELETE FROM bookings_current_payload WHERE booking_key = '{booking_key}'; \
          DELETE FROM bookings_current WHERE trip_id = '{trip_id}' OR booking_key = '{booking_key}'; \
-         DELETE FROM activity_tags WHERE activity_id IN (SELECT id FROM activities WHERE plan_id = '{plan_id}'); \
-         DELETE FROM activities WHERE plan_id = '{plan_id}'; \
-         DELETE FROM timesofday WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM airport_transfer_candidates WHERE plan_id = '{plan_id}'; \
-         DELETE FROM airport_transfers WHERE plan_id = '{plan_id}'; \
-         DELETE FROM process_statuses WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_offer_selection WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_destinations WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
+         DELETE FROM activity_tags WHERE activity_id IN (SELECT id FROM activities WHERE plan_id = '{plan_id}');"
     );
 
-    let out = bin().args(["db", "exec", &sql]).output().expect("run travel db exec cleanup");
-    if out.status.success() {
-        return true;
-    }
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping sync-bookings Turso test: {}", stderr.trim());
-        return false;
-    }
-
     if panic_on_failure {
-        panic!("travel db exec cleanup failed: {}\nSQL: {sql}", stderr.trim());
+        db_exec(&booking_sql).expect("cleanup booking rows");
+        teardown_plan(plan_id, "");
+        true
+    } else {
+        let _ = db_exec_teardown(&booking_sql);
+        teardown_plan(plan_id, "");
+        true
     }
-
-    eprintln!("sync-bookings cleanup failed: {}", stderr.trim());
-    false
 }
 
 fn seed_plan_with_one_activity_booking(plan_id: &str, dest: &str, activity_id: &str) -> bool {
@@ -114,7 +67,7 @@ fn update_seeded_booking(activity_id: &str) -> bool {
 }
 
 fn run_sync(plan_id: &str, trip_id: &str) -> Option<String> {
-    let out = bin()
+    let out = Command::new(bin())
         .args(["sync-bookings", "--plan-id", plan_id, "--trip-id", trip_id])
         .env_remove("TRAVEL_PLAN_ID")
         .output()
@@ -139,22 +92,15 @@ fn run_sync(plan_id: &str, trip_id: &str) -> Option<String> {
 }
 
 fn count(sql: &str) -> Option<i64> {
-    let out = db_exec(sql)?;
-    Some(
-        out.lines()
-            .find_map(|l| l.strip_prefix("n: "))
-            .map(|s| s.trim().parse::<i64>().unwrap_or(-1))
-            .unwrap_or(0),
-    )
+    let n = db_exec(sql)?
+        .scalar()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+    Some(n)
 }
 
-fn values(sql: &str, prefix: &str) -> Option<Vec<String>> {
-    let out = db_exec(sql)?;
-    Some(
-        out.lines()
-            .filter_map(|l| l.strip_prefix(prefix).map(|s| s.trim().to_string()))
-            .collect(),
-    )
+fn values(sql: &str, _prefix: &str) -> Option<Vec<String>> {
+    Some(db_exec(sql)?.column())
 }
 
 fn assert_created_rows(trip_id: &str, dest: &str, booking_key: &str) {

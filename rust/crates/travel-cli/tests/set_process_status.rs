@@ -10,65 +10,11 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, is_credless, is_transient, nanos, seed_plan, teardown_plan, Guard};
 
 static SET_PROCESS_STATUS_LOCK: Mutex<()> = Mutex::new(());
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_travel")
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn is_transient(stderr: &str) -> bool {
-    stderr.contains("Network is unreachable")
-        || stderr.contains("error trying to connect")
-        || stderr.contains("connection reset")
-        || stderr.contains("connection closed")
-}
-
-fn db_exec(sql: &str) -> Option<String> {
-    for attempt in 0..6 {
-        let out = Command::new(bin())
-            .args(["db", "exec", sql])
-            .env_remove("TRAVEL_PLAN_ID")
-            .output()
-            .expect("run db exec");
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        if !out.status.success() && is_credless(&stderr) {
-            eprintln!(
-                "skipping set-process-status test (no Turso creds): {}",
-                stderr.trim()
-            );
-            return None;
-        }
-        if !out.status.success() && is_transient(&stderr) && attempt < 5 {
-            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1)));
-            continue;
-        }
-        if !out.status.success() {
-            panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-        }
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    unreachable!()
-}
 
 fn run_cmd(args: &[&str]) -> Option<(bool, String, String)> {
     for attempt in 0..6 {
@@ -95,25 +41,10 @@ fn run_cmd(args: &[&str]) -> Option<(bool, String, String)> {
     unreachable!()
 }
 
-fn scalar(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
-fn column(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-        .filter(|v| !v.is_empty())
-        .collect()
-}
-
-fn seed_plan(plan: &str, dest: &str) -> bool {
+fn seed_process_statuses(plan: &str, dest: &str) -> bool {
+    seed_plan(plan, dest, 7);
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan}', '4.2.0', 7); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) VALUES ('{plan}', '4.2.0', '{dest}'); \
-         INSERT INTO process_statuses (plan_id, destination, process_id, status) VALUES \
+        "INSERT INTO process_statuses (plan_id, destination, process_id, status) VALUES \
          ('{plan}','{dest}','process_1_date_anchor','confirmed'), \
          ('{plan}','{dest}','process_2_destination','confirmed'), \
          ('{plan}','{dest}','process_3_transportation','pending'), \
@@ -122,10 +53,6 @@ fn seed_plan(plan: &str, dest: &str) -> bool {
          ('{plan}','{dest}','process_5_daily_itinerary','pending');"
     );
     db_exec(&sql).is_some()
-}
-
-fn teardown(plan: &str, dest: &str) {
-    common::teardown_plan(plan, dest);
 }
 
 fn run_set_status(plan: &str, dest: &str, process_id: &str, target: &str) -> Option<(bool, String, String)> {
@@ -154,14 +81,14 @@ fn set_process_status_advances_shortest_path_and_audits() {
     let plan = format!("test-setstatus-{tag}");
     let dest = format!("zz_setstatus_{tag}");
 
-    teardown(&plan, &dest);
+    teardown_plan(&plan, &dest);
     let _g = Guard::new({
         let plan = plan.clone();
         let dest = dest.clone();
-        move || teardown(&plan, &dest)
+        move || teardown_plan(&plan, &dest)
     });
 
-    assert!(seed_plan(&plan, &dest), "seed plan");
+    assert!(seed_process_statuses(&plan, &dest), "seed plan");
 
     let (ok, stdout, stderr) = run_set_status(&plan, &dest, "process_3_transportation", "booked")
         .expect("run set-process-status");
@@ -179,7 +106,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
         "SELECT status FROM process_statuses WHERE plan_id='{plan}' AND destination='{dest}' AND process_id='process_3_transportation';"
     ))
     .unwrap();
-    assert_eq!(scalar(&status).as_deref(), Some("booked"), "final status; out={status}");
+    assert_eq!(status.scalar().as_deref(), Some("booked"), "final status; out={status}");
 
     // Dest-process events
     let dest_events = db_exec(&format!(
@@ -189,7 +116,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&dest_events).as_deref(),
+        dest_events.scalar().as_deref(),
         Some("3"),
         "dest_process status_changed count; out={dest_events}"
     );
@@ -202,7 +129,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&tl_events).as_deref(),
+        tl_events.scalar().as_deref(),
         Some("3"),
         "timeline status_changed count; out={tl_events}"
     );
@@ -216,7 +143,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
     ))
     .unwrap();
     assert_eq!(
-        column(&hops),
+        hops.column(),
         vec![
             "pending->populated".to_string(),
             "populated->booking".to_string(),
@@ -231,7 +158,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
          FROM operation_runs WHERE plan_id='{plan}' ORDER BY started_at DESC LIMIT 1;"
     ))
     .unwrap();
-    let op_line = scalar(&op).unwrap_or_default();
+    let op_line = op.scalar().unwrap_or_default();
     assert!(
         op_line.starts_with("set-process-status|completed|7|8|"),
         "operation_runs row; got={op_line}"
@@ -245,7 +172,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
         "SELECT version FROM plans WHERE plan_id='{plan}';"
     ))
     .unwrap();
-    assert_eq!(scalar(&version).as_deref(), Some("8"), "plan version; out={version}");
+    assert_eq!(version.scalar().as_deref(), Some("8"), "plan version; out={version}");
 
     // Idempotent re-run
     let (ok2, stdout2, stderr2) = run_set_status(&plan, &dest, "process_3_transportation", "booked")
@@ -265,7 +192,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
            AND process_id='process_3_transportation' AND event='status_changed';"
     ))
     .unwrap();
-    assert_eq!(scalar(&dest_events2).as_deref(), Some("3"), "dest events unchanged");
+    assert_eq!(dest_events2.scalar().as_deref(), Some("3"), "dest events unchanged");
 
     let tl_events2 = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM plan_events \
@@ -273,7 +200,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
            AND process_id='process_3_transportation' AND event='status_changed';"
     ))
     .unwrap();
-    assert_eq!(scalar(&tl_events2).as_deref(), Some("3"), "timeline events unchanged");
+    assert_eq!(tl_events2.scalar().as_deref(), Some("3"), "timeline events unchanged");
 
     let op_count = db_exec(&format!(
         "SELECT COUNT(*) AS n FROM operation_runs \
@@ -281,7 +208,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&op_count).as_deref(),
+        op_count.scalar().as_deref(),
         Some("1"),
         "still one set-process-status operation; out={op_count}"
     );
@@ -290,7 +217,7 @@ fn set_process_status_advances_shortest_path_and_audits() {
         "SELECT version FROM plans WHERE plan_id='{plan}';"
     ))
     .unwrap();
-    assert_eq!(scalar(&version2).as_deref(), Some("8"), "version unchanged");
+    assert_eq!(version2.scalar().as_deref(), Some("8"), "version unchanged");
 
     // No-path failure: corrupted current value
     db_exec(&format!(
@@ -326,8 +253,8 @@ fn set_process_status_advances_shortest_path_and_audits() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&events_after),
-        scalar(&events_before),
+        events_after.scalar(),
+        events_before.scalar(),
         "no P4 status_changed events added"
     );
 
@@ -336,8 +263,8 @@ fn set_process_status_advances_shortest_path_and_audits() {
     ))
     .unwrap();
     assert_eq!(
-        scalar(&ops_after),
-        scalar(&ops_before),
+        ops_after.scalar(),
+        ops_before.scalar(),
         "no extra operation_runs"
     );
 }

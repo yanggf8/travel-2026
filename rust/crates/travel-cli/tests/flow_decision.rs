@@ -3,53 +3,16 @@
 
 use std::collections::HashSet;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping flow-decision Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
 fn count(sql: &str) -> Option<i64> {
-    let out = db_exec(sql)?;
-    out.lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().parse::<i64>().unwrap_or(-1)))
+    db_exec(sql)?.scalar().and_then(|s| s.parse::<i64>().ok())
 }
 
 fn scalar(sql: &str) -> Option<String> {
-    let out = db_exec(sql)?;
-    out.lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+    db_exec(sql)?.scalar()
 }
 
 fn kv_lines(plan: &str, event: &str) -> Option<Vec<String>> {
@@ -62,37 +25,19 @@ fn kv_lines(plan: &str, event: &str) -> Option<Vec<String>> {
            ) \
          ORDER BY key"
     );
-    let out = db_exec(&sql)?;
-    Some(
-        out.lines()
-            .filter_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-            .filter(|v| !v.is_empty())
-            .collect(),
-    )
+    Some(db_exec(&sql)?.column())
 }
 
 fn seed_bare(plan_id: &str, dest: &str) -> bool {
-    let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}');"
-    );
-    db_exec(&sql).is_some()
-}
-
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
+    true
 }
 
 fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
-    let mut cmd = bin();
+    let mut cmd = Command::new(bin());
     cmd.args(args).env("TRAVEL_PLAN_ID", plan_id);
     let out = cmd.output().unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
     (
@@ -122,10 +67,10 @@ fn flow_decision_mode_happy_path_writes_triad() {
     let tag = nanos();
     let plan_id = format!("zztest-flow-mode-{tag}");
     let dest = format!("zztest_flow_{tag}");
-    teardown(&plan_id);
+    teardown_plan(&plan_id, &dest);
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -204,10 +149,10 @@ fn flow_decision_mode_without_mode_flag_fails_writes_nothing() {
     let tag = nanos();
     let plan_id = format!("zztest-flow-nomode-{tag}");
     let dest = format!("zztest_flow_{tag}");
-    teardown(&plan_id);
+    teardown_plan(&plan_id, &dest);
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -223,10 +168,10 @@ fn flow_decision_enter_with_mode_flag_fails() {
     let tag = nanos();
     let plan_id = format!("zztest-flow-badmode-{tag}");
     let dest = format!("zztest_flow_{tag}");
-    teardown(&plan_id);
+    teardown_plan(&plan_id, &dest);
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -245,10 +190,10 @@ fn flow_decision_invalid_stage_fails() {
     let tag = nanos();
     let plan_id = format!("zztest-flow-badstage-{tag}");
     let dest = format!("zztest_flow_{tag}");
-    teardown(&plan_id);
+    teardown_plan(&plan_id, &dest);
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_bare(&plan_id, &dest) {
         return;
@@ -264,10 +209,10 @@ fn flow_decision_enter_happy_path_writes_triad() {
     let tag = nanos();
     let plan_id = format!("zztest-flow-enter-{tag}");
     let dest = format!("zztest_flow_{tag}");
-    teardown(&plan_id);
+    teardown_plan(&plan_id, &dest);
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_bare(&plan_id, &dest) {
         return;

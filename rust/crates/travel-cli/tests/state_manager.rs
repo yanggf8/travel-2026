@@ -25,52 +25,22 @@
 //! never touch real plans.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping state-manager Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
+use common::{bin, db_exec, db_exec_teardown, nanos, seed_plan, teardown_plan, Guard};
 
 /// Seed plan + plan_metadata + one day with a single activity "Hotel checkout"
 /// (id `act-checkout-<plan_id>`, suffixed because `activities.id` is the global
 /// PRIMARY KEY) in the morning session. Mirrors the day-5 fixture row.
 /// Returns false on credless skip.
 fn seed(plan_id: &str, dest: &str) -> bool {
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
     let act_id = format!("act-checkout-{plan_id}");
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) VALUES ('{plan_id}', '4.2.0', '{dest}'); \
-         INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
+        "INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
            VALUES ('{plan_id}', '{dest}', 5, '2026-02-17', 'Checkout', 'departure', 'draft'); \
          INSERT INTO activities \
            (id, plan_id, destination, day_number, session_type, sort_order, title, \
@@ -81,18 +51,11 @@ fn seed(plan_id: &str, dest: &str) -> bool {
     db_exec(&sql).is_some()
 }
 
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM activity_tags WHERE activity_id LIKE 'act-checkout-{plan_id}'; \
-         DELETE FROM activities WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
+fn teardown(plan_id: &str, dest: &str) {
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM activity_tags WHERE activity_id LIKE 'act-checkout-{plan_id}';"
+    ));
+    teardown_plan(plan_id, dest);
 }
 
 /// Run set-activity-time. Returns (success, stdout, stderr).
@@ -108,7 +71,7 @@ fn set_time(plan_id: &str, dest: &str, day: &str, session: &str, activity: &str,
     for e in extra {
         args.push((*e).to_string());
     }
-    let out = bin()
+    let out = Command::new(bin())
         .args(&args)
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -128,7 +91,9 @@ fn read_activity_col(plan_id: &str, dest: &str, col: &str) -> String {
     let sql = format!(
         "SELECT {col} FROM activities WHERE plan_id = '{plan_id}' AND destination = '{dest}' AND id = '{act_id}'"
     );
-    db_exec(&sql).unwrap_or_default()
+    db_exec(&sql)
+        .map(|rows| rows.raw().to_string())
+        .unwrap_or_default()
 }
 
 // ── 1. exact ID match ───────────────────────────────────────────────────────
@@ -137,13 +102,13 @@ async fn finds_activity_by_exact_id() {
     let tag = nanos();
     let plan_id = format!("test-plan-statemgr-id-{tag}");
     let dest = format!("statemgrid_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", &format!("act-checkout-{plan_id}"), &["--start", "11:00"]);
     let start = read_activity_col(&plan_id, &dest, "start_time");
@@ -158,13 +123,13 @@ async fn finds_activity_by_title_substring_lowercase() {
     let tag = nanos();
     let plan_id = format!("test-plan-statemgr-lc-{tag}");
     let dest = format!("statemgrlc_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--start", "11:00"]);
     let start = read_activity_col(&plan_id, &dest, "start_time");
@@ -179,13 +144,13 @@ async fn finds_activity_by_title_substring_uppercase() {
     let tag = nanos();
     let plan_id = format!("test-plan-statemgr-uc-{tag}");
     let dest = format!("statemgruc_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", "CHECKOUT", &["--start", "11:00"]);
     let start = read_activity_col(&plan_id, &dest, "start_time");
@@ -200,13 +165,13 @@ async fn only_updates_provided_fields() {
     let tag = nanos();
     let plan_id = format!("test-plan-statemgr-partial-{tag}");
     let dest = format!("statemgrpartial_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
 
     // First set start_time.
     let (ok1, _o1, e1) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--start", "11:00"]);
@@ -228,13 +193,13 @@ async fn sets_is_fixed_time_false_explicitly() {
     let tag = nanos();
     let plan_id = format!("test-plan-statemgr-fixed-{tag}");
     let dest = format!("statemgrfixed_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
 
     // true first.
     let (ok1, _o1, e1) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--fixed", "true"]);
@@ -256,13 +221,13 @@ async fn emits_activity_time_updated_event() {
     let tag = nanos();
     let plan_id = format!("test-plan-statemgr-event-{tag}");
     let dest = format!("statemgrevent_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
     if !seed(&plan_id, &dest) {
         return;
     }
-    let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
-    });
 
     let (ok, stdout, stderr) = set_time(&plan_id, &dest, "5", "morning", "checkout", &["--start", "11:00", "--fixed", "true"]);
     assert!(ok, "set-activity-time should succeed; stdout={stdout} stderr={stderr}");
@@ -271,6 +236,7 @@ async fn emits_activity_time_updated_event() {
     let events = db_exec(&format!(
         "SELECT event FROM plan_events WHERE plan_id = '{plan_id}' AND scope = 'timeline' AND event = 'activity_time_updated'"
     ))
+    .map(|rows| rows.raw().to_string())
     .unwrap_or_default();
     assert!(
         events.contains("event: activity_time_updated"),
@@ -281,6 +247,7 @@ async fn emits_activity_time_updated_event() {
     let kv = db_exec(&format!(
         "SELECT key, value FROM plan_event_data WHERE plan_id = '{plan_id}' AND scope = 'timeline' ORDER BY key"
     ))
+    .map(|rows| rows.raw().to_string())
     .unwrap_or_default();
 
     // day_number = 5, session = morning, activity_id = act-checkout-<plan>.

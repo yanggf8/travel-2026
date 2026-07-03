@@ -20,73 +20,27 @@
 //! creds are absent. NEVER touches a real plan.
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
-/// Run `db exec`; returns Some(stdout) on success, None on a credless skip,
-/// panics on a real failure.
-fn db_exec(sql: &str) -> Option<String> {
-    let out = bin().args(["db", "exec", sql]).output().expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping route-segment-guard Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
 
 /// Seed a throwaway plan + plan_metadata + ONE days row (day 1) so a guarded
 /// write that PASSES isn't a no-op. Returns false on a credless skip.
 fn seed_plan_with_day(plan_id: &str, dest: &str) -> bool {
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    seed_plan(plan_id, dest, 0);
     let sql = format!(
-        "INSERT INTO plans (plan_id, schema_version, version) VALUES ('{plan_id}', '4.2.0', 0); \
-         INSERT INTO plan_metadata (plan_id, schema_version, active_destination) \
-           VALUES ('{plan_id}', '4.2.0', '{dest}'); \
-         INSERT INTO days (plan_id, destination, day_number, date, day_type) \
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type) \
            VALUES ('{plan_id}', '{dest}', 1, '2026-06-12', 'full');"
     );
     db_exec(&sql).is_some()
 }
 
-fn teardown(plan_id: &str) {
-    let sql = format!(
-        "DELETE FROM plan_event_data WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_events WHERE plan_id = '{plan_id}'; \
-         DELETE FROM operation_runs WHERE plan_id = '{plan_id}'; \
-         DELETE FROM day_route_segments WHERE plan_id = '{plan_id}'; \
-         DELETE FROM days WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plan_metadata WHERE plan_id = '{plan_id}'; \
-         DELETE FROM plans WHERE plan_id = '{plan_id}';"
-    );
-    let _ = bin().args(["db", "exec", &sql]).output();
-}
-
 /// Run a `travel` subcommand with TRAVEL_PLAN_ID set. Returns (ok, stdout, stderr).
 fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .env("TRAVEL_PLAN_ID", plan_id)
         .output()
@@ -100,11 +54,9 @@ fn run_cmd(plan_id: &str, args: &[&str]) -> (bool, String, String) {
 
 /// COUNT(*) helper. Returns the integer count, or None on a credless skip.
 fn count(sql: &str) -> Option<i64> {
-    let out = db_exec(sql)?;
-    let n = out
-        .lines()
-        .find_map(|l| l.strip_prefix("n: "))
-        .map(|s| s.trim().parse::<i64>().unwrap_or(-1))
+    let n = db_exec(sql)?
+        .scalar()
+        .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
     Some(n)
 }
@@ -137,8 +89,8 @@ fn set_route_segment_rejects_mode_only_stop() {
     let plan_id = format!("test-rsg-junk-{tag}");
     let dest = format!("rsgjunk_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
@@ -163,8 +115,8 @@ fn set_route_segment_rejects_empty_after_clean() {
     let plan_id = format!("test-rsg-empty-{tag}");
     let dest = format!("rsgempty_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
@@ -185,8 +137,8 @@ fn set_route_segment_rejects_clock_time_stop() {
     let plan_id = format!("test-rsg-clock-{tag}");
     let dest = format!("rsgclock_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
@@ -205,8 +157,8 @@ fn set_route_segment_rejects_cross_country_pair() {
     let plan_id = format!("test-rsg-xc-{tag}");
     let dest = format!("rsgxc_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
@@ -228,8 +180,8 @@ fn set_route_segment_rejects_walking_over_rail() {
     let plan_id = format!("test-rsg-walkrail-{tag}");
     let dest = format!("rsgwalkrail_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
@@ -251,8 +203,8 @@ fn set_route_segment_passes_normal_segment() {
     let plan_id = format!("test-rsg-ok-{tag}");
     let dest = format!("rsgok_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
@@ -276,8 +228,8 @@ fn set_route_segments_bulk_rejects_whole_batch_on_one_bad() {
     let plan_id = format!("test-rsg-bulk-{tag}");
     let dest = format!("rsgbulk_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
@@ -313,8 +265,8 @@ fn set_route_segments_bulk_passes_all_clean() {
     let plan_id = format!("test-rsg-bulkok-{tag}");
     let dest = format!("rsgbulkok_{tag}");
     let _g = Guard::new({
-        let plan_id = plan_id.clone();
-        move || teardown(&plan_id)
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
     });
     if !seed_plan_with_day(&plan_id, &dest) {
         return;
