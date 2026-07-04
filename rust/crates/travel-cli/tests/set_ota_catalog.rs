@@ -4,30 +4,17 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, Guard};
 
 static CATALOG_LOCK: Mutex<()> = Mutex::new(());
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin().args(args).output().unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
+    let out = Command::new(bin())
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -35,28 +22,17 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn scalar(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout.lines().find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
 fn teardown(sid: &str) {
-    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_coverage WHERE source_id='{sid}'")]);
-    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_region_codes WHERE source_id='{sid}'")]);
-    let _ = run(&["db", "exec", &format!("DELETE FROM ota_sources WHERE source_id='{sid}'")]);
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_source_coverage WHERE source_id='{sid}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_source_region_codes WHERE source_id='{sid}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_sources WHERE source_id='{sid}'"));
     // catalog_runs is append-only audit; clean only this test's noise by command_summary match.
-    let _ = run(&["db", "exec", &format!("DELETE FROM catalog_runs WHERE command_summary LIKE '{sid}%'")]);
+    let _ = db_exec_teardown(&format!("DELETE FROM catalog_runs WHERE command_summary LIKE '{sid}%'"));
 }
 
 fn teardown_tier1(sid: &str) {
-    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_url_param WHERE source_id='{sid}'")]);
-    let _ = run(&["db", "exec", &format!("DELETE FROM ota_source_workflow WHERE source_id='{sid}'")]);
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_source_url_param WHERE source_id='{sid}'"));
+    let _ = db_exec_teardown(&format!("DELETE FROM ota_source_workflow WHERE source_id='{sid}'"));
     teardown(sid);
 }
 
@@ -80,9 +56,10 @@ async fn set_coverage_proven_requires_date_and_method() {
     // --proven WITHOUT --proven-at/--method must FAIL and write nothing.
     let (ok, _o, _e) = run(&["set-ota-coverage", &sid, "fit", "--proven"]);
     assert!(!ok, "--proven without --proven-at/--method must fail");
-    let Some(n) = scalar(&format!(
+    let Some(n) = db_exec(&format!(
         "SELECT count(*) AS n FROM ota_source_coverage WHERE source_id='{sid}'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert_eq!(n, "0", "failed --proven must write nothing");
@@ -101,19 +78,24 @@ async fn set_coverage_proven_requires_date_and_method() {
     ]);
     assert!(ok3, "valid coverage write should succeed; err={e3}");
     assert_eq!(
-        scalar(&format!("SELECT proven FROM ota_source_coverage WHERE source_id='{sid}' AND product_type='fit'")).as_deref(),
+        db_exec(&format!("SELECT proven FROM ota_source_coverage WHERE source_id='{sid}' AND product_type='fit'"))
+            .and_then(|r| r.scalar())
+            .as_deref(),
         Some("1"),
         "proven landed"
     );
     assert_eq!(
-        scalar(&format!("SELECT method FROM ota_source_coverage WHERE source_id='{sid}' AND product_type='fit'")).as_deref(),
+        db_exec(&format!("SELECT method FROM ota_source_coverage WHERE source_id='{sid}' AND product_type='fit'"))
+            .and_then(|r| r.scalar())
+            .as_deref(),
         Some("agent_parse"),
         "method landed"
     );
     // catalog_runs audit row written.
-    let Some(audit) = scalar(&format!(
+    let Some(audit) = db_exec(&format!(
         "SELECT count(*) AS n FROM catalog_runs WHERE command_summary LIKE '{sid}/fit%'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert!(audit.parse::<i64>().unwrap_or(0) >= 1, "a catalog_runs audit row was written");
@@ -162,58 +144,65 @@ async fn set_ota_workflow_round_trip_writes_row_and_audit() {
     );
 
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT nav_kind FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some("get"),
         "nav_kind landed"
     );
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT url_template FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some(template),
         "url_template landed"
     );
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT capture_url_contains FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some("example.com/search"),
         "capture_url_contains landed"
     );
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT settle_marker FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some("ready"),
         "settle_marker landed"
     );
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT settle_ms FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some("25000"),
         "settle_ms landed"
     );
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT agent_extraction_note FROM ota_source_workflow WHERE source_id='{sid}' AND product_type='fit'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some("zz workflow note"),
         "agent_extraction_note landed"
     );
 
-    let Some(audit) = scalar(&format!(
+    let Some(audit) = db_exec(&format!(
         "SELECT count(*) AS n FROM catalog_runs \
          WHERE command_type='set-ota-workflow' AND command_summary LIKE '{sid}/fit%'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert!(
@@ -256,20 +245,22 @@ async fn set_ota_url_param_round_trip_writes_row_and_audit() {
     );
 
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT url_value FROM ota_source_url_param \
              WHERE source_id='{sid}' AND product_type='fit' AND url_param_name='dest_code' \
                AND input_name='destination' AND input_value='tokyo'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some("TYO"),
         "token row landed"
     );
 
-    let Some(audit) = scalar(&format!(
+    let Some(audit) = db_exec(&format!(
         "SELECT count(*) AS n FROM catalog_runs \
          WHERE command_type='set-ota-url-param' AND command_summary LIKE '{sid}/fit%'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert!(
@@ -312,20 +303,22 @@ async fn set_ota_url_param_hotel_round_trip_writes_row_and_audit() {
     );
 
     assert_eq!(
-        scalar(&format!(
+        db_exec(&format!(
             "SELECT url_value FROM ota_source_url_param \
              WHERE source_id='{sid}' AND product_type='hotel' AND url_param_name='hotel_slug' \
                AND input_name='hotel' AND input_value='my-hotel'"
         ))
+        .and_then(|r| r.scalar())
         .as_deref(),
         Some("tok"),
         "hotel token row landed"
     );
 
-    let Some(audit) = scalar(&format!(
+    let Some(audit) = db_exec(&format!(
         "SELECT count(*) AS n FROM catalog_runs \
          WHERE command_type='set-ota-url-param' AND command_summary LIKE '{sid}/hotel%'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert!(
@@ -367,16 +360,18 @@ async fn set_ota_url_param_rejects_origin_input_name_and_writes_nothing() {
         "non-destination input_name must fail; stdout={stdout} stderr={stderr}"
     );
 
-    let Some(rows) = scalar(&format!(
+    let Some(rows) = db_exec(&format!(
         "SELECT count(*) AS n FROM ota_source_url_param WHERE source_id='{sid}'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert_eq!(rows, "0", "failed set-ota-url-param must write no url_param row");
 
-    let Some(audit) = scalar(&format!(
+    let Some(audit) = db_exec(&format!(
         "SELECT count(*) AS n FROM catalog_runs WHERE command_type='set-ota-url-param' AND command_summary LIKE '{sid}%'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert_eq!(audit, "0", "failed set-ota-url-param must write no audit row");

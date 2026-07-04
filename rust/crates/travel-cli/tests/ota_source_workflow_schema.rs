@@ -2,10 +2,9 @@
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, Guard};
 
 static WORKFLOW_SCHEMA_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -15,26 +14,8 @@ fn workflow_schema_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
-
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -77,31 +58,13 @@ fn pk_columns_of(table: &str) -> Option<Vec<String>> {
     )
 }
 
-fn scalar(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            eprintln!("skipping workflow schema test: {}", stderr.trim());
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
 fn teardown(source_id: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_source_url_param WHERE source_id='{source_id}'"),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM ota_source_workflow WHERE source_id='{source_id}'"),
-    ]);
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM ota_source_url_param WHERE source_id='{source_id}'"
+    ));
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM ota_source_workflow WHERE source_id='{source_id}'"
+    ));
 }
 
 #[tokio::test]
@@ -199,9 +162,10 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
         ("fit", "4"),
         ("group_tour", "1"),
     ] {
-        let Some(got_count) = scalar(&format!(
+        let Some(got_count) = db_exec(&format!(
             "SELECT count(*) AS n FROM product_type_inputs WHERE product_type='{product_type}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(
@@ -256,18 +220,20 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
     ];
 
     for (source_id, product_type, url_template, capture_url_contains, settle_ms) in expected {
-        let Some(got_url) = scalar(&format!(
+        let Some(got_url) = db_exec(&format!(
             "SELECT url_template FROM ota_source_workflow \
              WHERE source_id='{source_id}' AND product_type='{product_type}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(got_url, url_template, "{source_id}/{product_type} url_template");
 
-        let Some(got_contains) = scalar(&format!(
+        let Some(got_contains) = db_exec(&format!(
             "SELECT capture_url_contains FROM ota_source_workflow \
              WHERE source_id='{source_id}' AND product_type='{product_type}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(
@@ -275,10 +241,11 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
             "{source_id}/{product_type} capture_url_contains"
         );
 
-        let Some(got_settle_ms) = scalar(&format!(
+        let Some(got_settle_ms) = db_exec(&format!(
             "SELECT settle_ms FROM ota_source_workflow \
              WHERE source_id='{source_id}' AND product_type='{product_type}'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(got_settle_ms, settle_ms, "{source_id}/{product_type} settle_ms");
@@ -294,11 +261,12 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
         ("agoda", "hotel", "city_slug", "tokyo"),
         ("agoda", "hotel", "country", "jp"),
     ] {
-        let Some(got_url_value) = scalar(&format!(
+        let Some(got_url_value) = db_exec(&format!(
             "SELECT url_value FROM ota_source_url_param \
              WHERE source_id='{source_id}' AND product_type='{product_type}' \
                AND url_param_name='{url_param_name}' AND input_name='destination' AND input_value='tokyo'"
-        )) else {
+        ))
+        .and_then(|r| r.scalar()) else {
             return;
         };
         assert_eq!(
@@ -312,12 +280,13 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
     // credless AND when the row is missing, which would silently skip a dropped seed row. So first assert
     // the COUNT (a COUNT query returns Some("0") when creds are present but the row is absent → fails
     // loud; None only when credless → skip), then check the value.
-    let Some(hotel_slug_count) = scalar(
+    let Some(hotel_slug_count) = db_exec(
         "SELECT count(*) AS n FROM ota_source_url_param \
          WHERE source_id='agoda' AND product_type='hotel' AND url_param_name='hotel_slug' \
            AND input_name='hotel' AND input_value='shinjuku-washington-hotel-main-building' \
            AND url_value='shinjuku-washington-hotel-main-building'",
-    ) else {
+    )
+    .and_then(|r| r.scalar()) else {
         return; // credless — scalar already logged the skip
     };
     assert_eq!(
@@ -357,9 +326,10 @@ async fn workflow_and_url_param_schema_seed_rows_and_nav_kind_check() {
         "nav_kind='custom:test' must be accepted; stdout={stdout} stderr={stderr}"
     );
 
-    let Some(got_nav_kind) = scalar(&format!(
+    let Some(got_nav_kind) = db_exec(&format!(
         "SELECT nav_kind FROM ota_source_workflow WHERE source_id='{custom_source_id}' AND product_type='fit'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert_eq!(got_nav_kind, "custom:test");

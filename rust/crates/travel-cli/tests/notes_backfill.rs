@@ -4,21 +4,10 @@
 use std::process::Command;
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
+use common::{bin, db_exec, is_credless, Guard};
 
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -27,19 +16,6 @@ fn run(args: &[&str]) -> (bool, String, String) {
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
-}
-
-fn scalar(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
 }
 
 #[tokio::test]
@@ -66,7 +42,7 @@ async fn notes_backfill_populates_coverage_and_audit_rows() {
                AND proven=1 AND proven_at IS NOT NULL AND method='agent_parse'"
         );
         assert_eq!(
-            scalar(&sql).as_deref(),
+            db_exec(&sql).and_then(|r| r.scalar()).as_deref(),
             Some("1"),
             "{source_id}/{product_type} must have proven agent_parse coverage"
         );
@@ -88,14 +64,16 @@ async fn notes_backfill_populates_coverage_and_audit_rows() {
                AND blocked_reason_code='{blocked}'"
         );
         assert_eq!(
-            scalar(&sql).as_deref(),
+            db_exec(&sql).and_then(|r| r.scalar()).as_deref(),
             Some("1"),
             "{source_id}/{product_type} must have blocked_reason_code={blocked}"
         );
     }
 
     assert_eq!(
-        scalar("SELECT count(DISTINCT source_id) AS n FROM ota_notes_migration_audit").as_deref(),
+        db_exec("SELECT count(DISTINCT source_id) AS n FROM ota_notes_migration_audit")
+            .and_then(|r| r.scalar())
+            .as_deref(),
         Some("14"),
         "each ota_sources.notes row must be recorded in ota_notes_migration_audit"
     );

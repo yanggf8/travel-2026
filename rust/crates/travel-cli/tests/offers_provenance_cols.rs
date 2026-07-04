@@ -2,31 +2,12 @@
 //! Real-Turso; skips if creds absent. Test-owned rows use zz* and Guard teardown.
 
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod common;
-use common::Guard;
-
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
+use common::{bin, db_exec, db_exec_teardown, is_credless, nanos, Guard};
 
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -54,25 +35,10 @@ fn columns_of(table: &str) -> Option<Vec<String>> {
     Some(cols)
 }
 
-fn scalar(sql: &str) -> Option<String> {
-    let (ok, stdout, stderr) = run(&["db", "exec", sql]);
-    if !ok {
-        if is_credless(&stderr) {
-            return None;
-        }
-        panic!("db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    stdout
-        .lines()
-        .find_map(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-}
-
 fn teardown(offer_id: &str, scraped_at: &str) {
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!("DELETE FROM offers WHERE id='{offer_id}' AND scraped_at='{scraped_at}'"),
-    ]);
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM offers WHERE id='{offer_id}' AND scraped_at='{scraped_at}'"
+    ));
 }
 
 #[tokio::test]
@@ -134,9 +100,10 @@ async fn legacy_offer_insert_omitting_provenance_still_succeeds() {
     }
     assert!(ok, "legacy insert without provenance cols should succeed; err={err}");
 
-    let Some(n) = scalar(&format!(
+    let Some(n) = db_exec(&format!(
         "SELECT count(*) AS n FROM offers WHERE id='{offer_id}' AND scraped_at='{scraped_at}'"
-    )) else {
+    ))
+    .and_then(|r| r.scalar()) else {
         return;
     };
     assert_eq!(n, "1");
