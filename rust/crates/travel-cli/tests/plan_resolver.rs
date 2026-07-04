@@ -22,11 +22,10 @@
 //!   5. falls back to latest updated only when all known plans are historical
 
 mod common;
-use common::Guard;
+use common::{bin, db_exec, db_exec_teardown, nanos, Guard};
 
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Pin "today" to the TS fixture's `today: '2026-05-22'`.
 const TODAY: &str = "2026-05-22";
@@ -39,41 +38,11 @@ const TODAY: &str = "2026-05-22";
 /// in-memory `PlanSummary[]`.
 static RESOLVER_LOCK: Mutex<()> = Mutex::new(());
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
 /// Returns Some(stdout) on success, or None if Turso creds are absent / the
 /// connection failed (so credless CI skips gracefully). Panics on any other
 /// failure.
 fn run_db_exec(sql: &str) -> Option<String> {
-    let out = bin()
-        .args(["db", "exec", sql])
-        .output()
-        .expect("run travel db exec");
-    if out.status.success() {
-        return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if is_credless(&stderr) {
-        eprintln!("skipping plan-resolver Turso test: {}", stderr.trim());
-        return None;
-    }
-    panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
+    db_exec(sql).map(|r| r.raw().to_string())
 }
 
 /// Seed one plan: plans + plan_metadata + (optional) one date_anchor.
@@ -118,7 +87,7 @@ fn teardown(plan_ids: &[&str]) {
              DELETE FROM plans WHERE plan_id = '{id}';"
         );
         // Best-effort cleanup; ignore credless/skip.
-        let _ = bin().args(["db", "exec", &sql]).output();
+        let _ = db_exec_teardown(&sql);
     }
 }
 
@@ -130,7 +99,7 @@ fn teardown(plan_ids: &[&str]) {
 /// seeded — the same intent the in-binary RESOLVER_LOCK expresses, extended to
 /// real DB rows. Returns (success, stdout, stderr).
 fn resolve_scoped(only_prefix: Option<&str>, extra: &[&str]) -> (bool, String, String) {
-    let mut cmd = bin();
+    let mut cmd = Command::new(bin());
     cmd.arg("resolve-plan")
         .args(extra)
         .env("TRAVEL_TODAY", TODAY)

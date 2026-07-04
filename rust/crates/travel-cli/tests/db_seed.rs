@@ -14,20 +14,12 @@
 
 use std::process::Command;
 
-fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_travel"))
-}
-
-fn is_credless(stderr: &str) -> bool {
-    stderr.contains("turso auth login")
-        || stderr.contains("Missing Turso data")
-        || stderr.contains("failed to connect to Turso")
-        || stderr.contains("TRAVEL_TURSO")
-}
+mod common;
+use common::{bin, db_exec};
 
 /// Run a `travel` subcommand. Returns (ok, stdout, stderr).
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = bin()
+    let out = Command::new(bin())
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("run travel {args:?}: {e}"));
@@ -40,22 +32,7 @@ fn run(args: &[&str]) -> (bool, String, String) {
 
 /// COUNT(*) helper. Returns the integer count, or None on a credless skip.
 fn count(sql: &str) -> Option<i64> {
-    let out = bin().args(["db", "exec", sql]).output().expect("db exec");
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        if is_credless(&stderr) {
-            eprintln!("skipping db-seed Turso test: {}", stderr.trim());
-            return None;
-        }
-        panic!("travel db exec failed: {}\nSQL: {sql}", stderr.trim());
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let n = stdout
-        .lines()
-        .find_map(|l| l.strip_prefix("n: "))
-        .map(|s| s.trim().parse::<i64>().unwrap_or(-1))
-        .unwrap_or(0);
-    Some(n)
+    db_exec(sql).map(|r| r.scalar().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0))
 }
 
 // ── db seed ota-knowledge populates airlines (and friends) ───────────────────
