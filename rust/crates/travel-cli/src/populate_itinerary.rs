@@ -811,6 +811,7 @@ async fn add_activity(
         cost_estimate,
         notes,
         priority,
+        "confirmed",
         &now_db_datetime(),
     )
     .await?;

@@ -565,6 +565,23 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     //      Idempotent ADD COLUMN — tolerated "duplicate column" on re-run.
     add_column(&conn, "ALTER TABLE activities ADD COLUMN poi_id TEXT;").await;
 
+    // 14e. source provenance on itinerary content tables (confirmed vs ai_recommended).
+    add_column(
+        &conn,
+        "ALTER TABLE activities ADD COLUMN source TEXT NOT NULL DEFAULT 'confirmed';",
+    )
+    .await;
+    add_column(
+        &conn,
+        "ALTER TABLE session_meals ADD COLUMN source TEXT NOT NULL DEFAULT 'confirmed';",
+    )
+    .await;
+    add_column(
+        &conn,
+        "ALTER TABLE day_route_segments ADD COLUMN source TEXT NOT NULL DEFAULT 'confirmed';",
+    )
+    .await;
+
     // 15. flight_legs (normalized — replaces JSON blobs in flights).
     exec_create(
         &conn,
@@ -659,6 +676,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
   day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
   from_place TEXT NOT NULL, to_place TEXT NOT NULL,
   mode TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed', 'ai_recommended')),
   PRIMARY KEY (plan_id, destination, day_number, sort_order)
 )"#,
     )
@@ -1963,6 +1981,7 @@ const ITINERARY_TABLES: &[&str] = &[
   cost_estimate INTEGER,
   notes TEXT,
   priority TEXT NOT NULL DEFAULT 'want' CHECK(priority IN ('must', 'want', 'optional')),
+  source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed', 'ai_recommended')),
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );"#,
     r#"CREATE TABLE IF NOT EXISTS plan_metadata (
@@ -2200,6 +2219,7 @@ const PHASE1_TABLES: &[&str] = &[
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
   day_number INTEGER NOT NULL, session_type TEXT NOT NULL,
   sort_order INTEGER NOT NULL, meal TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed', 'ai_recommended')),
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, day_number, session_type, sort_order)
 )"#,

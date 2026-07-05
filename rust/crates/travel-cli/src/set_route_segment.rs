@@ -144,6 +144,11 @@ pub async fn run(
         println!("   Notes: {n}");
     }
 
+    let source = if has_flag(&args[5..], "--recommended") {
+        "ai_recommended"
+    } else {
+        "confirmed"
+    };
     match execute_single(
         &conn_write().await?,
         &plan_id,
@@ -156,6 +161,7 @@ pub async fn run(
         duration,
         notes.as_deref(),
         start_time.as_deref(),
+        source,
     )
     .await
     {
@@ -247,12 +253,18 @@ pub async fn run_bulk(
         println!("   {} → {} ({}{})", s.from, s.to, s.mode, dur);
     }
 
+    let source = if has_flag(&args[1..], "--recommended") {
+        "ai_recommended"
+    } else {
+        "confirmed"
+    };
     match execute_bulk(
         &conn_write().await?,
         &plan_id,
         &destination,
         day,
         &segments,
+        source,
     )
     .await
     {
@@ -305,6 +317,11 @@ fn parse_optional_string_flag(
     Ok(None)
 }
 
+/// Value-less flag scan — does NOT consume a following token as a value.
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|a| a == flag)
+}
+
 /// Collect every value of a repeatable flag: `--seg X --seg Y` → ["X", "Y"].
 /// (Other flags like `--dest <v>` are skipped along with their value.)
 fn collect_repeated_flag(args: &[String], flag: &str) -> Vec<String> {
@@ -316,6 +333,9 @@ fn collect_repeated_flag(args: &[String], flag: &str) -> Vec<String> {
                 out.push(v.clone());
             }
             i += 2;
+        } else if args[i] == "--recommended" {
+            // value-less flag — skip one token only
+            i += 1;
         } else if args[i].starts_with("--") {
             // skip an unrelated flag and its value (best-effort)
             i += 2;
@@ -397,6 +417,7 @@ async fn execute_single(
     duration: Option<i64>,
     notes: Option<&str>,
     start_time: Option<&str>,
+    source: &str,
 ) -> Result<i64, String> {
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
@@ -434,6 +455,7 @@ async fn execute_single(
             notes: notes.map(str::to_string),
             start_time: start_time.map(str::to_string),
         },
+        source,
         "",
     )
     .await?;
@@ -535,6 +557,7 @@ async fn execute_bulk(
     destination: &str,
     day: i64,
     segments: &[SegmentInput],
+    source: &str,
 ) -> Result<i64, String> {
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
@@ -567,6 +590,7 @@ async fn execute_bulk(
                 notes: s.notes.clone(),
                 start_time: s.start_time.clone(),
             },
+            source,
             &format!("[{i}]"),
         )
         .await?;

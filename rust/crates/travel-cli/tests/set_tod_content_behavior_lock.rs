@@ -393,14 +393,17 @@ fn set_tod_content_command_family_write_surface_is_locked() {
         return;
     }
     let meals = exec_ok(&format!(
-        "SELECT sort_order || '=' || meal AS v \
+        "SELECT sort_order || '=' || meal || '|' || source AS v \
          FROM session_meals WHERE plan_id = {p} AND destination = {d} \
            AND day_number = 1 AND session_type = 'noon' ORDER BY sort_order"
     ));
     assert_eq!(
         meals.column(),
-        vec!["0=Lunch: soba".to_string(), "1=Snack: sata andagi".to_string()],
-        "session_meals holds exactly the two --meal values in order 0,1; out={meals}"
+        vec![
+            "0=Lunch: soba|confirmed".to_string(),
+            "1=Snack: sata andagi|confirmed".to_string(),
+        ],
+        "session_meals holds exactly the two --meal values in order 0,1 with source=confirmed; out={meals}"
     );
     // set-meals must NOT touch session_activities_zh (the afternoon list stays cleared,
     // and the noon session has no ZH activity rows either).
@@ -413,4 +416,33 @@ fn set_tod_content_command_family_write_surface_is_locked() {
         "set-meals must not write session_activities_zh; out={zh_acts_after_meals}"
     );
     assert_audit(&plan, 5, 5, "set-meals", 1);
+
+    if run_cmd(&[
+        "set-meals",
+        "1",
+        "evening",
+        "--meal",
+        "Dinner: taco rice",
+        "--recommended",
+        "--plan-id",
+        &plan,
+        "--dest",
+        &dest,
+    ])
+    .is_none()
+    {
+        return;
+    }
+    let recommended_meals = exec_ok(&format!(
+        "SELECT sort_order || '=' || meal || '|' || source AS v \
+         FROM session_meals WHERE plan_id = {p} AND destination = {d} \
+           AND day_number = 1 AND session_type = 'evening' ORDER BY sort_order"
+    ));
+    assert_eq!(
+        recommended_meals.column(),
+        vec!["0=Dinner: taco rice|ai_recommended".to_string()],
+        "--recommended set-meals must write source=ai_recommended; out={recommended_meals}"
+    );
+    // set-meals ran twice (day-2 noon confirmed, then day-1 evening --recommended).
+    assert_audit(&plan, 6, 6, "set-meals", 2);
 }

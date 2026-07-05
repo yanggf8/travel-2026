@@ -72,13 +72,14 @@ pub async fn insert_segment(
     day: i64,
     sort_order: i64,
     seg: &SegmentWrite,
+    source: &str,
     err_label: &str,
 ) -> Result<(), String> {
     conn.execute(
         "INSERT INTO day_route_segments \
             (plan_id, destination, day_number, sort_order, from_place, to_place, \
-             mode, duration_min, notes, start_time) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             mode, duration_min, notes, start_time, source) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         libsql::params![
             plan_id.to_string(),
             destination.to_string(),
@@ -89,7 +90,8 @@ pub async fn insert_segment(
             seg.mode.clone(),
             seg.duration_min,
             seg.notes.clone(),
-            seg.start_time.clone()
+            seg.start_time.clone(),
+            source.to_string()
         ],
     )
     .await

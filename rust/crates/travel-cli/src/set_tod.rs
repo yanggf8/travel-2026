@@ -436,6 +436,11 @@ pub async fn run_meals(args: &[String], plan_id: String) -> Result<(), String> {
         parsed.day,
         &parsed.session,
         &parsed.meals,
+        if parsed.recommended {
+            "ai_recommended"
+        } else {
+            "confirmed"
+        },
     )
     .await?;
     for meal in &parsed.meals {
@@ -480,6 +485,7 @@ struct ParsedMeals {
     session: String,
     meals: Vec<String>,
     dest: Option<String>,
+    recommended: bool,
 }
 
 fn parse_meals(args: &[String]) -> Result<ParsedMeals, String> {
@@ -505,6 +511,10 @@ fn parse_meals(args: &[String]) -> Result<ParsedMeals, String> {
                 );
                 i += 2;
             }
+            "--recommended" => {
+                p.recommended = true;
+                i += 1;
+            }
             "--plan-id" => {
                 i += 2; // consumed by the top-level resolver
             }
@@ -519,7 +529,7 @@ fn parse_meals(args: &[String]) -> Result<ParsedMeals, String> {
     }
     if positional.len() < 2 {
         return Err(
-            "Usage: set-meals <day> <session> --meal \"<text>\" [--meal \"<text>\"...] [--dest <slug>]"
+            "Usage: set-meals <day> <session> --meal \"<text>\" [--meal \"<text>\"...] [--recommended] [--dest <slug>]"
                 .to_string(),
         );
     }

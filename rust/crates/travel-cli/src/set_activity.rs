@@ -1035,6 +1035,7 @@ struct ActivityAdd {
     /// `--after <id|title>`: insert directly after this activity instead of
     /// appending at the end of the session.
     after: Option<String>,
+    recommended: bool,
 }
 
 // ── delete-activity / remove-activity ──────────────────────────────
@@ -1500,6 +1501,11 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
         parsed.is_fixed_time,
         &parsed.priority,
         parsed.notes.clone(),
+        if parsed.recommended {
+            "ai_recommended"
+        } else {
+            "confirmed"
+        },
         &now_db_datetime(),
     )
     .await?;
@@ -1587,6 +1593,10 @@ fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
                 p.after = Some(arg_value(args, i, "--after")?);
                 i += 2;
             }
+            "--recommended" => {
+                p.recommended = true;
+                i += 1;
+            }
             "--plan-id" => {
                 // consumed by the top-level plan resolver; skip flag + value
                 i += 2;
@@ -1602,7 +1612,7 @@ fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
     }
     if positional.len() < 3 {
         return Err(
-            "Usage: add-activity <day> <session> <title> [--after <id|title>] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]"
+            "Usage: add-activity <day> <session> <title> [--after <id|title>] [--recommended] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]"
                 .to_string(),
         );
     }

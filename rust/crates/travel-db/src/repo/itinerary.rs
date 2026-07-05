@@ -308,6 +308,7 @@ pub async fn replace_session_meals(
     day: i64,
     session: &str,
     meals: &[String],
+    source: &str,
 ) -> Result<(), String> {
     conn.execute(
         "DELETE FROM session_meals \
@@ -324,15 +325,16 @@ pub async fn replace_session_meals(
     for (i, meal) in meals.iter().enumerate() {
         conn.execute(
             "INSERT INTO session_meals \
-                (plan_id, destination, day_number, session_type, sort_order, meal) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (plan_id, destination, day_number, session_type, sort_order, meal, source) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             libsql::params![
                 plan_id.to_string(),
                 destination.to_string(),
                 day,
                 session.to_string(),
                 i as i64,
-                meal.clone()
+                meal.clone(),
+                source.to_string()
             ],
         )
         .await
@@ -548,14 +550,15 @@ pub async fn insert_activity(
     is_fixed_time: bool,
     priority: &str,
     notes: Option<String>,
+    source: &str,
     now: &str,
 ) -> Result<(), String> {
     conn.execute(
         "INSERT INTO activities \
             (id, plan_id, destination, day_number, session_type, sort_order, \
              title, area, nearest_station, duration_min, start_time, end_time, \
-             is_fixed_time, priority, notes, booking_required, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16)",
+             is_fixed_time, priority, notes, source, booking_required, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, ?17)",
         libsql::params![
             activity_id.to_string(),
             plan_id.to_string(),
@@ -572,6 +575,7 @@ pub async fn insert_activity(
             if is_fixed_time { 1_i64 } else { 0_i64 },
             priority.to_string(),
             notes,
+            source.to_string(),
             now.to_string()
         ],
     )
@@ -844,14 +848,15 @@ pub async fn insert_populated_activity(
     cost_estimate: Option<i64>,
     notes: Option<&str>,
     priority: &str,
+    source: &str,
     now: &str,
 ) -> Result<(), String> {
     conn.execute(
         "INSERT INTO activities \
             (id, plan_id, destination, poi_id, day_number, session_type, sort_order, title, area, \
              nearest_station, duration_min, booking_required, booking_url, cost_estimate, \
-             notes, priority, is_fixed_time, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, ?17)",
+             notes, priority, source, is_fixed_time, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, 0, ?18)",
         libsql::params![
             activity_id.to_string(),
             plan_id.to_string(),
@@ -869,6 +874,7 @@ pub async fn insert_populated_activity(
             cost_estimate,
             notes.map(|s| s.to_string()),
             priority.to_string(),
+            source.to_string(),
             now.to_string()
         ],
     )

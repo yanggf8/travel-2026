@@ -219,6 +219,56 @@ fn set_route_segment_passes_normal_segment() {
     assert!(ok, "a clean segment must pass; stdout={stdout} stderr={stderr}");
     assert_eq!(seg, Some(1), "the clean segment must persist exactly one row");
     assert_eq!(audit, Some(1), "a clean write must record a completed audit row");
+    let source = db_exec(&format!(
+        "SELECT source AS v FROM day_route_segments \
+         WHERE plan_id = '{plan_id}' AND destination = '{dest}' \
+           AND day_number = 1 AND sort_order = 0"
+    ));
+    assert_eq!(
+        source.and_then(|r| r.scalar()),
+        Some("confirmed".to_string()),
+        "normal set-route-segment must write source=confirmed"
+    );
+}
+
+// ── single: --recommended writes source=ai_recommended ───────────────────────
+#[test]
+fn set_route_segment_passes_recommended_segment() {
+    let tag = nanos();
+    let plan_id = format!("test-rsg-rec-{tag}");
+    let dest = format!("rsgrec_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
+    });
+    if !seed_plan_with_day(&plan_id, &dest) {
+        return;
+    }
+    let (ok, stdout, stderr) = run_cmd(
+        &plan_id,
+        &[
+            "set-route-segment",
+            "1",
+            "0",
+            AKAMINE_EKI,
+            IIAS,
+            "driving",
+            "--recommended",
+            "--dest",
+            &dest,
+        ],
+    );
+    assert!(ok, "a clean --recommended segment must pass; stdout={stdout} stderr={stderr}");
+    let source = db_exec(&format!(
+        "SELECT source AS v FROM day_route_segments \
+         WHERE plan_id = '{plan_id}' AND destination = '{dest}' \
+           AND day_number = 1 AND sort_order = 0"
+    ));
+    assert_eq!(
+        source.and_then(|r| r.scalar()),
+        Some("ai_recommended".to_string()),
+        "--recommended set-route-segment must write source=ai_recommended"
+    );
 }
 
 // ── bulk: one bad segment rejects the WHOLE batch — no half-write ────────────
@@ -280,4 +330,62 @@ fn set_route_segments_bulk_passes_all_clean() {
     let seg = seg_count(&plan_id);
     assert!(ok, "an all-clean batch must pass; stdout={stdout} stderr={stderr}");
     assert_eq!(seg, Some(2), "both clean segments must persist");
+    let sources = db_exec(&format!(
+        "SELECT sort_order || '|' || source AS v FROM day_route_segments \
+         WHERE plan_id = '{plan_id}' AND destination = '{dest}' AND day_number = 1 \
+         ORDER BY sort_order"
+    ));
+    assert_eq!(
+        sources.map(|r| r.column()),
+        Some(vec![
+            "0|confirmed".to_string(),
+            "1|confirmed".to_string(),
+        ]),
+        "normal bulk must write source=confirmed on every segment"
+    );
+}
+
+// ── bulk: --recommended writes source=ai_recommended on every segment ────────
+#[test]
+fn set_route_segments_bulk_passes_recommended() {
+    let tag = nanos();
+    let plan_id = format!("test-rsg-bulkrec-{tag}");
+    let dest = format!("rsgbulkrec_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
+    });
+    if !seed_plan_with_day(&plan_id, &dest) {
+        return;
+    }
+    let s1 = format!("{AKAMINE_EKI}|{IIAS}|driving");
+    let s2 = format!("{IIAS}|{AKAMINE_EKI}|transit");
+    let (ok, stdout, stderr) = run_cmd(
+        &plan_id,
+        &[
+            "set-route-segments-bulk",
+            "1",
+            "--seg",
+            &s1,
+            "--seg",
+            &s2,
+            "--recommended",
+            "--dest",
+            &dest,
+        ],
+    );
+    assert!(ok, "an all-clean --recommended batch must pass; stdout={stdout} stderr={stderr}");
+    let sources = db_exec(&format!(
+        "SELECT sort_order || '|' || source AS v FROM day_route_segments \
+         WHERE plan_id = '{plan_id}' AND destination = '{dest}' AND day_number = 1 \
+         ORDER BY sort_order"
+    ));
+    assert_eq!(
+        sources.map(|r| r.column()),
+        Some(vec![
+            "0|ai_recommended".to_string(),
+            "1|ai_recommended".to_string(),
+        ]),
+        "--recommended bulk must write source=ai_recommended on every segment"
+    );
 }

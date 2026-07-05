@@ -45,6 +45,7 @@ CREATE TABLE activities (
     cost_estimate INTEGER,
     notes TEXT,
     priority TEXT NOT NULL DEFAULT 'want' CHECK(priority IN ('must','want','optional')),
+    source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed','ai_recommended')),
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -232,6 +233,7 @@ CREATE TABLE day_route_segments (
   day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
   from_place TEXT NOT NULL, to_place TEXT NOT NULL,
   mode TEXT NOT NULL, duration_min INTEGER, notes TEXT, start_time TEXT,
+  source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed','ai_recommended')),
   PRIMARY KEY (plan_id, destination, day_number, sort_order)
 );
 
@@ -852,6 +854,7 @@ CREATE TABLE session_meals (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
   day_number INTEGER NOT NULL, session_type TEXT NOT NULL,
   sort_order INTEGER NOT NULL, meal TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed','ai_recommended')),
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (plan_id, destination, day_number, session_type, sort_order)
 );

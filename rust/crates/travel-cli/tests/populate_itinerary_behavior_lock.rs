@@ -309,6 +309,17 @@ fn populate_itinerary_locks_current_write_surface() {
             "alpha museum|<NULL>",
         ],
     );
+    let first_sources = exec_ok(&format!(
+        "SELECT DISTINCT source AS value_text FROM activities \
+         WHERE plan_id = {} AND destination = {} ORDER BY source",
+        sql_lit(&plan),
+        sql_lit(&dest)
+    ));
+    assert_eq!(
+        first_sources.column(),
+        vec!["confirmed".to_string()],
+        "populate-itinerary must write source=confirmed on all activities; out={first_sources}"
+    );
 
     let tags = exec_ok(&format!(
         "SELECT a.title || ':' || at.tag AS row_text \
@@ -503,6 +514,17 @@ fn populate_itinerary_locks_current_write_surface() {
             "Last Station|last_station",
             "alpha museum|<NULL>",
         ],
+    );
+    let force_sources = exec_ok(&format!(
+        "SELECT DISTINCT source AS value_text FROM activities \
+         WHERE plan_id = {} AND destination = {} ORDER BY source",
+        sql_lit(&plan),
+        sql_lit(&dest)
+    ));
+    assert_eq!(
+        force_sources.column(),
+        vec!["confirmed".to_string()],
+        "force populate-itinerary must still write source=confirmed only; out={force_sources}"
     );
 
     let force_events = vec![

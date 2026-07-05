@@ -119,6 +119,21 @@ fn seed(
 }
 
 fn assert_audit(plan: &str, expected_count: i64, expected_version: i64, command_type: &str) {
+    // command_type is assumed to have run exactly once so far.
+    assert_audit_n(plan, expected_count, expected_version, command_type, 1);
+}
+
+/// `cmd_type_rows` = how many times `command_type` has run so far (a command_type
+/// may run more than once in one test, e.g. add-activity then add-activity
+/// --recommended). Asserts the total op count, the plan version, and that the
+/// LATEST row for this command_type recorded the +1 bump to `expected_version`.
+fn assert_audit_n(
+    plan: &str,
+    expected_count: i64,
+    expected_version: i64,
+    command_type: &str,
+    cmd_type_rows: i64,
+) {
     let p = sql_lit(plan);
     let count = exec_ok(&format!(
         "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id = {p}"
@@ -137,14 +152,15 @@ fn assert_audit(plan: &str, expected_count: i64, expected_version: i64, command_
     );
 
     let cmd = sql_lit(command_type);
+    // Count of rows for this command_type, plus the LATEST row's version bump.
     let row = exec_ok(&format!(
-        "SELECT COUNT(*) || '|' || MIN(version_before) || '>' || MAX(version_after) || '|' || MIN(status) AS v \
+        "SELECT COUNT(*) || '|' || MAX(version_after) || '|' || MIN(status) AS v \
          FROM operation_runs WHERE plan_id = {p} AND command_type = {cmd}"
     ));
     assert_eq!(
         row.scalar().as_deref(),
-        Some(format!("1|{}>{expected_version}|completed", expected_version - 1).as_str()),
-        "one completed operation row for {command_type}; out={row}"
+        Some(format!("{cmd_type_rows}|{expected_version}|completed").as_str()),
+        "completed operation row(s) for {command_type}; out={row}"
     );
 }
 
@@ -345,7 +361,46 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         ],
         "add-activity --after must shift existing rows before inserting"
     );
+    let inserted_source = exec_ok(&format!(
+        "SELECT source AS v FROM activities \
+         WHERE plan_id = {} AND destination = {} AND title = 'Inserted After Bait'",
+        sql_lit(&plan),
+        sql_lit(&dest)
+    ));
+    assert_eq!(
+        inserted_source.scalar().as_deref(),
+        Some("confirmed"),
+        "normal add-activity must write source=confirmed; out={inserted_source}"
+    );
     assert_audit(&plan, 4, 4, "add-activity");
+
+    if run_cmd(&[
+        "add-activity",
+        "1",
+        "morning",
+        "Recommended Coffee Stop",
+        "--recommended",
+        "--plan-id",
+        &plan,
+        "--dest",
+        &dest,
+    ])
+    .is_none()
+    {
+        return;
+    }
+    let recommended_source = exec_ok(&format!(
+        "SELECT source AS v FROM activities \
+         WHERE plan_id = {} AND destination = {} AND title = 'Recommended Coffee Stop'",
+        sql_lit(&plan),
+        sql_lit(&dest)
+    ));
+    assert_eq!(
+        recommended_source.scalar().as_deref(),
+        Some("ai_recommended"),
+        "--recommended add-activity must write source=ai_recommended; out={recommended_source}"
+    );
+    assert_audit_n(&plan, 5, 5, "add-activity", 2);
 
     // 5. move-activity appends to the target session, preserving row fields and updated_at.
     let target_max = exec_ok(&format!(
@@ -405,7 +460,7 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         Some("0"),
         "moved row leaves source session"
     );
-    assert_audit(&plan, 5, 5, "move-activity");
+    assert_audit(&plan, 6, 6, "move-activity");
 
     // 6. set-activity-title by title substring clears poi_id when the title changes.
     if run_cmd(&[
@@ -432,5 +487,5 @@ fn set_activity_command_family_mutation_surface_is_locked() {
         Some("Fresh POI Lock Title|<NULL>"),
         "title change must clear a stale poi_id; out={title_row}"
     );
-    assert_audit(&plan, 6, 6, "set-activity-title");
+    assert_audit(&plan, 7, 7, "set-activity-title");
 }
