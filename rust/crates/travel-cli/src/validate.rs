@@ -1216,6 +1216,7 @@ fn format_loc(r: &Issue) -> String {
 enum PublishSeverity {
     Block,
     Warn,
+    Info,
 }
 
 struct PublishIssue {
@@ -1313,15 +1314,63 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
         Err(_) => {}
     }
 
-    // Weather (WARN) — upcoming/active only, within 16-day window
+    // Weather (WARN within window; INFO when trip wholly beyond forecast window)
     if check_zh_weather {
-        for day in missing_weather_in_window(&conn, plan_id, &destination, &today).await? {
+        let missing_weather_days =
+            missing_weather_in_window(&conn, plan_id, &destination, &today).await?;
+        for day in &missing_weather_days {
             issues.push(PublishIssue {
                 category: "weather".to_string(),
                 severity: PublishSeverity::Warn,
                 message: format!("day {day} missing weather within 16-day forecast window"),
             });
         }
+        if missing_weather_days.is_empty() && day_count > 0 {
+            if let Some(start_date) = trip_start_date(&conn, plan_id, &destination).await? {
+                if start_beyond_forecast_window(&start_date, &today)? {
+                    issues.push(PublishIssue {
+                        category: "weather".to_string(),
+                        severity: PublishSeverity::Info,
+                        message: format!(
+                            "weather pending - Open-Meteo forecast available within 16 days of {start_date}"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // AI-recommended provenance (INFO) — not gated by is_past
+    let ai_activities = scalar_i64(
+        &conn,
+        "SELECT COUNT(*) FROM activities WHERE plan_id = ?1 AND destination = ?2 AND source = 'ai_recommended'",
+        plan_id,
+        &destination,
+    )
+    .await?;
+    let ai_meals = scalar_i64(
+        &conn,
+        "SELECT COUNT(*) FROM session_meals WHERE plan_id = ?1 AND destination = ?2 AND source = 'ai_recommended'",
+        plan_id,
+        &destination,
+    )
+    .await?;
+    let ai_routes = scalar_i64(
+        &conn,
+        "SELECT COUNT(*) FROM day_route_segments WHERE plan_id = ?1 AND destination = ?2 AND source = 'ai_recommended'",
+        plan_id,
+        &destination,
+    )
+    .await?;
+    let ai_total = ai_activities + ai_meals + ai_routes;
+    if ai_total > 0 {
+        issues.push(PublishIssue {
+            category: "ai-recommended".to_string(),
+            severity: PublishSeverity::Info,
+            message: format!(
+                "{ai_total} AI-recommended item(s) awaiting confirmation ({ai_activities} activities, {ai_meals} meals, {ai_routes} routes)"
+            ),
+        });
     }
 
     emit_publish_report(&issues);
@@ -1515,6 +1564,37 @@ async fn missing_weather_in_window(
     Ok(out)
 }
 
+async fn trip_start_date(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Option<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT start_date FROM date_anchors WHERE plan_id = ?1 AND destination = ?2",
+            params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("date_anchors start_date query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("date_anchors start_date row read failed: {e}"))?
+    {
+        let start: String = row.get(0).unwrap_or_default();
+        return Ok((!start.is_empty()).then_some(start));
+    }
+    Ok(None)
+}
+
+fn start_beyond_forecast_window(start_date: &str, today: &str) -> Result<bool, String> {
+    let start = chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
+        .map_err(|e| format!("invalid trip start_date {start_date}: {e}"))?;
+    let today = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d")
+        .map_err(|e| format!("invalid today date {today}: {e}"))?;
+    Ok((start - today).num_days() > 16)
+}
+
 async fn query_day_numbers(
     conn: &libsql::Connection,
     sql: &str,
@@ -1571,6 +1651,10 @@ fn emit_publish_report(issues: &[PublishIssue]) {
         .iter()
         .filter(|i| i.severity == PublishSeverity::Warn)
         .collect();
+    let infos: Vec<&PublishIssue> = issues
+        .iter()
+        .filter(|i| i.severity == PublishSeverity::Info)
+        .collect();
 
     if !blockers.is_empty() {
         println!("## Blockers\n");
@@ -1586,10 +1670,18 @@ fn emit_publish_report(issues: &[PublishIssue]) {
         }
         println!();
     }
+    if !infos.is_empty() {
+        println!("## Info\n");
+        for r in &infos {
+            println!("  ℹ️  [{}] {}", r.category, r.message);
+        }
+        println!();
+    }
 
     println!("## Summary\n");
     println!("  Blockers:   {}", blockers.len());
     println!("  Warnings:   {}", warnings.len());
+    println!("  Info:       {}", infos.len());
 }
 
 // ============================================================================

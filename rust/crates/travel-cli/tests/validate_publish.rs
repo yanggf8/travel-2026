@@ -265,3 +265,132 @@ fn empty_arrival_departure_sessions_do_not_false_block_zh() {
     let _ = ok;
     let _ = stderr;
 }
+
+/// Beyond-window trip: weather-pending INFO, no within-window WARN, publish passes.
+#[test]
+fn beyond_window_weather_pending_info_passes() {
+    let _lock = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    let tag = nanos();
+    let plan_id = format!("test-pub-wxinfo-{tag}");
+    let dest = format!("pubwxinfo_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || {
+            teardown_plan(&plan_id, &dest);
+            teardown_destination(&dest);
+        }
+    });
+
+    if db_exec("SELECT 1").is_none() {
+        return;
+    }
+
+    seed_plan(&plan_id, &dest, 0);
+    seed_destination(&dest);
+    seed_anchor(&plan_id, &dest, "2026-09-01", "2026-09-03", 3);
+
+    db_exec(&format!(
+        "INSERT INTO destination_pois (slug, poi_id, title, source_url, fetched_at, confidence, lat, lon) \
+           VALUES ('{dest}', 'poi_one', 'Test POI', 'test', '2026-07-05', 'test', 35.6812, 139.7671); \
+         INSERT INTO days (plan_id, destination, day_number, date, day_type, theme, theme_zh) \
+           VALUES ('{plan_id}', '{dest}', 1, '2026-09-01', 'arrival', 'Arrival', '抵達日'), \
+                  ('{plan_id}', '{dest}', 2, '2026-09-02', 'full', 'Explore', '探索'), \
+                  ('{plan_id}', '{dest}', 3, '2026-09-03', 'departure', 'Departure', '離開'); \
+         INSERT INTO timesofday (plan_id, destination, day_number, session_type, focus, focus_zh) \
+           VALUES ('{plan_id}', '{dest}', 2, 'morning', 'Museum', '博物館'); \
+         INSERT INTO activities \
+           (id, plan_id, destination, day_number, session_type, sort_order, title, poi_id) \
+           VALUES ('{plan_id}-act1', '{plan_id}', '{dest}', 2, 'morning', 0, 'Test activity', 'poi_one'); \
+         INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) \
+           VALUES ('{plan_id}', datetime('now'));"
+    ))
+    .expect("seed beyond-window plan");
+
+    let (ok, stdout, stderr) = run_publish(&plan_id, &dest);
+    assert!(
+        ok,
+        "weather-pending INFO must not fail publish; stderr={stderr}; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("weather pending - Open-Meteo forecast available within 16 days of 2026-09-01"),
+        "stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("⚠️  [weather]"),
+        "no within-window WARN expected; stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("missing weather within 16-day forecast window"),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("Info:"), "stdout={stdout}");
+}
+
+/// In-window complete plan with ai_recommended rows: count INFO, publish passes.
+#[test]
+fn ai_recommended_count_info_passes() {
+    let _lock = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    let tag = nanos();
+    let plan_id = format!("test-pub-aiinfo-{tag}");
+    let dest = format!("pubaiinfo_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || {
+            teardown_plan(&plan_id, &dest);
+            teardown_destination(&dest);
+        }
+    });
+
+    if db_exec("SELECT 1").is_none() {
+        return;
+    }
+
+    seed_plan(&plan_id, &dest, 0);
+    seed_destination(&dest);
+    seed_anchor(&plan_id, &dest, "2026-07-10", "2026-07-12", 3);
+
+    db_exec(&format!(
+        "INSERT INTO destination_pois (slug, poi_id, title, source_url, fetched_at, confidence, lat, lon) \
+           VALUES ('{dest}', 'poi_one', 'Test POI', 'test', '2026-07-05', 'test', 35.6812, 139.7671); \
+         INSERT INTO days (plan_id, destination, day_number, date, day_type, theme, theme_zh, \
+                            weather_label, weather_source_id, updated_at) \
+           VALUES ('{plan_id}', '{dest}', 1, '2026-07-10', 'arrival', 'Arrival', '抵達日', \
+                   'Sunny', 'open_meteo', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, '2026-07-11', 'full', 'Explore', '探索', \
+                   'Cloudy', 'open_meteo', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 3, '2026-07-12', 'departure', 'Departure', '離開', \
+                   'Sunny', 'open_meteo', datetime('now','-2 hours')); \
+         INSERT INTO timesofday (plan_id, destination, day_number, session_type, focus, focus_zh, updated_at) \
+           VALUES ('{plan_id}', '{dest}', 2, 'morning', 'Museum', '博物館', datetime('now','-2 hours')); \
+         INSERT INTO activities \
+           (id, plan_id, destination, day_number, session_type, sort_order, title, poi_id, updated_at) \
+           VALUES ('{plan_id}-act1', '{plan_id}', '{dest}', 2, 'morning', 0, 'Test activity', 'poi_one', \
+                   datetime('now','-2 hours')); \
+         INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) \
+           VALUES ('{plan_id}', datetime('now'));"
+    ))
+    .expect("seed complete plan");
+
+    db_exec(&format!(
+        "INSERT INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title, poi_id, source, updated_at) \
+           VALUES ('{plan_id}-ai-act1', '{plan_id}', '{dest}', 2, 'afternoon', 0, 'AI activity', 'poi_one', 'ai_recommended', datetime('now','-2 hours')); \
+         INSERT INTO session_meals (plan_id, destination, day_number, session_type, sort_order, meal, source, updated_at) \
+           VALUES ('{plan_id}', '{dest}', 2, 'morning', 0, 'AI lunch', 'ai_recommended', datetime('now','-2 hours')); \
+         INSERT INTO day_route_segments (plan_id, destination, day_number, sort_order, from_place, to_place, mode, source) \
+           VALUES ('{plan_id}', '{dest}', 2, 0, 'Place A', 'Place B', 'walking', 'ai_recommended');"
+    ))
+    .expect("seed ai_recommended rows");
+
+    let (ok, stdout, stderr) = run_publish(&plan_id, &dest);
+    assert!(
+        ok,
+        "AI-recommended INFO must not fail publish; stderr={stderr}; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("3 AI-recommended item(s) awaiting confirmation (1 activities, 1 meals, 1 routes)"),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("Info:"), "stdout={stdout}");
+}
