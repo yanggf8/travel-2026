@@ -1,5 +1,5 @@
 use super::{esc, esc_url_attr, render_activity_text, urlencode};
-use crate::model::Session;
+use crate::model::{Meal, Session};
 
 /// Render one meal line. Meals carry a map-pin convention
 /// `"<label>｜map:<query>"` (full-width `｜` or ASCII `|`, case-insensitive on
@@ -18,8 +18,9 @@ use crate::model::Session;
 /// (label is the clickable text, NOT the raw query), optionally followed by the
 /// trailing 備案 text as a plain `<span>`. Without a pin → the existing plain
 /// `<div class="meal">🍽️ <meal></div>` form.
-pub fn render_meal(meal: &str) -> String {
-    match split_meal_pin(meal) {
+pub fn render_meal(meal: &Meal, lang: &str) -> String {
+    let badge = super::ai_rec_badge(&meal.source, lang);
+    match split_meal_pin(&meal.text) {
         Some((label, query, trailing)) => {
             let url = format!("https://www.google.com/maps/search/{}", urlencode(&query));
             let mut h = format!(
@@ -33,11 +34,13 @@ pub fn render_meal(meal: &str) -> String {
                     esc(&trailing)
                 ));
             }
+            h.push_str(&badge);
             h
         }
         None => format!(
-            "<div class=\"meal\">🍽️ {}</div>",
-            render_activity_text(meal)
+            "<div class=\"meal\">🍽️ {}{}</div>",
+            render_activity_text(&meal.text),
+            badge
         ),
     }
 }
@@ -129,12 +132,13 @@ pub fn render(sess: &Session, lang: &str) -> String {
         // escapes, turns \n into <br>, and renders an embedded "Google Maps：<url>"
         // tail as a short labeled link instead of dumping the giant URL inline.
         h.push_str(&format!(
-            "<div class=\"activity\">{}</div>",
-            render_activity_text(&a.title)
+            "<div class=\"activity\">{}{}</div>",
+            render_activity_text(&a.title),
+            super::ai_rec_badge(&a.source, lang)
         ));
     }
     for m in &sess.meals {
-        h.push_str(&render_meal(m));
+        h.push_str(&render_meal(m, lang));
     }
     if !sess.transit_zh.is_empty() {
         h.push_str(&format!(
@@ -149,7 +153,7 @@ pub fn render(sess: &Session, lang: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Activity, Session};
+    use crate::model::{Activity, Meal, Session};
     /// Build an Activity carrying only a display title (the common test case).
     fn act(title: &str) -> Activity {
         Activity {
@@ -157,11 +161,17 @@ mod tests {
             ..Default::default()
         }
     }
+    fn meal(text: &str) -> Meal {
+        Meal {
+            text: text.into(),
+            source: "confirmed".into(),
+        }
+    }
     #[test]
     fn noon_meal_renders() {
         let sess = Session {
             session_type: "noon".into(),
-            meals: vec!["Lunch: Makishi".into()],
+            meals: vec![meal("Lunch: Makishi")],
             ..Default::default()
         };
         let html = render(&sess, "zh");
@@ -234,7 +244,7 @@ mod tests {
     // the raw "｜map:…" convention text must NOT appear.
     #[test]
     fn meal_pin_renders_clickable_label_not_raw_query() {
-        let out = render_meal("晚餐：ステーキ88｜map:ステーキ88 那覇");
+        let out = render_meal(&meal("晚餐：ステーキ88｜map:ステーキ88 那覇"), "zh");
         assert!(out.contains("<a class=\"meal\" href=\""), "got: {out}");
         assert!(out.contains("maps/search/"), "got: {out}");
         // Visible clickable text is the LABEL (no raw "map:" / the query blob).
@@ -253,7 +263,7 @@ mod tests {
     // ONLY the place name (stops at the next pipe); 備案 stays as plain text.
     #[test]
     fn meal_pin_trailing_alt_is_not_swallowed_into_query() {
-        let out = render_meal("晚餐：A｜map:A 那覇 ｜備案：B");
+        let out = render_meal(&meal("晚餐：A｜map:A 那覇 ｜備案：B"), "zh");
         // Link present, label clickable.
         assert!(out.contains("<a class=\"meal\" href=\""), "got: {out}");
         assert!(out.contains("🍽️ 晚餐：A 🗺️"), "got: {out}");
@@ -278,14 +288,14 @@ mod tests {
     // A meal with NO pin → plain div pill, no <a>, no panic.
     #[test]
     fn meal_without_pin_is_plain_pill() {
-        let out = render_meal("Hotel breakfast");
+        let out = render_meal(&meal("Hotel breakfast"), "zh");
         assert_eq!(out, "<div class=\"meal\">🍽️ Hotel breakfast</div>");
         assert!(!out.contains("<a "), "got: {out}");
     }
 
     #[test]
     fn meal_embedded_google_maps_url_becomes_labeled_link() {
-        let out = render_meal("午餐（實際）：安里屋すば（Asatoya Suba・沖繩そば・安里・飯店附近） Google Maps：https://www.google.com/maps/search/%E5%AE%89%E9%87%8C%E5%B1%8B%E3%81%99%E3%81%B0%20%E9%82%A3%E8%A6%87%20%E5%AE%89%E9%87%8C");
+        let out = render_meal(&meal("午餐（實際）：安里屋すば（Asatoya Suba・沖繩そば・安里・飯店附近） Google Maps：https://www.google.com/maps/search/%E5%AE%89%E9%87%8C%E5%B1%8B%E3%81%99%E3%81%B0%20%E9%82%A3%E8%A6%87%20%E5%AE%89%E9%87%8C"), "zh");
         assert!(out.contains("🗺️ Google Maps"), "got: {out}");
         assert!(
             out.contains("<a href=\"https://www.google.com/maps/search/%E5%AE%89%E9%87%8C"),
@@ -299,7 +309,7 @@ mod tests {
 
     #[test]
     fn meal_bare_google_maps_url_becomes_short_map_link() {
-        let out = render_meal("Lunch https://www.google.com/maps/search/Asatoya");
+        let out = render_meal(&meal("Lunch https://www.google.com/maps/search/Asatoya"), "zh");
         assert!(out.contains(">🗺️ Google Maps</a>"), "got: {out}");
         assert!(
             !out.contains(">https://www.google.com/maps/search/"),
@@ -311,7 +321,7 @@ mod tests {
     // the href preserves the query via esc_url_attr (no double-escape).
     #[test]
     fn meal_pin_escapes_label_and_preserves_href() {
-        let out = render_meal("Diner & <Café>｜map:Café & Bar 那覇");
+        let out = render_meal(&meal("Diner & <Café>｜map:Café & Bar 那覇"), "zh");
         // Visible label escaped once.
         assert!(out.contains("Diner &amp; &lt;Café&gt;"), "got: {out}");
         assert!(!out.contains("amp;amp;"), "double-escape; got: {out}");
@@ -335,12 +345,68 @@ mod tests {
     fn session_render_uses_meal_links() {
         let sess = Session {
             session_type: "evening".into(),
-            meals: vec!["晚餐：ステーキ88｜map:ステーキ88 那覇".into()],
+            meals: vec![meal("晚餐：ステーキ88｜map:ステーキ88 那覇")],
             ..Default::default()
         };
         let html = render(&sess, "zh");
         assert!(html.contains("<a class=\"meal\" href=\""), "got: {html}");
         assert!(html.contains("maps/search/"), "got: {html}");
         assert!(!html.contains("｜map:"), "got: {html}");
+    }
+
+    #[test]
+    fn ai_recommended_meal_renders_badge_en() {
+        let html = render_meal(
+            &Meal {
+                text: "Lunch".into(),
+                source: "ai_recommended".into(),
+            },
+            "en",
+        );
+        assert!(html.contains("ai-rec-badge"), "got: {html}");
+        assert!(html.contains("🤖 AI-recommended (unconfirmed)"), "got: {html}");
+    }
+
+    #[test]
+    fn confirmed_meal_has_no_badge() {
+        let html = render_meal(
+            &Meal {
+                text: "Lunch".into(),
+                source: "confirmed".into(),
+            },
+            "en",
+        );
+        assert!(!html.contains("ai-rec-badge"), "got: {html}");
+    }
+
+    #[test]
+    fn ai_recommended_activity_renders_badge_zh() {
+        let sess = Session {
+            session_type: "morning".into(),
+            activities: vec![Activity {
+                title: "Suggested spot".into(),
+                source: "ai_recommended".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&sess, "zh");
+        assert!(html.contains("ai-rec-badge"), "got: {html}");
+        assert!(html.contains("🤖 建議（未確認）"), "got: {html}");
+    }
+
+    #[test]
+    fn confirmed_activity_has_no_badge() {
+        let sess = Session {
+            session_type: "morning".into(),
+            activities: vec![Activity {
+                title: "Confirmed spot".into(),
+                source: "confirmed".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&sess, "zh");
+        assert!(!html.contains("ai-rec-badge"), "got: {html}");
     }
 }

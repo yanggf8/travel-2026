@@ -192,6 +192,7 @@ fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
         if !seg.notes.is_empty() {
             h.push_str(&format!(" · {}", render_activity_text(&seg.notes)));
         }
+        h.push_str(&super::ai_rec_badge(&seg.source, lang));
         h.push_str("</div>");
     }
     h.push_str("</div>");
@@ -243,7 +244,7 @@ pub fn render(day: &Day, plan_id: &str, lang: &str, has_map: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Activity, Day, RouteSegment, Session};
+    use crate::model::{Activity, Day, Meal, RouteSegment, Session};
     /// Build an Activity carrying only a display title (the common test case).
     fn act(title: &str) -> Activity {
         Activity {
@@ -264,6 +265,7 @@ mod tests {
                 duration_min: 12,
                 notes: "".into(),
                 start_time: "09:00".into(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -273,6 +275,27 @@ mod tests {
         assert!(html.contains("波上宮"));
         assert!(html.contains("🚗"));
         assert!(html.contains("~12 min"));
+    }
+
+    #[test]
+    fn ai_recommended_route_segment_renders_badge_en() {
+        let day = Day {
+            day_number: 2,
+            date: "2026-06-13".into(),
+            day_type: "full".into(),
+            route_segments: vec![RouteSegment {
+                from_place: "Hotel".into(),
+                to_place: "Beach".into(),
+                mode: "walking".into(),
+                duration_min: 15,
+                source: "ai_recommended".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&day, "okinawa-2026", "en", false);
+        assert!(html.contains("ai-rec-badge"), "got: {html}");
+        assert!(html.contains("AI-recommended (unconfirmed)"), "got: {html}");
     }
 
     #[test]
@@ -315,6 +338,7 @@ mod tests {
                 duration_min: 60,
                 start_time: "04:00".into(),
                 notes: "地址：桃園市大園區中山南路544號旁 Google Maps 導航：https://www.google.com/maps/dir/%E6%96%B0%E5%8C%97/%E6%A1%83%E5%9C%92".into(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -341,7 +365,10 @@ mod tests {
             theme_zh: "壺屋陶器街".into(),
             sessions: vec![Session {
                 session_type: "noon".into(),
-                meals: vec!["Lunch".into()],
+                meals: vec![Meal {
+                    text: "Lunch".into(),
+                    source: "confirmed".into(),
+                }],
                 ..Default::default()
             }],
             ..Default::default()

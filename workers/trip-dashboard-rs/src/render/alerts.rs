@@ -290,6 +290,7 @@ mod tests {
             booking_status: "pending".into(),
             book_by: book_by.into(),
             booking_url: booking_url.into(),
+            ..Default::default()
         }
     }
     /// A plan with a single day whose morning session holds the given activities.

@@ -20,6 +20,13 @@ pub struct RouteSegment {
     pub duration_min: i64,
     pub notes: String,
     pub start_time: String,
+    pub source: String,
+}
+
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct Meal {
+    pub text: String,
+    pub source: String,
 }
 
 /// One itinerary activity row, carrying the booking fields the pending-alert
@@ -31,6 +38,7 @@ pub struct Activity {
     pub booking_status: String,
     pub book_by: String,
     pub booking_url: String,
+    pub source: String,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -39,7 +47,7 @@ pub struct Session {
     pub focus_zh: String,
     pub transit_zh: String,
     pub activities: Vec<Activity>,
-    pub meals: Vec<String>,
+    pub meals: Vec<Meal>,
     pub stops: Vec<Stop>,
 }
 
@@ -98,12 +106,16 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
                     booking_status: s(r, "booking_status"),
                     book_by: s(r, "book_by"),
                     booking_url: s(r, "booking_url"),
+                    source: s(r, "source"),
                 })
                 .collect(),
             meals: meals
                 .iter()
                 .filter(|r| s(r, "session_type") == st)
-                .map(|r| s(r, "meal"))
+                .map(|r| Meal {
+                    text: s(r, "meal"),
+                    source: s(r, "source"),
+                })
                 .collect(),
             ..Default::default()
         })
@@ -234,6 +246,7 @@ pub fn assemble(
                 duration_min: i(r, "duration_min"),
                 notes: s(r, "notes"),
                 start_time: s(r, "start_time"),
+                source: s(r, "source"),
             })
             .collect();
         plan.days.push(Day {
@@ -529,13 +542,20 @@ mod tests {
         let meals = vec![row(&[
             ("session_type", json!("noon")),
             ("meal", json!("Lunch: Makishi")),
+            ("source", json!("confirmed")),
         ])];
         let sessions = build_sessions(&acts, &meals);
         assert_eq!(sessions.len(), 4);
         let noon = sessions.iter().find(|s| s.session_type == "noon").unwrap();
         assert_eq!(noon.activities.len(), 1);
         assert_eq!(noon.activities[0].title, "Makishi Market".to_string());
-        assert_eq!(noon.meals, vec!["Lunch: Makishi".to_string()]);
+        assert_eq!(
+            noon.meals,
+            vec![Meal {
+                text: "Lunch: Makishi".to_string(),
+                source: "confirmed".to_string(),
+            }]
+        );
     }
 
     #[test]

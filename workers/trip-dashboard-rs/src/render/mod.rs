@@ -57,6 +57,20 @@ pub fn render_plan(
     page(&plan.display_name, &body, lang)
 }
 
+/// AI-recommended provenance badge. Empty string for confirmed/any non-ai_recommended source, so
+/// callers can append it unconditionally. Bilingual: ZH default, English on ?lang=en.
+pub fn ai_rec_badge(source: &str, lang: &str) -> String {
+    if source != "ai_recommended" {
+        return String::new();
+    }
+    let label = if lang == "en" {
+        "\u{1F916} AI-recommended (unconfirmed)"
+    } else {
+        "\u{1F916} 建議（未確認）"
+    };
+    format!("<span class=\"ai-rec-badge\">{}</span>", esc(label))
+}
+
 /// Escape text for HTML TEXT content and DOUBLE-QUOTED attribute values only.
 /// (Escapes & < > ". Not safe for single-quoted attrs, unquoted attrs, URLs, or
 /// JS/CSS contexts — build those from trusted components instead.)
