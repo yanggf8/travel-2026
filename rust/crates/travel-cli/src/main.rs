@@ -346,7 +346,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-route-segment" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes \"...\"] [--start-time HH:MM] [--dest <slug>]");
+                println!("Usage:\n  travel set-route-segment <day> --seg \"from|to|mode[|duration[|start_time[|notes]]]\" [--seg ...] [--recommended] [--dest <slug>]\n  (--recommended marks the segment(s) AI-recommended/unconfirmed)");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -355,7 +355,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-route-segments-bulk" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-route-segments-bulk <day> --seg \"from|to|mode[|duration[|start_time[|notes]]]\" [--seg ...] [--dest <slug>]");
+                println!("Usage:\n  travel set-route-segments-bulk <day> --seg \"from|to|mode[|duration[|start_time[|notes]]]\" [--seg ...] [--recommended] [--dest <slug>]\n  (--recommended marks every segment AI-recommended/unconfirmed)");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -391,7 +391,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-meals" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-meals <day> <session> --meal \"<text>\" [--meal \"<text>\"...] [--dest <slug>]\n  (a meal may carry a map pin: \"<label>｜map:<query>\")");
+                println!("Usage:\n  travel set-meals <day> <session> --meal \"<text>\" [--meal \"<text>\"...] [--recommended] [--dest <slug>]\n  (a meal may carry a map pin: \"<label>｜map:<query>\"; --recommended marks it AI-recommended/unconfirmed)");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -427,7 +427,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "add-activity" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel add-activity <day> <session> <title> [--after <id|title>] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]");
+                println!("Usage:\n  travel add-activity <day> <session> <title> [--after <id|title>] [--recommended] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest <slug>]\n  (--recommended marks it AI-recommended/unconfirmed)");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;

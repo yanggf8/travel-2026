@@ -1,7 +1,7 @@
 ---
 name: stage3-expand-itinerary
-description: Expand the rough itinerary into a booking-aware detailed daily plan. Owns Stage 3 of the adopted research-first planning flow.
-version: 1.0.0
+description: Expand the rough itinerary into a booking-aware detailed daily plan, agent-authoring AI-recommended (labeled) depth. Owns Stage 3 of the adopted research-first planning flow.
+version: 1.1.0
 requires_skills: [travel-shared, p5-itinerary]
 requires_processes: [process_1_date_anchor, process_2_destination, process_3_transportation, process_4_accommodation]
 provides_processes: [process_5_daily_itinerary]
@@ -71,7 +71,38 @@ Do **not** use this for the first coarse draft before shopping; use
    Default meals are lunch and dinner only. Add breakfast only when hotel or
    package terms include it, or when the user asks for it.
 
-5. **Validate and rebalance**
+5. **Enrich with AI-recommended depth (agent-first, LABELED)**
+
+   `scaffold`/`populate` produce a structural skeleton only — no meals, no
+   route-segments, thin activities. **Do not leave that depth empty for the user
+   to hand-fill.** This is agent-first work (like OTA extraction): the agent
+   researches and authors the depth, then persists it **labeled as AI-recommended
+   (unconfirmed)** with the `--recommended` flag. Real-but-labeled is honest — it
+   is a transparent suggestion to confirm, not a fabricated fact and never a
+   claimed booking.
+
+   ```bash
+   # Meals — real restaurants (see the restaurant-pick rules: nearest to the site,
+   # Google-rating-trusted, authentic; always a main + a backup; never phone-only).
+   ./bin/travel set-meals <day> <session> --meal "<label>｜map:<real place + area>" --recommended --dest <destination_slug>
+   # Transit / route-segments — real place-chains (walk→monorail→shuttle→taxi; NO public bus).
+   ./bin/travel set-route-segment <day> --seg "<from>|<to>|<mode>[|min[|HH:MM[|notes]]]" --recommended --dest <destination_slug>
+   # Extra want/nice-to-have activities the skeleton is too thin for.
+   ./bin/travel add-activity <day> <session> "<title>" --recommended --dest <destination_slug>
+   ```
+
+   Rules for authored content:
+   - **Real data only.** Confirm a real place name + area before writing a
+     `map:` pin; never invent a Japanese place name; gloss kana with Chinese for
+     the user. If unconfirmed, label the pin generically rather than guessing.
+   - **`--recommended` is mandatory** on every meal/route/activity the AGENT
+     authored. User-provided facts (a booked restaurant, a confirmed transfer) are
+     entered WITHOUT `--recommended` (they are `confirmed`).
+   - The dashboard renders these with a `🤖 AI-recommended (unconfirmed)` badge;
+     `validate publish` reports the count as INFO (never a blocker); the user flips
+     the ones they accept with `confirm-recommendations` (step 7).
+
+6. **Validate and rebalance**
    ```bash
    ./bin/travel validate-itinerary --dest <destination_slug> --severity warning
    ```
@@ -83,22 +114,36 @@ Do **not** use this for the first coarse draft before shopping; use
    - Booking deadlines.
    - Meal gaps that matter for the user.
 
-6. **Confirm readiness for Stage 4**
+7. **Surface AI-recommended items for confirmation**
+
+   Show the user what the agent authored so they can accept or revise it. The
+   items are already visible (dashboard badge + `validate publish` INFO); when the
+   user confirms a batch, flip it from `ai_recommended` → `confirmed`:
+   ```bash
+   ./bin/travel confirm-recommendations [--day N] [--session s] [--kind activity|meal|route] --plan-id <plan_id> --dest <destination_slug>
+   ```
+   Scope by `--day`/`--session`/`--kind`, or run bare to confirm everything the
+   user approved. Leave un-confirmed items labeled — a labeled suggestion is a
+   valid pre-trip state (`validate publish` will not block on it).
+
+8. **Confirm readiness for Stage 4**
 
    Move to Stage 4 only when the itinerary is detailed enough to publish:
    - Arrival/departure logistics are represented.
    - Each full day has a coherent area focus.
    - Fixed activities and booking requirements are explicit.
    - Validation has no unresolved errors.
+   - AI-recommended items are either user-confirmed or intentionally left labeled.
 
 ## Output
 
 End with:
 - A concise day-by-day detailed itinerary summary.
 - Validation result and any remaining warnings.
+- A count of AI-recommended (unconfirmed) items awaiting the user's confirmation.
 - Bookings or activities still needing confirmation.
-- One next action: revise Stage 3, update bookings, fetch weather, or proceed
-  to Stage 4 (`/stage4-publish-dashboard`).
+- One next action: revise Stage 3, confirm AI-recommended items, update bookings,
+  fetch weather, or proceed to Stage 4 (`/stage4-publish-dashboard`).
 
 ## Notes
 
@@ -107,3 +152,10 @@ End with:
 - Prefer session-based itinerary format for new plans.
 - If a package includes guided days, preserve those fixed portions and plan only
   free or semi-free time around them.
+- **Agent-first + labeled provenance.** The agent AUTHORS meals/transit/extra
+  activities (real data) rather than dumping the hand-work on the user — but every
+  agent-authored item carries `--recommended` (source `ai_recommended`) so it shows
+  as a suggestion (`🤖` badge, `validate publish` INFO), never as a confirmed fact.
+  User-supplied facts are entered without `--recommended`. Confirm accepted items
+  with `confirm-recommendations`. No-cheat still holds: never fabricate a real-world
+  place, never mark AI content confirmed/booked.
