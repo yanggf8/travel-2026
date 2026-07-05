@@ -85,8 +85,13 @@ Do **not** use this for the first coarse draft before shopping; use
    # Meals — real restaurants (see the restaurant-pick rules: nearest to the site,
    # Google-rating-trusted, authentic; always a main + a backup; never phone-only).
    ./bin/travel set-meals <day> <session> --meal "<label>｜map:<real place + area>" --recommended --dest <destination_slug>
-   # Transit / route-segments — real place-chains (walk→monorail→shuttle→taxi; NO public bus).
-   ./bin/travel set-route-segment <day> --seg "<from>|<to>|<mode>[|min[|HH:MM[|notes]]]" --recommended --dest <destination_slug>
+   # Transit — a whole day's real place-chain (walk→monorail→shuttle→taxi; NO public bus).
+   # Keep stop names CLEAN (no （…）notes / clock times inside a stop — those go in the notes field);
+   # each --seg is "from|to|mode[|duration[|start_time[|notes]]]".
+   ./bin/travel set-route-segments-bulk <day> \
+     --seg "<from>|<to>|<mode>|<min>||<notes>" \
+     --seg "<from>|<to>|<mode>|<min>||<notes>" --recommended --dest <destination_slug>
+   # (or a single leg: set-route-segment <day> <sort_order> <from> <to> <mode> [--duration N] [--notes ".."] --recommended)
    # Extra want/nice-to-have activities the skeleton is too thin for.
    ./bin/travel add-activity <day> <session> "<title>" --recommended --dest <destination_slug>
    ```

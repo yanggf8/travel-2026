@@ -346,7 +346,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-route-segment" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-route-segment <day> --seg \"from|to|mode[|duration[|start_time[|notes]]]\" [--seg ...] [--recommended] [--dest <slug>]\n  (--recommended marks the segment(s) AI-recommended/unconfirmed)");
+                println!("Usage:\n  travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration N] [--notes \"...\"] [--start-time HH:MM] [--recommended] [--dest <slug>]\n  (one segment; use set-route-segments-bulk for a whole day. --recommended marks it AI-recommended/unconfirmed. Keep stop names clean — no （…）notes or clock times inside the stop.)");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
