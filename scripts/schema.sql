@@ -26,6 +26,7 @@ CREATE TABLE activities (
     id TEXT PRIMARY KEY,
     plan_id TEXT NOT NULL,
     destination TEXT NOT NULL,
+    poi_id TEXT,
     day_number INTEGER NOT NULL,
     session_type TEXT NOT NULL CHECK(session_type IN ('morning','noon','afternoon','evening')),
     sort_order INTEGER NOT NULL DEFAULT 0,

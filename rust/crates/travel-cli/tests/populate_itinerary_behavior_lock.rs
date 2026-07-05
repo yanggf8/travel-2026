@@ -68,7 +68,7 @@ fn seed_plan_and_destination(plan: &str, dest: &str) {
            ({d}, 'alpha_core', 'alpha_cafe', 1), \
            ({d}, 'alpha_core', 'alpha_gallery', 2), \
            ({d}, 'beta_core', 'beta_tower', 0), \
-           ({d}, 'beta_core', 'beta_market', 1), \
+           ({d}, 'beta_core', 'alpha_gallery_east', 1), \
            ({d}, 'souvenir_last_day', 'last_shrine', 0), \
            ({d}, 'souvenir_last_day', 'last_station', 1); \
          INSERT INTO destination_pois \
@@ -82,7 +82,7 @@ fn seed_plan_and_destination(plan: &str, dest: &str) {
             NULL, '', '10:00-18:00', '', 'test', '2026-07-02', 'test'), \
            ({d}, 'beta_tower', 'Beta Tower', 'beta_area', 'Beta Sta', 80, 0, NULL, \
             1500, 'Observation deck', '10:00-20:00', '1 Beta Bay', 'test', '2026-07-02', 'test'), \
-           ({d}, 'beta_market', 'Beta Market', 'beta_area', 'Market Sta', 70, 0, NULL, \
+           ({d}, 'alpha_gallery_east', 'Alpha Gallery', 'beta_area', 'Market Sta', 70, 0, NULL, \
             500, NULL, NULL, NULL, 'test', '2026-07-02', 'test'), \
            ({d}, 'last_shrine', 'Last Shrine', 'last_area', 'Last Sta', 50, 0, NULL, \
             0, 'Final stop', NULL, '9 Last Ln', 'test', '2026-07-02', 'test'), \
@@ -93,7 +93,7 @@ fn seed_plan_and_destination(plan: &str, dest: &str) {
            ({d}, 'alpha_museum', 'ticketed', 1), \
            ({d}, 'alpha_cafe', 'food', 0), \
            ({d}, 'beta_tower', 'view', 0), \
-           ({d}, 'beta_market', 'shopping', 0), \
+           ({d}, 'alpha_gallery_east', 'shopping', 0), \
            ({d}, 'last_shrine', 'culture', 0);"
     ));
 }
@@ -175,7 +175,8 @@ fn assert_touched_days(plan: &str, dest: &str, expected: &[&str]) {
 fn assert_activity_order_after_first(plan: &str, dest: &str) {
     let rows = exec_ok(&format!(
         "SELECT day_number || '|' || session_type || '|' || sort_order || '|' || title || '|' || \
-                COALESCE(area, '<NULL>') || '|' || COALESCE(nearest_station, '<NULL>') || '|' || \
+                COALESCE(poi_id, '<NULL>') || '|' || COALESCE(area, '<NULL>') || '|' || \
+                COALESCE(nearest_station, '<NULL>') || '|' || \
                 COALESCE(duration_min, -1) || '|' || booking_required || '|' || \
                 COALESCE(booking_url, '<NULL>') || '|' || COALESCE(cost_estimate, -1) || '|' || \
                 COALESCE(notes, '<NULL>') || '|' || priority AS row_text \
@@ -190,15 +191,33 @@ fn assert_activity_order_after_first(plan: &str, dest: &str) {
     assert_eq!(
         rows.column(),
         vec![
-            "2|morning|0|alpha museum|Seed Area|<NULL>|-1|0|<NULL>|-1|<NULL>|want",
-            "2|morning|1|Alpha Gallery|Alpha Ward|<NULL>|60|0|<NULL>|-1|Hours: 10:00-18:00|want",
-            "2|noon|0|Alpha Cafe|Alpha Ward|Alpha Sta|45|0|<NULL>|800|Coffee break | Address: 2 Alpha Rd|want",
-            "3|morning|0|Beta Tower|Beta Bay|Beta Sta|80|0|<NULL>|1500|Observation deck | Hours: 10:00-20:00 | Address: 1 Beta Bay|want",
-            "3|noon|0|Beta Market|Beta Bay|Market Sta|70|0|<NULL>|500|<NULL>|want",
-            "4|morning|0|Last Shrine|Last Stop|Last Sta|50|0|<NULL>|0|Final stop | Address: 9 Last Ln|want",
-            "4|noon|0|Last Station|Last Stop|Airport Line|40|0|<NULL>|-1|<NULL>|want",
+            "2|morning|0|alpha museum|<NULL>|Seed Area|<NULL>|-1|0|<NULL>|-1|<NULL>|want",
+            "2|morning|1|Alpha Gallery|alpha_gallery|Alpha Ward|<NULL>|60|0|<NULL>|-1|Hours: 10:00-18:00|want",
+            "2|noon|0|Alpha Cafe|alpha_cafe|Alpha Ward|Alpha Sta|45|0|<NULL>|800|Coffee break | Address: 2 Alpha Rd|want",
+            "3|morning|0|Beta Tower|beta_tower|Beta Bay|Beta Sta|80|0|<NULL>|1500|Observation deck | Hours: 10:00-20:00 | Address: 1 Beta Bay|want",
+            "3|noon|0|Alpha Gallery|alpha_gallery_east|Beta Bay|Market Sta|70|0|<NULL>|500|<NULL>|want",
+            "4|morning|0|Last Shrine|last_shrine|Last Stop|Last Sta|50|0|<NULL>|0|Final stop | Address: 9 Last Ln|want",
+            "4|noon|0|Last Station|last_station|Last Stop|Airport Line|40|0|<NULL>|-1|<NULL>|want",
         ],
         "allocation, session order, sort_order, and inserted activity fields should match current behavior; out={rows}"
+    );
+}
+
+fn assert_poi_ids_by_title(plan: &str, dest: &str, expected: &[&str]) {
+    let rows = exec_ok(&format!(
+        "SELECT title || '|' || COALESCE(poi_id, '<NULL>') AS row_text \
+         FROM activities \
+         WHERE plan_id = {} AND destination = {} \
+         ORDER BY title, day_number, \
+                  CASE session_type WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'afternoon' THEN 2 ELSE 3 END, \
+                  sort_order",
+        sql_lit(plan),
+        sql_lit(dest)
+    ));
+    assert_eq!(
+        rows.column(),
+        expected,
+        "title|poi_id pairs should prove linking by poi_id not title; out={rows}"
     );
 }
 
@@ -277,6 +296,19 @@ fn populate_itinerary_locks_current_write_surface() {
     );
     assert_touched_days(&plan, &dest, &["2", "3", "4"]);
     assert_activity_order_after_first(&plan, &dest);
+    assert_poi_ids_by_title(
+        &plan,
+        &dest,
+        &[
+            "Alpha Cafe|alpha_cafe",
+            "Alpha Gallery|alpha_gallery",
+            "Alpha Gallery|alpha_gallery_east",
+            "Beta Tower|beta_tower",
+            "Last Shrine|last_shrine",
+            "Last Station|last_station",
+            "alpha museum|<NULL>",
+        ],
+    );
 
     let tags = exec_ok(&format!(
         "SELECT a.title || ':' || at.tag AS row_text \
@@ -291,7 +323,7 @@ fn populate_itinerary_locks_current_write_surface() {
         tags.column(),
         vec![
             "Alpha Cafe:food",
-            "Beta Market:shopping",
+            "Alpha Gallery:shopping",
             "Beta Tower:view",
             "Last Shrine:culture",
         ],
@@ -308,7 +340,7 @@ fn populate_itinerary_locks_current_write_surface() {
         "6|itinerary_session_focus_set|3|morning|Beta Cluster",
         "7|itinerary_session_focus_set|3|noon|Beta Cluster",
         "8|activity_added|3|morning|Beta Tower",
-        "9|activity_added|3|noon|Beta Market",
+        "9|activity_added|3|noon|Alpha Gallery",
         "10|itinerary_day_theme_set|4||Last Day Cluster",
         "11|itinerary_session_focus_set|4|morning|Last Day Cluster",
         "12|itinerary_session_focus_set|4|noon|Last Day Cluster",
@@ -452,6 +484,26 @@ fn populate_itinerary_locks_current_write_surface() {
         Some("10"),
         "first run inserted four tags; force inserted six more"
     );
+    assert_poi_ids_by_title(
+        &plan,
+        &dest,
+        &[
+            "Alpha Cafe|alpha_cafe",
+            "Alpha Cafe|alpha_cafe",
+            "Alpha Gallery|alpha_gallery",
+            "Alpha Gallery|alpha_gallery",
+            "Alpha Gallery|alpha_gallery_east",
+            "Alpha Gallery|alpha_gallery_east",
+            "Alpha Museum|alpha_museum",
+            "Beta Tower|beta_tower",
+            "Beta Tower|beta_tower",
+            "Last Shrine|last_shrine",
+            "Last Shrine|last_shrine",
+            "Last Station|last_station",
+            "Last Station|last_station",
+            "alpha museum|<NULL>",
+        ],
+    );
 
     let force_events = vec![
         "15|itinerary_day_theme_set|2||Alpha Cluster",
@@ -464,7 +516,7 @@ fn populate_itinerary_locks_current_write_surface() {
         "22|itinerary_session_focus_set|3|morning|Beta Cluster",
         "23|itinerary_session_focus_set|3|noon|Beta Cluster",
         "24|activity_added|3|morning|Beta Tower",
-        "25|activity_added|3|noon|Beta Market",
+        "25|activity_added|3|noon|Alpha Gallery",
         "26|itinerary_day_theme_set|4||Last Day Cluster",
         "27|itinerary_session_focus_set|4|morning|Last Day Cluster",
         "28|itinerary_session_focus_set|4|noon|Last Day Cluster",

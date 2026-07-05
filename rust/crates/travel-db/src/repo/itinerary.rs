@@ -831,6 +831,7 @@ pub async fn insert_populated_activity(
     activity_id: &str,
     plan_id: &str,
     destination: &str,
+    poi_id: &str,
     day: i64,
     session: &str,
     sort_order: i64,
@@ -847,14 +848,15 @@ pub async fn insert_populated_activity(
 ) -> Result<(), String> {
     conn.execute(
         "INSERT INTO activities \
-            (id, plan_id, destination, day_number, session_type, sort_order, title, area, \
+            (id, plan_id, destination, poi_id, day_number, session_type, sort_order, title, area, \
              nearest_station, duration_min, booking_required, booking_url, cost_estimate, \
              notes, priority, is_fixed_time, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, ?17)",
         libsql::params![
             activity_id.to_string(),
             plan_id.to_string(),
             destination.to_string(),
+            poi_id.to_string(),
             day,
             session.to_string(),
             sort_order,
