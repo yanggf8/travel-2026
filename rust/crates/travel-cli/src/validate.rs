@@ -12,14 +12,19 @@
 // be removed at that point.
 
 use crate::db;
+use libsql::params;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Mode {
     Validate,
     Doctor,
+    Publish {
+        plan_id: String,
+        dest: Option<String>,
+    },
 }
 
 struct Issue {
@@ -38,9 +43,14 @@ enum Severity {
 }
 
 pub async fn run(mode: Mode) -> Result<(), String> {
+    if let Mode::Publish { plan_id, dest } = mode {
+        return run_publish(&plan_id, dest.as_deref()).await;
+    }
+
     let label = match mode {
         Mode::Validate => "Data consistency validation",
         Mode::Doctor => "Project health check (doctor)",
+        _ => unreachable!("Publish handled above"),
     };
     println!("Running {label}...\n");
 
@@ -65,7 +75,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     // (node_modules / npm binaries) is intentionally a no-op here — the project
     // is migrating away from npm, and the current TS test baseline shows both
     // modes produce identical output. Remove when root package.json is deleted.
-    if matches!(mode, Mode::Doctor) {
+    if mode == Mode::Doctor {
         // no-op: validateDependencies() (intentionally skipped — see note above)
         // Agent-first map-link check: cross-country (ocean-spanning) Maps legs
         // across all plans are doctor errors. Ambiguous-stop info/warnings stay
@@ -1196,6 +1206,390 @@ fn format_loc(r: &Issue) -> String {
         (Some(f), None) => format!(" ({f})"),
         _ => String::new(),
     }
+}
+
+// ============================================================================
+// Publish-readiness gate (`travel validate publish`) — READ-ONLY, no audit triad.
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PublishSeverity {
+    Block,
+    Warn,
+}
+
+struct PublishIssue {
+    category: String,
+    severity: PublishSeverity,
+    message: String,
+}
+
+/// Run publish-readiness checks for one plan + destination. Exit 1 on any BLOCK.
+async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String> {
+    let conn = db::connect_read().await?;
+    let destination =
+        crate::cascade::common::resolve_active_destination(&conn, plan_id, dest_opt).await?;
+
+    println!("Running publish-readiness validation for {plan_id} ({destination})...\n");
+
+    let today = crate::plans::today_iso_pub();
+    let lifecycle = read_lifecycle(&conn, plan_id, &destination).await?;
+    let is_past = lifecycle.as_deref() == Some("past");
+    let check_zh_weather = !is_past;
+
+    let mut issues: Vec<PublishIssue> = Vec::new();
+
+    // P5 days exist (BLOCK)
+    let day_count = count_days(&conn, plan_id, &destination).await?;
+    if day_count == 0 {
+        issues.push(PublishIssue {
+            category: "p5-days".to_string(),
+            severity: PublishSeverity::Block,
+            message: "no itinerary days found — run scaffold-itinerary first".to_string(),
+        });
+    }
+
+    // Itinerary errors (BLOCK) — reuse validate-itinerary error path
+    if day_count > 0 {
+        let errors = crate::validate_itinerary::error_messages(plan_id, dest_opt).await?;
+        for msg in errors {
+            issues.push(PublishIssue {
+                category: "itinerary".to_string(),
+                severity: PublishSeverity::Block,
+                message: msg,
+            });
+        }
+    }
+
+    // ZH content (BLOCK) — upcoming/active only; empty sessions skipped via SQL
+    if check_zh_weather {
+        for day in missing_day_zh(&conn, plan_id, &destination).await? {
+            issues.push(PublishIssue {
+                category: "zh-content".to_string(),
+                severity: PublishSeverity::Block,
+                message: format!("day {day} missing theme_zh"),
+            });
+        }
+        for (day, session) in missing_session_zh(&conn, plan_id, &destination).await? {
+            issues.push(PublishIssue {
+                category: "zh-content".to_string(),
+                severity: PublishSeverity::Block,
+                message: format!("day {day} {session} missing focus_zh/transit_notes_zh"),
+            });
+        }
+    }
+
+    // Map path (BLOCK) — POI coords OR day_route_segments
+    if !has_map_path(&conn, plan_id, &destination).await? {
+        issues.push(PublishIssue {
+            category: "map-path".to_string(),
+            severity: PublishSeverity::Block,
+            message: "no map path — need POI coordinates on activities or day_route_segments"
+                .to_string(),
+        });
+    }
+
+    // Maps freshness (WARN) — reuse check_maps_fresh::evaluate
+    match crate::check_maps_fresh::evaluate(&conn, plan_id).await {
+        Ok(crate::check_maps_fresh::Status::NeverSnapshotted) => {
+            issues.push(PublishIssue {
+                category: "maps-fresh".to_string(),
+                severity: PublishSeverity::Warn,
+                message: format!(
+                    "maps never snapshotted — run scripts/snapshot-maps.sh {plan_id} {destination}"
+                ),
+            });
+        }
+        Ok(crate::check_maps_fresh::Status::Stale { snapshotted_at }) => {
+            issues.push(PublishIssue {
+                category: "maps-fresh".to_string(),
+                severity: PublishSeverity::Warn,
+                message: format!(
+                    "itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run scripts/snapshot-maps.sh"
+                ),
+            });
+        }
+        Ok(crate::check_maps_fresh::Status::Fresh { .. }) => {}
+        Err(_) => {}
+    }
+
+    // Weather (WARN) — upcoming/active only, within 16-day window
+    if check_zh_weather {
+        for day in missing_weather_in_window(&conn, plan_id, &destination, &today).await? {
+            issues.push(PublishIssue {
+                category: "weather".to_string(),
+                severity: PublishSeverity::Warn,
+                message: format!("day {day} missing weather within 16-day forecast window"),
+            });
+        }
+    }
+
+    emit_publish_report(&issues);
+
+    let blockers = issues
+        .iter()
+        .filter(|i| i.severity == PublishSeverity::Block)
+        .count();
+    if blockers > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn read_lifecycle(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Option<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT start_date, end_date FROM date_anchors WHERE plan_id = ?1 AND destination = ?2",
+            params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("date_anchors query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("date_anchors row read failed: {e}"))?
+    {
+        let start: String = row.get(0).unwrap_or_default();
+        let end: String = row.get(1).unwrap_or_default();
+        if !start.is_empty() && !end.is_empty() {
+            let today = crate::plans::today_iso_pub();
+            return Ok(Some(
+                crate::plans::lifecycle(&start, &end, &today).to_string(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+async fn count_days(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<i64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM days WHERE plan_id = ?1 AND destination = ?2",
+            params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("days count query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("days count row read failed: {e}"))?
+    {
+        return Ok(row.get(0).unwrap_or(0));
+    }
+    Ok(0)
+}
+
+async fn missing_day_zh(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<i64>, String> {
+    let sql = "SELECT d.day_number \
+        FROM days d \
+        WHERE d.plan_id = ?1 AND d.destination = ?2 \
+          AND ( \
+            EXISTS ( \
+              SELECT 1 FROM activities a \
+              WHERE a.plan_id = d.plan_id AND a.destination = d.destination \
+                AND a.day_number = d.day_number \
+            ) \
+            OR EXISTS ( \
+              SELECT 1 FROM session_meals m \
+              WHERE m.plan_id = d.plan_id AND m.destination = d.destination \
+                AND m.day_number = d.day_number \
+            ) \
+            OR EXISTS ( \
+              SELECT 1 FROM day_route_segments r \
+              WHERE r.plan_id = d.plan_id AND r.destination = d.destination \
+                AND r.day_number = d.day_number \
+            ) \
+          ) \
+          AND NULLIF(TRIM(COALESCE(d.theme_zh, '')), '') IS NULL";
+    query_day_numbers(conn, sql, plan_id, destination).await
+}
+
+async fn missing_session_zh(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<(i64, String)>, String> {
+    let sql = "SELECT t.day_number, t.session_type \
+        FROM timesofday t \
+        WHERE t.plan_id = ?1 AND t.destination = ?2 \
+          AND ( \
+            EXISTS ( \
+              SELECT 1 FROM activities a \
+              WHERE a.plan_id = t.plan_id AND a.destination = t.destination \
+                AND a.day_number = t.day_number AND a.session_type = t.session_type \
+            ) \
+            OR EXISTS ( \
+              SELECT 1 FROM session_meals m \
+              WHERE m.plan_id = t.plan_id AND m.destination = t.destination \
+                AND m.day_number = t.day_number AND m.session_type = t.session_type \
+            ) \
+            OR NULLIF(TRIM(COALESCE(t.transit_notes, '')), '') IS NOT NULL \
+            OR NULLIF(TRIM(COALESCE(t.transit_notes_zh, '')), '') IS NOT NULL \
+          ) \
+          AND NULLIF(TRIM(COALESCE(t.focus_zh, '')), '') IS NULL \
+          AND NULLIF(TRIM(COALESCE(t.transit_notes_zh, '')), '') IS NULL";
+    let mut rows = conn
+        .query(
+            sql,
+            params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("missing session zh query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("missing session zh row read failed: {e}"))?
+    {
+        let day: i64 = row.get(0).unwrap_or(0);
+        let session: String = row.get(1).unwrap_or_default();
+        out.push((day, session));
+    }
+    Ok(out)
+}
+
+async fn has_map_path(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<bool, String> {
+    let poi_sql = "SELECT COUNT(*) \
+        FROM activities a \
+        JOIN destination_pois p ON p.slug = a.destination AND p.poi_id = a.poi_id \
+        WHERE a.plan_id = ?1 AND a.destination = ?2 \
+          AND p.lat IS NOT NULL AND p.lon IS NOT NULL \
+          AND TRIM(CAST(p.lat AS TEXT)) <> '' \
+          AND TRIM(CAST(p.lon AS TEXT)) <> ''";
+    let route_sql =
+        "SELECT COUNT(*) FROM day_route_segments WHERE plan_id = ?1 AND destination = ?2";
+    let poi_count = scalar_i64(conn, poi_sql, plan_id, destination).await?;
+    if poi_count > 0 {
+        return Ok(true);
+    }
+    let route_count = scalar_i64(conn, route_sql, plan_id, destination).await?;
+    Ok(route_count > 0)
+}
+
+async fn missing_weather_in_window(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+    today: &str,
+) -> Result<Vec<i64>, String> {
+    let sql = "SELECT day_number \
+        FROM days \
+        WHERE plan_id = ?1 AND destination = ?2 \
+          AND date >= ?3 AND date <= date(?3, '+16 days') \
+          AND (weather_label IS NULL OR weather_source_id IS NULL)";
+    let mut rows = conn
+        .query(
+            sql,
+            params![
+                plan_id.to_string(),
+                destination.to_string(),
+                today.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("weather window query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("weather window row read failed: {e}"))?
+    {
+        out.push(row.get(0).unwrap_or(0));
+    }
+    Ok(out)
+}
+
+async fn query_day_numbers(
+    conn: &libsql::Connection,
+    sql: &str,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<i64>, String> {
+    let mut rows = conn
+        .query(
+            sql,
+            params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("day zh query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("day zh row read failed: {e}"))?
+    {
+        out.push(row.get(0).unwrap_or(0));
+    }
+    Ok(out)
+}
+
+async fn scalar_i64(
+    conn: &libsql::Connection,
+    sql: &str,
+    plan_id: &str,
+    destination: &str,
+) -> Result<i64, String> {
+    let mut rows = conn
+        .query(
+            sql,
+            params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("scalar query failed: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("scalar row read failed: {e}"))?
+    {
+        return Ok(row.get(0).unwrap_or(0));
+    }
+    Ok(0)
+}
+
+fn emit_publish_report(issues: &[PublishIssue]) {
+    let blockers: Vec<&PublishIssue> = issues
+        .iter()
+        .filter(|i| i.severity == PublishSeverity::Block)
+        .collect();
+    let warnings: Vec<&PublishIssue> = issues
+        .iter()
+        .filter(|i| i.severity == PublishSeverity::Warn)
+        .collect();
+
+    if !blockers.is_empty() {
+        println!("## Blockers\n");
+        for r in &blockers {
+            println!("  ❌ [{}] {}", r.category, r.message);
+        }
+        println!();
+    }
+    if !warnings.is_empty() {
+        println!("## Warnings\n");
+        for r in &warnings {
+            println!("  ⚠️  [{}] {}", r.category, r.message);
+        }
+        println!();
+    }
+
+    println!("## Summary\n");
+    println!("  Blockers:   {}", blockers.len());
+    println!("  Warnings:   {}", warnings.len());
 }
 
 // ============================================================================

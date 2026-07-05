@@ -497,6 +497,11 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [group, sub, action, rest @ ..] if group == "db" && sub == "fetch" && action == "holidays" => {
             db_fetch_holidays::run(rest).await
         }
+        [group, sub, rest @ ..] if group == "validate" && sub == "publish" => {
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            let dest = parse_flag_value(rest, "--dest");
+            validate::run(validate::Mode::Publish { plan_id, dest }).await
+        }
         [group, sub, rest @ ..] if group == "validate" && sub == "data" => {
             if !rest.is_empty() {
                 return Err("Usage: travel validate data\n  (no arguments)".to_string());
@@ -694,6 +699,17 @@ fn wants_help(rest: &[String], usage: &str) -> bool {
     }
 }
 
+fn parse_flag_value(args: &[String], name: &str) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == name {
+            return args.get(i + 1).cloned();
+        }
+        i += 1;
+    }
+    None
+}
+
 fn print_usage() {
     // Grouped command reference. Run `travel <cmd> --help` for a command's args.
     // Keep this in sync when adding a dispatch arm — it is the only discovery
@@ -733,7 +749,7 @@ SHOP / OFFERS\n\
   query-tour-group-offers | import-tour-group-offers | compare-offers | search-offers\n\
 \n\
 VALIDATE / CHECKS\n\
-  validate data | doctor | validate-itinerary | check-hours\n\
+  validate data | validate publish | doctor | validate-itinerary | check-hours\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
   run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
 \n\

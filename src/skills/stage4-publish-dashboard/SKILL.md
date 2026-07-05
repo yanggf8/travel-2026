@@ -33,15 +33,13 @@ Do **not** auto-run this just because itinerary data changed.
 
 1. **Verify publish readiness**
    ```bash
-   ./bin/travel status --full --plan-id <plan_id>
-   ./bin/travel itinerary --plan-id <plan_id>
+   ./bin/travel validate publish --plan-id <plan_id> --dest <destination_slug>
    ./bin/travel validate-itinerary --dest <destination_slug> --severity warning
    ```
-   Confirm:
-   - P5 itinerary exists.
-   - No unresolved validation errors.
-   - ZH day/session content is populated enough for the dashboard audience.
-   - Bookings or placeholders are acceptable to show.
+   `validate publish` is the publish-readiness gate (P5 days, itinerary errors,
+   ZH content for upcoming/active trips, map path, maps freshness, weather).
+   Exit non-zero on any blocker; warnings are advisory. Past trips do not block
+   on missing ZH or weather.
 
 2. **Refresh optional data**
 

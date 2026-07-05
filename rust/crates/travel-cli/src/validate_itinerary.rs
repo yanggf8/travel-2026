@@ -107,6 +107,23 @@ struct RouteLeg {
     mode: String,
 }
 
+/// Return itinerary validator ERROR-level messages for publish-readiness reuse.
+/// READ-ONLY — no DB writes.
+pub async fn error_messages(plan_id: &str, dest_opt: Option<&str>) -> Result<Vec<String>, String> {
+    let conn = db::connect_read().await?;
+    let destination = read_destination(&conn, plan_id, dest_opt).await?;
+    let days = load_day_summaries(&conn, plan_id, &destination).await?;
+    if days.is_empty() {
+        return Ok(Vec::new());
+    }
+    let issues = validate(&days);
+    Ok(issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .map(|i| i.message.clone())
+        .collect())
+}
+
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
