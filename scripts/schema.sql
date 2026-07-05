@@ -353,6 +353,8 @@ CREATE TABLE destination_pois (
     source_url TEXT,
     fetched_at TEXT,
     confidence TEXT,
+    lat REAL,
+    lon REAL,
     PRIMARY KEY (slug, poi_id)
   );
 

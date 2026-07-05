@@ -1365,6 +1365,8 @@ pub async fn run(args: &[String]) -> Result<(), String> {
   source_url TEXT,
   fetched_at TEXT,
   confidence TEXT,
+  lat REAL,
+  lon REAL,
   PRIMARY KEY (slug, poi_id)
 );"#,
     )

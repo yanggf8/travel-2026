@@ -262,3 +262,47 @@ fn opt_string(row: &libsql::Row, idx: i32) -> Option<String> {
         _ => None,
     }
 }
+
+/// Existence check for `(slug, poi_id)` — used by `set-poi-coords` to fail
+/// loud before attempting the UPDATE.
+pub async fn poi_coords_exists(conn: &Connection, slug: &str, poi_id: &str) -> Result<bool, String> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM destination_pois WHERE slug = ?1 AND poi_id = ?2",
+            libsql::params![slug.to_string(), poi_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("destination_pois existence query failed: {e}"))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| format!("destination_pois existence row read failed: {e}"))?
+        .is_some())
+}
+
+/// `set-poi-coords` write — sets lat/lon and (optionally, via COALESCE) refreshes
+/// `source_url`/`confidence` for one `(slug, poi_id)` row. Destination-ref data is
+/// slug-keyed GLOBAL data — NO audit triad / NO plans.version (mirrors the rest
+/// of this module). Caller must check the returned affected-row count == 1 and
+/// fail loud otherwise.
+pub async fn set_poi_coords(
+    conn: &Connection,
+    slug: &str,
+    poi_id: &str,
+    lat: f64,
+    lon: f64,
+    source: Option<&str>,
+    confidence: Option<&str>,
+) -> Result<u64, String> {
+    conn.execute(
+        "UPDATE destination_pois \
+         SET lat = ?1, \
+             lon = ?2, \
+             source_url = COALESCE(?3, source_url), \
+             confidence = COALESCE(?4, confidence) \
+         WHERE slug = ?5 AND poi_id = ?6",
+        libsql::params![lat, lon, source, confidence, slug.to_string(), poi_id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("destination_pois coords UPDATE failed: {e}"))
+}

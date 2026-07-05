@@ -835,6 +835,46 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
             line: None,
         });
     }
+
+    // Ungeocoded POIs: destination_pois rows missing lat/lon (map pins can't be
+    // rendered on the dashboard until a real geocoder value is set via
+    // `travel set-poi-coords`). Grouped by slug with a count — WARNING only
+    // (never blocks `validate data`'s exit code).
+    let mut ungeocoded_rows = match conn
+        .query(
+            "SELECT slug, COUNT(*) AS n FROM destination_pois \
+             WHERE lat IS NULL OR lon IS NULL \
+                OR TRIM(CAST(lat AS TEXT)) = '' OR TRIM(CAST(lon AS TEXT)) = '' \
+             GROUP BY slug ORDER BY slug",
+            (),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            issues.push(Issue {
+                category: "destinations".to_string(),
+                severity: Severity::Error,
+                message: format!("failed to query destination_pois for ungeocoded rows: {err}"),
+                file: Some("turso:destination_pois".to_string()),
+                line: None,
+            });
+            return;
+        }
+    };
+    while let Some(row) = ungeocoded_rows.next().await.ok().flatten() {
+        let slug: String = row.get(0).unwrap_or_default();
+        let n: i64 = row.get(1).unwrap_or(0);
+        issues.push(Issue {
+            category: "destinations".to_string(),
+            severity: Severity::Warning,
+            message: format!(
+                "{slug}: {n} destination_pois row(s) missing lat/lon. Run ./bin/travel set-poi-coords <slug> <poi_id> <lat> <lon>."
+            ),
+            file: Some("turso:destination_pois".to_string()),
+            line: None,
+        });
+    }
 }
 
 // --- DB check: holiday calendars ---
