@@ -29,6 +29,7 @@ mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-param catalo
 mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-keyed, no audit triad)
 mod set_activity;
 mod set_activity_poi;
+mod confirm_recommendations;
 mod set_airport_transfer;
 mod set_dates;
 mod set_day_theme;
@@ -628,6 +629,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "compare-offers" => search_compare::run_compare(rest).await,
         [cmd, rest @ ..] if cmd == "search-offers" => search_compare::run_search(rest).await,
         [cmd, rest @ ..] if cmd == "chat-format" => chat_format::run(rest).await,
+        [cmd, rest @ ..] if cmd == "confirm-recommendations" => {
+            if wants_help(
+                rest,
+                "travel confirm-recommendations [--day N] [--session morning|noon|afternoon|evening] [--kind activity|meal|route] [--dest <slug>]\n  Flips ai_recommended itinerary content to confirmed, scoped by the filters.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            confirm_recommendations::run(rest, plan_id).await?;
+            Ok(())
+        }
 
         _ => Err(format!(
             "unknown command: {}\nRun `travel --help` for usage.",
@@ -738,6 +750,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   reorder-activities <day> <session> <id|title> ...\n\
   move-activity <day> <from-session> <to-session> <id|title> [--to-day N]\n\
   set-meals <day> <session> --meal \"<text>\" [--meal ...] [--zh \"<zh>\" ...]\n\
+  confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]  Flip AI-recommended → confirmed\n\
   set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\
   set-route-segment | set-route-segments-bulk <day> --seg \"from|to|mode[|...]\"\n\
   set-flight | set-hotel | set-airport-transfer | mark-booked | sync-bookings\n\

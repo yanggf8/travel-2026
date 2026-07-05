@@ -115,3 +115,27 @@ pub async fn touch_day(
     .map_err(|e| format!("days touch UPDATE failed: {e}"))?;
     Ok(())
 }
+
+/// Flip `ai_recommended` route segments to `confirmed`, scoped by optional day.
+/// `day_route_segments` has no `session_type` or `updated_at` column.
+pub async fn confirm_routes(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: Option<i64>,
+) -> Result<u64, String> {
+    let mut sql = String::from("UPDATE day_route_segments SET source = 'confirmed' WHERE 1=1");
+    let mut binds: Vec<libsql::Value> = Vec::new();
+    binds.push(libsql::Value::Text(plan_id.to_string()));
+    sql.push_str(&format!(" AND plan_id = ?{}", binds.len()));
+    binds.push(libsql::Value::Text(destination.to_string()));
+    sql.push_str(&format!(" AND destination = ?{}", binds.len()));
+    sql.push_str(" AND source = 'ai_recommended'");
+    if let Some(day) = day {
+        binds.push(libsql::Value::Integer(day));
+        sql.push_str(&format!(" AND day_number = ?{}", binds.len()));
+    }
+    conn.execute(&sql, binds)
+        .await
+        .map_err(|e| format!("routes confirm recommendations failed: {e}"))
+}

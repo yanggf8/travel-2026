@@ -716,6 +716,68 @@ pub async fn set_activity_poi(
     .map_err(|e| format!("activities UPDATE poi_id failed: {e}"))
 }
 
+fn push_text_filter(sql: &mut String, binds: &mut Vec<libsql::Value>, col: &str, val: &str) {
+    binds.push(libsql::Value::Text(val.to_string()));
+    sql.push_str(&format!(" AND {col} = ?{}", binds.len()));
+}
+
+fn push_i64_filter(sql: &mut String, binds: &mut Vec<libsql::Value>, col: &str, val: i64) {
+    binds.push(libsql::Value::Integer(val));
+    sql.push_str(&format!(" AND {col} = ?{}", binds.len()));
+}
+
+/// Flip `ai_recommended` activities to `confirmed`, scoped by optional day/session.
+pub async fn confirm_activities(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: Option<i64>,
+    session: Option<&str>,
+    now: &str,
+) -> Result<u64, String> {
+    let mut sql =
+        String::from("UPDATE activities SET source = 'confirmed', updated_at = ?1 WHERE 1=1");
+    let mut binds = vec![libsql::Value::Text(now.to_string())];
+    push_text_filter(&mut sql, &mut binds, "plan_id", plan_id);
+    push_text_filter(&mut sql, &mut binds, "destination", destination);
+    sql.push_str(" AND source = 'ai_recommended'");
+    if let Some(day) = day {
+        push_i64_filter(&mut sql, &mut binds, "day_number", day);
+    }
+    if let Some(session) = session {
+        push_text_filter(&mut sql, &mut binds, "session_type", session);
+    }
+    conn.execute(&sql, binds)
+        .await
+        .map_err(|e| format!("activities confirm recommendations failed: {e}"))
+}
+
+/// Flip `ai_recommended` session_meals to `confirmed`, scoped by optional day/session.
+pub async fn confirm_meals(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: Option<i64>,
+    session: Option<&str>,
+    now: &str,
+) -> Result<u64, String> {
+    let mut sql =
+        String::from("UPDATE session_meals SET source = 'confirmed', updated_at = ?1 WHERE 1=1");
+    let mut binds = vec![libsql::Value::Text(now.to_string())];
+    push_text_filter(&mut sql, &mut binds, "plan_id", plan_id);
+    push_text_filter(&mut sql, &mut binds, "destination", destination);
+    sql.push_str(" AND source = 'ai_recommended'");
+    if let Some(day) = day {
+        push_i64_filter(&mut sql, &mut binds, "day_number", day);
+    }
+    if let Some(session) = session {
+        push_text_filter(&mut sql, &mut binds, "session_type", session);
+    }
+    conn.execute(&sql, binds)
+        .await
+        .map_err(|e| format!("session_meals confirm recommendations failed: {e}"))
+}
+
 // ─────────────────────────────────────────────────────────────────
 // populate-itinerary domain writes on the `days`, `timesofday`, `activities`,
 // and `activity_tags` tables. SQL copied verbatim from `populate_itinerary.rs`;
