@@ -243,23 +243,30 @@ step (see Fill order below), and the confirm loop.
   --transit-zh "地下鐵御堂筋線 難波→心齋橋 5分鐘"
 ```
 
-**Fill order:**
-1. Lock must-do activities (fixed time, priority = must)
-2. Map out transit between areas
-3. Fill in meals (lunch + dinner; no breakfast by default unless the selected hotel/package includes it)
-4. Add nice-to-have activities in remaining slots
-5. **Enrich, agent-first + LABELED.** The agent authors the real depth (meals via
-   `set-meals`, transit via `set-route-segments-bulk`, extra activities via
-   `add-activity`) with the `--recommended` flag → `source='ai_recommended'`. Real
-   data only; the dashboard badges it 🤖, `validate publish` counts it as INFO
-   (never blocks). **Set the session ZH (`set-tod-zh`) in the same pass** as the
-   first content you add to a previously-empty session — else the Stage-4 publish
-   gate BLOCKs on missing `focus_zh`.
+**Fill order** (authoritative step list: `stage3-expand-itinerary/SKILL.md`):
+1. Lock must-do activities (fixed time, priority = must) — via `populate-itinerary`.
+2. Add nice-to-have activities in remaining slots.
+3. **Cascade routes: `derive-routes`.** Routes come from the activity skeleton
+   automatically (one `ai_recommended` transit leg per consecutive-activity pair,
+   from POI stations + destination transit). Run once after populate; idempotent;
+   re-run `--day N` after activity edits. Skips days with `confirmed` routes.
+4. **Enrich the rest, agent-first + LABELED.** What does NOT cascade is MEALS
+   (no reference data — agent research; aim for lunch+dinner every full day, real
+   restaurants) and any thin activities. Author via `set-meals`/`add-activity`
+   (and hand-`set-route-segments-bulk` only where derive couldn't), all with
+   `--recommended` → `source='ai_recommended'` (dashboard badges 🤖; `validate
+   publish` counts as INFO, never blocks). **Set the session ZH (`set-tod-zh`) in
+   the same pass** as the first content you add to a previously-empty session —
+   else the Stage-4 publish gate BLOCKs on missing `focus_zh`.
+5. **Validate + fill gaps.** `validate-itinerary` for mechanics; `validate publish`
+   for the **content-depth** WARN/INFO gap list ("day N missing dinner meal", "day
+   N: X activities but 0 routes"). Drive those back into steps 3-4 until the WARNs
+   clear or a compact day is consciously accepted (WARN/INFO, never blockers).
 6. **Review + confirm.** `query-recommendations` lists the AI-recommended items
    (same filters as confirm) — present them to the user; then
    `confirm-recommendations` flips the approved scope `ai_recommended`→`confirmed`.
    Un-confirmed items stay labeled (a valid pre-trip state).
-7. Check pacing (relaxed/balanced/packed) and run `validate publish` for readiness.
+7. Check pacing (relaxed/balanced/packed).
 
 ---
 

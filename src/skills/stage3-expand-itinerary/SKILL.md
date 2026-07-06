@@ -1,7 +1,7 @@
 ---
 name: stage3-expand-itinerary
-description: Expand the rough itinerary into a booking-aware detailed daily plan, agent-authoring AI-recommended (labeled) depth. Owns Stage 3 of the adopted research-first planning flow.
-version: 1.1.0
+description: Expand the rough itinerary into a booking-aware detailed daily plan — cascade routes via derive-routes, agent-author AI-recommended (labeled) meals/depth, and drive completeness with the content-depth signal. Owns Stage 3 of the adopted research-first planning flow.
+version: 1.2.0
 requires_skills: [travel-shared, p5-itinerary]
 requires_processes: [process_1_date_anchor, process_2_destination, process_3_transportation, process_4_accommodation]
 provides_processes: [process_5_daily_itinerary]
@@ -71,29 +71,42 @@ Do **not** use this for the first coarse draft before shopping; use
    Default meals are lunch and dinner only. Add breakfast only when hotel or
    package terms include it, or when the user asks for it.
 
-5. **Enrich with AI-recommended depth (agent-first, LABELED)**
+5. **Derive route segments (deterministic cascade — run this FIRST)**
 
-   `scaffold`/`populate` produce a structural skeleton only — no meals, no
-   route-segments, thin activities. **Do not leave that depth empty for the user
+   `scaffold`/`populate` write activities only. `derive-routes` CASCADES the
+   route skeleton from them — one `ai_recommended` transit leg between each pair
+   of consecutive same-day activities (using their POI stations + destination
+   transit metadata). Run it once after populate; it's idempotent and re-runnable
+   after any activity edit:
+   ```bash
+   ./bin/travel derive-routes --dest <destination_slug>          # all days
+   ./bin/travel derive-routes --day <N> --dest <destination_slug> # re-run one day after edits
+   ```
+   It never clobbers a `confirmed` route (a day you've hand-finalized is skipped),
+   and its legs are labeled `ai_recommended` — refine or confirm them like any
+   other suggestion. Only hand-author routes (`set-route-segments-bulk
+   --recommended`) where derive can't (missing stations, a walk-chain it skipped).
+
+6. **Enrich the remaining depth (agent-first, LABELED)**
+
+   After derive-routes, the gaps that DON'T cascade are MEALS (no reference data —
+   agent research) and any thin activities. **Do not leave them empty for the user
    to hand-fill.** This is agent-first work (like OTA extraction): the agent
    researches and authors the depth, then persists it **labeled as AI-recommended
-   (unconfirmed)** with the `--recommended` flag. Real-but-labeled is honest — it
-   is a transparent suggestion to confirm, not a fabricated fact and never a
-   claimed booking.
+   (unconfirmed)** with the `--recommended` flag. Real-but-labeled is honest — a
+   transparent suggestion to confirm, never a fabricated fact or a claimed booking.
 
+   **Meals — aim for per-day completeness** (this is what a real trip has): a
+   lunch (noon) AND a dinner (evening) on every full day; a dinner on arrival day
+   and a lunch on departure day when the timing fits. Real restaurants only (see
+   the restaurant-pick rules: nearest to the site, Google-rating-trusted,
+   authentic; always a main + a backup; never phone-only).
    ```bash
-   # Meals — real restaurants (see the restaurant-pick rules: nearest to the site,
-   # Google-rating-trusted, authentic; always a main + a backup; never phone-only).
    ./bin/travel set-meals <day> <session> --meal "<label>｜map:<real place + area>" --recommended --dest <destination_slug>
-   # Transit — a whole day's real place-chain (walk→monorail→shuttle→taxi; NO public bus).
-   # Keep stop names CLEAN (no （…）notes / clock times inside a stop — those go in the notes field);
-   # each --seg is "from|to|mode[|duration[|start_time[|notes]]]".
-   ./bin/travel set-route-segments-bulk <day> \
-     --seg "<from>|<to>|<mode>|<min>||<notes>" \
-     --seg "<from>|<to>|<mode>|<min>||<notes>" --recommended --dest <destination_slug>
-   # (or a single leg: set-route-segment <day> <sort_order> <from> <to> <mode> [--duration N] [--notes ".."] --recommended)
-   # Extra want/nice-to-have activities the skeleton is too thin for.
+   # Extra want/nice-to-have activities where the skeleton is too thin.
    ./bin/travel add-activity <day> <session> "<title>" --recommended --dest <destination_slug>
+   # Hand-author a route only where derive-routes couldn't (clean stop names; notes in the notes field):
+   ./bin/travel set-route-segments-bulk <day> --seg "<from>|<to>|<mode>|<min>||<notes>" --recommended --dest <destination_slug>
    ```
 
    Rules for authored content:
@@ -115,21 +128,23 @@ Do **not** use this for the first coarse draft before shopping; use
      stage later with no breadcrumb back to the enrichment.
    - The dashboard renders these with a `🤖 AI-recommended (unconfirmed)` badge;
      `validate publish` reports the count as INFO (never a blocker); the user flips
-     the ones they accept with `confirm-recommendations` (step 7).
+     the ones they accept with `confirm-recommendations` (step 8).
 
-6. **Validate and rebalance**
+7. **Validate + use the content-depth signal as the gap list**
    ```bash
    ./bin/travel validate-itinerary --dest <destination_slug> --severity warning
+   ./bin/travel validate publish --plan-id <plan_id>    # content-depth WARN/INFO = your remaining-depth checklist
    ```
-   Fix:
-   - Time conflicts.
-   - Overpacked days.
-   - Cross-city inefficiency.
-   - Missing transit buffers.
-   - Booking deadlines.
-   - Meal gaps that matter for the user.
+   `validate-itinerary` catches mechanics (time conflicts, overpacked days,
+   cross-city inefficiency, missing transit buffers, booking deadlines).
+   `validate publish` adds **content-depth** WARN/INFO — the concrete gap list to
+   drive back into step 6: "day N may be thin: missing dinner meal (evening)" or
+   "day N: X activities but 0 route segments". Keep filling (agent-first meals,
+   re-run `derive-routes --day N` for routes) until the content-depth WARNs are
+   gone or you've consciously accepted a compact day. These are WARN/INFO, never
+   blockers — a labeled, still-thin draft is a valid pre-trip state.
 
-7. **Surface AI-recommended items for confirmation**
+8. **Surface AI-recommended items for confirmation**
 
    **First, LIST what the agent authored and present it to the user** — don't just
    flip it silently. This works BEFORE the dashboard is deployed (Stage 4), so the
@@ -150,7 +165,7 @@ Do **not** use this for the first coarse draft before shopping; use
    valid pre-trip state (`validate publish` will not block on it; it counts them as
    INFO, and the dashboard badges them 🤖 once deployed).
 
-8. **Confirm readiness for Stage 4**
+9. **Confirm readiness for Stage 4**
 
    Move to Stage 4 only when the itinerary is detailed enough to publish:
    - Arrival/departure logistics are represented.
