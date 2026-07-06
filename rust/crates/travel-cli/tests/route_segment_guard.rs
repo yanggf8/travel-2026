@@ -389,3 +389,71 @@ fn set_route_segments_bulk_passes_recommended() {
         "--recommended bulk must write source=ai_recommended on every segment"
     );
 }
+
+// ── single: a TYPO'd flag (e.g. --recommend) is REJECTED, nothing written ─────
+// Guards the provenance invariant: an unrecognized flag must NOT be silently
+// ignored (which would write `confirmed` when the agent meant ai_recommended).
+#[test]
+fn set_route_segment_rejects_unknown_flag() {
+    let tag = nanos();
+    let plan_id = format!("test-rsg-badflag-{tag}");
+    let dest = format!("rsgbadflag_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
+    });
+    if !seed_plan_with_day(&plan_id, &dest) {
+        return;
+    }
+    // A CLEAN, valid segment — so the ONLY reason to fail is the typo'd flag.
+    let (ok, stdout, stderr) = run_cmd(
+        &plan_id,
+        &[
+            "set-route-segment", "1", "0", AKAMINE_EKI, IIAS, "driving",
+            "--recommend", // typo of --recommended
+            "--dest", &dest,
+        ],
+    );
+    assert!(!ok, "a typo'd --recommend must exit non-zero; stdout={stdout} stderr={stderr}");
+    assert!(
+        stderr.contains("unknown argument: --recommend"),
+        "stderr must name the bad flag; stderr={stderr}"
+    );
+    assert_eq!(seg_count(&plan_id), Some(0), "NOTHING may be written on a bad flag");
+    assert_eq!(
+        completed_audit_count(&plan_id, "set-route-segment"),
+        Some(0),
+        "no completed audit row when a flag is rejected"
+    );
+}
+
+// ── bulk: a TYPO'd flag is REJECTED, nothing written ─────────────────────────
+#[test]
+fn set_route_segments_bulk_rejects_unknown_flag() {
+    let tag = nanos();
+    let plan_id = format!("test-rsg-bulkbadflag-{tag}");
+    let dest = format!("rsgbulkbadflag_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
+    });
+    if !seed_plan_with_day(&plan_id, &dest) {
+        return;
+    }
+    let s1 = format!("{AKAMINE_EKI}|{IIAS}|driving");
+    let (ok, stdout, stderr) = run_cmd(
+        &plan_id,
+        &[
+            "set-route-segments-bulk", "1",
+            "--seg", &s1,
+            "--recommend", // typo
+            "--dest", &dest,
+        ],
+    );
+    assert!(!ok, "a typo'd --recommend must exit non-zero; stdout={stdout} stderr={stderr}");
+    assert!(
+        stderr.contains("unknown argument: --recommend"),
+        "stderr must name the bad flag; stderr={stderr}"
+    );
+    assert_eq!(seg_count(&plan_id), Some(0), "NOTHING may be written on a bad flag");
+}
