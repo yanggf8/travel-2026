@@ -81,6 +81,7 @@ mod db_seed_test_plan;        // db seed test-plan (scripts/seed-test-plan.ts)
 mod db_sync_destinations; // db sync destinations (scripts/turso-sync-destinations.ts)
 mod db_sync_events;     // db sync events (scripts/turso-sync-events.ts)
 mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
+mod create_plan;        // create-plan (fast-path plan seed)
 mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
@@ -131,6 +132,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             normalize_flights(rest)
         }
         [cmd] if cmd == "plans" || cmd == "list-plans" => plans::run().await,
+        [cmd, rest @ ..] if cmd == "create-plan" => {
+            if wants_help(
+                rest,
+                "travel create-plan <plan_id> --dest <slug> --start YYYY-MM-DD --end YYYY-MM-DD --airport <IATA> [--region <name>] [--display-name <name>] [--origin <code>] [--nights N]\n  Create a fast-path plan (plans + metadata + date_anchors + the process ladder) so set-flight/set-hotel/itinerary work. Dest must be registered (/new-destination). Dates-inclusive — no separate set-dates needed.",
+            ) {
+                return Ok(());
+            }
+            create_plan::run(rest, String::new()).await
+        }
         [cmd, rest @ ..] if cmd == "mark-plan-deleted" => {
             // The target plan_id is a REQUIRED positional — do NOT route through
             // the resolver ladder (which would pick a default plan if omitted).
@@ -754,6 +764,7 @@ VIEWS\n\
   view-prices | check-freshness --source <id> [--dest slug]\n\
 \n\
 ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
+  create-plan <plan_id> --dest <slug> --start <d> --end <d> --airport <IATA> [--region ..] [--nights N]  Create a fast-path plan\n\
   set-dates <start> <end> [reason]\n\
   set-day-theme <day> [theme] [--zh \"<zh>\"]\n\
   scaffold-itinerary | populate-itinerary | swap-days <dayA> <dayB>\n\
