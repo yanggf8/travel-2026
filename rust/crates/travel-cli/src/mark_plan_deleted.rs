@@ -97,7 +97,7 @@ pub async fn run(args: &[String], _resolved_plan_id: String) -> Result<(), Strin
     .await?;
 
     println!(
-        "marked {} deleted (soft) — data retained; run 'db cleanup-deleted' to wipe",
+        "✅ marked {} deleted (soft) — data retained; run 'db cleanup-deleted' to wipe",
         parsed.plan_id
     );
     Ok(())

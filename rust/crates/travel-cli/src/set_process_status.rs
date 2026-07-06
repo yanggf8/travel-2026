@@ -301,21 +301,26 @@ fn format_path(current: &str, hops: &[StatusHop]) -> String {
 fn print_result(plan_id: &str, dest: &str, result: &StatusChangeResult) {
     if result.hops.is_empty() {
         println!(
-            "No change: {}.{} already at {}",
+            "✅ No change: {}.{} already at {}",
             dest, result.process_id, result.target_status
         );
         return;
     }
-    println!("Plan: {plan_id}");
-    println!("Destination: {dest}");
-    println!("Process: {}", result.process_id);
+    println!("\n🔀 Setting process status:");
+    println!("   Plan: {plan_id}");
+    println!("   Destination: {dest}");
+    println!("   Process: {}", result.process_id);
     println!(
-        "Path: {}",
+        "   Path: {}",
         format_path(&result.current_status, &result.hops)
     );
     if let (Some(before), Some(after)) = (result.version_before, result.version_after) {
-        println!("Version: {before} -> {after}");
+        println!("   Version: {before} -> {after}");
     }
+    println!(
+        "✅ {} → {}",
+        result.process_id, result.target_status
+    );
 }
 
 #[cfg(test)]

@@ -41,7 +41,7 @@ pub async fn run_set_source(args: &[String]) -> Result<(), String> {
     ota_catalog::upsert_source(&conn, &source_id, name.as_deref(), status.as_deref(), &now).await?;
 
     record_catalog_run(&conn, "set-ota-source", &source_id).await?;
-    println!("ota_sources upserted: {source_id}");
+    println!("✅ ota_sources upserted: {source_id}");
     Ok(())
 }
 
@@ -114,7 +114,7 @@ pub async fn run_set_coverage(args: &[String]) -> Result<(), String> {
         &format!("{source_id}/{product_type} proven={proven_int}"),
     )
     .await?;
-    println!("ota_source_coverage upserted: {source_id}/{product_type} (proven={proven_int})");
+    println!("✅ ota_source_coverage upserted: {source_id}/{product_type} (proven={proven_int})");
     Ok(())
 }
 
@@ -149,7 +149,7 @@ pub async fn run_set_region(args: &[String]) -> Result<(), String> {
         &format!("{source_id}/{product_type}/{region_label}"),
     )
     .await?;
-    println!("ota_source_region_codes upserted: {source_id}/{product_type}/{region_label}");
+    println!("✅ ota_source_region_codes upserted: {source_id}/{product_type}/{region_label}");
     Ok(())
 }
 
@@ -241,7 +241,7 @@ pub async fn run_set_workflow(args: &[String]) -> Result<(), String> {
         &format!("{source_id}/{product_type}"),
     )
     .await?;
-    println!("ota_source_workflow upserted: {source_id}/{product_type}");
+    println!("✅ ota_source_workflow upserted: {source_id}/{product_type}");
     Ok(())
 }
 
@@ -304,7 +304,7 @@ pub async fn run_set_url_param(args: &[String]) -> Result<(), String> {
     )
     .await?;
     println!(
-        "ota_source_url_param upserted: {source_id}/{product_type}/{url_param_name}/{input_name}/{input_value}"
+        "✅ ota_source_url_param upserted: {source_id}/{product_type}/{url_param_name}/{input_name}/{input_value}"
     );
     Ok(())
 }
