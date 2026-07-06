@@ -77,11 +77,11 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                 p.dest = Some(arg_value(args, i, "--dest")?);
                 i += 2;
             }
-            // Accept-and-skip --plan-id (plan resolution is done in main.rs via
-            // plan_resolver::resolve_plan_id, matching the neighboring set-*
-            // mutations; the resolved plan_id is passed into run()).
-            "--plan-id" => {
-                let _ = arg_value(args, i, "--plan-id")?;
+            // Accept-and-skip plan-selection flags (plan resolution is done in main.rs via
+            // plan_resolver::resolve_plan_id, matching the neighboring set-* mutations;
+            // the resolved plan_id is passed into run()).
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                let _ = arg_value(args, i, f)?;
                 i += 2;
             }
             other if other.starts_with("--") => {

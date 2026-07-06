@@ -171,8 +171,9 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                     .ok_or_else(|| "missing value for --dest".to_string())?;
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {

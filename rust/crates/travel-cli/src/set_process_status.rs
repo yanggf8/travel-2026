@@ -86,8 +86,8 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                 dest = Some(arg_value(args, i, "--dest")?);
                 i += 2;
             }
-            "--plan-id" => {
-                let _ = arg_value(args, i, "--plan-id")?;
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                let _ = arg_value(args, i, f)?;
                 i += 2;
             }
             other if other.starts_with("--") => {

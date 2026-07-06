@@ -141,9 +141,9 @@ fn parse_and_validate(args: &[String]) -> Result<Parsed, String> {
                 );
                 i += 2;
             }
-            "--plan-id" => {
+            f if crate::plan_resolver::is_resolver_flag(f) => {
                 if args.get(i + 1).is_none() {
-                    return Err("missing value for --plan-id".to_string());
+                    return Err(format!("missing value for {f}"));
                 }
                 i += 2;
             }

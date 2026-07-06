@@ -327,8 +327,9 @@ fn parse_time(args: &[String]) -> Result<ActivityTime, String> {
                 p.is_fixed_time = Some(parse_bool(&v)?);
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -380,8 +381,9 @@ fn parse_title(args: &[String]) -> Result<ActivityTitle, String> {
                 p.dest = Some(arg_value(args, i, "--dest")?);
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -1242,7 +1244,11 @@ fn parse_move(args: &[String]) -> Result<MoveArgs, String> {
                 );
                 i += 2;
             }
-            "--plan-id" => i += 2, // consumed by the resolver
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
+                i += 2;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -1597,8 +1603,9 @@ fn parse_add(args: &[String]) -> Result<ActivityAdd, String> {
                 p.recommended = true;
                 i += 1;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -1894,8 +1901,9 @@ fn parse_reorder(args: &[String]) -> Result<ActivityReorder, String> {
                 p.dest = Some(arg_value(args, i, "--dest")?);
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -1938,8 +1946,9 @@ fn parse_delete(args: &[String]) -> Result<ActivityDelete, String> {
                 p.dest = Some(arg_value(args, i, "--dest")?);
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -1990,8 +1999,9 @@ fn parse_booking(args: &[String]) -> Result<ActivityBooking, String> {
                 p.book_by = Some(arg_value(args, i, "--book-by")?);
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {

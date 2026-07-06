@@ -310,6 +310,25 @@ pub fn today_iso() -> String {
     minimal_utc_date()
 }
 
+/// The plan-SELECTION flags the top-level dispatcher's `resolve_plan_id` consumes
+/// to pick the plan (see `parse_args_inner`). Each takes a following VALUE.
+/// SINGLE SOURCE OF TRUTH: a per-command parser that rejects unknown flags must
+/// skip these (flag + value) — they belong to the resolver, not the command.
+/// Keep this list in lock-step with the match arms in `parse_args_inner`.
+pub const RESOLVER_VALUE_FLAGS: &[&str] = &[
+    "--plan-id",
+    "--plan-path",
+    "--travel-date",
+    "--travel-start",
+    "--travel-end",
+];
+
+/// True if `flag` is one of the resolver's plan-selection flags (each consumes a
+/// following value). A command parser skips `i += 2` when this returns true.
+pub fn is_resolver_flag(flag: &str) -> bool {
+    RESOLVER_VALUE_FLAGS.contains(&flag)
+}
+
 /// Minimal UTC YYYY-MM-DD from the system clock, no external
 /// crates. Copied from `plans::minimal_utc_date` (Howard Hinnant's
 /// civil-from-days algorithm).
@@ -712,6 +731,25 @@ pub async fn resolve_plan_id(args: &[String]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_resolver_flag_matches_exactly_the_five_selection_flags() {
+        // The single source of truth every command parser skips. Locks that it
+        // stays in lock-step with the resolver's parse_args_inner arms — a drift
+        // here re-introduces the "unknown argument: --travel-date" class of bug.
+        for f in [
+            "--plan-id",
+            "--plan-path",
+            "--travel-date",
+            "--travel-start",
+            "--travel-end",
+        ] {
+            assert!(is_resolver_flag(f), "{f} must be a resolver flag");
+        }
+        for f in ["--dest", "--destination", "--force", "--day", "--plan", "-h", "plan-id"] {
+            assert!(!is_resolver_flag(f), "{f} must NOT be a resolver flag");
+        }
+    }
 
     /// Tiny fixture builder. `anchors` is a list of
     /// (destination, start, end) tuples. `window` is an optional

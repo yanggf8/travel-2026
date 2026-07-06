@@ -20,11 +20,11 @@ impl DestRefArgs {
         let mut i = 0;
         while i < args.len() {
             match args[i].as_str() {
-                "--slug" => {
+                "--slug" | "--dest" | "--destination" => {
                     slug = Some(
                         args.get(i + 1)
                             .cloned()
-                            .ok_or_else(|| "--slug requires a value".to_string())?,
+                            .ok_or_else(|| "requires a value".to_string())?,
                     );
                     i += 2;
                 }

@@ -47,7 +47,7 @@ impl QueryOffersArgs {
                     .ok_or_else(|| format!("{key} requires a value"))
             };
             match key {
-                "--destination" => o.destination = Some(val()?),
+                "--destination" | "--dest" => o.destination = Some(val()?),
                 "--region" => o.region = Some(val()?),
                 "--start" => o.start = Some(val()?),
                 "--end" => o.end = Some(val()?),

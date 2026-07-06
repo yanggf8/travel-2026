@@ -87,9 +87,11 @@ pub fn parse_args(rest: &[String]) -> Result<PromoteOpts, String> {
                 i += 1;
                 dest = rest.get(i).cloned();
             }
-            "--plan-id" => {
+            f if crate::plan_resolver::is_resolver_flag(f) => {
                 i += 1;
-                plan_id_arg = rest.get(i).cloned();
+                if f == "--plan-id" {
+                    plan_id_arg = rest.get(i).cloned();
+                }
             }
             "--source" => {
                 i += 1;

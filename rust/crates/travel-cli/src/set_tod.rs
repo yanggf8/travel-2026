@@ -515,8 +515,10 @@ fn parse_meals(args: &[String]) -> Result<ParsedMeals, String> {
                 p.recommended = true;
                 i += 1;
             }
-            "--plan-id" => {
-                i += 2; // consumed by the top-level resolver
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
+                i += 2;
             }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
@@ -575,8 +577,9 @@ fn parse_focus(args: &[String]) -> Result<ParsedFocus, String> {
                 );
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -641,8 +644,9 @@ fn parse_time_range(args: &[String]) -> Result<ParsedTimeRange, String> {
                 );
                 i += 2;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {
@@ -729,8 +733,9 @@ fn parse_zh(args: &[String]) -> Result<ParsedZh, String> {
                 p.clear_activities = true;
                 i += 1;
             }
-            "--plan-id" => {
-                // consumed by the top-level plan resolver; skip flag + value
+            f if crate::plan_resolver::is_resolver_flag(f) => {
+                // any plan-selection flag (--plan-id / --plan-path / --travel-date /
+                // --travel-start / --travel-end) is consumed by the resolver; skip flag + value
                 i += 2;
             }
             other if other.starts_with("--") => {

@@ -188,7 +188,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
                 });
                 i += 2;
             }
-            "--plan-id" => {
+            f if crate::plan_resolver::is_resolver_flag(f) => {
                 i += 2;
             }
             other if other.starts_with("--") => {

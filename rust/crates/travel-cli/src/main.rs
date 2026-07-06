@@ -475,7 +475,12 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [group, sub, rest @ ..] if group == "db" && sub == "token-status" => {
             db_token_status::run(rest).await
         }
-        [group, sub, rest @ ..] if group == "db" && sub == "exec" => db_exec::run(rest).await,
+        [group, sub, rest @ ..] if group == "db" && sub == "exec" => {
+            if wants_help(rest, "travel db exec \"<SQL>\"  (run one SQL statement; rows print as plain text)") {
+                return Ok(());
+            }
+            db_exec::run(rest).await
+        }
         [group, sub, rest @ ..] if group == "db" && sub == "schema" => db_schema::run(rest).await,
         [group, sub, rest @ ..] if group == "db" && sub == "cleanup-deleted" => {
             db_cleanup_deleted::run(rest).await
@@ -486,27 +491,52 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         // ── P2 db subcommands (pre-wired; modules filled per batch) ──
         [group, sub, rest @ ..] if group == "db" && sub == "migrate" => {
+            // --help must NOT run the migration (it's a schema WRITE).
+            if wants_help(rest, "travel db migrate  (create/upgrade tables — idempotent; runs a schema WRITE)") {
+                return Ok(());
+            }
             db_migrate::run(rest).await
         }
         [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "plans" => {
+            if wants_help(rest, "travel db seed plans  (one-time plan seed — a WRITE)") {
+                return Ok(());
+            }
             db_seed_plans::run(rest).await
         }
         [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "destination-refs" => {
+            if wants_help(rest, "travel db seed destination-refs  (seed destination reference data — a WRITE)") {
+                return Ok(());
+            }
             db_seed_destination_refs::run(rest).await
         }
         [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "ota-knowledge" => {
+            if wants_help(rest, "travel db seed ota-knowledge  (seed OTA knowledge tables — a WRITE)") {
+                return Ok(());
+            }
             db_seed_ota_knowledge::run(rest).await
         }
         [group, sub, action, rest @ ..] if group == "db" && sub == "seed" && action == "test-plan" => {
+            if wants_help(rest, "travel db seed test-plan [source] [target]  (clone a plan into a throwaway test plan — a WRITE)") {
+                return Ok(());
+            }
             db_seed_test_plan::run(rest).await
         }
         [group, sub, action, rest @ ..] if group == "db" && sub == "sync" && action == "destinations" => {
+            if wants_help(rest, "travel db sync destinations  (sync destination_config from reference data — a WRITE)") {
+                return Ok(());
+            }
             db_sync_destinations::run(rest).await
         }
         [group, sub, action, rest @ ..] if group == "db" && sub == "sync" && action == "events" => {
+            if wants_help(rest, "travel db sync events  (sync the event log from data/state.json — a WRITE)") {
+                return Ok(());
+            }
             db_sync_events::run(rest).await
         }
         [group, sub, action, rest @ ..] if group == "db" && sub == "fetch" && action == "holidays" => {
+            if wants_help(rest, "travel db fetch holidays [url]  (fetch + store the Taiwan holiday calendar — a WRITE)") {
+                return Ok(());
+            }
             db_fetch_holidays::run(rest).await
         }
         [group, sub, rest @ ..] if group == "validate" && sub == "publish" => {

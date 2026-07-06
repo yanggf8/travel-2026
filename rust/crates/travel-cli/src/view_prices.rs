@@ -79,7 +79,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             "--start" => start = val(),
             "--end" => end = val(),
             "--region" => region = val(),
-            "--destination" => destination = val(),
+            "--destination" | "--dest" => destination = val(),
             "--hotel-per-night" => hotel_per_night = val().and_then(|s| s.parse().ok()),
             "--nights" => nights = val().and_then(|s| s.parse().ok()),
             "--package" => package_price = val().and_then(|s| s.parse().ok()),

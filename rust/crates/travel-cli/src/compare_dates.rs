@@ -52,7 +52,7 @@ impl CompareDatesArgs {
                 "--hotel-per-night" => o.hotel_per_night = int(val()?, "--hotel-per-night")?,
                 "--market" | "-m" => o.market = val()?,
                 "--region" => o.region = Some(val()?),
-                "--destination" => o.destination = Some(val()?),
+                "--destination" | "--dest" => o.destination = Some(val()?),
                 "--pax" => o.pax = int(val()?, "--pax")?,
                 "--baggage-fee" => o.baggage_fee = int(val()?, "--baggage-fee")?,
                 other => return Err(format!("unknown flag for compare dates: {other}")),
