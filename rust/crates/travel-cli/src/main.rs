@@ -4,6 +4,7 @@ mod catalog_audit; // catalog_runs audit helper for global OTA-catalog mutations
 mod checks; // shared lint predicates (single source of truth) — see checks.rs
 mod compare;
 mod compare_dates;
+mod compare_content_depth;
 mod compare_true_cost;
 mod db;
 mod db_exec;
@@ -130,6 +131,13 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let opts = compare_true_cost::TrueCostArgs::parse(rest)?;
             compare_true_cost::run(&opts).await
+        }
+        [group, sub, rest @ ..] if group == "compare" && sub == "content-depth" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel compare content-depth --plan-id <drill> [--against <ref>]\n  (--against default: okinawa-2026; read-only depth oracle for the drill loop)");
+                return Ok(());
+            }
+            compare_content_depth::run(rest).await
         }
         [group, sub, rest @ ..] if group == "normalize" && sub == "flights" => {
             normalize_flights(rest)
