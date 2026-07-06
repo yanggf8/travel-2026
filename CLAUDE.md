@@ -90,7 +90,7 @@ Python/other → OTA scraping = gwebcdb (~/b/gwebcdb) on WSLg; old Python scrape
 **Single-binary CLI:** there is ONE binary, `travel`, with subcommands (no per-area binaries). Examples:
 - views/status → `travel status --full`, `travel itinerary`, `travel transport`, `travel bookings`
 - validation → `travel validate data`, `travel doctor`
-- comparison → `travel compare trips ...`, `travel compare dates ...`, `travel compare true-cost ...`
+- comparison → `travel compare trips ...`, `travel compare dates ...`, `travel compare true-cost ...`, `travel compare content-depth ...`
 - utilities → `travel normalize flights ...`, `travel leave calc`
 - DB ops → `travel db migrate`, `travel db status`, `travel db seed plans`, `travel db exec "<sql>"`
 
@@ -189,6 +189,7 @@ User intent                          → Skill / Action
 "how many leave days"                → ./bin/travel leave calc
 "book this" / "select offer"         → ./bin/travel select-offer
 "plan the days" / "itinerary"        → /stage3-expand-itinerary   (populate activities → derive-routes cascades transit → agent authors AI-recommended meals, LABELED via --recommended)
+"is the drill/plan rich enough" / "compare depth to a real trip"  → ./bin/travel compare content-depth --plan-id <id> [--against okinawa-2026]  (read-only oracle; loop-until-BETTER; web page is final gate)
 "derive routes" / "add transit between activities"  → ./bin/travel derive-routes [--day N] [--dest slug]   (cascade ai_recommended legs from the activity skeleton; run after populate)
 "show/review the AI suggestions" / "what did the agent recommend"  → ./bin/travel query-recommendations [--day N] [--session s] [--kind ...]   (read-only list; preview before confirming)
 "confirm the AI suggestions" / "accept recommendations"  → ./bin/travel confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]   (flip ai_recommended → confirmed)
@@ -334,6 +335,9 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 ./bin/travel sync-bookings [--dry-run]
 ./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
 ./bin/travel validate-itinerary --dest tokyo_2026
+
+# Comparison (read-only)
+./bin/travel compare content-depth --plan-id <drill> [--against okinawa-2026]   # depth oracle: SHORT/ALIGNED/BETTER vs reference
 
 # Scraping — Python scrapers DECOMMISSIONED + chromeport RETIRED; use gwebcdb (WSLg) from ~/b/gwebcdb.
 # Extraction is AGENT-FIRST: capture, then the coding agent reads raw_text and writes offers (no in-CLI parser).

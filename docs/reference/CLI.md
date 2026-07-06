@@ -29,6 +29,7 @@ Each view is a separate subcommand — pick one:
 ./bin/travel compare trips --input <your-comparison-file.json> [--detailed]   # input file is BYO
 ./bin/travel compare dates --start 2026-02-24 --end 2026-02-28 --nights 4
 ./bin/travel compare true-cost --region kansai --pax 2 --date 2026-02-24
+./bin/travel compare content-depth --plan-id <drill> [--against okinawa-2026]   # read-only depth oracle: per-axis drill-vs-reference verdict (SHORT/ALIGNED/BETTER); quality-gated (real meals, routes w/ metadata, weighted ZH)
 ```
 
 ## Scraping

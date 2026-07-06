@@ -1,7 +1,7 @@
 ---
 name: stage3-expand-itinerary
 description: Expand the rough itinerary into a booking-aware detailed daily plan — cascade routes via derive-routes, agent-author AI-recommended (labeled) meals/depth, and drive completeness with the content-depth signal. Owns Stage 3 of the adopted research-first planning flow.
-version: 1.2.0
+version: 1.3.0
 requires_skills: [travel-shared, p5-itinerary]
 requires_processes: [process_1_date_anchor, process_2_destination, process_3_transportation, process_4_accommodation]
 provides_processes: [process_5_daily_itinerary]
@@ -143,6 +143,15 @@ Do **not** use this for the first coarse draft before shopping; use
    re-run `derive-routes --day N` for routes) until the content-depth WARNs are
    gone or you've consciously accepted a compact day. These are WARN/INFO, never
    blockers — a labeled, still-thin draft is a valid pre-trip state.
+
+   After the content-depth WARNs are addressed, run the depth ORACLE against a
+   known-good reference:
+   `./bin/travel compare content-depth --plan-id <plan_id> [--against okinawa-2026]`.
+   Treat the `SHORT: <axes>` line as the enrichment worklist — enrich the named
+   axes (agent-first meals on the SHORT days, re-run `derive-routes --day N` for
+   routes), then re-compare. Repeat until `VERDICT: BETTER`.
+   **This is a mid-loop oracle, NOT final acceptance.** The final gate is the
+   deployed dashboard page reviewed side by side with the reference (Stage 4).
 
 8. **Surface AI-recommended items for confirmation**
 
