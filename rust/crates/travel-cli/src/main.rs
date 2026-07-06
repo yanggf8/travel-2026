@@ -83,6 +83,8 @@ mod db_sync_events;     // db sync events (scripts/turso-sync-events.ts)
 mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
 mod create_plan;        // create-plan (fast-path plan seed)
 mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
+mod set_plan_name;      // set-plan-name (rename plan_destinations.display_name)
+mod set_active_destination; // set-active-destination (switch plan_metadata.active_destination)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
@@ -317,6 +319,28 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_hotel::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-plan-name" => {
+            if wants_help(
+                rest,
+                "travel set-plan-name <name> [--dest <slug>] [--plan-id <id> | --travel-date ...]\n  Rename a plan's display label (plan_destinations.display_name). --dest disambiguates a multi-destination plan.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_plan_name::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-active-destination" => {
+            if wants_help(
+                rest,
+                "travel set-active-destination <slug> [--plan-id <id> | --travel-date ...]\n  Switch plan_metadata.active_destination to one of the plan's destinations.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_active_destination::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "share-token" => {
@@ -825,6 +849,7 @@ COMPARE / UTIL\n\
   compare trips --trip '<k=v;...>' [--detailed] | compare dates | compare true-cost\n\
   normalize flights --text '<...>' --url '<...>' | leave calc <start> <end> [country]\n\
   fetch-weather [--dest slug] | share-token | mark-plan-deleted <plan>\n\
+  set-plan-name <name> [--dest <slug>] | set-active-destination <slug>\n\
 \n\
 DB\n\
   db status | db token-status | db schema [<table>] | db exec \"<SQL>\" | db migrate\n\

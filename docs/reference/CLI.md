@@ -120,6 +120,11 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 
 ## Mutations
 ```bash
+# Plan lifecycle
+./bin/travel create-plan <plan_id> --dest <slug> --start <d> --end <d> --airport <IATA> [--region <name>] [--display-name <name>] [--origin <code>] [--nights N]    # create a fast-path plan (plans + metadata + date_anchors + the 6-process ladder) so set-flight/set-hotel/itinerary work. Dest must be registered (/new-destination). Dates-inclusive — no separate set-dates. plan_id is POSITIONAL (no --plan-id).
+./bin/travel set-plan-name <name> [--dest <slug>] [--plan-id <id> | --travel-date ...]    # rename a plan's display label (plan_destinations.display_name); --dest disambiguates a multi-destination plan. Audited, no plan_events.
+./bin/travel set-active-destination <slug> [--plan-id <id> | --travel-date ...]    # switch plan_metadata.active_destination to one of the plan's destinations (fail-loud if the slug isn't a destination of the plan). Audited.
+./bin/travel mark-plan-deleted <plan_id> [--force]    # soft-delete a plan (sets deleted_at; data retained; `db cleanup-deleted` wipes). plan_id POSITIONAL.
 ./bin/travel set-dates 2026-02-13 2026-02-17
 ./bin/travel select-offer <offer-id> <date>
 ./bin/travel set-process-status <process_id> <target_status> [--dest slug] [--plan-id <id>]    # advance the process ladder to a status via the SHORTEST LEGAL path (BFS over the state machine); walks hop-by-hop (e.g. pending→populated→booking→booked) emitting one status_changed event per hop; idempotent no-op if already there. process_id: the 6 ids or aliases (p1/date, p2/destination, p34/packages, p3/transport/flight, p4/hotel, p5/itinerary). status: pending|researching|researched|selecting|selected|populated|booking|booked|confirmed|skipped. Used by the ingest-known path (set-flight/set-hotel are no-cascade); select-offer auto-advances P3/P4 so it needs no manual move.

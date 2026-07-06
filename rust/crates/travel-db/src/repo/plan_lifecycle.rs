@@ -21,6 +21,59 @@ pub async fn soft_delete(conn: &Connection, plan_id: &str, now_db: &str) -> Resu
     Ok(())
 }
 
+pub async fn list_destination_slugs(conn: &Connection, plan_id: &str) -> Result<Vec<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT slug FROM plan_destinations WHERE plan_id = ?1 ORDER BY slug",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("plan_destinations query failed: {e}"))?;
+    let mut slugs = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("plan_destinations row read failed: {e}"))?
+    {
+        slugs.push(row.get::<String>(0).map_err(|e| e.to_string())?);
+    }
+    Ok(slugs)
+}
+
+pub async fn set_display_name(
+    conn: &Connection,
+    plan_id: &str,
+    slug: &str,
+    name: &str,
+    now_db: &str,
+) -> Result<u64, String> {
+    conn.execute(
+        "UPDATE plan_destinations SET display_name = ?3, updated_at = ?4 WHERE plan_id = ?1 AND slug = ?2",
+        libsql::params![
+            plan_id.to_string(),
+            slug.to_string(),
+            name.to_string(),
+            now_db.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("plan_destinations update failed: {e}"))
+}
+
+pub async fn set_active_destination(
+    conn: &Connection,
+    plan_id: &str,
+    slug: &str,
+    now_db: &str,
+) -> Result<u64, String> {
+    conn.execute(
+        "UPDATE plan_metadata SET active_destination = ?2, updated_at = ?3 WHERE plan_id = ?1",
+        libsql::params![plan_id.to_string(), slug.to_string(), now_db.to_string()],
+    )
+    .await
+    .map_err(|e| format!("plan_metadata update failed: {e}"))
+}
+
 /// The seed values for one `shaping-adopt --create-plan` (all owned; travel-db does
 /// not depend on any travel-cli type). `ts` is the run's now_rfc3339 timestamp used
 /// where the original bound it (plan_destinations created_at/updated_at).
