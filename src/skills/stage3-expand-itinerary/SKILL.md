@@ -102,7 +102,17 @@ Do **not** use this for the first coarse draft before shopping; use
      the user. If unconfirmed, label the pin generically rather than guessing.
    - **`--recommended` is mandatory** on every meal/route/activity the AGENT
      authored. User-provided facts (a booked restaurant, a confirmed transfer) are
-     entered WITHOUT `--recommended` (they are `confirmed`).
+     entered WITHOUT `--recommended` (they are `confirmed`). (Typos fail loud —
+     the write commands reject unknown flags — so a mistyped `--recommended` won't
+     silently write `confirmed`.)
+   - **Set the session ZH in the SAME pass.** Adding the FIRST content (meal /
+     route / activity) to a previously-empty session makes it *non-empty*, which
+     means the Stage-4 `validate publish` gate will BLOCK until that session also
+     has `focus_zh` (and `transit_notes_zh` if it has transit). So every session
+     you enrich, also run
+     `set-tod-zh <day> <session> --zh "<focus_zh>" [--transit-zh "<transit_zh>"]`
+     right here — do NOT defer it to Stage 4, or the publish gate fails a full
+     stage later with no breadcrumb back to the enrichment.
    - The dashboard renders these with a `🤖 AI-recommended (unconfirmed)` badge;
      `validate publish` reports the count as INFO (never a blocker); the user flips
      the ones they accept with `confirm-recommendations` (step 7).

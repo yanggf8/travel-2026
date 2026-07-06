@@ -61,18 +61,24 @@ Do **not** auto-run this just because itinerary data changed.
 
 4. **Deploy on explicit request**
    ```bash
-   cd workers/trip-dashboard
+   cd workers/trip-dashboard-rs
    unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
    ```
+   Deploys the **Rust** worker (`worker-build --release`) — the canonical live
+   dashboard. (The legacy TS `workers/trip-dashboard` was retired + undeployed
+   2026-07-02; do not deploy it. The old `trip-dashboard.yanggf.workers.dev` URL
+   now 301-redirects to `-rs`.) A production deploy is Yang-gated — confirm first.
    If Wrangler OAuth is not logged in, stop and ask the user to run
    `npx wrangler login` interactively.
 
 5. **Verify live dashboard**
    ```bash
-   curl "https://trip-dashboard.yanggf.workers.dev/?plan=<plan_slug>"
-   curl "https://trip-dashboard.yanggf.workers.dev/api/plan/<plan_id>"
+   # Owner pages are GitHub-OAuth-gated; use a share-token viewer link to verify
+   # login-free (mint via `./bin/travel share-token --show-full --plan-id <id>`):
+   curl -sL "https://trip-dashboard-rs.yanggf.workers.dev/?plan=<plan_slug>&token=<share_token>" | head -c 400
    ```
-   Confirm both dashboard HTML and API JSON respond.
+   Confirm HTTP 200 + the plan content renders. (The `-rs` worker is SSR — there
+   is no separate `/api/plan` JSON route.) Use `-L` so the old-URL 301 is followed.
 
 ## Output
 

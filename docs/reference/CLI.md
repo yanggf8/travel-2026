@@ -92,6 +92,7 @@ make test                                        # full Rust test suite (or: cd 
 ./bin/travel leave calc 2026-02-24 2026-02-28
 ./bin/travel normalize flights scrapes/trip-feb24-out.json --top 5
 ./bin/travel validate data                       # data integrity check
+./bin/travel validate publish --plan-id <id> [--dest slug]    # publish-readiness gate (Stage 4). BLOCKS on: no P5 days, itinerary errors, missing ZH (theme_zh/focus_zh on non-empty sessions), no map path. WARNS on: stale/never-snapshotted maps, missing weather within the 16-day window (upcoming trips). INFO (never blocks): count of AI-recommended items awaiting confirmation; weather-pending for a trip beyond the 16-day forecast window. Exit 1 only when blockers>0. Past-trip + empty-session guards.
 ./bin/travel doctor                              # full system health check (also runs the map-link lint across all plans; cross-country/ocean-route legs fail as errors). Emits a per-plan [reservations] info line for sit-down restaurants not yet tracked in the booking ledger (advisory — never fails the check)
 ```
 
@@ -111,6 +112,7 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 # Route maps (per-day + plan PNGs: numbered markers + route polyline, auto-framed; chromeport→Leaflet→R2).
 ./bin/travel snapshot-maps [--dest <slug>]        # (re)capture + upload the route-map PNGs (wraps scripts/snapshot-maps.sh). Needs Chrome at the chromeport CDP endpoint + wrangler auth.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
+./bin/travel set-poi-coords <slug> <poi_id> <lat> <lon> [--source <s>] [--confidence <c>]    # geocode a destination_pois row (feeds the POI-coord map path). GLOBAL/slug-keyed reference data — takes NO --plan-id, NO audit triad. `validate data` WARNs on ungeocoded POIs.
 ./bin/travel check-maps-fresh [--plan-id <id>]    # lint: flag map PNGs that are stale vs the latest itinerary edit (advisory; never fails)
 ```
 Only activities linked to a POI with lat/lon appear on the maps; non-place lines (flights, airport steps, bare meals) are excluded from both the maps and the per-stop Google-Maps links.
@@ -126,13 +128,15 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel set-activity-title <day> <session> "<activity>" "<new_title>" [--plan-id <id>]
 ./bin/travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM    # (alias: set-session-time-range)
 ./bin/travel set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
-./bin/travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM]
-./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...]    # plain-text; repeat --seg per segment
+./bin/travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM] [--recommended]
+./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...] [--recommended]    # plain-text; repeat --seg per segment. NOTE: single command is POSITIONAL; bulk uses --seg. Both reject unknown flags (a typo'd --recommended fails loud, never writes 'confirmed' silently).
 #   <mode> canonical: transit | walking | driving. Aliases are normalized: walk→walking; monorail/rail/train/bus/subway/metro/tram/ferry→transit; taxi/car/cab→driving (plus 步行/單軌/巴士/計程車…).
 ./bin/travel set-tod-zh <day> <session> [--zh "<focus_zh>"] [--transit-zh "<transit_notes_zh>"] [--activity-zh "<zh>" (repeatable)] [--clear-activities] [--plan-id <id>]    # (alias: set-session-zh); --clear-activities empties the ZH activity list (mutually exclusive with --activity-zh)
 ./bin/travel set-tod-focus <day> <session> "<focus_text>" [--zh "<focus_zh>"] [--plan-id <id>]    # (alias: set-session-focus); --zh sets focus_zh too (dashboard renders ZH by default)
-./bin/travel set-meals <day> <session> --meal "<text>" [--meal "<text>"...] [--dest slug]    # replace session meals; a meal may carry a place pin: "<label>｜map:<query>"
-./bin/travel add-activity <day> <session> "<title>" [--after <id|title>] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest slug]    # add an activity (append, or --after to insert at a position); audit triad
+./bin/travel set-meals <day> <session> --meal "<text>" [--meal "<text>"...] [--recommended] [--dest slug]    # replace session meals; a meal may carry a place pin: "<label>｜map:<query>"
+./bin/travel add-activity <day> <session> "<title>" [--after <id|title>] [--recommended] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest slug]    # add an activity (append, or --after to insert at a position); audit triad
+#   --recommended (on set-meals / add-activity / set-route-segment(s-bulk)) marks the item AI-recommended (source='ai_recommended') vs user-confirmed. The dashboard badges it 🤖; `validate publish` counts it as INFO; the user flips accepted items with confirm-recommendations. Enriching a previously-empty session with a meal/route/activity makes it non-empty → it now REQUIRES focus_zh (set-tod-zh) or `validate publish` will BLOCK; set the ZH focus in the same pass.
+./bin/travel confirm-recommendations [--day N] [--session morning|noon|afternoon|evening] [--kind activity|meal|route] [--dest slug]    # flip source='ai_recommended' → 'confirmed', scoped by the filters. Zero-scope is a clean no-op (no audit/version bump). --kind route + --session is rejected (routes have no session); with --kind absent, --session scopes activities/meals only while routes confirm by day.
 ./bin/travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]    # move an activity to another session/day, PRESERVING its id + poi link (vs delete+re-add)
 ./bin/travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest slug]    # rewrite sort_order; list ALL activities in the session in the desired order
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)

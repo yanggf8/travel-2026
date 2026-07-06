@@ -188,7 +188,8 @@ User intent                          → Skill / Action
 "book separately"                    → /stage2-shop-transport (uses /separate-bookings)
 "how many leave days"                → ./bin/travel leave calc
 "book this" / "select offer"         → ./bin/travel select-offer
-"plan the days" / "itinerary"        → /stage3-expand-itinerary
+"plan the days" / "itinerary"        → /stage3-expand-itinerary   (agent authors AI-recommended meals/routes/activities, LABELED via --recommended)
+"confirm the AI suggestions" / "accept recommendations"  → ./bin/travel confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]   (flip ai_recommended → confirmed)
 "show bookings"                      → ./bin/travel query-bookings (from DB)
 "show status"                        → ./bin/travel status --full
 "show schedule"                      → ./bin/travel itinerary
