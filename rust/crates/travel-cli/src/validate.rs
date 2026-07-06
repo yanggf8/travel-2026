@@ -1373,6 +1373,41 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
         });
     }
 
+    if !is_past {
+        for row in content_depth_rows(&conn, plan_id, &destination).await? {
+            let missing_lunch = row.noon_meals == 0;
+            let missing_dinner = row.evening_meals == 0;
+            if missing_lunch || missing_dinner {
+                let missing = match (missing_lunch, missing_dinner) {
+                    (true, true) => "missing lunch meal (noon) and dinner meal (evening)",
+                    (true, false) => "missing lunch meal (noon)",
+                    (false, true) => "missing dinner meal (evening)",
+                    (false, false) => unreachable!(),
+                };
+                let severity = if row.day_type == "arrival" || row.day_type == "departure" {
+                    PublishSeverity::Info
+                } else {
+                    PublishSeverity::Warn
+                };
+                issues.push(PublishIssue {
+                    category: "content-depth".to_string(),
+                    severity,
+                    message: format!("day {} may be thin: {missing}", row.day_number),
+                });
+            }
+            if row.activities >= 2 && row.routes == 0 {
+                issues.push(PublishIssue {
+                    category: "content-depth".to_string(),
+                    severity: PublishSeverity::Warn,
+                    message: format!(
+                        "day {} may be thin: {} activities but 0 route segments",
+                        row.day_number, row.activities
+                    ),
+                });
+            }
+        }
+    }
+
     emit_publish_report(&issues);
 
     let blockers = issues
@@ -1615,6 +1650,55 @@ async fn query_day_numbers(
         .map_err(|e| format!("day zh row read failed: {e}"))?
     {
         out.push(row.get(0).unwrap_or(0));
+    }
+    Ok(out)
+}
+
+struct ContentDepthRow {
+    day_number: i64,
+    day_type: String,
+    activities: i64,
+    noon_meals: i64,
+    evening_meals: i64,
+    routes: i64,
+}
+
+async fn content_depth_rows(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<ContentDepthRow>, String> {
+    let sql = "WITH day_rows AS (SELECT day_number, day_type FROM days WHERE plan_id=?1 AND destination=?2),
+      activity_counts AS (SELECT day_number, COUNT(*) AS activities FROM activities WHERE plan_id=?1 AND destination=?2 GROUP BY day_number),
+      meal_counts AS (SELECT day_number, SUM(CASE WHEN session_type='noon' THEN 1 ELSE 0 END) AS noon_meals, SUM(CASE WHEN session_type='evening' THEN 1 ELSE 0 END) AS evening_meals FROM session_meals WHERE plan_id=?1 AND destination=?2 GROUP BY day_number),
+      route_counts AS (SELECT day_number, COUNT(*) AS routes FROM day_route_segments WHERE plan_id=?1 AND destination=?2 GROUP BY day_number)
+      SELECT d.day_number, d.day_type, COALESCE(a.activities,0), COALESCE(m.noon_meals,0), COALESCE(m.evening_meals,0), COALESCE(r.routes,0)
+      FROM day_rows d
+      LEFT JOIN activity_counts a ON a.day_number=d.day_number
+      LEFT JOIN meal_counts m ON m.day_number=d.day_number
+      LEFT JOIN route_counts r ON r.day_number=d.day_number
+      ORDER BY d.day_number";
+    let mut rows = conn
+        .query(
+            sql,
+            params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("content_depth query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        out.push(ContentDepthRow {
+            day_number: row.get(0).map_err(|e| e.to_string())?,
+            day_type: row.get(1).map_err(|e| e.to_string())?,
+            activities: row.get(2).unwrap_or(0),
+            noon_meals: row.get(3).unwrap_or(0),
+            evening_meals: row.get(4).unwrap_or(0),
+            routes: row.get(5).unwrap_or(0),
+        });
     }
     Ok(out)
 }

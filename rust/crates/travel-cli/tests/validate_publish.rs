@@ -394,3 +394,181 @@ fn ai_recommended_count_info_passes() {
     );
     assert!(stdout.contains("Info:"), "stdout={stdout}");
 }
+
+/// Thin itinerary: content-depth WARN/INFO signals fire but never block publish.
+#[test]
+fn content_depth_warn_info_signals_are_nonblocking() {
+    let _lock = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    let tag = nanos();
+    let plan_id = format!("test-pub-cdepth-{tag}");
+    let dest = format!("pubcdepth_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || {
+            teardown_plan(&plan_id, &dest);
+            teardown_destination(&dest);
+        }
+    });
+
+    if db_exec("SELECT 1").is_none() {
+        return;
+    }
+
+    seed_plan(&plan_id, &dest, 0);
+    seed_destination(&dest);
+    seed_anchor(&plan_id, &dest, "2026-07-10", "2026-07-13", 4);
+
+    db_exec(&format!(
+        "INSERT INTO destination_pois (slug, poi_id, title, source_url, fetched_at, confidence, lat, lon) \
+           VALUES ('{dest}', 'poi_a', 'POI A', 'test', '2026-07-05', 'test', 35.6812, 139.7671), \
+                  ('{dest}', 'poi_b', 'POI B', 'test', '2026-07-05', 'test', 35.6820, 139.7680), \
+                  ('{dest}', 'poi_c', 'POI C', 'test', '2026-07-05', 'test', 35.6830, 139.7690); \
+         INSERT INTO days (plan_id, destination, day_number, date, day_type, theme, theme_zh, \
+                            weather_label, weather_source_id, updated_at) \
+           VALUES ('{plan_id}', '{dest}', 1, '2026-07-10', 'arrival', 'Arrival', '抵達', \
+                   'Sunny', 'open_meteo', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, '2026-07-11', 'full', 'Full day', '完整日', \
+                   'Cloudy', 'open_meteo', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 3, '2026-07-12', 'full', 'Thin day', '薄弱日', \
+                   'Sunny', 'open_meteo', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 4, '2026-07-13', 'departure', 'Departure', '離開', \
+                   'Sunny', 'open_meteo', datetime('now','-2 hours')); \
+         INSERT INTO timesofday (plan_id, destination, day_number, session_type, focus, focus_zh, updated_at) \
+           VALUES ('{plan_id}', '{dest}', 1, 'noon', 'Lunch', '午餐', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 1, 'afternoon', 'Sightseeing', '觀光', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, 'morning', 'Morning', '上午', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, 'afternoon', 'Afternoon', '下午', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, 'noon', 'Lunch', '午餐', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, 'evening', 'Dinner', '晚餐', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 3, 'morning', 'Morning', '上午', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 3, 'noon', 'Lunch', '午餐', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 3, 'afternoon', 'Afternoon', '下午', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 4, 'noon', 'Lunch', '午餐', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 4, 'evening', 'Dinner', '晚餐', datetime('now','-2 hours')); \
+         INSERT INTO activities \
+           (id, plan_id, destination, day_number, session_type, sort_order, title, poi_id, updated_at) \
+           VALUES ('{plan_id}-d1-afternoon', '{plan_id}', '{dest}', 1, 'afternoon', 0, 'Arrival activity', 'poi_a', datetime('now','-2 hours')), \
+                  ('{plan_id}-d2-morning', '{plan_id}', '{dest}', 2, 'morning', 0, 'Morning A', 'poi_a', datetime('now','-2 hours')), \
+                  ('{plan_id}-d2-afternoon', '{plan_id}', '{dest}', 2, 'afternoon', 0, 'Afternoon B', 'poi_b', datetime('now','-2 hours')), \
+                  ('{plan_id}-d3-morning', '{plan_id}', '{dest}', 3, 'morning', 0, 'Morning A', 'poi_a', datetime('now','-2 hours')), \
+                  ('{plan_id}-d3-noon', '{plan_id}', '{dest}', 3, 'noon', 0, 'Noon B', 'poi_b', datetime('now','-2 hours')), \
+                  ('{plan_id}-d3-afternoon', '{plan_id}', '{dest}', 3, 'afternoon', 0, 'Afternoon C', 'poi_c', datetime('now','-2 hours')); \
+         INSERT INTO session_meals (plan_id, destination, day_number, session_type, sort_order, meal, updated_at) \
+           VALUES ('{plan_id}', '{dest}', 1, 'noon', 0, 'Arrival lunch', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, 'noon', 0, 'Full lunch', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 2, 'evening', 0, 'Full dinner', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 3, 'noon', 0, 'Thin lunch', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 4, 'noon', 0, 'Departure lunch', datetime('now','-2 hours')), \
+                  ('{plan_id}', '{dest}', 4, 'evening', 0, 'Departure dinner', datetime('now','-2 hours')); \
+         INSERT INTO day_route_segments \
+           (plan_id, destination, day_number, sort_order, from_place, to_place, mode) \
+           VALUES ('{plan_id}', '{dest}', 2, 0, 'POI A', 'POI B', 'walking'); \
+         INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) \
+           VALUES ('{plan_id}', datetime('now'));"
+    ))
+    .expect("seed content-depth plan");
+
+    let (ok, stdout, stderr) = run_publish(&plan_id, &dest);
+    assert!(
+        ok,
+        "content-depth WARN/INFO must not block publish; stderr={stderr}; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("Blockers:   0"),
+        "expected zero blockers, got:\n{stdout}"
+    );
+
+    let warnings = stdout
+        .split("## Warnings")
+        .nth(1)
+        .and_then(|s| s.split("## Info").next())
+        .unwrap_or("");
+    let infos = stdout
+        .split("## Info")
+        .nth(1)
+        .and_then(|s| s.split("## Summary").next())
+        .unwrap_or("");
+
+    assert!(
+        warnings.contains("[content-depth] day 3 may be thin: missing dinner meal (evening)"),
+        "warnings section:\n{warnings}\nfull stdout:\n{stdout}"
+    );
+    assert!(
+        warnings.contains("[content-depth] day 3 may be thin: 3 activities but 0 route segments"),
+        "warnings section:\n{warnings}\nfull stdout:\n{stdout}"
+    );
+    assert!(
+        !warnings.contains("[content-depth] day 1 may be thin"),
+        "arrival meal gaps must be INFO not WARN; warnings:\n{warnings}"
+    );
+    assert!(
+        infos.contains("[content-depth] day 1 may be thin: missing dinner meal (evening)"),
+        "infos section:\n{infos}\nfull stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("[content-depth] day 2 may be thin"),
+        "day 2 is complete — no content-depth signal expected; stdout:\n{stdout}"
+    );
+}
+
+/// Past trips skip content-depth checks (like ZH/weather).
+#[test]
+fn past_plan_skips_content_depth_signal() {
+    let _lock = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    let tag = nanos();
+    let plan_id = format!("test-pub-cdpast-{tag}");
+    let dest = format!("pubcdpast_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || {
+            teardown_plan(&plan_id, &dest);
+            teardown_destination(&dest);
+        }
+    });
+
+    if db_exec("SELECT 1").is_none() {
+        return;
+    }
+
+    seed_plan(&plan_id, &dest, 0);
+    seed_destination(&dest);
+    seed_anchor(&plan_id, &dest, "2026-02-01", "2026-02-03", 3);
+
+    db_exec(&format!(
+        "INSERT INTO destination_pois (slug, poi_id, title, source_url, fetched_at, confidence, lat, lon) \
+           VALUES ('{dest}', 'poi_a', 'POI A', 'test', '2026-07-05', 'test', 35.6812, 139.7671), \
+                  ('{dest}', 'poi_b', 'POI B', 'test', '2026-07-05', 'test', 35.6820, 139.7680), \
+                  ('{dest}', 'poi_c', 'POI C', 'test', '2026-07-05', 'test', 35.6830, 139.7690); \
+         INSERT INTO days (plan_id, destination, day_number, date, day_type, theme) \
+           VALUES ('{plan_id}', '{dest}', 1, '2026-02-01', 'arrival', 'Arrival'), \
+                  ('{plan_id}', '{dest}', 2, '2026-02-02', 'full', 'Explore'), \
+                  ('{plan_id}', '{dest}', 3, '2026-02-03', 'departure', 'Departure'); \
+         INSERT INTO activities \
+           (id, plan_id, destination, day_number, session_type, sort_order, title, poi_id) \
+           VALUES ('{plan_id}-d2-morning', '{plan_id}', '{dest}', 2, 'morning', 0, 'Act A', 'poi_a'), \
+                  ('{plan_id}-d2-noon', '{plan_id}', '{dest}', 2, 'noon', 0, 'Act B', 'poi_b'), \
+                  ('{plan_id}-d2-afternoon', '{plan_id}', '{dest}', 2, 'afternoon', 0, 'Act C', 'poi_c'); \
+         INSERT INTO day_route_segments \
+           (plan_id, destination, day_number, sort_order, from_place, to_place, mode) \
+           VALUES ('{plan_id}', '{dest}', 2, 0, 'Place A', 'Place B', 'walking'); \
+         INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) \
+           VALUES ('{plan_id}', datetime('now'));"
+    ))
+    .expect("seed past thin plan");
+
+    let (ok, stdout, stderr) = run_publish(&plan_id, &dest);
+    assert!(
+        ok,
+        "past plan must pass publish; stderr={stderr}; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("Blockers:   0"),
+        "expected zero blockers, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("[content-depth]"),
+        "past plan must skip content-depth signals, got:\n{stdout}"
+    );
+}
