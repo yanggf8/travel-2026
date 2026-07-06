@@ -50,9 +50,12 @@ travel compare content-depth --plan-id <drill> [--against <ref>]   # --against d
 - Module: `rust/crates/travel-cli/src/compare_content_depth.rs`.
 - Read-only: `db::connect_read`, no `plan_events` / `operation_runs` / `plans.version` (no audit —
   it mutates nothing).
-- Plan/destination resolution: reuse the same `plan_id → destination` convention as other view
-  commands (hyphen plan_id → underscore destination). Reference defaults to `okinawa-2026` /
-  `okinawa_2026`.
+- **Destination resolution: `cascade::common::resolve_active_destination(conn, plan_id, None)`**
+  (reads `plan_metadata.active_destination`, fail-loud, no local fallback) — NOT a naive
+  `plan_id.replace('-','_')`. Corrected 2026-07-06 after a live smoke: the naive derivation is WRONG
+  for plans whose active destination differs from the plan slug (`kyoto-confirm-2026 → kyoto_2026`,
+  `osaka-drill-2026 → osaka_kyoto_2026`) and would silently report `0/0/0` (a false SHORT). Reference
+  defaults to plan_id `okinawa-2026` (its active destination `okinawa_2026` resolves the same way).
 
 ### Axes computed for BOTH plans
 

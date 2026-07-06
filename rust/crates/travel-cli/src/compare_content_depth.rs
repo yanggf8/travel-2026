@@ -40,10 +40,6 @@ impl ContentDepthArgs {
     }
 }
 
-fn destination_for(plan_id: &str) -> String {
-    plan_id.replace('-', "_")
-}
-
 struct DepthRow {
     day_number: i64,
     day_type: String,
@@ -173,9 +169,13 @@ fn axis_cell(d: i64, r: i64) -> &'static str {
 
 pub async fn run(rest: &[String]) -> Result<(), String> {
     let args = ContentDepthArgs::parse(rest)?;
-    let drill_dest = destination_for(&args.plan_id);
-    let ref_dest = destination_for(&args.against);
     let conn = db::connect_read().await?;
+    // Resolve the REAL active destination from plan_metadata (fail-loud, no local
+    // fallback). A naive plan_id.replace('-','_') is WRONG for plans whose active
+    // destination differs from the plan slug (e.g. kyoto-confirm-2026 → kyoto_2026,
+    // osaka-drill-2026 → osaka_kyoto_2026) — it would silently report 0/0/0.
+    let drill_dest = crate::cascade::common::resolve_active_destination(&conn, &args.plan_id, None).await?;
+    let ref_dest = crate::cascade::common::resolve_active_destination(&conn, &args.against, None).await?;
 
     let drill_rows = depth_rows(&conn, &args.plan_id, &drill_dest).await?;
     let ref_rows = depth_rows(&conn, &args.against, &ref_dest).await?;
