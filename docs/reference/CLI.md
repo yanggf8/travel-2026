@@ -17,6 +17,7 @@ Each view is a separate subcommand — pick one:
 ./bin/travel itinerary                           # daily plan
 ./bin/travel transport                           # transport summary
 ./bin/travel bookings                            # booking ledger
+./bin/travel query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]    # READ-ONLY: list AI-recommended (source='ai_recommended') meals/routes/activities awaiting confirmation, grouped by kind with a "Day N session" scope hint. Same filters as confirm-recommendations (this previews what it would confirm). No --json.
 ./bin/travel status --travel-date 2026-06-20
 ./bin/travel itinerary --travel-start 2026-06-18 --travel-end 2026-06-25
 ./bin/travel view-prices --flights scrapes/date-range-prices.json --hotel-per-night 3000 --nights 4 --package 40740
@@ -136,7 +137,7 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel set-meals <day> <session> --meal "<text>" [--meal "<text>"...] [--recommended] [--dest slug]    # replace session meals; a meal may carry a place pin: "<label>｜map:<query>"
 ./bin/travel add-activity <day> <session> "<title>" [--after <id|title>] [--recommended] [--area ..] [--station ..] [--duration MIN] [--start HH:MM] [--end HH:MM] [--fixed true|false] [--priority must|want|optional] [--notes ..] [--dest slug]    # add an activity (append, or --after to insert at a position); audit triad
 #   --recommended (on set-meals / add-activity / set-route-segment(s-bulk)) marks the item AI-recommended (source='ai_recommended') vs user-confirmed. The dashboard badges it 🤖; `validate publish` counts it as INFO; the user flips accepted items with confirm-recommendations. Enriching a previously-empty session with a meal/route/activity makes it non-empty → it now REQUIRES focus_zh (set-tod-zh) or `validate publish` will BLOCK; set the ZH focus in the same pass.
-./bin/travel confirm-recommendations [--day N] [--session morning|noon|afternoon|evening] [--kind activity|meal|route] [--dest slug]    # flip source='ai_recommended' → 'confirmed', scoped by the filters. Zero-scope is a clean no-op (no audit/version bump). --kind route + --session is rejected (routes have no session); with --kind absent, --session scopes activities/meals only while routes confirm by day.
+./bin/travel confirm-recommendations [--day N] [--session morning|noon|afternoon|evening] [--kind activity|meal|route] [--dest slug]    # flip source='ai_recommended' → 'confirmed', scoped by the filters. Zero-scope is a clean no-op (no audit/version bump). --kind route + --session is rejected (routes have no session); with --kind absent, --session scopes activities/meals only while routes confirm by day. PREVIEW first with `query-recommendations` (same filters, read-only) to see exactly what will flip.
 ./bin/travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]    # move an activity to another session/day, PRESERVING its id + poi link (vs delete+re-add)
 ./bin/travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest slug]    # rewrite sort_order; list ALL activities in the session in the desired order
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)

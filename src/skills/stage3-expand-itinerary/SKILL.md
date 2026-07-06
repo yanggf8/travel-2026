@@ -131,15 +131,24 @@ Do **not** use this for the first coarse draft before shopping; use
 
 7. **Surface AI-recommended items for confirmation**
 
-   Show the user what the agent authored so they can accept or revise it. The
-   items are already visible (dashboard badge + `validate publish` INFO); when the
-   user confirms a batch, flip it from `ai_recommended` → `confirmed`:
+   **First, LIST what the agent authored and present it to the user** — don't just
+   flip it silently. This works BEFORE the dashboard is deployed (Stage 4), so the
+   user can review during Stage 3:
+   ```bash
+   ./bin/travel query-recommendations --plan-id <plan_id> --dest <destination_slug>
+   ```
+   It prints the AI-recommended meals/routes/activities grouped by kind, each with a
+   `Day N session` scope hint. Render that list to the user and ask which to accept.
+
+   Then flip ONLY the approved items from `ai_recommended` → `confirmed` (same
+   filters as `query-recommendations`, so preview then confirm the same scope):
    ```bash
    ./bin/travel confirm-recommendations [--day N] [--session s] [--kind activity|meal|route] --plan-id <plan_id> --dest <destination_slug>
    ```
    Scope by `--day`/`--session`/`--kind`, or run bare to confirm everything the
    user approved. Leave un-confirmed items labeled — a labeled suggestion is a
-   valid pre-trip state (`validate publish` will not block on it).
+   valid pre-trip state (`validate publish` will not block on it; it counts them as
+   INFO, and the dashboard badges them 🤖 once deployed).
 
 8. **Confirm readiness for Stage 4**
 

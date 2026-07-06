@@ -189,6 +189,7 @@ User intent                          → Skill / Action
 "how many leave days"                → ./bin/travel leave calc
 "book this" / "select offer"         → ./bin/travel select-offer
 "plan the days" / "itinerary"        → /stage3-expand-itinerary   (agent authors AI-recommended meals/routes/activities, LABELED via --recommended)
+"show/review the AI suggestions" / "what did the agent recommend"  → ./bin/travel query-recommendations [--day N] [--session s] [--kind ...]   (read-only list; preview before confirming)
 "confirm the AI suggestions" / "accept recommendations"  → ./bin/travel confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]   (flip ai_recommended → confirmed)
 "show bookings"                      → ./bin/travel query-bookings (from DB)
 "show status"                        → ./bin/travel status --full
