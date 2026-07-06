@@ -633,7 +633,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "confirm-recommendations" => {
             if wants_help(
                 rest,
-                "travel confirm-recommendations [--day N] [--session morning|noon|afternoon|evening] [--kind activity|meal|route] [--dest <slug>]\n  Flips ai_recommended itinerary content to confirmed, scoped by the filters.",
+                "travel confirm-recommendations [--day N] [--session morning|noon|afternoon|evening] [--kind activity|meal|route] [--dest <slug>]\n  Flips ai_recommended itinerary content to confirmed, scoped by the filters.\n  Note: --session scopes activities/meals only — routes have no session, so they are confirmed by --day (or all days). Use `query-recommendations` with the same flags to preview first.",
             ) {
                 return Ok(());
             }

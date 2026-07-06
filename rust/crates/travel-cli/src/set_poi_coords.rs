@@ -92,6 +92,13 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                 confidence = Some(arg_value(args, i, "--confidence")?);
                 i += 2;
             }
+            "--plan-id" => {
+                return Err(
+                    "set-poi-coords is global/slug-keyed reference data and takes no --plan-id \
+                     (a POI's coordinates are shared across every plan that uses the destination)"
+                        .to_string(),
+                );
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }

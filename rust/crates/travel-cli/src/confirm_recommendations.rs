@@ -44,6 +44,11 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let now_db = crate::cascade::common::now_db_datetime();
     let now_iso = crate::cascade::common::now_rfc3339();
 
+    // NB: confirm does NOT touch_day() (unlike set-meals/add-activity/set-route-segment).
+    // Flipping source ai_recommended→confirmed is a provenance/status change, not a content
+    // edit — the day's rendered content is unchanged — so it must not bump days.updated_at
+    // and trip the maps-fresh gate. The confirm_* writers still touch each row's own updated_at
+    // where the column exists (activities/session_meals), which is the audit signal we want.
     let mut activities = 0u64;
     let mut meals = 0u64;
     let mut routes = 0u64;
@@ -80,7 +85,8 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     }
     let total = activities + meals + routes;
     if total == 0 {
-        println!("0 confirmed");
+        println!("\n✅ Confirming recommendations:\n   Destination: {destination}");
+        println!("   0 confirmed (nothing matched the scope)");
         return Ok(());
     }
 
@@ -115,6 +121,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let summary = format!(
         "{total} confirmed ({activities} activities, {meals} meals, {routes} routes)"
     );
+    println!("\n✅ Confirming recommendations:\n   Destination: {destination}");
     crate::cascade::common::record_operation(
         &conn,
         &plan_id,
@@ -126,10 +133,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     )
     .await?;
 
-    println!("{total} confirmed");
-    println!("activities\t{activities}");
-    println!("meals\t{meals}");
-    println!("routes\t{routes}");
+    println!("✅ {summary}");
     Ok(())
 }
 

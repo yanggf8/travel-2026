@@ -203,8 +203,8 @@ fn confirm_recommendations_write_surface_is_locked() {
     }
     let (stdout, _) = out.unwrap();
     assert!(
-        stdout.lines().next().map(|l| l.trim()) == Some("3 confirmed"),
-        "first stdout line must be '3 confirmed'; got {stdout:?}"
+        stdout.contains("✅ 3 confirmed (1 activities, 1 meals, 1 routes)"),
+        "stdout must show the house-style confirm summary; got {stdout:?}"
     );
 
     let acts = exec_ok(&format!(
@@ -268,8 +268,8 @@ fn confirm_recommendations_write_surface_is_locked() {
     }
     let (stdout2, _) = out2.unwrap();
     assert!(
-        stdout2.trim() == "0 confirmed",
-        "zero-scope must print '0 confirmed'; got {stdout2:?}"
+        stdout2.contains("0 confirmed (nothing matched the scope)"),
+        "zero-scope must print the 0-confirmed line; got {stdout2:?}"
     );
     assert_audit(&plan, 1, 1, "confirm-recommendations", 1);
 
@@ -292,8 +292,8 @@ fn confirm_recommendations_write_surface_is_locked() {
     }
     let (stdout3, _) = out3.unwrap();
     assert!(
-        stdout3.lines().next().map(|l| l.trim()) == Some("1 confirmed"),
-        "meal-only confirm must print '1 confirmed'; got {stdout3:?}"
+        stdout3.contains("✅ 1 confirmed (0 activities, 1 meals, 0 routes)"),
+        "meal-only confirm must show the house-style summary; got {stdout3:?}"
     );
 
     let meals_after_meal_only = exec_ok(&format!(
