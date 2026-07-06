@@ -392,3 +392,58 @@ fn verdict_antipadding_routes() {
     assert!(!s.contains("BETTER"), "stdout: {s}");
 }
 
+#[test]
+fn renders_header_perday_and_totals() {
+    if db_exec("SELECT 1 AS n").is_none() {
+        return;
+    }
+    let n = nanos();
+    let drill = format!("test-cdepth-render-d-{n}");
+    let drill_dest = drill.replace('-', "_");
+    let refr = format!("test-cdepth-render-r-{n}");
+    let ref_dest = refr.replace('-', "_");
+    seed_plan(&drill, &drill_dest, 0);
+    seed_plan(&refr, &ref_dest, 0);
+    let _g = Guard::new({
+        let (d, dd, r, rd) = (
+            drill.clone(),
+            drill_dest.clone(),
+            refr.clone(),
+            ref_dest.clone(),
+        );
+        move || {
+            teardown_plan(&d, &dd);
+            teardown_plan(&r, &rd);
+        }
+    });
+    if !seed_depth_counts(&format!("{n}d"), &drill, &drill_dest, 2, 1, 1, true) {
+        return;
+    }
+    if !seed_depth_counts(&format!("{n}r"), &refr, &ref_dest, 1, 1, 1, true) {
+        return;
+    }
+    let Some(s) = run_or_skip(&[
+        "compare",
+        "content-depth",
+        "--plan-id",
+        &drill,
+        "--against",
+        &refr,
+    ]) else {
+        return;
+    };
+    assert!(s.contains("CONTENT DEPTH"), "stdout: {s}");
+    assert!(s.contains(&drill), "stdout: {s}");
+    assert!(s.contains(&refr), "stdout: {s}");
+    assert!(s.contains("(reference)"), "stdout: {s}");
+    assert!(s.contains("per-day:"), "stdout: {s}");
+    assert!(s.contains("DRILL"), "stdout: {s}");
+    assert!(s.contains("REF"), "stdout: {s}");
+    assert!(s.contains("totals:"), "stdout: {s}");
+    assert!(s.contains("activities"), "stdout: {s}");
+    assert!(s.contains("meals (real)"), "stdout: {s}");
+    assert!(s.contains("routes (w/ metadata)"), "stdout: {s}");
+    assert!(s.contains("ZH coverage"), "stdout: {s}");
+    assert!(s.contains("VERDICT:"), "stdout: {s}");
+}
+
