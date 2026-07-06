@@ -20,3 +20,34 @@ fn help_prints_usage() {
         "help should name the default reference; stdout: {s}"
     );
 }
+
+#[test]
+fn missing_plan_id_fails() {
+    let out = Command::new(bin())
+        .args(["compare", "content-depth", "--against", "okinawa-2026"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let s = String::from_utf8_lossy(&out.stderr);
+    assert!(s.contains("--plan-id"), "stderr: {s}");
+}
+
+#[test]
+fn unknown_flag_fails() {
+    let out = Command::new(bin())
+        .args([
+            "compare",
+            "content-depth",
+            "--plan-id",
+            "x-2026",
+            "--bogus",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let s = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        s.to_lowercase().contains("unknown flag"),
+        "stderr: {s}"
+    );
+}
