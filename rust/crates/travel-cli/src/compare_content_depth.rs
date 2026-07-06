@@ -106,32 +106,148 @@ async fn zh_coverage_pct(
     Ok(0)
 }
 
+struct Totals {
+    activities: i64,
+    meals: i64,
+    routes: i64,
+    zh: i64,
+}
+
+fn totals_of(rows: &[DepthRow], zh: i64) -> Totals {
+    Totals {
+        activities: rows.iter().map(|r| r.activities).sum(),
+        meals: rows.iter().map(|r| r.meals).sum(),
+        routes: rows.iter().map(|r| r.routes).sum(),
+        zh,
+    }
+}
+
+// SHORT (any axis drill<ref, precedence) / ALIGNED (all >=, none strictly >) / BETTER.
+fn verdict(drill: &Totals, refr: &Totals) -> String {
+    let axes: [(&str, i64, i64); 4] = [
+        ("activities", drill.activities, refr.activities),
+        ("meals", drill.meals, refr.meals),
+        ("routes", drill.routes, refr.routes),
+        ("ZH", drill.zh, refr.zh),
+    ];
+    let short: Vec<&str> = axes
+        .iter()
+        .filter(|(_, d, r)| d < r)
+        .map(|(n, _, _)| *n)
+        .collect();
+    if !short.is_empty() {
+        return format!("VERDICT: SHORT: {}", short.join(", "));
+    }
+    let strictly_greater = axes.iter().filter(|(_, d, r)| d > r).count();
+    if strictly_greater == 0 {
+        return "VERDICT: ALIGNED — every axis meets the reference exactly".to_string();
+    }
+    format!("VERDICT: BETTER — all axes >= reference, {strictly_greater} strictly greater, quality gate PASS")
+}
+
+fn delta(d: i64, r: i64) -> String {
+    let x = d - r;
+    if x > 0 {
+        format!("+{x}")
+    } else {
+        format!("{x}")
+    }
+}
+
+fn delta_pp(d: i64, r: i64) -> String {
+    let x = d - r;
+    if x > 0 {
+        format!("+{x}pp")
+    } else {
+        format!("{x}pp")
+    }
+}
+
+fn axis_cell(d: i64, r: i64) -> &'static str {
+    if d >= r {
+        ">="
+    } else {
+        "<"
+    }
+}
+
 pub async fn run(rest: &[String]) -> Result<(), String> {
     let args = ContentDepthArgs::parse(rest)?;
-    let conn = db::connect_read().await?;
-
     let drill_dest = destination_for(&args.plan_id);
     let ref_dest = destination_for(&args.against);
+    let conn = db::connect_read().await?;
 
     let drill_rows = depth_rows(&conn, &args.plan_id, &drill_dest).await?;
     let ref_rows = depth_rows(&conn, &args.against, &ref_dest).await?;
     let drill_zh = zh_coverage_pct(&conn, &args.plan_id, &drill_dest).await?;
     let ref_zh = zh_coverage_pct(&conn, &args.against, &ref_dest).await?;
 
-    println!("activities meals routes");
-    println!("ZH coverage {drill_zh}% (drill) / {ref_zh}% (ref)");
-    for row in &drill_rows {
-        println!(
-            "{} {} {}/{}/{}",
-            row.day_number, row.day_type, row.activities, row.meals, row.routes
-        );
+    let dt = totals_of(&drill_rows, drill_zh);
+    let rt = totals_of(&ref_rows, ref_zh);
+
+    println!(
+        "CONTENT DEPTH — {}  vs  {} (reference)",
+        args.plan_id, args.against
+    );
+    println!();
+
+    // Per-day (union of day numbers, ordered)
+    println!("per-day:");
+    println!("  day  type        DRILL(a/m/r)   REF(a/m/r)");
+    let mut days: Vec<i64> = drill_rows
+        .iter()
+        .map(|r| r.day_number)
+        .chain(ref_rows.iter().map(|r| r.day_number))
+        .collect();
+    days.sort_unstable();
+    days.dedup();
+    for day in days {
+        let d = drill_rows.iter().find(|r| r.day_number == day);
+        let r = ref_rows.iter().find(|r| r.day_number == day);
+        let day_type = d
+            .map(|x| x.day_type.clone())
+            .or_else(|| r.map(|x| x.day_type.clone()))
+            .unwrap_or_default();
+        let (da, dm, dr) = d.map(|x| (x.activities, x.meals, x.routes)).unwrap_or((0, 0, 0));
+        let (ra, rm, rr) = r.map(|x| (x.activities, x.meals, x.routes)).unwrap_or((0, 0, 0));
+        let dcell = format!("{da}/{dm}/{dr}");
+        println!("  {:<4} {:<11} {:<14} {}/{}/{}", day, day_type, dcell, ra, rm, rr);
     }
-    for row in &ref_rows {
-        println!(
-            "ref {} {} {}/{}/{}",
-            row.day_number, row.day_type, row.activities, row.meals, row.routes
-        );
-    }
+    println!();
+
+    // Totals
+    println!("totals:");
+    println!("                        DRILL   REF    Δ       verdict");
+    println!(
+        "  activities            {:<7} {:<6} {:<7} {}",
+        dt.activities,
+        rt.activities,
+        delta(dt.activities, rt.activities),
+        axis_cell(dt.activities, rt.activities)
+    );
+    println!(
+        "  meals (real)          {:<7} {:<6} {:<7} {}",
+        dt.meals,
+        rt.meals,
+        delta(dt.meals, rt.meals),
+        axis_cell(dt.meals, rt.meals)
+    );
+    println!(
+        "  routes (w/ metadata)  {:<7} {:<6} {:<7} {}",
+        dt.routes,
+        rt.routes,
+        delta(dt.routes, rt.routes),
+        axis_cell(dt.routes, rt.routes)
+    );
+    println!(
+        "  ZH coverage           {:<7} {:<6} {:<7} {}",
+        format!("{}%", dt.zh),
+        format!("{}%", rt.zh),
+        delta_pp(dt.zh, rt.zh),
+        axis_cell(dt.zh, rt.zh)
+    );
+    println!("  ----------------------------------------------------");
+    println!("  {}", verdict(&dt, &rt));
 
     Ok(())
 }

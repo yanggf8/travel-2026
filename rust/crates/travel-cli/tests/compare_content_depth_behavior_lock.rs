@@ -164,3 +164,231 @@ fn zh_coverage_is_weighted_not_avg() {
         "must not use avg-of-ratios (92%); stdout: {s}"
     );
 }
+
+fn seed_depth_counts(
+    tag: &str,
+    plan: &str,
+    dest: &str,
+    acts: i64,
+    meals: i64,
+    routes: i64,
+    full_zh: bool,
+) -> bool {
+    let theme = if full_zh { "'主題'" } else { "NULL" };
+    let mut sql = format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) \
+         VALUES ('{plan}','{dest}',1,'2026-11-01','full','draft',{theme},'2020-01-01 00:00:00');"
+    );
+    for i in 0..acts {
+        sql.push_str(&format!(
+            "INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) \
+             VALUES ('{tag}-a{i}','{plan}','{dest}',1,'morning',{i},'act{i}','2020-01-01 00:00:00');"
+        ));
+    }
+    for i in 0..meals {
+        let st = if i % 2 == 0 { "noon" } else { "evening" };
+        sql.push_str(&format!(
+            "INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) \
+             VALUES ('{plan}','{dest}',1,'{st}',{i},'Meal{i}','ai_recommended');"
+        ));
+    }
+    for i in 0..routes {
+        sql.push_str(&format!(
+            "INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) \
+             VALUES ('{plan}','{dest}',1,{i},'A{i}','B{i}','walk',10,'ai_recommended');"
+        ));
+    }
+    for st in ["morning", "noon", "afternoon", "evening"] {
+        let zh = if full_zh { "'焦點'" } else { "NULL" };
+        sql.push_str(&format!(
+            "INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) \
+             VALUES ('{plan}','{dest}',1,'{st}',{zh});"
+        ));
+    }
+    !db_exec(&sql).is_none()
+}
+
+fn seed_antipadding_drill(tag: &str, plan: &str, dest: &str) -> bool {
+    let sql = format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,updated_at) \
+         VALUES ('{plan}','{dest}',1,'2026-11-01','full','draft','2020-01-01 00:00:00'); \
+         INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) \
+         VALUES ('{tag}-a0','{plan}','{dest}',1,'morning',0,'act0','2020-01-01 00:00:00'); \
+         INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) \
+         VALUES ('{plan}','{dest}',1,'noon',0,'Lunch','ai_recommended'); \
+         INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) \
+         VALUES ('{plan}','{dest}',1,0,'A','B','walk',10,'ai_recommended'), \
+                ('{plan}','{dest}',1,1,'B','C','walk',15,'ai_recommended'), \
+                ('{plan}','{dest}',1,2,'C','D','walk',NULL,'ai_recommended'), \
+                ('{plan}','{dest}',1,3,'D','E','walk',0,'ai_recommended'), \
+                ('{plan}','{dest}',1,4,'E','F','walk',NULL,'ai_recommended'); \
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) \
+         VALUES ('{plan}','{dest}',1,'morning',NULL),('{plan}','{dest}',1,'noon',NULL), \
+                ('{plan}','{dest}',1,'afternoon',NULL),('{plan}','{dest}',1,'evening',NULL);"
+    );
+    !db_exec(&sql).is_none()
+}
+
+#[test]
+fn verdict_short() {
+    let n = nanos();
+    let drill = format!("test-cdepth-short-d-{n}");
+    let drill_dest = drill.replace('-', "_");
+    let refr = format!("test-cdepth-short-r-{n}");
+    let ref_dest = refr.replace('-', "_");
+    seed_plan(&drill, &drill_dest, 0);
+    seed_plan(&refr, &ref_dest, 0);
+    let _g = Guard::new({
+        let (d, dd, r, rd) = (
+            drill.clone(),
+            drill_dest.clone(),
+            refr.clone(),
+            ref_dest.clone(),
+        );
+        move || {
+            teardown_plan(&d, &dd);
+            teardown_plan(&r, &rd);
+        }
+    });
+    if !seed_depth_counts(&format!("{n}d"), &drill, &drill_dest, 1, 1, 1, true) {
+        return;
+    }
+    if !seed_depth_counts(&format!("{n}r"), &refr, &ref_dest, 1, 2, 1, true) {
+        return;
+    }
+    let Some(s) = run_or_skip(&[
+        "compare",
+        "content-depth",
+        "--plan-id",
+        &drill,
+        "--against",
+        &refr,
+    ]) else {
+        return;
+    };
+    assert!(s.contains("VERDICT: SHORT:"), "stdout: {s}");
+    assert!(s.contains("meals"), "stdout: {s}");
+}
+
+#[test]
+fn verdict_aligned() {
+    let n = nanos();
+    let drill = format!("test-cdepth-align-d-{n}");
+    let drill_dest = drill.replace('-', "_");
+    let refr = format!("test-cdepth-align-r-{n}");
+    let ref_dest = refr.replace('-', "_");
+    seed_plan(&drill, &drill_dest, 0);
+    seed_plan(&refr, &ref_dest, 0);
+    let _g = Guard::new({
+        let (d, dd, r, rd) = (
+            drill.clone(),
+            drill_dest.clone(),
+            refr.clone(),
+            ref_dest.clone(),
+        );
+        move || {
+            teardown_plan(&d, &dd);
+            teardown_plan(&r, &rd);
+        }
+    });
+    if !seed_depth_counts(&format!("{n}d"), &drill, &drill_dest, 2, 1, 1, true) {
+        return;
+    }
+    if !seed_depth_counts(&format!("{n}r"), &refr, &ref_dest, 2, 1, 1, true) {
+        return;
+    }
+    let Some(s) = run_or_skip(&[
+        "compare",
+        "content-depth",
+        "--plan-id",
+        &drill,
+        "--against",
+        &refr,
+    ]) else {
+        return;
+    };
+    assert!(s.contains("VERDICT: ALIGNED"), "stdout: {s}");
+}
+
+#[test]
+fn verdict_better() {
+    let n = nanos();
+    let drill = format!("test-cdepth-better-d-{n}");
+    let drill_dest = drill.replace('-', "_");
+    let refr = format!("test-cdepth-better-r-{n}");
+    let ref_dest = refr.replace('-', "_");
+    seed_plan(&drill, &drill_dest, 0);
+    seed_plan(&refr, &ref_dest, 0);
+    let _g = Guard::new({
+        let (d, dd, r, rd) = (
+            drill.clone(),
+            drill_dest.clone(),
+            refr.clone(),
+            ref_dest.clone(),
+        );
+        move || {
+            teardown_plan(&d, &dd);
+            teardown_plan(&r, &rd);
+        }
+    });
+    if !seed_depth_counts(&format!("{n}d"), &drill, &drill_dest, 3, 1, 1, true) {
+        return;
+    }
+    if !seed_depth_counts(&format!("{n}r"), &refr, &ref_dest, 2, 1, 1, true) {
+        return;
+    }
+    let Some(s) = run_or_skip(&[
+        "compare",
+        "content-depth",
+        "--plan-id",
+        &drill,
+        "--against",
+        &refr,
+    ]) else {
+        return;
+    };
+    assert!(s.contains("VERDICT: BETTER"), "stdout: {s}");
+}
+
+#[test]
+fn verdict_antipadding_routes() {
+    let n = nanos();
+    let drill = format!("test-cdepth-antipad-d-{n}");
+    let drill_dest = drill.replace('-', "_");
+    let refr = format!("test-cdepth-antipad-r-{n}");
+    let ref_dest = refr.replace('-', "_");
+    seed_plan(&drill, &drill_dest, 0);
+    seed_plan(&refr, &ref_dest, 0);
+    let _g = Guard::new({
+        let (d, dd, r, rd) = (
+            drill.clone(),
+            drill_dest.clone(),
+            refr.clone(),
+            ref_dest.clone(),
+        );
+        move || {
+            teardown_plan(&d, &dd);
+            teardown_plan(&r, &rd);
+        }
+    });
+    if !seed_antipadding_drill(&format!("{n}d"), &drill, &drill_dest) {
+        return;
+    }
+    if !seed_depth_counts(&format!("{n}r"), &refr, &ref_dest, 1, 1, 3, false) {
+        return;
+    }
+    let Some(s) = run_or_skip(&[
+        "compare",
+        "content-depth",
+        "--plan-id",
+        &drill,
+        "--against",
+        &refr,
+    ]) else {
+        return;
+    };
+    assert!(s.contains("VERDICT: SHORT"), "stdout: {s}");
+    assert!(s.contains("routes"), "stdout: {s}");
+    assert!(!s.contains("BETTER"), "stdout: {s}");
+}
+
