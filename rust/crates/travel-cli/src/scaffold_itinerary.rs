@@ -149,6 +149,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                 p.force = true;
                 i += 1;
             }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
+            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }

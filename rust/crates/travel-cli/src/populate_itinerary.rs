@@ -297,8 +297,22 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     )
     .await?;
 
-    println!("\n✅ Itinerary populated (incremental adds)");
-    println!("\nNext action: run status --full, then adjust with updateActivity/removeActivity as needed");
+    if planned.is_empty() {
+        // Nothing matched — do NOT report a false success. The itinerary is still
+        // empty (or unchanged), so point the user at the real next step rather than
+        // "adjust activities" (there are none). Most common cause: the --goals
+        // cluster IDs aren't in this destination's reference data (e.g. a
+        // destination with no clusters/POIs yet).
+        println!("\n⚠️  0 activities added — no --goals cluster matched this destination.");
+        println!(
+            "Next action: check the available clusters (query-destination-ref --slug {destination}); \
+             if the destination has none, author the itinerary directly with add-activity, or seed its \
+             reference clusters/POIs first."
+        );
+    } else {
+        println!("\n✅ Itinerary populated (incremental adds)");
+        println!("\nNext action: run status --full, then adjust with updateActivity/removeActivity as needed");
+    }
     Ok(())
 }
 
@@ -328,6 +342,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
             "--force" => {
                 p.force = true;
                 i += 1;
+            }
+            "--plan-id" => {
+                // consumed by the top-level plan resolver; skip flag + value
+                i += 2;
             }
             other => return Err(format!("unknown argument: {other}")),
         }
