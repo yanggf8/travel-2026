@@ -81,6 +81,31 @@ async fn depth_rows(
     Ok(out)
 }
 
+async fn zh_coverage_pct(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<i64, String> {
+    let sql = "SELECT
+        (SELECT COUNT(*) FROM days WHERE plan_id=?1 AND destination=?2 AND TRIM(COALESCE(theme_zh,'')) <> '')
+      + (SELECT COUNT(*) FROM timesofday WHERE plan_id=?1 AND destination=?2 AND TRIM(COALESCE(focus_zh,'')) <> '') AS num,
+        (SELECT COUNT(*) FROM days WHERE plan_id=?1 AND destination=?2)
+      + (SELECT COUNT(*) FROM timesofday WHERE plan_id=?1 AND destination=?2) AS den";
+    let mut rows = conn
+        .query(sql, params![plan_id.to_string(), destination.to_string()])
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        let num: i64 = row.get(0).unwrap_or(0);
+        let den: i64 = row.get(1).unwrap_or(0);
+        if den == 0 {
+            return Ok(0);
+        }
+        return Ok((num * 100) / den);
+    }
+    Ok(0)
+}
+
 pub async fn run(rest: &[String]) -> Result<(), String> {
     let args = ContentDepthArgs::parse(rest)?;
     let conn = db::connect_read().await?;
@@ -90,8 +115,11 @@ pub async fn run(rest: &[String]) -> Result<(), String> {
 
     let drill_rows = depth_rows(&conn, &args.plan_id, &drill_dest).await?;
     let ref_rows = depth_rows(&conn, &args.against, &ref_dest).await?;
+    let drill_zh = zh_coverage_pct(&conn, &args.plan_id, &drill_dest).await?;
+    let ref_zh = zh_coverage_pct(&conn, &args.against, &ref_dest).await?;
 
     println!("activities meals routes");
+    println!("ZH coverage {drill_zh}% (drill) / {ref_zh}% (ref)");
     for row in &drill_rows {
         println!(
             "{} {} {}/{}/{}",

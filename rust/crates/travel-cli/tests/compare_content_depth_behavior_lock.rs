@@ -111,3 +111,56 @@ fn gated_query_excludes_blank_meals_and_metadataless_routes() {
         "stdout: {s}"
     );
 }
+
+#[test]
+fn zh_coverage_is_weighted_not_avg() {
+    let n = nanos();
+    let plan = format!("test-cdepth-zh-{n}");
+    let dest = plan.replace('-', "_");
+    seed_plan(&plan, &dest, 0);
+    let _g = Guard::new({
+        let (p, d) = (plan.clone(), dest.clone());
+        move || teardown_plan(&p, &d)
+    });
+    for day in 1..=5 {
+        if db_exec(&format!(
+            "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{plan}','{dest}',{day},'2026-11-0{day}','full','draft','主題{day}','2020-01-01 00:00:00')"
+        ))
+        .is_none()
+        {
+            return;
+        }
+    }
+    let mut filled = 0;
+    for day in 1..=5 {
+        for st in ["morning", "noon", "afternoon", "evening"] {
+            let zh = if filled < 17 {
+                filled += 1;
+                "'焦點'"
+            } else {
+                "NULL"
+            };
+            db_exec(&format!(
+                "INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{plan}','{dest}',{day},'{st}',{zh})"
+            ));
+        }
+    }
+    let Some(s) = run_or_skip(&[
+        "compare",
+        "content-depth",
+        "--plan-id",
+        &plan,
+        "--against",
+        &plan,
+    ]) else {
+        return;
+    };
+    assert!(
+        s.contains("88%"),
+        "expected weighted 88%, not 92%; stdout: {s}"
+    );
+    assert!(
+        !s.contains("92%"),
+        "must not use avg-of-ratios (92%); stdout: {s}"
+    );
+}
