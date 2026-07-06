@@ -30,6 +30,7 @@ mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-k
 mod set_activity;
 mod set_activity_poi;
 mod confirm_recommendations;
+mod derive_routes;
 mod query_recommendations;
 mod set_airport_transfer;
 mod set_dates;
@@ -705,6 +706,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             confirm_recommendations::run(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "derive-routes" => {
+            if wants_help(
+                rest,
+                "travel derive-routes [--day N] [--dest <slug>]\n  Derive ai_recommended transit route segments from consecutive activity stations. Skips days with confirmed route segments; idempotent.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            derive_routes::run(rest, plan_id).await?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "query-recommendations" => {
             if wants_help(
                 rest,
@@ -829,6 +841,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   move-activity <day> <from-session> <to-session> <id|title> [--to-day N]\n\
   set-meals <day> <session> --meal \"<text>\" [--meal ...] [--zh \"<zh>\" ...]\n\
   confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]  Flip AI-recommended → confirmed\n\
+  derive-routes [--day N] [--dest <slug>]  Derive ai_recommended transit route segments from activity stations\n\
   set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\
   set-route-segment | set-route-segments-bulk <day> --seg \"from|to|mode[|...]\"\n\
   set-flight | set-hotel | set-airport-transfer | mark-booked | sync-bookings\n\

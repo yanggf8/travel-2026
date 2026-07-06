@@ -201,6 +201,57 @@ pub(crate) fn mentions_rail_or_bus(s: &str) -> bool {
         .any(|k| s.contains(k))
 }
 
+/// Fail-loud guard bundle for a single (from, to, mode) route segment. Reuses
+/// the lint's OWN predicates verbatim so the WRITE guard and the READ-ONLY lint
+/// in `validate_itinerary.rs` agree exactly — no drift.
+///
+/// Mirrors `validate_itinerary::lint`'s per-leg logic, in the same order:
+///   (#3) each of from/to must form a usable Maps stop: reject if it cleans to
+///        empty, retains stray （）()＋+, carries a clock time, or is a
+///        mode-only word (步行/單軌/巴士…). The segment's `mode` column already
+///        carries the travel mode, so a mode word standing as a PLACE is a bug.
+///   (#4) cross-country ground leg: compute place_country on the CLEANED stops
+///        (matching the lint, which cleans before comparing) and reject when
+///        both are known AND differ (an ocean-spanning route, e.g. TW↔JP).
+///   (#5) walking-over-rail: if mode=="walking" and `"<from> <to>"` mentions a
+///        rail/bus mode → reject (the lint uses the raw from/to as context).
+///
+/// Returns `Err(reason)` naming the offending stop/rule; `Ok(())` when clean.
+/// Pure: no DB, no I/O — so it's unit-tested directly and called before any write.
+pub(crate) fn guard_segment(from: &str, to: &str, mode: &str) -> Result<(), String> {
+    // (#3) per-stop map-link integrity — use the lint's check_stop_linkable,
+    // which is exactly clean_stop → stop_link_problem.
+    for (label, stop) in [("from", from), ("to", to)] {
+        if let Err(reason) = check_stop_linkable(stop) {
+            return Err(format!("<{label}> \"{stop}\" {reason} [rule: map-link/stop]"));
+        }
+    }
+
+    // The lint compares place_country on the CLEANED stop strings; do the same
+    // so the guard never disagrees with what the lint would flag.
+    let from_clean = clean_stop(from);
+    let to_clean = clean_stop(to);
+
+    // (#4) cross-country ground leg — both known AND different.
+    if let (Some(a), Some(b)) = (place_country(&from_clean), place_country(&to_clean)) {
+        if a != b {
+            return Err(format!(
+                "cross-country ground leg: \"{from}\" ({a}) → \"{to}\" ({b}) would draw an ocean-spanning route [rule: cross-country]"
+            ));
+        }
+    }
+
+    // (#5) walking leg that actually rides rail/bus — context is the raw pair
+    // (matches the lint's `format!("{from} {to}")` ctx for route legs).
+    if mode == "walking" && mentions_rail_or_bus(&format!("{from} {to}")) {
+        return Err(format!(
+            "mode=walking but \"{from} {to}\" names a rail/bus leg — set mode=transit [rule: walking-over-rail]"
+        ));
+    }
+
+    Ok(())
+}
+
 /// A meal "has a pin" if it carries the ｜map:/|map: marker or an embedded URL.
 pub(crate) fn meal_has_pin(text: &str) -> bool {
     let lower = text.to_lowercase();

@@ -19,60 +19,6 @@ struct SegmentInput {
     start_time: Option<String>,
 }
 
-/// Fail-loud guard bundle for a single (from, to, mode) route segment. Reuses
-/// the lint's OWN predicates verbatim (`crate::checks`) so the WRITE guard and
-/// the READ-ONLY lint in `validate_itinerary.rs` agree exactly — no drift.
-///
-/// Mirrors `validate_itinerary::lint`'s per-leg logic, in the same order:
-///   (#3) each of from/to must form a usable Maps stop: reject if it cleans to
-///        empty, retains stray （）()＋+, carries a clock time, or is a
-///        mode-only word (步行/單軌/巴士…). The segment's `mode` column already
-///        carries the travel mode, so a mode word standing as a PLACE is a bug.
-///   (#4) cross-country ground leg: compute place_country on the CLEANED stops
-///        (matching the lint, which cleans before comparing) and reject when
-///        both are known AND differ (an ocean-spanning route, e.g. TW↔JP).
-///   (#5) walking-over-rail: if mode=="walking" and `"<from> <to>"` mentions a
-///        rail/bus mode → reject (the lint uses the raw from/to as context).
-///
-/// Returns `Err(reason)` naming the offending stop/rule; `Ok(())` when clean.
-/// Pure: no DB, no I/O — so it's unit-tested directly and called before any write.
-fn guard_segment(from: &str, to: &str, mode: &str) -> Result<(), String> {
-    // (#3) per-stop map-link integrity — use the lint's check_stop_linkable,
-    // which is exactly clean_stop → stop_link_problem.
-    for (label, stop) in [("from", from), ("to", to)] {
-        if let Err(reason) = crate::checks::check_stop_linkable(stop) {
-            return Err(format!("<{label}> \"{stop}\" {reason} [rule: map-link/stop]"));
-        }
-    }
-
-    // The lint compares place_country on the CLEANED stop strings; do the same
-    // so the guard never disagrees with what the lint would flag.
-    let from_clean = crate::checks::clean_stop(from);
-    let to_clean = crate::checks::clean_stop(to);
-
-    // (#4) cross-country ground leg — both known AND different.
-    if let (Some(a), Some(b)) = (
-        crate::checks::place_country(&from_clean),
-        crate::checks::place_country(&to_clean),
-    ) {
-        if a != b {
-            return Err(format!(
-                "cross-country ground leg: \"{from}\" ({a}) → \"{to}\" ({b}) would draw an ocean-spanning route [rule: cross-country]"
-            ));
-        }
-    }
-
-    // (#5) walking leg that actually rides rail/bus — context is the raw pair
-    // (matches the lint's `format!("{from} {to}")` ctx for route legs).
-    if mode == "walking" && crate::checks::mentions_rail_or_bus(&format!("{from} {to}")) {
-        return Err(format!(
-            "mode=walking but \"{from} {to}\" names a rail/bus leg — set mode=transit [rule: walking-over-rail]"
-        ));
-    }
-
-    Ok(())
-}
-
 pub async fn run(
     args: &[String],
     plan_id: String,
@@ -109,7 +55,7 @@ pub async fn run(
     // mis-moded Maps route is rejected here, before it reaches the DB /
     // dashboard. Same predicates the validate-itinerary lint uses, so the guard
     // and the lint agree exactly. Caught at creation, not in a late review.
-    if let Err(reason) = guard_segment(&from, &to, &mode) {
+    if let Err(reason) = crate::checks::guard_segment(&from, &to, &mode) {
         eprintln!("Error: route segment rejected — {reason}.");
         eprintln!("Hint: use a clean place name (e.g. \"赤嶺駅\", \"iias 沖縄豊崎\") — no （…）notes, +步行, or clock times inside the stop; keep both stops in the same country; use mode=transit for a rail/bus leg.");
         std::process::exit(1);
@@ -231,7 +177,7 @@ pub async fn run_bulk(
     for (i, spec) in specs.iter().enumerate() {
         match parse_seg_spec(spec) {
             Ok(s) => {
-                if let Err(reason) = guard_segment(&s.from, &s.to, &s.mode) {
+                if let Err(reason) = crate::checks::guard_segment(&s.from, &s.to, &s.mode) {
                     problems.push(format!("--seg #{i} {reason}"));
                 }
                 segments.push(s);
@@ -980,24 +926,24 @@ mod tests {
         // segment driven by taxi). Both are clean place names, same country, and
         // mode isn't walking — must PASS untouched.
         assert!(
-            guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving").is_ok()
+            crate::checks::guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving").is_ok()
         ); // 赤嶺駅 → iias 沖縄豊崎
         // and the same pair as a transit leg is also fine
         assert!(
-            guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "transit").is_ok()
+            crate::checks::guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "transit").is_ok()
         );
     }
 
     #[test]
     fn guard_rejects_mode_only_stop() {
         // (#3) "步行" is a mode word, not a place — REJECT, naming the stop.
-        let e = guard_segment("\u{6B65}\u{884C}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving")
+        let e = crate::checks::guard_segment("\u{6B65}\u{884C}", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving")
             .expect_err("mode-only '步行' as a place must be rejected"); // 步行 → iias…
         assert!(e.contains("from"), "reason must name the offending side: {e}");
         assert!(e.contains("map-link/stop"), "reason must name the rule: {e}");
         // also as the `to` stop
         assert!(
-            guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "\u{55AE}\u{8ECC}", "driving").is_err()
+            crate::checks::guard_segment("\u{8D64}\u{5DBA}\u{99C5}", "\u{55AE}\u{8ECC}", "driving").is_err()
         ); // 赤嶺駅 → 單軌 (mode word only)
     }
 
@@ -1006,7 +952,7 @@ mod tests {
         // (#3) a stop that cleans to empty (pure junk/mode/notes) has no usable
         // place name — REJECT.
         let raw = "\u{FF08}\u{55AE}\u{8ECC}\u{7D04}2\u{5206}\u{FF09}+\u{6B65}\u{884C}"; // （單軌約2分）+步行
-        let e = guard_segment(raw, "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving")
+        let e = crate::checks::guard_segment(raw, "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving")
             .expect_err("a stop that cleans to empty must be rejected");
         assert!(e.contains("map-link/stop"), "reason must name the rule: {e}");
     }
@@ -1015,14 +961,14 @@ mod tests {
     fn guard_rejects_clock_time_only_stop() {
         // (#3) a bare clock time cleans to empty → no place → REJECT.
         assert!(
-            guard_segment("08:30", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving").is_err()
+            crate::checks::guard_segment("08:30", "iias \u{6C96}\u{7E04}\u{8C4A}\u{5D0E}", "driving").is_err()
         );
     }
 
     #[test]
     fn guard_rejects_cross_country_pair() {
         // (#4) 紅樹林 (TW) → 那覇機場 (JP) is an ocean-spanning ground leg — REJECT.
-        let e = guard_segment(
+        let e = crate::checks::guard_segment(
             "\u{7D05}\u{6A39}\u{6797}",
             "\u{90A3}\u{8987}\u{6A5F}\u{5834}",
             "driving",
@@ -1035,7 +981,7 @@ mod tests {
     #[test]
     fn guard_rejects_walking_over_rail() {
         // (#5) mode=walking but the leg names rail (單軌) — REJECT.
-        let e = guard_segment(
+        let e = crate::checks::guard_segment(
             "\u{8D64}\u{5DBA}\u{99C5}",
             "\u{55AE}\u{8ECC}\u{6CBF}\u{7DDA}\u{67D0}\u{7AD9}",
             "walking",
@@ -1044,7 +990,7 @@ mod tests {
         assert!(e.contains("walking-over-rail"), "reason must name the rule: {e}");
         // the SAME pair as transit is fine (it's the walking claim that's wrong)
         assert!(
-            guard_segment(
+            crate::checks::guard_segment(
                 "\u{8D64}\u{5DBA}\u{99C5}",
                 "\u{55AE}\u{8ECC}\u{6CBF}\u{7DDA}\u{67D0}\u{7AD9}",
                 "transit"
@@ -1058,7 +1004,7 @@ mod tests {
         // Anti-false-positive: a real place whose parenthetical note clean_stop
         // strips (安里駅（單軌）) must PASS — clean_stop yields 安里駅, a valid stop.
         assert!(
-            guard_segment(
+            crate::checks::guard_segment(
                 "\u{5B89}\u{91CC}\u{99C5}\u{FF08}\u{55AE}\u{8ECC}\u{FF09}",
                 "\u{8D64}\u{5DBA}\u{99C5}",
                 "transit"
@@ -1066,6 +1012,6 @@ mod tests {
             .is_ok()
         ); // 安里駅（單軌）→ 赤嶺駅
         // an airport / hotel ASCII name is fine too
-        assert!(guard_segment("Naha Airport", "Hotel Azat Naha", "driving").is_ok());
+        assert!(crate::checks::guard_segment("Naha Airport", "Hotel Azat Naha", "driving").is_ok());
     }
 }

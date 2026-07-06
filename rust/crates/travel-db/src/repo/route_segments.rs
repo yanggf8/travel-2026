@@ -46,6 +46,21 @@ pub async fn delete_slot(
     Ok(())
 }
 
+/// Delete every `ai_recommended` segment for one day (derive-routes stale cleanup).
+pub async fn delete_ai_recommended_for_day(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<u64, String> {
+    conn.execute(
+        "DELETE FROM day_route_segments WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND source = 'ai_recommended'",
+        libsql::params![plan_id.to_string(), destination.to_string(), day],
+    )
+    .await
+    .map_err(|e| format!("day_route_segments ai_recommended DELETE failed: {e}"))
+}
+
 /// Delete every segment for `(day)` (bulk-replace path).
 pub async fn delete_all_for_day(
     conn: &Connection,
