@@ -207,13 +207,16 @@ Use `/stage2-shop-transport` as the orchestration skill; it wraps `/p3-flights`,
 
 ## Stage 3 — Expand Itinerary (Detailed Planning)
 
-**Trigger:** Flight is confirmed (booked).
+**Trigger:** Transport + lodging are selected/recorded — booked, or provisionally
+chosen (a detailed pass before final ticketing is allowed).
 
 **Goal:** Fill in the full itinerary — attractions, transit between areas, meal arrangements (no breakfast), timing per session.
 
-Use `/stage3-expand-itinerary` as the orchestration skill for this stage. It
-wraps `/p5-itinerary` and the itinerary CLI commands, and owns detailed
-validation against real transport and lodging.
+Use `/stage3-expand-itinerary` as the orchestration skill for this stage — **it is
+the authoritative step list** (this section is the high-level overview). It wraps
+`/p5-itinerary` and the itinerary CLI commands, and owns detailed validation
+against real transport and lodging, the agent-first **AI-recommended enrichment**
+step (see Fill order below), and the confirm loop.
 
 **What to do:**
 ```bash
@@ -245,7 +248,18 @@ validation against real transport and lodging.
 2. Map out transit between areas
 3. Fill in meals (lunch + dinner; no breakfast by default unless the selected hotel/package includes it)
 4. Add nice-to-have activities in remaining slots
-5. Check pacing (relaxed/balanced/packed)
+5. **Enrich, agent-first + LABELED.** The agent authors the real depth (meals via
+   `set-meals`, transit via `set-route-segments-bulk`, extra activities via
+   `add-activity`) with the `--recommended` flag → `source='ai_recommended'`. Real
+   data only; the dashboard badges it 🤖, `validate publish` counts it as INFO
+   (never blocks). **Set the session ZH (`set-tod-zh`) in the same pass** as the
+   first content you add to a previously-empty session — else the Stage-4 publish
+   gate BLOCKs on missing `focus_zh`.
+6. **Review + confirm.** `query-recommendations` lists the AI-recommended items
+   (same filters as confirm) — present them to the user; then
+   `confirm-recommendations` flips the approved scope `ai_recommended`→`confirmed`.
+   Un-confirmed items stay labeled (a valid pre-trip state).
+7. Check pacing (relaxed/balanced/packed) and run `validate publish` for readiness.
 
 ---
 
