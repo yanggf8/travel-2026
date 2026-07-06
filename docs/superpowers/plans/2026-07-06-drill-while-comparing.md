@@ -17,7 +17,17 @@
 - **ZH coverage = WEIGHTED ratio** `(day_zh + sess_zh) / (day_all + sess_all)`, integer percent (floor). NOT average-of-ratios. okinawa ref = 22/25 = 88%.
 - **Verdict:** any axis `drill < ref` → `SHORT: <axes>` (precedence). Else all `>=` & none strictly `>` → `ALIGNED`. Else (all `>=`, ≥1 strictly `>`, quality gate applied) → `BETTER`. **Exit code 0 in every case** (diagnostic).
 - **Tests hermetic:** always pass explicit `--against <seeded-ref>` (never depend on live okinawa rows). One separate test checks the DEFAULT string `okinawa-2026` appears in the header when `--against` is omitted — assert header text only, don't require the reference query to return rows.
-- **Behavior-lock tests** on `common::` harness (`bin`, `db_exec`, `seed_plan`, `teardown_plan`, `Guard`, `nanos`, `is_credless`); RAII `Guard` armed right after plan-id bound; run **serialized in background** (foreground timeout SIGTERMs mid-run → Guard Drop never fires → leaked Turso row).
+- **Behavior-lock tests** on `common::` harness. **EXACT signatures (source-verified `tests/common/mod.rs`) — the plan's illustrative snippets below use these, do NOT invent variants:**
+  - `bin() -> &'static str`, `nanos() -> u128`, `db_exec(sql: &str) -> Option<Rows>`, `db_exec_teardown(sql: &str) -> Option<String>`, `teardown_plan(plan: &str, dest: &str)`, `Guard::new(closure)`.
+  - **`seed_plan(plan: &str, dest: &str, version: i64)`** — THREE args (no dates). Call `seed_plan(&plan, &dest, 0)`. It inserts ONLY `plans` + `plan_metadata` — NOT days/timesofday/activities/meals/routes (so no double-count; seed those yourself).
+  - **`is_credless(stderr: &str) -> bool`** — takes stderr, is a POST-command check, NOT a pre-check. Copy the `run_cmd` helper pattern from `tests/derive_routes_behavior_lock.rs:20-38`: run the command, and `if !out.status.success() && is_credless(&stderr) { return; }` to skip cleanly when creds are absent. There is NO bare `is_credless()` — `if is_credless() { return; }` will not compile.
+  - RAII `Guard` armed right after plan-id bound; run **serialized in background** (foreground timeout SIGTERMs mid-run → Guard Drop never fires → leaked Turso row).
+- **EXACT seed column sets (source-verified `scripts/schema.sql`; template = `tests/derive_routes_behavior_lock.rs:149-163`):**
+  - `days` — `(plan_id, destination, day_number, date, day_type, status, updated_at)`. **`date TEXT NOT NULL`** and **`day_type NOT NULL CHECK IN ('arrival','full','departure')`** — both required. (theme_zh optional.)
+  - `activities` — `(id, plan_id, destination, poi_id, day_number, session_type, sort_order, title, updated_at)`. **`id TEXT PRIMARY KEY` required (unique per row)**; the title column is **`title`**, NOT `activity`. `session_type CHECK IN ('morning','noon','afternoon','evening')`.
+  - `session_meals` — `(plan_id, destination, day_number, session_type, sort_order, meal, source)`. `meal NOT NULL`; `source` DEFAULT 'confirmed'.
+  - `day_route_segments` — `(plan_id, destination, day_number, sort_order, from_place, to_place, mode, duration_min, source)`. `source` DEFAULT 'confirmed'; `notes`/`start_time` nullable.
+  - `timesofday` — `(plan_id, destination, day_number, session_type, focus_zh)`. First four NOT NULL; `session_type` same CHECK as activities.
 - **Flag rejection:** unknown flags fail loud, mirroring the existing `reject_unknown_flags` convention (see `create_plan.rs` / `set_route_segment.rs`). This command owns only `--plan-id` / `--against` (not the 5 resolver flags).
 - `./bin/travel` is RELEASE — `cargo build -p travel-cli --release && cp target/release/travel ../bin/travel` before any live smoke.
 - Commit ONLY this plan's pathspecs (parallel session shares the index — verify `git diff --cached --name-only`). Use `git commit -F <file>` for multi-line bodies (backticks in `-m` get shell-substituted).
@@ -59,7 +69,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Minimal implementation**
 
-In `main.rs`, add `mod compare_content_depth;` with the other `mod` lines, and a dispatch arm beside the compare siblings:
+In `main.rs`, add `mod compare_content_depth;` in the module block near `main.rs:5-8` (alongside `mod compare;`, `mod compare_dates;`, `mod compare_true_cost;`), and a dispatch arm beside the compare siblings:
 
 ```rust
 [group, sub, rest @ ..] if group == "compare" && sub == "content-depth" => {
@@ -189,42 +199,44 @@ git commit -F <commit-msg-file>   # "feat(compare): content-depth arg parse + fl
 - [ ] **Step 1: Write the failing test** (seed rows incl. anti-padding; assert gated totals)
 
 ```rust
-mod common;                       // (already at top of file)
-use common::{db_exec, seed_plan, teardown_plan, nanos, Guard, is_credless};
+mod common;
+use common::{bin, db_exec, seed_plan, teardown_plan, nanos, Guard, is_credless};
+use std::process::Command;
+
+// Helper (put at top of the test file): run the binary, skip cleanly if credless.
+fn run_or_skip(args: &[&str]) -> Option<String> {
+    let out = Command::new(bin()).args(args).env_remove("TRAVEL_PLAN_ID").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() && is_credless(&stderr) { return None; }
+    assert!(out.status.success(), "cmd {args:?} failed; stdout={stdout} stderr={stderr}");
+    Some(stdout)
+}
 
 #[test]
 fn gated_query_excludes_blank_meals_and_metadataless_routes() {
-    if is_credless() { return; }
     let n = nanos();
     let plan = format!("test-cdepth-drill-{n}");
     let dest = plan.replace('-', "_");
-    seed_plan(&plan, &dest, "2026-11-01", "2026-11-01");   // 1 day is enough
+    seed_plan(&plan, &dest, 0);   // 3 args, no dates; inserts plans+plan_metadata only
     let _g = Guard::new({ let (p, d) = (plan.clone(), dest.clone()); move || teardown_plan(&p, &d) });
 
-    db_exec(&format!("INSERT INTO days (plan_id,destination,day_number,day_type) VALUES ('{plan}','{dest}',1,'full')"));
-    // 3 activities
-    for i in 0..3 { db_exec(&format!("INSERT INTO activities (plan_id,destination,day_number,session_type,sort_order,activity) VALUES ('{plan}','{dest}',1,'morning',{i},'act{i}')")); }
-    // 2 real meals + 1 blank meal (must NOT count)
-    db_exec(&format!("INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) VALUES ('{plan}','{dest}',1,'noon',0,'Real lunch','ai_recommended')"));
-    db_exec(&format!("INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) VALUES ('{plan}','{dest}',1,'evening',0,'Real dinner','ai_recommended')"));
-    db_exec(&format!("INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) VALUES ('{plan}','{dest}',1,'noon',1,'   ','ai_recommended')"));
-    // 2 routes with metadata + 1 NULL + 1 zero (only 2 count)
-    db_exec(&format!("INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) VALUES ('{plan}','{dest}',1,0,'A','B','walk',10,'ai_recommended')"));
-    db_exec(&format!("INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) VALUES ('{plan}','{dest}',1,1,'B','C','train',15,'ai_recommended')"));
-    db_exec(&format!("INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) VALUES ('{plan}','{dest}',1,2,'C','D','walk',NULL,'ai_recommended')"));
-    db_exec(&format!("INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) VALUES ('{plan}','{dest}',1,3,'D','E','walk',0,'ai_recommended')"));
+    // one 'full' day — date + day_type + status all required
+    if db_exec(&format!("INSERT INTO days (plan_id,destination,day_number,date,day_type,status,updated_at) VALUES ('{plan}','{dest}',1,'2026-11-01','full','draft','2020-01-01 00:00:00'); \
+      INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) VALUES ('{n}-a0','{plan}','{dest}',1,'morning',0,'act0','2020-01-01 00:00:00'),('{n}-a1','{plan}','{dest}',1,'morning',1,'act1','2020-01-01 00:00:00'),('{n}-a2','{plan}','{dest}',1,'afternoon',0,'act2','2020-01-01 00:00:00'); \
+      INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) VALUES ('{plan}','{dest}',1,'noon',0,'Real lunch','ai_recommended'),('{plan}','{dest}',1,'evening',0,'Real dinner','ai_recommended'),('{plan}','{dest}',1,'noon',1,'   ','ai_recommended'); \
+      INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) VALUES ('{plan}','{dest}',1,0,'A','B','walk',10,'ai_recommended'),('{plan}','{dest}',1,1,'B','C','train',15,'ai_recommended'),('{plan}','{dest}',1,2,'C','D','walk',NULL,'ai_recommended'),('{plan}','{dest}',1,3,'D','E','walk',0,'ai_recommended')")).is_none() { return; }
 
-    // compare drill vs itself: totals must read acts=3, meals=2, routes=2
-    let out = Command::new(bin()).args(["compare","content-depth","--plan-id",&plan,"--against",&plan]).output().unwrap();
-    let s = String::from_utf8_lossy(&out.stdout);
-    assert!(s.contains("1/2/2") || s.contains("3/2/2"), "gated per-day a/m/r wrong; stdout: {s}");
+    // compare drill vs itself: gated per-day must read activities=3, meals=2, routes=2
+    let Some(s) = run_or_skip(&["compare","content-depth","--plan-id",&plan,"--against",&plan]) else { return; };
+    assert!(s.contains("3/2/2"), "gated per-day a/m/r should be 3/2/2 (blank meal + NULL/zero routes excluded); stdout: {s}");
     assert!(s.contains("activities") && s.contains("meals") && s.contains("routes"), "stdout: {s}");
 }
 ```
 
-(Confirm the exact `activities` insert column set against `scripts/schema.sql` — the activities table
-requires `session_type,sort_order,activity`; adjust the INSERT if the schema differs. The per-day
-render token is `activities/meals/routes` = `3/2/2`.)
+(All column names + the `run_or_skip` helper are copied from the source-verified template
+`tests/derive_routes_behavior_lock.rs:20-38,149-163`. The per-day render token is
+`activities/meals/routes` = `3/2/2`. `db_exec` returns `Option<Rows>`; `.is_none()` = credless-skip.)
 
 - [ ] **Step 2: Run — expect FAIL** (no query yet)
 
@@ -290,14 +302,15 @@ git commit -F <commit-msg-file>   # "feat(compare): quality-gated content-depth 
 ```rust
 #[test]
 fn zh_coverage_is_weighted_not_avg() {
-    if is_credless() { return; }
     let n = nanos();
     let plan = format!("test-cdepth-zh-{n}");
     let dest = plan.replace('-', "_");
-    seed_plan(&plan, &dest, "2026-11-01", "2026-11-05");
+    seed_plan(&plan, &dest, 0);
     let _g = Guard::new({ let (p,d)=(plan.clone(),dest.clone()); move || teardown_plan(&p,&d) });
-    // 5 days, all theme_zh set -> 5/5
-    for day in 1..=5 { db_exec(&format!("INSERT INTO days (plan_id,destination,day_number,day_type,theme_zh) VALUES ('{plan}','{dest}',{day},'full','主題{day}')")); }
+    // 5 days, all theme_zh set -> 5/5  (date + day_type + status required)
+    for day in 1..=5 {
+        if db_exec(&format!("INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{plan}','{dest}',{day},'2026-11-0{day}','full','draft','主題{day}','2020-01-01 00:00:00')")).is_none() { return; }
+    }
     // 20 sessions, 17 with focus_zh -> 17/20
     let mut filled = 0;
     for day in 1..=5 { for st in ["morning","noon","afternoon","evening"] {
@@ -305,8 +318,7 @@ fn zh_coverage_is_weighted_not_avg() {
         db_exec(&format!("INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{plan}','{dest}',{day},'{st}',{zh})"));
     }}
     // weighted = (5+17)/(5+20) = 22/25 = 88%  (avg-of-ratios would be 92%)
-    let out = Command::new(bin()).args(["compare","content-depth","--plan-id",&plan,"--against",&plan]).output().unwrap();
-    let s = String::from_utf8_lossy(&out.stdout);
+    let Some(s) = run_or_skip(&["compare","content-depth","--plan-id",&plan,"--against",&plan]) else { return; };
     assert!(s.contains("88%"), "expected weighted 88%, not 92%; stdout: {s}");
     assert!(!s.contains("92%"), "must not use avg-of-ratios (92%); stdout: {s}");
 }
@@ -385,8 +397,12 @@ fn verdict_antipadding_routes() {
 }
 ```
 
-Every test: `if is_credless() { return; }`, `Guard` armed right after plan-id, exit code success
-asserted for SHORT too (`out.status.success()`), run serialized in background.
+Every test: seed via `seed_plan(&plan,&dest,0)` + explicit `days`/`activities`/`session_meals`/
+`day_route_segments`/`timesofday` INSERTs (using the exact column sets in Global Constraints), `Guard`
+armed right after plan-id, use the `run_or_skip` helper (post-command `is_credless(&stderr)` skip — there
+is NO bare `is_credless()`), assert exit success for SHORT too (`run_or_skip` returns `Some` on success),
+run serialized in background. For the anti-padding test, exit code is still success (SHORT is a diagnostic
+verdict, not a failure) so `run_or_skip` returns `Some` and you assert the stdout contains `SHORT`/`routes`.
 
 - [ ] **Step 2: Run — expect FAIL**
 
