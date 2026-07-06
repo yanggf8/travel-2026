@@ -346,7 +346,7 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 
 # Tour-group / FIT offers (manual entry for sources without a full scraper)
 ./bin/travel import-tour-group-offers --run <run_id> --file <path>
-./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--nights N] [--max-price TWD] [--json]
+./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--nights N] [--max-price TWD]
 ./bin/travel shaping-baseline --run <run_id>                # methodology comparison view
 ./bin/travel shaping-purchase-matrix --run <run_id> [--qualified-only] [--limit N]   # purchase decision matrix: scores each option (flight + packages) vs shaping_rules (hard=GATE, soft=NUDGE); read-only
 ./bin/travel add-besttour-offer --url <url> --price <twd> --hotel "<name>"

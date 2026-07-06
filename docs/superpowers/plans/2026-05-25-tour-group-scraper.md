@@ -817,7 +817,7 @@ const importTourGroupCommand: CommandHandler = {
 const queryTourGroupCommand: CommandHandler = {
   names: ['query-tour-group-offers'],
   description: 'List tour-group offers collected for a Stage 0 run.',
-  usage: 'query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--nights N] [--max-price TWD] [--json]',
+  usage: 'query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--nights N] [--max-price TWD]',
   requiresState: false,
   async execute(ctx: CliContext): Promise<void> {
     const { args } = ctx;
@@ -1818,7 +1818,7 @@ python scripts/scrape_tour_groups.py \
 ./bin/travel import-tour-group-offers --run <run_id> --file <path>
 
 # 3. List what's been collected
-./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--nights N] [--max-price TWD] [--json]
+./bin/travel query-tour-group-offers --run <run_id> [--source <id>] [--dest-region <region>] [--nights N] [--max-price TWD]
 ```
 
 Supported sources: `besttour`, `lifetour`, `settour`. LionTravel group and Travel4U deferred.

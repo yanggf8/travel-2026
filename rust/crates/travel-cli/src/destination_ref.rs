@@ -28,9 +28,6 @@ impl DestRefArgs {
                     );
                     i += 2;
                 }
-                "--json" => {
-                    return Err("query-destination-ref does not support --json (plain text only)".to_string());
-                }
                 // First positional arg is treated as the slug (matches TS cleanArgs[0]).
                 other if !other.starts_with("--") && slug.is_none() => {
                     slug = Some(other.to_string());

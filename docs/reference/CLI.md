@@ -167,6 +167,6 @@ Explore departure date × destination × flight price together before any plan e
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>   # seed new plan with P1/P2
 ./bin/travel shaping-adopt <candidate_id> <plan_id>   # link to an existing plan only
 # Internal (aggregator handoff — usually not run by hand):
-./bin/travel shaping-export --run <run_id> --json
+./bin/travel shaping-export --run <run_id> [--file <path>]    # writes the machine handoff JSON to a FILE (default <run_id>-shaping.json) for shaping-import; the terminal shows a plain-text confirmation, not JSON
 ./bin/travel shaping-import --run <run_id> --file <path>
 ```

@@ -174,7 +174,7 @@ Use `/stage2-shop-transport` as the orchestration skill; it wraps `/p3-flights`,
 #   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 
 # Compare with package prices (Path B must run first to populate DB)
-./bin/travel query-offers --region kansai --start 2026-06-18 --end 2026-06-25 --max-price 30000 --json
+./bin/travel query-offers --region kansai --start 2026-06-18 --end 2026-06-25 --max-price 30000
 ```
 
 **Note:** Shaping Stage only researches flights. To compare direct vs package, run Path B below first to scrape and import package data, then return to Path A results.
@@ -192,7 +192,7 @@ Use `/stage2-shop-transport` as the orchestration skill; it wraps `/p3-flights`,
 
 # Import and query
 ./bin/travel import-offers --dir scrapes --dest <slug>
-./bin/travel query-offers --plan-id <id> --dest <slug> --max-price 30000 --json
+./bin/travel query-offers --plan-id <id> --dest <slug> --max-price 30000
 ```
 
 **Decision:** Direct flight only OR package?

@@ -1090,13 +1090,20 @@ fn truncate(s: &str, max: usize) -> String {
 
 pub async fn run_export(args: &[String]) -> Result<(), String> {
     if has_flag(args, "--help") || has_flag(args, "-h") {
-        println!("Usage:\n  travel shaping-export --run <run_id> --json");
+        println!(
+            "Usage:\n  travel shaping-export --run <run_id> [--file <path>]\n  \
+             Writes the run's machine handoff JSON to a FILE (default: <run_id>-shaping.json) for\n  \
+             shaping-import to consume — the terminal shows a plain-text confirmation, not JSON."
+        );
         return Ok(());
     }
     let Some(run_id) = opt(args, "--run") else {
         eprintln!("Error: shaping-export requires --run <run_id>");
         std::process::exit(1);
     };
+    // Default output path mirrors the shaping-import --file contract; the JSON is a
+    // machine handoff, so it goes to a file — never dumped to the human's terminal.
+    let out_path = opt(args, "--file").unwrap_or_else(|| format!("{run_id}-shaping.json"));
     let conn = db::connect_read().await?;
     let Some(run) = get_research_run(&conn, &run_id).await? else {
         eprintln!("Error: research run not found: {run_id}");
@@ -1180,8 +1187,10 @@ pub async fn run_export(args: &[String]) -> Result<(), String> {
         })
         .collect();
 
-    // Single-line JSON object (mirrors TS console.log(JSON.stringify({...}))).
-    println!(
+    // Single-line JSON object (the machine handoff shaping-import consumes). It is
+    // written to a FILE — never printed to the terminal, so a human running this
+    // command sees a plain-text confirmation, not a wall of JSON.
+    let handoff = format!(
         "{{\"run_id\":{},\"origin_code\":{},\"pax\":{},\"window_start\":{},\"window_end\":{},\"currency\":{},\"exchange_rate_usd_twd\":{},\"status\":{},\"destinations\":[{}],\"durations\":[{}],\"attempts\":[{}],\"shaping\":[{}]}}",
         js_str(&run.run_id),
         js_str(&run.origin_code),
@@ -1196,6 +1205,16 @@ pub async fn run_export(args: &[String]) -> Result<(), String> {
         attempts.join(","),
         shaping_json.join(","),
     );
+    std::fs::write(&out_path, &handoff)
+        .map_err(|e| format!("failed to write shaping export to {out_path}: {e}"))?;
+    println!("\n✅ Exported run {run_id} → {out_path}");
+    println!(
+        "   {} destination(s), {} duration(s), {} shaping row(s)",
+        dests.len(),
+        durs.len(),
+        shaping.len()
+    );
+    println!("   Next: travel shaping-import --run {run_id} --file {out_path}");
     Ok(())
 }
 
