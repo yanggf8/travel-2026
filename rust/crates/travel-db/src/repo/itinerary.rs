@@ -778,6 +778,98 @@ pub async fn confirm_meals(
         .map_err(|e| format!("session_meals confirm recommendations failed: {e}"))
 }
 
+#[derive(Debug, Clone)]
+pub struct RecommendedActivity {
+    pub day_number: i64,
+    pub session_type: String,
+    pub sort_order: i64,
+    pub title: String,
+    pub poi_id: Option<String>,
+}
+
+pub async fn list_recommended_activities(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: Option<i64>,
+    session: Option<&str>,
+) -> Result<Vec<RecommendedActivity>, String> {
+    let mut sql = String::from(
+        "SELECT day_number, session_type, sort_order, title, poi_id FROM activities WHERE 1=1",
+    );
+    let mut binds: Vec<libsql::Value> = Vec::new();
+    push_text_filter(&mut sql, &mut binds, "plan_id", plan_id);
+    push_text_filter(&mut sql, &mut binds, "destination", destination);
+    sql.push_str(" AND source = 'ai_recommended'");
+    if let Some(day) = day {
+        push_i64_filter(&mut sql, &mut binds, "day_number", day);
+    }
+    if let Some(session) = session {
+        push_text_filter(&mut sql, &mut binds, "session_type", session);
+    }
+    sql.push_str(" ORDER BY day_number, session_type, sort_order");
+    let mut rows = conn
+        .query(&sql, binds)
+        .await
+        .map_err(|e| format!("list_recommended_activities failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.push(RecommendedActivity {
+            day_number: row.get(0).map_err(|e| e.to_string())?,
+            session_type: row.get(1).map_err(|e| e.to_string())?,
+            sort_order: row.get(2).map_err(|e| e.to_string())?,
+            title: row.get(3).map_err(|e| e.to_string())?,
+            poi_id: row.get(4).ok(),
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone)]
+pub struct RecommendedMeal {
+    pub day_number: i64,
+    pub session_type: String,
+    pub sort_order: i64,
+    pub meal: String,
+}
+
+pub async fn list_recommended_meals(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: Option<i64>,
+    session: Option<&str>,
+) -> Result<Vec<RecommendedMeal>, String> {
+    let mut sql = String::from(
+        "SELECT day_number, session_type, sort_order, meal FROM session_meals WHERE 1=1",
+    );
+    let mut binds: Vec<libsql::Value> = Vec::new();
+    push_text_filter(&mut sql, &mut binds, "plan_id", plan_id);
+    push_text_filter(&mut sql, &mut binds, "destination", destination);
+    sql.push_str(" AND source = 'ai_recommended'");
+    if let Some(day) = day {
+        push_i64_filter(&mut sql, &mut binds, "day_number", day);
+    }
+    if let Some(session) = session {
+        push_text_filter(&mut sql, &mut binds, "session_type", session);
+    }
+    sql.push_str(" ORDER BY day_number, session_type, sort_order");
+    let mut rows = conn
+        .query(&sql, binds)
+        .await
+        .map_err(|e| format!("list_recommended_meals failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.push(RecommendedMeal {
+            day_number: row.get(0).map_err(|e| e.to_string())?,
+            session_type: row.get(1).map_err(|e| e.to_string())?,
+            sort_order: row.get(2).map_err(|e| e.to_string())?,
+            meal: row.get(3).map_err(|e| e.to_string())?,
+        });
+    }
+    Ok(out)
+}
+
 // ─────────────────────────────────────────────────────────────────
 // populate-itinerary domain writes on the `days`, `timesofday`, `activities`,
 // and `activity_tags` tables. SQL copied verbatim from `populate_itinerary.rs`;

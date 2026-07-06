@@ -139,3 +139,49 @@ pub async fn confirm_routes(
         .await
         .map_err(|e| format!("routes confirm recommendations failed: {e}"))
 }
+
+#[derive(Debug, Clone)]
+pub struct RecommendedRoute {
+    pub day_number: i64,
+    pub sort_order: i64,
+    pub from_place: String,
+    pub to_place: String,
+    pub mode: String,
+}
+
+pub async fn list_recommended_routes(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: Option<i64>,
+) -> Result<Vec<RecommendedRoute>, String> {
+    let mut sql = String::from(
+        "SELECT day_number, sort_order, from_place, to_place, mode FROM day_route_segments WHERE 1=1",
+    );
+    let mut binds: Vec<libsql::Value> = Vec::new();
+    binds.push(libsql::Value::Text(plan_id.to_string()));
+    sql.push_str(&format!(" AND plan_id = ?{}", binds.len()));
+    binds.push(libsql::Value::Text(destination.to_string()));
+    sql.push_str(&format!(" AND destination = ?{}", binds.len()));
+    sql.push_str(" AND source = 'ai_recommended'");
+    if let Some(day) = day {
+        binds.push(libsql::Value::Integer(day));
+        sql.push_str(&format!(" AND day_number = ?{}", binds.len()));
+    }
+    sql.push_str(" ORDER BY day_number, sort_order");
+    let mut rows = conn
+        .query(&sql, binds)
+        .await
+        .map_err(|e| format!("list_recommended_routes failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.push(RecommendedRoute {
+            day_number: row.get(0).map_err(|e| e.to_string())?,
+            sort_order: row.get(1).map_err(|e| e.to_string())?,
+            from_place: row.get(2).map_err(|e| e.to_string())?,
+            to_place: row.get(3).map_err(|e| e.to_string())?,
+            mode: row.get(4).map_err(|e| e.to_string())?,
+        });
+    }
+    Ok(out)
+}

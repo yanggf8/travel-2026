@@ -30,6 +30,7 @@ mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-k
 mod set_activity;
 mod set_activity_poi;
 mod confirm_recommendations;
+mod query_recommendations;
 mod set_airport_transfer;
 mod set_dates;
 mod set_day_theme;
@@ -640,6 +641,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             confirm_recommendations::run(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "query-recommendations" => {
+            if wants_help(
+                rest,
+                "travel query-recommendations [--day N] [--session morning|noon|afternoon|evening] [--kind activity|meal|route] [--dest <slug>]\n  Lists ai_recommended itinerary content awaiting confirmation (read-only).",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            query_recommendations::run(rest, plan_id).await?;
+            Ok(())
+        }
 
         _ => Err(format!(
             "unknown command: {}\nRun `travel --help` for usage.",
@@ -737,6 +749,7 @@ VIEWS\n\
   bookings [--dest slug]        booking ledger\n\
   query-bookings [--dest slug] [--category c] [--status s] [--max N]\n\
   query-offers [--source a,b] [--dest d] [--max-price N] [--start D] [--end D] [--limit N]\n\
+  query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]  List AI-recommended items awaiting confirmation\n\
   query-destination-ref --slug <slug>\n\
   view-prices | check-freshness --source <id> [--dest slug]\n\
 \n\
