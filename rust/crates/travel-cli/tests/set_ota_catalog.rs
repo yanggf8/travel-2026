@@ -376,3 +376,44 @@ async fn set_ota_url_param_rejects_origin_input_name_and_writes_nothing() {
     };
     assert_eq!(audit, "0", "failed set-ota-url-param must write no audit row");
 }
+
+// ── Unknown-flag rejection (parse-before-connect → hermetic, no DB needed) ──
+// Each subcommand rejects an unknown --flag with its OWN flag list. A flag valid
+// for one subcommand (e.g. --proven on coverage) is unknown for another (source).
+
+#[test]
+fn set_ota_source_rejects_unknown_flag() {
+    let (ok, _o, err) = run(&["set-ota-source", "zzsrc", "--name", "ZZ", "--stat", "active"]);
+    assert!(!ok, "should reject --stat; err={err}");
+    assert!(err.contains("unknown argument: --stat"), "err={err}");
+}
+
+#[test]
+fn set_ota_coverage_rejects_typoed_proven() {
+    // The provenance bug: --provven → silently proven=0. Now fails loud.
+    let (ok, _o, err) = run(&["set-ota-coverage", "zzsrc", "fit", "--provven"]);
+    assert!(!ok, "should reject --provven; err={err}");
+    assert!(err.contains("unknown argument: --provven"), "err={err}");
+}
+
+#[test]
+fn set_ota_region_rejects_any_flag() {
+    // Positionals only — any --flag is misuse.
+    let (ok, _o, err) = run(&["set-ota-region", "zzsrc", "fit", "Tokyo", "TYO", "--dry-run"]);
+    assert!(!ok, "should reject --dry-run; err={err}");
+    assert!(err.contains("unknown argument: --dry-run"), "err={err}");
+}
+
+#[test]
+fn set_ota_workflow_rejects_unknown_flag() {
+    let (ok, _o, err) = run(&["set-ota-workflow", "zzsrc", "fit", "--nav", "get", "--url-templat", "x"]);
+    assert!(!ok, "should reject --url-templat; err={err}");
+    assert!(err.contains("unknown argument: --url-templat"), "err={err}");
+}
+
+#[test]
+fn set_ota_url_param_rejects_any_flag() {
+    let (ok, _o, err) = run(&["set-ota-url-param", "zzsrc", "fit", "dest", "destination", "tokyo", "TYO", "--dry-run"]);
+    assert!(!ok, "should reject --dry-run; err={err}");
+    assert!(err.contains("unknown argument: --dry-run"), "err={err}");
+}

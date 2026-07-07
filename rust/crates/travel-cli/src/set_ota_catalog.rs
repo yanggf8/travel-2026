@@ -21,6 +21,7 @@ pub async fn run_set_source(args: &[String]) -> Result<(), String> {
         println!("Usage:\n  travel set-ota-source <source_id> --name <name> --status active|inactive");
         return Ok(());
     }
+    crate::plan_resolver::reject_unknown_flags(args, &["--name", "--status"], &[])?;
     let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     let source_id = pos
         .first()
@@ -54,6 +55,12 @@ pub async fn run_set_coverage(args: &[String]) -> Result<(), String> {
         println!("Usage:\n  travel set-ota-coverage <source_id> <product_type> [--proven] [--proven-at YYYY-MM-DD] [--method agent_parse|regex] [--search-url <url>] [--blocked <reason_code>]");
         return Ok(());
     }
+    // A typo'd `--proven` (e.g. `--provven`) must fail loud, not silently record proven=0.
+    crate::plan_resolver::reject_unknown_flags(
+        args,
+        &["--proven-at", "--method", "--search-url", "--blocked"],
+        &["--proven"],
+    )?;
     let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if pos.len() < 2 {
         return Err("Error: set-ota-coverage requires <source_id> <product_type>".to_string());
@@ -126,6 +133,8 @@ pub async fn run_set_region(args: &[String]) -> Result<(), String> {
         println!("Usage:\n  travel set-ota-region <source_id> <product_type> <region_label> <region_code>");
         return Ok(());
     }
+    // Positionals only — any `--flag` is a typo/misuse.
+    crate::plan_resolver::reject_unknown_flags(args, &[], &[])?;
     let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if pos.len() < 4 {
         return Err(
@@ -165,6 +174,11 @@ pub async fn run_set_workflow(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
+    crate::plan_resolver::reject_unknown_flags(
+        args,
+        &["--nav", "--url-template", "--capture-url-contains", "--settle-ms", "--settle-marker", "--note"],
+        &[],
+    )?;
     let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if pos.len() < 2 {
         return Err(
@@ -256,6 +270,8 @@ pub async fn run_set_url_param(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
+    // Positionals only — any `--flag` is a typo/misuse.
+    crate::plan_resolver::reject_unknown_flags(args, &[], &[])?;
     let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if pos.len() < 6 {
         return Err(
