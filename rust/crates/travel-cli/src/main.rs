@@ -658,6 +658,13 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "sync-bookings" => {
+            // Reject unknown flags before the resolver opens Turso (a typo'd
+            // --dry-run would otherwise run a real sync).
+            plan_resolver::reject_unknown_flags(
+                rest,
+                &["--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end", "--trip-id"],
+                &["--dry-run"],
+            )?;
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             sync_bookings::run(rest, plan_id).await?;
             Ok(())
@@ -703,6 +710,13 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         // batch 5: weather / prices / compare / chat
         [cmd, rest @ ..] if cmd == "fetch-weather" => {
             if wants_help(rest, "travel fetch-weather [--dest slug] [--all]\n  (fetch Open-Meteo forecast into the day rows)") { return Ok(()); }
+            // Reject unknown flags before the resolver opens Turso (a typo'd
+            // --all/--dest would otherwise be silently ignored).
+            plan_resolver::reject_unknown_flags(
+                rest,
+                &["--dest", "--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"],
+                &["--all"],
+            )?;
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             weather::run(rest, plan_id).await?;
             Ok(())
