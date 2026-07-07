@@ -85,14 +85,25 @@ tokyo-sep-2026 時親手撞到路線/交通的反覆手動摩擦。全部 CONFIR
 
 ## 建議修復順序
 
-**第一批(REAL BUG,靜默資料/provenance 風險):**
-1. B1 mark-booked --dry-run 繞過(最高:安全預覽變不可逆寫入)
-2. B2 set-ota-coverage --proven 靜默 proven=0
-3. B4 群(promote/import_offers 等 catch-all)+ B1/B2 一起用共用 reject_unknown_flags 修掉
+**✅ 第一批 — DONE (2026-07-07, commits ff6c4cf→d02261e, pushed):** reject-unknown-flags 全批。
+helper hoist 到 plan_resolver.rs(pub(crate)+4 unit test)→ mark-booked(dispatch-arm preflight,
+connect-before-parse)→ sync-bookings/fetch-weather(同)→ set-ota-catalog ×5 subcommand(每個各自
+flag 清單)→ promote/import-offers(`_ => {}`→reject arm)→ tour-offers ×4。全部 TDD RED→GREEN,
+15+ reject 測試綠燈,set-ota 10/10(含 valid round-trip 證明分類正確),live smoke 四類 bug 皆 fail-loud +
+valid --dry-run 不被誤拒。Codex 設計 + Claude 逐項 corroborate(connect-before-parse 洞見、flag value/bool
+分類、set-ota-region/url-param 無 flag)。
+  ~~1. B1 mark-booked~~ ~~2. B2 set-ota-coverage~~ ~~3. B4 群~~ — 全部完成。
 
-**第二批(原則違反 + 這次痛點,最有槓桿):**
-4. A1 add-transit 命令(修 hardcode + no-CLI-write 原則違反)→ 直接解 A3
-5. A2 derive-routes 報告缺 metadata(接 A1 成迴圈)
+**✅ 第二批(A1)— DONE (2026-07-07, add-transit feature, pushed):** `travel add-transit <slug>
+<from> <to> --minutes N [--line/--kind/--source/--confidence]` — slug-keyed reference-data 命令(仿
+set-poi-coords,無 audit),寫 destination_transit,冪等 INSERT OR REPLACE。核心正確性:新 transit_key.rs
+共用模組(norm_station/primary_pair_key/lookup_candidates),add-transit 的寫 key == derive-routes 的
+lookup key(derive_routes 抽取後 behavior-lock 綠燈)。END-TO-END LOCK 證明:add-transit 一個奇怪大小寫/
+空白的站對 → derive-routes → leg 拿到 duration_min=12。修掉 destination_transit hardcode 在 Rust 的
+no-hardcode/Turso-only 違反 + 直接解 A3(研究的分鐘數現在可透過 add-transit 寫回參考表,對下個 plan 黏住)。
+9 unit + 1 e2e + live smoke。
+  ~~4. A1 add-transit~~ — 完成。A3 一併解決(add-transit 就是寫回參考表的路徑)。
+5. A2 derive-routes 報告缺 metadata(接 A1 成迴圈)— 仍待做(Codex 建議獨立 behavior-lock)
 
 **第三批(audit 完整性 + 品質):**
 6. B3 set-active-destination/set-plan-name 補 plan_events

@@ -191,6 +191,7 @@ User intent                          → Skill / Action
 "plan the days" / "itinerary"        → /stage3-expand-itinerary   (populate activities → derive-routes cascades transit → agent authors AI-recommended meals, LABELED via --recommended)
 "is the drill/plan rich enough" / "compare depth to a real trip"  → ./bin/travel compare content-depth --plan-id <id> [--against okinawa-2026]  (read-only oracle; loop-until-BETTER; web page is final gate)
 "derive routes" / "add transit between activities"  → ./bin/travel derive-routes [--day N] [--dest slug]   (cascade ai_recommended legs from the activity skeleton; run after populate)
+"add a transit time" / "derived leg has no minutes"  → ./bin/travel add-transit <slug> <from> <to> --minutes N [--line ..] [--kind ..]   (add a destination_transit station pair so derive-routes attaches its time; slug-keyed reference data, no --plan-id, idempotent. Use this instead of raw db exec when a derived leg came back without a duration.)
 "show/review the AI suggestions" / "what did the agent recommend"  → ./bin/travel query-recommendations [--day N] [--session s] [--kind ...]   (read-only list; preview before confirming)
 "confirm the AI suggestions" / "accept recommendations"  → ./bin/travel confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]   (flip ai_recommended → confirmed)
 "show bookings"                      → ./bin/travel query-bookings (from DB)
