@@ -63,6 +63,11 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let mut inserted_total = 0i64;
     let mut deleted_total = 0i64;
     let mut skipped_confirmed = 0i64;
+    // Derived legs whose station pair has no destination_transit metadata (NULL
+    // duration_min). Collected across ALL days (a metadata-less pair persists even
+    // on an unchanged day) and reported at the end so the agent has a worklist to
+    // fix with `add-transit` (dedup on the display from/to).
+    let mut missing_pairs: Vec<(String, String)> = Vec::new();
 
     for (day, acts) in &by_day {
         days_scanned += 1;
@@ -75,6 +80,19 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
 
         let desired = derive_legs(&conn, &destination, acts, *day).await?;
+
+        // A metadata-less leg is written but won't count as a "real" route (the
+        // depth oracle gates on duration_min>0) — collect it for the end report
+        // regardless of whether this day is (re)written below.
+        for leg in &desired {
+            if leg.duration_min.is_none() {
+                let pair = (leg.from_place.clone(), leg.to_place.clone());
+                if !missing_pairs.contains(&pair) {
+                    missing_pairs.push(pair);
+                }
+            }
+        }
+
         let existing = load_existing_ai(&conn, &plan_id, &destination, *day).await?;
 
         if desired == existing {
@@ -215,6 +233,16 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     println!(
         "Totals: days_scanned={days_scanned} days_written={days_written} inserted={inserted_total} deleted={deleted_total} skipped_confirmed={skipped_confirmed}"
     );
+    if !missing_pairs.is_empty() {
+        println!(
+            "⚠ {} station pair(s) missing destination_transit metadata (leg written with no transit time — will not count toward route depth). Add each with:",
+            missing_pairs.len()
+        );
+        for (from, to) in &missing_pairs {
+            println!("    travel add-transit {destination} \"{from}\" \"{to}\" --minutes <N> [--line \"<line>\"] [--kind metro|rail|walk]");
+        }
+        println!("  then re-run: travel derive-routes --dest {destination} (or --day N)");
+    }
     if days_written > 0 {
         println!(
             "✅ Derived ai_recommended route segments ({inserted_total} inserted, {deleted_total} deleted across {days_written} day(s))"
