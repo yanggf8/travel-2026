@@ -306,3 +306,44 @@ pub async fn set_poi_coords(
     .await
     .map_err(|e| format!("destination_pois coords UPDATE failed: {e}"))
 }
+
+/// Upsert one `destination_transit` row (slug-keyed reference data, no audit
+/// triad — mirrors the rest of this module). The caller computes `pair_key` via
+/// `transit_key::primary_pair_key` (the SAME normalization `derive-routes`
+/// looks up by), and passes the ORIGINAL display strings for `station_from` /
+/// `station_to`. INSERT OR REPLACE on the (slug, pair_key) PK makes it
+/// idempotent. Returns the affected-row count (caller asserts == 1).
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_transit(
+    conn: &Connection,
+    slug: &str,
+    pair_key: &str,
+    kind: &str,
+    minutes: i64,
+    line: &str,
+    station_from: &str,
+    station_to: &str,
+    source: Option<&str>,
+    confidence: &str,
+    fetched_at: &str,
+) -> Result<u64, String> {
+    conn.execute(
+        "INSERT OR REPLACE INTO destination_transit \
+         (slug, pair_key, kind, minutes, line, station_from, station_to, source_url, fetched_at, confidence) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        libsql::params![
+            slug.to_string(),
+            pair_key.to_string(),
+            kind.to_string(),
+            minutes,
+            line.to_string(),
+            station_from.to_string(),
+            station_to.to_string(),
+            source,
+            fetched_at.to_string(),
+            confidence.to_string(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("destination_transit INSERT OR REPLACE failed: {e}"))
+}

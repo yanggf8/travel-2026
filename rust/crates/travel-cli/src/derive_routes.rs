@@ -394,12 +394,7 @@ async fn load_existing_ai(
     Ok(out)
 }
 
-fn norm_station(s: &str) -> String {
-    s.to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+use crate::transit_key::norm_station;
 
 async fn lookup_transit_metadata(
     conn: &Connection,
@@ -407,14 +402,9 @@ async fn lookup_transit_metadata(
     from: &str,
     to: &str,
 ) -> Result<(Option<i64>, Option<String>), String> {
-    let a = norm_station(from);
-    let b = norm_station(to);
-    let k0 = format!("{a}_to_{b}");
-    let k1 = format!("{a}|{b}");
-    let k2 = format!("{b}_to_{a}");
-    let k3 = format!("{b}|{a}");
-
-    let candidates = [k0, k1, k2, k3];
+    // Shared key math (transit_key) — the SAME normalization add-transit writes,
+    // so a pair persisted via `add-transit` is always found here.
+    let candidates = crate::transit_key::lookup_candidates(from, to);
     let mut rows = conn
         .query(
             "SELECT minutes, line, LOWER(pair_key) FROM destination_transit \
