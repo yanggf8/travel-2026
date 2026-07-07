@@ -112,6 +112,11 @@ pub fn parse_args(rest: &[String]) -> Result<ImportOpts, String> {
             "--dry-run" => {
                 dry_run = true;
             }
+            // A typo'd flag (e.g. --not, --dry-runn) must fail loud, not be dropped —
+            // else provenance (--note/--source) or a guard (--dry-run) is silently lost.
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
             _ => {}
         }
         i += 1;

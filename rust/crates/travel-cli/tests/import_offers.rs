@@ -347,3 +347,13 @@ fn import_offers_writes_full_offer_family_and_preserves_warnings() {
         "plans.version should bump by one; out={version}"
     );
 }
+#[test]
+fn import_offers_rejects_unknown_flag() {
+    let out = Command::new(bin())
+        .args(["import-offers", "--dest", "zz", "--not", "x"])
+        .output()
+        .expect("run import-offers");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "should reject --not; err={err}");
+    assert!(err.contains("unknown argument: --not"), "err={err}");
+}

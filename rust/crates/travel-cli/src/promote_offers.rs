@@ -110,6 +110,11 @@ pub fn parse_args(rest: &[String]) -> Result<PromoteOpts, String> {
                 pax = rest.get(i).and_then(|s| s.parse::<i64>().ok());
             }
             "--dry-run" => dry_run = true,
+            // A typo'd flag (e.g. --sourc) must fail loud, not be silently dropped —
+            // else it corrupts provenance (--source) or turns off a guard (--dry-run).
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
             _ => {}
         }
         i += 1;

@@ -272,3 +272,14 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
 
     // _cleanup Drop runs teardown here (and on any panic above).
 }
+#[test]
+fn promote_offers_rejects_unknown_flag() {
+    // A typo'd --source silently dropped would corrupt provenance; must fail loud.
+    let out = Command::new(bin())
+        .args(["promote-offers", "--from-offers", "--dest", "zz", "--sourc", "x"])
+        .output()
+        .expect("run promote-offers");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "should reject --sourc; err={err}");
+    assert!(err.contains("unknown argument: --sourc"), "err={err}");
+}
