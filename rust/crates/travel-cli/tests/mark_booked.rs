@@ -89,6 +89,25 @@ fn run_mark_booked(plan: &str, dest: &str) -> (bool, String, String) {
     )
 }
 
+/// A typo'd `--dry-run` (here `--dry-rnu`) must fail LOUD before any resolver/DB
+/// touch — otherwise dry_run=false and mark-booked commits the real booking
+/// transition the user thought they were only previewing. Hermetic: the reject
+/// runs in the dispatch arm BEFORE resolve_plan_id opens Turso.
+#[test]
+fn mark_booked_rejects_unknown_flag_before_write() {
+    let out = Command::new(bin())
+        .args(["mark-booked", "--dest", "zz_no_db", "--dry-rnu"])
+        .env("TRAVEL_PLAN_ID", "zz-no-db")
+        .output()
+        .expect("run mark-booked");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "must reject unknown flag; stderr={stderr}");
+    assert!(
+        stderr.contains("unknown argument: --dry-rnu"),
+        "stderr should name the bad flag; stderr={stderr}"
+    );
+}
+
 #[test]
 fn mark_booked_locks_full_write_surface() {
     let _lock = MARK_BOOKED_LOCK.lock().unwrap_or_else(|p| p.into_inner());

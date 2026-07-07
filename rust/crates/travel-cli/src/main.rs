@@ -645,6 +645,14 @@ async fn run(args: Vec<String>) -> Result<(), String> {
 
         // batch 3: bookings / status
         [cmd, rest @ ..] if cmd == "mark-booked" => {
+            // Reject unknown flags BEFORE resolve_plan_id opens Turso — else a
+            // typo'd `--dry-run` is ignored (dry_run=false) and this commits a
+            // real booking transition the user meant to preview.
+            plan_resolver::reject_unknown_flags(
+                rest,
+                &["--dest", "--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"],
+                &["--dry-run"],
+            )?;
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             mark_booked::run(rest, plan_id).await?;
             Ok(())
