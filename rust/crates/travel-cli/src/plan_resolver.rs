@@ -724,6 +724,36 @@ pub async fn resolve_plan_id(args: &[String]) -> Result<String, String> {
     Ok(resolved.plan_id)
 }
 
+/// Reject any unrecognized `--flag` in an argument slice, matching the fail-loud
+/// parse of set-meals/add-activity/confirm-recommendations/set-route-segment.
+/// Without this, a typo'd flag (e.g. `--dry-runn`, `--proven` → `--provven`) is
+/// silently ignored — turning a dry-run into a real write, or writing `proven=0`
+/// under the wrong flag. `value_flags` each consume the FOLLOWING token as their
+/// value (so a value that itself starts with `--` is NOT treated as a flag);
+/// `bool_flags` are value-less. Any other `--token` is a hard error. Shared home
+/// (colocated with `is_resolver_flag`/`RESOLVER_VALUE_FLAGS`) so every command
+/// classifies flags against ONE helper.
+pub(crate) fn reject_unknown_flags(
+    args: &[String],
+    value_flags: &[&str],
+    bool_flags: &[&str],
+) -> Result<(), String> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if value_flags.contains(&a.as_str()) {
+            i += 2; // skip the flag AND its value (value may itself start with '--')
+        } else if bool_flags.contains(&a.as_str()) {
+            i += 1;
+        } else if a.starts_with("--") {
+            return Err(format!("unknown argument: {a}"));
+        } else {
+            i += 1; // a value belonging to a preceding value_flag, or a positional
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
@@ -749,6 +779,39 @@ mod tests {
         for f in ["--dest", "--destination", "--force", "--day", "--plan", "-h", "plan-id"] {
             assert!(!is_resolver_flag(f), "{f} must NOT be a resolver flag");
         }
+    }
+
+    fn s(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn reject_unknown_flags_errors_on_bogus() {
+        let e = reject_unknown_flags(&s(&["--bogus"]), &[], &[]);
+        assert!(e.is_err());
+        assert!(e.unwrap_err().contains("unknown argument: --bogus"));
+    }
+
+    #[test]
+    fn reject_unknown_flags_value_flag_consumes_dashdash_value() {
+        // A value flag's value may itself start with `--` and must NOT be flagged.
+        assert!(reject_unknown_flags(&s(&["--note", "--weird"]), &["--note"], &[]).is_ok());
+    }
+
+    #[test]
+    fn reject_unknown_flags_bool_flag_does_not_consume_next() {
+        // `--dry-run` is value-less, so the following `--bogus` is still unknown.
+        assert!(reject_unknown_flags(&s(&["--dry-run", "--bogus"]), &[], &["--dry-run"]).is_err());
+    }
+
+    #[test]
+    fn reject_unknown_flags_positionals_and_known_pass() {
+        assert!(reject_unknown_flags(
+            &s(&["zzsrc", "fit", "--proven", "--method", "regex"]),
+            &["--method"],
+            &["--proven"],
+        )
+        .is_ok());
     }
 
     /// Tiny fixture builder. `anchors` is a list of

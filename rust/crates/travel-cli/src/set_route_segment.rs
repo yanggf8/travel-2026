@@ -31,7 +31,7 @@ pub async fn run(
     }
     // Fail loud on a typo'd flag (e.g. `--recommend`) BEFORE any write — else a
     // mistyped `--recommended` silently writes `confirmed` provenance.
-    if let Err(e) = reject_unknown_flags(
+    if let Err(e) = crate::plan_resolver::reject_unknown_flags(
         &args[5..],
         &["--duration", "--notes", "--start-time", "--dest", "--plan-id"],
         &["--recommended"],
@@ -153,7 +153,7 @@ pub async fn run_bulk(
     };
     // Fail loud on a typo'd flag BEFORE any parse/write (same reason as the single
     // command): a mistyped `--recommended` must not silently write `confirmed`.
-    if let Err(e) = reject_unknown_flags(
+    if let Err(e) = crate::plan_resolver::reject_unknown_flags(
         &args[1..],
         &["--seg", "--dest", "--plan-id"],
         &["--recommended"],
@@ -286,34 +286,6 @@ fn parse_optional_string_flag(
 /// Value-less flag scan — does NOT consume a following token as a value.
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
-}
-
-/// Reject any unrecognized `--flag` in the flag region, matching the fail-loud
-/// parse of set-meals/add-activity/confirm-recommendations. Without this, a
-/// typo'd `--recommended` (e.g. `--recommend`) is silently ignored and the
-/// segment is written as `confirmed` — losing the AI-recommended provenance the
-/// whole feature guarantees. `value_flags` each consume the following token as
-/// their value (so it is NOT itself treated as a flag); `bool_flags` are
-/// value-less. Any other `--token` is a hard error.
-fn reject_unknown_flags(
-    args: &[String],
-    value_flags: &[&str],
-    bool_flags: &[&str],
-) -> Result<(), String> {
-    let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
-        if value_flags.contains(&a.as_str()) {
-            i += 2; // skip the flag AND its value (value may itself start with '--')
-        } else if bool_flags.contains(&a.as_str()) {
-            i += 1;
-        } else if a.starts_with("--") {
-            return Err(format!("unknown argument: {a}"));
-        } else {
-            i += 1; // a value belonging to a preceding value_flag, or a positional
-        }
-    }
-    Ok(())
 }
 
 /// Collect every value of a repeatable flag: `--seg X --seg Y` → ["X", "Y"].
