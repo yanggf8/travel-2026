@@ -87,6 +87,18 @@ Do **not** use this for the first coarse draft before shopping; use
    other suggestion. Only hand-author routes (`set-route-segments-bulk
    --recommended`) where derive can't (missing stations, a walk-chain it skipped).
 
+   **If derive-routes ends with a `⚠ ... missing destination_transit metadata`
+   report**, those legs got NO transit time and won't count toward route depth.
+   It prints a ready-to-run `add-transit` line per pair — research the real minutes
+   and run each (real transit data only, no fabricated durations), then re-run
+   `derive-routes`. This is the loop that makes routes rich:
+   ```bash
+   ./bin/travel add-transit <destination_slug> "<from>" "<to>" --minutes <N> --line "<line>" --kind metro|rail|walk
+   ./bin/travel derive-routes --dest <destination_slug>   # re-derive; legs now carry the time
+   ```
+   `add-transit` writes the shared `destination_transit` reference table, so the
+   knowledge sticks for every later plan on that destination.
+
 6. **Enrich the remaining depth (agent-first, LABELED)**
 
    After derive-routes, the gaps that DON'T cascade are MEALS (no reference data —

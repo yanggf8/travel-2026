@@ -103,7 +103,11 @@ lookup key(derive_routes 抽取後 behavior-lock 綠燈)。END-TO-END LOCK 證�
 no-hardcode/Turso-only 違反 + 直接解 A3(研究的分鐘數現在可透過 add-transit 寫回參考表,對下個 plan 黏住)。
 9 unit + 1 e2e + live smoke。
   ~~4. A1 add-transit~~ — 完成。A3 一併解決(add-transit 就是寫回參考表的路徑)。
-5. A2 derive-routes 報告缺 metadata(接 A1 成迴圈)— 仍待做(Codex 建議獨立 behavior-lock)
+**✅ A2 — DONE (2026-07-08, commit 6e48b8f):** derive-routes 現在收集所有 metadata-less 站對(跨所有天,
+含 days_written=0 的 unchanged run)並印出 copy-paste worklist:`⚠ N 站對缺 destination_transit metadata`
++ 每對一行現成的 `add-transit` 命令 + 提示 re-run。閉合 A1+A2 迴圈:derive → 看缺什麼 → add-transit →
+re-derive。RED→GREEN lock + live-verified(kyoto-confirm 印出全 6 個缺的站對)。Stage-3 skill 也記錄此迴圈。
+  ~~5. A2~~ — 完成。
 
 **第三批(audit 完整性 + 品質):**
 6. B3 set-active-destination/set-plan-name 補 plan_events
