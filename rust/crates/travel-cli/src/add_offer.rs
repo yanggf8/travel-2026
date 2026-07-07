@@ -92,6 +92,9 @@ pub async fn run(rest: &[String]) -> Result<(), String> {
                 i += 1;
                 note = rest.get(i).cloned();
             }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
             _ => {}
         }
         i += 1;
