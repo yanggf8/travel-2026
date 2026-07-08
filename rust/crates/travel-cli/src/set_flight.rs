@@ -53,6 +53,20 @@ pub async fn run(
     }
     let input = parse_args(&args[1..])?;
 
+    // Require at least one field flag — otherwise `set-flight <direction>` writes
+    // ZERO flight_legs rows yet bumps version + prints "✅ Flight leg updated"
+    // (a silent no-op). Mirrors set-hotel's guard. Leg-level fields are checked by
+    // has_leg_level_fields; the shared fields are airline/airline_code/booked_date.
+    if !has_leg_level_fields(&input)
+        && input.airline.is_none()
+        && input.airline_code.is_none()
+        && input.booked_date.is_none()
+    {
+        eprintln!("Error: set-flight requires at least one of --flight, --from, --dep, --to, --arr, --date, --airline, --airline-code, --booked-date");
+        eprintln!("Example: set-flight outbound --dest kyoto_2026 --flight SL396 --airline \"Thai Lion Air\" --from TPE --dep 09:00 --to KIX --arr 12:30");
+        std::process::exit(1);
+    }
+
     let conn = match crate::db::connect_write().await {
         Ok(c) => c,
         Err(e) => {

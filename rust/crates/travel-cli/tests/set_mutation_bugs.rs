@@ -117,6 +117,53 @@ fn set_flight_persists_on_fresh_plan() {
     );
 }
 
+// ── set-flight with ONLY a direction (no field flags) must FAIL LOUD and write
+//    NOTHING — mirrors set-hotel's "at least one field" guard. Before the fix it
+//    printed "✅ Flight leg updated" + bumped version while writing 0 flight_legs
+//    rows (a "沒跑出資料" silent no-op). Found by the master-drill audit. ────────
+#[test]
+fn set_flight_direction_only_fails_loud_and_writes_nothing() {
+    let tag = nanos();
+    let plan_id = format!("test-setbug-flightnofield-{tag}");
+    let dest = format!("setbugflnf_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
+    if !seed_bare(&plan_id, &dest) {
+        return;
+    }
+
+    let version_before = count(&format!(
+        "SELECT version FROM plans WHERE plan_id = '{plan_id}'"
+    ));
+
+    // Direction only, no --flight/--from/--dep/--to/--arr/--date/--airline/...
+    let (ok, stdout, stderr) =
+        run_cmd(&plan_id, &["set-flight", "outbound", "--dest", &dest]);
+
+    assert!(
+        !ok,
+        "set-flight with no field flags must exit non-zero; stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("at least one"),
+        "error must say at least one field flag is required; stderr={stderr}"
+    );
+    assert_eq!(
+        count(&format!(
+            "SELECT COUNT(*) AS n FROM flight_legs WHERE plan_id = '{plan_id}'"
+        )),
+        Some(0),
+        "no flight_legs row may be written on a no-field set-flight"
+    );
+    assert_eq!(
+        count(&format!("SELECT version FROM plans WHERE plan_id = '{plan_id}'")),
+        version_before,
+        "plans.version must NOT bump on a no-field set-flight"
+    );
+}
+
 // ── set-flight: --airline (shared) hits BOTH legs; a later leg-only update
 //    preserves it. Locks the repo::flight_legs::upsert_leg semantics:
 //    update_flight_shared writes outbound+return, and a partial leg update must
