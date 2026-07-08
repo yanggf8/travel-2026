@@ -1547,6 +1547,25 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
         "Next: run `derive-routes --day {} --dest {destination}` to cascade transit between the day's activities.",
         parsed.day
     );
+
+    // Post-add POI hint (read-only): if the new title UNAMBIGUOUSLY matches one
+    // GEOCODED destination_pois row (same rule as `set-activity-poi --auto`),
+    // nudge the agent to link it so the day's map pin renders. Silent on
+    // no-match / ambiguous / ungeocoded, and on any lookup error — the add has
+    // already succeeded and this must never fail the command.
+    if let Ok(pois) =
+        crate::set_activity_poi::list_destination_pois_for_auto(&conn, &destination).await
+    {
+        if let crate::set_activity_poi::AutoMatch::Link(poi_id) =
+            crate::set_activity_poi::resolve_auto_match(&parsed.title, &pois)
+        {
+            println!(
+                "💡 matches POI '{poi_id}' — link it for a map pin: set-activity-poi {} {} {poi_id}",
+                parsed.day, parsed.session
+            );
+        }
+    }
+
     Ok(())
 }
 

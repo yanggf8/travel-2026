@@ -39,11 +39,12 @@ struct AutoActivity {
     title: String,
 }
 
+// pub(crate): reused by set_activity.rs's post-add POI hint (the ONE match rule).
 #[derive(Debug, Clone)]
-struct AutoPoi {
-    poi_id: String,
-    title: String,
-    geocoded: bool,
+pub(crate) struct AutoPoi {
+    pub(crate) poi_id: String,
+    pub(crate) title: String,
+    pub(crate) geocoded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +68,7 @@ struct AutoResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum AutoMatch {
+pub(crate) enum AutoMatch {
     Link(String),
     Unlinked(String),
 }
@@ -321,7 +322,7 @@ fn strip_trailing_zh_gloss(title: &str) -> String {
     }
 }
 
-fn resolve_auto_match(activity_title: &str, pois: &[AutoPoi]) -> AutoMatch {
+pub(crate) fn resolve_auto_match(activity_title: &str, pois: &[AutoPoi]) -> AutoMatch {
     let normalized = strip_trailing_zh_gloss(activity_title).to_lowercase();
     let exact: Vec<&AutoPoi> = pois
         .iter()
@@ -384,7 +385,7 @@ async fn list_null_poi_activities(
     Ok(out)
 }
 
-async fn list_destination_pois_for_auto(
+pub(crate) async fn list_destination_pois_for_auto(
     conn: &Connection,
     destination: &str,
 ) -> Result<Vec<AutoPoi>, String> {
