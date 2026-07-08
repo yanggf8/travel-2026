@@ -36,6 +36,18 @@ pub async fn resolve_active_destination(
     dest_override: Option<&str>,
 ) -> Result<String, String> {
     if let Some(d) = dest_override {
+        // Validate the override is a real destination of THIS plan (fail loud) —
+        // else `set-flight --dest bogus_slug` would write orphaned rows under a
+        // phantom destination + bump plans.version (the write-side analogue of the
+        // read-side bug assert_dest_matches fixed). Every plan's destinations live
+        // in plan_destinations (verified: all live plans' active dest is present).
+        let slugs = travel_db::repo::plan_lifecycle::list_destination_slugs(conn, plan_id).await?;
+        if !slugs.iter().any(|s| s == d) {
+            return Err(format!(
+                "destination '{d}' is not a destination of plan '{plan_id}' (known: {})",
+                if slugs.is_empty() { "<none>".to_string() } else { slugs.join(", ") }
+            ));
+        }
         return Ok(d.to_string());
     }
     let mut rows = conn

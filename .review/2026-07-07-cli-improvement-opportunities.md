@@ -110,7 +110,16 @@ re-derive。RED→GREEN lock + live-verified(kyoto-confirm 印出全 6 個缺的
   ~~5. A2~~ — 完成。
 
 **第三批(audit 完整性 + 品質):**
-6. B3 set-active-destination/set-plan-name 補 plan_events
-7. B5 resolve_active_destination 驗 slug 存在
-8. A4 add-activity/populate 提示 derive-routes(提示行,非自動 cascade)
-9. B6 ✅ glyph 一致(cosmetic)
+- **✅ B3 — DONE (2026-07-08) — 結論修正:documented 而非強塞 event。** Codex/agent 建議「補
+  plan_events」有 data-loss 陷阱:plan_events 是 process-keyed 的 current-state projection(PK=
+  plan_id/scope/destination/process_id/sort_order),非 append log;insert_event 會先 DELETE 同 PK。
+  set-active-destination 若寫 (timeline,"","",0) 事件會 **CLOBBER create_plan 的 plan_created 事件**。
+  正確修法(仿 mark_plan_deleted):這是 metadata/lifecycle 變更、無 process 可掛 → 不發 plan_events,
+  只保 record_operation(version+operation_runs)。兩個命令加了說明註解(no 行為變更)。
+- **✅ B5 — DONE (2026-07-08).** resolve_active_destination 現在驗 --dest override 是該 plan 的真實
+  destination(對照 list_destination_slugs / plan_destinations,fail-loud)—— `set-flight --dest bogus`
+  不再寫孤兒資料 + bump version,改報「is not a destination of plan (known: ...)」。連帶把 seed_plan
+  補上 plan_destinations 行(對齊 production;所有 live plan 都有),+ 修一個 display_name-assert 測試用
+  OR REPLACE。RED→GREEN + broad regression sweep(11 binaries / 33 test 綠)+ live-verified。
+- A4 add-activity/populate 提示 derive-routes(提示行,非自動 cascade)— 仍待做(低優先)
+- B6 ✅ glyph 一致(cosmetic)— 仍待做(最低優先)

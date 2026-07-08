@@ -1,4 +1,14 @@
 //! `travel set-active-destination <slug>` — switch plan_metadata.active_destination.
+//!
+//! Audit decision (mirrors mark_plan_deleted): switching the active destination is
+//! a plan-metadata/lifecycle change, NOT a domain/itinerary mutation, so it does
+//! NOT emit `plan_events`. `plan_events` is a current-state projection keyed to
+//! processes/destinations (PK = plan_id/scope/destination/process_id/sort_order),
+//! not an append-only history log — a metadata flip has no process to attach to,
+//! and a `(timeline,"","",0)` event would COLLIDE with create_plan's `plan_created`
+//! row (insert_event DELETEs that exact PK first, destroying the creation record).
+//! It DOES write the durable audit every mutation owes: bump plans.version +
+//! operation_runs (via record_operation).
 
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let slug = parse(args)?;

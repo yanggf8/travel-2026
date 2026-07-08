@@ -1,4 +1,10 @@
 //! `travel set-plan-name <name> [--dest <slug>]` — rename plan_destinations.display_name.
+//!
+//! Audit decision (mirrors mark_plan_deleted / set_active_destination): a display-name
+//! rename is a plan-metadata change, NOT a domain/itinerary mutation, so it does NOT
+//! emit `plan_events` (a process-keyed current-state projection, not a history log —
+//! a metadata edit has no process to attach to). It DOES bump plans.version + write
+//! operation_runs (via record_operation) — the durable audit every mutation owes.
 
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let (name, dest_opt) = parse(args)?;

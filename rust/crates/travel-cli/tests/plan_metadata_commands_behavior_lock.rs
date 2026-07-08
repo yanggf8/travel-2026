@@ -66,8 +66,10 @@ fn insert_plan_destination(plan: &str, slug: &str, display_name: &str) {
     let p = sql_lit(plan);
     let s = sql_lit(slug);
     let n = sql_lit(display_name);
+    // OR REPLACE: seed_plan now inserts a default plan_destinations row for the
+    // active dest, so this override must replace it (this test controls display_name).
     exec_ok(&format!(
-        "INSERT INTO plan_destinations (plan_id, slug, display_name, status, created_at, updated_at) \
+        "INSERT OR REPLACE INTO plan_destinations (plan_id, slug, display_name, status, created_at, updated_at) \
          VALUES ({p}, {s}, {n}, 'active', '2020-01-01 00:00:00', '2020-01-01 00:00:00')"
     ));
 }

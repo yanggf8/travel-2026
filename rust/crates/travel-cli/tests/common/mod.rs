@@ -134,11 +134,18 @@ pub fn db_exec(sql: &str) -> Option<Rows> {
 pub fn seed_plan(plan: &str, dest: &str, version: i64) {
     let plan = sql_lit(plan);
     let dest = sql_lit(dest);
+    // A production plan ALWAYS has its active destination registered in
+    // plan_destinations (verified: every live plan does). Seed it too, so tests
+    // that pass `--dest <the active dest>` match reality — `resolve_active_destination`
+    // validates the override against plan_destinations (fail-loud on a phantom dest).
+    // teardown_plan's dynamic sqlite_master scan already covers plan_destinations.
     db_exec(&format!(
         "INSERT OR REPLACE INTO plans (plan_id, schema_version, version) \
          VALUES ({plan}, '4.2.0', {version}); \
          INSERT OR REPLACE INTO plan_metadata (plan_id, schema_version, active_destination) \
-         VALUES ({plan}, '4.2.0', {dest});"
+         VALUES ({plan}, '4.2.0', {dest}); \
+         INSERT OR REPLACE INTO plan_destinations (plan_id, slug, display_name, status) \
+         VALUES ({plan}, {dest}, 'Seed Dest', 'active');"
     ))
     .expect("seed plan");
 }
