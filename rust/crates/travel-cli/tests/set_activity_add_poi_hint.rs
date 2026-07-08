@@ -69,6 +69,7 @@ fn add_activity_hints_only_on_unambiguous_geocoded_poi_match() {
            VALUES ({p}, {d}, 1, 'morning', '2020-01-01 00:00:00'); \
          INSERT INTO destination_pois (slug, poi_id, title, lat, lon) VALUES \
            ({d}, 'osaka_castle', 'Osaka Castle', 34.6873, 135.5262), \
+           ({d}, 'dotonbori', 'Dotonbori Canal', 34.6687, 135.5013), \
            ({d}, 'namba_parks', 'Namba Parks', 34.6617, 135.5017), \
            ({d}, 'namba_yasaka', 'Namba Yasaka Shrine', 34.6623, 135.4960), \
            ({d}, 'tsutenkaku', 'Tsutenkaku Tower', NULL, NULL);"
@@ -88,6 +89,21 @@ fn add_activity_hints_only_on_unambiguous_geocoded_poi_match() {
     assert!(
         stdout.contains("set-activity-poi 1 morning osaka_castle"),
         "hint must include the ready-to-run link command. stdout:\n{stdout}"
+    );
+
+    // 1b. SUBSTRING match: gloss-stripped title "Dotonbori" is CONTAINED in the
+    // POI title "Dotonbori Canal" (not equal) -> still an unambiguous geocoded
+    // hint. This is the case the drill exercised and the exact-match case (1)
+    // does not cover.
+    let (ok1b, stdout1b, _) = run_add(&plan, &dest, "1", "afternoon", "Dotonbori 道頓堀");
+    assert!(ok1b, "substring add must succeed. stdout:\n{stdout1b}");
+    assert!(
+        stdout1b.contains("💡 matches POI 'dotonbori'"),
+        "expected the POI hint for a gloss-stripped substring match. stdout:\n{stdout1b}"
+    );
+    assert!(
+        stdout1b.contains("set-activity-poi 1 afternoon dotonbori"),
+        "substring-match hint must carry the right day/session. stdout:\n{stdout1b}"
     );
 
     // 2. Title matches >1 geocoded POI ("Namba" -> Parks + Yasaka) -> NO hint.
