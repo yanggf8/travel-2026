@@ -129,3 +129,31 @@ re-derive。RED→GREEN lock + live-verified(kyoto-confirm 印出全 6 個缺的
   不加 — sync-bookings 的 "Would sync" 保持無 ✅)。測試皆 contains(子字串),16 test 綠。
 
 **清單全清 — 這次 CLI/flow hardening sweep 的所有項目(B batch / A1 / A2 / B3 / B5 / A4 / B6)都已 SHIPPED。**
+
+---
+
+## 第二輪 CLI 全面稽核 (2026-07-08, commit `0a87bc5`)
+
+兩個 Explore agent 掃 arg-parsing/error-handling + agent-first UX/output。**關鍵教訓:agent 只讀 command
+module、沒讀 `main.rs`,把 3 個「HIGH」誤報成真** — mark-booked / sync-bookings / fetch-weather
+「靜默吞 typo'd --dry-run/--dest → 錯誤寫入」是 FALSE POSITIVE:B1 sweep 早已在 `main.rs` dispatch arm
+(652/665/716) 放了 `reject_unknown_flags` preflight(connect-before-parse 命令的正確位置)。逐一對源碼
+corroborate 才擋下「重修已修的 bug」。
+
+**真 gap(全 low/moderate,已修):**
+- **promote-offers 假成功訊號** (`promote_offers.rs:202`):全部 offer 被 skip(0 寫入、不 bump version)時
+  卻印 `✅ Saved to Turso` → agent 誤以為 promote 成功。改為 `⚠ Nothing promoted — all skipped`。
+  順帶:真實 save 行漏 `✅`(glyph 跟 no-op 路徑 + sibling import-offers 相反)→ glyph 移到真 save。
+- **next-action hint 缺口**:select-offer 停在「✅ P3/P4 populated」不指下一步 → 加 `→ scaffold-itinerary`
+  (mark-booked 早就指這步);add-transit 的「re-run derive-routes」只在 --help,不在成功輸出 → 補上,
+  閉合 derive→add-transit→re-derive 迴圈。
+- **error prefix 大小寫**:`checks.rs:374,394` 時間驗證用小寫 `error:` vs 主流 `Error:` → 破壞 agent
+  prefix 解析。兩訊息 + doc 例 + unit test(現 assert `starts_with("Error:")`)全改。
+- **set-poi-coords 缺 ✅** vs sibling add-transit → 補。
+
+**驗證清乾淨(非 gap):** JSON-to-stdout(完全遵守,--json 已移除,shaping 寫 FILE)、plan/--dest 解析
+(會列候選 + 補救 flag)、positional day/session/enum 驗證(一致)、--help 覆蓋(main.rs 集中,完整)、
+silent-no-op mutation(itinerary/booking 全掃過,只 promote-offers 漏,已補)。
+
+**沒修(YAGNI):** `std::process::exit(1)` sprawl(136 處 vs 中央 `Err(String)` 慣例)— 真的不一致 +
+那些錯誤路徑不可測,但是純 cosmetic refactor、零正確性收益,不值得動。
