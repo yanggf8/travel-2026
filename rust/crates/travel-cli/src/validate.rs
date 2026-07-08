@@ -1290,6 +1290,16 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
         });
     }
 
+    for day in map_coverage_gaps(&conn, plan_id, &destination).await? {
+        issues.push(PublishIssue {
+            category: "map-coverage".to_string(),
+            severity: PublishSeverity::Warn,
+            message: format!(
+                "day {day} has no geocoded stops and no route segments - its dashboard map will render empty. Link a real POI: set-activity-poi {day} <session> <poi_id> (or set-activity-poi --auto)."
+            ),
+        });
+    }
+
     // Maps freshness (WARN) — reuse check_maps_fresh::evaluate
     match crate::check_maps_fresh::evaluate(&conn, plan_id).await {
         Ok(crate::check_maps_fresh::Status::NeverSnapshotted) => {
@@ -1542,6 +1552,44 @@ async fn missing_session_zh(
         out.push((day, session));
     }
     Ok(out)
+}
+
+async fn map_coverage_gaps(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<i64>, String> {
+    let sql = "WITH activity_days AS ( \
+          SELECT day_number, COUNT(*) AS activity_count \
+          FROM activities \
+          WHERE plan_id = ?1 AND destination = ?2 \
+          GROUP BY day_number \
+        ), \
+        mappable_days AS ( \
+          SELECT a.day_number, COUNT(*) AS mappable_count \
+          FROM activities a \
+          JOIN destination_pois p \
+            ON p.slug = a.destination AND p.poi_id = a.poi_id \
+          WHERE a.plan_id = ?1 AND a.destination = ?2 \
+            AND p.lat IS NOT NULL AND p.lon IS NOT NULL \
+            AND TRIM(CAST(p.lat AS TEXT)) <> '' \
+            AND TRIM(CAST(p.lon AS TEXT)) <> '' \
+          GROUP BY a.day_number \
+        ), \
+        route_days AS ( \
+          SELECT day_number, COUNT(*) AS route_count \
+          FROM day_route_segments \
+          WHERE plan_id = ?1 AND destination = ?2 \
+          GROUP BY day_number \
+        ) \
+        SELECT ad.day_number \
+        FROM activity_days ad \
+        LEFT JOIN mappable_days md USING (day_number) \
+        LEFT JOIN route_days rd USING (day_number) \
+        WHERE COALESCE(md.mappable_count, 0) = 0 \
+          AND COALESCE(rd.route_count, 0) = 0 \
+        ORDER BY ad.day_number";
+    query_day_numbers(conn, sql, plan_id, destination).await
 }
 
 async fn has_map_path(
