@@ -58,7 +58,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         ));
     }
 
-    println!("destination_pois coords set: {} / {}", parsed.slug, parsed.poi_id);
+    println!("✅ destination_pois coords set: {} / {}", parsed.slug, parsed.poi_id);
     println!("  lat: {}", parsed.lat);
     println!("  lon: {}", parsed.lon);
     if let Some(ref s) = parsed.source {

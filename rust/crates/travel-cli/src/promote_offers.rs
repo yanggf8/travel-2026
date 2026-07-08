@@ -200,7 +200,9 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
 
     if to_write.is_empty() {
         // All matching rows were skipped — nothing written, no version bump.
-        println!("✅ Saved to Turso (plan_offers).");
+        // Do NOT print a ✅ save line: it would falsely signal a promotion. The
+        // per-source counts above already show `0 offer(s) — N skipped`.
+        println!("⚠ Nothing promoted — all matching offers were skipped (no price/date). Nothing written to plan_offers.");
         return Ok(());
     }
 
@@ -300,7 +302,7 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
     )
     .await?;
 
-    println!("Saved to Turso (plan_offers).");
+    println!("✅ Saved to Turso (plan_offers).");
     Ok(())
 }
 

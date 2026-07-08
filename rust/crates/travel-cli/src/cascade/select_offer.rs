@@ -139,6 +139,7 @@ pub async fn run(
             }
         }
     }
+    println!("Next: run `scaffold-itinerary` to create the day/session rows, then populate activities.");
     Ok(())
 }
 

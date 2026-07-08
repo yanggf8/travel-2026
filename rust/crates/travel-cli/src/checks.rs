@@ -371,7 +371,7 @@ pub(crate) fn validate_hhmm(s: &str) -> Result<(), String> {
 pub(crate) fn validate_time_flag(flag: &str, value: &str) -> Result<(), String> {
     if validate_hhmm(value).is_err() {
         return Err(format!(
-            "error: {flag} \"{value}\" is not a valid HH:MM time (expected 00:00\u{2013}23:59)"
+            "Error: {flag} \"{value}\" is not a valid HH:MM time (expected 00:00\u{2013}23:59)"
         ));
     }
     Ok(())
@@ -382,7 +382,7 @@ pub(crate) fn validate_time_flag(flag: &str, value: &str) -> Result<(), String> 
 /// first), so a plain string compare orders them correctly. On violation returns
 /// an actionable error naming both flags and both values:
 ///
-///   `error: --start "14:00" is after --end "09:00" (start must be ≤ end)`
+///   `Error: --start "14:00" is after --end "09:00" (start must be ≤ end)`
 pub(crate) fn validate_start_le_end(
     start_flag: &str,
     start: &str,
@@ -391,7 +391,7 @@ pub(crate) fn validate_start_le_end(
 ) -> Result<(), String> {
     if start > end {
         return Err(format!(
-            "error: {start_flag} \"{start}\" is after {end_flag} \"{end}\" (start must be \u{2264} end)"
+            "Error: {start_flag} \"{start}\" is after {end_flag} \"{end}\" (start must be \u{2264} end)"
         ));
     }
     Ok(())
@@ -673,8 +673,10 @@ mod tests {
         let err = validate_time_flag("--start", "9am").unwrap_err();
         assert_eq!(
             err,
-            "error: --start \"9am\" is not a valid HH:MM time (expected 00:00\u{2013}23:59)"
+            "Error: --start \"9am\" is not a valid HH:MM time (expected 00:00\u{2013}23:59)"
         );
+        // Prefix must match the dominant `Error:` casing so agent prefix-parsing works.
+        assert!(err.starts_with("Error:"), "got: {err}");
         // Out-of-range clock is rejected too, naming the flag passed in.
         let err = validate_time_flag("--arr", "25:00").unwrap_err();
         assert!(err.contains("--arr") && err.contains("\"25:00\""), "got: {err}");

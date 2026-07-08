@@ -68,6 +68,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         println!("  line: {}", parsed.line);
     }
     println!("  confidence: {}", parsed.confidence);
+    println!("Next: re-run `derive-routes` — this station pair's minutes now attach to any derived leg that uses it.");
     Ok(())
 }
 
