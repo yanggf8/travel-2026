@@ -200,7 +200,7 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
 
     if to_write.is_empty() {
         // All matching rows were skipped — nothing written, no version bump.
-        println!("Saved to Turso (plan_offers).");
+        println!("✅ Saved to Turso (plan_offers).");
         return Ok(());
     }
 

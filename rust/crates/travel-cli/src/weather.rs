@@ -147,7 +147,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
 
     finalize(&conn, &plan_id, &dest).await?;
 
-    println!("Weather updated for {} day(s) in {dest}:", forecasts.len());
+    println!("✅ Weather updated for {} day(s) in {dest}:", forecasts.len());
     for idx in 0..forecasts.len().min(days.len()) {
         let f = &forecasts[idx];
         let feels_like = match (f.feels_like_low_c, f.feels_like_high_c) {

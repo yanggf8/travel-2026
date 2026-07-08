@@ -353,7 +353,7 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
     )
     .await?;
 
-    println!("Saved to Turso (plan_offers).");
+    println!("✅ Saved to Turso (plan_offers).");
     Ok(())
 }
 

@@ -311,7 +311,10 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         );
     } else {
         println!("\n✅ Itinerary populated (incremental adds)");
-        println!("\nNext action: run status --full, then adjust with updateActivity/removeActivity as needed");
+        println!(
+            "\nNext action: run `derive-routes --dest {destination}` to cascade transit between the \
+             populated activities, then status --full; adjust with add-activity/move-activity as needed"
+        );
     }
     Ok(())
 }

@@ -121,5 +121,11 @@ re-derive。RED→GREEN lock + live-verified(kyoto-confirm 印出全 6 個缺的
   不再寫孤兒資料 + bump version,改報「is not a destination of plan (known: ...)」。連帶把 seed_plan
   補上 plan_destinations 行(對齊 production;所有 live plan 都有),+ 修一個 display_name-assert 測試用
   OR REPLACE。RED→GREEN + broad regression sweep(11 binaries / 33 test 綠)+ live-verified。
-- A4 add-activity/populate 提示 derive-routes(提示行,非自動 cascade)— 仍待做(低優先)
-- B6 ✅ glyph 一致(cosmetic)— 仍待做(最低優先)
+- **✅ A4 — DONE (2026-07-08).** add-activity 成功後印 `Next: run derive-routes --day N --dest ...`;
+  populate 的 next-action 改為先跑 `derive-routes --dest ...`(提示行,非自動 cascade — 保留 derive-routes
+  刻意獨立+冪等的設計)。
+- **✅ B6 — DONE (2026-07-08).** 6 個成功行補 `✅` glyph(flow-decision / import-offers / promote-offers ×2 /
+  sync-bookings / weather / add-besttour-offer),與 ~25 個 sibling 一致。只加在真實成功路徑(dry-run preview
+  不加 — sync-bookings 的 "Would sync" 保持無 ✅)。測試皆 contains(子字串),16 test 綠。
+
+**清單全清 — 這次 CLI/flow hardening sweep 的所有項目(B batch / A1 / A2 / B3 / B5 / A4 / B6)都已 SHIPPED。**

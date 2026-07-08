@@ -1543,6 +1543,10 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
         "\n➕ Adding activity:\n   Destination: {destination}\n   Day {} {}: \"{}\"\n   Sort order: {}\n✅ Activity added (id={})",
         parsed.day, parsed.session, parsed.title, sort_order, activity_id
     );
+    println!(
+        "Next: run `derive-routes --day {} --dest {destination}` to cascade transit between the day's activities.",
+        parsed.day
+    );
     Ok(())
 }
 

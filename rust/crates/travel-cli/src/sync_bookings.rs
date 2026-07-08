@@ -97,7 +97,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
     }
 
-    println!("Synced {} bookings to Turso.", bookings.len());
+    println!("✅ Synced {} bookings to Turso.", bookings.len());
     Ok(())
 }
 

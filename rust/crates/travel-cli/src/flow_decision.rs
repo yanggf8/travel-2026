@@ -91,7 +91,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await?;
 
-    println!("flow-decision recorded: {summary}");
+    println!("✅ flow-decision recorded: {summary}");
     Ok(())
 }
 
