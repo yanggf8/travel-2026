@@ -19,11 +19,57 @@ use travel_db::repo::itinerary;
 
 #[derive(Default, Debug)]
 struct ParsedArgs {
+    auto: bool,
     day: i64,
     session: String,
     poi_id: String,
     match_substr: Option<String>,
     dest: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AutoActivity {
+    id: String,
+    day: i64,
+    session: String,
+    // Selected only to make the scan order (ORDER BY day_number, session_type,
+    // sort_order, id) explicit + deterministic; not read back in Rust.
+    #[allow(dead_code)]
+    sort_order: i64,
+    title: String,
+}
+
+#[derive(Debug, Clone)]
+struct AutoPoi {
+    poi_id: String,
+    title: String,
+    geocoded: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AutoLinked {
+    activity: AutoActivity,
+    poi_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct AutoUnlinked {
+    activity: AutoActivity,
+    reason: String,
+}
+
+#[derive(Debug, Clone)]
+struct AutoResult {
+    linked: Vec<AutoLinked>,
+    unlinked: Vec<AutoUnlinked>,
+    version_before: Option<i64>,
+    version_after: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AutoMatch {
+    Link(String),
+    Unlinked(String),
 }
 
 /// CLI entry: `travel set-activity-poi <day> <session> <poi_id> [--match "<sub>"] [--dest <slug>]`.
@@ -45,6 +91,19 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             std::process::exit(1);
         }
     };
+
+    if parsed.auto {
+        match execute_auto(&conn, &plan_id, &destination).await {
+            Ok(result) => {
+                print_auto_result(&destination, &result);
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error: set-activity-poi --auto failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     match execute(&conn, &plan_id, &destination, &parsed).await {
         Ok(title) => {
@@ -69,6 +128,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     while i < args.len() {
         let a = &args[i];
         match a.as_str() {
+            "--auto" => {
+                p.auto = true;
+                i += 1;
+            }
             "--match" => {
                 p.match_substr = Some(arg_value(args, i, "--match")?);
                 i += 2;
@@ -93,6 +156,19 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
             }
         }
     }
+    if p.auto {
+        if !positional.is_empty() {
+            return Err(
+                "--auto cannot be combined with <day> <session> <poi_id>; use either --auto or a single manual link"
+                    .to_string(),
+            );
+        }
+        if p.match_substr.is_some() {
+            return Err("--auto cannot be combined with --match".to_string());
+        }
+        return Ok(p);
+    }
+
     if positional.len() < 3 {
         return Err(usage_error());
     }
@@ -115,7 +191,9 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
 
 fn usage_error() -> String {
     "Usage: set-activity-poi <day> <session> <poi_id> [--match \"<title substring>\"] [--dest <slug>]
-Example: set-activity-poi 2 morning shuri_castle --match \"Shurijo\""
+       set-activity-poi --auto [--dest <slug>]
+Example: set-activity-poi 2 morning shuri_castle --match \"Shurijo\"
+Example: set-activity-poi --auto --dest osaka_kyoto_2026"
         .to_string()
 }
 
@@ -206,6 +284,317 @@ async fn assert_poi_exists(
         "unknown poi_id \"{poi_id}\" for destination \"{destination}\" \
          (no row in destination_pois)"
     ))
+}
+
+fn is_trailing_gloss_char(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '\u{4E00}'..='\u{9FFF}'
+                | '\u{3040}'..='\u{309F}'
+                | '\u{30A0}'..='\u{30FF}'
+                | '\u{3000}'..='\u{303F}'
+                | '\u{FF00}'..='\u{FFEF}'
+        )
+}
+
+fn strip_trailing_zh_gloss(title: &str) -> String {
+    let trimmed = title.trim_end();
+    let mut cut = trimmed.len();
+    let mut saw_script_or_fullwidth = false;
+
+    for (idx, ch) in trimmed.char_indices().rev() {
+        if is_trailing_gloss_char(ch) {
+            if !ch.is_whitespace() {
+                saw_script_or_fullwidth = true;
+            }
+            cut = idx;
+            continue;
+        }
+        break;
+    }
+
+    if saw_script_or_fullwidth {
+        trimmed[..cut].trim_end().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn resolve_auto_match(activity_title: &str, pois: &[AutoPoi]) -> AutoMatch {
+    let normalized = strip_trailing_zh_gloss(activity_title).to_lowercase();
+    let exact: Vec<&AutoPoi> = pois
+        .iter()
+        .filter(|p| p.title.to_lowercase() == normalized)
+        .collect();
+    let matches = if exact.is_empty() {
+        pois.iter()
+            .filter(|p| {
+                let title = p.title.to_lowercase();
+                !normalized.is_empty()
+                    && !title.is_empty()
+                    && (normalized.contains(&title) || title.contains(&normalized))
+            })
+            .collect::<Vec<&AutoPoi>>()
+    } else {
+        exact
+    };
+
+    if matches.is_empty() {
+        return AutoMatch::Unlinked("no POI match".to_string());
+    }
+
+    let geocoded: Vec<&AutoPoi> = matches.iter().copied().filter(|p| p.geocoded).collect();
+    match geocoded.len() {
+        0 => AutoMatch::Unlinked("matched but POI ungeocoded".to_string()),
+        1 => AutoMatch::Link(geocoded[0].poi_id.clone()),
+        _ => AutoMatch::Unlinked("ambiguous POI match".to_string()),
+    }
+}
+
+async fn list_null_poi_activities(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<AutoActivity>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT id, day_number, session_type, sort_order, title \
+             FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND poi_id IS NULL \
+             ORDER BY day_number, session_type, sort_order, id",
+            libsql::params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("NULL-poi activities query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("NULL-poi activities row read failed: {e}"))?
+    {
+        out.push(AutoActivity {
+            id: row.get(0).map_err(|e| format!("activity id col read failed: {e}"))?,
+            day: row.get(1).map_err(|e| format!("activity day col read failed: {e}"))?,
+            session: row.get(2).map_err(|e| format!("activity session col read failed: {e}"))?,
+            sort_order: row.get(3).map_err(|e| format!("activity sort_order col read failed: {e}"))?,
+            title: row.get(4).map_err(|e| format!("activity title col read failed: {e}"))?,
+        });
+    }
+    Ok(out)
+}
+
+async fn list_destination_pois_for_auto(
+    conn: &Connection,
+    destination: &str,
+) -> Result<Vec<AutoPoi>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT poi_id, COALESCE(title, ''), \
+                    CASE WHEN lat IS NOT NULL AND lon IS NOT NULL \
+                           AND TRIM(CAST(lat AS TEXT)) <> '' \
+                           AND TRIM(CAST(lon AS TEXT)) <> '' \
+                         THEN 1 ELSE 0 END AS geocoded \
+             FROM destination_pois \
+             WHERE slug = ?1 \
+             ORDER BY poi_id",
+            libsql::params![destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("destination_pois auto query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("destination_pois auto row read failed: {e}"))?
+    {
+        let geocoded: i64 = row.get(2).unwrap_or(0);
+        out.push(AutoPoi {
+            poi_id: row.get(0).map_err(|e| format!("poi_id col read failed: {e}"))?,
+            title: row.get(1).unwrap_or_default(),
+            geocoded: geocoded == 1,
+        });
+    }
+    Ok(out)
+}
+
+async fn execute_auto(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<AutoResult, String> {
+    let activities = list_null_poi_activities(conn, plan_id, destination).await?;
+    if activities.is_empty() {
+        return Ok(AutoResult {
+            linked: Vec::new(),
+            unlinked: Vec::new(),
+            version_before: None,
+            version_after: None,
+        });
+    }
+
+    let pois = list_destination_pois_for_auto(conn, destination).await?;
+    let mut linked = Vec::new();
+    let mut unlinked = Vec::new();
+
+    for activity in activities {
+        match resolve_auto_match(&activity.title, &pois) {
+            AutoMatch::Link(poi_id) => linked.push(AutoLinked { activity, poi_id }),
+            AutoMatch::Unlinked(reason) => unlinked.push(AutoUnlinked { activity, reason }),
+        }
+    }
+
+    if linked.is_empty() {
+        return Ok(AutoResult {
+            linked,
+            unlinked,
+            version_before: None,
+            version_after: None,
+        });
+    }
+
+    let now_iso = now_rfc3339();
+    let now_db = now_db_datetime();
+    let version_before = read_version(conn, plan_id).await?;
+    let version_after = version_before + 1;
+    let mut touched_days: Vec<i64> = Vec::new();
+
+    let mut dest_process_so =
+        next_dest_process_sort_order(conn, plan_id, destination, "process_5_daily_itinerary").await?;
+    let mut timeline_so = next_timeline_sort_order(conn, plan_id).await?;
+
+    for link in &linked {
+        let affected = itinerary::set_activity_poi(
+            conn,
+            plan_id,
+            destination,
+            link.activity.day,
+            &link.activity.session,
+            &link.activity.id,
+            &link.poi_id,
+            &now_db,
+        )
+        .await?;
+        if affected != 1 {
+            return Err(format!(
+                "activities UPDATE affected {affected} rows (expected 1) for id={}",
+                link.activity.id
+            ));
+        }
+
+        if !touched_days.contains(&link.activity.day) {
+            touch_day(conn, plan_id, destination, link.activity.day).await?;
+            touched_days.push(link.activity.day);
+        }
+
+        let kv: Vec<(&str, String)> = vec![
+            ("day_number", link.activity.day.to_string()),
+            ("session", link.activity.session.clone()),
+            ("activity_id", link.activity.id.clone()),
+            ("title", link.activity.title.clone()),
+            ("poi_id", link.poi_id.clone()),
+            ("mode", "auto".to_string()),
+        ];
+        insert_event(
+            conn,
+            plan_id,
+            "dest_process",
+            destination,
+            "process_5_daily_itinerary",
+            dest_process_so,
+            "activity_poi_linked",
+            &now_iso,
+        )
+        .await?;
+        insert_kv(
+            conn,
+            plan_id,
+            "dest_process",
+            destination,
+            "process_5_daily_itinerary",
+            dest_process_so,
+            &kv,
+        )
+        .await?;
+        dest_process_so += 1;
+
+        insert_event(
+            conn,
+            plan_id,
+            "timeline",
+            "",
+            "process_5_daily_itinerary",
+            timeline_so,
+            "activity_poi_linked",
+            &now_iso,
+        )
+        .await?;
+        insert_kv(
+            conn,
+            plan_id,
+            "timeline",
+            "",
+            "process_5_daily_itinerary",
+            timeline_so,
+            &kv,
+        )
+        .await?;
+        timeline_so += 1;
+    }
+
+    crate::cascade::common::record_operation(
+        conn,
+        plan_id,
+        "set-activity-poi",
+        &format!("auto-linked {} POI(s)", linked.len()),
+        version_before,
+        version_after,
+        &now_db,
+    )
+    .await?;
+
+    Ok(AutoResult {
+        linked,
+        unlinked,
+        version_before: Some(version_before),
+        version_after: Some(version_after),
+    })
+}
+
+fn print_auto_result(destination: &str, result: &AutoResult) {
+    println!("\n📍 set-activity-poi --auto ({destination})");
+    if result.linked.is_empty() && result.unlinked.is_empty() {
+        println!("nothing to link");
+        return;
+    }
+
+    println!("✅ linked {}:", result.linked.len());
+    for link in &result.linked {
+        println!(
+            "   D{} {:<9} \"{}\" -> {}",
+            link.activity.day, link.activity.session, link.activity.title, link.poi_id
+        );
+    }
+
+    if !result.unlinked.is_empty() {
+        println!(
+            "⚠ unlinked {} (link manually with set-activity-poi <day> <session> <poi_id> --match \"<title substring>\"):",
+            result.unlinked.len()
+        );
+        for item in &result.unlinked {
+            println!(
+                "   D{} {:<9} \"{}\" - {}",
+                item.activity.day, item.activity.session, item.activity.title, item.reason
+            );
+        }
+    }
+
+    if let (Some(before), Some(after)) = (result.version_before, result.version_after) {
+        println!(
+            "Version {before} -> {after} (auto-linked {} POI(s)).",
+            result.linked.len()
+        );
+    }
 }
 
 async fn execute(
@@ -569,5 +958,94 @@ mod tests {
             "x".to_string()
         ])
         .is_err());
+    }
+
+    #[test]
+    fn parse_args_accepts_auto_with_dest() {
+        let p = parse_args(&[
+            "--auto".to_string(),
+            "--dest".to_string(),
+            "osaka_kyoto_2026".to_string(),
+        ])
+        .unwrap();
+        assert!(p.auto);
+        assert_eq!(p.dest.as_deref(), Some("osaka_kyoto_2026"));
+    }
+
+    #[test]
+    fn parse_args_rejects_auto_with_positionals() {
+        let err = parse_args(&[
+            "--auto".to_string(),
+            "1".to_string(),
+            "morning".to_string(),
+            "foo".to_string(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--auto cannot be combined with <day> <session> <poi_id>"));
+    }
+
+    #[test]
+    fn strip_trailing_zh_gloss_removes_only_trailing_gloss() {
+        assert_eq!(strip_trailing_zh_gloss("Dotonbori 道頓堀"), "Dotonbori");
+        assert_eq!(
+            strip_trailing_zh_gloss("Kuromon Ichiba Market 黑門市場"),
+            "Kuromon Ichiba Market"
+        );
+        assert_eq!(
+            strip_trailing_zh_gloss("Umeda Sky Building 梅田スカイビル"),
+            "Umeda Sky Building"
+        );
+        assert_eq!(strip_trailing_zh_gloss("Namba Parks"), "Namba Parks");
+    }
+
+    #[test]
+    fn resolve_auto_match_exact_substring_ambiguous_and_ungeocoded() {
+        let pois = vec![
+            AutoPoi {
+                poi_id: "kuromon".to_string(),
+                title: "Kuromon Ichiba Market".to_string(),
+                geocoded: true,
+            },
+            AutoPoi {
+                poi_id: "dotonbori".to_string(),
+                title: "Dotonbori Canal".to_string(),
+                geocoded: true,
+            },
+            AutoPoi {
+                poi_id: "namba1".to_string(),
+                title: "Namba Parks".to_string(),
+                geocoded: true,
+            },
+            AutoPoi {
+                poi_id: "namba2".to_string(),
+                title: "Namba Yasaka Shrine".to_string(),
+                geocoded: true,
+            },
+            AutoPoi {
+                poi_id: "tower".to_string(),
+                title: "Tsutenkaku Tower".to_string(),
+                geocoded: false,
+            },
+        ];
+        assert_eq!(
+            resolve_auto_match("Kuromon Ichiba Market 黑門市場", &pois),
+            AutoMatch::Link("kuromon".to_string())
+        );
+        assert_eq!(
+            resolve_auto_match("Dotonbori 道頓堀", &pois),
+            AutoMatch::Link("dotonbori".to_string())
+        );
+        assert_eq!(
+            resolve_auto_match("Namba", &pois),
+            AutoMatch::Unlinked("ambiguous POI match".to_string())
+        );
+        assert_eq!(
+            resolve_auto_match("No Such Place", &pois),
+            AutoMatch::Unlinked("no POI match".to_string())
+        );
+        assert_eq!(
+            resolve_auto_match("Tsutenkaku Tower 通天閣", &pois),
+            AutoMatch::Unlinked("matched but POI ungeocoded".to_string())
+        );
     }
 }

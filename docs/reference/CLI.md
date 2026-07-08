@@ -134,6 +134,8 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
 ./bin/travel set-activity-time <day> <session> "<activity>" [--start HH:MM] [--end HH:MM] [--fixed true]
 ./bin/travel set-activity-title <day> <session> "<activity>" "<new_title>" [--plan-id <id>]
+./bin/travel set-activity-poi <day> <session> <poi_id> [--match "<title substring>"] [--dest slug]    # link one activity to a destination_pois row; durable map/ticket POI FK; writes audit triad.
+./bin/travel set-activity-poi --auto [--dest slug]    # batch-link NULL-poi activities to exactly-one geocoded POI by exact/title-substring match after stripping trailing CJK/kana/fullwidth gloss; never guesses; one operation_runs row for the batch; unambiguous misses stay manual.
 ./bin/travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM    # (alias: set-session-time-range)
 ./bin/travel set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
 ./bin/travel derive-routes [--day N] [--dest slug] [--plan-id <id>]    # CASCADE: derive ai_recommended transit legs between consecutive same-day activities (from POI nearest_station + destination_transit metadata). Idempotent; skips days with a confirmed route; re-run --day N after activity edits. Run once after populate-itinerary. Legs flow into the 🤖 badge / validate-publish INFO / query-confirm lifecycle. Ends with a `⚠ ... missing destination_transit metadata` worklist (a ready-to-run `add-transit` line per pair) when a derived leg has no transit time — fill via add-transit, then re-derive.
