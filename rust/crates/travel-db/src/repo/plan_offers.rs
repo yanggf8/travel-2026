@@ -24,7 +24,9 @@ pub struct PlanOfferWrite {
     pub price_total: i64,
     pub departure_date: String,
     pub hotel: Option<PlanOfferHotelWrite>,
-    pub flights: Option<[PlanOfferFlightWrite; 2]>,
+    /// Flight legs to write (0, 1, or 2). Empty = no legs; one element is typically
+    /// outbound-only (e.g. google_flights round-trip total with no paired return).
+    pub flights: Vec<PlanOfferFlightWrite>,
     pub includes: Vec<String>,
 }
 
@@ -35,7 +37,7 @@ pub struct PlanOfferHotelWrite {
     pub area: Option<String>,
 }
 
-/// One flight leg child row (written as a pair when `flights` is `Some`).
+/// One flight leg child row (one entry per direction the caller supplies).
 #[derive(Debug, Clone)]
 pub struct PlanOfferFlightWrite {
     pub direction: String,
@@ -144,27 +146,25 @@ pub async fn insert_offer(
         .map_err(|e| e.to_string())?;
     }
 
-    // plan_offer_flights — only if BOTH legs present (no fabrication).
-    if let Some(ref legs) = write.flights {
-        for leg in legs {
-            conn.execute(
-                "INSERT INTO plan_offer_flights \
-                    (plan_id, destination, offer_id, direction, flight_number, airline, \
-                     airline_code, departure_code, departure_time, arrival_code, arrival_time, \
-                     updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, NULL, NULL, NULL, ?6)",
-                libsql::params![
-                    write.plan_id.clone(),
-                    write.destination.clone(),
-                    write.offer_id.clone(),
-                    leg.direction.clone(),
-                    leg.flight_number.clone(),
-                    now_db.to_string(),
-                ],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        }
+    // plan_offer_flights — one row per leg the caller supplied (0, 1, or 2).
+    for leg in &write.flights {
+        conn.execute(
+            "INSERT INTO plan_offer_flights \
+                (plan_id, destination, offer_id, direction, flight_number, airline, \
+                 airline_code, departure_code, departure_time, arrival_code, arrival_time, \
+                 updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, NULL, NULL, NULL, ?6)",
+            libsql::params![
+                write.plan_id.clone(),
+                write.destination.clone(),
+                write.offer_id.clone(),
+                leg.direction.clone(),
+                leg.flight_number.clone(),
+                now_db.to_string(),
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     // plan_offer_includes — caller already split/trimmed/filtered.

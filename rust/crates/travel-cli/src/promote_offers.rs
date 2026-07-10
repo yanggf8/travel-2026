@@ -375,6 +375,7 @@ async fn read_source_offers(
 
 /// Map a promotable `SourceOffer` to the DAL write payload. Business decisions
 /// (title fallback, hotel/flight presence, includes split) stay in the command.
+/// Flights: both legs → 2 rows, outbound-only → 1, neither → empty vec.
 fn build_plan_offer_write(
     plan_id: &str,
     dest: &str,
@@ -404,8 +405,11 @@ fn build_plan_offer_write(
         }
     });
 
+    // Build flight legs: both → 2, outbound-only → 1 (google_flights gives outbound +
+    // round-trip total, no paired return), neither → none. No time-parsing here —
+    // PlanOfferFlightWrite is { direction, flight_number } only (times lost upstream).
     let flights = match (&o.flight_outbound, &o.flight_return) {
-        (Some(outbound), Some(ret)) => Some([
+        (Some(outbound), Some(ret)) => vec![
             PlanOfferFlightWrite {
                 direction: "outbound".to_string(),
                 flight_number: outbound.clone(),
@@ -414,8 +418,12 @@ fn build_plan_offer_write(
                 direction: "return".to_string(),
                 flight_number: ret.clone(),
             },
-        ]),
-        _ => None,
+        ],
+        (Some(outbound), None) => vec![PlanOfferFlightWrite {
+            direction: "outbound".to_string(),
+            flight_number: outbound.clone(),
+        }],
+        _ => Vec::new(),
     };
 
     let includes = o

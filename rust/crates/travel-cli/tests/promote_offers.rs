@@ -272,6 +272,99 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
 
     // _cleanup Drop runs teardown here (and on any panic above).
 }
+
+/// #1: google_flights gives outbound + round-trip total but no paired return
+/// (`flight_return` NULL). Promote must write ONE outbound leg so select-offer
+/// has_flight() → P3 populated. (Previously required BOTH legs → 0 legs.)
+#[tokio::test]
+async fn promote_outbound_only_offer_writes_one_leg_and_populates_p3() {
+    let _guard = PROMOTE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    if db_exec("SELECT 1").is_none() {
+        eprintln!("skipping promote outbound-only test (no Turso creds)");
+        return;
+    }
+
+    let tag = nanos();
+    let dest = format!("test_promote_ob_{tag}");
+    let plan = format!("test-promote-ob-{tag}");
+    let offer_id = format!("po-ob-{tag}");
+    let ids: Vec<&str> = vec![&offer_id];
+
+    teardown(&plan, &dest, &ids);
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.clone());
+        let owned_ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        move || {
+            let ids: Vec<&str> = owned_ids.iter().map(String::as_str).collect();
+            teardown(&plan, &dest, &ids);
+        }
+    });
+    seed_plan(&plan, &dest, 0);
+    seed_process_ladder(&plan, &dest);
+
+    // Outbound-only: flight_return=NULL (real google_flights shape). seed_offer
+    // hardcodes type='package' — leg writing keys on flight_outbound/return only,
+    // not offer type, so package is fine (matches the existing both-legs case).
+    seed_offer(
+        &dest,
+        &offer_id,
+        "google_flights",
+        Some(10386),
+        Some("2026-08-05"),
+        None,
+        Some("GK25"),
+        None,
+        "",
+        "2026-07-10T00:00:00Z",
+    );
+
+    let (ok, out, err) = run_promote(&plan, &dest, &[]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds mid-test): {}", err.trim());
+        return;
+    }
+    assert!(ok, "promote should succeed; err={err} out={out}");
+
+    // Exactly one outbound leg (not zero, not two).
+    let legs = db_exec(&format!(
+        "SELECT direction || ':' || COALESCE(flight_number,'') AS leg \
+         FROM plan_offer_flights \
+         WHERE plan_id='{plan}' AND destination='{dest}' AND offer_id='{offer_id}' \
+         ORDER BY direction"
+    ))
+    .expect("creds");
+    assert_eq!(
+        legs.column(),
+        vec!["outbound:GK25"],
+        "outbound-only offer must write exactly one outbound leg; got {legs}"
+    );
+
+    // select-offer → P3 populated (has_flight true because legs non-empty).
+    let so = Command::new(bin())
+        .args(["select-offer", &offer_id, "2026-08-05", "--plan-id", &plan])
+        .output()
+        .expect("run select-offer");
+    let so_ok = so.status.success();
+    let so_err = String::from_utf8_lossy(&so.stderr).into_owned();
+    let so_out = String::from_utf8_lossy(&so.stdout).into_owned();
+    assert!(
+        so_ok,
+        "select-offer on outbound-only offer should succeed; err={so_err} out={so_out}"
+    );
+    let p3 = db_exec(&format!(
+        "SELECT status FROM process_statuses \
+         WHERE plan_id='{plan}' AND destination='{dest}' \
+           AND process_id='process_3_transportation'"
+    ))
+    .expect("creds");
+    assert_eq!(
+        p3.scalar().as_deref(),
+        Some("populated"),
+        "P3 must be populated from the outbound-only leg; out={p3}"
+    );
+}
+
 #[test]
 fn promote_offers_rejects_unknown_flag() {
     // A typo'd --source silently dropped would corrupt provenance; must fail loud.
