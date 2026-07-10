@@ -186,11 +186,11 @@ fn parse_tsv(path: &Path) -> Result<Vec<ParsedOffer>, String> {
 }
 
 pub async fn run(args: &[String]) -> Result<(), String> {
-    let positional = common::positionals(args, &["--capture", "--claim-token", "--tsv"]);
+    let positional = common::positionals(args, &["--capture", "--claim-token", "--tsv", "--dest"]);
     if positional.is_empty() {
         return Err(
             "Usage: travel ota write-offers <job_id> --capture <capture_id> \
-             --claim-token <token> --tsv <path>"
+             --claim-token <token> --tsv <path> --dest <slug>"
                 .to_string(),
         );
     }
@@ -198,6 +198,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let mut capture_id: Option<String> = None;
     let mut claim_token: Option<String> = None;
     let mut tsv_path: Option<String> = None;
+    let mut dest: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -213,12 +214,17 @@ pub async fn run(args: &[String]) -> Result<(), String> {
                 tsv_path = Some(args.get(i + 1).ok_or("missing --tsv")?.clone());
                 i += 2;
             }
+            "--dest" => {
+                dest = Some(args.get(i + 1).ok_or("missing --dest")?.clone());
+                i += 2;
+            }
             _ => i += 1,
         }
     }
     let capture_id = capture_id.ok_or("Error: --capture is required")?;
     let claim_token = claim_token.ok_or("Error: --claim-token is required")?;
     let tsv_path = tsv_path.ok_or("Error: --tsv is required")?;
+    let dest = dest.ok_or("Error: --dest <slug> is required")?;
 
     let conn = db::connect_write().await?;
     let job = ota_jobs::get(&conn, job_id)
@@ -227,6 +233,27 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     if job.claim_token.as_deref() != Some(claim_token.as_str()) {
         return Err(format!("Error: claim_token mismatch for job_id={job_id}"));
     }
+
+    // Validate --dest against destination_config (fail loud on a bad slug).
+    {
+        let mut r = conn
+            .query(
+                "SELECT 1 FROM destination_config WHERE slug = ?1",
+                libsql::params![dest.clone()],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        if r.next().await.map_err(|e| e.to_string())?.is_none() {
+            return Err(format!("Error: --dest '{dest}' is not a registered destination"));
+        }
+    }
+    // Region for the offer row: region_label if present, else region_code, else NULL.
+    let params = ota_jobs::get_params(&conn, job_id).await?;
+    let region = params
+        .iter()
+        .find(|(k, _)| k == "region_label")
+        .or_else(|| params.iter().find(|(k, _)| k == "region_code"))
+        .map(|(_, v)| v.clone());
 
     let cap = captures::get(&conn, &capture_id)
         .await?
@@ -268,6 +295,8 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             common::parsed_to_offer_row(
                 &source_id,
                 &p.product_type,
+                &dest,
+                region.as_deref(),
                 url,
                 &capture_id,
                 &scraped_at,

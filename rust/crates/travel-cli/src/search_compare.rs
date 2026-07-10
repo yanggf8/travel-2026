@@ -275,7 +275,7 @@ pub async fn run_search(args: &[String]) -> Result<(), String> {
              \n\
              Note: in-process OTA scrapers are DECOMMISSIONED. Live capture is done\n\
              via gwebcdb on WSLg; the agent extracts captures.raw_text to TSV, then writes offers:\n  \
-               ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>"
+               ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path> --dest <slug>"
         );
         return Ok(());
     }

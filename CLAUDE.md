@@ -229,7 +229,7 @@ first — gwebcdb's `turso_db.py` has no `.env` loader):
 
 | URL Contains | Action |
 |-------------|--------|
-| Any OTA (besttour / liontravel / lifetour / settour / …) | Start Chrome, drive the page, capture, then **the agent reads the capture text and writes offers** (no in-CLI parser): <br>`./scripts/start-chrome-cdp-wslg.sh` (idempotent; CDP on :9222) <br>→ `python bridge/navigate.py "<url>"` (+ `form_fill`/`combo_select`/`form_click` for SPA searches; let async price/hotel SPAs settle ~25s) <br>→ `python bridge/ota_capture.py --source <id> [--url-contains <s>]` (UNREDACTED text → `captures`; prints `capture_id`) <br>→ **agent reads `captures.raw_text`, extracts the offers, emits TSV** <br>→ `./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>` (under a claimed `ota_jobs` job; writes `offers` + provenance + attempt audit) |
+| Any OTA (besttour / liontravel / lifetour / settour / …) | Start Chrome, drive the page, capture, then **the agent reads the capture text and writes offers** (no in-CLI parser): <br>`./scripts/start-chrome-cdp-wslg.sh` (idempotent; CDP on :9222) <br>→ `python bridge/navigate.py "<url>"` (+ `form_fill`/`combo_select`/`form_click` for SPA searches; let async price/hotel SPAs settle ~25s) <br>→ `python bridge/ota_capture.py --source <id> [--url-contains <s>]` (UNREDACTED text → `captures`; prints `capture_id`) <br>→ **agent reads `captures.raw_text`, extracts the offers, emits TSV** <br>→ `./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>` (under a claimed `ota_jobs` job; writes `offers` + provenance + attempt audit) |
 | Non-OTA URL | Use WebFetch as normal |
 
 The bridge navigates/clicks the actual UI (no fragile URL templates). Captures live in the Turso
@@ -324,7 +324,7 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 # After shaping-init: capture offers via gwebcdb (WSLg), agent-extract, then import + compare:
 #   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
 #   → python bridge/ota_capture.py --source <id>   # → capture_id (UNREDACTED → captures)
-#   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job> --capture <id> --claim-token <tok> --tsv <path>
+#   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job> --capture <id> --claim-token <tok> --tsv <path> --dest <slug>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id>
 ./bin/travel shaping-adopt <candidate_id> <plan_id> --create-plan --dest <slug>
@@ -350,7 +350,7 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 #   ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
 #   → python bridge/ota_capture.py --source <id>            # → capture_id (UNREDACTED → captures)
 #   → AGENT reads captures.raw_text, extracts offers, emits TSV
-#   → ./bin/travel ota write-offers <job> --capture <capture_id> --claim-token <tok> --tsv <path>  # → Turso offers + provenance
+#   → ./bin/travel ota write-offers <job> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>  # → Turso offers + provenance
 # (`travel ota parse` / the regex parser_rules path is RETIRED.) See URL Routing + gwebcdb CLAUDE.md + src/skills/scrape-ota/SKILL.md.
 
 # Tour-group / FIT offers (manual entry for sources without a full scraper)
