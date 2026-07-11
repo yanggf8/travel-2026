@@ -105,9 +105,11 @@ Expected: `help_prints_usage_for_query_commands` FAILS — the four commands cur
 
 In `rust/crates/travel-cli/src/main.rs`, add `if wants_help(rest, "<usage-body>") { return Ok(()); }` as the first statement of each of the four arms, before `::parse`. `wants_help` (main.rs:828) already prepends `Usage:\n  `, so pass only the body. Draw the flag list from each module's `parse` match arms (VERIFY against source — a wrong flag in Usage is worse than none):
 
+The flag lists below are the EXACT flags each module's `parse` accepts (verified against the source `match` arms — `--destination` is an alias of `--dest`, omitted from Usage for brevity):
+
 ```rust
         [cmd, rest @ ..] if cmd == "query-offers" => {
-            if wants_help(rest, "travel query-offers [--plan-id <id>] [--dest <slug>] [--region <r>] [--start <date>] [--end <date>] [--sources <csv>] [--type <t>] [--max-price <twd>] [--fresh-hours <n>] [--max <n>] [--include-undated] [--sql]") { return Ok(()); }
+            if wants_help(rest, "travel query-offers [--dest <slug>] [--region <r>] [--start <date>] [--end <date>] [--source <s>] [--max-price <twd>] [--limit <n>]") { return Ok(()); }
             let opts = offers::OffersArgs::parse(rest)?;
             offers::run(&opts).await
         }
@@ -117,18 +119,18 @@ In `rust/crates/travel-cli/src/main.rs`, add `if wants_help(rest, "<usage-body>"
             destination_ref::run(&opts).await
         }
         [cmd, rest @ ..] if cmd == "query-bookings" => {
-            if wants_help(rest, "travel query-bookings [--plan-id <id>] [--dest <slug>] [--category <c>] [--status <s>]") { return Ok(()); }
+            if wants_help(rest, "travel query-bookings [--dest <slug>] [--category <c>] [--status <s>] [--max <n>] [--trip-id <id>]") { return Ok(()); }
             let opts = bookings::QueryBookingsArgs::parse(rest)?;
             bookings::run(&opts).await
         }
         [cmd, rest @ ..] if cmd == "check-freshness" => {
-            if wants_help(rest, "travel check-freshness --source <s> [--plan-id <id>] [--dest <slug>]") { return Ok(()); }
+            if wants_help(rest, "travel check-freshness --source <s> [--dest <slug>] [--region <r>] [--start <date>] [--end <date>] [--max-age <hours>] [--plan-id <id>]") { return Ok(()); }
             let opts = freshness::FreshnessArgs::parse(rest)?;
             freshness::run(&opts).await
         }
 ```
 
-> IMPORTANT — the flag lists above are drawn from the modules but VERIFY each against the source `match` arms (`offers.rs`, `destination_ref.rs`, `bookings.rs`, `freshness.rs`) before writing. Do NOT change the modules; only the four `main.rs` arms. Use `wants_help`, not inline `any(...)`.
+> The flag lists above are VERIFIED (grepped `"--..."` from each module 2026-07-11): offers.rs = dest/region/start/end/source/max-price/limit; destination_ref.rs = slug; bookings.rs = dest/category/status/max/trip-id; freshness.rs = source/dest/region/start/end/max-age/plan-id. Copy them verbatim. Do NOT change the modules; only the four `main.rs` arms. Use `wants_help`, not inline `any(...)`.
 
 - [ ] **Step 4: Build + run test to verify it passes**
 
