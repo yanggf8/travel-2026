@@ -33,24 +33,30 @@
 
 **新設計:**
 - content-depth 的 4 軸 → **3 個比較 depth 軸（activities / meals / routes-with-metadata）+ 1 個 ZH-completeness gate**。
-- **ZH gate 語意（對齊 validate.rs `missing_day_zh`/`missing_session_zh` 的 eligibility）:**
-  - 分子 = 有活動的 day 中 theme_zh 非空數 + 有活動的 session 中 ZH 非空數。
-  - 分母 = 有活動的 day 數 + 有活動的 session 數。
-  - **eligibility = `EXISTS activities`**（Codex 建議、最小、與 validate.rs 一致 — Yang 確認）。空 session/day 不列入。
-  - **session-level ZH「非空」的定義對齊 validate.rs**: `focus_zh` OR `transit_notes_zh` 非空即算已翻(validate.rs:1513 用 `focus_zh`/`transit_notes_zh` 二選一)。**注意**: eligibility 用 `EXISTS activities`,**不是**用 ZH 欄本身(Codex 陷阱警告: 若用 ZH 欄決定 eligibility,缺翻譯會從分母消失 → 缺 ZH 反而變 gate PASS)。
-  - **gate PASS ⟺ 分子 == 分母**（每個有活動的 day/session 都翻了）。
-- **verdict 規則改為:**
-  - `BETTER` = ZH gate PASS **且** 3 個 depth 軸都 ≥ 參考 **且** ≥1 depth 軸 strictly >。
-  - `ALIGNED` = ZH gate PASS 且 3 depth 軸都 == 參考。
-  - `SHORT` = 任一 depth 軸 < 參考 **或** ZH gate FAIL。SHORT 列出:不足的 depth 軸 + (若 gate FAIL) `ZH-gate`。
-- **輸出格式:** ZH 從 `Totals` 表移到獨立區塊:
-  ```
-  gates:
-    ZH completeness       20/20  PASS
-  ```
-  drill FAIL 時: `18/20  FAIL`（並在 SHORT 列出 `ZH-gate`）。
-- **也報參考的 gate 狀態（Codex 建議）:** 若參考 ZH gate < 100%（`num != den`）,視為**無效/退化的參考** — 印警告,不讓 drill 繼承較低的完整性標準。（參考本應 100%;若不是,是參考的問題。）
-- **enrichment worklist 效果:** SHORT 的 `ZH-gate` 仍是 worklist 訊號,但它現在只叫 agent 翻**有活動**的 session(真該翻的),不會叫它填空 session。
+- **ZH gate 語意 — EXACT validator alignment（Codex 審 spec 抓到 DRIFT + Claude 第一手 corroborate 修正):** eligibility **必須逐字對齊** `validate.rs` 的 `missing_day_zh`/`missing_session_zh`,**不是** `EXISTS activities`（初稿寫錯 — validate.rs 的 eligibility 是 OR 鏈,若只用 activities,content-depth 會 PASS 但 validate publish 會 BLOCK 一個 meal-only/route-only/transit-only 的 slot → 兩 gate 不一致,正是本 spec 要避免的）。實際 eligibility（Claude corroborate `validate.rs:1493-1508` / `:1521-1536`）:
+  - **day eligible ⟺** `EXISTS activities(by day) OR EXISTS session_meals(by day) OR EXISTS day_route_segments(by day)`（validate.rs:1493-1507）。
+  - **session eligible ⟺** `EXISTS activities(by day,session) OR EXISTS session_meals(by day,session) OR transit_notes 非空 OR transit_notes_zh 非空`（validate.rs:1521-1536）。
+  - **「已翻」判定（session）:** `focus_zh 非空 OR transit_notes_zh 非空`（validate.rs:1537-1538 只在兩者皆空時報 missing）。**day 已翻 =** `theme_zh 非空`。
+  - **「非空」= `NULLIF(TRIM(COALESCE(col,'')),'') IS NOT NULL`**（逐字對齊 validator;whitespace-only 算空）。
+  - **eligibility 用內容存在（activities/meals/routes/transit），不用 ZH 欄本身**（Codex 陷阱: 若用 ZH 欄決定 eligibility,缺翻譯會從分母消失 → 缺 ZH 反而 gate PASS）。
+  - **gate PASS ⟺ 分子 == 分母**,即「每個 eligible 的 day/session 都已翻」;等價於「validate.rs 的 `missing_day_zh` + `missing_session_zh` 回傳空集」。分子 = eligible-day-已翻 + eligible-session-已翻;分母 = eligible-day + eligible-session。
+  - **`0/0`（無任何 eligible slot）= 空洞真 PASS,印 `0/0 PASS`。**
+- **verdict 規則改為（Codex: VERDICT LOGIC OK）:**
+  - `SHORT` = 任一 depth 軸 < 參考 **或** drill ZH gate FAIL。SHORT 列出:不足的 depth 軸（依 activities/meals/routes 固定序）+ (若 gate FAIL) 尾綴 `ZH-gate`。
+  - `BETTER` = 無 SHORT **且** ≥1 depth 軸 strictly >（drill gate PASS 已由「無 SHORT」保證）。
+  - `ALIGNED` = 無 SHORT 且 3 depth 軸全 == 參考（gate 只證完整性,非 richness,不能供 strictly-greater）。
+  - **wording:** 現有 ALIGNED 文案 `every axis meets the reference exactly`（`compare_content_depth.rs:139`）改為 `all 3 depth axes equal reference; ZH gate PASS`;BETTER 文案改為 `all 3 depth axes >= reference, N strictly greater; ZH gate PASS`。
+- **輸出格式（Codex: OUTPUT GAP — 定死區塊順序與格式）:** 區塊順序 = `per-day` → 三列 `totals`（僅 activities/meals/routes,**移除 ZH 列**）→ `gates:` → （若參考 gate FAIL）warning 行 → `VERDICT`。
+  - per-day 表**不變**（仍 `a/m/r`,本就無 ZH 欄 — `compare_content_depth.rs:195`）。
+  - `gates:` 區塊**兩列**（drill + 參考),label 統一用 **`ZH slot completeness`**:
+    ```
+    gates:
+      ZH slot completeness  drill 20/20  PASS
+      ZH slot completeness  ref   19/19  PASS
+    ```
+    FAIL 時該列 `18/20  FAIL`。
+- **參考 gate 處理（Codex: REFERENCE-GATE RISK — 收斂為 warn-and-continue，非 abort）:** 若**參考** ZH gate FAIL（`num != den`）:印一行 warning `⚠ reference ZH gate FAIL (N/M); depth comparison continues; drill must independently PASS` 到 **stdout**;**不** abort、**不** 影響 verdict、**exit 0**、**不** 降低 drill 的 gate 要求。（不用「invalid reference」措辭 — 那暗示該中止。）
+- **enrichment worklist 效果:** SHORT 的 `ZH-gate` 仍是 worklist 訊號,但只叫 agent 翻 **eligible** 的 day/session(真有內容的),不會叫它填空 session。
 
 **解決 kyoto 抱怨（Codex Q3 確認 + 數據）:** kyoto content-bearing 全填 → 20/20 gate PASS;okinawa 19/19 gate PASS → 無 false SHORT,且 kyoto 3 depth 軸已 BETTER（31>29 / 12>10 / 22>21）→ 整體 VERDICT BETTER。不靠灌水。
 
@@ -73,11 +79,19 @@
 - `validate_itinerary.rs:360` — `e.g. "赤嶺駅", "iias 沖縄豊崎"`
 - `validate_itinerary.rs:411` — `e.g. "安里駅 那覇"`
 
-**改法:** 範例改成 schematic 佔位,例如:
-- 「clean place chain」例 → `e.g. "<站A> → <站B> → <地標>"`（或英文 `"Station A → Station B → Mall"`）。
-- 「clean place name」例 → `e.g. a plain station or landmark name, no （…）notes/＋步行/clock times`。
-- `:411` 的「加 駅/站/city」例 → `e.g. add a 駅/站/Station suffix or a city name`。
-（實際字串在 plan 定稿;原則:傳達同樣規則,不寫死任一 dest 的地名。）
+**改法（Codex: exact strings 在 spec 定死,不 defer plan;保留 same-country/transit-mode 指引）。四處精確替換,只換地名範例、其餘 guidance 逐字保留:**
+
+1. `set_tod.rs:285` — 現:`...Hint: write the pill as a clean place chain, e.g. "安里駅 → 赤嶺駅 → iias 沖縄豊崎" — no （…）notes, +步行, or clock times inside a stop.`
+   → 新:`...Hint: write the pill as a clean place chain, e.g. "<站A> → <站B> → <地標>" — no （…）notes, +步行, or clock times inside a stop.`
+2. `set_route_segment.rs:60` — 現:`Hint: use a clean place name (e.g. "赤嶺駅", "iias 沖縄豊崎") — no （…）notes, +步行, or clock times inside the stop; keep both stops in the same country; use mode=transit for a rail/bus leg.`
+   → 新:`Hint: use a clean place name (e.g. "<車站>", "<地標>") — no （…）notes, +步行, or clock times inside the stop; keep both stops in the same country; use mode=transit for a rail/bus leg.`
+   （`keep both stops in the same country` + `use mode=transit...` **原封保留**。）
+3. `validate_itinerary.rs:360` — 現:`Use a clean place name as the stop (e.g. "赤嶺駅", "iias 沖縄豊崎") — no parenthetical notes, +步行, or clock times inside the stop itself.`
+   → 新:`Use a clean place name as the stop (e.g. "<車站>", "<地標>") — no parenthetical notes, +步行, or clock times inside the stop itself.`
+4. `validate_itinerary.rs:411` — 現:`Add a 駅/站/Station suffix or a city (e.g. "安里駅 那覇").`
+   → 新:`Add a 駅/站/Station suffix or a city (e.g. "<車站>駅 <城市>").`
+
+原則:傳達同樣規則,不寫死任一 dest 的真地名;佔位用角括號 schematic。`checks.rs` 邏輯 + 測試/註解地名不動。
 
 **理由:** 提示範例寫死特定 dest 的地名違反 no-hardcode 精神 + 編別的 dest 時提示與內容不符(agent/用戶困惑)。這是 cosmetic string cleanup,無邏輯風險。
 
@@ -85,15 +99,25 @@
 
 ---
 
-## 測試衝擊（Codex 標 + Claude corroborate）
+## 測試衝擊（Codex 審 spec 補漏 + Claude corroborate）
 
-- `zh_coverage_pct` 是 private,只有 module 內 2 個 caller（`compare_content_depth.rs:182-183`),無其他 reader（Claude grep 確認）→ 改它安全。
-- **現有測試 `zh_coverage_is_weighted_not_avg`（`compare_content_depth_behavior_lock.rs:116-160`）會故意壞** — 它造 days + timesofday **無 activities**,鎖 `88%`。新 metric 下這些 session 全非-eligible → 要**重寫**成明確區分:
-  1. 有活動的 session 缺 ZH → gate FAIL（降完整性）。
-  2. 真空 scaffold session 缺 ZH → gate 仍 PASS（不列入）。
-  3. day theme ZH 仍在 gate 分母。
-- `verdict_short`/`verdict_aligned`（`:233,274`）用到 ZH — 檢查它們的 seed 是否讓 ZH gate PASS,否則 verdict 邏輯改後會變;需相應更新。
-- **歷史 88% 數字:** okinawa 舊 `88%` 出現在 design spec / CLI.md / CLAUDE.md history。新 metric 下 okinawa = 19/19 gate PASS（不再是百分比軸）。處理: 舊文件的 88% **標為歷史**（「(舊 4-軸 metric;新 metric = ZH gate)」）保留歷史脈絡,不改敘述;只更新會被執行的 behavior-lock 測試到新 metric（Yang 確認: 文件是歷史記錄,測試才是活的 — 對齊 `verify-against-committed-tree` 精神）。CLI.md 的 content-depth 說明更新到新的「3 軸 + gate」。
+- `zh_coverage_pct` 是 private,只有 module 內 2 個 caller（`compare_content_depth.rs:182-183`),無其他 reader（Claude grep 確認）→ 改它安全。它會被 gate 版取代(回 `(num,den)` 而非 %)。
+- **必壞、要換的測試:**
+  1. `zh_coverage_is_weighted_not_avg`（`compare_content_depth_behavior_lock.rs:116-160`）— 造 days+timesofday **無 activities**、鎖 `88%`。新 metric 下這些 session 非-eligible。**重寫**成 gate 語意的 case（見下「新增 behavior lock」）。
+  2. `renders_header_perday_and_totals`（`compare_content_depth_behavior_lock.rs:446`,Codex 抓到、初稿漏）— assert `ZH coverage` 在 totals 表。ZH 移出 totals 後**必壞** → 改成鎖 `gates:` 區塊 + drill/ref 兩列 gate 輸出。
+- **可能不用改 seed（Codex 修正初稿）:** `verdict_short`/`verdict_aligned`/`verdict_better`（`:233/:274/…`）的 helper `seed_depth_counts`（`:168`）已 insert 一個 activity + full ZH → 它們的 eligible session 已翻、gate PASS。**只需** review 確認 gate PASS 不改變其 verdict;多半無需改 seed（但要驗)。
+- **新增 behavior lock（Codex 列 + exact-validator-alignment case）:**
+  - gate FAIL 單獨就強制 `SHORT`（即使 3 depth 軸全 ≥ 或 ==）。
+  - `SHORT` 同時列 depth 缺口（固定序）+ 尾綴 `ZH-gate`。
+  - **`transit_notes_zh` 單獨**（focus_zh 空）滿足「session 已翻」→ 不算 missing。
+  - **whitespace-only ZH** 仍算 missing。
+  - **meal-only / route-only / transit-only 的 eligible slot**（validator alignment）: 有 meal 無 activity 的 session 缺 ZH → gate FAIL（證明 eligibility 是 OR 鏈非純 activities）。
+  - **參考 gate FAIL** → 印定義的 warning、exit 0、**不**降 drill 要求、**不**改 verdict。
+  - **`0/0`（零 eligible slot）→ gate PASS**、印 `0/0 PASS`。
+- **歷史 88% 數字:** okinawa 舊 `88%`（4-軸 metric）出現在 design spec / CLI.md / CLAUDE.md history 等。新 metric 下 okinawa = 19/19 gate PASS。處理（Codex: 限制 doc churn）:
+  - **更新** live `docs/reference/CLI.md` 的 content-depth 說明到「3 depth 軸 + ZH slot completeness gate」。
+  - **標為歷史**（不改敘述): genuinely-current `CLAUDE.md` 描述處加註「(舊 4-軸 metric;新 = ZH gate)」。
+  - **不改** 舊的 `2026-07-06-drill-while-comparing` design/plan（讓歷史照舊描述當時行為 — `verify-against-committed-tree` 精神:文件是歷史,測試才是活的)。
 
 ## 驗收
 
