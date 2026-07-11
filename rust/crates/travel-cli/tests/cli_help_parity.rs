@@ -40,3 +40,19 @@ fn real_typo_flag_still_errors() {
         "a real unknown flag must fail loud; stderr={stderr}"
     );
 }
+
+#[test]
+fn populate_missing_goals_points_to_cluster_list() {
+    // The --goals error is emitted by parse_args before any Turso connect, so
+    // no creds / no seed needed. An explicit --plan-id avoids plan ambiguity.
+    let (ok, _stdout, stderr) = run(&["populate-itinerary", "--plan-id", "no-such-plan-xyz"]);
+    assert!(!ok, "missing --goals must error (exit non-zero)");
+    assert!(
+        stderr.contains("requires --goals"),
+        "expected the --goals error; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("query-destination-ref"),
+        "the --goals error must point to query-destination-ref; got: {stderr}"
+    );
+}

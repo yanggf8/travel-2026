@@ -362,7 +362,11 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     p.pace = pace;
 
     let goals_raw =
-        goals_opt.ok_or_else(|| "populate-itinerary requires --goals \"<cluster1,cluster2,...>\"".to_string())?;
+        goals_opt.ok_or_else(|| {
+            "populate-itinerary requires --goals \"<cluster1,cluster2,...>\"\n  \
+             — list available clusters with: travel query-destination-ref --slug <dest>"
+                .to_string()
+        })?;
     let goals: Vec<String> = goals_raw
         .split(',')
         .map(|s| s.trim().to_string())
