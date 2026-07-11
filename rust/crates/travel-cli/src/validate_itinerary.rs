@@ -357,7 +357,7 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
                         truncate(ctx, 50)
                     ),
                     suggestion: Some(
-                        "Use a clean place name as the stop (e.g. \"赤嶺駅\", \"iias 沖縄豊崎\") — no parenthetical notes, +步行, or clock times inside the stop itself.".to_string(),
+                        "Use a clean place name as the stop (e.g. \"<車站>\", \"<地標>\") — no parenthetical notes, +步行, or clock times inside the stop itself.".to_string(),
                     ),
                 });
             }
@@ -408,7 +408,7 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
                         "Map stop \"{stop}\" is a bare name without station/city context — may geolocate wrong"
                     ),
                     suggestion: Some(
-                        "Add a 駅/站/Station suffix or a city (e.g. \"安里駅 那覇\").".to_string(),
+                        "Add a 駅/站/Station suffix or a city (e.g. \"<車站>駅 <城市>\").".to_string(),
                     ),
                 });
             }

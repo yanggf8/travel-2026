@@ -282,7 +282,7 @@ pub async fn run_zh(
             }
             if let Err(reason) = crate::checks::check_stop_linkable(stop) {
                 return Err(format!(
-                    "transit_notes_zh stop \"{}\" {reason}.\nHint: write the pill as a clean place chain, e.g. \"安里駅 → 赤嶺駅 → iias 沖縄豊崎\" — no （…）notes, +步行, or clock times inside a stop.",
+                    "transit_notes_zh stop \"{}\" {reason}.\nHint: write the pill as a clean place chain, e.g. \"<站A> → <站B> → <地標>\" — no （…）notes, +步行, or clock times inside a stop.",
                     stop.trim()
                 ));
             }

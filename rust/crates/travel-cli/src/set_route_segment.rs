@@ -57,7 +57,7 @@ pub async fn run(
     // and the lint agree exactly. Caught at creation, not in a late review.
     if let Err(reason) = crate::checks::guard_segment(&from, &to, &mode) {
         eprintln!("Error: route segment rejected — {reason}.");
-        eprintln!("Hint: use a clean place name (e.g. \"赤嶺駅\", \"iias 沖縄豊崎\") — no （…）notes, +步行, or clock times inside the stop; keep both stops in the same country; use mode=transit for a rail/bus leg.");
+        eprintln!("Hint: use a clean place name (e.g. \"<車站>\", \"<地標>\") — no （…）notes, +步行, or clock times inside the stop; keep both stops in the same country; use mode=transit for a rail/bus leg.");
         std::process::exit(1);
     }
     let day: i64 = match day_str.parse() {
