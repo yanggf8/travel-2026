@@ -113,56 +113,122 @@ fn gated_query_excludes_blank_meals_and_metadataless_routes() {
 }
 
 #[test]
-fn zh_coverage_is_weighted_not_avg() {
+fn zh_gate_passes_and_ignores_empty_session() {
+    let n = nanos(); let plan = format!("cdz-pass-{n}"); let dest = format!("cdz_pass_{n}");
+    let _g = Guard::new({ let (p,d)=(plan.clone(),dest.clone()); move || teardown_plan(&p,&d) });
+    seed_plan(&plan,&dest,0);   // REQUIRED: plan_metadata for resolve_active_destination
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{plan}','{dest}',1,'2026-11-01','full','draft','主題','2020-01-01 00:00:00');\
+         INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) VALUES ('{n}-a','{plan}','{dest}',1,'morning',0,'act','2020-01-01 00:00:00');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{plan}','{dest}',1,'morning','焦點'),('{plan}','{dest}',1,'afternoon',NULL);"
+    )).is_none() { eprintln!("credless"); return; }
+    let Some(out) = run_or_skip(&["compare","content-depth","--plan-id",&plan,"--against",&plan]) else { return };
+    // afternoon empty (no activity/meal/transit) → not eligible → its missing ZH is ignored.
+    assert!(out.contains("ZH slot completeness"), "gate label present; out={out}");
+    assert!(!out.contains("ZH coverage"), "ZH not a totals row; out={out}");
+    assert!(out.contains("1/1  PASS") || out.contains("PASS"), "eligible=1 day+1 session all translated → PASS; out={out}");
+}
+
+#[test]
+fn zh_gate_fail_and_depth_deficit_both_in_short() {
     let n = nanos();
-    let plan = format!("test-cdepth-zh-{n}");
-    let dest = plan.replace('-', "_");
-    seed_plan(&plan, &dest, 0);
-    let _g = Guard::new({
-        let (p, d) = (plan.clone(), dest.clone());
-        move || teardown_plan(&p, &d)
-    });
-    for day in 1..=5 {
-        if db_exec(&format!(
-            "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{plan}','{dest}',{day},'2026-11-0{day}','full','draft','主題{day}','2020-01-01 00:00:00')"
-        ))
-        .is_none()
-        {
-            return;
-        }
-    }
-    let mut filled = 0;
-    for day in 1..=5 {
-        for st in ["morning", "noon", "afternoon", "evening"] {
-            let zh = if filled < 17 {
-                filled += 1;
-                "'焦點'"
-            } else {
-                "NULL"
-            };
-            db_exec(&format!(
-                "INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{plan}','{dest}',{day},'{st}',{zh})"
-            ));
-        }
-    }
-    let Some(s) = run_or_skip(&[
-        "compare",
-        "content-depth",
-        "--plan-id",
-        &plan,
-        "--against",
-        &plan,
-    ]) else {
-        return;
-    };
-    assert!(
-        s.contains("88%"),
-        "expected weighted 88%, not 92%; stdout: {s}"
-    );
-    assert!(
-        !s.contains("92%"),
-        "must not use avg-of-ratios (92%); stdout: {s}"
-    );
+    let drill = format!("cdz-fd-d-{n}"); let ddest = format!("cdz_fd_d_{n}");
+    let refr = format!("cdz-fd-r-{n}"); let rdest = format!("cdz_fd_r_{n}");
+    let _g = Guard::new({ let (a,b,c,d)=(drill.clone(),ddest.clone(),refr.clone(),rdest.clone());
+        move || { teardown_plan(&a,&b); teardown_plan(&c,&d); } });
+    seed_plan(&drill,&ddest,0); seed_plan(&refr,&rdest,0);
+    // drill: 1 activity in morning, theme_zh set, but morning focus_zh NULL → eligible+untranslated → gate FAIL.
+    //        meals=0. ref: same activity + full ZH + 1 meal → drill meals(0) < ref meals(1) = depth deficit.
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{drill}','{ddest}',1,'2026-11-01','full','draft','主題','2020-01-01 00:00:00');\
+         INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) VALUES ('{n}-da','{drill}','{ddest}',1,'morning',0,'act','2020-01-01 00:00:00');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{drill}','{ddest}',1,'morning',NULL);\
+         INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{refr}','{rdest}',1,'2026-11-01','full','draft','主題','2020-01-01 00:00:00');\
+         INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) VALUES ('{n}-ra','{refr}','{rdest}',1,'morning',0,'act','2020-01-01 00:00:00');\
+         INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) VALUES ('{refr}','{rdest}',1,'noon',0,'Lunch','ai_recommended');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{refr}','{rdest}',1,'morning','焦點'),('{refr}','{rdest}',1,'noon','焦點');"
+    )).is_none() { eprintln!("credless"); return; }
+    let Some(out) = run_or_skip(&["compare","content-depth","--plan-id",&drill,"--against",&refr]) else { return };
+    assert!(out.contains("FAIL"), "drill gate FAIL; out={out}");
+    assert!(out.contains("SHORT: meals") && out.contains("ZH-gate"),
+        "SHORT lists depth deficit (meals) AND ZH-gate, meals before ZH-gate; out={out}");
+}
+
+#[test]
+fn zh_gate_transit_zh_translates_whitespace_missing() {
+    let n = nanos(); let plan = format!("cdz-tz-{n}"); let dest = format!("cdz_tz_{n}");
+    let _g = Guard::new({ let (p,d)=(plan.clone(),dest.clone()); move || teardown_plan(&p,&d) });
+    seed_plan(&plan,&dest,0);
+    // morning: activity + focus_zh = "   " (whitespace) but transit_notes_zh set → translated via transit_zh (NOT whitespace focus).
+    // To prove whitespace alone fails: also give noon an activity with focus_zh="   " and NO transit_zh → untranslated → FAIL.
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{plan}','{dest}',1,'2026-11-01','full','draft','主題','2020-01-01 00:00:00');\
+         INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) VALUES ('{n}-m','{plan}','{dest}',1,'morning',0,'act','2020-01-01 00:00:00'),('{n}-o','{plan}','{dest}',1,'noon',0,'act2','2020-01-01 00:00:00');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh,transit_notes_zh) VALUES ('{plan}','{dest}',1,'morning','   ','交通ZH'),('{plan}','{dest}',1,'noon','   ',NULL);"
+    )).is_none() { eprintln!("credless"); return; }
+    let Some(out) = run_or_skip(&["compare","content-depth","--plan-id",&plan,"--against",&plan]) else { return };
+    // morning translated (transit_zh non-blank); noon untranslated (whitespace focus, no transit_zh) → gate FAIL.
+    assert!(out.contains("FAIL"), "whitespace-only focus_zh is missing → noon untranslated → FAIL; out={out}");
+    assert!(out.contains("ZH-gate"), "SHORT: ZH-gate; out={out}");
+}
+
+#[test]
+fn zh_gate_meal_only_and_route_only_eligibility() {
+    let n = nanos(); let plan = format!("cdz-mr-{n}"); let dest = format!("cdz_mr_{n}");
+    let _g = Guard::new({ let (p,d)=(plan.clone(),dest.clone()); move || teardown_plan(&p,&d) });
+    seed_plan(&plan,&dest,0);
+    // Day eligible via ROUTE only (no activity, no meal on the day-level... actually meal below).
+    // noon: meal only, NO activity, NO transit_notes/_zh, focus_zh NULL → eligible SOLELY by meal, untranslated → FAIL.
+    // If eligibility were activities-only (the WRONG rule), noon would be non-eligible → PASS. FAIL proves the meal OR-branch.
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{plan}','{dest}',1,'2026-11-01','full','draft','主題','2020-01-01 00:00:00');\
+         INSERT INTO session_meals (plan_id,destination,day_number,session_type,sort_order,meal,source) VALUES ('{plan}','{dest}',1,'noon',0,'Lunch','ai_recommended');\
+         INSERT INTO day_route_segments (plan_id,destination,day_number,sort_order,from_place,to_place,mode,duration_min,source) VALUES ('{plan}','{dest}',1,0,'A','B','walk',10,'ai_recommended');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{plan}','{dest}',1,'noon',NULL);"
+    )).is_none() { eprintln!("credless"); return; }
+    let Some(out) = run_or_skip(&["compare","content-depth","--plan-id",&plan,"--against",&plan]) else { return };
+    // day eligible via route (theme_zh set → translated). noon eligible via meal, focus/transit_zh both blank → untranslated → FAIL.
+    assert!(out.contains("FAIL"), "meal-only session missing ZH → gate FAIL (proves OR-chain eligibility, not activities-only); out={out}");
+}
+
+#[test]
+fn reference_gate_fail_warns_but_does_not_change_verdict() {
+    let n = nanos();
+    let drill = format!("cdz-rg-d-{n}"); let ddest = format!("cdz_rg_d_{n}");
+    let refr = format!("cdz-rg-r-{n}"); let rdest = format!("cdz_rg_r_{n}");
+    let _g = Guard::new({ let (a,b,c,d)=(drill.clone(),ddest.clone(),refr.clone(),rdest.clone());
+        move || { teardown_plan(&a,&b); teardown_plan(&c,&d); } });
+    seed_plan(&drill,&ddest,0); seed_plan(&refr,&rdest,0);
+    // drill: fully translated, 1 activity → gate PASS, depth = ref depth.
+    // ref: 1 activity in morning but focus_zh NULL → ref gate FAIL. depth equal → drill should be ALIGNED (gate PASS),
+    //      + a reference-gate-FAIL warning; exit 0; drill verdict NOT SHORT (ref gate doesn't lower drill).
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{drill}','{ddest}',1,'2026-11-01','full','draft','主題','2020-01-01 00:00:00');\
+         INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) VALUES ('{n}-da','{drill}','{ddest}',1,'morning',0,'act','2020-01-01 00:00:00');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{drill}','{ddest}',1,'morning','焦點');\
+         INSERT INTO days (plan_id,destination,day_number,date,day_type,status,theme_zh,updated_at) VALUES ('{refr}','{rdest}',1,'2026-11-01','full','draft','主題','2020-01-01 00:00:00');\
+         INSERT INTO activities (id,plan_id,destination,day_number,session_type,sort_order,title,updated_at) VALUES ('{n}-ra','{refr}','{rdest}',1,'morning',0,'act','2020-01-01 00:00:00');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{refr}','{rdest}',1,'morning',NULL);"
+    )).is_none() { eprintln!("credless"); return; }
+    // run_or_skip returns Some only on exit 0 → asserting Some proves exit 0.
+    let Some(out) = run_or_skip(&["compare","content-depth","--plan-id",&drill,"--against",&refr]) else { return };
+    assert!(out.contains("reference ZH gate FAIL"), "ref gate FAIL warning printed; out={out}");
+    assert!(out.contains("ALIGNED") || out.contains("BETTER"), "drill gate PASS + depth>=ref → NOT SHORT despite bad ref; out={out}");
+    assert!(!out.contains("SHORT"), "bad reference must not force drill SHORT; out={out}");
+}
+
+#[test]
+fn zh_gate_zero_eligible_is_pass() {
+    let n = nanos(); let plan = format!("cdz-zero-{n}"); let dest = format!("cdz_zero_{n}");
+    let _g = Guard::new({ let (p,d)=(plan.clone(),dest.clone()); move || teardown_plan(&p,&d) });
+    seed_plan(&plan,&dest,0);
+    // one day, sessions, but zero content anywhere → 0 eligible → 0/0 PASS.
+    if db_exec(&format!(
+        "INSERT INTO days (plan_id,destination,day_number,date,day_type,status,updated_at) VALUES ('{plan}','{dest}',1,'2026-11-01','full','draft','2020-01-01 00:00:00');\
+         INSERT INTO timesofday (plan_id,destination,day_number,session_type,focus_zh) VALUES ('{plan}','{dest}',1,'morning',NULL);"
+    )).is_none() { eprintln!("credless"); return; }
+    let Some(out) = run_or_skip(&["compare","content-depth","--plan-id",&plan,"--against",&plan]) else { return };
+    assert!(out.contains("0/0  PASS") || (out.contains("0/0") && out.contains("PASS")), "zero eligible → 0/0 PASS; out={out}");
 }
 
 fn seed_depth_counts(
@@ -443,7 +509,25 @@ fn renders_header_perday_and_totals() {
     assert!(s.contains("activities"), "stdout: {s}");
     assert!(s.contains("meals (real)"), "stdout: {s}");
     assert!(s.contains("routes (w/ metadata)"), "stdout: {s}");
-    assert!(s.contains("ZH coverage"), "stdout: {s}");
+    // ZH is a completeness gate, not a totals depth axis.
+    assert!(!s.contains("ZH coverage"), "ZH must not appear in totals; stdout: {s}");
+    assert!(s.contains("gates:"), "gates block present; stdout: {s}");
+    assert!(
+        s.contains("ZH slot completeness  drill") && s.contains("ZH slot completeness  ref"),
+        "both drill + ref gate rows; stdout: {s}"
+    );
+    assert!(
+        s.contains(" PASS") || s.contains(" FAIL"),
+        "gate PASS|FAIL label; stdout: {s}"
+    );
     assert!(s.contains("VERDICT:"), "stdout: {s}");
+    // Block ORDER: gates after totals, before VERDICT.
+    let totals_i = s.find("totals").expect("totals present");
+    let gates_i = s.find("gates:").expect("gates present");
+    let verdict_i = s.find("VERDICT:").expect("VERDICT present");
+    assert!(
+        totals_i < gates_i && gates_i < verdict_i,
+        "order must be totals → gates → VERDICT; totals={totals_i} gates={gates_i} verdict={verdict_i}; stdout: {s}"
+    );
 }
 
