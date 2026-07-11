@@ -162,18 +162,22 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "resolve-plan" => plan_resolver::run_cli(rest).await,
         [cmd, rest @ ..] if cmd == "query-offers" => {
+            if wants_help(rest, "travel query-offers [--dest <slug>] [--region <r>] [--start <date>] [--end <date>] [--source <s>] [--max-price <twd>] [--limit <n>]") { return Ok(()); }
             let opts = offers::OffersArgs::parse(rest)?;
             offers::run(&opts).await
         }
         [cmd, rest @ ..] if cmd == "query-destination-ref" || cmd == "destination-ref" => {
+            if wants_help(rest, "travel query-destination-ref --slug <destination_slug>\n  (lists areas, clusters, POIs, transit, tips for a registered destination — e.g. tokyo_2026)") { return Ok(()); }
             let opts = destination_ref::DestRefArgs::parse(rest)?;
             destination_ref::run(&opts).await
         }
         [cmd, rest @ ..] if cmd == "query-bookings" => {
+            if wants_help(rest, "travel query-bookings [--dest <slug>] [--category <c>] [--status <s>] [--max <n>] [--trip-id <id>]") { return Ok(()); }
             let opts = bookings::QueryBookingsArgs::parse(rest)?;
             bookings::run(&opts).await
         }
         [cmd, rest @ ..] if cmd == "check-freshness" => {
+            if wants_help(rest, "travel check-freshness --source <s> [--dest <slug>] [--region <r>] [--start <date>] [--end <date>] [--max-age <hours>] [--plan-id <id>]") { return Ok(()); }
             let opts = freshness::FreshnessArgs::parse(rest)?;
             freshness::run(&opts).await
         }
