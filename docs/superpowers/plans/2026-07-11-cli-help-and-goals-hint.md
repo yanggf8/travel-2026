@@ -174,31 +174,21 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-CORROBORATED ORDERING: the `--goals` check (`populate_itinerary.rs:365`) fires AFTER `resolve_plan_id` (main.rs:640) AND after `connect_write` (populate_itinerary.rs:68). So the test MUST seed a resolvable plan and needs Turso creds — skip cleanly if credless. Use the real harness (`common::{seed_plan, teardown_plan, Guard, nanos, is_credless, bin}`).
+CORROBORATED ORDERING (re-verified 2026-07-11, live): the `requires --goals` error lives INSIDE `parse_args` (`populate_itinerary.rs:365`, within the `fn parse_args` at :322), and `run()` calls `parse_args(args)` as its FIRST line (:66) — BEFORE `connect_write` (:68). And `resolve_plan_id` with an explicit `--plan-id` returns that id WITHOUT touching Turso. So the `--goals` error fires SYNCHRONOUSLY, pre-connect, pre-DB — **NO seed, NO creds needed**. Verified live: `populate-itinerary --plan-id some-plan-xyz` (unseeded, no creds) → stderr `populate-itinerary requires --goals ...`, exit 1. (This is the simpler creds-free test; do NOT seed a plan — that was an earlier over-correction.)
 
-Add to `tests/cli_help_parity.rs` (top: `use common::{seed_plan, teardown_plan, nanos, is_credless, Guard};`):
+Add to `tests/cli_help_parity.rs`:
 
 ```rust
-#[tokio::test]
-async fn populate_missing_goals_points_to_cluster_list() {
-    let n = nanos();
-    let plan = format!("hint-plan-{n}");
-    let dest = format!("hint_dest_{n}");
-
-    // Need creds: the --goals error is reached only after connect_write.
-    let (_ok0, _o0, probe) = run(&["query-bookings", "--plan-id", &plan]);
-    if is_credless(&probe) { eprintln!("credless — skip"); return; }
-
-    let _g = Guard::new({
-        let (plan, dest) = (plan.clone(), dest.clone());
-        move || teardown_plan(&plan, &dest)
-    });
-    seed_plan(&plan, &dest, 1);
-
-    // No --goals -> error must point the agent to the cluster list.
-    let (ok, _stdout, stderr) = run(&["populate-itinerary", "--plan-id", &plan]);
-    assert!(!ok, "missing --goals must error");
-    assert!(stderr.contains("requires --goals"), "expected the --goals error; got: {stderr}");
+#[test]
+fn populate_missing_goals_points_to_cluster_list() {
+    // The --goals error is emitted by parse_args before any Turso connect, so
+    // no creds / no seed needed. An explicit --plan-id avoids plan ambiguity.
+    let (ok, _stdout, stderr) = run(&["populate-itinerary", "--plan-id", "no-such-plan-xyz"]);
+    assert!(!ok, "missing --goals must error (exit non-zero)");
+    assert!(
+        stderr.contains("requires --goals"),
+        "expected the --goals error; got: {stderr}"
+    );
     assert!(
         stderr.contains("query-destination-ref"),
         "the --goals error must point to query-destination-ref; got: {stderr}"
@@ -206,7 +196,7 @@ async fn populate_missing_goals_points_to_cluster_list() {
 }
 ```
 
-> `is_credless` takes the stderr of a command that tried to connect; `query-bookings` connects, so its stderr reveals a creds failure. If a seeded plan still can't reach the `--goals` branch because `read_destination`/`read_days` (populate_itinerary.rs:69-72) error first, seed the destination + a `plan_destinations` row too (mirror what other populate/itinerary tests seed — check `tests/populate_itinerary_behavior_lock.rs` for the exact seed set). Adjust the seed until the `requires --goals` branch is the failing point. The three assertions are the lock.
+> This is a plain `#[test]` (no tokio, no harness beyond the local `run()`), because the target error is synchronous and DB-free. The three assertions are the lock: exits non-zero, says "requires --goals", and names "query-destination-ref".
 
 - [ ] **Step 2: Run test to verify it fails**
 
