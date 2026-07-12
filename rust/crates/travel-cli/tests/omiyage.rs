@@ -634,3 +634,175 @@ fn add_omiyage_no_audit_even_with_travel_plan_id() {
     .unwrap_or_else(|| "0".into());
     assert_eq!(events_before, events_after, "no plan_events row");
 }
+
+// ── Task 4: query-omiyage ──────────────────────────────────────────────────
+
+#[test]
+fn query_omiyage_round_trip_grouped_with_dual_provenance() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_q_{n}");
+    let poi = format!("omi_poi_q_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    if !seed_dest_and_poi(&slug, &poi) {
+        return;
+    }
+
+    // two items, different categories (order: 名產 before 和菓子 if we use ASCII... use explicit categories)
+    let (ok_a, _, e_a) = run(&[
+        "add-omiyage", &slug, "item_b",
+        "--name", "Banana Cake", "--category", "和菓子",
+        "--buy-at", &poi,
+        "--item-source-url", "https://example.com/banana",
+        "--item-confidence", "verified",
+        "--location-source-url", "https://example.com/floor-b",
+        "--location-confidence", "verified",
+        "--notes", "classic",
+    ]);
+    assert!(ok_a, "{e_a}");
+    let (ok_b, _, e_b) = run(&[
+        "add-omiyage", &slug, "item_a",
+        "--name", "Senbei Pack", "--category", "名產",
+        "--buy-at", &poi,
+        "--item-source-url", "https://example.com/senbei",
+        "--item-confidence", "reviewed",
+        "--location-source-url", "https://example.com/floor-a",
+        "--location-confidence", "reviewed",
+    ]);
+    assert!(ok_b, "{e_b}");
+
+    let (ok, stdout, e) = run(&["query-omiyage", "--slug", &slug]);
+    assert!(ok, "query; stderr={e}");
+    // item_id printed
+    assert!(stdout.contains("item_a") && stdout.contains("item_b"), "item_ids: {stdout}");
+    // both category headers / labels present
+    assert!(stdout.contains("名產") && stdout.contains("和菓子"), "categories: {stdout}");
+    // POI title/area/station from join
+    assert!(stdout.contains("Test Depachika"), "poi title: {stdout}");
+    assert!(stdout.contains("namba") || stdout.contains("Namba"), "area/station: {stdout}");
+    // dual provenance: item URLs once + location URLs
+    assert!(stdout.contains("https://example.com/banana"), "item provenance: {stdout}");
+    assert!(stdout.contains("https://example.com/floor-b"), "loc provenance: {stdout}");
+    // nullable address → '—' (seed left address NULL)
+    assert!(stdout.contains('—') || stdout.contains("—"), "nullable dash: {stdout}");
+    // deterministic order from repo ORDER BY i.category, i.name, i.item_id, ...
+    // Lock relative order of the two category labels in stdout (whichever UTF-8 sort puts first).
+    let i_meisan = stdout.find("名產").expect("名產");
+    let i_wagashi = stdout.find("和菓子").expect("和菓子");
+    let cat_order_ok = if "名產" < "和菓子" {
+        i_meisan < i_wagashi
+    } else {
+        i_wagashi < i_meisan
+    };
+    assert!(cat_order_ok, "category order must follow ORDER BY i.category; stdout={stdout}");
+}
+
+#[test]
+fn query_omiyage_unknown_vs_empty() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_empty_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    // known dest, zero omiyage rows
+    if db_exec(&format!(
+        "INSERT INTO destination_config (slug, display_name, timezone, currency, origin) \
+           VALUES ('{slug}', 'Empty Omi', 'Asia/Tokyo', 'JPY', 'taiwan');"
+    ))
+    .is_none()
+    {
+        return;
+    }
+
+    let (ok_empty, out_e, err_e) = run(&["query-omiyage", "--slug", &slug]);
+    assert!(!ok_empty, "empty dest must fail");
+    let msg_empty = format!("{out_e}{err_e}");
+    assert!(
+        msg_empty.contains("no sourced") || msg_empty.contains("no omiyage") || msg_empty.contains("empty"),
+        "empty message: {msg_empty}"
+    );
+
+    let (ok_unk, out_u, err_u) = run(&["query-omiyage", "--slug", "no_such_dest_omiyage_zzz"]);
+    assert!(!ok_unk, "unknown dest must fail");
+    let msg_unk = format!("{out_u}{err_u}");
+    assert!(
+        msg_unk.contains("unknown") || msg_unk.contains("not found") || msg_unk.contains("destination_config"),
+        "unknown message: {msg_unk}"
+    );
+    // different messages
+    assert_ne!(
+        msg_empty.trim(),
+        msg_unk.trim(),
+        "unknown vs empty must differ"
+    );
+}
+
+#[test]
+fn query_omiyage_corrupt_orphan_fails() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_orph_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    if db_exec(&format!(
+        "INSERT INTO destination_config (slug, display_name, timezone, currency, origin) \
+           VALUES ('{slug}', 'Orph', 'Asia/Tokyo', 'JPY', 'taiwan'); \
+         INSERT INTO destination_omiyage_items \
+           (slug,item_id,name,category,notes,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','orphan_item','O','名產',NULL,'https://example.com/i','2026-07-12T00:00:00Z','verified'); \
+         INSERT INTO destination_omiyage_locations \
+           (slug,item_id,poi_id,purchase_note,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','orphan_item','missing_poi',NULL,'https://example.com/l','2026-07-12T00:00:00Z','verified');"
+    ))
+    .is_none()
+    {
+        return;
+    }
+
+    let (ok, _, e) = run(&["query-omiyage", "--slug", &slug]);
+    assert!(!ok, "orphan POI must fail query, not silently omit; stderr={e}");
+}
+
+#[test]
+fn query_omiyage_rejects_plan_id_help_and_typo() {
+    // --help: no Turso needed if parse is pre-connect; still fine if connect later
+    let (ok_h, out_h, err_h) = run(&["query-omiyage", "--help"]);
+    assert!(ok_h, "help should succeed");
+    let help = format!("{out_h}{err_h}");
+    assert!(
+        help.contains("Usage") || help.contains("usage") || help.contains("query-omiyage"),
+        "help text: {help}"
+    );
+
+    let (ok_p, _, e_p) = run(&["query-omiyage", "--slug", "x", "--plan-id", "p"]);
+    assert!(!ok_p, "--plan-id rejected; stderr={e_p}");
+    assert!(
+        e_p.contains("plan-id") || e_p.contains("--plan-id"),
+        "friendly plan-id: {e_p}"
+    );
+
+    let (ok_t, _, e_t) = run(&["query-omiyage", "--slug", "x", "--slugg", "y"]);
+    assert!(!ok_t, "typo flag rejected; stderr={e_t}");
+}

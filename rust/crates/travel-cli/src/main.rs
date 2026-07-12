@@ -30,6 +30,7 @@ mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-param catalo
 mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-keyed, no audit triad)
 mod add_transit; // add-transit — add a destination_transit station pair (slug-keyed, no audit; feeds derive-routes)
 mod add_omiyage; // add-omiyage — omiyage item + purchase location (slug-keyed, no audit triad)
+mod query_omiyage; // query-omiyage — read-only grouped omiyage view (slug-keyed reference data)
 mod set_activity;
 mod set_activity_poi;
 mod confirm_recommendations;
@@ -232,6 +233,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "add-omiyage" => {
             add_omiyage::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "query-omiyage" => {
+            query_omiyage::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "ota-status" => {
             ota_status::run(rest).await
@@ -870,6 +874,7 @@ VIEWS\n\
   query-offers [--source a,b] [--dest d] [--max-price N] [--start D] [--end D] [--limit N]\n\
   query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]  List AI-recommended items awaiting confirmation\n\
   query-destination-ref --slug <slug>\n\
+  query-omiyage --slug <slug>     omiyage items + purchase locations (slug-keyed)\n\
   view-prices | check-freshness --source <id> [--dest slug]\n\
 \n\
 ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
@@ -899,7 +904,7 @@ VALIDATE / CHECKS\n\
   validate data | validate publish | doctor | validate-itinerary | check-hours\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
-  add-transit | add-omiyage  (slug-keyed reference data; no --plan-id)\n\
+  add-transit | add-omiyage | query-omiyage  (slug-keyed reference data; no --plan-id)\n\
   run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
 \n\
 COMPARE / UTIL\n\
