@@ -172,6 +172,52 @@ pub async fn query_omiyage(conn: &Connection, slug: &str) -> Result<Vec<OmiyageR
     Ok(out)
 }
 
+/// One omiyage-tagged POI for the read-only research worklist.
+#[derive(Debug, Clone)]
+pub struct WorklistPoi {
+    pub poi_id: String,
+    pub title: String,
+    pub area: String,
+    pub notes: Option<String>,
+    pub already_sourced: i64,
+}
+
+/// POIs tagged 'omiyage' for a slug, with their notes (verbatim hint) and a count
+/// of already-sourced omiyage locations at that POI. Read-only discovery for the worklist.
+pub async fn omiyage_worklist_pois(
+    conn: &Connection,
+    slug: &str,
+) -> Result<Vec<WorklistPoi>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT p.poi_id, p.title, p.area, p.notes, \
+                    (SELECT COUNT(*) FROM destination_omiyage_locations l \
+                     WHERE l.slug=p.slug AND l.poi_id=p.poi_id) AS sourced \
+             FROM destination_poi_tags t \
+             JOIN destination_pois p ON p.slug=t.slug AND p.poi_id=t.poi_id \
+             WHERE t.slug=?1 AND t.tag='omiyage' \
+             ORDER BY p.poi_id",
+            libsql::params![slug.to_string()],
+        )
+        .await
+        .map_err(|e| format!("omiyage_worklist_pois failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(r) = rows
+        .next()
+        .await
+        .map_err(|e| format!("worklist row read failed: {e}"))?
+    {
+        out.push(WorklistPoi {
+            poi_id: r.get(0).unwrap_or_default(),
+            title: r.get(1).unwrap_or_default(),
+            area: r.get(2).unwrap_or_default(),
+            notes: opt_string(&r, 3),
+            already_sourced: r.get(4).unwrap_or(0),
+        });
+    }
+    Ok(out)
+}
+
 // ── atomic writer ──────────────────────────────────────────────────────────
 
 /// Atomic write per plan Task 2 / spec L64–71.

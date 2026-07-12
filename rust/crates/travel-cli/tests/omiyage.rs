@@ -17,11 +17,13 @@ fn run(args: &[&str]) -> (bool, String, String) {
 }
 
 /// Dependency-order teardown for omiyage + seeded ref rows (non-plan-keyed).
+/// Also deletes destination_poi_tags (worklist tests seed tags).
 fn omi_teardown(slug: &str) {
     let s = slug.replace('\'', "''");
     let _ = db_exec_teardown(&format!(
         "DELETE FROM destination_omiyage_locations WHERE slug='{s}'; \
          DELETE FROM destination_omiyage_items WHERE slug='{s}'; \
+         DELETE FROM destination_poi_tags WHERE slug='{s}'; \
          DELETE FROM destination_pois WHERE slug='{s}'; \
          DELETE FROM destination_config WHERE slug='{s}';"
     ));
@@ -938,4 +940,186 @@ fn validate_data_empty_omiyage_stays_valid_for_slug() {
             panic!("empty omiyage must not be an integrity error: {line}");
         }
     }
+}
+
+// ── Task 1: omiyage-worklist (read-only discovery) ─────────────────────────
+
+/// Seed config + poi + an omiyage tag with a notes hint. Returns false if credless.
+/// Columns match scripts/schema.sql (notes exists; no invented `source` column —
+/// same contract as seed_dest_and_poi).
+fn seed_omiyage_tagged_poi(slug: &str, poi: &str, notes: &str) -> bool {
+    if db_exec("SELECT 1").is_none() {
+        return false;
+    }
+    let s = slug.replace('\'', "''");
+    let p = poi.replace('\'', "''");
+    let nt = notes.replace('\'', "''");
+    db_exec(&format!(
+        "INSERT INTO destination_config (slug,display_name,timezone,currency,origin) \
+           VALUES ('{s}','Omi','Asia/Tokyo','JPY','taiwan');\
+         INSERT INTO destination_pois \
+           (slug,poi_id,title,area,nearest_station,notes,source_url,fetched_at,confidence) \
+           VALUES ('{s}','{p}','Test Depachika','namba','Namba','{nt}',\
+                   'https://example.com/poi','2026-07-12T00:00:00Z','verified');\
+         INSERT INTO destination_poi_tags (slug,poi_id,tag,sort_order) \
+           VALUES ('{s}','{p}','omiyage',0);"
+    ))
+    .is_some()
+}
+
+#[test]
+fn worklist_prints_tagged_poi_notes_and_template_writes_nothing() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_wl_{n}");
+    let poi = format!("omi_wlp_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    if !seed_omiyage_tagged_poi(&slug, &poi, "Premium omiyage: Yoku Moku, Tokyo Banana") {
+        return;
+    }
+
+    let (ok, out, e) = run(&["omiyage-worklist", "--slug", &slug]);
+    assert!(ok, "worklist should succeed; e={e}");
+    assert!(out.contains(&poi), "prints poi_id: {out}");
+    assert!(out.contains("Yoku Moku"), "prints notes verbatim: {out}");
+    assert!(
+        out.contains("WARNING") || out.contains("hint"),
+        "warns notes are hints: {out}"
+    );
+    assert!(
+        out.contains("add-omiyage") && out.contains(&slug),
+        "prints add-omiyage template with slug: {out}"
+    );
+    assert!(
+        out.contains("already sourced") || out.contains("0"),
+        "shows already-sourced count: {out}"
+    );
+
+    // WRITES NOTHING: no omiyage rows created for this slug.
+    let items = db_exec(&format!(
+        "SELECT COUNT(*) FROM destination_omiyage_items WHERE slug='{slug}'"
+    ))
+    .unwrap();
+    assert_eq!(
+        items.scalar().as_deref(),
+        Some("0"),
+        "worklist must write NO items"
+    );
+    let locs = db_exec(&format!(
+        "SELECT COUNT(*) FROM destination_omiyage_locations WHERE slug='{slug}'"
+    ))
+    .unwrap();
+    assert_eq!(
+        locs.scalar().as_deref(),
+        Some("0"),
+        "worklist must write NO locations"
+    );
+}
+
+#[test]
+fn worklist_already_sourced_count_reflects_existing() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_wls_{n}");
+    let poi = format!("omi_wlsp_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    if !seed_omiyage_tagged_poi(&slug, &poi, "Tokyo Banana") {
+        return;
+    }
+    // add one real omiyage row at this POI via the real command
+    let (ok_a, _, ea) = run(&[
+        "add-omiyage",
+        &slug,
+        "tokyo_banana",
+        "--name",
+        "Tokyo Banana",
+        "--category",
+        "和菓子",
+        "--buy-at",
+        &poi,
+        "--item-source-url",
+        "https://example.com/i",
+        "--item-confidence",
+        "verified",
+        "--location-source-url",
+        "https://example.com/l",
+        "--location-confidence",
+        "verified",
+    ]);
+    assert!(ok_a, "{ea}");
+    let (ok, out, e) = run(&["omiyage-worklist", "--slug", &slug]);
+    assert!(ok, "e={e}");
+    // already-sourced count for this POI should be 1
+    assert!(
+        out.contains("already sourced here: 1") || out.contains(": 1"),
+        "count reflects the 1 existing: {out}"
+    );
+}
+
+#[test]
+fn worklist_no_tagged_poi_fails_loud() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_wln_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    // config exists but NO omiyage-tagged POI
+    if db_exec(&format!(
+        "INSERT INTO destination_config (slug,display_name,timezone,currency,origin) \
+           VALUES ('{slug}','Omi','Asia/Tokyo','JPY','taiwan')"
+    ))
+    .is_none()
+    {
+        return;
+    }
+    let (ok, _o, e) = run(&["omiyage-worklist", "--slug", &slug]);
+    assert!(!ok, "no omiyage-tagged POI must fail loud");
+    assert!(
+        e.contains("no omiyage") || e.contains("no omiyage-tagged") || e.contains("tag"),
+        "message: {e}"
+    );
+}
+
+#[test]
+fn worklist_unknown_dest_and_plan_id_and_help() {
+    let (ok_u, _o, e_u) = run(&["omiyage-worklist", "--slug", "no_such_dest_wl_zzz"]);
+    assert!(!ok_u, "unknown dest fails");
+    assert!(
+        e_u.contains("unknown") || e_u.contains("destination_config"),
+        "unknown msg: {e_u}"
+    );
+    let (ok_p, _o, e_p) = run(&["omiyage-worklist", "--slug", "x", "--plan-id", "p"]);
+    assert!(!ok_p, "--plan-id rejected");
+    assert!(e_p.contains("plan-id"), "friendly: {e_p}");
+    let (ok_h, out_h, err_h) = run(&["omiyage-worklist", "--help"]);
+    assert!(
+        ok_h && (format!("{out_h}{err_h}").contains("Usage")
+            || format!("{out_h}{err_h}").contains("omiyage-worklist")),
+        "help"
+    );
+    let (ok_t, _o, _e) = run(&["omiyage-worklist", "--slug", "x", "--slugg", "y"]);
+    assert!(!ok_t, "typo flag rejected");
 }

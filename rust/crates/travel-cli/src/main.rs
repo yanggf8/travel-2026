@@ -31,6 +31,7 @@ mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-k
 mod add_transit; // add-transit — add a destination_transit station pair (slug-keyed, no audit; feeds derive-routes)
 mod add_omiyage; // add-omiyage — omiyage item + purchase location (slug-keyed, no audit triad)
 mod query_omiyage; // query-omiyage — read-only grouped omiyage view (slug-keyed reference data)
+mod omiyage_worklist; // omiyage-worklist — read-only research worklist of omiyage-tagged POIs (writes nothing)
 mod set_activity;
 mod set_activity_poi;
 mod confirm_recommendations;
@@ -236,6 +237,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "query-omiyage" => {
             query_omiyage::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "omiyage-worklist" => {
+            omiyage_worklist::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "ota-status" => {
             ota_status::run(rest).await
@@ -875,6 +879,7 @@ VIEWS\n\
   query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]  List AI-recommended items awaiting confirmation\n\
   query-destination-ref --slug <slug>\n\
   query-omiyage --slug <slug>     omiyage items + purchase locations (slug-keyed)\n\
+  omiyage-worklist --slug <slug>   omiyage-tagged POIs as research worklist (read-only; writes nothing)\n\
   view-prices | check-freshness --source <id> [--dest slug]\n\
 \n\
 ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
@@ -904,7 +909,7 @@ VALIDATE / CHECKS\n\
   validate data | validate publish | doctor | validate-itinerary | check-hours\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
-  add-transit | add-omiyage | query-omiyage  (slug-keyed reference data; no --plan-id)\n\
+  add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
   run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
 \n\
 COMPARE / UTIL\n\
