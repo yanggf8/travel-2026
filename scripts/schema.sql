@@ -379,6 +379,29 @@ CREATE TABLE destination_transit (
     PRIMARY KEY (slug, pair_key)
   );
 
+CREATE TABLE destination_omiyage_items (
+    slug TEXT,
+    item_id TEXT,
+    name TEXT,
+    category TEXT,
+    notes TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (slug, item_id)
+  );
+
+CREATE TABLE destination_omiyage_locations (
+    slug TEXT,
+    item_id TEXT,
+    poi_id TEXT,
+    purchase_note TEXT,
+    source_url TEXT,
+    fetched_at TEXT,
+    confidence TEXT,
+    PRIMARY KEY (slug, item_id, poi_id)
+  );
+
 CREATE TABLE destinations (
     slug TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,

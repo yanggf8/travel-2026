@@ -1422,6 +1422,35 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
+    exec_lenient(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS destination_omiyage_items (
+  slug TEXT,
+  item_id TEXT,
+  name TEXT,
+  category TEXT,
+  notes TEXT,
+  source_url TEXT,
+  fetched_at TEXT,
+  confidence TEXT,
+  PRIMARY KEY (slug, item_id)
+);"#,
+    )
+    .await;
+    exec_lenient(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS destination_omiyage_locations (
+  slug TEXT,
+  item_id TEXT,
+  poi_id TEXT,
+  purchase_note TEXT,
+  source_url TEXT,
+  fetched_at TEXT,
+  confidence TEXT,
+  PRIMARY KEY (slug, item_id, poi_id)
+);"#,
+    )
+    .await;
 
     exec_lenient(
         &conn,
