@@ -29,6 +29,7 @@ mod scrape_parser;
 mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-param catalog mutations
 mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-keyed, no audit triad)
 mod add_transit; // add-transit — add a destination_transit station pair (slug-keyed, no audit; feeds derive-routes)
+mod add_omiyage; // add-omiyage — omiyage item + purchase location (slug-keyed, no audit triad)
 mod set_activity;
 mod set_activity_poi;
 mod confirm_recommendations;
@@ -228,6 +229,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "add-transit" => {
             add_transit::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "add-omiyage" => {
+            add_omiyage::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "ota-status" => {
             ota_status::run(rest).await
@@ -895,6 +899,7 @@ VALIDATE / CHECKS\n\
   validate data | validate publish | doctor | validate-itinerary | check-hours\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
+  add-transit | add-omiyage  (slug-keyed reference data; no --plan-id)\n\
   run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
 \n\
 COMPARE / UTIL\n\

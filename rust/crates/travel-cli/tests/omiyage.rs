@@ -71,3 +71,566 @@ fn omiyage_tables_exist_after_migrate() {
         "destination_omiyage_locations must have the 7 columns"
     );
 }
+
+#[test]
+fn add_omiyage_creates_item_and_location() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_dest_{n}");
+    let poi = format!("omi_poi_{n}");
+    // Guard FIRST — right after ids bound, BEFORE seed (set_poi_coords.rs:62-68)
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug); // defensive pre-clean
+    if !seed_dest_and_poi(&slug, &poi) {
+        eprintln!("credless on seed");
+        return;
+    }
+
+    let (ok, _o, e) = run(&[
+        "add-omiyage",
+        &slug,
+        "tokyo_banana",
+        "--name",
+        "Tokyo Banana",
+        "--category",
+        "和菓子",
+        "--buy-at",
+        &poi,
+        "--item-source-url",
+        "https://www.tokyobanana.jp/",
+        "--item-confidence",
+        "verified",
+        "--location-source-url",
+        "https://example.com/floor",
+        "--location-confidence",
+        "verified",
+    ]);
+    assert!(ok, "add-omiyage should succeed; err={e}");
+
+    let it = db_exec(&format!(
+        "SELECT COUNT(*) FROM destination_omiyage_items \
+         WHERE slug='{slug}' AND item_id='tokyo_banana'"
+    ))
+    .expect("count items");
+    assert_eq!(it.scalar().as_deref(), Some("1"));
+
+    let lo = db_exec(&format!(
+        "SELECT COUNT(*) FROM destination_omiyage_locations \
+         WHERE slug='{slug}' AND item_id='tokyo_banana' AND poi_id='{poi}'"
+    ))
+    .expect("count locations");
+    assert_eq!(lo.scalar().as_deref(), Some("1"));
+}
+
+#[test]
+fn add_omiyage_second_seller_keeps_item_unchanged() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_dest2_{n}");
+    let poi1 = format!("omi_poi_a_{n}");
+    let poi2 = format!("omi_poi_b_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    if !seed_dest_and_poi(&slug, &poi1) {
+        return;
+    }
+    // second POI same slug (real columns only)
+    let s = slug.replace('\'', "''");
+    let p2 = poi2.replace('\'', "''");
+    if db_exec(&format!(
+        "INSERT INTO destination_pois \
+           (slug, poi_id, title, area, nearest_station, source_url, fetched_at, confidence) \
+           VALUES ('{s}', '{p2}', 'Second Seller', 'umeda', 'Umeda', \
+                   'https://example.com/poi2', '2026-07-12T00:00:00Z', 'verified');"
+    ))
+    .is_none()
+    {
+        return;
+    }
+
+    // first seller + full item bundle
+    let (ok1, _, e1) = run(&[
+        "add-omiyage", &slug, "item_x",
+        "--name", "Item X", "--category", "名產",
+        "--buy-at", &poi1,
+        "--item-source-url", "https://example.com/item",
+        "--item-confidence", "verified",
+        "--location-source-url", "https://example.com/loc1",
+        "--location-confidence", "verified",
+        "--notes", "keep-me",
+    ]);
+    assert!(ok1, "first add; err={e1}");
+
+    let before = db_exec(&format!(
+        "SELECT name||'|'||category||'|'||COALESCE(notes,'')||'|'||source_url||'|'||confidence \
+         FROM destination_omiyage_items WHERE slug='{slug}' AND item_id='item_x'"
+    ))
+    .and_then(|r| r.scalar())
+    .expect("item snapshot");
+
+    // second seller: item bundle OMITTED
+    let (ok2, _, e2) = run(&[
+        "add-omiyage", &slug, "item_x",
+        "--buy-at", &poi2,
+        "--location-source-url", "https://example.com/loc2",
+        "--location-confidence", "reviewed",
+    ]);
+    assert!(ok2, "second seller; err={e2}");
+
+    let after = db_exec(&format!(
+        "SELECT name||'|'||category||'|'||COALESCE(notes,'')||'|'||source_url||'|'||confidence \
+         FROM destination_omiyage_items WHERE slug='{slug}' AND item_id='item_x'"
+    ))
+    .and_then(|r| r.scalar())
+    .expect("item after");
+    assert_eq!(before, after, "item row must be byte-identical after 2nd seller");
+
+    let nloc = db_exec(&format!(
+        "SELECT COUNT(*) FROM destination_omiyage_locations WHERE slug='{slug}' AND item_id='item_x'"
+    ))
+    .expect("loc count");
+    assert_eq!(nloc.scalar().as_deref(), Some("2"));
+
+    // sub-case: mismatched SUPPLIED bundle → fail, no 3rd location, item still unchanged
+    let (ok_bad, _, e_bad) = run(&[
+        "add-omiyage", &slug, "item_x",
+        "--name", "WRONG NAME",
+        "--buy-at", &poi1,
+        "--location-source-url", "https://example.com/loc3",
+        "--location-confidence", "verified",
+    ]);
+    assert!(!ok_bad, "mismatched name must fail; stderr={e_bad}");
+    let after_bad = db_exec(&format!(
+        "SELECT name||'|'||category||'|'||COALESCE(notes,'')||'|'||source_url||'|'||confidence \
+         FROM destination_omiyage_items WHERE slug='{slug}' AND item_id='item_x'"
+    ))
+    .and_then(|r| r.scalar())
+    .expect("item after mismatch");
+    assert_eq!(before, after_bad);
+    let nloc2 = db_exec(&format!(
+        "SELECT COUNT(*) FROM destination_omiyage_locations WHERE slug='{slug}' AND item_id='item_x'"
+    ))
+    .expect("loc count after mismatch");
+    assert_eq!(nloc2.scalar().as_deref(), Some("2"));
+}
+
+#[test]
+fn add_omiyage_same_seller_re_add_refreshes_fetched_at() {
+    // Spec L147 / L71: same (slug,item_id,poi_id) re-add → still 1 location row, fetched_at refreshed.
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_re_{n}");
+    let poi = format!("omi_poi_re_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+    if !seed_dest_and_poi(&slug, &poi) {
+        return;
+    }
+
+    let (ok1, _, e1) = run(&[
+        "add-omiyage", &slug, "re_item",
+        "--name", "Re Item", "--category", "藥妝",
+        "--buy-at", &poi,
+        "--item-source-url", "https://example.com/re-item",
+        "--item-confidence", "verified",
+        "--location-source-url", "https://example.com/re-loc",
+        "--location-confidence", "verified",
+    ]);
+    assert!(ok1, "first; err={e1}");
+
+    let fa1 = db_exec(&format!(
+        "SELECT fetched_at FROM destination_omiyage_locations \
+         WHERE slug='{slug}' AND item_id='re_item' AND poi_id='{poi}'"
+    ))
+    .and_then(|r| r.scalar())
+    .expect("fetched_at1");
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    // re-add same seller (item bundle optional; omit)
+    let (ok2, _, e2) = run(&[
+        "add-omiyage", &slug, "re_item",
+        "--buy-at", &poi,
+        "--location-source-url", "https://example.com/re-loc-v2",
+        "--location-confidence", "reviewed",
+    ]);
+    assert!(ok2, "re-add; err={e2}");
+
+    let nloc = db_exec(&format!(
+        "SELECT COUNT(*) FROM destination_omiyage_locations \
+         WHERE slug='{slug}' AND item_id='re_item' AND poi_id='{poi}'"
+    ))
+    .expect("count");
+    assert_eq!(nloc.scalar().as_deref(), Some("1"));
+
+    let fa2 = db_exec(&format!(
+        "SELECT fetched_at FROM destination_omiyage_locations \
+         WHERE slug='{slug}' AND item_id='re_item' AND poi_id='{poi}'"
+    ))
+    .and_then(|r| r.scalar())
+    .expect("fetched_at2");
+    assert_ne!(fa1, fa2, "fetched_at must refresh on same-seller re-add");
+
+    let conf = db_exec(&format!(
+        "SELECT confidence FROM destination_omiyage_locations \
+         WHERE slug='{slug}' AND item_id='re_item' AND poi_id='{poi}'"
+    ))
+    .and_then(|r| r.scalar());
+    assert_eq!(conf.as_deref(), Some("reviewed"));
+}
+
+/// Atomic / zero-partial: every fail path leaves 0 rows on both tables.
+/// (Spec L148: failure create → 0 item + 0 location. True mid-tx ROLLBACK is
+/// implemented in write_item_and_location; CLI-level proof is zero residual rows
+/// on all validation failures below + the matrix.)
+#[test]
+fn add_omiyage_fail_loud_matrix() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_fail_{n}");
+    let poi = format!("omi_poi_fail_{n}");
+    let other_slug = format!("omi_other_{n}");
+    let _g = Guard::new({
+        let (s1, s2) = (slug.clone(), other_slug.clone());
+        move || {
+            omi_teardown(&s1);
+            omi_teardown(&s2);
+        }
+    });
+    omi_teardown(&slug);
+    omi_teardown(&other_slug);
+    if !seed_dest_and_poi(&slug, &poi) {
+        return;
+    }
+    // wrong-slug POI: POI exists under other_slug only
+    if !seed_dest_and_poi(&other_slug, "poi_elsewhere") {
+        return;
+    }
+
+    let assert_zero = |label: &str| {
+        let it = db_exec(&format!(
+            "SELECT COUNT(*) FROM destination_omiyage_items WHERE slug='{slug}'"
+        ))
+        .expect("items");
+        let lo = db_exec(&format!(
+            "SELECT COUNT(*) FROM destination_omiyage_locations WHERE slug='{slug}'"
+        ))
+        .expect("locs");
+        assert_eq!(it.scalar().as_deref(), Some("0"), "{label}: items");
+        assert_eq!(lo.scalar().as_deref(), Some("0"), "{label}: locations");
+    };
+
+    // unknown dest
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", "no_such_dest_xyz", "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "unknown dest; stderr={e}");
+    }
+
+    // unknown POI (same slug, poi missing)
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", "no_such_poi",
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "unknown poi; stderr={e}");
+        assert_zero("unknown poi");
+    }
+
+    // wrong-slug POI (poi exists only on other_slug)
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", "poi_elsewhere",
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "wrong-slug poi; stderr={e}");
+        assert_zero("wrong-slug poi");
+    }
+
+    // blank name on new item
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "   ", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "blank name; stderr={e}");
+        assert_zero("blank name");
+    }
+
+    // blank category on new item
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "blank category; stderr={e}");
+        assert_zero("blank category");
+    }
+
+    // missing --location-source-url
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "missing loc url; stderr={e}");
+        assert_zero("missing loc url");
+    }
+
+    // bad --location-confidence 'guess'
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "guess",
+        ]);
+        assert!(!ok, "bad confidence; stderr={e}");
+        assert_zero("bad confidence");
+    }
+
+    // non-http url (must start with http:// or https://)
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "ftp://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "non-http url; stderr={e}");
+        assert_zero("non-http url");
+    }
+
+    // missing flag value
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", // no value
+        ]);
+        assert!(!ok, "missing flag value; stderr={e}");
+        assert_zero("missing flag value");
+    }
+
+    // excess positional
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1", "extra_pos",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "excess positional; stderr={e}");
+        assert_zero("excess positional");
+    }
+
+    // unknown flag
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+            "--not-a-real-flag", "x",
+        ]);
+        assert!(!ok, "unknown flag; stderr={e}");
+        assert_zero("unknown flag");
+    }
+
+    // --plan-id (friendly reject; explicit parse arm — not generic reject_unknown_flags alone)
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--name", "N", "--category", "C",
+            "--buy-at", &poi,
+            "--item-source-url", "https://example.com/i",
+            "--item-confidence", "verified",
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+            "--plan-id", "some-plan",
+        ]);
+        assert!(!ok, "--plan-id; stderr={e}");
+        assert!(
+            e.contains("plan-id") || e.contains("--plan-id") || e.contains("no --plan-id"),
+            "friendly --plan-id message; stderr={e}"
+        );
+        assert_zero("--plan-id");
+    }
+
+    // new-item missing bundle (no --name/--category/--item-source-url/--item-confidence)
+    {
+        let (ok, _, e) = run(&[
+            "add-omiyage", &slug, "i1",
+            "--buy-at", &poi,
+            "--location-source-url", "https://example.com/l",
+            "--location-confidence", "verified",
+        ]);
+        assert!(!ok, "new-item missing bundle; stderr={e}");
+        assert_zero("new-item missing bundle");
+    }
+}
+
+#[test]
+fn add_omiyage_no_audit_even_with_travel_plan_id() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let plan = format!("zz-omi-plan-{n}");
+    let slug = format!("omi_audit_{n}");
+    let poi = format!("omi_poi_audit_{n}");
+
+    // Combined Guard: plan-keyed + omiyage/ref rows
+    let _g = Guard::new({
+        let (plan, slug) = (plan.clone(), slug.clone());
+        move || {
+            omi_teardown(&slug);
+            teardown_plan(&plan, &slug);
+        }
+    });
+    omi_teardown(&slug);
+    teardown_plan(&plan, &slug);
+    seed_plan(&plan, &slug, 7);
+    if !seed_dest_and_poi(&slug, &poi) {
+        return;
+    }
+
+    let ver_before = db_exec(&format!(
+        "SELECT version FROM plans WHERE plan_id='{plan}'"
+    ))
+    .and_then(|r| r.scalar())
+    .expect("version before");
+    let runs_before = db_exec(&format!(
+        "SELECT COUNT(*) FROM operation_runs WHERE plan_id='{plan}'"
+    ))
+    .and_then(|r| r.scalar())
+    .unwrap_or_else(|| "0".into());
+    let events_before = db_exec(&format!(
+        "SELECT COUNT(*) FROM plan_events WHERE plan_id='{plan}'"
+    ))
+    .and_then(|r| r.scalar())
+    .unwrap_or_else(|| "0".into());
+
+    let out = Command::new(bin())
+        .args([
+            "add-omiyage",
+            &slug,
+            "audit_item",
+            "--name",
+            "Audit Item",
+            "--category",
+            "名產",
+            "--buy-at",
+            &poi,
+            "--item-source-url",
+            "https://example.com/a",
+            "--item-confidence",
+            "verified",
+            "--location-source-url",
+            "https://example.com/al",
+            "--location-confidence",
+            "verified",
+        ])
+        .env("TRAVEL_PLAN_ID", &plan)
+        .output()
+        .expect("run with TRAVEL_PLAN_ID");
+    assert!(
+        out.status.success(),
+        "add should succeed with TRAVEL_PLAN_ID set; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let ver_after = db_exec(&format!(
+        "SELECT version FROM plans WHERE plan_id='{plan}'"
+    ))
+    .and_then(|r| r.scalar())
+    .expect("version after");
+    assert_eq!(ver_before, ver_after, "plans.version must not bump");
+
+    let runs_after = db_exec(&format!(
+        "SELECT COUNT(*) FROM operation_runs WHERE plan_id='{plan}'"
+    ))
+    .and_then(|r| r.scalar())
+    .unwrap_or_else(|| "0".into());
+    assert_eq!(runs_before, runs_after, "no operation_runs row");
+
+    let events_after = db_exec(&format!(
+        "SELECT COUNT(*) FROM plan_events WHERE plan_id='{plan}'"
+    ))
+    .and_then(|r| r.scalar())
+    .unwrap_or_else(|| "0".into());
+    assert_eq!(events_before, events_after, "no plan_events row");
+}
