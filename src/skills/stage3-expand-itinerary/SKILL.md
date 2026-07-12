@@ -1,7 +1,7 @@
 ---
 name: stage3-expand-itinerary
 description: Expand the rough itinerary into a booking-aware detailed daily plan — cascade routes via derive-routes, agent-author AI-recommended (labeled) meals/depth, and drive completeness with the content-depth signal. Owns Stage 3 of the adopted research-first planning flow.
-version: 1.3.0
+version: 1.4.0
 requires_skills: [travel-shared, p5-itinerary]
 requires_processes: [process_1_date_anchor, process_2_destination, process_3_transportation, process_4_accommodation]
 provides_processes: [process_5_daily_itinerary]
@@ -165,7 +165,35 @@ Do **not** use this for the first coarse draft before shopping; use
    **This is a mid-loop oracle, NOT final acceptance.** The final gate is the
    deployed dashboard page reviewed side by side with the reference (Stage 4).
 
-8. **Surface AI-recommended items for confirmation**
+8. **Auto-generate omiyage (souvenir) research from tagged POIs**
+
+   Run the read-only worklist to discover omiyage candidates for the destination:
+   ```bash
+   ./bin/travel omiyage-worklist --slug <destination_slug>
+   ```
+   It lists the destination's omiyage-tagged POIs, prints their notes VERBATIM as
+   **unverified hints** (not facts), an already-sourced count per POI, and a filled
+   `add-omiyage` template. It **writes nothing** — the "auto" is the flow driving the
+   agent to research, not the DB inventing recommendations.
+
+   For each candidate the agent then gwebcdb-verifies BOTH halves before persisting:
+   1. an official **item/product page** (the souvenir is real), AND
+   2. an official **branch/floor-guide page** proving that POI sells it (a Google
+      Maps hit proving the store exists is NOT proof it stocks the item).
+
+   Only with both does it write the pair via the existing atomic command:
+   ```bash
+   ./bin/travel add-omiyage <slug> <item_id> --buy-at <poi_id> \
+     --location-source-url <url> --location-confidence <verified|reviewed> \
+     --name <name> --category <category> \
+     --item-source-url <url> --item-confidence <verified|reviewed>
+   ```
+   Candidates it cannot verify are **left out** — an honest gap, exactly like an
+   unverifiable restaurant. Never promote a POI note to an omiyage fact; never write
+   an unsourced item or seller. Finish by reviewing with `query-omiyage --slug <slug>`
+   and confirming integrity with `validate data`.
+
+9. **Surface AI-recommended items for confirmation**
 
    **First, LIST what the agent authored and present it to the user** — don't just
    flip it silently. This works BEFORE the dashboard is deployed (Stage 4), so the
@@ -186,7 +214,7 @@ Do **not** use this for the first coarse draft before shopping; use
    valid pre-trip state (`validate publish` will not block on it; it counts them as
    INFO, and the dashboard badges them 🤖 once deployed).
 
-9. **Confirm readiness for Stage 4**
+10. **Confirm readiness for Stage 4**
 
    Move to Stage 4 only when the itinerary is detailed enough to publish:
    - Arrival/departure logistics are represented.
