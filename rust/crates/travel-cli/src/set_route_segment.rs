@@ -123,6 +123,11 @@ pub async fn run(
     {
         Ok(_) => {
             println!("✅ Route segment updated");
+            if source == "ai_recommended" {
+                println!("   ℹ this leg is ai_recommended — the next `derive-routes` run replaces every ai_recommended leg on this day (add without --recommended to store it as confirmed and make derive-routes skip the day).");
+            } else {
+                println!("   ℹ confirmed leg — future `derive-routes` runs skip this day (its derived legs are now frozen).");
+            }
             Ok(())
         }
         Err(e) => {
@@ -236,6 +241,11 @@ pub async fn run_bulk(
     {
         Ok(_) => {
             println!("✅ Route segments replaced");
+            if source == "ai_recommended" {
+                println!("   ℹ these legs are ai_recommended — the next `derive-routes` run replaces every ai_recommended leg on this day (omit --recommended to store as confirmed and make derive-routes skip the day).");
+            } else {
+                println!("   ℹ confirmed legs — future `derive-routes` runs skip this day (its derived legs are now frozen).");
+            }
             Ok(())
         }
         Err(e) => {
