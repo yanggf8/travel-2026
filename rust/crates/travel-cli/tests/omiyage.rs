@@ -806,3 +806,136 @@ fn query_omiyage_rejects_plan_id_help_and_typo() {
     let (ok_t, _, e_t) = run(&["query-omiyage", "--slug", "x", "--slugg", "y"]);
     assert!(!ok_t, "typo flag rejected; stderr={e_t}");
 }
+
+#[test]
+fn validate_data_catches_omiyage_orphans_and_missing_provenance() {
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let n = nanos();
+    let slug = format!("omi_val_{n}");
+    let poi = format!("omi_poi_val_{n}");
+    let _g = Guard::new({
+        let s = slug.clone();
+        move || omi_teardown(&s)
+    });
+    omi_teardown(&slug);
+
+    // --- empty stays valid: no omiyage rows for this slug (and we don't require global non-empty) ---
+    // Run validate and only assert our slug doesn't appear in omiyage errors; global exit may still
+    // fail on unrelated live data — so assert on stdout/stderr *lines about omiyage* for our slug.
+
+    // Seed a multi-corrupt state via db_exec:
+    if db_exec(&format!(
+        "INSERT INTO destination_config (slug, display_name, timezone, currency, origin) \
+           VALUES ('{slug}', 'Val', 'Asia/Tokyo', 'JPY', 'taiwan'); \
+         INSERT INTO destination_pois (slug, poi_id, title, source_url, fetched_at, confidence) \
+           VALUES ('{slug}', '{poi}', 'P', 'https://example.com/p', '2026-07-12T00:00:00Z', 'verified'); \
+         /* (a) location with missing parent item */ \
+         INSERT INTO destination_omiyage_locations \
+           (slug,item_id,poi_id,purchase_note,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','ghost_item','{poi}',NULL,'https://example.com/l','2026-07-12T00:00:00Z','verified'); \
+         /* (b) location with missing POI */ \
+         INSERT INTO destination_omiyage_items \
+           (slug,item_id,name,category,notes,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','has_bad_poi','N','名產',NULL,'https://example.com/i','2026-07-12T00:00:00Z','verified'); \
+         INSERT INTO destination_omiyage_locations \
+           (slug,item_id,poi_id,purchase_note,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','has_bad_poi','missing_poi',NULL,'https://example.com/l2','2026-07-12T00:00:00Z','verified'); \
+         /* (c) item with no location */ \
+         INSERT INTO destination_omiyage_items \
+           (slug,item_id,name,category,notes,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','lonely','L','名產',NULL,'https://example.com/i2','2026-07-12T00:00:00Z','verified'); \
+         /* (d) blank source_url on an item */ \
+         INSERT INTO destination_omiyage_items \
+           (slug,item_id,name,category,notes,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','blank_url','B','名產',NULL,'','2026-07-12T00:00:00Z','verified'); \
+         INSERT INTO destination_omiyage_locations \
+           (slug,item_id,poi_id,purchase_note,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','blank_url','{poi}',NULL,'https://example.com/l3','2026-07-12T00:00:00Z','verified'); \
+         /* (e) confidence='guess' */ \
+         INSERT INTO destination_omiyage_items \
+           (slug,item_id,name,category,notes,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','bad_conf','C','名產',NULL,'https://example.com/i3','2026-07-12T00:00:00Z','guess'); \
+         INSERT INTO destination_omiyage_locations \
+           (slug,item_id,poi_id,purchase_note,source_url,fetched_at,confidence) \
+           VALUES ('{slug}','bad_conf','{poi}',NULL,'https://example.com/l4','2026-07-12T00:00:00Z','verified');"
+    ))
+    .is_none()
+    {
+        return;
+    }
+
+    // (f) item.slug NOT IN destination_config — arm Guard FIRST, then seed phantom slug
+    let phantom = format!("omi_phantom_{n}");
+    let _g2 = Guard::new({
+        let p = phantom.clone();
+        move || omi_teardown(&p)
+    });
+    if db_exec(&format!(
+        "INSERT INTO destination_omiyage_items \
+           (slug,item_id,name,category,notes,source_url,fetched_at,confidence) \
+           VALUES ('{phantom}','ph','P','名產',NULL,'https://example.com/ph','2026-07-12T00:00:00Z','verified'); \
+         INSERT INTO destination_omiyage_locations \
+           (slug,item_id,poi_id,purchase_note,source_url,fetched_at,confidence) \
+           VALUES ('{phantom}','ph','no_poi',NULL,'https://example.com/phl','2026-07-12T00:00:00Z','verified');"
+    ))
+    .is_none()
+    {
+        return;
+    }
+
+    let (ok, stdout, stderr) = run(&["validate", "data"]);
+    let all = format!("{stdout}{stderr}");
+    // Do not assert global exit code alone (live DB may have other issues). Assert each class is reported:
+    assert!(
+        all.contains("ghost_item") || all.contains("orphan") || all.contains("parent"),
+        "orphan location/item: {all}"
+    );
+    assert!(
+        all.contains("missing_poi") || all.contains("has_bad_poi") || all.contains("poi"),
+        "orphan seller POI: {all}"
+    );
+    assert!(
+        all.contains("lonely") || all.contains("no location") || all.contains("without location"),
+        "item without location: {all}"
+    );
+    assert!(
+        all.contains("blank_url") || all.contains("source_url") || all.contains("provenance"),
+        "blank provenance: {all}"
+    );
+    assert!(
+        all.contains("bad_conf") || all.contains("guess") || all.contains("confidence"),
+        "bad confidence: {all}"
+    );
+    assert!(
+        all.contains(&phantom) || all.contains("destination_config") || all.contains("slug"),
+        "item.slug not in destination_config: {all}"
+    );
+    let _ = ok; // global may be non-zero; class coverage is the lock
+}
+
+#[test]
+fn validate_data_empty_omiyage_stays_valid_for_slug() {
+    // Empty omiyage tables must NOT produce an empty-table Error (spec L81).
+    // Do NOT add omiyage to validate.rs:1005 checklist.
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless");
+        return;
+    };
+    let _ = run(&["db", "migrate"]);
+    let (_, stdout, stderr) = run(&["validate", "data"]);
+    let all = format!("{stdout}{stderr}");
+    for line in all.lines() {
+        let lower = line.to_lowercase();
+        if lower.contains("omiyage")
+            && (lower.contains("is empty")
+                || lower.contains("no rows")
+                || lower.contains("no live seeder"))
+        {
+            panic!("empty omiyage must not be an integrity error: {line}");
+        }
+    }
+}

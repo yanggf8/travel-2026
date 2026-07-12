@@ -64,6 +64,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_python_scripts(&mut issues);
     validate_destinations(&mut issues).await;
     validate_holiday_calendars(&mut issues).await;
+    validate_omiyage(&mut issues).await;
     validate_reference_tables(&mut issues).await;
 
     // Always-run: documentation ↔ code drift checks
@@ -983,6 +984,405 @@ async fn validate_holiday_calendars(issues: &mut Vec<Issue>) {
             line: None,
         });
     }
+}
+
+// --- DB check: omiyage reference integrity ---
+//
+// Dedicated path (NOT the empty-table-is-error checklist below). Empty
+// destination_omiyage_* tables are valid — only row-level invariants error.
+
+async fn validate_omiyage(issues: &mut Vec<Issue>) {
+    let conn = match db::connect_read().await {
+        Ok(c) => c,
+        Err(err) => {
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!("failed to connect to Turso: {err}"),
+                file: Some("turso:destination_omiyage_*".to_string()),
+                line: None,
+            });
+            return;
+        }
+    };
+
+    // 1. Orphan location: (slug,item_id) has no matching destination_omiyage_items row
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT l.slug, l.item_id, l.poi_id \
+                 FROM destination_omiyage_locations l \
+                 LEFT JOIN destination_omiyage_items i \
+                   ON i.slug = l.slug AND i.item_id = l.item_id \
+                 WHERE i.item_id IS NULL \
+                 ORDER BY l.slug, l.item_id, l.poi_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage orphan locations: {err}"),
+                    file: Some("turso:destination_omiyage_locations".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            let poi_id: String = row.get(2).unwrap_or_default();
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage location item_id '{item_id}' poi_id '{poi_id}' has no parent item (orphan location)"
+                ),
+                file: Some("turso:destination_omiyage_locations".to_string()),
+                line: None,
+            });
+        }
+    }
+
+    // 2. Orphan seller POI: (slug,poi_id) has no matching destination_pois row
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT l.slug, l.item_id, l.poi_id \
+                 FROM destination_omiyage_locations l \
+                 LEFT JOIN destination_pois p \
+                   ON p.slug = l.slug AND p.poi_id = l.poi_id \
+                 WHERE p.poi_id IS NULL \
+                 ORDER BY l.slug, l.item_id, l.poi_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage orphan seller POIs: {err}"),
+                    file: Some("turso:destination_omiyage_locations".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            let poi_id: String = row.get(2).unwrap_or_default();
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage location item_id '{item_id}' poi_id '{poi_id}' has no matching destination_pois row (orphan seller POI)"
+                ),
+                file: Some("turso:destination_omiyage_locations".to_string()),
+                line: None,
+            });
+        }
+    }
+
+    // 3. Item with zero locations (item with no seller)
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT i.slug, i.item_id \
+                 FROM destination_omiyage_items i \
+                 LEFT JOIN destination_omiyage_locations l \
+                   ON l.slug = i.slug AND l.item_id = i.item_id \
+                 WHERE l.item_id IS NULL \
+                 ORDER BY i.slug, i.item_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage items without location: {err}"),
+                    file: Some("turso:destination_omiyage_items".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage item '{item_id}' has no location (item without seller)"
+                ),
+                file: Some("turso:destination_omiyage_items".to_string()),
+                line: None,
+            });
+        }
+    }
+
+    // 4. item.slug NOT IN destination_config
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT i.slug, i.item_id \
+                 FROM destination_omiyage_items i \
+                 LEFT JOIN destination_config c ON c.slug = i.slug \
+                 WHERE c.slug IS NULL \
+                 ORDER BY i.slug, i.item_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage items vs destination_config: {err}"),
+                    file: Some("turso:destination_omiyage_items".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage item '{item_id}' slug not in destination_config"
+                ),
+                file: Some("turso:destination_omiyage_items".to_string()),
+                line: None,
+            });
+        }
+    }
+
+    // 5. Item blank/NULL required fields (name / category / source_url / fetched_at / confidence)
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT slug, item_id, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(name,'')),'') IS NULL THEN 1 ELSE 0 END, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(category,'')),'') IS NULL THEN 1 ELSE 0 END, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(source_url,'')),'') IS NULL THEN 1 ELSE 0 END, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(fetched_at,'')),'') IS NULL THEN 1 ELSE 0 END, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(confidence,'')),'') IS NULL THEN 1 ELSE 0 END \
+                 FROM destination_omiyage_items \
+                 WHERE NULLIF(TRIM(COALESCE(name,'')),'') IS NULL \
+                    OR NULLIF(TRIM(COALESCE(category,'')),'') IS NULL \
+                    OR NULLIF(TRIM(COALESCE(source_url,'')),'') IS NULL \
+                    OR NULLIF(TRIM(COALESCE(fetched_at,'')),'') IS NULL \
+                    OR NULLIF(TRIM(COALESCE(confidence,'')),'') IS NULL \
+                 ORDER BY slug, item_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage item required fields: {err}"),
+                    file: Some("turso:destination_omiyage_items".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            let miss_name: i64 = row.get(2).unwrap_or(0);
+            let miss_cat: i64 = row.get(3).unwrap_or(0);
+            let miss_url: i64 = row.get(4).unwrap_or(0);
+            let miss_fetched: i64 = row.get(5).unwrap_or(0);
+            let miss_conf: i64 = row.get(6).unwrap_or(0);
+            let mut fields: Vec<&str> = Vec::new();
+            if miss_name != 0 {
+                fields.push("name");
+            }
+            if miss_cat != 0 {
+                fields.push("category");
+            }
+            if miss_url != 0 {
+                fields.push("source_url");
+            }
+            if miss_fetched != 0 {
+                fields.push("fetched_at");
+            }
+            if miss_conf != 0 {
+                fields.push("confidence");
+            }
+            let field_list = fields.join("/");
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage item '{item_id}' missing provenance/required field(s): {field_list}"
+                ),
+                file: Some("turso:destination_omiyage_items".to_string()),
+                line: None,
+            });
+        }
+    }
+
+    // 6. Location blank/NULL required fields (source_url / fetched_at / confidence)
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT slug, item_id, poi_id, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(source_url,'')),'') IS NULL THEN 1 ELSE 0 END, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(fetched_at,'')),'') IS NULL THEN 1 ELSE 0 END, \
+                        CASE WHEN NULLIF(TRIM(COALESCE(confidence,'')),'') IS NULL THEN 1 ELSE 0 END \
+                 FROM destination_omiyage_locations \
+                 WHERE NULLIF(TRIM(COALESCE(source_url,'')),'') IS NULL \
+                    OR NULLIF(TRIM(COALESCE(fetched_at,'')),'') IS NULL \
+                    OR NULLIF(TRIM(COALESCE(confidence,'')),'') IS NULL \
+                 ORDER BY slug, item_id, poi_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage location required fields: {err}"),
+                    file: Some("turso:destination_omiyage_locations".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            let poi_id: String = row.get(2).unwrap_or_default();
+            let miss_url: i64 = row.get(3).unwrap_or(0);
+            let miss_fetched: i64 = row.get(4).unwrap_or(0);
+            let miss_conf: i64 = row.get(5).unwrap_or(0);
+            let mut fields: Vec<&str> = Vec::new();
+            if miss_url != 0 {
+                fields.push("source_url");
+            }
+            if miss_fetched != 0 {
+                fields.push("fetched_at");
+            }
+            if miss_conf != 0 {
+                fields.push("confidence");
+            }
+            let field_list = fields.join("/");
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage location item_id '{item_id}' poi_id '{poi_id}' missing provenance/required field(s): {field_list}"
+                ),
+                file: Some("turso:destination_omiyage_locations".to_string()),
+                line: None,
+            });
+        }
+    }
+
+    // 7. confidence NOT IN ('verified','reviewed') on either table
+    //    (non-blank values outside the allowed set; blank already covered above)
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT slug, item_id, confidence \
+                 FROM destination_omiyage_items \
+                 WHERE NULLIF(TRIM(COALESCE(confidence,'')),'') IS NOT NULL \
+                   AND TRIM(confidence) NOT IN ('verified','reviewed') \
+                 ORDER BY slug, item_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage item confidence: {err}"),
+                    file: Some("turso:destination_omiyage_items".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            let confidence: String = row.get(2).unwrap_or_default();
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage item '{item_id}' confidence '{confidence}' not in (verified, reviewed)"
+                ),
+                file: Some("turso:destination_omiyage_items".to_string()),
+                line: None,
+            });
+        }
+    }
+    {
+        let mut rows = match conn
+            .query(
+                "SELECT slug, item_id, poi_id, confidence \
+                 FROM destination_omiyage_locations \
+                 WHERE NULLIF(TRIM(COALESCE(confidence,'')),'') IS NOT NULL \
+                   AND TRIM(confidence) NOT IN ('verified','reviewed') \
+                 ORDER BY slug, item_id, poi_id",
+                (),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                issues.push(Issue {
+                    category: "omiyage".to_string(),
+                    severity: Severity::Error,
+                    message: format!("failed to query omiyage location confidence: {err}"),
+                    file: Some("turso:destination_omiyage_locations".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        };
+        while let Some(row) = rows.next().await.ok().flatten() {
+            let slug: String = row.get(0).unwrap_or_default();
+            let item_id: String = row.get(1).unwrap_or_default();
+            let poi_id: String = row.get(2).unwrap_or_default();
+            let confidence: String = row.get(3).unwrap_or_default();
+            issues.push(Issue {
+                category: "omiyage".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "{slug}: omiyage location item_id '{item_id}' poi_id '{poi_id}' confidence '{confidence}' not in (verified, reviewed)"
+                ),
+                file: Some("turso:destination_omiyage_locations".to_string()),
+                line: None,
+            });
+        }
+    }
+
+    // 8. EMPTY tables → NO error (intentionally no COUNT(*)==0 check).
 }
 
 // --- DB check: reference tables ---
