@@ -51,7 +51,55 @@ Do **not** use this for the first coarse draft before shopping; use
    Use `--force` only when the user explicitly approves replacing existing
    days. If Stage 1 already scaffolded days, continue from the existing draft.
 
-3. **Assign clusters and must-do activities**
+3. **Research the omiyage (souvenir) catalog — BEFORE assigning activities**
+
+   Run the read-only worklist as soon as the skeleton exists, so verified sellers
+   can inform WHICH days/POIs you assign next (run it here, not after routes — a
+   seller found late forces activities and routes to be redone):
+   ```bash
+   ./bin/travel omiyage-worklist --slug <destination_slug>
+   ```
+   It lists the destination's omiyage-tagged POIs, prints their notes VERBATIM as
+   **unverified hints** (not facts), an already-sourced count per POI, and a filled
+   `add-omiyage` template. It **writes nothing** — the "auto" is the flow driving the
+   agent to research the catalog, not the DB inventing recommendations. The worklist
+   is a **destination catalog, NOT a purchase schedule** (it has no plan/day/timing —
+   omiyage reference data is global, reused across trips).
+
+   For each candidate the agent gwebcdb-verifies BOTH halves before persisting:
+   1. an official **item/product page** (the souvenir is real), AND
+   2. an official **branch/floor-guide page** proving that POI sells it (a Google
+      Maps hit proving the store exists is NOT proof it stocks the item).
+
+   Only with both does it write the pair via the existing atomic command:
+   ```bash
+   ./bin/travel add-omiyage <slug> <item_id> --buy-at <poi_id> \
+     --location-source-url <url> --location-confidence <verified|reviewed> \
+     --name <name> --category <category> \
+     --item-source-url <url> --item-confidence <verified|reviewed>
+   ```
+   Candidates it cannot verify are **left out** — an honest gap, exactly like an
+   unverifiable restaurant. Never promote a POI note to an omiyage fact; never write
+   an unsourced item or seller. Review with `query-omiyage --slug <slug>` and confirm
+   integrity with `validate data`.
+
+   **WHEN/WHERE to buy is a per-plan decision made in the itinerary, not in the
+   catalog.** People buy souvenirs late — most on the last day or two, food often at
+   the airport (short shelf life; nobody wants to carry it for days). So when you
+   assign activities (next step), express the *purchase intent* as an itinerary
+   activity at the seller POI on the right day:
+   - **Food / short-shelf-life** → schedule the buy on the **departure-day route**
+     (a seller POI already on the way to the airport) or an **airport seller POI**
+     (a specific terminal shop/floor — pre- vs post-security matters — not a vague
+     "the airport").
+   - **Non-perishable / non-food** (cookies, tins, crafts) → fine to buy earlier if
+     a verified seller POI already falls on an earlier day's route; don't force a
+     detour and don't force it early just because the catalog was researched first.
+   The global omiyage tables only ever say *where an item is sold*; the itinerary
+   activity says *when THIS trip buys it*. Never write a trip's purchase choice back
+   into the global reference tables.
+
+4. **Assign clusters and must-do activities**
    ```bash
    ./bin/travel populate-itinerary --goals "<cluster1,cluster2>" --pace balanced --dest <destination_slug>
    ```
@@ -62,7 +110,7 @@ Do **not** use this for the first coarse draft before shopping; use
    - Want/nice-to-have activities.
    - Meals and transit buffers.
 
-4. **Set timing, themes, and transit**
+5. **Set timing, themes, and transit**
    ```bash
    ./bin/travel set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed true
    ./bin/travel set-day-theme <day> "<theme>" --zh "<zh_title>" --dest <destination_slug>
@@ -71,7 +119,7 @@ Do **not** use this for the first coarse draft before shopping; use
    Default meals are lunch and dinner only. Add breakfast only when hotel or
    package terms include it, or when the user asks for it.
 
-5. **Derive route segments (deterministic cascade — run this FIRST)**
+6. **Derive route segments (deterministic cascade — run this FIRST)**
 
    `scaffold`/`populate` write activities only. `derive-routes` CASCADES the
    route skeleton from them — one `ai_recommended` transit leg between each pair
@@ -99,7 +147,7 @@ Do **not** use this for the first coarse draft before shopping; use
    `add-transit` writes the shared `destination_transit` reference table, so the
    knowledge sticks for every later plan on that destination.
 
-6. **Enrich the remaining depth (agent-first, LABELED)**
+7. **Enrich the remaining depth (agent-first, LABELED)**
 
    After derive-routes, the gaps that DON'T cascade are MEALS (no reference data —
    agent research) and any thin activities. **Do not leave them empty for the user
@@ -142,7 +190,7 @@ Do **not** use this for the first coarse draft before shopping; use
      `validate publish` reports the count as INFO (never a blocker); the user flips
      the ones they accept with `confirm-recommendations` (step 8).
 
-7. **Validate + use the content-depth signal as the gap list**
+8. **Validate + use the content-depth signal as the gap list**
    ```bash
    ./bin/travel validate-itinerary --dest <destination_slug> --severity warning
    ./bin/travel validate publish --plan-id <plan_id>    # content-depth WARN/INFO = your remaining-depth checklist
@@ -164,34 +212,6 @@ Do **not** use this for the first coarse draft before shopping; use
    routes), then re-compare. Repeat until `VERDICT: BETTER`.
    **This is a mid-loop oracle, NOT final acceptance.** The final gate is the
    deployed dashboard page reviewed side by side with the reference (Stage 4).
-
-8. **Auto-generate omiyage (souvenir) research from tagged POIs**
-
-   Run the read-only worklist to discover omiyage candidates for the destination:
-   ```bash
-   ./bin/travel omiyage-worklist --slug <destination_slug>
-   ```
-   It lists the destination's omiyage-tagged POIs, prints their notes VERBATIM as
-   **unverified hints** (not facts), an already-sourced count per POI, and a filled
-   `add-omiyage` template. It **writes nothing** — the "auto" is the flow driving the
-   agent to research, not the DB inventing recommendations.
-
-   For each candidate the agent then gwebcdb-verifies BOTH halves before persisting:
-   1. an official **item/product page** (the souvenir is real), AND
-   2. an official **branch/floor-guide page** proving that POI sells it (a Google
-      Maps hit proving the store exists is NOT proof it stocks the item).
-
-   Only with both does it write the pair via the existing atomic command:
-   ```bash
-   ./bin/travel add-omiyage <slug> <item_id> --buy-at <poi_id> \
-     --location-source-url <url> --location-confidence <verified|reviewed> \
-     --name <name> --category <category> \
-     --item-source-url <url> --item-confidence <verified|reviewed>
-   ```
-   Candidates it cannot verify are **left out** — an honest gap, exactly like an
-   unverifiable restaurant. Never promote a POI note to an omiyage fact; never write
-   an unsourced item or seller. Finish by reviewing with `query-omiyage --slug <slug>`
-   and confirming integrity with `validate data`.
 
 9. **Surface AI-recommended items for confirmation**
 
