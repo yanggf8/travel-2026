@@ -9,9 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Japan Travel Project
 
 ## Trip Details
-- **Schema**: `4.2.0` — destination-scoped with canonical offer model
-- **Completed**: Tokyo Feb 13-17, Kyoto Feb 24-28 (see `docs/trips/`)
-- **Active**: `okinawa-2026` — Naha, **2026-06-12 → 06-16** (CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary populated). `okinawa_2026` is registered in `destination_config`. Status: `./bin/travel status --full --plan-id okinawa-2026`. (Flights/hotel were pre-decided and entered directly via `set-flight`/`set-hotel`; the `shaping-20260525-093508` run was exploratory only — 0 candidates adopted. Corrected 2026-07-02 vs the DB record; see the Okinawa entry under Next Steps.)
+- **Schema**: `4.2.0` — destination-scoped with canonical offer model.
+- **Live trip status** — run `./bin/travel plans` / `status --full`; per-trip records (Tokyo/Kyoto Feb 2026, Okinawa Jun 2026) live in `docs/trips/`. Don't track trip state here.
 - **Naming caveat**: legacy artifacts may say `yokohama-travel-2026`; the project is Japan-wide. (Root `package.json` is retired — see CLI Execution below.)
 
 ## Architecture
@@ -64,12 +63,19 @@ bug, not the convention:
   else `plan_metadata.active_destination` (fail-loud, no local fallback). Every `set_*`/itinerary
   module's `read_destination` is a thin wrapper over this — don't reintroduce a private copy.
 
+**DAL boundary (`travel-db` repos).** Domain reads/writes go through `travel-db` repos; the audit
+triad stays in `cascade::common` (no repo writes it). `db_migrate`/`db exec` are the only inline SQL
+by design. Add a new offer predicate to `repo::offers::OfferFilter` (the parameterized WHERE builder),
+never a fresh string-built/`sql_quote` query. `repo::process_statuses::upsert` is the single home for
+the status ON-CONFLICT upsert — don't re-roll a per-module copy.
+
 - **Turso cloud is sole source of truth** — fully normalized, no JSON blobs, no config JSON files
 - **No local data — fail loud, never fall back** — NO command may read trip/project data (destinations, shaping/constraints, research, ranked candidates, selected offers) from a local file as its source of truth. If a Turso table/row is missing, the command THROWS — it must not silently fall back to `research/*.json`, `data/*.json`, or any local export. A `if (!dbRow) readLocalJson()` path is the bug, not the fix. `scrapes/` is a raw landing zone whose only legal next step is import→Turso→read-from-Turso. A destination MUST be registered in `destination_config` (via `/new-destination`) **before** Shaping Stage researches it. "Is X saved?" → check Turso; local files existing ≠ saved.
 - **CLI agent first; plain text only** — User-facing CLI command output must be plain text/table lines, not JSON. Do not introduce JSON files, JSON fixtures, or JSON as the pipeline boundary. If structured data is needed, store it in normalized Turso tables and render a plain-text CLI view from Turso. JSON is allowed only where an external protocol/library requires it internally (e.g. the chromeport capture envelope, the shaping export/import handoff) — never as a user-facing artifact or source of truth.
 - **No JSON in the RDB** — every former `*_json` column was re-normalized into child rows or typed scalar columns. Don't reintroduce `*_json` columns or parse JSON out of a DB column.
 - **Destination config in DB** — `destination_config` table (no `data/destinations.json`); loaded from Turso. **28+ normalized tables** (see Data Model above). `flight_legs` holds fully-normalized flight data incl. `departure_terminal`/`arrival_terminal`.
 - **Audit trail** — `plans.version` is a monotonic counter bumped per mutation; `operation_runs` records run_id/command/status/version_before-after; domain events go to `plan_events` (+ `plan_event_data` KV).
+- **Delegates (Grok/Codex subagents) run NO git operations** — not reset/add/commit/checkout/push. The agent gates every commit itself. (A delegate once ran `git reset --soft` and un-committed finished work.)
 - Plan ID: `"<trip-id>"` (e.g. `tokyo-2026`, `kyoto-2026`). CLI output is stdout plain text; diagnostics go to stderr.
 - **Plan resolution** — view/mutation commands resolve the plan via `plan_resolver::resolve_plan_id`: `--plan-id` > `$TRAVEL_PLAN_ID` > `--travel-date`/`--travel-start`/`--travel-end` > active-today > upcoming > most-recent. It ignores flags it doesn't own (so `status --full`, `bookings --dest x` pass through).
 - **Tests** — real-Turso integration tests in `rust/crates/travel-cli/tests/*.rs`: seed → run binary → SELECT → assert → teardown; skip cleanly if creds absent. Unit tests inline per module.
@@ -297,14 +303,6 @@ in gwebcdb's `CLAUDE.md` ("OTA scraping — end-to-end usage"); see also the URL
 and `docs/plans/2026-06-24-ota-migration-chromeport.md`. gwebcdb is NOT "read-only finance only" —
 it is the shared multi-function CDP toolset, and ALL OTA scraping goes through it.
 
-## Current Status
-
-Completed trips — full bookings, itinerary, and weather notes archived:
-- **Tokyo Feb 13-17** → `docs/trips/2026-tokyo.md`
-- **Kyoto Feb 24-28** → `docs/trips/2026-kyoto.md`
-
-**Upcoming: Okinawa (Naha) 2026-06-12 → 06-16** — `okinawa-2026`, active and populated (flights CI120/CI121, HOTEL AZAT NAHA, 5-day itinerary). Status: `./bin/travel status --full --plan-id okinawa-2026`.
-
 ## CLI Quick Reference
 
 Most-used commands inline; the **canonical full reference** (every mutation, comparison view, scraping flag, Shaping Stage aggregator handoff) lives in **`docs/reference/CLI.md`**. Add new commands there, not here.
@@ -395,29 +393,17 @@ Plan resolution: `--plan-id` and `$TRAVEL_PLAN_ID` win. Without those, the CLI u
 ├── scrapes/                       # LEGACY raw-capture JSON landing zone (gitignored) — import→Turso only; not live scraping (see "Scrape terminology")
 ├── scripts/                       # NON-TS keepers only: hooks/, schema.sql, *.sql, *.ps1, *.sh, README
 │   └── hooks/pre-commit           # cargo build -p travel-cli + ./bin/travel validate data
-├── workers/trip-dashboard/        # Cloudflare Worker — live trip dashboard (own package.json + wrangler)
-│   ├── src/index.ts               # Request handler + router + favicon
-│   ├── src/turso.ts               # Turso HTTP pipeline client (18-query pipeline)
-│   ├── src/render.ts              # SSR HTML renderer (ZH from DB, no hardcoded content)
-│   └── src/styles.ts              # Mobile-first inline CSS
+├── workers/                       # trip-dashboard-rs (LIVE Rust worker), trip-dashboard (legacy TS, RETIRED), trip-dashboard-redirect
 ├── Makefile                       # npm-free build/dev entry: build, dev, test, check, validate, hooks, setup
 ├── bin/                           # built binaries (gitignored): travel, chromeport — via `make build`
 ├── rust/crates/                   # the LIVE codebase (Cargo workspace)
-│   ├── travel-cli/                # the `travel` binary — ALL CLI commands
-│   │   ├── src/main.rs            #   arg-slice match dispatch → one module per command
-│   │   ├── src/<command>.rs       #   ~58 modules (set_dates, select_offer, shaping, weather,
-│   │   │                          #     view_{bookings,itinerary,transport}, db_*, validate, …)
-│   │   ├── src/db.rs              #   connect_read/connect_write (libsql via turso-util)
-│   │   ├── src/plan_resolver.rs   #   plan resolution ladder
-│   │   ├── src/db_migrate.rs      #   inline-DDL schema migrate (1:1 port of old turso-migrate.ts)
-│   │   ├── src/cascade/           #   cascade logic (date_change, select_offer → populate P3+P4)
-│   │   └── tests/                 #   real-Turso integration tests + fixtures/
+│   ├── travel-cli/                # the `travel` binary — ALL CLI commands (main.rs dispatch → one module/command;
+│   │                              #   db.rs connect_read/write, plan_resolver.rs, db_migrate.rs, cascade/, tests/)
 │   ├── chromeport/                # RETIRED CDP OTA driver (still builds; OTA now = gwebcdb on WSLg)
 │   └── turso-util/                # Turso token mint/cache + libsql connect + migrate runner
 ├── src/skills/                    # LIVE skill defs (SKILL.md + references) — ONLY live part of src/
-├── archive/ts-cli-retired/        # retired TS CLI: src/ (minus skills), tests/, scripts/*.ts (read-only)
-├── data/                          # holiday calendar + zone/route reference JSON read by the binary
-└── docs/                          # API.md, EXTENDING.md, SKILL_TEMPLATE.md, reference/CLI.md, plans/
+├── archive/ts-cli-retired/        # retired TS CLI (read-only)
+└── docs/                          # API.md, EXTENDING.md, reference/CLI.md, plans/, superpowers/, history/, trips/
 ```
 
 Config/reference data all live in Turso (no JSON files): `destination_config`, `ota_sources`, `origin_config`, `global_config`; OTA rules in `airlines`/`booking_types`/`platform_behaviors`/`comparison_rules`; destination reference (areas/POIs/clusters/transit/tips) in `destination_areas` (+ child tables), `destination_pois`, `destination_clusters`, `destination_transit`, `destination_tips` — read via `./bin/travel query-destination-ref`. Re-seeding a fresh/empty DB uses the seed pipeline (the original TS seed scripts are under `archive/ts-cli-retired/scripts/`; reusable seeders are `./bin/travel db seed …` + inline `seed_*` in `db_migrate.rs`). The OTA provider catalog cold-start is checked-in SQL run insert-if-absent on every `db migrate`: `scripts/seed/ota_catalog.seed.sql` (product types + block reasons) and `scripts/seed/ota_coverage.seed.sql` (the per-`(source, product_type)` coverage matrix + region codes); the notes audit rows come from `backfill_ota_notes_audit` in `db_migrate.rs`. Seed-file rule: one statement per line, no `;` or `'` inside comments (the splitter splits on `;` before stripping comment lines).
@@ -485,20 +471,15 @@ Browser → Cloudflare Worker (SSR HTML) → Turso HTTP Pipeline API → normali
 | Maps embed not showing | No `GOOGLE_MAPS_KEY` secret | `wrangler secret put GOOGLE_MAPS_KEY` (restrict key to Maps Embed API + referrer in GCP Console) |
 
 ```bash
-cd workers/trip-dashboard
-
-# Local dev
-unset CLOUDFLARE_API_TOKEN && npx wrangler dev
-# → http://localhost:8787/?plan=tokyo-2026 | http://localhost:8787/?plan=kyoto-2026
-
-# Deploy
-unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
-
-# Set secrets (one-time, or pipe from .env)
-TURSO_URL=$(grep '^TURSO_URL=' ../../.env | cut -d= -f2-) && unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_URL <<< "$TURSO_URL"
+# The LIVE worker is trip-dashboard-rs (Rust). Deploy:
+cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy   # runs worker-build --release
+# Set a secret (one-time): pipe from .env, e.g.
 TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ../../.env | cut -d= -f2-) && unset CLOUDFLARE_API_TOKEN && npx wrangler secret put TURSO_TOKEN <<< "$TURSO_TOKEN"
 ```
 
 ## Build Gate
 Pre-commit: Rust build check + `validate data` (see Pre-commit above). Install hooks: `make hooks`.
+
+## Historical Records
+Historical implementation records (the retired Next Steps journal) are non-normative and may be superseded: see [`docs/history/README.md`](docs/history/README.md). Current sources (CLAUDE.md / the owning SKILL.md / source code / tests) always win on conflict. Genuinely-open items are in that README's **Open items** section.
 
