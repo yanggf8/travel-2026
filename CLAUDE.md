@@ -107,6 +107,8 @@ Python/other → OTA scraping = gwebcdb (~/b/gwebcdb) on WSLg; old Python scrape
 ### Setup
 ```bash
 make setup                    # build ./bin/{travel,chromeport} + install git hooks
+                              #   (chromeport still BUILDS but is RETIRED for OTA — only browser/screenshot/db
+                              #    remain, used by snapshot-maps; never use it for OTA scraping — that's gwebcdb)
 # or piecemeal:
 make build                    # release binaries → ./bin/ (gitignored)
 make dev                      # fast debug build of travel-cli
