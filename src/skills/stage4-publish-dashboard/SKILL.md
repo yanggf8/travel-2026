@@ -65,8 +65,8 @@ Do **not** auto-run this just because itinerary data changed.
    unset CLOUDFLARE_API_TOKEN && npx wrangler deploy
    ```
    Deploys the **Rust** worker (`worker-build --release`) — the canonical live
-   dashboard. (The legacy TS `workers/trip-dashboard` was retired + undeployed
-   2026-07-02; do not deploy it. The old `trip-dashboard.yanggf.workers.dev` URL
+   dashboard. (The legacy TS worker — now `archive/ts-dashboard-retired/` — was
+   retired + undeployed 2026-07-02; do not deploy it. The old URL
    now 301-redirects to `-rs`.) A production deploy is Yang-gated — confirm first.
    If Wrangler OAuth is not logged in, stop and ask the user to run
    `npx wrangler login` interactively.

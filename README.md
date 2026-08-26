@@ -82,7 +82,7 @@ Plan state lives in Turso (no JSON state files). For the full command list see `
 │   ├── scrape_tigerair.py          # Tigerair form-based scraper
 │   ├── shaping_research.py          # Shaping Stage aggregator (zero Turso I/O)
 │   └── filter_packages.py          # Filter scraped packages by criteria
-├── workers/trip-dashboard/   # Cloudflare Worker — live dashboard (reads Turso)
+├── workers/trip-dashboard-rs/ # Cloudflare Worker — live dashboard (Rust, reads Turso)
 └── tsconfig.json
 ```
 

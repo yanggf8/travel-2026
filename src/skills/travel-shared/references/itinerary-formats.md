@@ -90,7 +90,7 @@ Used by: Kyoto (legacy), some quick drafts
 
 ## Dashboard Compatibility
 
-The trip dashboard (`workers/trip-dashboard/`) supports **both formats**:
+The trip dashboard (`workers/trip-dashboard-rs/`) supports **both formats**:
 
 | Format | Field Mapping |
 |--------|---------------|

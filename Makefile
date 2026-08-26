@@ -1,6 +1,6 @@
 # travel-2026 — npm-free build entry (root package.json retired; CLI is Rust).
-# The Cloudflare Worker (workers/trip-dashboard/) keeps its own package.json and
-# is built/deployed separately with wrangler — it is NOT covered here.
+# The Cloudflare Workers under workers/ keep their own wrangler/npm setup and
+# are built/deployed separately — they are NOT covered here.
 
 CARGO      := cargo
 RUST_DIR   := rust

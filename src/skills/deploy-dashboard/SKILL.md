@@ -14,8 +14,8 @@ provides_processes: []
 Deploy the trip dashboard to Cloudflare Workers with pre-checks to prevent common
 deployment failures. The live dashboard is the **Rust** worker
 `workers/trip-dashboard-rs/` (SSR, GitHub-OAuth-gated owner pages + share-token
-viewer links). The legacy TS `workers/trip-dashboard/` was **retired and
-undeployed 2026-07-02** — do not deploy it; the old
+viewer links). The legacy TS worker (`archive/ts-dashboard-retired/`) was **retired and
+undeployed 2026-07-02, archived 2026-08-26** — do not deploy it; the old
 `trip-dashboard.yanggf.workers.dev` URL now 301-redirects to `-rs`.
 
 ## When to Use
