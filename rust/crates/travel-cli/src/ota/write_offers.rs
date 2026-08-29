@@ -343,5 +343,52 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     println!("deduped\t{}", out.deduped);
     println!("parser_method\tagent_parse");
     println!("status\tsucceeded");
+    if let Some(warn) = under_extraction_warn(candidate_count, out.inserted, out.deduped) {
+        eprintln!("{warn}");
+    }
+    eprintln!(
+        "Next: promote with `travel promote-offers --from-offers --dest {dest} --plan-id <id>`"
+    );
     Ok(())
+}
+
+/// stderr WARN when a succeeded write looks empty or fully-deduped. Exit code stays 0.
+fn under_extraction_warn(candidate_count: i64, inserted: i64, deduped: i64) -> Option<String> {
+    if candidate_count == 0 {
+        Some(
+            "WARN: 0 candidates — page may have been empty or extraction missed content"
+                .to_string(),
+        )
+    } else if inserted == 0 {
+        Some(format!(
+            "WARN: all candidates deduped (inserted=0, deduped={deduped}) — may be re-ingesting same TSV"
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::under_extraction_warn;
+
+    #[test]
+    fn warn_on_zero_candidates() {
+        let msg = under_extraction_warn(0, 0, 0).expect("warn");
+        assert!(msg.contains("WARN: 0 candidates"));
+        assert!(msg.contains("extraction missed content"));
+    }
+
+    #[test]
+    fn warn_on_all_deduped() {
+        let msg = under_extraction_warn(3, 0, 3).expect("warn");
+        assert!(msg.contains("WARN: all candidates deduped"));
+        assert!(msg.contains("inserted=0, deduped=3"));
+    }
+
+    #[test]
+    fn no_warn_on_successful_insert() {
+        assert_eq!(under_extraction_warn(2, 2, 0), None);
+        assert_eq!(under_extraction_warn(2, 1, 1), None);
+    }
 }

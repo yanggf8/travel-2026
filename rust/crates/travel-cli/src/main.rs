@@ -165,7 +165,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "resolve-plan" => plan_resolver::run_cli(rest).await,
         [cmd, rest @ ..] if cmd == "query-offers" => {
-            if wants_help(rest, "travel query-offers [--dest <slug>] [--region <r>] [--start <date>] [--end <date>] [--source <s>] [--max-price <twd>] [--limit <n>]") { return Ok(()); }
+            if wants_help(rest, "travel query-offers [--dest <slug>] [--region <r>] [--start <date>] [--end <date>] [--source <s>] [--max-price <twd>] [--limit <n>] [--capture-id <id>] [--job-id <id>] [--attempt-id <id>]") { return Ok(()); }
             let opts = offers::OffersArgs::parse(rest)?;
             offers::run(&opts).await
         }
@@ -875,7 +875,7 @@ VIEWS\n\
   transport [--dest slug]       transport summary\n\
   bookings [--dest slug]        booking ledger\n\
   query-bookings [--dest slug] [--category c] [--status s] [--max N]\n\
-  query-offers [--source a,b] [--dest d] [--max-price N] [--start D] [--end D] [--limit N]\n\
+  query-offers [--source a,b] [--dest d] [--max-price N] [--start D] [--end D] [--limit N] [--capture-id|--job-id|--attempt-id]\n\
   query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]  List AI-recommended items awaiting confirmation\n\
   query-destination-ref --slug <slug>\n\
   query-omiyage --slug <slug>     omiyage items + purchase locations (slug-keyed)\n\
@@ -904,6 +904,7 @@ SHOP / OFFERS\n\
   add-offer | add-besttour-offer | add-lifetour-offer | update-offer | select-offer\n\
   shaping-init | shaping-compare | shaping-adopt | shaping-baseline | shaping-export | shaping-import\n\
   query-tour-group-offers | import-tour-group-offers | compare-offers | search-offers\n\
+  ota {{enqueue|claim|heartbeat|finish|reap-stale|run|write-offers|observations|show-capture}}\n\
 \n\
 VALIDATE / CHECKS\n\
   validate data | validate publish | doctor | validate-itinerary | check-hours\n\

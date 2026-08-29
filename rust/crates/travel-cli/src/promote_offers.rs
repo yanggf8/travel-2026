@@ -303,6 +303,9 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
     .await?;
 
     println!("✅ Saved to Turso (plan_offers).");
+    eprintln!(
+        "Next: select with travel select-offer <offer_id> <date> 或 travel status --full 查看"
+    );
     Ok(())
 }
 

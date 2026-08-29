@@ -209,6 +209,10 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
             stdout.contains(&format!("product_type\t{product_type}")),
             "stdout={stdout}"
         );
+        assert!(
+            stderr.contains("Next:") && stderr.contains("show-capture"),
+            "capture-only success must print Next hint; stderr={stderr}"
+        );
 
         let Some(captures) = count(&format!(
             "SELECT count(*) AS n FROM captures WHERE capture_id='{capture_id}' AND source_id='{source_id}'"
@@ -256,6 +260,11 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
             return;
         };
         assert_eq!(offers, 0, "capture-only must not write offers");
+        assert!(
+            stderr.contains("Next:")
+                && (stderr.contains("show-capture") || stderr.contains("write-offers")),
+            "capture-only should hint show-capture/write-offers on stderr; stderr={stderr}"
+        );
     }
 }
 

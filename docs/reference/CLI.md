@@ -49,7 +49,8 @@ coding agent reads `captures.raw_text`, emits TSV, then persists normalized `off
 python bridge/navigate.py "<url>"                                 # + form_fill/combo_select for SPAs; settle ~25s
 python bridge/ota_capture.py --source <id> [--url-contains <s>]   # → capture_id; UNREDACTED → captures
 # AGENT reads captures.raw_text, extracts offers, emits TSV, then:
-./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>   # → Turso offers + provenance
+./bin/travel ota show-capture <capture_id>                        # read-only: raw_text → stdout; source_id/url/captured_at → stderr
+./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>   # → Turso offers + provenance
 ```
 
 See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-24-ota-migration-chromeport.md`.
@@ -64,8 +65,9 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-24-ota-migration-ch
 # global offers.destination; --plan-id owns the resulting plan_offers rows.)
 ./bin/travel promote-offers --from-offers --dest tokyo_sep_2026 --plan-id tokyo-sep-2026 \
   [--source eztravel] [--start 2026-09-01 --end 2026-09-30] [--pax 2] [--dry-run]
-./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000]
+./bin/travel query-offers --plan-id tokyo-2026 --dest tokyo_2026 [--max-price 30000] [--capture-id <id>] [--job-id <id>] [--attempt-id <id>]
 ./bin/travel query-offers --region kansai --start 2026-02-24 --end 2026-02-28 [--max-price 30000]
+./bin/travel db query-offers --destination osaka_2026 [--capture-id <id>] [--job-id <id>] [--attempt-id <id>] [--sql]
 ./bin/travel check-freshness --source besttour --plan-id tokyo-2026 --dest tokyo_2026
 ./bin/travel check-freshness --source besttour --region kansai
 # (the old `db:import:turso` raw-offers loader is retired — the gwebcdb capture + agent

@@ -432,6 +432,10 @@ pub async fn run(args: &[String]) -> Result<(), String> {
                 "agent_extraction_note\t{}",
                 workflow.agent_extraction_note.as_deref().unwrap_or("")
             );
+            eprintln!(
+                "Next: read raw_text with `travel ota show-capture {capture_id}` then `travel ota write-offers {} --capture {capture_id} --claim-token {} --tsv <path> --dest <slug>`",
+                claimed.job_id, claimed.claim_token
+            );
             Ok(())
         }
         other => Err(format!("nav_kind '{other}' has no registered strategy")),

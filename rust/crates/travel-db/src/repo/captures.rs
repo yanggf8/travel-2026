@@ -6,6 +6,7 @@ pub struct CaptureRow {
     pub capture_id: String,
     pub source_id: String,
     pub url: Option<String>,
+    pub captured_at: String,
     pub raw_text: String,
 }
 
@@ -13,7 +14,7 @@ pub struct CaptureRow {
 pub async fn get(conn: &Connection, capture_id: &str) -> Result<Option<CaptureRow>, String> {
     let mut rows = conn
         .query(
-            "SELECT capture_id, source_id, url, raw_text FROM captures WHERE capture_id = ?1",
+            "SELECT capture_id, source_id, url, captured_at, raw_text FROM captures WHERE capture_id = ?1",
             libsql::params![capture_id.to_string()],
         )
         .await
@@ -25,7 +26,8 @@ pub async fn get(conn: &Connection, capture_id: &str) -> Result<Option<CaptureRo
         capture_id: row.get(0).map_err(|e| e.to_string())?,
         source_id: row.get(1).map_err(|e| e.to_string())?,
         url: row.get(2).ok(),
-        raw_text: row.get(3).map_err(|e| e.to_string())?,
+        captured_at: row.get(3).map_err(|e| e.to_string())?,
+        raw_text: row.get(4).map_err(|e| e.to_string())?,
     }))
 }
 

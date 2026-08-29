@@ -39,6 +39,10 @@ fn fixture_tsv() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zz_ota_offers.tsv")
 }
 
+fn fixture_empty_tsv() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zz_ota_empty.tsv")
+}
+
 fn seed_zz_wo_dest() {
     let _ = run(&[
         "db",
@@ -138,6 +142,14 @@ async fn write_offers_from_fixture_tsv() {
     assert!(ok, "write-offers failed: {stderr}");
     assert!(stdout.contains("inserted\t1"));
     assert!(stdout.contains("parser_method\tagent_parse"));
+    assert!(
+        stderr.contains("Next: promote with") && stderr.contains("promote-offers"),
+        "write-offers should print Next hint on stderr; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("WARN:"),
+        "successful insert must not under-extract-warn; stderr={stderr}"
+    );
 
     let (ok, stdout, _) = run(&[
         "db",
@@ -156,6 +168,96 @@ async fn write_offers_from_fixture_tsv() {
 
 fn fixture_multi_tsv() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zz_ota_multi.tsv")
+}
+
+/// Header-only TSV → 0 candidates. Status is still succeeded, but stderr must WARN.
+#[tokio::test]
+async fn write_offers_zero_candidates_warns_and_succeeds() {
+    let _lock = write_offers_test_lock();
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let suffix = nanos();
+    let job_id = format!("zzwo{suffix}");
+    let capture_id = format!("zzcapwo{suffix}");
+    let now = "2026-06-29T15:40:00Z";
+    teardown(&job_id, &capture_id);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown(&job_id, &capture_id)
+    });
+
+    seed_zz_wo_dest();
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
+             VALUES ('zztest', 'ZZ Test', 'active', '{now}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT OR IGNORE INTO ota_source_coverage \
+             (source_id, product_type, status, method, updated_at) \
+             VALUES ('zztest', 'fit', 'active', 'agent_parse', '{now}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO captures (capture_id, source_id, url, captured_at, raw_text) \
+             VALUES ('{capture_id}', 'zztest', 'https://example.com/', '{now}', 'empty tsv')"
+        ),
+    ]);
+    let token = format!("zztok{suffix}");
+    let lease = "2026-06-29T16:40:00Z";
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, claimed_by, \
+             claimed_at, heartbeat_at, lease_expires_at, created_at, updated_at) \
+             VALUES ('{job_id}', 'zztest', 'fit', 'claimed', '{token}', 'wo-test', \
+             '{now}', '{now}', '{lease}', '{now}', '{now}')"
+        ),
+    ]);
+
+    let tsv = fixture_empty_tsv();
+    let (ok, stdout, stderr) = run(&[
+        "ota",
+        "write-offers",
+        &job_id,
+        "--capture",
+        &capture_id,
+        "--claim-token",
+        &token,
+        "--tsv",
+        tsv.to_str().unwrap(),
+        "--dest",
+        ZZ_WO_DEST,
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(ok, "0-candidate write-offers must still succeed; stderr={stderr}");
+    assert!(stdout.contains("candidates\t0"), "stdout={stdout}");
+    assert!(stdout.contains("inserted\t0"), "stdout={stdout}");
+    assert!(stdout.contains("status\tsucceeded"), "stdout={stdout}");
+    assert!(
+        stderr.contains("WARN: 0 candidates"),
+        "stderr must warn on empty extraction; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Next: promote with"),
+        "stderr must still print Next; stderr={stderr}"
+    );
 }
 
 /// Two distinct offers share the same (date, nights) — they MUST NOT collapse onto one PK.
@@ -689,6 +791,10 @@ async fn write_offers_dest_stamps_destination_and_region_and_promotes() {
         &plan,
     ]);
     assert!(ok, "promote failed: stderr={stderr} stdout={stdout}");
+    assert!(
+        stderr.contains("Next: select with") && stderr.contains("select-offer"),
+        "promote-offers success must print Next hint; stderr={stderr}"
+    );
     let po = db_exec(&format!(
         "SELECT COUNT(*) FROM plan_offers WHERE plan_id='{plan}' AND destination='{dest}'"
     ))
@@ -698,5 +804,87 @@ async fn write_offers_dest_stamps_destination_and_region_and_promotes() {
         Some("1"),
         "promoted offer must land in plan_offers; out={}",
         po.raw()
+    );
+}
+
+fn seed_claimed_job(job_id: &str, capture_id: &str, token: &str, now: &str) {
+    seed_zz_wo_dest();
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
+             VALUES ('zztest', 'ZZ Test', 'active', '{now}')"
+        ),
+    ]);
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO captures (capture_id, source_id, url, captured_at, raw_text) \
+             VALUES ('{capture_id}', 'zztest', 'https://example.com/', '{now}', 'empty page')"
+        ),
+    ]);
+    let lease = "2026-06-29T16:40:00Z";
+    let _ = run(&[
+        "db",
+        "exec",
+        &format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, claimed_by, \
+             claimed_at, heartbeat_at, lease_expires_at, created_at, updated_at) \
+             VALUES ('{job_id}', 'zztest', 'fit', 'claimed', '{token}', 'wo-test', \
+             '{now}', '{now}', '{lease}', '{now}', '{now}')"
+        ),
+    ]);
+}
+
+#[tokio::test]
+async fn write_offers_zero_candidates_warns_but_succeeds() {
+    let _lock = write_offers_test_lock();
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let suffix = nanos();
+    let job_id = format!("zzwo{suffix}");
+    let capture_id = format!("zzcapwo{suffix}");
+    let token = format!("zztok{suffix}");
+    teardown(&job_id, &capture_id);
+    let _g = Guard::new({
+        let (job_id, capture_id) = (job_id.clone(), capture_id.clone());
+        move || teardown(&job_id, &capture_id)
+    });
+    seed_claimed_job(&job_id, &capture_id, &token, "2026-06-29T15:41:00Z");
+
+    let tsv = fixture_empty_tsv();
+    let (ok, stdout, stderr) = run(&[
+        "ota",
+        "write-offers",
+        &job_id,
+        "--capture",
+        &capture_id,
+        "--claim-token",
+        &token,
+        "--tsv",
+        tsv.to_str().unwrap(),
+        "--dest",
+        ZZ_WO_DEST,
+    ]);
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(ok, "0-candidate write-offers must still succeed; stderr={stderr}");
+    assert!(stdout.contains("candidates\t0"), "stdout={stdout}");
+    assert!(stdout.contains("inserted\t0"), "stdout={stdout}");
+    assert!(stdout.contains("status\tsucceeded"), "stdout={stdout}");
+    assert!(
+        stderr.contains("WARN: 0 candidates"),
+        "0 candidates must warn; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Next: promote with") && stderr.contains("promote-offers"),
+        "must still print Next hint; stderr={stderr}"
     );
 }

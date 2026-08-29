@@ -95,6 +95,24 @@ impl OfferFilter {
         self
     }
 
+    /// `capture_id = ?`
+    pub fn capture_id(mut self, value: &str) -> Self {
+        self.push_text("capture_id =", value);
+        self
+    }
+
+    /// `produced_by_job_id = ?`
+    pub fn produced_by_job_id(mut self, value: &str) -> Self {
+        self.push_text("produced_by_job_id =", value);
+        self
+    }
+
+    /// `produced_by_attempt_id = ?`
+    pub fn produced_by_attempt_id(mut self, value: &str) -> Self {
+        self.push_text("produced_by_attempt_id =", value);
+        self
+    }
+
     /// `departure_date >= ?`
     pub fn departure_from(mut self, value: &str) -> Self {
         self.push_text("departure_date >=", value);
@@ -425,6 +443,22 @@ mod tests {
     }
 
     #[test]
+    fn offer_filter_provenance_ids_are_exact_equals() {
+        let w = OfferFilter::new()
+            .capture_id("cap-1")
+            .produced_by_job_id("job-1")
+            .produced_by_attempt_id("att-1")
+            .build();
+        assert_eq!(
+            w.clause,
+            "WHERE capture_id = ?1 AND produced_by_job_id = ?2 AND produced_by_attempt_id = ?3"
+        );
+        assert_eq!(text(&w.params[0]), Some("cap-1"));
+        assert_eq!(text(&w.params[1]), Some("job-1"));
+        assert_eq!(text(&w.params[2]), Some("att-1"));
+    }
+
+    #[test]
     fn placeholders_keep_numbering_across_mixed_predicates() {
         // destination(?1) + window(?2,?3) + fresh(?4) — numbering must stay sequential.
         let w = OfferFilter::new()
@@ -441,5 +475,21 @@ mod tests {
              julianday(scraped_at) >= (julianday('now') - (?4 / 24.0))"
         );
         assert_eq!(w.params.len(), 4);
+    }
+
+    #[test]
+    fn offer_filter_capture_job_attempt_ids() {
+        let w = OfferFilter::new()
+            .capture_id("cap1")
+            .produced_by_job_id("job1")
+            .produced_by_attempt_id("att1")
+            .build();
+        assert_eq!(
+            w.clause,
+            "WHERE capture_id = ?1 AND produced_by_job_id = ?2 AND produced_by_attempt_id = ?3"
+        );
+        assert_eq!(text(&w.params[0]), Some("cap1"));
+        assert_eq!(text(&w.params[1]), Some("job1"));
+        assert_eq!(text(&w.params[2]), Some("att1"));
     }
 }

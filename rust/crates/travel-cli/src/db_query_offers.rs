@@ -17,7 +17,7 @@ const DEFAULT_LIMIT: i64 = 50;
 const NAME_TRUNCATE: usize = 40;
 const AGE_TRUNCATE: usize = 6;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct QueryOffersArgs {
     pub destination: Option<String>,
     pub region: Option<String>,
@@ -30,6 +30,9 @@ pub struct QueryOffersArgs {
     pub limit: i64,
     pub include_undated: bool,
     pub show_sql: bool,
+    pub capture_id: Option<String>,
+    pub job_id: Option<String>,
+    pub attempt_id: Option<String>,
 }
 
 impl QueryOffersArgs {
@@ -67,13 +70,24 @@ impl QueryOffersArgs {
                             .map_err(|_| "--fresh-hours must be an integer".to_string())?,
                     )
                 }
+                "--capture-id" => o.capture_id = Some(val()?),
+                "--job-id" => o.job_id = Some(val()?),
+                "--attempt-id" => o.attempt_id = Some(val()?),
                 "--max" => {
                     o.limit = val()?
                         .parse()
                         .map_err(|_| "--max must be an integer".to_string())?
                 }
-                "--include-undated" => o.include_undated = true,
-                "--sql" => o.show_sql = true,
+                "--include-undated" => {
+                    o.include_undated = true;
+                    i += 1;
+                    continue;
+                }
+                "--sql" => {
+                    o.show_sql = true;
+                    i += 1;
+                    continue;
+                }
                 "--help" | "-h" => {
                     print_usage();
                     process::exit(0);
@@ -157,6 +171,15 @@ fn build_where(o: &QueryOffersArgs) -> travel_db::repo::offers::OfferWhere {
     if let Some(f) = o.fresh_hours {
         filter = filter.fresh_within_hours(f);
     }
+    if let Some(c) = &o.capture_id {
+        filter = filter.capture_id(c);
+    }
+    if let Some(j) = &o.job_id {
+        filter = filter.produced_by_job_id(j);
+    }
+    if let Some(a) = &o.attempt_id {
+        filter = filter.produced_by_attempt_id(a);
+    }
     filter.build()
 }
 
@@ -167,6 +190,7 @@ fn build_sql(o: &QueryOffersArgs) -> (String, Vec<libsql::Value>) {
     let mut sql = String::from(
         "SELECT id, source_id, type, name, price_per_person, currency, \
          departure_date, return_date, airline, hotel_name, scraped_at, \
+         capture_id, produced_by_job_id, produced_by_attempt_id, \
          (julianday('now') - julianday(scraped_at)) * 24.0 AS age_hours \
          FROM offers",
     );
@@ -273,13 +297,13 @@ pub async fn run(opts: &QueryOffersArgs) -> Result<(), String> {
         .await
         .map_err(|err| format!("failed to query offers from Turso: {err}"))?;
 
-    let mut collected: Vec<[String; 11]> = Vec::new();
+    let mut collected: Vec<[String; 15]> = Vec::new();
     while let Some(row) = rows
         .next()
         .await
         .map_err(|err| format!("failed to read offer row: {err}"))?
     {
-        let mut vals: [String; 11] = std::array::from_fn(|_| String::new());
+        let mut vals: [String; 15] = std::array::from_fn(|_| String::new());
         for (i, slot) in vals.iter_mut().enumerate() {
             *slot = row
                 .get_value(i as i32)
@@ -299,27 +323,32 @@ pub async fn run(opts: &QueryOffersArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn print_table(rows: &[[String; 11]], limit: i64) {
+fn print_table(rows: &[[String; 15]], limit: i64) {
     let source_w = 12usize;
     let type_w = 9usize;
     let price_w = 10usize;
     let date_w = 23usize;
     let age_w = AGE_TRUNCATE;
+    let prov_w = 16usize;
 
     println!("Found {} offer(s):\n", rows.len());
     let header = format!(
-        "{:<sw$} {:<tw$} {:<pw$} {:<dw$} {:<aw$} {}",
+        "{:<sw$} {:<tw$} {:<pw$} {:<dw$} {:<aw$} {:<pv$} {:<pv$} {:<pv$} {}",
         "SOURCE",
         "TYPE",
         "PRICE",
         "DATE",
         "AGE",
+        "CAPTURE",
+        "JOB",
+        "ATTEMPT",
         "NAME",
         sw = source_w,
         tw = type_w,
         pw = price_w,
         dw = date_w,
         aw = age_w,
+        pv = prov_w,
     );
     println!("{header}");
     println!("{}", "-".repeat(80));
@@ -343,20 +372,27 @@ fn print_table(rows: &[[String; 11]], limit: i64) {
             format!("{depart}→{ret}")
         };
         let age = format_age(&r[10]);
+        let capture = truncate(dash(&r[11]), prov_w);
+        let job = truncate(dash(&r[12]), prov_w);
+        let attempt = truncate(dash(&r[13]), prov_w);
         let name = truncate(dash(&r[3]), NAME_TRUNCATE);
         println!(
-            "{:<sw$} {:<tw$} {:<pw$} {:<dw$} {:<aw$} {}",
+            "{:<sw$} {:<tw$} {:<pw$} {:<dw$} {:<aw$} {:<pv$} {:<pv$} {:<pv$} {}",
             source,
             kind,
             price_str,
             date_str,
             age,
+            capture,
+            job,
+            attempt,
             name,
             sw = source_w,
             tw = type_w,
             pw = price_w,
             dw = date_w,
             aw = age_w,
+            pv = prov_w,
         );
     }
     println!();
@@ -385,6 +421,15 @@ fn print_applied_filters(o: &QueryOffersArgs) {
     if let Some(f) = o.fresh_hours {
         println!("  fresh_hours: {f}");
     }
+    if let Some(c) = &o.capture_id {
+        println!("  capture_id: {c}");
+    }
+    if let Some(j) = &o.job_id {
+        println!("  job_id: {j}");
+    }
+    if let Some(a) = &o.attempt_id {
+        println!("  attempt_id: {a}");
+    }
 }
 
 fn print_usage() {
@@ -407,10 +452,13 @@ fn print_usage() {
            --fresh-hours <int>      Only offers scraped within N hours\n  \
            --max <int>              Limit results (default: 50)\n  \
            --include-undated        When filtering by date, also include offers without departure_date\n  \
+           --capture-id <id>        Filter by capture_id (exact match)\n  \
+           --job-id <id>            Filter by produced_by_job_id (exact match)\n  \
+           --attempt-id <id>        Filter by produced_by_attempt_id (exact match)\n  \
            --sql                    Show generated SQL (for debugging)\n\
          \n\
          Output columns:\n  \
-           SOURCE, TYPE, PRICE, DATE, AGE, NAME"
+           SOURCE, TYPE, PRICE, DATE, AGE, CAPTURE, JOB, ATTEMPT, NAME"
     );
 }
 
@@ -453,6 +501,9 @@ mod tests {
             limit: 10,
             include_undated: false,
             show_sql: false,
+            capture_id: None,
+            job_id: None,
+            attempt_id: None,
         };
         let w = build_where(&o);
         assert_eq!(
@@ -504,5 +555,48 @@ mod tests {
         assert!(sql.contains("FROM offers WHERE region = ?1 ORDER BY"));
         assert!(sql.trim_end().ends_with("LIMIT 7"));
         assert_eq!(param_texts(&params), vec!["kansai"]);
+        assert!(sql.contains("capture_id, produced_by_job_id, produced_by_attempt_id"));
+    }
+
+    #[test]
+    fn build_where_provenance_filters_bind_exact_ids() {
+        let o = QueryOffersArgs {
+            capture_id: Some("cap-1".to_string()),
+            job_id: Some("job-1".to_string()),
+            attempt_id: Some("att-1".to_string()),
+            limit: DEFAULT_LIMIT,
+            ..Default::default()
+        };
+        let w = build_where(&o);
+        assert_eq!(
+            w.clause,
+            "WHERE capture_id = ?1 AND produced_by_job_id = ?2 AND produced_by_attempt_id = ?3"
+        );
+        assert_eq!(param_texts(&w.params), vec!["cap-1", "job-1", "att-1"]);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_flag() {
+        let err = QueryOffersArgs::parse(&["--totally-bogus".to_string()]).unwrap_err();
+        assert!(err.contains("unknown flag"), "err={err}");
+    }
+
+    #[test]
+    fn parse_provenance_flags_after_sql_boolean() {
+        // `--sql` is boolean (i+=1); a following value-flag must still bind.
+        let o = QueryOffersArgs::parse(&[
+            "--sql".to_string(),
+            "--capture-id".to_string(),
+            "c1".to_string(),
+            "--job-id".to_string(),
+            "j1".to_string(),
+            "--attempt-id".to_string(),
+            "a1".to_string(),
+        ])
+        .unwrap();
+        assert!(o.show_sql);
+        assert_eq!(o.capture_id.as_deref(), Some("c1"));
+        assert_eq!(o.job_id.as_deref(), Some("j1"));
+        assert_eq!(o.attempt_id.as_deref(), Some("a1"));
     }
 }

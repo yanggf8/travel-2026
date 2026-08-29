@@ -5,6 +5,7 @@
 
 use crate::db;
 
+#[derive(Debug)]
 pub struct OffersArgs {
     pub source: Option<String>,
     pub region: Option<String>,
@@ -13,6 +14,9 @@ pub struct OffersArgs {
     pub start: Option<String>,
     pub end: Option<String>,
     pub limit: i64,
+    pub capture_id: Option<String>,
+    pub job_id: Option<String>,
+    pub attempt_id: Option<String>,
 }
 
 impl OffersArgs {
@@ -25,6 +29,9 @@ impl OffersArgs {
             start: None,
             end: None,
             limit: 500,
+            capture_id: None,
+            job_id: None,
+            attempt_id: None,
         };
         let mut i = 0;
         while i < args.len() {
@@ -46,6 +53,9 @@ impl OffersArgs {
                 "--limit" => {
                     o.limit = val()?.parse().map_err(|_| "--limit must be an integer".to_string())?
                 }
+                "--capture-id" => o.capture_id = Some(val()?),
+                "--job-id" => o.job_id = Some(val()?),
+                "--attempt-id" => o.attempt_id = Some(val()?),
                 other => return Err(format!("unknown flag for query-offers: {other}")),
             }
             i += 2;
@@ -76,10 +86,20 @@ pub async fn run(opts: &OffersArgs) -> Result<(), String> {
     if let Some(e) = &opts.end {
         filter = filter.departure_to(e);
     }
+    if let Some(c) = &opts.capture_id {
+        filter = filter.capture_id(c);
+    }
+    if let Some(j) = &opts.job_id {
+        filter = filter.produced_by_job_id(j);
+    }
+    if let Some(a) = &opts.attempt_id {
+        filter = filter.produced_by_attempt_id(a);
+    }
     let where_built = filter.build();
 
     let sql = format!(
-        "SELECT source_id, type, price_per_person, hotel_name, airline, departure_date, scraped_at \
+        "SELECT source_id, type, price_per_person, hotel_name, airline, departure_date, scraped_at, \
+         capture_id, produced_by_job_id, produced_by_attempt_id \
          FROM offers {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT {}",
         where_built.clause, opts.limit
     );
@@ -90,7 +110,7 @@ pub async fn run(opts: &OffersArgs) -> Result<(), String> {
         .await
         .map_err(|err| format!("failed to query offers from Turso: {err}"))?;
 
-    let mut out: Vec<[String; 7]> = Vec::new();
+    let mut out: Vec<[String; 10]> = Vec::new();
     while let Some(row) = rows
         .next()
         .await
@@ -103,6 +123,9 @@ pub async fn run(opts: &OffersArgs) -> Result<(), String> {
         let airline: String = row.get(4).unwrap_or_default();
         let depart: String = row.get(5).unwrap_or_default();
         let scraped: String = row.get(6).unwrap_or_default();
+        let capture: String = row.get(7).unwrap_or_default();
+        let job: String = row.get(8).unwrap_or_default();
+        let attempt: String = row.get(9).unwrap_or_default();
         out.push([
             source,
             kind,
@@ -111,6 +134,9 @@ pub async fn run(opts: &OffersArgs) -> Result<(), String> {
             airline,
             depart,
             scraped,
+            capture,
+            job,
+            attempt,
         ]);
     }
 
@@ -122,13 +148,13 @@ fn dash(s: &str) -> String {
     if s.is_empty() { "-".to_string() } else { s.to_string() }
 }
 
-fn print_offer_table(rows: &[[String; 7]]) {
+fn print_offer_table(rows: &[[String; 10]]) {
     if rows.is_empty() {
         println!("\nNo offers found in Turso.");
         return;
     }
     println!("\nTurso Offers ({} results):", rows.len());
-    let bar = "─".repeat(100);
+    let bar = "─".repeat(140);
     println!("{bar}");
     let header = [
         format!("{:<12}", "Source"),
@@ -138,6 +164,9 @@ fn print_offer_table(rows: &[[String; 7]]) {
         format!("{:<10}", "Airline"),
         format!("{:<12}", "Depart"),
         format!("{:<20}", "Scraped"),
+        format!("{:<16}", "Capture"),
+        format!("{:<16}", "Job"),
+        format!("{:<16}", "Attempt"),
     ]
     .join(" │ ");
     println!("{header}");
@@ -153,6 +182,11 @@ fn print_offer_table(rows: &[[String; 7]]) {
             let s = if s.is_empty() { "-".to_string() } else { s };
             format!("{s:<20}")
         };
+        let col16 = |s: &str| {
+            let d = dash(s);
+            let truncated: String = d.chars().take(16).collect();
+            format!("{truncated:<16}")
+        };
         let line = [
             format!("{:<12}", dash(&r[0])),
             format!("{:<8}", dash(&r[1])),
@@ -161,8 +195,41 @@ fn print_offer_table(rows: &[[String; 7]]) {
             format!("{:<10}", dash(&r[4])),
             format!("{:<12}", dash(&r[5])),
             scraped,
+            col16(&r[7]),
+            col16(&r[8]),
+            col16(&r[9]),
         ]
         .join(" │ ");
         println!("{line}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OffersArgs;
+
+    #[test]
+    fn parse_accepts_provenance_filters() {
+        let o = OffersArgs::parse(&[
+            "--capture-id".into(),
+            "cap-1".into(),
+            "--job-id".into(),
+            "job-1".into(),
+            "--attempt-id".into(),
+            "att-1".into(),
+            "--dest".into(),
+            "tokyo_2026".into(),
+        ])
+        .expect("parse");
+        assert_eq!(o.capture_id.as_deref(), Some("cap-1"));
+        assert_eq!(o.job_id.as_deref(), Some("job-1"));
+        assert_eq!(o.attempt_id.as_deref(), Some("att-1"));
+        assert_eq!(o.destination.as_deref(), Some("tokyo_2026"));
+    }
+
+    #[test]
+    fn parse_rejects_unknown_flag() {
+        let err = OffersArgs::parse(&["--totally-bogus".into()]).unwrap_err();
+        assert!(err.contains("unknown flag"), "err={err}");
     }
 }
