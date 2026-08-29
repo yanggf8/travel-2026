@@ -329,7 +329,7 @@ fn print_table(rows: &[[String; 15]], limit: i64) {
     let price_w = 10usize;
     let date_w = 23usize;
     let age_w = AGE_TRUNCATE;
-    let prov_w = 16usize;
+    let prov_w = 36usize;
 
     println!("Found {} offer(s):\n", rows.len());
     let header = format!(
@@ -351,7 +351,7 @@ fn print_table(rows: &[[String; 15]], limit: i64) {
         pv = prov_w,
     );
     println!("{header}");
-    println!("{}", "-".repeat(80));
+    println!("{}", "-".repeat(header.len()));
 
     for r in rows {
         let source = dash(&r[1]);
@@ -372,9 +372,13 @@ fn print_table(rows: &[[String; 15]], limit: i64) {
             format!("{depart}→{ret}")
         };
         let age = format_age(&r[10]);
-        let capture = truncate(dash(&r[11]), prov_w);
-        let job = truncate(dash(&r[12]), prov_w);
-        let attempt = truncate(dash(&r[13]), prov_w);
+        let prov = |s: &str| {
+            let d = dash(s);
+            if d.chars().count() >= prov_w { d.to_string() } else { format!("{d:<prov_w$}") }
+        };
+        let capture = prov(&r[11]);
+        let job = prov(&r[12]);
+        let attempt = prov(&r[13]);
         let name = truncate(dash(&r[3]), NAME_TRUNCATE);
         println!(
             "{:<sw$} {:<tw$} {:<pw$} {:<dw$} {:<aw$} {:<pv$} {:<pv$} {:<pv$} {}",
@@ -598,5 +602,18 @@ mod tests {
         assert_eq!(o.capture_id.as_deref(), Some("c1"));
         assert_eq!(o.job_id.as_deref(), Some("j1"));
         assert_eq!(o.attempt_id.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn parse_include_undated_does_not_swallow_next_flag() {
+        // `--include-undated` is boolean (i+=1); a following value-flag must still bind.
+        let o = QueryOffersArgs::parse(&[
+            "--include-undated".to_string(),
+            "--capture-id".to_string(),
+            "c1".to_string(),
+        ])
+        .unwrap();
+        assert!(o.include_undated);
+        assert_eq!(o.capture_id.as_deref(), Some("c1"));
     }
 }

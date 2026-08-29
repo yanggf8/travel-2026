@@ -9,9 +9,11 @@ use common::{
     bin, db_exec, db_exec_teardown, is_credless, nanos, seed_plan, teardown_plan, Guard,
 };
 
-// These tests share the global `zztest` row in ota_sources/ota_source_coverage, and each test's
+// These tests share the global `zztest` row in ota_sources, and each test's
 // teardown DELETEs it by that shared literal — so a concurrent test would have its source yanked
 // mid-run. Serialize them (same pattern as ota_claim.rs / ota_parse.rs).
+// (No ota_source_coverage seed: write-offers never reads it, and the old seed used a `status`
+// column that does not exist in the schema, so it silently failed on every run.)
 static WRITE_OFFERS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn write_offers_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -93,15 +95,6 @@ async fn write_offers_from_fixture_tsv() {
         &format!(
             "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
              VALUES ('zztest', 'ZZ Test', 'active', '{now}')"
-        ),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!(
-            "INSERT OR IGNORE INTO ota_source_coverage \
-             (source_id, product_type, status, method, updated_at) \
-             VALUES ('zztest', 'fit', 'active', 'agent_parse', '{now}')"
         ),
     ]);
     let _ = run(&[
@@ -197,15 +190,6 @@ async fn write_offers_zero_candidates_warns_and_succeeds() {
         &format!(
             "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
              VALUES ('zztest', 'ZZ Test', 'active', '{now}')"
-        ),
-    ]);
-    let _ = run(&[
-        "db",
-        "exec",
-        &format!(
-            "INSERT OR IGNORE INTO ota_source_coverage \
-             (source_id, product_type, status, method, updated_at) \
-             VALUES ('zztest', 'fit', 'active', 'agent_parse', '{now}')"
         ),
     ]);
     let _ = run(&[

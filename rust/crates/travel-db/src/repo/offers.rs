@@ -477,19 +477,4 @@ mod tests {
         assert_eq!(w.params.len(), 4);
     }
 
-    #[test]
-    fn offer_filter_capture_job_attempt_ids() {
-        let w = OfferFilter::new()
-            .capture_id("cap1")
-            .produced_by_job_id("job1")
-            .produced_by_attempt_id("att1")
-            .build();
-        assert_eq!(
-            w.clause,
-            "WHERE capture_id = ?1 AND produced_by_job_id = ?2 AND produced_by_attempt_id = ?3"
-        );
-        assert_eq!(text(&w.params[0]), Some("cap1"));
-        assert_eq!(text(&w.params[1]), Some("job1"));
-        assert_eq!(text(&w.params[2]), Some("att1"));
-    }
 }

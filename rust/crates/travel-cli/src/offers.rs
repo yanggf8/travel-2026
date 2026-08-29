@@ -154,8 +154,6 @@ fn print_offer_table(rows: &[[String; 10]]) {
         return;
     }
     println!("\nTurso Offers ({} results):", rows.len());
-    let bar = "─".repeat(140);
-    println!("{bar}");
     let header = [
         format!("{:<12}", "Source"),
         format!("{:<8}", "Type"),
@@ -164,11 +162,13 @@ fn print_offer_table(rows: &[[String; 10]]) {
         format!("{:<10}", "Airline"),
         format!("{:<12}", "Depart"),
         format!("{:<20}", "Scraped"),
-        format!("{:<16}", "Capture"),
-        format!("{:<16}", "Job"),
-        format!("{:<16}", "Attempt"),
+        format!("{:<36}", "Capture"),
+        format!("{:<36}", "Job"),
+        format!("{:<36}", "Attempt"),
     ]
     .join(" │ ");
+    let bar = "─".repeat(header.chars().count());
+    println!("{bar}");
     println!("{header}");
     println!("{bar}");
     for r in rows {
@@ -182,10 +182,9 @@ fn print_offer_table(rows: &[[String; 10]]) {
             let s = if s.is_empty() { "-".to_string() } else { s };
             format!("{s:<20}")
         };
-        let col16 = |s: &str| {
+        let col36 = |s: &str| {
             let d = dash(s);
-            let truncated: String = d.chars().take(16).collect();
-            format!("{truncated:<16}")
+            if d.chars().count() >= 36 { d } else { format!("{d:<36}") }
         };
         let line = [
             format!("{:<12}", dash(&r[0])),
@@ -195,9 +194,9 @@ fn print_offer_table(rows: &[[String; 10]]) {
             format!("{:<10}", dash(&r[4])),
             format!("{:<12}", dash(&r[5])),
             scraped,
-            col16(&r[7]),
-            col16(&r[8]),
-            col16(&r[9]),
+            col36(&r[7]),
+            col36(&r[8]),
+            col36(&r[9]),
         ]
         .join(" │ ");
         println!("{line}");

@@ -81,7 +81,6 @@ fn teardown_capture_rows(capture_id: &str, offer_id: Option<&str>, dest: Option<
     let _ = db_exec_teardown(&format!(
         "DELETE FROM captures WHERE capture_id = '{capture_id}'"
     ));
-    let _ = db_exec_teardown("DELETE FROM captures WHERE capture_id LIKE 'test-%'");
     if let Some(slug) = dest {
         let _ = db_exec_teardown(&format!(
             "DELETE FROM destination_config WHERE slug = '{slug}'"

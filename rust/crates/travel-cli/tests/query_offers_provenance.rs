@@ -76,8 +76,7 @@ async fn query_offers_filters_by_capture_job_attempt() {
         "matching offer must appear; stdout={stdout}"
     );
     assert!(
-        stdout.contains(&format!("capture={capture_id}"))
-            || stdout.contains(&capture_id),
+        stdout.contains(&capture_id),
         "output must include capture_id; stdout={stdout}"
     );
 
