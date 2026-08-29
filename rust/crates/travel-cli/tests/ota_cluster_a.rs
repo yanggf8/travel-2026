@@ -478,7 +478,9 @@ async fn write_offers_reingest_same_tsv_dedupes_across_jobs() {
     assert!(out2.contains("inserted\t0"), "re-ingest inserts nothing; stdout={out2}");
     assert!(out2.contains("deduped\t1"), "re-ingest dedupes the candidate; stdout={out2}");
 
-    // User-visible symptom check: the package appears exactly once after the re-ingest.
+    // User-visible symptom check: the package appears exactly once after the re-ingest, and its
+    // hotel shows in the NAME column (agent-path rows have NULL offers.name → COALESCE falls
+    // through to hotel_name).
     let (okq, outq, errq) = run(&["db", "query-offers", "--capture-id", &capture_id]);
     assert!(okq, "query-offers failed: {errq}");
     assert!(outq.contains("Found 1 offer(s)"), "exactly one row survives; stdout={outq}");
@@ -486,5 +488,10 @@ async fn write_offers_reingest_same_tsv_dedupes_across_jobs() {
         outq.matches(&source_id).count(),
         1,
         "the package must appear exactly once after re-ingest; stdout={outq}"
+    );
+    assert_eq!(
+        outq.matches("HOTEL ZZTEST").count(),
+        1,
+        "hotel_name must surface in the NAME column; stdout={outq}"
     );
 }

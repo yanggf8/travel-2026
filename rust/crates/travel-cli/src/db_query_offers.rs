@@ -188,7 +188,9 @@ fn build_sql(o: &QueryOffersArgs) -> (String, Vec<libsql::Value>) {
     let where_built = build_where(o);
     // Single-line SQL to match TS .trim().replace(/\s+/g, ' ') behavior.
     let mut sql = String::from(
-        "SELECT id, source_id, type, name, price_per_person, currency, \
+        "SELECT id, source_id, type, \
+         COALESCE(NULLIF(name, ''), NULLIF(hotel_name, ''), NULLIF(airline, '')) AS name, \
+         price_per_person, currency, \
          departure_date, return_date, airline, hotel_name, scraped_at, \
          capture_id, produced_by_job_id, produced_by_attempt_id, \
          (julianday('now') - julianday(COALESCE(last_seen_at, scraped_at))) * 24.0 AS age_hours \
@@ -555,7 +557,11 @@ mod tests {
             ..Default::default()
         };
         let (sql, params) = build_sql(&o);
-        assert!(sql.starts_with("SELECT id, source_id, type, name, price_per_person"));
+        assert!(sql.starts_with(
+            "SELECT id, source_id, type, \
+             COALESCE(NULLIF(name, ''), NULLIF(hotel_name, ''), NULLIF(airline, '')) AS name, \
+             price_per_person"
+        ));
         assert!(sql.contains("FROM offers WHERE region = ?1 ORDER BY"));
         assert!(sql.trim_end().ends_with("LIMIT 7"));
         assert_eq!(param_texts(&params), vec!["kansai"]);
