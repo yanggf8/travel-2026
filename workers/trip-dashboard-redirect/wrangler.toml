@@ -1,6 +1,13 @@
-# Redirect worker — reclaims the retired `trip-dashboard` workers.dev name to 301-forward the old
-# dashboard URL to the live -rs worker (path + query preserved). Deploy: `npx wrangler deploy`.
+# Redirect worker — reclaims the retired `trip-dashboard` workers.dev name to 301-forward the
+# old dashboard URL to the live -rs worker (path + query preserved, so old `?plan=…&token=…`
+# share links keep landing). Deploy: `npx wrangler deploy`. Worker NAME must stay
+# `trip-dashboard` — that is the URL being reclaimed.
 name = "trip-dashboard"
-main = "src/index.ts"
+main = "build/worker/shim.mjs"
 compatibility_date = "2024-12-01"
-workers_dev = true
+
+# Ported from src/index.ts to workers-rs (all-Rust audit, 2026-08-29). Same build recipe as
+# trip-dashboard-rs: only install worker-build if it's not already on PATH (installing needs
+# pkg-config/OpenSSL, absent in this WSL; a pre-installed rustls-patched worker-build is used).
+[build]
+command = "command -v worker-build >/dev/null || cargo install -q worker-build; worker-build --release"
