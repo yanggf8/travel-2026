@@ -153,7 +153,7 @@ async fn promote_offers_bridges_into_plan_and_feeds_select() {
     // --- 6. real run ---
     let (ok, out, err) = run_promote(&plan, &dest, &[]);
     assert!(
-        err.contains("Next: select with travel select-offer"),
+        err.contains("Next: select with `travel select-offer"),
         "promote-offers success must print Next hint; err={err}"
     );
     assert!(ok, "promote should succeed; err={err} out={out}");
