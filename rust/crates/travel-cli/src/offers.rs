@@ -100,7 +100,7 @@ pub async fn run(opts: &OffersArgs) -> Result<(), String> {
     let sql = format!(
         "SELECT source_id, type, price_per_person, hotel_name, airline, departure_date, scraped_at, \
          capture_id, produced_by_job_id, produced_by_attempt_id \
-         FROM offers {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT {}",
+         FROM offers {} ORDER BY COALESCE(last_seen_at, scraped_at) DESC, price_per_person ASC LIMIT {}",
         where_built.clause, opts.limit
     );
 

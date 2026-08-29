@@ -191,7 +191,7 @@ fn build_sql(o: &QueryOffersArgs) -> (String, Vec<libsql::Value>) {
         "SELECT id, source_id, type, name, price_per_person, currency, \
          departure_date, return_date, airline, hotel_name, scraped_at, \
          capture_id, produced_by_job_id, produced_by_attempt_id, \
-         (julianday('now') - julianday(scraped_at)) * 24.0 AS age_hours \
+         (julianday('now') - julianday(COALESCE(last_seen_at, scraped_at))) * 24.0 AS age_hours \
          FROM offers",
     );
     if !where_built.clause.is_empty() {
@@ -202,7 +202,7 @@ fn build_sql(o: &QueryOffersArgs) -> (String, Vec<libsql::Value>) {
         " ORDER BY \
          CASE WHEN price_per_person IS NULL THEN 1 ELSE 0 END, \
          price_per_person ASC, \
-         scraped_at DESC \
+         COALESCE(last_seen_at, scraped_at) DESC \
          LIMIT ",
     );
     sql.push_str(&o.limit.to_string());
@@ -515,8 +515,8 @@ mod tests {
             "WHERE destination = ?1 AND region = ?2 AND departure_date IS NOT NULL \
              AND departure_date >= ?3 AND departure_date <= ?4 \
              AND source_id IN (?5,?6) AND type = ?7 AND price_per_person <= ?8 \
-             AND scraped_at IS NOT NULL \
-             AND julianday(scraped_at) >= (julianday('now') - (?9 / 24.0))"
+             AND COALESCE(last_seen_at, scraped_at) IS NOT NULL \
+             AND julianday(COALESCE(last_seen_at, scraped_at)) >= (julianday('now') - (?9 / 24.0))"
         );
         assert_eq!(
             param_texts(&w.params),

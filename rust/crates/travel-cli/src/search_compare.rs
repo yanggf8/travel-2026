@@ -130,7 +130,7 @@ async fn load_scraped_offers(
         "SELECT id, source_id, price_per_person, currency, airline, hotel_name, name, \
          departure_date, return_date, scraped_at \
          FROM offers WHERE {} \
-         ORDER BY scraped_at DESC, price_per_person ASC LIMIT 500",
+         ORDER BY COALESCE(last_seen_at, scraped_at) DESC, price_per_person ASC LIMIT 500",
         conds.join(" AND ")
     );
 

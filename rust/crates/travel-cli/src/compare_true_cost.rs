@@ -136,7 +136,7 @@ pub async fn run(opts: &TrueCostArgs) -> Result<(), String> {
     let where_built = filter.build();
     let sql = format!(
         "SELECT id, source_id, price_per_person, currency, airline, hotel_name, name FROM offers \
-         {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT 500",
+         {} ORDER BY COALESCE(last_seen_at, scraped_at) DESC, price_per_person ASC LIMIT 500",
         where_built.clause
     );
     let mut offers: Vec<RawOffer> = Vec::new();

@@ -397,8 +397,12 @@ pub fn parsed_to_offer_row(
     normalizer_version: &str,
 ) -> OfferRow {
     let product_code = product_code_from_url(url).unwrap_or_default();
+    // offer_key keeps the PRE-disambiguation base id as the stable logical identity:
+    // disambiguate_ids later overwrites `id` with batch-order-dependent `_2`/`_3` suffixes.
+    let base_id = offer_row_id(source_id, &product_code, departure_date, nights);
     OfferRow {
-        id: offer_row_id(source_id, &product_code, departure_date, nights),
+        id: base_id.clone(),
+        offer_key: Some(base_id),
         source_file: Some(format!("capture:{capture_id}")),
         source_id: source_id.to_string(),
         offer_type: offer_row_kind(product_type).to_string(),

@@ -51,6 +51,8 @@ python bridge/ota_capture.py --source <id> [--url-contains <s>]   # → capture_
 # AGENT reads captures.raw_text, extracts offers, emits TSV, then:
 ./bin/travel ota show-capture <capture_id>                        # read-only: raw_text → stdout; source_id/url/captured_at → stderr
 ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>   # → Turso offers + provenance
+#   Re-ingesting identical content (same TSV, new job) is DEDUPED by offers.dedup_key —
+#   the surviving row's last_seen_at bumps; a price change is a NEW row (price history kept).
 ```
 
 See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-24-ota-migration-chromeport.md`.

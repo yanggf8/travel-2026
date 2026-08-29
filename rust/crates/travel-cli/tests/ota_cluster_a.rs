@@ -361,3 +361,130 @@ async fn db_query_offers_filters_by_capture_job_attempt() {
         "unknown flag must mention unknown flag; stderr={stderr}"
     );
 }
+
+#[tokio::test]
+async fn write_offers_reingest_same_tsv_dedupes_across_jobs() {
+    let _lock = lock();
+    let (ok, _o, err) = run(&["db", "migrate"]);
+    if !ok && is_credless(&err) {
+        eprintln!("skipping (no creds): {}", err.trim());
+        return;
+    }
+
+    let suffix = nanos();
+    let dest = format!("test_dest_{suffix}");
+    let source_id = format!("test-src-{suffix}");
+    let capture_id = format!("test-cap-{suffix}");
+    let job1 = format!("test-job-a-{suffix}");
+    let job2 = format!("test-job-b-{suffix}");
+    let token1 = format!("test-tok-a-{suffix}");
+    let token2 = format!("test-tok-b-{suffix}");
+    let now = "2026-08-26T01:00:00Z";
+    let lease = "2026-08-26T02:00:00Z";
+    let tsv = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zz_ota_offers.tsv");
+    // Pre-clean + panic-safe teardown for BOTH jobs' rows plus the shared capture/source/dest.
+    // Exact ids only — no prefix sweeps on the shared DB.
+    let cleanup = {
+        let (dest, source_id, capture_id, job1, job2) = (
+            dest.clone(),
+            source_id.clone(),
+            capture_id.clone(),
+            job1.clone(),
+            job2.clone(),
+        );
+        move || {
+            for job in [&job1, &job2] {
+                let _ = db_exec_teardown(&format!(
+                    "DELETE FROM offers WHERE produced_by_job_id='{job}'"
+                ));
+                let _ =
+                    db_exec_teardown(&format!("DELETE FROM ota_attempts WHERE job_id='{job}'"));
+                let _ = db_exec_teardown(&format!(
+                    "DELETE FROM ota_job_params WHERE job_id='{job}'"
+                ));
+                let _ = db_exec_teardown(&format!("DELETE FROM ota_jobs WHERE job_id='{job}'"));
+            }
+            let _ = db_exec_teardown(&format!(
+                "DELETE FROM captures WHERE capture_id='{capture_id}'"
+            ));
+            let _ = db_exec_teardown(&format!(
+                "DELETE FROM ota_sources WHERE source_id='{source_id}'"
+            ));
+            let _ = db_exec_teardown(&format!("DELETE FROM destination_config WHERE slug='{dest}'"));
+        }
+    };
+    cleanup();
+    let _g = Guard::new(cleanup);
+
+    let seed = [
+        format!(
+            "INSERT OR IGNORE INTO destination_config \
+             (slug, display_name, timezone, currency, origin) \
+             VALUES ('{dest}', 'ZZ Cluster A', 'Asia/Tokyo', 'JPY', 'TPE')"
+        ),
+        format!(
+            "INSERT OR IGNORE INTO ota_sources (source_id, name, status, updated_at) \
+             VALUES ('{source_id}', 'ZZ Cluster A', 'active', '{now}')"
+        ),
+        format!(
+            "INSERT INTO captures (capture_id, source_id, url, captured_at, raw_text) \
+             VALUES ('{capture_id}', '{source_id}', 'https://example.test/pkg', '{now}', 'package page')"
+        ),
+        // Job product_type must match the TSV offer kind (package), or write-offers rejects.
+        format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, claimed_by, \
+             claimed_at, heartbeat_at, lease_expires_at, created_at, updated_at) \
+             VALUES ('{job1}', '{source_id}', 'package', 'claimed', '{token1}', 'cluster-a', \
+             '{now}', '{now}', '{lease}', '{now}', '{now}')"
+        ),
+        format!(
+            "INSERT INTO ota_jobs (job_id, source_id, product_type, status, claim_token, claimed_by, \
+             claimed_at, heartbeat_at, lease_expires_at, created_at, updated_at) \
+             VALUES ('{job2}', '{source_id}', 'package', 'claimed', '{token2}', 'cluster-a', \
+             '{now}', '{now}', '{lease}', '{now}', '{now}')"
+        ),
+    ];
+    for sql in &seed {
+        if db_exec(sql).is_none() {
+            eprintln!("skipping (no creds mid-test)");
+            return;
+        }
+    }
+
+    let write = |job: &str, token: &str| {
+        run(&[
+            "ota",
+            "write-offers",
+            job,
+            "--capture",
+            &capture_id,
+            "--claim-token",
+            token,
+            "--tsv",
+            tsv.to_str().unwrap(),
+            "--dest",
+            &dest,
+        ])
+    };
+
+    // First ingest inserts.
+    let (ok1, out1, err1) = write(&job1, &token1);
+    assert!(ok1, "first write-offers should succeed: stderr={err1}");
+    assert!(out1.contains("inserted\t1"), "first run inserts the offer; stdout={out1}");
+
+    // Re-ingest the SAME TSV through a second job: content dedup, not duplication.
+    let (ok2, out2, err2) = write(&job2, &token2);
+    assert!(ok2, "re-ingest write-offers should succeed: stderr={err2}");
+    assert!(out2.contains("inserted\t0"), "re-ingest inserts nothing; stdout={out2}");
+    assert!(out2.contains("deduped\t1"), "re-ingest dedupes the candidate; stdout={out2}");
+
+    // User-visible symptom check: the package appears exactly once after the re-ingest.
+    let (okq, outq, errq) = run(&["db", "query-offers", "--capture-id", &capture_id]);
+    assert!(okq, "query-offers failed: {errq}");
+    assert!(outq.contains("Found 1 offer(s)"), "exactly one row survives; stdout={outq}");
+    assert_eq!(
+        outq.matches(&source_id).count(),
+        1,
+        "the package must appear exactly once after re-ingest; stdout={outq}"
+    );
+}

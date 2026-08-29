@@ -126,7 +126,7 @@ async fn query_offers(
 
     let sql = format!(
         "SELECT source_id, departure_date, price_per_person, airline, hotel_name, name \
-         FROM offers {} ORDER BY scraped_at DESC, price_per_person ASC LIMIT 500",
+         FROM offers {} ORDER BY COALESCE(last_seen_at, scraped_at) DESC, price_per_person ASC LIMIT 500",
         where_built.clause
     );
 

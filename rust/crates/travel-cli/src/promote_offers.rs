@@ -314,8 +314,8 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
 // ============================================================================
 
 /// Read the latest snapshot per id from the global `offers` table for this
-/// destination, with optional source/date filters. PK is (id, scraped_at), so a
-/// MAX(scraped_at) self-join takes the freshest snapshot per id.
+/// destination, with optional source/date filters. Liveness is
+/// MAX(COALESCE(last_seen_at, scraped_at)) so a re-observed (deduped) offer counts as fresh.
 async fn read_source_offers(
     conn: &Connection,
     opts: &PromoteOpts,
@@ -327,9 +327,10 @@ async fn read_source_offers(
                 o.availability, o.departure_date, o.hotel_name, o.hotel_area, \
                 o.flight_outbound, o.flight_return, o.includes, o.scraped_at \
          FROM offers o \
-         JOIN (SELECT id, MAX(scraped_at) AS latest FROM offers \
+         JOIN (SELECT id, MAX(COALESCE(last_seen_at, scraped_at)) AS latest FROM offers \
                WHERE destination = ?1 GROUP BY id) m \
-           ON o.id = m.id AND o.scraped_at = m.latest \
+           ON o.id = m.id \
+          AND COALESCE(o.last_seen_at, o.scraped_at) = m.latest \
          WHERE o.destination = ?1",
     );
     let mut params: Vec<libsql::Value> = vec![opts.dest.clone().into()];

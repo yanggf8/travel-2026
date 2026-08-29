@@ -1012,6 +1012,30 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     add_column(&conn, "ALTER TABLE offers ADD COLUMN parser_rule_checksum TEXT;").await;
     add_column(&conn, "ALTER TABLE offers ADD COLUMN normalizer_version TEXT;").await;
 
+    // Content-hash re-ingest dedup (plan docs/plans/2026-08-29-offers-dedup-a-prime.md):
+    // offer_key = stable pre-disambiguation identity, dedup_key = sha256 content fingerprint
+    // (UNIQUE — all-NULL rows are distinct in SQLite, so creating it before backfill is safe),
+    // last_seen_at = bumped whenever content is re-observed.
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN offer_key TEXT;").await;
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN dedup_key TEXT;").await;
+    add_column(&conn, "ALTER TABLE offers ADD COLUMN last_seen_at TEXT;").await;
+    exec_lenient(
+        &conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_offers_dedup_key ON offers(dedup_key);",
+    )
+    .await;
+    exec_lenient(
+        &conn,
+        "CREATE INDEX IF NOT EXISTS idx_offers_offer_key ON offers(offer_key, scraped_at);",
+    )
+    .await;
+    exec_lenient(
+        &conn,
+        "CREATE INDEX IF NOT EXISTS idx_offers_last_seen ON offers(last_seen_at);",
+    )
+    .await;
+    backfill_offers_dedup_keys(&conn).await;
+
     // Shaping Stage research tables.
     for sql in SHAPING_RESEARCH_TABLES {
         exec_lenient(&conn, sql).await;
@@ -1678,6 +1702,90 @@ async fn backfill_ota_notes_audit(conn: &libsql::Connection) {
         );
         exec_lenient(conn, &sql).await;
     }
+}
+
+/// Assign `dedup_key` (content fingerprint) to legacy `offers` rows. Oldest-first so the
+/// FIRST-SEEN row is canonical; a row is stamped only when no other row already carries the
+/// key, so pre-existing content duplicates keep `dedup_key IS NULL` — visible debt for an
+/// explicit P2 collapse command (migrate NEVER deletes). Idempotent: re-runs find zero
+/// stampable rows. (plan docs/plans/2026-08-29-offers-dedup-a-prime.md)
+async fn backfill_offers_dedup_keys(conn: &libsql::Connection) {
+    let sql = "SELECT id, scraped_at, source_id, type, name, price_per_person, currency, \
+         destination, departure_date, return_date, nights, availability, hotel_name, airline, \
+         flight_outbound, flight_return, offer_key \
+         FROM offers WHERE dedup_key IS NULL ORDER BY scraped_at ASC, id ASC";
+    let mut rows = match conn.query(sql, ()).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("⚠️  Could not read offers for dedup backfill: {e}");
+            return;
+        }
+    };
+    let mut stamped: u64 = 0;
+    let mut skipped: u64 = 0;
+    loop {
+        let Some(row) = (
+            match rows.next().await {
+                Ok(row) => row,
+                Err(e) => {
+                    eprintln!("⚠️  Could not read dedup-backfill row: {e}");
+                    break;
+                }
+            }
+        ) else {
+            break;
+        };
+        let text = |i: i32| -> Option<String> {
+            match row.get_value(i) {
+                Ok(libsql::Value::Text(s)) => Some(s),
+                _ => None,
+            }
+        };
+        let num = |i: i32| -> Option<i64> {
+            match row.get_value(i) {
+                Ok(libsql::Value::Integer(n)) => Some(n),
+                _ => None,
+            }
+        };
+        let (Some(id), Some(scraped_at)) = (text(0), text(1)) else {
+            skipped += 1;
+            continue;
+        };
+        let offer = travel_db::OfferRow {
+            id: id.clone(),
+            source_id: text(2).unwrap_or_default(),
+            offer_type: text(3).unwrap_or_default(),
+            name: text(4),
+            price_per_person: num(5),
+            currency: text(6),
+            destination: text(7),
+            departure_date: text(8),
+            return_date: text(9),
+            nights: num(10),
+            availability: text(11),
+            hotel_name: text(12),
+            airline: text(13),
+            flight_outbound: text(14),
+            flight_return: text(15),
+            offer_key: text(16),
+            scraped_at: scraped_at.clone(),
+            ..Default::default()
+        };
+        let key = travel_db::repo::offers::dedup_key(&offer);
+        let upd = "UPDATE offers SET dedup_key = ?1, \
+                   last_seen_at = COALESCE(last_seen_at, scraped_at) \
+                   WHERE id = ?2 AND scraped_at = ?3 AND dedup_key IS NULL \
+                   AND NOT EXISTS (SELECT 1 FROM offers o2 WHERE o2.dedup_key = ?1)";
+        match conn
+            .execute(upd, libsql::params![key.clone(), id.clone(), scraped_at])
+            .await
+        {
+            Ok(1) => stamped += 1,
+            Ok(_) => skipped += 1,
+            Err(e) => eprintln!("⚠️  Could not stamp dedup_key on offer {id}: {e}"),
+        }
+    }
+    println!("offers_dedup_backfill\tstamped={stamped} skipped_duplicate_content={skipped}");
 }
 
 async fn seed_ota_sources(conn: &libsql::Connection) {
@@ -2471,6 +2579,107 @@ mod ota_coverage_backfill_tests {
             scalar_i64(&conn, "SELECT count(*) FROM ota_notes_migration_audit WHERE source_id='settour'").await,
             1,
             "backfill must collapse pre-existing duplicate audit rows to one per source"
+        );
+    }
+}
+
+#[cfg(test)]
+mod offers_dedup_backfill_tests {
+    //! In-memory libsql tests for `backfill_offers_dedup_keys`: stamps oldest-first, keeps the
+    //! first-seen row canonical when pre-existing content duplicates exist (newer duplicate
+    //! stays NULL for the explicit P2 collapse), never deletes, and is idempotent on re-run.
+
+    use super::*;
+
+    async fn mem_conn() -> libsql::Connection {
+        libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .expect("in-memory db")
+            .connect()
+            .expect("connect")
+    }
+
+    async fn create_offers(conn: &libsql::Connection) {
+        conn.execute(
+            "CREATE TABLE offers (id TEXT, source_id TEXT, type TEXT, name TEXT, \
+             price_per_person INTEGER, currency TEXT, region TEXT, destination TEXT, \
+             departure_date TEXT, return_date TEXT, nights INTEGER, availability TEXT, \
+             hotel_name TEXT, airline TEXT, flight_outbound TEXT, flight_return TEXT, \
+             scraped_at TEXT, offer_key TEXT, dedup_key TEXT, last_seen_at TEXT, \
+             PRIMARY KEY (id, scraped_at))",
+            (),
+        )
+        .await
+        .expect("create offers");
+    }
+
+    async fn ins(conn: &libsql::Connection, id: &str, scraped_at: &str, hotel: &str, price: i64) {
+        conn.execute(
+            "INSERT INTO offers (id, source_id, type, destination, departure_date, nights, \
+             hotel_name, price_per_person, currency, scraped_at) \
+             VALUES (?1,'zztest','package','tokyo_2026','2026-09-01',3,?2,?3,'TWD',?4)",
+            libsql::params![id, hotel, price, scraped_at],
+        )
+        .await
+        .expect("insert offer");
+    }
+
+    async fn count(conn: &libsql::Connection, sql: &str) -> i64 {
+        let mut rows = conn.query(sql, ()).await.expect("count query");
+        let row = rows.next().await.expect("a row").expect("a row");
+        match row.get_value(0) {
+            Ok(libsql::Value::Integer(n)) => n,
+            other => panic!("expected integer count, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stamps_oldest_first_and_skips_preexisting_duplicates() {
+        let conn = mem_conn().await;
+        create_offers(&conn).await;
+        // Two identical-content rows (the legacy duplicate shape) + one price change.
+        ins(&conn, "zzdup", "2026-09-01T08:00:00Z", "Hotel Alpha", 25500).await;
+        ins(&conn, "zzdup2", "2026-09-05T08:00:00Z", "Hotel Alpha", 25500).await;
+        ins(&conn, "zzchg", "2026-09-06T08:00:00Z", "Hotel Alpha", 26900).await;
+        let before = count(&conn, "SELECT COUNT(*) FROM offers").await;
+        backfill_offers_dedup_keys(&conn).await;
+        // Oldest duplicate canonical, newer duplicate left NULL, price change gets its own key.
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM offers WHERE dedup_key IS NOT NULL").await,
+            2
+        );
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM offers WHERE dedup_key IS NULL").await,
+            1
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM offers WHERE dedup_key IS NOT NULL \
+                 AND id = 'zzdup' AND last_seen_at = '2026-09-01T08:00:00Z'"
+            )
+            .await,
+            1,
+            "first-seen row canonical, last_seen_at = scraped_at"
+        );
+        // Never deletes.
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM offers").await, before);
+    }
+
+    #[tokio::test]
+    async fn is_idempotent_on_rerun() {
+        let conn = mem_conn().await;
+        create_offers(&conn).await;
+        ins(&conn, "zzone", "2026-09-01T08:00:00Z", "Hotel Beta", 10000).await;
+        backfill_offers_dedup_keys(&conn).await;
+        let stamped =
+            count(&conn, "SELECT COUNT(*) FROM offers WHERE dedup_key IS NOT NULL").await;
+        assert_eq!(stamped, 1);
+        backfill_offers_dedup_keys(&conn).await;
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM offers WHERE dedup_key IS NOT NULL").await,
+            stamped
         );
     }
 }

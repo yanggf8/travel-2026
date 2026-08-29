@@ -44,7 +44,7 @@ const QUERIES: &[CountQuery] = &[
     },
     CountQuery {
         label: "offers_last_scraped_at",
-        sql: "SELECT MAX(scraped_at) AS v FROM offers",
+        sql: "SELECT MAX(COALESCE(last_seen_at, scraped_at)) AS v FROM offers",
     },
     CountQuery {
         label: "events_last_created_at",

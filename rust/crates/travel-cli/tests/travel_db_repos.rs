@@ -117,6 +117,172 @@ async fn offer_insert_round_trips_provenance() {
 }
 
 #[tokio::test]
+async fn offer_reingest_dedupes_and_bumps_last_seen() {
+    let conn = match connect_write().await {
+        Ok(c) => c,
+        Err(e) if is_credless(&e) => {
+            eprintln!("skipping offer reingest test: {e}");
+            return;
+        }
+        Err(e) => panic!("connect failed: {e}"),
+    };
+
+    let offer_id = format!("zzrepo{}", nanos());
+    let t1 = "2026-09-01T08:00:00Z";
+    let t2 = "2026-09-05T08:00:00Z";
+    teardown_offer(&conn, &offer_id, t1).await;
+    teardown_offer(&conn, &offer_id, t2).await;
+    let _g = Guard::new({
+        let offer_id = offer_id.clone();
+        move || {
+            exec_sql(&format!("DELETE FROM offers WHERE id='{offer_id}'"));
+        }
+    });
+
+    let mk = |scraped_at: &str, key: String| offers::OfferRow {
+        id: offer_id.clone(),
+        source_id: "zztest".to_string(),
+        offer_type: "package".to_string(),
+        scraped_at: scraped_at.to_string(),
+        offer_key: Some(key),
+        hotel_name: Some("Hotel Dedup".to_string()),
+        price_per_person: Some(25500),
+        currency: Some("TWD".to_string()),
+        destination: Some("zz_dest".to_string()),
+        departure_date: Some("2026-09-01".to_string()),
+        nights: Some(3),
+        ..Default::default()
+    };
+
+    let first = offers::insert(&conn, &mk(t1, offer_id.clone())).await.expect("first insert");
+    assert_eq!(first.inserted, 1);
+    // The re-ingest shape: identical business content under a fresh scraped_at.
+    let again = offers::insert(&conn, &mk(t2, offer_id.clone())).await.expect("re-ingest");
+    assert_eq!(again.inserted, 0);
+    assert_eq!(again.deduped, 1);
+
+    let mut rows = conn
+        .query(
+            "SELECT scraped_at, last_seen_at FROM offers WHERE id = ?1",
+            libsql::params![offer_id.clone()],
+        )
+        .await
+        .expect("query");
+    let mut seen = Vec::new();
+    while let Some(row) = rows.next().await.expect("row") {
+        let scraped: String = row.get(0).unwrap_or_default();
+        let seen_at: String = row.get(1).unwrap_or_default();
+        seen.push((scraped, seen_at));
+    }
+    assert_eq!(seen.len(), 1, "re-ingest must not add a row");
+    assert_eq!(seen[0].0, t1, "first-seen scraped_at holds");
+    assert_eq!(seen[0].1, t2, "last_seen_at bumped to the new observation");
+}
+
+#[tokio::test]
+async fn offer_price_change_is_a_new_row_not_a_dedup() {
+    let conn = match connect_write().await {
+        Ok(c) => c,
+        Err(e) if is_credless(&e) => {
+            eprintln!("skipping price-change test: {e}");
+            return;
+        }
+        Err(e) => panic!("connect failed: {e}"),
+    };
+
+    let offer_id = format!("zzrepo{}", nanos());
+    let t1 = "2026-09-01T08:00:00Z";
+    let t2 = "2026-09-05T08:00:00Z";
+    teardown_offer(&conn, &offer_id, t1).await;
+    teardown_offer(&conn, &offer_id, t2).await;
+    let _g = Guard::new({
+        let offer_id = offer_id.clone();
+        move || {
+            exec_sql(&format!("DELETE FROM offers WHERE id='{offer_id}'"));
+        }
+    });
+
+    let mk = |scraped_at: &str, price: i64| offers::OfferRow {
+        id: offer_id.clone(),
+        source_id: "zztest".to_string(),
+        offer_type: "package".to_string(),
+        scraped_at: scraped_at.to_string(),
+        offer_key: Some(offer_id.clone()),
+        price_per_person: Some(price),
+        currency: Some("TWD".to_string()),
+        destination: Some("zz_dest".to_string()),
+        departure_date: Some("2026-09-01".to_string()),
+        nights: Some(3),
+        ..Default::default()
+    };
+
+    let first = offers::insert(&conn, &mk(t1, 25500)).await.expect("first insert");
+    assert_eq!(first.inserted, 1);
+    // Price is INSIDE the hash: a price change must be a new price point, never silently
+    // dropped by the dedup UNIQUE index.
+    let changed = offers::insert(&conn, &mk(t2, 26900)).await.expect("price change");
+    assert_eq!(changed.inserted, 1);
+    assert_eq!(changed.deduped, 0);
+
+    let mut rows = conn
+        .query(
+            "SELECT price_per_person, dedup_key FROM offers WHERE id = ?1 ORDER BY scraped_at",
+            libsql::params![offer_id.clone()],
+        )
+        .await
+        .expect("query");
+    let mut keys = Vec::new();
+    while let Some(row) = rows.next().await.expect("row") {
+        let price: i64 = row.get(0).unwrap_or_default();
+        let key: String = row.get(1).unwrap_or_default();
+        keys.push((price, key));
+    }
+    assert_eq!(keys.len(), 2, "price history is two rows");
+    assert_ne!(keys[0].1, keys[1].1, "distinct content keys");
+    assert_eq!(keys[0].0, 25500);
+    assert_eq!(keys[1].0, 26900);
+}
+
+#[tokio::test]
+async fn offers_columns_are_all_hash_or_excluded() {
+    // Drift guard against the LIVE schema: every column must be a decided member of
+    // DEDUP_HASH_FIELDS or DEDUP_EXCLUDED_FIELDS, so a future column can't silently escape
+    // the content hash.
+    let conn = match connect_write().await {
+        Ok(c) => c,
+        Err(e) if is_credless(&e) => {
+            eprintln!("skipping column-drift test: {e}");
+            return;
+        }
+        Err(e) => panic!("connect failed: {e}"),
+    };
+    let mut rows = conn
+        .query("PRAGMA table_info(offers)", ())
+        .await
+        .expect("pragma");
+    let mut cols = Vec::new();
+    while let Some(row) = rows.next().await.expect("row") {
+        let name: String = row.get(1).unwrap_or_default();
+        cols.push(name);
+    }
+    assert!(
+        cols.contains(&"dedup_key".to_string()),
+        "run `db migrate` first: dedup columns missing (found {cols:?})"
+    );
+    let decided: std::collections::HashSet<&str> = offers::DEDUP_HASH_FIELDS
+        .iter()
+        .chain(offers::DEDUP_EXCLUDED_FIELDS)
+        .copied()
+        .collect();
+    for c in &cols {
+        assert!(
+            decided.contains(c.as_str()),
+            "offers column {c} is not in DEDUP_HASH_FIELDS or DEDUP_EXCLUDED_FIELDS — decide whether it is content"
+        );
+    }
+}
+
+#[tokio::test]
 async fn stale_claim_token_finish_affects_zero_rows() {
     let conn = match connect_write().await {
         Ok(c) => c,

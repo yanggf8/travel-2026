@@ -13,14 +13,15 @@ pub struct FreshnessCount {
     pub newest: Option<String>,
 }
 
-/// Legacy `offers`-table freshness: `COUNT(*)`, `MAX(scraped_at)` over a parameterized WHERE.
-/// Build `where_built` with `repo::offers::OfferFilter` (e.g. `.source_id(..).region(..)`).
+/// Legacy `offers`-table freshness: `COUNT(*)`, `MAX(COALESCE(last_seen_at, scraped_at))` over a
+/// parameterized WHERE — liveness follows re-observation, not first-seen. Build `where_built`
+/// with `repo::offers::OfferFilter` (e.g. `.source_id(..).region(..)`).
 pub async fn offers_freshness(
     conn: &Connection,
     where_built: OfferWhere,
 ) -> Result<FreshnessCount, String> {
     let sql = format!(
-        "SELECT COUNT(*) AS cnt, MAX(scraped_at) AS newest FROM offers {}",
+        "SELECT COUNT(*) AS cnt, MAX(COALESCE(last_seen_at, scraped_at)) AS newest FROM offers {}",
         where_built.clause
     );
     run_count_newest(conn, &sql, where_built.params).await

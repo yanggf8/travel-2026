@@ -365,7 +365,7 @@ fn build_offers_sql(opts: &Opts, kind: &str, limit: i64) -> String {
     format!(
         "SELECT source_id, price_per_person, currency, departure_date, return_date, airline \
          FROM offers {where_clause} \
-         ORDER BY scraped_at DESC, price_per_person ASC LIMIT {limit}"
+         ORDER BY COALESCE(last_seen_at, scraped_at) DESC, price_per_person ASC LIMIT {limit}"
     )
 }
 

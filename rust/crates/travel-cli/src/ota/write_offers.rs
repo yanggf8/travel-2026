@@ -361,7 +361,7 @@ fn under_extraction_warn(candidate_count: i64, inserted: i64, deduped: i64) -> O
         )
     } else if inserted == 0 {
         Some(format!(
-            "WARN: all candidates deduped (inserted=0, deduped={deduped}) — (id, scraped_at) collision; re-ingesting the same TSV after this run would duplicate rows, not dedupe"
+            "WARN: all candidates deduped (inserted=0, deduped={deduped}) — identical content already ingested (dedup_key match); likely a re-ingested capture"
         ))
     } else {
         None
