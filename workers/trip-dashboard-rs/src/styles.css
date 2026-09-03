@@ -655,15 +655,14 @@ h1 {
 /* ---- Desktop two-column ---- */
 @media (min-width: 900px) {
   body { max-width: 1080px; }
-  /* summary + plan map side by side */
+  /* booking-summary stays in normal flow; plan overview is its own full-width row */
   .booking-summary {
-    float: left;
-    width: 48%;
-    margin-right: 4%;
+    width: 100%;
+    clear: both;
   }
   .map-frame:has(.planmap) {
-    float: left;
-    width: 48%;
+    width: 100%;
+    clear: both;
   }
   /* day content beside its day map */
   .day {

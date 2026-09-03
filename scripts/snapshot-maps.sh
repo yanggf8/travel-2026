@@ -594,6 +594,21 @@ echo "== render plan overview (each day its own colored route) =="
 # day's color. Reuses DAY_COORDS / DAY_ROADS cached by process_day above — no second
 # round of per-day POI/segment/geocode queries OR OSRM calls.
 PLAN_RF="${OUT}/plan.routes"; : > "$PLAN_RF"
+# Count mappable vs total days up front so the log explains WHY plan.png was
+# skipped (not just "no mappable stops across any day" — which is opaque when the
+# operator knows the destination has 4 POIs).
+MAPPABLE_DAYS=0; TOTAL_DAYS=0
+for d in $ALL_DAYS; do TOTAL_DAYS=$((TOTAL_DAYS+1)); [ -n "${DAY_COORDS[$d]:-}" ] && MAPPABLE_DAYS=$((MAPPABLE_DAYS+1)); done
+echo "   overview source: ${MAPPABLE_DAYS}/${TOTAL_DAYS} day(s) have mappable stops (4 POIs for jiufen should give 2/2)"
+if [ "$MAPPABLE_DAYS" -eq 0 ]; then
+  # Diagnose: are there any activities at all? (poi coords may simply be missing)
+  ACT_COUNT="$($CHROMEPORT db query "SELECT COUNT(*) FROM activities WHERE plan_id='${PLAN}'" 2>/dev/null | awk -F'\t' 'NR>1{print $1; exit}')"
+  POI_LINKED="$($CHROMEPORT db query "SELECT COUNT(*) FROM activities a JOIN destination_pois p ON (p.poi_id=a.poi_id OR (a.poi_id IS NULL AND p.title=a.title)) AND p.slug='${DEST}' WHERE a.plan_id='${PLAN}' AND p.lat IS NOT NULL" 2>/dev/null | awk -F'\t' 'NR>1{print $1; exit}')"
+  echo "   diagnostic: activities=${ACT_COUNT:-?} poi-linked=${POI_LINKED:-?}"
+  if [ -n "${ACT_COUNT:-}" ] && [ "$ACT_COUNT" != "0" ] && [ "${POI_LINKED:-0}" = "0" ]; then
+    echo "   hint: activities exist but none linked to a geocoded POI — run set-activity-poi or set-poi-coords to geocode them."
+  fi
+fi
 OVERVIEW="$(for d in $ALL_DAYS; do
   [ -n "${DAY_COORDS[$d]:-}" ] || continue
   color="${DAY_COLORS[$(( (d-1) % ${#DAY_COLORS[@]} ))]}"
@@ -605,8 +620,19 @@ done)"
 if [ -n "$OVERVIEW" ] && printf '%s\n' "$OVERVIEW" | render_map "plan" "$PLAN_RF"; then
   upload_and_record "plan.png" "${OUT}/plan.png"
 else
-  echo "   skip plan.png: no mappable stops across any day"
-  record_artifact "plan.png" "skipped" 0 "no mappable stops"
+  if [ -z "$OVERVIEW" ]; then
+    echo "   skip plan.png: no mappable stops across any day (${MAPPABLE_DAYS}/${TOTAL_DAYS} days had coords; see diagnostic above)"
+  else
+    echo "   FAIL plan.png: screenshot failed (${#OVERVIEW} chars of overview data)"
+    record_artifact "plan.png" "failed" 0 "plan screenshot failed"
+    FAILED=1
+    # Don't just silently skip — the failure is now in the manifest as 'failed' not
+    # 'skipped' so check-maps-fresh surfaces it as EMPTY requiring attention.
+    # Continue; don't exit — the per-day maps may still have uploaded.
+  fi
+  if [ -z "$OVERVIEW" ]; then
+    record_artifact "plan.png" "skipped" 0 "no mappable stops (${MAPPABLE_DAYS}/${TOTAL_DAYS} days had coords)"
+  fi
 fi
 
 echo "== record snapshot timestamp =="
