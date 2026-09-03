@@ -1524,7 +1524,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             5200,
             1,
             "manual",
-            "https://via.placeholder.com/600x400?text=HaiLun+SeaView",
+            "https://ocean-theory.h-and.world/assets/room-rouge-CBUWFFnr.webp",
         ),
         (
             "jiufen_chliv_seaview_7200",
