@@ -1497,6 +1497,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
   currency TEXT NOT NULL DEFAULT 'TWD',
   breakfast_included INTEGER NOT NULL CHECK(breakfast_included IN (0,1)),
   source TEXT,
+  image_url TEXT,
   updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );"#,
     )
@@ -1506,23 +1507,68 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "CREATE INDEX IF NOT EXISTS idx_domestic_accommodations_dest ON domestic_accommodations(destination);",
     )
     .await;
+    // Back-compat: existing DBs created before image_url existed.
+    add_column(
+        &conn,
+        "ALTER TABLE domestic_accommodations ADD COLUMN image_url TEXT;",
+    )
+    .await;
     // Manual seed for Jiufen Phase A examples (idempotent INSERT OR IGNORE).
-    for (id, hotel, room, sea_view, price, breakfast, source) in [
-        ("jiufen_hailun_seaview_5200", "海論", "海景雙人房", 1, 5200, 1, "manual"),
-        ("jiufen_chliv_seaview_7200", "CHLIV", "海景雙人房", 1, 7200, 1, "manual"),
-        ("jiufen_shancheng_seaview_4200", "山城逸境", "海景雙人房", 1, 4200, 1, "manual"),
+    // image_url uses placeholder via.placeholder.com — replace with real public URLs later.
+    for (id, hotel, room, sea_view, price, breakfast, source, image_url) in [
+        (
+            "jiufen_hailun_seaview_5200",
+            "海論",
+            "海景雙人房",
+            1,
+            5200,
+            1,
+            "manual",
+            "https://via.placeholder.com/600x400?text=HaiLun+SeaView",
+        ),
+        (
+            "jiufen_chliv_seaview_7200",
+            "CHLIV",
+            "海景雙人房",
+            1,
+            7200,
+            1,
+            "manual",
+            "https://via.placeholder.com/600x400?text=CHLIV+SeaView",
+        ),
+        (
+            "jiufen_shancheng_seaview_4200",
+            "山城逸境",
+            "海景雙人房",
+            1,
+            4200,
+            1,
+            "manual",
+            "https://via.placeholder.com/600x400?text=Shancheng+SeaView",
+        ),
     ] {
         exec_lenient(
             &conn,
             &format!(
                 "INSERT OR IGNORE INTO domestic_accommodations \
-                 (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
-                 VALUES ({}, {}, {}, {}, {sea_view}, {price}, 'TWD', {breakfast}, {}, datetime('now'))",
+                 (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, image_url, updated_at) \
+                 VALUES ({}, {}, {}, {}, {sea_view}, {price}, 'TWD', {breakfast}, {}, {}, datetime('now'))",
                 sq(id),
                 sq("jiufen"),
                 sq(hotel),
                 sq(room),
                 sq(source),
+                sq(image_url),
+            ),
+        )
+        .await;
+        // Backfill image_url for pre-existing rows where it is still NULL/empty.
+        exec_lenient(
+            &conn,
+            &format!(
+                "UPDATE domestic_accommodations SET image_url = {} WHERE id = {} AND (image_url IS NULL OR image_url = '')",
+                sq(image_url),
+                sq(id),
             ),
         )
         .await;

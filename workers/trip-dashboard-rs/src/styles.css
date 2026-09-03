@@ -145,6 +145,78 @@ h1 {
 }
 .voucher-link:hover { text-decoration: underline; }
 
+/* ---- Domestic candidates (sea-view shortlist) ---- */
+.candidate-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 640px) {
+  .candidate-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.candidate-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--card);
+  padding: 0 0 10px;
+  box-shadow: var(--shadow);
+}
+.candidate-image {
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  display: block;
+  border-radius: 0;
+  background: var(--bg);
+}
+.candidate-image--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: repeating-linear-gradient(-45deg, var(--bg), var(--bg) 8px, var(--card) 8px, var(--card) 16px);
+  color: var(--text-dim);
+  font-size: 13px;
+  min-height: 0;
+}
+.candidate-name {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 8px 10px 2px;
+  line-height: 1.4;
+}
+.candidate-price {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0 10px;
+}
+.candidate-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 10px 0;
+}
+.candidate-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+}
+.candidate-tag--sea {
+  background: #e0f2fe;
+  border-color: #bae6fd;
+  color: #0369a1;
+}
+.candidate-tag--bf {
+  background: #fef3c7;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
 /* ---- Plan map / day map slots ---- */
 .map-frame {
   margin-top: 16px;

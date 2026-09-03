@@ -18,6 +18,7 @@ pub struct DomesticAccommodationRow {
     pub currency: String,
     pub breakfast_included: i64,
     pub source: Option<String>,
+    pub image_url: Option<String>,
     pub updated_at: String,
 }
 
@@ -88,7 +89,7 @@ pub async fn query(
 ) -> Result<Vec<DomesticAccommodationRow>, String> {
     let built = filter.build();
     let sql = format!(
-        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, updated_at \
+        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, updated_at \
          FROM domestic_accommodations {} ORDER BY price_twd ASC, hotel_name ASC LIMIT {limit}",
         built.clause
     );
@@ -113,7 +114,8 @@ pub async fn query(
             currency: row.get(7).unwrap_or_else(|_| "TWD".to_string()),
             breakfast_included: row.get(8).unwrap_or(0),
             source: row.get(9).ok(),
-            updated_at: row.get(10).unwrap_or_default(),
+            image_url: row.get(10).ok(),
+            updated_at: row.get(11).unwrap_or_default(),
         });
     }
     Ok(out)

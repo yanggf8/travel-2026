@@ -262,6 +262,110 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         h.push_str("</div>");
     }
 
+    // Domestic stays (Taiwan, via bookings_current category=accommodation)
+    if !plan.domestic_stays.is_empty() {
+        h.push_str(&format!("<h2>{}</h2>", esc(t("domesticStay", lang))));
+        h.push_str("<div class=\"booking-grid\">");
+        for stay in &plan.domestic_stays {
+            // Prefer hotel_name + room_type split; fallback to raw title.
+            let name = if !stay.hotel_name.is_empty() {
+                if stay.room_type.is_empty() {
+                    stay.hotel_name.clone()
+                } else {
+                    format!("{} {}", stay.hotel_name, stay.room_type)
+                }
+            } else {
+                stay.title.clone()
+            };
+            let cur = if stay.currency.is_empty() {
+                "TWD"
+            } else {
+                &stay.currency
+            };
+            h.push_str("<div class=\"booking-item domestic\">");
+            h.push_str("<span class=\"booking-icon\">🏠</span>");
+            h.push_str("<div class=\"booking-detail\">");
+            h.push_str(&format!(
+                "<div class=\"booking-value\">{}</div>",
+                esc(&name)
+            ));
+            // Price line — TWD grouped, no hard-coded JPY.
+            if stay.price_twd > 0 {
+                h.push_str(&format!(
+                    "<div class=\"booking-sub\">{} {}</div>",
+                    esc(cur),
+                    group_thousands(stay.price_twd)
+                ));
+            }
+            if !stay.selected_date.is_empty() {
+                h.push_str(&format!(
+                    "<div class=\"booking-sub\">{}</div>",
+                    esc(&stay.selected_date)
+                ));
+            }
+            if !stay.status.is_empty() {
+                h.push_str(&format!(
+                    "<div class=\"booking-sub\">{}</div>",
+                    esc(&stay.status)
+                ));
+            }
+            h.push_str("</div></div>");
+        }
+        h.push_str("</div>");
+    }
+
+    // Domestic candidates — sea-view shortlist (jiufen three) from domestic_accommodations.
+    // Rendered below the booked stay so booked + shortlist are visually grouped.
+    if !plan.candidates.is_empty() {
+        h.push_str(&format!("<h2>{}</h2>", esc(t("candidates", lang))));
+        h.push_str("<div class=\"candidate-grid\">");
+        for c in &plan.candidates {
+            let title = if c.room_type.is_empty() {
+                c.hotel_name.clone()
+            } else {
+                format!("{} {}", c.hotel_name, c.room_type)
+            };
+            let cur = if c.currency.is_empty() { "TWD" } else { &c.currency };
+            h.push_str("<div class=\"candidate-card\">");
+            if c.image_url.is_empty() {
+                h.push_str(&format!(
+                    "<div class=\"candidate-image candidate-image--placeholder\" aria-label=\"{}\"></div>",
+                    esc(&c.hotel_name)
+                ));
+            } else {
+                h.push_str(&format!(
+                    "<img class=\"candidate-image\" src=\"{}\" alt=\"{}\" loading=\"lazy\" />",
+                    esc_url_attr(&c.image_url),
+                    esc(&c.hotel_name)
+                ));
+            }
+            h.push_str(&format!(
+                "<div class=\"candidate-name\">{}</div>",
+                esc(&title)
+            ));
+            if c.price_twd > 0 {
+                h.push_str(&format!(
+                    "<div class=\"candidate-price\">{} {}</div>",
+                    esc(cur),
+                    group_thousands(c.price_twd)
+                ));
+            }
+            // Tags: sea view + breakfast
+            let mut tags: Vec<String> = Vec::new();
+            if c.sea_view == 1 {
+                tags.push(format!("<span class=\"candidate-tag candidate-tag--sea\">{}</span>", esc(t("seaView", lang))));
+            }
+            if c.breakfast_included == 1 {
+                tags.push(format!("<span class=\"candidate-tag candidate-tag--bf\">{}</span>", esc(t("breakfast", lang))));
+            }
+            if !tags.is_empty() {
+                h.push_str(&format!("<div class=\"candidate-tags\">{}</div>", tags.join(" ")));
+            }
+            h.push_str("</div>");
+        }
+        h.push_str("</div>");
+    }
+
     // Transfers (the old "—" bug lived here)
     if !plan.transfers.is_empty() {
         h.push_str(&format!("<h2>{}</h2>", esc(t("transfers", lang))));

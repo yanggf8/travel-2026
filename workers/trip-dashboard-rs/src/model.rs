@@ -122,6 +122,30 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
         .collect()
 }
 
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DomesticStay {
+    pub title: String,
+    pub hotel_name: String,
+    pub room_type: String,
+    pub price_twd: i64,
+    pub currency: String,
+    pub selected_date: String,
+    pub status: String,
+    pub destination: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DomesticCandidate {
+    pub hotel_name: String,
+    pub room_type: String,
+    pub price_twd: i64,
+    pub currency: String,
+    pub sea_view: i64,
+    pub breakfast_included: i64,
+    pub image_url: String,
+    pub source: String,
+}
+
 #[derive(Debug, Default)]
 pub struct Plan {
     pub plan_id: String,
@@ -147,6 +171,10 @@ pub struct Plan {
     pub hotel_access_lines: Vec<String>,
     /// Destination currency (e.g. "JPY"); drives the Japan-only entry-info rows.
     pub currency: String,
+    /// Domestic stays (Taiwan) from bookings_current category=accommodation, status=booked.
+    pub domestic_stays: Vec<DomesticStay>,
+    /// Domestic accommodation candidates (sea-view shortlist) from domestic_accommodations.
+    pub candidates: Vec<DomesticCandidate>,
 }
 
 /// The chosen package offer, for the booking-summary package row.
@@ -180,6 +208,8 @@ pub fn assemble(
     hotel_access_rows: &[Row],
     landmark_rows: &[Row],
     dest_config_rows: &[Row],
+    domestic_rows: &[Row],
+    candidate_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -220,6 +250,50 @@ pub fn assemble(
     if let Some(c) = dest_config_rows.first() {
         plan.currency = s(c, "currency");
     }
+    // ---- domestic stays (category=accommodation, status=booked) ----
+    plan.domestic_stays = domestic_rows
+        .iter()
+        .map(|r| {
+            let title = s(r, "title");
+            // hotel_name / room_type derived from title when separate columns absent.
+            // title is "海論 海景雙人房" — split on first space as heuristic, else full title.
+            let (hotel_name, room_type) = if let Some(idx) = title.find(' ') {
+                (title[..idx].trim().to_string(), title[idx..].trim().to_string())
+            } else {
+                (title.clone(), String::new())
+            };
+            DomesticStay {
+                title: title.clone(),
+                hotel_name: if hotel_name.is_empty() { title.clone() } else { hotel_name },
+                room_type,
+                price_twd: i(r, "price_amount"),
+                currency: {
+                    let c = s(r, "price_currency");
+                    if c.is_empty() { "TWD".to_string() } else { c }
+                },
+                selected_date: s(r, "selected_date"),
+                status: s(r, "status"),
+                destination: s(r, "destination"),
+            }
+        })
+        .collect();
+    // ---- domestic candidates (sea-view shortlist) from domestic_accommodations ----
+    plan.candidates = candidate_rows
+        .iter()
+        .map(|r| DomesticCandidate {
+            hotel_name: s(r, "hotel_name"),
+            room_type: s(r, "room_type"),
+            price_twd: i(r, "price_twd"),
+            currency: {
+                let c = s(r, "currency");
+                if c.is_empty() { "TWD".to_string() } else { c }
+            },
+            sea_view: i(r, "sea_view"),
+            breakfast_included: i(r, "breakfast_included"),
+            image_url: s(r, "image_url"),
+            source: s(r, "source"),
+        })
+        .collect();
     for d in day_rows {
         let dn = i(d, "day_number");
         let acts: Vec<Row> = activity_rows
@@ -800,6 +874,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
@@ -845,6 +921,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
@@ -869,6 +947,8 @@ mod tests {
         let plan = assemble(
             &plan_rows,
             &day_rows,
+            &[],
+            &[],
             &[],
             &[],
             &[],
@@ -1096,6 +1176,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
         );
         assert_eq!(plan.transit_hotel_station, "Asato Station");
         assert_eq!(plan.transit_hotel_station_zh, "安里站");
@@ -1122,6 +1204,8 @@ mod tests {
         ])];
         let plan = assemble(
             &plan_rows,
+            &[],
+            &[],
             &[],
             &[],
             &[],

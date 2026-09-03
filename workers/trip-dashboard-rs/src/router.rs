@@ -589,13 +589,15 @@ fn owner_login_href_for_plan(slug: &str, lang: &str) -> String {
     format!("/auth/login?next={}", render::urlencode(&next))
 }
 
-/// Load the full plan via a 12-statement Turso pipeline. Query order matches
+/// Load the full plan via a 18-statement Turso pipeline. Query order matches
 /// model::assemble()'s argument order exactly.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
         return Err(Error::RustError(format!("invalid plan slug: {slug}")));
     }
-    let dest = slug.replace('-', "_");
+    // Fallback only for legacy plans without a plan_destinations row; the
+    // authoritative dest is the plan_destinations subquery used in [8], [15], [16].
+    let dest_fallback = slug.replace('-', "_");
     let sqls: Vec<String> = vec![
         format!(
             "SELECT p.plan_id, d.start_date, d.end_date, pd.display_name \
@@ -637,7 +639,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         format!(
             "SELECT poi_id, title, lat, lon, address, cost_estimate \
-             FROM destination_pois WHERE slug = '{dest}'"
+             FROM destination_pois WHERE slug = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}')"
         ),
         format!(
             "SELECT day_number, from_place, to_place, mode, duration_min, notes, start_time, source \
@@ -677,19 +679,29 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              ORDER BY day_number, sort_order"
         ),
         // [15] destination currency — JPY drives the Japan-only entry-info rows.
+        // Use plan_destinations as authoritative dest, fallback to slug.replace for legacy.
         format!(
-            "SELECT currency FROM destination_config WHERE slug = '{dest}'"
+            "SELECT currency FROM destination_config WHERE slug = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}')"
+        ),
+        // [16] domestic accommodation stays (booked) for Booking Summary — jiufen et al.
+        // Filter by authoritative dest when available; fallback to any dest for legacy plans.
+        format!(
+            "SELECT trip_id, destination, title, price_amount, price_currency, status, selected_date FROM bookings_current WHERE trip_id = '{slug}' AND category = 'accommodation' AND status = 'booked' AND destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), destination)"
+        ),
+        // [17] domestic accommodation candidates (sea-view shortlist) — jiufen three
+        format!(
+            "SELECT hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, source FROM domestic_accommodations WHERE destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') ORDER BY price_twd ASC"
         ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 16 {
+    if r.len() < 18 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 16 results".into(),
+            "Turso pipeline returned fewer than 18 results".into(),
         ));
     }
     Ok(model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
-        &r[12], &r[13], &r[14], &r[15],
+        &r[12], &r[13], &r[14], &r[15], &r[16], &r[17],
     ))
 }
 
