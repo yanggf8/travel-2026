@@ -98,6 +98,7 @@ mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapsho
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 mod snapshot_maps;      // snapshot-maps (wrap scripts/snapshot-maps.sh: capture+upload route maps)
 mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
+mod clear_accommodation; // clear-accommodation — cancel domestic accommodation (P4 -> selecting)
 
 use std::{env, io::Read, process};
 
@@ -403,6 +404,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_accommodation::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "clear-accommodation" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel clear-accommodation --hotel <name> [--room-type <type>] [--dest <slug>] [--plan-id <id>]");
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            clear_accommodation::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "set-process-status" => {
@@ -912,7 +922,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   derive-routes [--day N] [--dest <slug>]  Derive ai_recommended transit route segments from activity stations\n\
   set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\
   set-route-segment | set-route-segments-bulk <day> --seg \"from|to|mode[|...]\"\n\
-  set-flight | set-hotel | set-accommodation --hotel <name> --room-type <type> --price <twd> | set-airport-transfer | mark-booked | sync-bookings\n\
+  set-flight | set-hotel | set-accommodation --hotel <name> --room-type <type> --price <twd> | clear-accommodation --hotel <name> | set-airport-transfer | mark-booked | sync-bookings\n\
 \n\
 SHOP / OFFERS\n\
   import-offers [--dest slug] [--dir path] [--dry-run]\n\

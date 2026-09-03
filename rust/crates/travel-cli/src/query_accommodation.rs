@@ -1,9 +1,9 @@
-// `travel query-accommodation --dest <slug> --date YYYY-MM-DD [--sea-view] [--hotel <name>] [--limit N]`
+// `travel query-accommodation --dest <slug> [--date YYYY-MM-DD] [--sea-view] [--hotel <name>] [--limit N]`
 // — read `domestic_accommodations` with parameterized WHERE (OfferFilter pattern), plain-text table.
 //
 // `--dest` is REQUIRED and validated via `resolve_active_destination` (fail loud if missing/unknown).
-// `--date` is required per spec but TABLE has no date column; validate ISO date shape and print it in header,
-// no date predicate (future availability column placeholder).
+// `--date` is OPTIONAL: validates ISO shape when provided, printed in header, no date predicate
+// (future availability column placeholder — table has no date column yet).
 // No JSON output, no sql_quote.
 
 use crate::cascade::common::resolve_active_destination;
@@ -12,7 +12,7 @@ use travel_db::repo::domestic_accommodations::{DomesticAccommodationFilter, quer
 #[derive(Debug)]
 struct Args {
     dest: String,
-    date: String,
+    date: Option<String>,
     sea_view: bool,
     hotel: Option<String>,
     limit: i64,
@@ -114,12 +114,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     }
     let dest = dest.ok_or_else(|| {
         format!(
-            "--dest <slug> is required.\nUsage: travel query-accommodation --dest <slug> --date YYYY-MM-DD [--sea-view] [--hotel <name>] [--limit N]"
-        )
-    })?;
-    let date = date.ok_or_else(|| {
-        format!(
-            "--date YYYY-MM-DD is required.\nUsage: travel query-accommodation --dest <slug> --date YYYY-MM-DD [--sea-view] [--hotel <name>] [--limit N]"
+            "--dest <slug> is required.\nUsage: travel query-accommodation --dest <slug> [--date YYYY-MM-DD] [--sea-view] [--hotel <name>] [--limit N]"
         )
     })?;
     Ok(Args {
@@ -144,7 +139,7 @@ fn is_iso_date(s: &str) -> bool {
 
 fn print_usage() {
     println!(
-        "Usage:\n  travel query-accommodation --dest <slug> --date YYYY-MM-DD [--sea-view] [--hotel <name>] [--limit N]\n  (destination validated via resolve_active_destination; plain-text table)"
+        "Usage:\n  travel query-accommodation --dest <slug> [--date YYYY-MM-DD] [--sea-view] [--hotel <name>] [--limit N]\n  (destination validated via resolve_active_destination; plain-text table; --date optional, printed in header when provided)"
     );
 }
 
@@ -157,7 +152,8 @@ fn print_table(
     args: &Args,
     dest: &str,
 ) {
-    println!("\nDomestic Accommodations — dest={dest} date={} ({} result(s))", args.date, rows.len());
+    let date_label = args.date.as_deref().unwrap_or("-");
+    println!("\nDomestic Accommodations — dest={dest} date={date_label} ({} result(s))", rows.len());
     if rows.is_empty() {
         println!("No accommodations found.");
         return;
@@ -203,9 +199,16 @@ mod tests {
     fn parses_required_fields() {
         let o = parse_args(&a(&["--dest", "jiufen", "--date", "2026-09-03"])).unwrap();
         assert_eq!(o.dest, "jiufen");
-        assert_eq!(o.date, "2026-09-03");
+        assert_eq!(o.date.as_deref(), Some("2026-09-03"));
         assert!(!o.sea_view);
         assert_eq!(o.limit, 50);
+    }
+
+    #[test]
+    fn parses_without_date() {
+        let o = parse_args(&a(&["--dest", "jiufen"])).unwrap();
+        assert_eq!(o.dest, "jiufen");
+        assert!(o.date.is_none());
     }
 
     #[test]
@@ -226,9 +229,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_date() {
-        let e = parse_args(&a(&["--dest", "jiufen"])).unwrap_err();
-        assert!(e.contains("--date"));
+    fn date_optional_no_error() {
+        // --date is now optional; no error when missing
+        let o = parse_args(&a(&["--dest", "jiufen"])).unwrap();
+        assert!(o.date.is_none());
     }
 
     #[test]
