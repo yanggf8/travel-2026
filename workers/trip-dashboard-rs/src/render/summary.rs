@@ -38,6 +38,14 @@ fn group_thousands(n: i64) -> String {
     }
 }
 
+/// True when an image_url should NOT be loaded as an <img> — empty or the legacy
+/// via.placeholder.com host which Chrome now reports as broken (0x0). In that case
+/// we render a CSS placeholder div instead of an external request.
+fn is_placeholder_image(url: &str) -> bool {
+    let t = url.trim();
+    t.is_empty() || t.contains("via.placeholder.com")
+}
+
 /// Join non-empty parts with a single space (skips blanks so we don't emit "  ").
 fn join_parts(parts: &[String]) -> String {
     parts
@@ -263,8 +271,16 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     }
 
     // Domestic stays (Taiwan, via bookings_current category=accommodation)
+    // P4-aware: when p4_status == booked, this is the primary block; when pending/selecting
+    // and there is no booked stay, the block is hidden (empty → no render).
+    let is_booked = plan.p4_status == "booked";
     if !plan.domestic_stays.is_empty() {
-        h.push_str(&format!("<h2>{}</h2>", esc(t("domesticStay", lang))));
+        let domestic_title = if is_booked {
+            if lang == "zh" { "已訂住宿" } else { "Booked Accommodation" }
+        } else {
+            t("domesticStay", lang)
+        };
+        h.push_str(&format!("<h2>{}</h2>", esc(domestic_title)));
         h.push_str("<div class=\"booking-grid\">");
         for stay in &plan.domestic_stays {
             // Prefer hotel_name + room_type split; fallback to raw title.
@@ -315,9 +331,25 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     }
 
     // Domestic candidates — sea-view shortlist (jiufen three) from domestic_accommodations.
-    // Rendered below the booked stay so booked + shortlist are visually grouped.
+    // P4-aware headings (pure HTML/CSS, no JS):
+    //   booked   → 「其他海景參考」 + 小字「僅供參考」
+    //   pending/selecting/empty → 「海景候選 · 正在選」 (candidates as primary)
     if !plan.candidates.is_empty() {
-        h.push_str(&format!("<h2>{}</h2>", esc(t("candidates", lang))));
+        let (cand_title, cand_sub): (&str, Option<&str>) = if is_booked {
+            (
+                if lang == "zh" { "其他海景參考" } else { "Other Sea-View References" },
+                Some(if lang == "zh" { "僅供參考 · 已選定住宿" } else { "For reference · accommodation booked" }),
+            )
+        } else {
+            (
+                if lang == "zh" { "海景候選 · 正在選" } else { "Sea-View Candidates · Selecting" },
+                None,
+            )
+        };
+        h.push_str(&format!("<h2>{}</h2>", esc(cand_title)));
+        if let Some(sub) = cand_sub {
+            h.push_str(&format!("<div class=\"candidate-sub\">{}</div>", esc(sub)));
+        }
         h.push_str("<div class=\"candidate-grid\">");
         for c in &plan.candidates {
             let title = if c.room_type.is_empty() {
@@ -327,9 +359,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             };
             let cur = if c.currency.is_empty() { "TWD" } else { &c.currency };
             h.push_str("<div class=\"candidate-card\">");
-            if c.image_url.is_empty() {
+            if is_placeholder_image(&c.image_url) {
                 h.push_str(&format!(
-                    "<div class=\"candidate-image candidate-image--placeholder\" aria-label=\"{}\"></div>",
+                    "<div class=\"candidate-image candidate-image--placeholder\" aria-label=\"{}\">{}</div>",
+                    esc(&c.hotel_name),
                     esc(&c.hotel_name)
                 ));
             } else {

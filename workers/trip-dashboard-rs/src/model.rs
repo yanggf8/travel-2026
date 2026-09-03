@@ -175,6 +175,8 @@ pub struct Plan {
     pub domestic_stays: Vec<DomesticStay>,
     /// Domestic accommodation candidates (sea-view shortlist) from domestic_accommodations.
     pub candidates: Vec<DomesticCandidate>,
+    /// P4 accommodation process status (pending|selecting|booked) from process_statuses.
+    pub p4_status: String,
 }
 
 /// The chosen package offer, for the booking-summary package row.
@@ -210,6 +212,7 @@ pub fn assemble(
     dest_config_rows: &[Row],
     domestic_rows: &[Row],
     candidate_rows: &[Row],
+    p4_status_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -249,6 +252,9 @@ pub fn assemble(
     plan.hotel_access_lines = hotel_access_rows.iter().map(|r| s(r, "line")).collect();
     if let Some(c) = dest_config_rows.first() {
         plan.currency = s(c, "currency");
+    }
+    if let Some(r) = p4_status_rows.first() {
+        plan.p4_status = s(r, "status");
     }
     // ---- domestic stays (category=accommodation, status=booked) ----
     plan.domestic_stays = domestic_rows
@@ -876,6 +882,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
@@ -923,6 +930,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
@@ -947,6 +955,7 @@ mod tests {
         let plan = assemble(
             &plan_rows,
             &day_rows,
+            &[],
             &[],
             &[],
             &[],
@@ -1178,6 +1187,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         assert_eq!(plan.transit_hotel_station, "Asato Station");
         assert_eq!(plan.transit_hotel_station_zh, "安里站");
@@ -1204,6 +1214,7 @@ mod tests {
         ])];
         let plan = assemble(
             &plan_rows,
+            &[],
             &[],
             &[],
             &[],

@@ -1514,7 +1514,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
     // Manual seed for Jiufen Phase A examples (idempotent INSERT OR IGNORE).
-    // image_url uses placeholder via.placeholder.com — replace with real public URLs later.
+    // image_url: local CSS placeholder for CHLIV/山城逸境 (no external via.placeholder.com — broken in Chrome 0x0); 海論 keeps its real URL.
     for (id, hotel, room, sea_view, price, breakfast, source, image_url) in [
         (
             "jiufen_hailun_seaview_5200",
@@ -1534,7 +1534,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             7200,
             1,
             "manual",
-            "https://via.placeholder.com/600x400?text=CHLIV+SeaView",
+            "",
         ),
         (
             "jiufen_shancheng_seaview_4200",
@@ -1544,7 +1544,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             4200,
             1,
             "manual",
-            "https://via.placeholder.com/600x400?text=Shancheng+SeaView",
+            "",
         ),
     ] {
         exec_lenient(
@@ -1584,6 +1584,13 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         )
         .await;
     }
+    // Cleanup legacy broken via.placeholder.com URLs (Chrome reports them as 0x0 broken images).
+    // Existing DBs that already seeded the placeholder need this one-shot migration to local fallback.
+    exec_lenient(
+        &conn,
+        "UPDATE domestic_accommodations SET image_url = '' WHERE image_url LIKE '%via.placeholder.com%'",
+    )
+    .await;
 
     // De-JSON batches (guarded — skip on already-migrated DB).
     de_json_reference_data(&conn).await;

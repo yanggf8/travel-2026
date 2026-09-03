@@ -589,7 +589,7 @@ fn owner_login_href_for_plan(slug: &str, lang: &str) -> String {
     format!("/auth/login?next={}", render::urlencode(&next))
 }
 
-/// Load the full plan via a 18-statement Turso pipeline. Query order matches
+/// Load the full plan via a 19-statement Turso pipeline. Query order matches
 /// model::assemble()'s argument order exactly.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
@@ -692,16 +692,20 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         format!(
             "SELECT hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, source FROM domestic_accommodations WHERE destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') ORDER BY price_twd ASC"
         ),
+        // [18] P4 accommodation process status — drives booked vs selecting UI.
+        format!(
+            "SELECT status FROM process_statuses WHERE plan_id = '{slug}' AND destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') AND process_id = 'process_4_accommodation'"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 18 {
+    if r.len() < 19 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 18 results".into(),
+            "Turso pipeline returned fewer than 19 results".into(),
         ));
     }
     Ok(model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
-        &r[12], &r[13], &r[14], &r[15], &r[16], &r[17],
+        &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18],
     ))
 }
 
