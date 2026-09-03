@@ -148,11 +148,8 @@ h1 {
 /* ---- Domestic candidates (sea-view shortlist) ---- */
 .candidate-grid {
   display: grid;
-  gap: 12px;
+  gap: 16px;
   grid-template-columns: 1fr;
-}
-@media (min-width: 640px) {
-  .candidate-grid { grid-template-columns: repeat(3, 1fr); }
 }
 .candidate-sub {
   font-size: 12px;
@@ -170,11 +167,12 @@ h1 {
 }
 .candidate-image {
   width: 100%;
-  aspect-ratio: 3 / 2;
+  aspect-ratio: 16 / 9;
   object-fit: cover;
   display: block;
   border-radius: 0;
   background: var(--bg);
+  min-height: 200px;
 }
 .candidate-image--placeholder {
   display: flex;
