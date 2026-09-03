@@ -1483,6 +1483,62 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
     exec_lenient(&conn, "DROP TABLE IF EXISTS destination_references;").await;
 
+    // Domestic accommodations (Phase A, Taiwan domestic stays — no JSON).
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS domestic_accommodations (
+  id TEXT PRIMARY KEY,
+  destination TEXT NOT NULL,
+  hotel_name TEXT NOT NULL,
+  room_type TEXT NOT NULL,
+  sea_view INTEGER NOT NULL CHECK(sea_view IN (0,1)),
+  max_occupancy INTEGER,
+  price_twd INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'TWD',
+  breakfast_included INTEGER NOT NULL CHECK(breakfast_included IN (0,1)),
+  source TEXT,
+  updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);"#,
+    )
+    .await;
+    exec_lenient(
+        &conn,
+        "CREATE INDEX IF NOT EXISTS idx_domestic_accommodations_dest ON domestic_accommodations(destination);",
+    )
+    .await;
+    // Manual seed for Jiufen Phase A examples (idempotent INSERT OR IGNORE).
+    for (id, hotel, room, sea_view, price, breakfast, source) in [
+        ("jiufen_hailun_seaview_5200", "海論", "海景雙人房", 1, 5200, 1, "manual"),
+        ("jiufen_chliv_seaview_7200", "CHLIV", "海景雙人房", 1, 7200, 1, "manual"),
+        ("jiufen_shancheng_seaview_4200", "山城逸境", "海景雙人房", 1, 4200, 1, "manual"),
+    ] {
+        exec_lenient(
+            &conn,
+            &format!(
+                "INSERT OR IGNORE INTO domestic_accommodations \
+                 (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
+                 VALUES ({}, {}, {}, {}, {sea_view}, {price}, 'TWD', {breakfast}, {}, datetime('now'))",
+                sq(id),
+                sq("jiufen"),
+                sq(hotel),
+                sq(room),
+                sq(source),
+            ),
+        )
+        .await;
+        // Ensure destination_config contains jiufen so resolve_active_destination can pass for tests that use it.
+        exec_lenient(
+            &conn,
+            &format!(
+                "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
+                 VALUES ({}, {}, 'Asia/Taipei', 'TWD', 'zh-TW', 'taiwan')",
+                sq("jiufen"),
+                sq("九份"),
+            ),
+        )
+        .await;
+    }
+
     // De-JSON batches (guarded — skip on already-migrated DB).
     de_json_reference_data(&conn).await;
     de_json_itinerary_sessions(&conn).await;

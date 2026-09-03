@@ -31,6 +31,7 @@ mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-k
 mod add_transit; // add-transit — add a destination_transit station pair (slug-keyed, no audit; feeds derive-routes)
 mod add_omiyage; // add-omiyage — omiyage item + purchase location (slug-keyed, no audit triad)
 mod query_omiyage; // query-omiyage — read-only grouped omiyage view (slug-keyed reference data)
+mod query_accommodation; // query-accommodation — domestic stays (destination-scoped, plan-validated)
 mod omiyage_worklist; // omiyage-worklist — read-only research worklist of omiyage-tagged POIs (writes nothing)
 mod set_activity;
 mod set_activity_poi;
@@ -96,6 +97,7 @@ mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 mod snapshot_maps;      // snapshot-maps (wrap scripts/snapshot-maps.sh: capture+upload route maps)
+mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
 
 use std::{env, io::Read, process};
 
@@ -237,6 +239,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "query-omiyage" => {
             query_omiyage::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "query-accommodation" => {
+            query_accommodation::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "omiyage-worklist" => {
             omiyage_worklist::run(rest).await
@@ -389,6 +394,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_flight::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-accommodation" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel set-accommodation --hotel <name> --room-type <type> --price <twd> [--date YYYY-MM-DD] [--dest <slug>] [--plan-id <id>]");
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_accommodation::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "set-process-status" => {
@@ -879,6 +893,7 @@ VIEWS\n\
   query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]  List AI-recommended items awaiting confirmation\n\
   query-destination-ref --slug <slug>\n\
   query-omiyage --slug <slug>     omiyage items + purchase locations (slug-keyed)\n\
+  query-accommodation --dest <slug> --date YYYY-MM-DD [--sea-view] [--hotel <name>]  Domestic stays (Taiwan, destination-validated)\n\
   omiyage-worklist --slug <slug>   omiyage-tagged POIs as research worklist (read-only; writes nothing)\n\
   view-prices | check-freshness --source <id> [--dest slug]\n\
 \n\
@@ -897,7 +912,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   derive-routes [--day N] [--dest <slug>]  Derive ai_recommended transit route segments from activity stations\n\
   set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\
   set-route-segment | set-route-segments-bulk <day> --seg \"from|to|mode[|...]\"\n\
-  set-flight | set-hotel | set-airport-transfer | mark-booked | sync-bookings\n\
+  set-flight | set-hotel | set-accommodation --hotel <name> --room-type <type> --price <twd> | set-airport-transfer | mark-booked | sync-bookings\n\
 \n\
 SHOP / OFFERS\n\
   import-offers [--dest slug] [--dir path] [--dry-run]\n\
