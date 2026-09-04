@@ -459,6 +459,22 @@ fn is_grant_token(s: &str) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
+/// SQL expression resolving a plan's destination slug, with a fallback.
+///
+/// `plan_destinations` keys the destination in a column named `slug`, NOT
+/// `destination`. Getting that wrong failed in two different silent ways: against a
+/// table that also lacks a `destination` column (`destination_pois`) the whole
+/// statement ERRORS, so the worker rendered zero POIs and every stop link degraded
+/// to a Google search on the entire activity title; against a table that HAS one
+/// (`domestic_accommodations`) SQLite bound the name to the OUTER table instead,
+/// making the predicate `destination = destination` — always true, which would
+/// return every destination's rows as soon as a second destination had any. Both
+/// look correct on a single-destination database. One helper, one place to be
+/// wrong, pinned by `dest_subquery_reads_the_slug_column`.
+fn dest_subquery(slug: &str, fallback: &str) -> String {
+    format!("COALESCE((SELECT slug FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{fallback}')")
+}
+
 fn sql_quote(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -534,11 +550,11 @@ async fn check_map_status(
 ) -> Result<render::map::MapStatus> {
     let bucket = env.bucket("MAPS")?;
     let plan_key = format!("{plan_id}/plan.png");
-    let plan = r2_has_valid_map(&bucket, &plan_key).await?;
+    let plan = r2_map_version(&bucket, &plan_key).await?;
     let mut day_status = HashMap::new();
     for d in days {
         let key = format!("{plan_id}/day-{}.png", d.day_number);
-        day_status.insert(d.day_number, r2_has_valid_map(&bucket, &key).await?);
+        day_status.insert(d.day_number, r2_map_version(&bucket, &key).await?);
     }
     Ok(render::map::MapStatus {
         plan,
@@ -546,12 +562,18 @@ async fn check_map_status(
     })
 }
 
-async fn r2_has_valid_map(bucket: &worker::Bucket, key: &str) -> Result<bool> {
-    Ok(bucket
-        .head(key)
-        .await?
-        .map(|obj| obj.size() as usize > render::map::MIN_MAP_PNG_BYTES)
-        .unwrap_or(false))
+/// `Some(etag)` when the key holds a real PNG. The ETag is the cache-bust version:
+/// it comes free with the HEAD we already do, and it changes exactly when the object
+/// does — unlike the stable URL, which let a stale map survive its own replacement
+/// for the full 24h `max-age`.
+async fn r2_map_version(bucket: &worker::Bucket, key: &str) -> Result<Option<String>> {
+    Ok(bucket.head(key).await?.and_then(|obj| {
+        if obj.size() as usize > render::map::MIN_MAP_PNG_BYTES {
+            Some(obj.etag())
+        } else {
+            None
+        }
+    }))
 }
 
 fn serve_placeholder() -> Result<Response> {
@@ -598,6 +620,11 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
     // Fallback only for legacy plans without a plan_destinations row; the
     // authoritative dest is the plan_destinations subquery used in [8], [15], [16].
     let dest_fallback = slug.replace('-', "_");
+    let dest_expr = dest_subquery(slug, &dest_fallback);
+    // bookings_current falls back to matching its OWN destination column rather than
+    // to a guessed slug, so it keeps a bespoke fallback.
+    let dest_expr_own =
+        format!("COALESCE((SELECT slug FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), destination)");
     let sqls: Vec<String> = vec![
         format!(
             "SELECT p.plan_id, d.start_date, d.end_date, pd.display_name \
@@ -639,7 +666,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         format!(
             "SELECT poi_id, title, lat, lon, address, cost_estimate \
-             FROM destination_pois WHERE slug = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}')"
+             FROM destination_pois WHERE slug = {dest_expr}"
         ),
         format!(
             "SELECT day_number, from_place, to_place, mode, duration_min, notes, start_time, source \
@@ -681,27 +708,27 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         // [15] destination currency — JPY drives the Japan-only entry-info rows.
         // Use plan_destinations as authoritative dest, fallback to slug.replace for legacy.
         format!(
-            "SELECT currency FROM destination_config WHERE slug = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}')"
+            "SELECT currency FROM destination_config WHERE slug = {dest_expr}"
         ),
         // [16] domestic accommodation stays (booked) for Booking Summary — jiufen et al.
         // Filter by authoritative dest when available; fallback to any dest for legacy plans.
         format!(
-            "SELECT trip_id, destination, title, price_amount, price_currency, status, selected_date FROM bookings_current WHERE trip_id = '{slug}' AND category = 'accommodation' AND status = 'booked' AND destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), destination)"
+            "SELECT trip_id, destination, title, price_amount, price_currency, status, selected_date FROM bookings_current WHERE trip_id = '{slug}' AND category = 'accommodation' AND status = 'booked' AND destination = {dest_expr_own}"
         ),
         // [17] domestic accommodation candidates (sea-view shortlist) — jiufen three
         format!(
-            "SELECT id, hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, booking_url, room_size_sqm, rooms_left, free_cancel_until, price_source, price_checked_at, source FROM domestic_accommodations WHERE destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') ORDER BY price_twd ASC"
+            "SELECT id, hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, booking_url, room_size_sqm, rooms_left, free_cancel_until, price_source, price_checked_at, source FROM domestic_accommodations WHERE destination = {dest_expr} ORDER BY price_twd ASC"
         ),
         // [18] P4 accommodation process status — drives booked vs selecting UI.
         format!(
-            "SELECT status FROM process_statuses WHERE plan_id = '{slug}' AND destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') AND process_id = 'process_4_accommodation'"
+            "SELECT status FROM process_statuses WHERE plan_id = '{slug}' AND destination = {dest_expr} AND process_id = 'process_4_accommodation'"
         ),
         // [19] candidate gallery images (per-room-type / area photos), joined by accommodation_id.
         format!(
             "SELECT g.accommodation_id, g.image_url, g.label, g.sort_order \
              FROM domestic_accommodation_images g \
              JOIN domestic_accommodations a ON a.id = g.accommodation_id \
-             WHERE a.destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') \
+             WHERE a.destination = {dest_expr} \
              ORDER BY g.accommodation_id, g.sort_order"
         ),
         // [20] candidate guest ratings, one row per review source (scales differ).
@@ -709,7 +736,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             "SELECT t.accommodation_id, t.source, t.score, t.scale, t.review_count \
              FROM domestic_accommodation_ratings t \
              JOIN domestic_accommodations a ON a.id = t.accommodation_id \
-             WHERE a.destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') \
+             WHERE a.destination = {dest_expr} \
              ORDER BY t.accommodation_id, t.source"
         ),
     ];
@@ -728,6 +755,18 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dest_subquery_reads_the_slug_column() {
+        let q = dest_subquery("jiufen-2026", "jiufen_2026");
+        assert_eq!(
+            q,
+            "COALESCE((SELECT slug FROM plan_destinations WHERE plan_id = 'jiufen-2026' LIMIT 1), 'jiufen_2026')"
+        );
+        // plan_destinations has no `destination` column, and where an outer table has
+        // one the name silently binds to THAT instead of erroring.
+        assert!(!q.contains("SELECT destination"), "must not select a destination column: {q}");
+    }
 
     #[test]
     fn safe_slug_accepts_valid() {

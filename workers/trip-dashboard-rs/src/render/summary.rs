@@ -464,9 +464,9 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             )
         };
         h.push_str(&format!("<h2>{}</h2>", esc(cand_title)));
-        if let Some(sub) = cand_sub {
-            h.push_str(&format!("<div class=\"candidate-sub\">{}</div>", esc(sub)));
-        }
+        // Say it in words, not only through a dashed border a reader may not decode.
+        let sub_text = cand_sub.map(str::to_string).unwrap_or_else(|| t("notBookedYet", lang).to_string());
+        h.push_str(&format!("<div class=\"candidate-sub\">{}</div>", esc(&sub_text)));
         h.push_str("<div class=\"candidate-grid\">");
         for c in &plan.candidates {
             let title = if c.room_type.is_empty() {
@@ -533,6 +533,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     esc(cur),
                     group_thousands(c.price_twd)
                 ));
+                h.push_str(&format!(
+                    "<span class=\"candidate-unit\">{}</span>",
+                    esc(t("perNight", lang))
+                ));
                 if c.room_size_sqm > 0 {
                     h.push_str(&format!(
                         "<span class=\"candidate-size\">{} m\u{b2}</span>",
@@ -552,6 +556,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             }
             if c.breakfast_included == 1 {
                 tags.push(format!("<span class=\"candidate-tag candidate-tag--bf\">{}</span>", esc(t("breakfast", lang))));
+            } else {
+                // State it. An absent breakfast tag was indistinguishable from
+                // "we never checked", and a NT$7,199 room reads as half-board by default.
+                tags.push(format!("<span class=\"candidate-tag candidate-tag--nobf\">{}</span>", esc(t("noBreakfast", lang))));
             }
             if !tags.is_empty() {
                 h.push_str(&format!("<div class=\"candidate-tags\">{}</div>", tags.join(" ")));
@@ -1078,6 +1086,52 @@ mod tests {
         );
 
         assert!(html.contains("2026-09-28 前免費取消"));
+    }
+
+    #[test]
+    fn no_breakfast_is_stated_not_left_silent() {
+        use crate::model::DomesticCandidate;
+        let mk = |bf: i64| Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 3300,
+                breakfast_included: bf,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // 0 must SAY so — an absent tag reads as "included" for a Taiwanese guesthouse.
+        let none = render(&mk(0), "zh", None);
+        assert!(none.contains("不含早餐"), "{none}");
+        assert!(!none.contains("含早餐</span>") || none.contains("不含早餐"), "{none}");
+        assert!(render(&mk(0), "en", None).contains("No breakfast"));
+        // 1 keeps the positive tag and must NOT also claim the negative.
+        let yes = render(&mk(1), "zh", None);
+        assert!(yes.contains("candidate-tag--bf"));
+        assert!(!yes.contains("不含早餐"), "{yes}");
+    }
+
+    #[test]
+    fn price_states_what_it_buys_and_that_nothing_is_booked() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 3300,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("每房每晚"), "a bare number does not say per night: {zh}");
+        assert!(zh.contains("尚未預訂"), "say it in words, not only a dashed border: {zh}");
+        let en = render(&plan, "en", None);
+        assert!(en.contains("per room / night"));
+        assert!(en.contains("Nothing booked yet"));
     }
 
     #[test]

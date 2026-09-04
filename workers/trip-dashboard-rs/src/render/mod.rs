@@ -46,11 +46,14 @@ pub fn render_plan(
     body.push_str(&alerts::render_pending_alerts(plan, lang, false));
     // Plan overview map ABOVE the booking summary (its own frame, never inside
     // the summary's dashed box) — user visibility request.
-    body.push_str(&map::plan_map_slot(&plan.plan_id, map_status.plan, lang));
+    body.push_str(&map::plan_map_slot(&plan.plan_id, map_status.plan.as_deref(), lang));
     body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
-        let has_map = map_status.days.get(&d.day_number).copied().unwrap_or(false);
-        body.push_str(&day::render(d, &plan.plan_id, lang, has_map));
+        let map_ver = map_status
+            .days
+            .get(&d.day_number)
+            .and_then(|v| v.as_deref());
+        body.push_str(&day::render(d, &plan.plan_id, lang, map_ver));
     }
     // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),
     // then the transit cheat-sheet (mirror render.ts:1394).
@@ -170,8 +173,8 @@ mod tests {
             ..Default::default()
         };
         let map_status = map::MapStatus {
-            plan: true,
-            days: [(1i64, true)].into_iter().collect(),
+            plan: Some("etag1".into()),
+            days: [(1i64, Some("etag2".into()))].into_iter().collect(),
         };
         let html = render_plan(&plan, "en", None, &map_status, "");
         assert!(html.contains("booking-summary"));

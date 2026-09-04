@@ -17,8 +17,14 @@ pub const MIN_MAP_PNG_BYTES: usize = 200;
 /// (R2 HEAD/get per key) and threaded into the sync render layer.
 #[derive(Debug, Default)]
 pub struct MapStatus {
-    pub plan: bool,
-    pub days: HashMap<i64, bool>,
+    /// `Some(version)` when a real PNG is present; the version is stamped onto the
+    /// URL so a re-snapshot reaches viewers immediately. Map PNGs are served
+    /// `Cache-Control: public, max-age=86400`, so a stable URL meant a refreshed map
+    /// stayed invisible to anyone who had already opened the page for a full day —
+    /// which is exactly how a batch of watermarked maps kept being served after they
+    /// had been regenerated.
+    pub plan: Option<String>,
+    pub days: HashMap<i64, Option<String>>,
 }
 
 /// True when the body is a real PNG map (not a 1-byte garbage capture or tiny stub).
@@ -40,14 +46,15 @@ fn day_route_caption(day_number: i64, lang: &str) -> String {
 
 /// Framed plan-overview map slot. Emits a real `<img>` only when `has_map` is true;
 /// otherwise a styled missing placeholder (never a blind broken-image `<img>`).
-pub fn plan_map_slot(plan_id: &str, has_map: bool, lang: &str) -> String {
+pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str) -> String {
     let caption = i18n::t("tripOverview", lang);
-    if has_map {
+    if let Some(v) = version {
         format!(
             "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
-             src=\"/map/{}/plan.png\"><figcaption>{}</figcaption></figure>",
+             src=\"/map/{}/plan.png{}\"><figcaption>{}</figcaption></figure>",
             esc(caption),
             esc_url_attr(plan_id),
+            cache_bust(v),
             esc(caption),
         )
     } else {
@@ -62,15 +69,16 @@ pub fn plan_map_slot(plan_id: &str, has_map: bool, lang: &str) -> String {
 }
 
 /// Framed per-day route map slot. Same contract as `plan_map_slot`.
-pub fn day_map_slot(plan_id: &str, day_number: i64, has_map: bool, lang: &str) -> String {
+pub fn day_map_slot(plan_id: &str, day_number: i64, version: Option<&str>, lang: &str) -> String {
     let caption = day_route_caption(day_number, lang);
-    if has_map {
+    if let Some(v) = version {
         format!(
             "<figure class=\"map-frame\"><img class=\"daymap\" alt=\"{}\" \
-             src=\"/map/{}/day-{}.png\"><figcaption>{}</figcaption></figure>",
+             src=\"/map/{}/day-{}.png{}\"><figcaption>{}</figcaption></figure>",
             esc(&caption),
             esc_url_attr(plan_id),
             day_number,
+            cache_bust(v),
             esc(&caption),
         )
     } else {
@@ -128,6 +136,22 @@ pub fn stop_list(stops: &[Stop]) -> String {
     }
     h.push_str("</ul>");
     h
+}
+
+/// `?v=<version>` for a map URL. The version is the R2 object's ETag, reduced to
+/// URL-safe characters — its exact value is irrelevant, only that it CHANGES when the
+/// PNG does. An empty/unusable version yields no query string rather than `?v=`.
+fn cache_bust(version: &str) -> String {
+    let v: String = version
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(32)
+        .collect();
+    if v.is_empty() {
+        String::new()
+    } else {
+        format!("?v={v}")
+    }
 }
 
 fn stop_visible_title(title: &str) -> String {
@@ -205,8 +229,28 @@ mod tests {
     }
 
     #[test]
+    fn map_url_carries_a_cache_busting_version() {
+        // Map PNGs are served max-age=86400. Without a version in the URL a
+        // re-snapshot stays invisible to anyone who already opened the page.
+        let h = plan_map_slot("jiufen-2026", Some("\"abc123\""), "zh");
+        assert!(h.contains("/map/jiufen-2026/plan.png?v=abc123"), "{h}");
+        let d = day_map_slot("jiufen-2026", 2, Some("W/\"deadbeef\""), "zh");
+        assert!(d.contains("/map/jiufen-2026/day-2.png?v=Wdeadbeef"), "{d}");
+        // A different PNG must produce a different URL.
+        let other = plan_map_slot("jiufen-2026", Some("zzz999"), "zh");
+        assert_ne!(h, other);
+    }
+
+    #[test]
+    fn unusable_version_emits_no_query_string() {
+        let h = plan_map_slot("jiufen-2026", Some("\"\""), "zh");
+        assert!(h.contains("/map/jiufen-2026/plan.png\""), "no dangling ?v=: {h}");
+        assert!(!h.contains("?v="), "{h}");
+    }
+
+    #[test]
     fn plan_map_slot_with_map_emits_img() {
-        let h = plan_map_slot("okinawa-2026", true, "en");
+        let h = plan_map_slot("okinawa-2026", Some("v1"), "en");
         assert!(h.contains("map-frame"));
         assert!(h.contains("class=\"planmap\""));
         assert!(h.contains("/map/okinawa-2026/plan.png"));
@@ -216,7 +260,7 @@ mod tests {
 
     #[test]
     fn plan_map_slot_without_map_emits_placeholder() {
-        let h = plan_map_slot("okinawa-2026", false, "en");
+        let h = plan_map_slot("okinawa-2026", None, "en");
         assert!(h.contains("map-frame map-missing"));
         assert!(h.contains("map-missing-box"));
         assert!(h.contains("Map not available yet"));
@@ -227,7 +271,7 @@ mod tests {
 
     #[test]
     fn day_map_slot_with_map_emits_img() {
-        let h = day_map_slot("okinawa-2026", 2, true, "zh");
+        let h = day_map_slot("okinawa-2026", 2, Some("v1"), "zh");
         assert!(h.contains("map-frame"));
         assert!(h.contains("class=\"daymap\""));
         assert!(h.contains("/map/okinawa-2026/day-2.png"));
@@ -237,7 +281,7 @@ mod tests {
 
     #[test]
     fn day_map_slot_without_map_emits_placeholder_zh() {
-        let h = day_map_slot("okinawa-2026", 3, false, "zh");
+        let h = day_map_slot("okinawa-2026", 3, None, "zh");
         assert!(h.contains("map-missing"));
         assert!(h.contains("地圖尚未產生"));
         assert!(h.contains("第 3 天路線"));

@@ -25,6 +25,14 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("moreRoomTypes", true) => "查看房型與空房 ↗",
         ("bookedBadge", false) => "Booked",
         ("bookedBadge", true) => "已訂",
+        // Silence is not the same as "no breakfast": Taiwanese guesthouses often
+        // include one, so an omitted tag was being read as "included".
+        ("noBreakfast", false) => "No breakfast",
+        ("noBreakfast", true) => "不含早餐",
+        ("perNight", false) => "per room / night",
+        ("perNight", true) => "每房每晚",
+        ("notBookedYet", false) => "Nothing booked yet — comparing these three",
+        ("notBookedYet", true) => "尚未預訂 · 三間比較中",
         ("plans", false) => "Plans",
         ("plans", true) => "行程",
         ("details", false) => "Booking details",

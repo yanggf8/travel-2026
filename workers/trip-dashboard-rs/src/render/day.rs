@@ -199,7 +199,7 @@ fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
     h
 }
 
-pub fn render(day: &Day, plan_id: &str, lang: &str, has_map: bool) -> String {
+pub fn render(day: &Day, plan_id: &str, lang: &str, map_version: Option<&str>) -> String {
     let theme = if lang == "zh" && !day.theme_zh.is_empty() {
         &day.theme_zh
     } else {
@@ -220,7 +220,7 @@ pub fn render(day: &Day, plan_id: &str, lang: &str, has_map: bool) -> String {
     h.push_str(&super::map::day_map_slot(
         plan_id,
         day.day_number,
-        has_map,
+        map_version,
         lang,
     ));
     if !day.landmarks.is_empty() {
@@ -269,7 +269,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(html.contains("今日路線"));
         assert!(html.contains("HOTEL AZAT NAHA"));
         assert!(html.contains("波上宮"));
@@ -293,7 +293,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "en", false);
+        let html = render(&day, "okinawa-2026", "en", None);
         assert!(html.contains("ai-rec-badge"), "got: {html}");
         assert!(html.contains("AI-recommended (unconfirmed)"), "got: {html}");
     }
@@ -307,7 +307,7 @@ mod tests {
             landmarks: vec!["Kinkaku-ji Temple".into(), "Kitano Tenmangu Shrine".into()],
             ..Default::default()
         };
-        let html = render(&day, "kyoto-2026", "en", false);
+        let html = render(&day, "kyoto-2026", "en", None);
         assert!(html.contains("day-landmarks"));
         assert!(html.contains("Kinkaku-ji Temple"));
         assert!(html.contains("Kitano Tenmangu Shrine"));
@@ -321,7 +321,7 @@ mod tests {
             day_type: "arrival".into(),
             ..Default::default()
         };
-        let html = render(&day, "kyoto-2026", "en", false);
+        let html = render(&day, "kyoto-2026", "en", None);
         assert!(!html.contains("day-landmarks"));
     }
 
@@ -342,7 +342,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(html.contains("🗺️ Google Maps 導航"), "got: {html}");
         assert!(
             html.contains(
@@ -373,7 +373,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(html.contains("壺屋陶器街"));
         assert!(html.contains("中午"));
         assert!(html.contains("Lunch"));
@@ -397,7 +397,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "en", false);
+        let html = render(&day, "okinawa-2026", "en", None);
         assert!(html.contains("Arrive"));
         // the empty noon session should NOT emit a session block
         assert!(!html.contains("session-noon"));
@@ -410,7 +410,7 @@ mod tests {
             day_type: "full".into(),
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "en", true);
+        let html = render(&day, "okinawa-2026", "en", Some("v1"));
         assert!(html.contains("/map/okinawa-2026/day-2.png"));
         assert!(html.contains("map-frame"));
     }
@@ -423,7 +423,7 @@ mod tests {
             day_type: "full".into(),
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "en", false);
+        let html = render(&day, "okinawa-2026", "en", None);
         assert!(html.contains("map-missing"));
         assert!(!html.contains("src=\"/map"));
     }
@@ -494,7 +494,7 @@ mod tests {
             feels_like_high_c: Some(34.0),
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(html.contains("體感"), "got: {html}");
         assert!(html.contains("💧73%"), "got: {html}");
         assert!(html.contains("26\u{2013}30°C"), "got: {html}"); // en-dash range
@@ -512,7 +512,7 @@ mod tests {
             precipitation_pct: Some(73.0),
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(html.contains("weather-clothing"), "got: {html}");
         assert!(html.contains("炎熱"), "got: {html}");
         assert!(html.contains("帶傘"), "got: {html}");
@@ -530,7 +530,7 @@ mod tests {
             precipitation_pct: Some(5.0),
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(html.contains("舒適"), "got: {html}");
         assert!(!html.contains("帶傘"), "got: {html}");
     }
@@ -550,7 +550,7 @@ mod tests {
             feels_like_high_c: Some(34.0),
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(
             html.contains("炎熱"),
             "expected feels-like-driven 炎熱, got: {html}"
@@ -566,7 +566,7 @@ mod tests {
             weather_label: "Sunny".into(),
             ..Default::default()
         };
-        let html = render(&day, "okinawa-2026", "zh", false);
+        let html = render(&day, "okinawa-2026", "zh", None);
         assert!(html.contains("Sunny"), "got: {html}");
         assert!(!html.contains("體感"), "got: {html}");
         assert!(!html.contains("weather-clothing"), "got: {html}");
