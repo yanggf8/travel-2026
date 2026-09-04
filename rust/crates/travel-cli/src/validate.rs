@@ -65,6 +65,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_destinations(&mut issues).await;
     validate_holiday_calendars(&mut issues).await;
     validate_omiyage(&mut issues).await;
+    validate_domestic_accommodations(&mut issues).await;
     validate_reference_tables(&mut issues).await;
 
     // Always-run: documentation ↔ code drift checks
@@ -1385,6 +1386,125 @@ async fn validate_omiyage(issues: &mut Vec<Issue>) {
     // 8. EMPTY tables → NO error (intentionally no COUNT(*)==0 check).
 }
 
+// --- DB check: domestic_accommodations (Taiwan domestic stay reference data) ---
+
+/// Every domestic_accommodations row should carry an image_url (WARN — the
+/// dashboard renders a placeholder otherwise) and a booking_url (INFO — advisory
+/// only; a stay can legitimately be phone/walk-in booked). Both are fixable via
+/// `travel update-accommodation --id <id> [--image-url u] [--booking-url u]`.
+/// A thin candidate gallery (< GALLERY_MIN extra photos in
+/// domestic_accommodation_images) is an INFO — one hero photo per candidate reads
+/// as too little to choose from; fix via `travel add-accommodation-image`.
+async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    let mut rows = match conn
+        .query(
+            "SELECT id, destination, hotel_name, image_url, booking_url FROM domestic_accommodations ORDER BY destination, id",
+            (),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            // Table may not exist on a pre-migrate DB — not a data error.
+            if err.to_string().contains("no such table") {
+                return;
+            }
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Error,
+                message: format!("failed to query domestic_accommodations: {err}"),
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+            return;
+        }
+    };
+
+    let mut stays: Vec<(String, String, String)> = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        let id: String = row.get(0).unwrap_or_default();
+        let dest: String = row.get(1).unwrap_or_default();
+        let hotel: String = row.get(2).unwrap_or_default();
+        let image_url: Option<String> = row.get(3).ok();
+        let booking_url: Option<String> = row.get(4).ok();
+
+        if image_url.as_deref().is_none_or(|s| s.trim().is_empty()) {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "{dest}/{hotel} ({id}) missing image_url — dashboard shows a placeholder; set via update-accommodation --id {id} --image-url <url>"
+                ),
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+        }
+        if booking_url.as_deref().is_none_or(|s| s.trim().is_empty()) {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Info,
+                message: format!(
+                    "{dest}/{hotel} ({id}) has no booking_url — add the Agoda/booking link via update-accommodation --id {id} --booking-url <url>"
+                ),
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+        }
+        stays.push((id, dest, hotel));
+    }
+
+    // Gallery depth: one hero image per candidate is too little to choose from.
+    let mut counts: Vec<(String, i64)> = Vec::new();
+    match conn
+        .query(
+            "SELECT accommodation_id, COUNT(*) FROM domestic_accommodation_images GROUP BY accommodation_id",
+            (),
+        )
+        .await
+    {
+        Ok(mut g) => {
+            while let Ok(Some(row)) = g.next().await {
+                counts.push((row.get(0).unwrap_or_default(), row.get(1).unwrap_or(0)));
+            }
+        }
+        // Pre-migrate DB without the child table — nothing to check.
+        Err(err) if err.to_string().contains("no such table") => return,
+        Err(err) => {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Error,
+                message: format!("failed to query domestic_accommodation_images: {err}"),
+                file: Some("turso:domestic_accommodation_images".to_string()),
+                line: None,
+            });
+            return;
+        }
+    }
+    for (id, dest, hotel) in &stays {
+        let n = counts
+            .iter()
+            .find(|(aid, _)| aid == id)
+            .map_or(0, |(_, n)| *n);
+        if n < GALLERY_MIN {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Info,
+                message: format!(
+                    "{dest}/{hotel} ({id}) has only {n} gallery photo(s) — aim for {GALLERY_MIN}+ room/view shots via add-accommodation-image --id {id} --url <url> --label <text>"
+                ),
+                file: Some("turso:domestic_accommodation_images".to_string()),
+                line: None,
+            });
+        }
+    }
+}
+
+/// Minimum extra gallery photos a candidate should carry beyond its hero image.
+const GALLERY_MIN: i64 = 3;
+
 // --- DB check: reference tables ---
 
 async fn validate_reference_tables(issues: &mut Vec<Issue>) {
@@ -1721,6 +1841,30 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
             });
         }
         Ok(crate::check_maps_fresh::Status::Fresh { .. }) => {}
+        Err(_) => {}
+    }
+
+    // Maps completeness (WARN) — map_artifacts must hold an uploaded plan.png
+    // (plus one day-N.png per itinerary day). Reuses the doctor completeness
+    // classifier: a key is OK only when status='uploaded' and byte_size > 64.
+    match crate::check_maps_fresh::evaluate_completeness(&conn, plan_id).await {
+        Ok(crate::check_maps_fresh::CompletenessVerdict::NoManifest) => {
+            issues.push(PublishIssue {
+                category: "maps-complete".to_string(),
+                severity: PublishSeverity::Warn,
+                message: format!(
+                    "no map manifest — plan.png not uploaded; run scripts/snapshot-maps.sh {plan_id} {destination}"
+                ),
+            });
+        }
+        Ok(crate::check_maps_fresh::CompletenessVerdict::Incomplete { line }) => {
+            issues.push(PublishIssue {
+                category: "maps-complete".to_string(),
+                severity: PublishSeverity::Warn,
+                message: line,
+            });
+        }
+        Ok(crate::check_maps_fresh::CompletenessVerdict::Complete { .. }) => {}
         Err(_) => {}
     }
 

@@ -17,7 +17,7 @@ fn ensure_domestic_seed() {
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
          ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_chliv_seaview_7200','jiufen','CHLIV','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
          ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
     );
     let _ = db_exec(
@@ -50,7 +50,14 @@ fn set_accommodation_books_and_advances_p4() {
 
     let _g = Guard::new({
         let (plan, dest) = (plan.clone(), dest.to_string());
-        move || teardown_plan(&plan, &dest)
+        move || {
+            // The test-only third candidate is NOT plan-keyed, so teardown_plan
+            // does not cover it — delete it explicitly or it leaks into shared Turso.
+            let _ = common::db_exec_teardown(
+                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+            );
+            teardown_plan(&plan, &dest);
+        }
     });
     teardown_plan(&plan, dest);
     common::seed_plan(&plan, dest, 1);
@@ -120,7 +127,14 @@ fn set_accommodation_rejects_unknown_hotel() {
     let dest = "jiufen";
     let _g = Guard::new({
         let (plan, dest) = (plan.clone(), dest.to_string());
-        move || teardown_plan(&plan, &dest)
+        move || {
+            // The test-only third candidate is NOT plan-keyed, so teardown_plan
+            // does not cover it — delete it explicitly or it leaks into shared Turso.
+            let _ = common::db_exec_teardown(
+                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+            );
+            teardown_plan(&plan, &dest);
+        }
     });
     teardown_plan(&plan, dest);
     common::seed_plan(&plan, dest, 1);

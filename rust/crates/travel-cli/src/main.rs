@@ -99,6 +99,13 @@ mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 mod snapshot_maps;      // snapshot-maps (wrap scripts/snapshot-maps.sh: capture+upload route maps)
 mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
 mod clear_accommodation; // clear-accommodation — cancel domestic accommodation (P4 -> selecting)
+mod list_accommodations; // list-accommodations — list domestic_accommodations (slug-keyed, no --plan-id)
+mod add_accommodation;  // add-accommodation — add a domestic_accommodations row (slug-keyed, no audit triad)
+mod update_accommodation; // update-accommodation — set image_url/booking_url by id (slug-keyed)
+mod delete_accommodation; // delete-accommodation — remove a domestic_accommodations row by id (slug-keyed)
+mod add_accommodation_image;    // add-accommodation-image — gallery photo for a domestic stay (slug-keyed)
+mod list_accommodation_images;  // list-accommodation-images — gallery photos + per-hotel counts (read-only)
+mod delete_accommodation_image; // delete-accommodation-image — remove one/all gallery photos (slug-keyed)
 
 use std::{env, io::Read, process};
 
@@ -414,6 +421,27 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             clear_accommodation::run(rest, plan_id).await?;
             Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "list-accommodations" => {
+            list_accommodations::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "add-accommodation" => {
+            add_accommodation::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "update-accommodation" => {
+            update_accommodation::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "delete-accommodation" => {
+            delete_accommodation::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "add-accommodation-image" => {
+            add_accommodation_image::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "list-accommodation-images" => {
+            list_accommodation_images::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "delete-accommodation-image" => {
+            delete_accommodation_image::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "set-process-status" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
@@ -904,6 +932,8 @@ VIEWS\n\
   query-destination-ref --slug <slug>\n\
   query-omiyage --slug <slug>     omiyage items + purchase locations (slug-keyed)\n\
   query-accommodation --dest <slug> --date YYYY-MM-DD [--sea-view] [--hotel <name>]  Domestic stays (Taiwan, destination-validated)\n\
+  list-accommodations --dest <slug> [--limit N]  Domestic stay reference rows incl. image/booking link status (slug-keyed)\n\
+  list-accommodation-images --dest <slug> | --id <id>  Candidate gallery photos + per-hotel counts (slug-keyed)\n\
   omiyage-worklist --slug <slug>   omiyage-tagged POIs as research worklist (read-only; writes nothing)\n\
   view-prices | check-freshness --source <id> [--dest slug]\n\
 \n\
@@ -936,6 +966,8 @@ VALIDATE / CHECKS\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
   add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
+  add-accommodation | update-accommodation --id <id> [--image-url u] [--booking-url u] | delete-accommodation --id <id>  (domestic stay reference data; no --plan-id)\n\
+  add-accommodation-image --id <id> --url <u> [--label t] | delete-accommodation-image --id <id> (--url u | --all)  (candidate gallery; no --plan-id)\n\
   run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
 \n\
 COMPARE / UTIL\n\

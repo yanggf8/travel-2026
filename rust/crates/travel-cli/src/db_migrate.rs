@@ -1498,6 +1498,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
   breakfast_included INTEGER NOT NULL CHECK(breakfast_included IN (0,1)),
   source TEXT,
   image_url TEXT,
+  booking_url TEXT,
   updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );"#,
     )
@@ -1513,77 +1514,47 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "ALTER TABLE domestic_accommodations ADD COLUMN image_url TEXT;",
     )
     .await;
-    // Manual seed for Jiufen Phase A examples (idempotent INSERT OR IGNORE).
-    // image_url: local CSS placeholder for CHLIV/山城逸境 (no external via.placeholder.com — broken in Chrome 0x0); 海論 keeps its real URL.
-    for (id, hotel, room, sea_view, price, breakfast, source, image_url) in [
-        (
-            "jiufen_hailun_seaview_5200",
-            "海論",
-            "海景雙人房",
-            1,
-            5200,
-            1,
-            "manual",
-            "https://ocean-theory.h-and.world/assets/room-rouge-CBUWFFnr.webp",
+    // Candidate gallery: one row per extra photo (per room type / area) — normalized
+    // child table, NOT a JSON array in a column. Dashboard renders thumbnails + labels.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS domestic_accommodation_images (
+  accommodation_id TEXT NOT NULL REFERENCES domestic_accommodations(id) ON DELETE CASCADE,
+  image_url TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (accommodation_id, image_url)
+);"#,
+    )
+    .await;
+    // Back-compat: existing DBs created before booking_url existed.
+    add_column(
+        &conn,
+        "ALTER TABLE domestic_accommodations ADD COLUMN booking_url TEXT;",
+    )
+    .await;
+    // `jiufen` must exist in destination_config so resolve_active_destination (and
+    // the slug-keyed accommodation commands) can validate against it — a destination
+    // REGISTRATION, not trip content.
+    //
+    // NOTE: the three Jiufen stays that used to be hard-seeded here are GONE on
+    // purpose. They are trip content, editable through the CLI
+    // (add/update/delete-accommodation, add-accommodation-image), and an
+    // INSERT OR IGNORE on every `db migrate` resurrected rows the user had
+    // deliberately deleted — one such row was a coffee shop wrongly recorded as a
+    // NT$7,200 sea-view stay, and it came back after each migrate. Reference data
+    // belongs in the DB via the CLI, never hardcoded in the migrator.
+    exec_lenient(
+        &conn,
+        &format!(
+            "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
+             VALUES ({}, {}, 'Asia/Taipei', 'TWD', 'zh-TW', 'taiwan')",
+            sq("jiufen"),
+            sq("九份"),
         ),
-        (
-            "jiufen_chliv_seaview_7200",
-            "CHLIV",
-            "海景雙人房",
-            1,
-            7200,
-            1,
-            "manual",
-            "",
-        ),
-        (
-            "jiufen_shancheng_seaview_4200",
-            "山城逸境",
-            "海景雙人房",
-            1,
-            4200,
-            1,
-            "manual",
-            "",
-        ),
-    ] {
-        exec_lenient(
-            &conn,
-            &format!(
-                "INSERT OR IGNORE INTO domestic_accommodations \
-                 (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, image_url, updated_at) \
-                 VALUES ({}, {}, {}, {}, {sea_view}, {price}, 'TWD', {breakfast}, {}, {}, datetime('now'))",
-                sq(id),
-                sq("jiufen"),
-                sq(hotel),
-                sq(room),
-                sq(source),
-                sq(image_url),
-            ),
-        )
-        .await;
-        // Backfill image_url for pre-existing rows where it is still NULL/empty.
-        exec_lenient(
-            &conn,
-            &format!(
-                "UPDATE domestic_accommodations SET image_url = {} WHERE id = {} AND (image_url IS NULL OR image_url = '')",
-                sq(image_url),
-                sq(id),
-            ),
-        )
-        .await;
-        // Ensure destination_config contains jiufen so resolve_active_destination can pass for tests that use it.
-        exec_lenient(
-            &conn,
-            &format!(
-                "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
-                 VALUES ({}, {}, 'Asia/Taipei', 'TWD', 'zh-TW', 'taiwan')",
-                sq("jiufen"),
-                sq("九份"),
-            ),
-        )
-        .await;
-    }
+    )
+    .await;
+
     // Cleanup legacy broken via.placeholder.com URLs (Chrome reports them as 0x0 broken images).
     // Existing DBs that already seeded the placeholder need this one-shot migration to local fallback.
     exec_lenient(

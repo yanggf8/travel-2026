@@ -131,7 +131,9 @@ fn render_notes(notes: &str) -> String {
 
 pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let mut h = String::new();
-    h.push_str("<section class=\"booking-summary\">");
+    // `summary-box` adds the dashed frame (user visibility request); the plan map
+    // slot is rendered ABOVE this section (render_plan), never inside the frame.
+    h.push_str("<section class=\"booking-summary summary-box\">");
 
     // Package offer (booking-summary package row) — the chosen plan_offer + its
     // selected-date price. Only shown when a package was selected (flight+hotel
@@ -276,7 +278,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let is_booked = plan.p4_status == "booked";
     if !plan.domestic_stays.is_empty() {
         let domestic_title = if is_booked {
-            if lang == "zh" { "已訂住宿" } else { "Booked Accommodation" }
+            if lang == "zh" { "🏠 已訂住宿" } else { "🏠 Booked Accommodation" }
         } else {
             t("domesticStay", lang)
         };
@@ -298,13 +300,25 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             } else {
                 &stay.currency
             };
-            h.push_str("<div class=\"booking-item domestic\">");
+            // Booked stays get the obvious green "已訂" treatment (badge + tinted card).
+            let item_class = if is_booked {
+                "booking-item domestic domestic--booked"
+            } else {
+                "booking-item domestic"
+            };
+            h.push_str(&format!("<div class=\"{item_class}\">"));
             h.push_str("<span class=\"booking-icon\">🏠</span>");
             h.push_str("<div class=\"booking-detail\">");
             h.push_str(&format!(
                 "<div class=\"booking-value\">{}</div>",
                 esc(&name)
             ));
+            if is_booked {
+                h.push_str(&format!(
+                    "<span class=\"booked-badge\">✓ {}</span>",
+                    esc(t("bookedBadge", lang))
+                ));
+            }
             // Price line — TWD grouped, no hard-coded JPY.
             if stay.price_twd > 0 {
                 h.push_str(&format!(
@@ -333,7 +347,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     // Domestic candidates — sea-view shortlist (jiufen three) from domestic_accommodations.
     // P4-aware headings (pure HTML/CSS, no JS):
     //   booked   → 「其他海景參考」 + 小字「僅供參考」
-    //   pending/selecting/empty → 「海景候選 · 正在選」 (candidates as primary)
+    //   pending/selecting/empty → 「🏨 海景候選 · 正在選」 (candidates as primary, dashed frame)
     if !plan.candidates.is_empty() {
         let (cand_title, cand_sub): (&str, Option<&str>) = if is_booked {
             (
@@ -342,7 +356,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             )
         } else {
             (
-                if lang == "zh" { "海景候選 · 正在選" } else { "Sea-View Candidates · Selecting" },
+                if lang == "zh" { "🏨 海景候選 · 正在選" } else { "🏨 Sea-View Candidates · Selecting" },
                 None,
             )
         };
@@ -358,7 +372,13 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 format!("{} {}", c.hotel_name, c.room_type)
             };
             let cur = if c.currency.is_empty() { "TWD" } else { &c.currency };
-            h.push_str("<div class=\"candidate-card\">");
+            // Selecting state → dashed frame on each card (visual "not booked yet").
+            let card_class = if is_booked {
+                "candidate-card"
+            } else {
+                "candidate-card candidate-card--selecting"
+            };
+            h.push_str(&format!("<div class=\"{card_class}\">"));
             if is_placeholder_image(&c.image_url) {
                 h.push_str(&format!(
                     "<div class=\"candidate-image candidate-image--placeholder\" aria-label=\"{}\">{}</div>",
@@ -371,6 +391,34 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     esc_url_attr(&c.image_url),
                     esc(&c.hotel_name)
                 ));
+            }
+            // Gallery: one thumbnail per room type / area (child table rows), each
+            // linking to the full image (SSR-only, no JS lightbox).
+            let gallery: Vec<_> = c
+                .images
+                .iter()
+                .filter(|g| !is_placeholder_image(&g.image_url))
+                .collect();
+            if !gallery.is_empty() {
+                h.push_str("<div class=\"candidate-gallery\">");
+                for g in gallery {
+                    h.push_str("<figure class=\"candidate-gallery-item\">");
+                    h.push_str(&format!(
+                        "<a href=\"{}\" target=\"_blank\" rel=\"noopener\">\
+                         <img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" /></a>",
+                        esc_url_attr(&g.image_url),
+                        esc_url_attr(&g.image_url),
+                        esc(if g.label.is_empty() { &c.hotel_name } else { &g.label }),
+                    ));
+                    if !g.label.is_empty() {
+                        h.push_str(&format!(
+                            "<figcaption class=\"candidate-gallery-label\">{}</figcaption>",
+                            esc(&g.label)
+                        ));
+                    }
+                    h.push_str("</figure>");
+                }
+                h.push_str("</div>");
             }
             h.push_str(&format!(
                 "<div class=\"candidate-name\">{}</div>",
@@ -393,6 +441,14 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             }
             if !tags.is_empty() {
                 h.push_str(&format!("<div class=\"candidate-tags\">{}</div>", tags.join(" ")));
+            }
+            // External "查看更多房型" link (official rooms page / OTA listing).
+            if !c.link_url.is_empty() {
+                h.push_str(&format!(
+                    "<a class=\"candidate-link\" href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>",
+                    esc_url_attr(&c.link_url),
+                    esc(t("moreRoomTypes", lang))
+                ));
             }
             h.push_str("</div>");
         }
@@ -781,5 +837,142 @@ mod tests {
         assert!(!html.contains("Flights"));
         assert!(!html.contains("Hotel"));
         assert!(!html.contains("Transfers"));
+    }
+
+    #[test]
+    fn summary_section_carries_dashed_box_class() {
+        let plan = Plan::default();
+        let html = render(&plan, "en", None);
+        assert!(html.contains("<section class=\"booking-summary summary-box\">"));
+    }
+
+    #[test]
+    fn booked_domestic_stay_shows_green_badge_and_icon_title() {
+        use crate::model::DomesticStay;
+        let plan = Plan {
+            p4_status: "booked".into(),
+            domestic_stays: vec![DomesticStay {
+                title: "海論 海景雙人房".into(),
+                hotel_name: "海論".into(),
+                room_type: "海景雙人房".into(),
+                price_twd: 5200,
+                selected_date: "2026-10-12".into(),
+                status: "booked".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(html.contains("🏠 已訂住宿"), "booked h2 title, got: {html}");
+        assert!(html.contains("domestic--booked"), "green booked card class");
+        assert!(html.contains("booked-badge"), "已訂 badge");
+        assert!(html.contains("✓ 已訂"));
+    }
+
+    #[test]
+    fn selecting_candidates_show_icon_title_and_dashed_cards() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "海論".into(),
+                room_type: "海景雙人房".into(),
+                price_twd: 5200,
+                sea_view: 1,
+                breakfast_included: 1,
+                image_url: "https://example.com/a.webp".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(html.contains("🏨 海景候選 · 正在選"), "selecting h2, got: {html}");
+        assert!(html.contains("candidate-card--selecting"), "dashed card class");
+        assert!(!html.contains("已訂住宿"));
+    }
+
+    #[test]
+    fn booked_candidates_lose_dashed_frame_and_show_reference_sub() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "booked".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "海論".into(),
+                room_type: "海景雙人房".into(),
+                image_url: "https://example.com/a.webp".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(html.contains("其他海景參考"));
+        assert!(html.contains("僅供參考"));
+        assert!(!html.contains("candidate-card--selecting"));
+    }
+
+    #[test]
+    fn candidate_gallery_renders_labeled_thumbs_and_room_link() {
+        use crate::model::{CandidateImage, DomesticCandidate};
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "海論".into(),
+                room_type: "海景雙人房".into(),
+                image_url: "https://example.com/main.webp".into(),
+                link_url: "https://example.com/rooms".into(),
+                images: vec![
+                    CandidateImage {
+                        image_url: "https://example.com/quad.webp".into(),
+                        label: "海景高級四人房".into(),
+                    },
+                    CandidateImage {
+                        image_url: "https://example.com/common.webp".into(),
+                        label: "公區".into(),
+                    },
+                    // placeholder/empty urls are skipped
+                    CandidateImage {
+                        image_url: "".into(),
+                        label: "不該出現".into(),
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(html.contains("candidate-gallery"), "gallery wrapper");
+        assert!(html.contains("https://example.com/quad.webp"));
+        assert!(html.contains("海景高級四人房"));
+        assert!(html.contains("公區"));
+        assert!(!html.contains("不該出現"), "placeholder gallery rows skipped");
+        assert_eq!(html.matches("candidate-gallery-img").count(), 2);
+        // thumbs link to the full image in a new tab
+        assert!(html.contains("target=\"_blank\""));
+        // 查看更多房型 external link
+        assert!(html.contains("class=\"candidate-link\""));
+        assert!(html.contains("href=\"https://example.com/rooms\""));
+        assert!(html.contains("查看更多房型 ↗"));
+    }
+
+    #[test]
+    fn candidate_without_gallery_or_link_renders_neither() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "CHLIV".into(),
+                room_type: "海景雙人房".into(),
+                image_url: "https://example.com/a.webp".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(!html.contains("candidate-gallery"));
+        assert!(!html.contains("candidate-link"));
     }
 }

@@ -690,22 +690,30 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         // [17] domestic accommodation candidates (sea-view shortlist) — jiufen three
         format!(
-            "SELECT hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, source FROM domestic_accommodations WHERE destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') ORDER BY price_twd ASC"
+            "SELECT id, hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, booking_url, source FROM domestic_accommodations WHERE destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') ORDER BY price_twd ASC"
         ),
         // [18] P4 accommodation process status — drives booked vs selecting UI.
         format!(
             "SELECT status FROM process_statuses WHERE plan_id = '{slug}' AND destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') AND process_id = 'process_4_accommodation'"
         ),
+        // [19] candidate gallery images (per-room-type / area photos), joined by accommodation_id.
+        format!(
+            "SELECT g.accommodation_id, g.image_url, g.label, g.sort_order \
+             FROM domestic_accommodation_images g \
+             JOIN domestic_accommodations a ON a.id = g.accommodation_id \
+             WHERE a.destination = COALESCE((SELECT destination FROM plan_destinations WHERE plan_id = '{slug}' LIMIT 1), '{dest_fallback}') \
+             ORDER BY g.accommodation_id, g.sort_order"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 19 {
+    if r.len() < 20 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 19 results".into(),
+            "Turso pipeline returned fewer than 20 results".into(),
         ));
     }
     Ok(model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
-        &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18],
+        &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18], &r[19],
     ))
 }
 

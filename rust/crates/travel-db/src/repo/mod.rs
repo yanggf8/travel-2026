@@ -22,5 +22,6 @@ pub mod product_type_inputs;
 pub mod shaping;
 pub mod shaping_purchase;
 pub mod plan;
+pub mod domestic_accommodation_images;
 pub mod domestic_accommodations;
 pub mod route_segments;

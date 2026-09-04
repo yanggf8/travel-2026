@@ -19,6 +19,7 @@ pub struct DomesticAccommodationRow {
     pub breakfast_included: i64,
     pub source: Option<String>,
     pub image_url: Option<String>,
+    pub booking_url: Option<String>,
     pub updated_at: String,
 }
 
@@ -89,7 +90,7 @@ pub async fn query(
 ) -> Result<Vec<DomesticAccommodationRow>, String> {
     let built = filter.build();
     let sql = format!(
-        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, updated_at \
+        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, updated_at \
          FROM domestic_accommodations {} ORDER BY price_twd ASC, hotel_name ASC LIMIT {limit}",
         built.clause
     );
@@ -115,10 +116,103 @@ pub async fn query(
             breakfast_included: row.get(8).unwrap_or(0),
             source: row.get(9).ok(),
             image_url: row.get(10).ok(),
-            updated_at: row.get(11).unwrap_or_default(),
+            booking_url: row.get(11).ok(),
+            updated_at: row.get(12).unwrap_or_default(),
         });
     }
     Ok(out)
+}
+
+/// Row to INSERT via `add-accommodation` (slug-keyed reference data write).
+#[derive(Debug, Clone)]
+pub struct NewDomesticAccommodation {
+    pub id: String,
+    pub destination: String,
+    pub hotel_name: String,
+    pub room_type: String,
+    pub sea_view: i64,
+    pub max_occupancy: Option<i64>,
+    pub price_twd: i64,
+    pub breakfast_included: i64,
+    pub source: Option<String>,
+    pub image_url: Option<String>,
+    pub booking_url: Option<String>,
+}
+
+/// INSERT OR IGNORE one row. Returns affected rows: 1 = inserted, 0 = id already
+/// exists (natural dedup — NOT an error; the CLI surfaces it as "already exists").
+pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result<u64, String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO domestic_accommodations \
+         (id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'TWD', ?8, ?9, ?10, ?11, datetime('now'))",
+        libsql::params![
+            row.id.clone(),
+            row.destination.clone(),
+            row.hotel_name.clone(),
+            row.room_type.clone(),
+            row.sea_view,
+            row.max_occupancy,
+            row.price_twd,
+            row.breakfast_included,
+            row.source.clone(),
+            row.image_url.clone(),
+            row.booking_url.clone(),
+        ],
+    )
+    .await
+    .map_err(|e| format!("domestic_accommodations INSERT failed: {e}"))
+}
+
+/// Build the UPDATE for the mutable fields (pure — unit-testable).
+/// `image_url` / `booking_url` are `Some` only when the caller sets them.
+/// Caller guarantees at least one is `Some`; `updated_at` always bumps.
+pub fn build_update(
+    id: &str,
+    image_url: Option<&str>,
+    booking_url: Option<&str>,
+) -> (String, Vec<libsql::Value>) {
+    let mut sets: Vec<String> = Vec::new();
+    let mut params: Vec<libsql::Value> = Vec::new();
+    if let Some(u) = image_url {
+        params.push(libsql::Value::Text(u.to_string()));
+        sets.push(format!("image_url = ?{}", params.len()));
+    }
+    if let Some(u) = booking_url {
+        params.push(libsql::Value::Text(u.to_string()));
+        sets.push(format!("booking_url = ?{}", params.len()));
+    }
+    sets.push("updated_at = datetime('now')".to_string());
+    params.push(libsql::Value::Text(id.to_string()));
+    let sql = format!(
+        "UPDATE domestic_accommodations SET {} WHERE id = ?{}",
+        sets.join(", "),
+        params.len()
+    );
+    (sql, params)
+}
+
+/// UPDATE image_url/booking_url by id. Returns affected rows (0 = unknown id).
+pub async fn update_fields(
+    conn: &Connection,
+    id: &str,
+    image_url: Option<&str>,
+    booking_url: Option<&str>,
+) -> Result<u64, String> {
+    let (sql, params) = build_update(id, image_url, booking_url);
+    conn.execute(&sql, params)
+        .await
+        .map_err(|e| format!("domestic_accommodations UPDATE failed: {e}"))
+}
+
+/// DELETE one row by id. Returns affected rows (0 = unknown id).
+pub async fn delete_by_id(conn: &Connection, id: &str) -> Result<u64, String> {
+    conn.execute(
+        "DELETE FROM domestic_accommodations WHERE id = ?1",
+        libsql::params![id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("domestic_accommodations DELETE failed: {e}"))
 }
 
 #[cfg(test)]
@@ -159,5 +253,36 @@ mod tests {
             .build();
         assert_eq!(w.clause, "WHERE hotel_name LIKE ?1");
         assert!(matches!(&w.params[0], libsql::Value::Text(s) if s == "%a'b%"));
+    }
+
+    #[test]
+    fn build_update_both_fields() {
+        let (sql, params) = build_update("id1", Some("https://img"), Some("https://book"));
+        assert_eq!(
+            sql,
+            "UPDATE domestic_accommodations SET image_url = ?1, booking_url = ?2, updated_at = datetime('now') WHERE id = ?3"
+        );
+        assert_eq!(params.len(), 3);
+        assert!(matches!(&params[2], libsql::Value::Text(s) if s == "id1"));
+    }
+
+    #[test]
+    fn build_update_booking_only() {
+        let (sql, params) = build_update("id2", None, Some("https://book"));
+        assert_eq!(
+            sql,
+            "UPDATE domestic_accommodations SET booking_url = ?1, updated_at = datetime('now') WHERE id = ?2"
+        );
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn build_update_image_only() {
+        let (sql, params) = build_update("id3", Some("https://img"), None);
+        assert_eq!(
+            sql,
+            "UPDATE domestic_accommodations SET image_url = ?1, updated_at = datetime('now') WHERE id = ?2"
+        );
+        assert_eq!(params.len(), 2);
     }
 }

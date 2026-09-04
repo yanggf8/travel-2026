@@ -20,6 +20,11 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("seaView", true) => "海景",
         ("breakfast", false) => "Breakfast included",
         ("breakfast", true) => "含早餐",
+        // candidate gallery + external room-types link (domestic accommodations)
+        ("moreRoomTypes", false) => "More room types ↗",
+        ("moreRoomTypes", true) => "查看更多房型 ↗",
+        ("bookedBadge", false) => "Booked",
+        ("bookedBadge", true) => "已訂",
         ("plans", false) => "Plans",
         ("plans", true) => "行程",
         ("details", false) => "Booking details",

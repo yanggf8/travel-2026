@@ -3,8 +3,8 @@
 # connecting polyline, auto-framed) and upload the PNGs to the R2 bucket the
 # dashboard worker serves from.
 #
-# Keyless: a self-contained Leaflet page (CARTO Positron basemap — © OpenStreetMap,
-# © CARTO; Leaflet from unpkg CDN) is
+# Keyless: a self-contained Leaflet page (OpenStreetMap standard basemap — © OpenStreetMap
+# contributors; Leaflet from unpkg CDN) is
 # generated per day, screenshotted via chromeport (a CDP *client*) attached to an
 # isolated Chrome this script ACQUIRES from the gwebcdb per-agent allocator (Chrome
 # is launched detached so it persists across our subprocess calls; released on exit).
@@ -400,12 +400,15 @@ render_map() {
   html,body{margin:0;padding:0;height:100%}
   #map{position:absolute;inset:0;background:#eef}
   .leaflet-control-attribution,.leaflet-control-zoom{display:none}
+  /* Mute the OSM basemap so the route polyline and numbered markers stay dominant
+     (Positron used to give this for free). Markers/route sit in their own panes. */
+  .leaflet-tile-pane{filter:saturate(0.45) brightness(1.06)}
   /* Keyless tile attribution is burned in below (.credit) since the Leaflet
-     attribution control is disabled — CARTO/OSM tiles require credit. */
+     attribution control is disabled — OSM tiles require credit. */
   .credit{position:absolute;right:3px;bottom:2px;z-index:1000;font:10px/13px sans-serif;
     color:#555;background:rgba(255,255,255,.7);padding:0 4px;border-radius:3px}
 </style></head><body><div id="map"></div>
-<div class="credit">© OpenStreetMap, © CARTO</div><script>
+<div class="credit">© OpenStreetMap contributors</div><script>
   var pts = ${arr};
   var roads = ${roads};        // [[color,kind,[[lat,lon],...]],...]  one entry per LEG
   var haveRoutes = ${have_routes};
@@ -414,7 +417,7 @@ render_map() {
   var map = L.map('map',{zoomControl:false,attributionControl:false});
   L.control.scale({imperial:false,position:'bottomleft'}).addTo(map);
 
-  // --- tile-load readiness: signal MAP_READY only AFTER the visible CARTO tiles have
+  // --- tile-load readiness: signal MAP_READY only AFTER the visible OSM tiles have
   // actually loaded + decoded + painted (not on a blind timer), so the screenshot can
   // never fire on a blank/half-painted basemap. tileerror / timeout → MAP_FAILED.
   var readyDone = false, tileFailed = 0;
@@ -425,7 +428,7 @@ render_map() {
     return Array.prototype.slice.call(document.querySelectorAll('#map .leaflet-tile-loaded'))
       .filter(function(img){ var r=img.getBoundingClientRect();
         return img.complete && img.naturalWidth>0 && img.naturalHeight>0 &&
-          img.src.indexOf('basemaps.cartocdn.com/light_all/')!==-1 &&
+          img.src.indexOf('tile.openstreetmap.org/')!==-1 &&
           r.width>0 && r.height>0 && r.right>box.left && r.left<box.right &&
           r.bottom>box.top && r.top<box.bottom; });
   }
@@ -446,7 +449,7 @@ render_map() {
     });
   }
   function waitForVisibleTiles(){
-    // Tolerant gate: succeed as soon as the framed viewport has visibly-painted CARTO
+    // Tolerant gate: succeed as soon as the framed viewport has visibly-painted OSM
     // tiles — even if SOME tiles errored (one bad tile must NOT drop an otherwise-good
     // map; the old blind-sleep captured those). We only fail-loud (MAP_FAILED) when the
     // 14s safety timeout elapses with STILL nothing painted (a truly blank basemap).
@@ -460,8 +463,11 @@ render_map() {
       // rather than failing — slow networks paint later; the 14s cap is the real floor.
     })();
   }
-  // CARTO Positron — keyless, muted basemap so route + pins read clearly (no API key).
-  var baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:20});
+  // OpenStreetMap standard tiles — genuinely keyless. CARTO Positron was dropped
+  // 2026-09-04: basemaps.cartocdn.com now stamps "API KEY REQUIRED" across every
+  // keyless tile, so every snapshotted map rendered with that watermark burned in.
+  // Desaturated via CSS below so the route line + numbered pins still read clearly.
+  var baseLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19});
   baseLayer.on('tileerror', function(){ tileFailed++; });   // counted (for diagnostics) but NOT fatal
   baseLayer.on('load', waitForVisibleTiles);
   // Safety cap (14s). On expiry: if ANY visible tile painted, capture it (degraded but

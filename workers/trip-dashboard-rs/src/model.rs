@@ -134,8 +134,19 @@ pub struct DomesticStay {
     pub destination: String,
 }
 
+/// One gallery image for a domestic accommodation candidate (child table
+/// `domestic_accommodation_images` — normalized, no JSON arrays in a column).
+/// `label` is a short caption like 「海景高級四人房」/「公區」.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct CandidateImage {
+    pub image_url: String,
+    pub label: String,
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DomesticCandidate {
+    /// Row id in domestic_accommodations — joins the gallery child rows.
+    pub id: String,
     pub hotel_name: String,
     pub room_type: String,
     pub price_twd: i64,
@@ -143,6 +154,10 @@ pub struct DomesticCandidate {
     pub sea_view: i64,
     pub breakfast_included: i64,
     pub image_url: String,
+    /// "查看更多房型" external link (official rooms page / OTA listing). Empty = no link.
+    pub link_url: String,
+    /// Extra per-room-type / area photos (one row per image, sorted).
+    pub images: Vec<CandidateImage>,
     pub source: String,
 }
 
@@ -213,6 +228,7 @@ pub fn assemble(
     domestic_rows: &[Row],
     candidate_rows: &[Row],
     p4_status_rows: &[Row],
+    candidate_image_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -286,18 +302,33 @@ pub fn assemble(
     // ---- domestic candidates (sea-view shortlist) from domestic_accommodations ----
     plan.candidates = candidate_rows
         .iter()
-        .map(|r| DomesticCandidate {
-            hotel_name: s(r, "hotel_name"),
-            room_type: s(r, "room_type"),
-            price_twd: i(r, "price_twd"),
-            currency: {
-                let c = s(r, "currency");
-                if c.is_empty() { "TWD".to_string() } else { c }
-            },
-            sea_view: i(r, "sea_view"),
-            breakfast_included: i(r, "breakfast_included"),
-            image_url: s(r, "image_url"),
-            source: s(r, "source"),
+        .map(|r| {
+            let id = s(r, "id");
+            // Gallery child rows for this accommodation, in sort_order.
+            let images = candidate_image_rows
+                .iter()
+                .filter(|g| s(g, "accommodation_id") == id)
+                .map(|g| CandidateImage {
+                    image_url: s(g, "image_url"),
+                    label: s(g, "label"),
+                })
+                .collect();
+            DomesticCandidate {
+                id,
+                hotel_name: s(r, "hotel_name"),
+                room_type: s(r, "room_type"),
+                price_twd: i(r, "price_twd"),
+                currency: {
+                    let c = s(r, "currency");
+                    if c.is_empty() { "TWD".to_string() } else { c }
+                },
+                sea_view: i(r, "sea_view"),
+                breakfast_included: i(r, "breakfast_included"),
+                image_url: s(r, "image_url"),
+                link_url: s(r, "booking_url"),
+                images,
+                source: s(r, "source"),
+            }
         })
         .collect();
     for d in day_rows {
@@ -883,6 +914,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
@@ -931,6 +963,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
@@ -955,6 +988,7 @@ mod tests {
         let plan = assemble(
             &plan_rows,
             &day_rows,
+            &[],
             &[],
             &[],
             &[],
@@ -1188,6 +1222,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         assert_eq!(plan.transit_hotel_station, "Asato Station");
         assert_eq!(plan.transit_hotel_station_zh, "安里站");
@@ -1214,6 +1249,7 @@ mod tests {
         ])];
         let plan = assemble(
             &plan_rows,
+            &[],
             &[],
             &[],
             &[],
@@ -1263,5 +1299,76 @@ mod tests {
             m.cost_estimate, 0,
             "an unmatched poi_id must not borrow the title-match price"
         );
+    }
+
+    // Candidate gallery child rows join by accommodation_id (not hotel name) and
+    // keep their sort_order; link_url flows through.
+    #[test]
+    fn assemble_attaches_candidate_gallery_by_id() {
+        let candidate_rows = vec![
+            row(&[
+                ("id", json!("acc_a")),
+                ("hotel_name", json!("海論")),
+                ("room_type", json!("海景雙人房")),
+                ("price_twd", json!("5200")),
+                ("booking_url", json!("https://example.com/rooms")),
+            ]),
+            row(&[
+                ("id", json!("acc_b")),
+                ("hotel_name", json!("CHLIV")),
+                ("room_type", json!("海景雙人房")),
+                ("price_twd", json!("7200")),
+            ]),
+        ];
+        let gallery_rows = vec![
+            row(&[
+                ("accommodation_id", json!("acc_a")),
+                ("image_url", json!("https://example.com/quad.webp")),
+                ("label", json!("海景高級四人房")),
+            ]),
+            row(&[
+                ("accommodation_id", json!("acc_a")),
+                ("image_url", json!("https://example.com/common.webp")),
+                ("label", json!("公區")),
+            ]),
+            row(&[
+                ("accommodation_id", json!("acc_b")),
+                ("image_url", json!("https://example.com/cafe.webp")),
+                ("label", json!("店內")),
+            ]),
+        ];
+        let plan = assemble(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &candidate_rows,
+            &[],
+            &gallery_rows,
+        );
+        assert_eq!(plan.candidates.len(), 2);
+        let a = &plan.candidates[0];
+        assert_eq!(a.id, "acc_a");
+        assert_eq!(a.link_url, "https://example.com/rooms");
+        assert_eq!(a.images.len(), 2);
+        assert_eq!(a.images[0].label, "海景高級四人房");
+        assert_eq!(a.images[1].image_url, "https://example.com/common.webp");
+        let b = &plan.candidates[1];
+        assert_eq!(b.images.len(), 1);
+        assert_eq!(b.images[0].label, "店內");
+        assert!(b.link_url.is_empty());
     }
 }

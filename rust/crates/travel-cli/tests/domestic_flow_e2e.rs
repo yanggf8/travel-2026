@@ -29,7 +29,7 @@ fn ensure_domestic_seed() {
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
          ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_chliv_seaview_7200','jiufen','CHLIV','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
          ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
     );
 }
@@ -51,7 +51,14 @@ fn domestic_jiufen_flow_query_then_book() {
     teardown_plan(&plan, dest);
     let _g = Guard::new({
         let (plan, dest) = (plan.clone(), dest.to_string());
-        move || teardown_plan(&plan, &dest)
+        move || {
+            // The test-only third candidate is NOT plan-keyed, so teardown_plan
+            // does not cover it — delete it explicitly or it leaks into shared Turso.
+            let _ = common::db_exec_teardown(
+                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+            );
+            teardown_plan(&plan, &dest);
+        }
     });
 
     // Re-ensure after pre-clean (destination_config is not plan-keyed; domestic rows survive teardown but keep idempotent).
@@ -139,7 +146,7 @@ fn domestic_jiufen_flow_query_then_book() {
         "query-accommodation should succeed; stdout={stdout} stderr={stderr}"
     );
     assert!(stdout.contains("海論"), "should contain 海論: {stdout}");
-    assert!(stdout.contains("CHLIV"), "should contain CHLIV: {stdout}");
+    assert!(stdout.contains("ZZ測試海景館"), "should contain the test-only third row: {stdout}");
     assert!(stdout.contains("山城逸境"), "should contain 山城逸境: {stdout}");
 
     // 9. set-accommodation

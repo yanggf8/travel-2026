@@ -26,7 +26,7 @@ pub fn page(title: &str, body: &str, lang: &str) -> String {
     )
 }
 
-/// Render a full plan page: booking summary, plan map, then each day card.
+/// Render a full plan page: plan overview map, booking summary, then each day card.
 /// `token` is the access token the page was loaded with — threaded into the
 /// auth-gated voucher link so a click carries the same token (else 403).
 /// `owner_chrome` is the logged-in owner top bar (copy share link); empty for viewers.
@@ -44,8 +44,10 @@ pub fn render_plan(
     }
     // Non-meal pending-booking alerts BEFORE the summary (mirror render.ts:1388).
     body.push_str(&alerts::render_pending_alerts(plan, lang, false));
-    body.push_str(&summary::render(plan, lang, token));
+    // Plan overview map ABOVE the booking summary (its own frame, never inside
+    // the summary's dashed box) — user visibility request.
     body.push_str(&map::plan_map_slot(&plan.plan_id, map_status.plan, lang));
+    body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
         let has_map = map_status.days.get(&d.day_number).copied().unwrap_or(false);
         body.push_str(&day::render(d, &plan.plan_id, lang, has_map));
@@ -175,5 +177,15 @@ mod tests {
         assert!(html.contains("booking-summary"));
         assert!(html.contains("/map/okinawa-2026/plan.png"));
         assert!(html.contains("Day 1"));
+        // Plan map renders ABOVE the booking summary (its own frame, not in the
+        // summary's dashed box).
+        let map_pos = html.find("planmap").expect("planmap img missing");
+        let summary_pos = html.find("booking-summary").expect("summary missing");
+        assert!(
+            map_pos < summary_pos,
+            "plan map must render before the booking summary"
+        );
+        // Summary carries the dashed-frame class.
+        assert!(html.contains("booking-summary summary-box"));
     }
 }

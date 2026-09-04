@@ -124,6 +124,19 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 ./bin/travel query-omiyage --slug <slug>    # read-only plain-text view of sourced omiyage for a destination, grouped by category then item. Prints item provenance once + per-seller POI (title/area/station/address/hours) + location provenance. Nullable fields render as `—`. Fail-loud: unknown dest vs empty (no rows) vs corrupt orphan location (poi_id with no destination_pois row). GLOBAL/slug-keyed — NO --plan-id.
 ./bin/travel omiyage-worklist --slug <slug>    # READ-ONLY omiyage research worklist — lists the destination's omiyage-tagged POIs, prints their notes VERBATIM as UNVERIFIED hints (not facts), an already-sourced count per POI, a VERIFY-BEFORE-ADDING checklist, and a filled add-omiyage template (slug/poi filled; item/URL/confidence left as placeholders). WRITES NOTHING — the agent gwebcdb-verifies each candidate's item page + seller floor-guide, then persists via add-omiyage; unverifiable candidates are left out (honest gap). Fail-loud: unknown dest / no omiyage-tagged POI. GLOBAL/slug-keyed — NO --plan-id. This is a destination CATALOG, not a purchase schedule (no plan/day/timing); WHEN/WHERE to buy is a per-plan itinerary-activity decision (food/short-shelf-life → departure-day route or airport seller POI). Stage 3 (`/stage3-expand-itinerary`) runs this automatically, right after the skeleton (before assigning activities).
 ./bin/travel check-maps-fresh [--plan-id <id>]    # lint: flag map PNGs that are stale vs the latest itinerary edit (advisory; never fails)
+
+# Domestic stay reference data (Taiwan; domestic_accommodations table — GLOBAL/slug-keyed, NO --plan-id, NO audit triad).
+# Booking a stay for a plan is the separate audited pair: set-accommodation (P4 -> booked) / clear-accommodation (P4 -> selecting).
+./bin/travel list-accommodations --dest <slug> [--limit N]    # READ-ONLY plain-text table of every domestic_accommodations row for the destination (id/hotel/room/price/sea-view/breakfast/image?/booking?/updated_at). Fail-loud on an unknown destination slug.
+./bin/travel add-accommodation --dest <slug> --hotel <name> --room-type <type> --price <twd> [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast]    # add one row. Idempotent — the id is a deterministic FNV-1a hash of dest|hotel|room_type|price, so re-adding the same stay is a no-op ("already exists"), NOT an error.
+./bin/travel update-accommodation --id <id> [--image-url <url>] [--booking-url <url>]    # set image_url / booking_url (at least one required; bumps updated_at). Fail-loud on an unknown id.
+./bin/travel delete-accommodation --id <id>    # remove one row by id. Fail-loud on an unknown id.
+
+# Candidate gallery (domestic_accommodation_images — one ROW per photo, normalized child table; never a JSON array).
+# The dashboard renders these as labeled thumbnails under each candidate's hero image, so a candidate can show one shot per room type.
+./bin/travel add-accommodation-image --id <accommodation_id> --url <image_url> [--label <text>] [--sort N]    # add one photo. Appends by default (MAX(sort_order)+1); PK is (accommodation_id, image_url) so re-adding the same photo is a no-op ("already exists"), NOT an error. Fail-loud on an unknown accommodation id.
+./bin/travel list-accommodation-images --dest <slug> | --id <accommodation_id>    # READ-ONLY table (hotel/id/sort/label/url) + per-hotel photo counts. This is the publish check for "does every candidate have enough photos".
+./bin/travel delete-accommodation-image --id <accommodation_id> (--url <image_url> | --all)    # remove one photo, or clear the whole gallery. Fail-loud when nothing matched.
 ```
 Only activities linked to a POI with lat/lon appear on the maps; non-place lines (flights, airport steps, bare meals) are excluded from both the maps and the per-stop Google-Maps links.
 
