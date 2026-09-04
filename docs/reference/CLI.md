@@ -129,7 +129,7 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 # Booking a stay for a plan is the separate audited pair: set-accommodation (P4 -> booked) / clear-accommodation (P4 -> selecting).
 ./bin/travel list-accommodations --dest <slug> [--limit N]    # READ-ONLY plain-text table of every domestic_accommodations row for the destination (id/hotel/room/price/sea-view/breakfast/image?/booking?/updated_at). Fail-loud on an unknown destination slug.
 ./bin/travel add-accommodation --dest <slug> --hotel <name> --room-type <type> --price <twd> [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast]    # add one row. Idempotent — the id is a deterministic FNV-1a hash of dest|hotel|room_type|price, so re-adding the same stay is a no-op ("already exists"), NOT an error.
-./bin/travel update-accommodation --id <id> [--image-url <url>] [--booking-url <url>]    # set image_url / booking_url (at least one required; bumps updated_at). Fail-loud on an unknown id.
+./bin/travel update-accommodation --id <id> [--image-url <url>] [--booking-url <url>] [--price <twd>] [--room-type <type>] [--breakfast yes|no] [--room-size <sqm>] [--price-source <name>] [--price-checked <YYYY-MM-DD>] [--free-cancel-until <YYYY-MM-DD>] [--rooms-left <n>]    # update any subset (at least one required; bumps updated_at). A re-checked rate is an UPDATE, not a new row — the id stays. --price-source with no --price-checked stamps TODAY, because the dashboard publishes that date and an undated rate is indistinguishable from a made-up one. Fail-loud on an unknown id.
 ./bin/travel delete-accommodation --id <id>    # remove one row by id. Fail-loud on an unknown id.
 
 # Candidate gallery (domestic_accommodation_images — one ROW per photo, normalized child table; never a JSON array).
@@ -137,6 +137,11 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 ./bin/travel add-accommodation-image --id <accommodation_id> --url <image_url> [--label <text>] [--sort N]    # add one photo. Appends by default (MAX(sort_order)+1); PK is (accommodation_id, image_url) so re-adding the same photo is a no-op ("already exists"), NOT an error. Fail-loud on an unknown accommodation id.
 ./bin/travel list-accommodation-images --dest <slug> | --id <accommodation_id>    # READ-ONLY table (hotel/id/sort/label/url) + per-hotel photo counts. This is the publish check for "does every candidate have enough photos".
 ./bin/travel delete-accommodation-image --id <accommodation_id> (--url <image_url> | --all)    # remove one photo, or clear the whole gallery. Fail-loud when nothing matched.
+
+# Guest ratings (domestic_accommodation_ratings — one ROW per review SOURCE).
+# Kept per-source because Booking.com scores out of 10 and Google out of 5; averaging them would publish a number nobody gave.
+./bin/travel set-accommodation-rating --id <accommodation_id> --source <name> --score <n> [--scale <n>] [--reviews <n>]    # upsert one source's rating (re-running a source overwrites it and refreshes checked_at). --scale defaults to 10 for booking/agoda and 5 for google; any other source must state it. Rejects a score above its scale.
+./bin/travel set-accommodation-rating --id <accommodation_id> --source <name> --clear    # drop one source's rating. Fail-loud when there is none.
 ```
 Only activities linked to a POI with lat/lon appear on the maps; non-place lines (flights, airport steps, bare meals) are excluded from both the maps and the per-stop Google-Maps links.
 

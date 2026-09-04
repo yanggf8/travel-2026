@@ -1,6 +1,6 @@
 //! clear-accommodation integration test (real Turso, Guard panic-safe).
 //!
-//! Verifies: set-accommodation booked -> clear-accommodation --hotel 海論
+//! Verifies: set-accommodation booked -> clear-accommodation --hotel <fixture>
 //! removes bookings_current row and reverts P4 to selecting.
 
 mod common;
@@ -16,19 +16,33 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn ensure_domestic_seed() {
-    let _ = db_exec(
+/// Seed three per-run fixture stays and return their hotel names.
+///
+/// Ids and names carry `n` because the tests in this file run in PARALLEL: they
+/// used to share one fixture id, so the first test to finish ran its Guard and
+/// deleted the rows the others were still reading. Names stay short — the CLI
+/// table truncates hotel_name at 16 chars, and a truncated name fails `contains`.
+fn ensure_domestic_seed(n: u128) -> [String; 3] {
+    let sfx = n % 100_000_000;
+    let names = [
+        format!("ZZ海景一{sfx:08}"),
+        format!("ZZ海景二{sfx:08}"),
+        format!("ZZ海景三{sfx:08}"),
+    ];
+    let _ = db_exec(&format!(
         "INSERT OR IGNORE INTO domestic_accommodations \
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
-         ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
-    );
+         ('zz_test_{n}_5200','jiufen','{}','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_7200','jiufen','{}','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_4200','jiufen','{}','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+        names[0], names[1], names[2]
+    ));
     let _ = db_exec(
-        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin, lat, lon) \
-         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan',25.109,121.844)",
+        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
+         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan')",
     );
+    names
 }
 
 fn process_status(plan: &str, dest: &str) -> Option<String> {
@@ -50,8 +64,6 @@ fn clear_accommodation_removes_booking_and_reverts_p4() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("test-clear-acc-{n}");
     let dest = "jiufen";
@@ -62,14 +74,16 @@ fn clear_accommodation_removes_booking_and_reverts_p4() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
     common::seed_plan(&plan, dest, 1);
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
 
     // Clean any prior bookings for this plan
     let _ = db_exec(&format!("DELETE FROM bookings_current WHERE trip_id = '{plan}'"));
@@ -87,7 +101,7 @@ fn clear_accommodation_removes_booking_and_reverts_p4() {
     let (ok, stdout, stderr) = run(&[
         "set-accommodation",
         "--hotel",
-        "海論",
+        fx[0].as_str(),
         "--room-type",
         "海景雙人房",
         "--price",
@@ -125,7 +139,7 @@ fn clear_accommodation_removes_booking_and_reverts_p4() {
     let (ok, stdout, stderr) = run(&[
         "clear-accommodation",
         "--hotel",
-        "海論",
+        fx[0].as_str(),
         "--dest",
         dest,
         "--plan-id",

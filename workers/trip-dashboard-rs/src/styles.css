@@ -232,6 +232,41 @@ h1 {
   color: var(--text);
   padding: 0 10px;
 }
+/* Room size sits inline with the price, visibly secondary to it. */
+.candidate-size {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+/* Guest ratings — one chip per review source, each carrying its own scale. */
+.candidate-ratings {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 10px 0;
+}
+.candidate-rating {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+}
+.candidate-rating b {
+  font-size: 12px;
+  color: var(--text);
+}
+/* Price provenance: source, the date it was read, stock, cancellation deadline.
+   Deliberately quiet — it qualifies the price rather than competing with it. */
+.candidate-note {
+  padding: 4px 10px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
 .candidate-tags {
   display: flex;
   gap: 6px;

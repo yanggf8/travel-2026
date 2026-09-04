@@ -143,6 +143,17 @@ pub struct CandidateImage {
     pub label: String,
 }
 
+/// One review source's guest rating (child table `domestic_accommodation_ratings`).
+/// The scale travels with the score because Booking.com is /10 and Google is /5 —
+/// there is no single number that means both.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct CandidateRating {
+    pub source: String,
+    pub score: f64,
+    pub scale: f64,
+    pub review_count: i64,
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DomesticCandidate {
     /// Row id in domestic_accommodations — joins the gallery child rows.
@@ -158,6 +169,15 @@ pub struct DomesticCandidate {
     pub link_url: String,
     /// Extra per-room-type / area photos (one row per image, sorted).
     pub images: Vec<CandidateImage>,
+    /// Guest ratings, one per review source.
+    pub ratings: Vec<CandidateRating>,
+    /// Decision facts. 0 / empty = not recorded, so the card omits the line.
+    pub room_size_sqm: i64,
+    pub rooms_left: i64,
+    pub free_cancel_until: String,
+    pub price_source: String,
+    /// Date the rate was read — rendered so a stale published price is visible as stale.
+    pub price_checked_at: String,
     pub source: String,
 }
 
@@ -229,6 +249,7 @@ pub fn assemble(
     candidate_rows: &[Row],
     p4_status_rows: &[Row],
     candidate_image_rows: &[Row],
+    candidate_rating_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -313,6 +334,16 @@ pub fn assemble(
                     label: s(g, "label"),
                 })
                 .collect();
+            let ratings = candidate_rating_rows
+                .iter()
+                .filter(|t| s(t, "accommodation_id") == id)
+                .map(|t| CandidateRating {
+                    source: s(t, "source"),
+                    score: f(t, "score").unwrap_or(0.0),
+                    scale: f(t, "scale").unwrap_or(0.0),
+                    review_count: i(t, "review_count"),
+                })
+                .collect();
             DomesticCandidate {
                 id,
                 hotel_name: s(r, "hotel_name"),
@@ -327,6 +358,12 @@ pub fn assemble(
                 image_url: s(r, "image_url"),
                 link_url: s(r, "booking_url"),
                 images,
+                ratings,
+                room_size_sqm: i(r, "room_size_sqm"),
+                rooms_left: i(r, "rooms_left"),
+                free_cancel_until: s(r, "free_cancel_until"),
+                price_source: s(r, "price_source"),
+                price_checked_at: s(r, "price_checked_at"),
                 source: s(r, "source"),
             }
         })
@@ -915,6 +952,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
@@ -964,6 +1002,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
@@ -988,6 +1027,7 @@ mod tests {
         let plan = assemble(
             &plan_rows,
             &day_rows,
+            &[],
             &[],
             &[],
             &[],
@@ -1223,6 +1263,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         assert_eq!(plan.transit_hotel_station, "Asato Station");
         assert_eq!(plan.transit_hotel_station_zh, "安里站");
@@ -1249,6 +1290,7 @@ mod tests {
         ])];
         let plan = assemble(
             &plan_rows,
+            &[],
             &[],
             &[],
             &[],
@@ -1358,6 +1400,7 @@ mod tests {
             &candidate_rows,
             &[],
             &gallery_rows,
+            &[],
         );
         assert_eq!(plan.candidates.len(), 2);
         let a = &plan.candidates[0];

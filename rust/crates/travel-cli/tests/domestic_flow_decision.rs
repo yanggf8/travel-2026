@@ -18,23 +18,33 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn ensure_domestic_seed() {
-    let _ = db_exec(
-        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin, lat, lon) \
-         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan',25.109,121.844)",
-    );
-    let _ = db_exec(
-        "UPDATE destination_config SET lat = 25.109, lon = 121.844 \
-         WHERE slug = 'jiufen' AND (lat IS NULL OR lon IS NULL)",
-    );
-    let _ = db_exec(
+/// Seed three per-run fixture stays and return their hotel names.
+///
+/// Ids and names carry `n` because the tests in this file run in PARALLEL: they
+/// used to share one fixture id, so the first test to finish ran its Guard and
+/// deleted the rows the others were still reading. Names stay short — the CLI
+/// table truncates hotel_name at 16 chars, and a truncated name fails `contains`.
+fn ensure_domestic_seed(n: u128) -> [String; 3] {
+    let sfx = n % 100_000_000;
+    let names = [
+        format!("ZZ海景一{sfx:08}"),
+        format!("ZZ海景二{sfx:08}"),
+        format!("ZZ海景三{sfx:08}"),
+    ];
+    let _ = db_exec(&format!(
         "INSERT OR IGNORE INTO domestic_accommodations \
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
-         ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+         ('zz_test_{n}_5200','jiufen','{}','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_7200','jiufen','{}','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_4200','jiufen','{}','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+        names[0], names[1], names[2]
+    ));
+    let _ = db_exec(
+        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
+         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan')",
     );
+    names
 }
 
 fn process_status(plan: &str, dest: &str, pid: &str) -> Option<String> {
@@ -56,8 +66,6 @@ fn domestic_defer_auto_advances_p3_p34_p4_to_skipped() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("test-domestic-defer-{n}");
     let dest = "jiufen";
@@ -68,13 +76,15 @@ fn domestic_defer_auto_advances_p3_p34_p4_to_skipped() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
-    ensure_domestic_seed();
+    let _fx = ensure_domestic_seed(n);
 
     // create-plan with jiufen, 2026-11-01 -> 2026-11-02, airport TPE
     let (ok, stdout, stderr) = run(&[
@@ -145,8 +155,6 @@ fn domestic_defer_preserves_booked_p4() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("test-domestic-defer-booked-{n}");
     let dest = "jiufen";
@@ -157,13 +165,15 @@ fn domestic_defer_preserves_booked_p4() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
 
     let (ok, stdout, stderr) = run(&[
         "create-plan",
@@ -183,11 +193,11 @@ fn domestic_defer_preserves_booked_p4() {
     }
     assert!(ok, "create-plan should succeed; stdout={stdout} stderr={stderr}");
 
-    // Book accommodation first: set-accommodation 海論
+    // Book accommodation first: set-accommodation on the fixture stay
     let (ok, stdout, stderr) = run(&[
         "set-accommodation",
         "--hotel",
-        "海論",
+        fx[0].as_str(),
         "--room-type",
         "海景雙人房",
         "--price",
@@ -264,6 +274,7 @@ fn domestic_defer_preserves_booked_p4() {
 
     // cleanup extra payload rows (teardown_plan already covers plan_id tables, but ensure legacy bookings cleaned if needed)
     let _ = db_exec(&format!(
-        "DELETE FROM bookings WHERE destination = '{dest}' AND hotel_name LIKE '%海論%' AND offer_id LIKE 'domestic:{plan}:%'"
+        "DELETE FROM bookings WHERE destination = '{dest}' AND hotel_name LIKE '%{}%' AND offer_id LIKE 'domestic:{plan}:%'",
+        fx[0]
     ));
 }

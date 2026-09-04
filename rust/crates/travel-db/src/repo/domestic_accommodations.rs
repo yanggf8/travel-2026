@@ -20,6 +20,13 @@ pub struct DomesticAccommodationRow {
     pub source: Option<String>,
     pub image_url: Option<String>,
     pub booking_url: Option<String>,
+    /// Decision facts shown next to the price (all optional).
+    pub room_size_sqm: Option<i64>,
+    pub price_source: Option<String>,
+    /// When the rate was read. A published price with no date is a lie waiting to happen.
+    pub price_checked_at: Option<String>,
+    pub free_cancel_until: Option<String>,
+    pub rooms_left: Option<i64>,
     pub updated_at: String,
 }
 
@@ -90,7 +97,7 @@ pub async fn query(
 ) -> Result<Vec<DomesticAccommodationRow>, String> {
     let built = filter.build();
     let sql = format!(
-        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, updated_at \
+        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, updated_at \
          FROM domestic_accommodations {} ORDER BY price_twd ASC, hotel_name ASC LIMIT {limit}",
         built.clause
     );
@@ -117,7 +124,12 @@ pub async fn query(
             source: row.get(9).ok(),
             image_url: row.get(10).ok(),
             booking_url: row.get(11).ok(),
-            updated_at: row.get(12).unwrap_or_default(),
+            room_size_sqm: row.get(12).ok(),
+            price_source: row.get(13).ok(),
+            price_checked_at: row.get(14).ok(),
+            free_cancel_until: row.get(15).ok(),
+            rooms_left: row.get(16).ok(),
+            updated_at: row.get(17).unwrap_or_default(),
         });
     }
     Ok(out)
@@ -164,42 +176,34 @@ pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result
     .map_err(|e| format!("domestic_accommodations INSERT failed: {e}"))
 }
 
-/// Build the UPDATE for the mutable fields (pure — unit-testable).
-/// `image_url` / `booking_url` are `Some` only when the caller sets them.
-/// Caller guarantees at least one is `Some`; `updated_at` always bumps.
-pub fn build_update(
-    id: &str,
-    image_url: Option<&str>,
-    booking_url: Option<&str>,
-) -> (String, Vec<libsql::Value>) {
-    let mut sets: Vec<String> = Vec::new();
+/// Build the UPDATE for the caller-supplied columns (pure — unit-testable).
+/// `sets` is an ordered list of `(column, value)`; the caller guarantees the column
+/// names are literals it owns (never user input), so only the VALUES are bound.
+/// `updated_at` always bumps. Caller guarantees `sets` is non-empty.
+pub fn build_update(id: &str, sets: &[(&str, libsql::Value)]) -> (String, Vec<libsql::Value>) {
+    let mut frags: Vec<String> = Vec::new();
     let mut params: Vec<libsql::Value> = Vec::new();
-    if let Some(u) = image_url {
-        params.push(libsql::Value::Text(u.to_string()));
-        sets.push(format!("image_url = ?{}", params.len()));
+    for (col, val) in sets {
+        params.push(val.clone());
+        frags.push(format!("{col} = ?{}", params.len()));
     }
-    if let Some(u) = booking_url {
-        params.push(libsql::Value::Text(u.to_string()));
-        sets.push(format!("booking_url = ?{}", params.len()));
-    }
-    sets.push("updated_at = datetime('now')".to_string());
+    frags.push("updated_at = datetime('now')".to_string());
     params.push(libsql::Value::Text(id.to_string()));
     let sql = format!(
         "UPDATE domestic_accommodations SET {} WHERE id = ?{}",
-        sets.join(", "),
+        frags.join(", "),
         params.len()
     );
     (sql, params)
 }
 
-/// UPDATE image_url/booking_url by id. Returns affected rows (0 = unknown id).
+/// UPDATE the given columns by id. Returns affected rows (0 = unknown id).
 pub async fn update_fields(
     conn: &Connection,
     id: &str,
-    image_url: Option<&str>,
-    booking_url: Option<&str>,
+    sets: &[(&str, libsql::Value)],
 ) -> Result<u64, String> {
-    let (sql, params) = build_update(id, image_url, booking_url);
+    let (sql, params) = build_update(id, sets);
     conn.execute(&sql, params)
         .await
         .map_err(|e| format!("domestic_accommodations UPDATE failed: {e}"))
@@ -255,9 +259,16 @@ mod tests {
         assert!(matches!(&w.params[0], libsql::Value::Text(s) if s == "%a'b%"));
     }
 
+    fn txt(v: &str) -> libsql::Value {
+        libsql::Value::Text(v.to_string())
+    }
+
     #[test]
-    fn build_update_both_fields() {
-        let (sql, params) = build_update("id1", Some("https://img"), Some("https://book"));
+    fn build_update_two_columns() {
+        let (sql, params) = build_update(
+            "id1",
+            &[("image_url", txt("https://img")), ("booking_url", txt("https://book"))],
+        );
         assert_eq!(
             sql,
             "UPDATE domestic_accommodations SET image_url = ?1, booking_url = ?2, updated_at = datetime('now') WHERE id = ?3"
@@ -267,8 +278,8 @@ mod tests {
     }
 
     #[test]
-    fn build_update_booking_only() {
-        let (sql, params) = build_update("id2", None, Some("https://book"));
+    fn build_update_single_column() {
+        let (sql, params) = build_update("id2", &[("booking_url", txt("https://book"))]);
         assert_eq!(
             sql,
             "UPDATE domestic_accommodations SET booking_url = ?1, updated_at = datetime('now') WHERE id = ?2"
@@ -277,12 +288,20 @@ mod tests {
     }
 
     #[test]
-    fn build_update_image_only() {
-        let (sql, params) = build_update("id3", Some("https://img"), None);
-        assert_eq!(
-            sql,
-            "UPDATE domestic_accommodations SET image_url = ?1, updated_at = datetime('now') WHERE id = ?2"
+    fn build_update_binds_non_text_values_in_order() {
+        let (sql, params) = build_update(
+            "id3",
+            &[
+                ("room_size_sqm", libsql::Value::Integer(18)),
+                ("rooms_left", libsql::Value::Integer(1)),
+                ("price_source", txt("Booking.com")),
+            ],
         );
-        assert_eq!(params.len(), 2);
+        assert!(sql.starts_with(
+            "UPDATE domestic_accommodations SET room_size_sqm = ?1, rooms_left = ?2, price_source = ?3, updated_at = datetime('now')"
+        ));
+        assert!(matches!(params[0], libsql::Value::Integer(18)));
+        assert!(matches!(&params[2], libsql::Value::Text(s) if s == "Booking.com"));
+        assert!(matches!(&params[3], libsql::Value::Text(s) if s == "id3"));
     }
 }

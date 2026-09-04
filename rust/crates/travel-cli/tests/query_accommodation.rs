@@ -14,19 +14,33 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn ensure_domestic_seed() {
-    let _ = db_exec(
+/// Seed three per-run fixture stays and return their hotel names.
+///
+/// Ids and names carry `n` because the tests in this file run in PARALLEL: they
+/// used to share one fixture id, so the first test to finish ran its Guard and
+/// deleted the rows the others were still reading. Names stay short — the CLI
+/// table truncates hotel_name at 16 chars, and a truncated name fails `contains`.
+fn ensure_domestic_seed(n: u128) -> [String; 3] {
+    let sfx = n % 100_000_000;
+    let names = [
+        format!("ZZ海景一{sfx:08}"),
+        format!("ZZ海景二{sfx:08}"),
+        format!("ZZ海景三{sfx:08}"),
+    ];
+    let _ = db_exec(&format!(
         "INSERT OR IGNORE INTO domestic_accommodations \
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
-         ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
-    );
+         ('zz_test_{n}_5200','jiufen','{}','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_7200','jiufen','{}','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_4200','jiufen','{}','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+        names[0], names[1], names[2]
+    ));
     let _ = db_exec(
         "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
          VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan')",
     );
+    names
 }
 
 #[test]
@@ -36,8 +50,6 @@ fn query_accommodation_shows_three_jiufen_hotels() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("zz-accom-{n}");
     let dest = "jiufen";
@@ -48,8 +60,10 @@ fn query_accommodation_shows_three_jiufen_hotels() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
@@ -58,7 +72,7 @@ fn query_accommodation_shows_three_jiufen_hotels() {
     common::seed_plan(&plan, dest, 1);
 
     // Re-ensure seed after Guard (teardown may not delete domestic rows but destination-config is not plan-keyed; re-ensure)
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
 
     let (ok, stdout, stderr) = run(&[
         "query-accommodation",
@@ -74,9 +88,9 @@ fn query_accommodation_shows_three_jiufen_hotels() {
         return;
     }
     assert!(ok, "query-accommodation should succeed; stdout={stdout} stderr={stderr}");
-    assert!(stdout.contains("海論"), "should contain 海論: {stdout}");
-    assert!(stdout.contains("ZZ測試海景館"), "should contain the test-only third row: {stdout}");
-    assert!(stdout.contains("山城逸境"), "should contain 山城逸境: {stdout}");
+    assert!(stdout.contains(&fx[0]), "should contain fixture 1: {stdout}");
+    assert!(stdout.contains(&fx[1]), "should contain the test-only third row: {stdout}");
+    assert!(stdout.contains(&fx[2]), "should contain fixture 3: {stdout}");
     // price/breakfast columns present
     assert!(stdout.contains("5200") && stdout.contains("7200") && stdout.contains("4200"), "prices: {stdout}");
     // header columns per spec
@@ -90,8 +104,6 @@ fn query_accommodation_sea_view_filter() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("zz-accom-sv-{n}");
     let dest = "jiufen";
@@ -100,15 +112,17 @@ fn query_accommodation_sea_view_filter() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
     teardown_plan(&plan, dest);
     common::seed_plan(&plan, dest, 1);
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
 
     // All three seeded are sea_view=1; filtering should still return them.
     let (ok, stdout, stderr) = run(&[
@@ -126,7 +140,7 @@ fn query_accommodation_sea_view_filter() {
         return;
     }
     assert!(ok, "sea-view query should succeed; stdout={stdout} stderr={stderr}");
-    assert!(stdout.contains("海論") && stdout.contains("ZZ測試海景館") && stdout.contains("山城逸境"), "sea_view filter: {stdout}");
+    assert!(stdout.contains(&fx[0]) && stdout.contains(&fx[1]) && stdout.contains(&fx[2]), "sea_view filter: {stdout}");
 
     // Hotel substring filter
     let (ok2, stdout2, stderr2) = run(&[
@@ -136,7 +150,7 @@ fn query_accommodation_sea_view_filter() {
         "--date",
         "2026-09-03",
         "--hotel",
-        "海論",
+        fx[0].as_str(),
         "--plan-id",
         &plan,
     ]);
@@ -145,8 +159,8 @@ fn query_accommodation_sea_view_filter() {
         return;
     }
     assert!(ok2, "hotel filter should succeed; stdout={stdout2} stderr={stderr2}");
-    assert!(stdout2.contains("海論"), "hotel filter contains match: {stdout2}");
-    assert!(!stdout2.contains("ZZ測試海景館"), "hotel filter excludes other: {stdout2}");
+    assert!(stdout2.contains(&fx[0]), "hotel filter contains match: {stdout2}");
+    assert!(!stdout2.contains(&fx[1]), "hotel filter excludes other: {stdout2}");
 }
 
 #[test]

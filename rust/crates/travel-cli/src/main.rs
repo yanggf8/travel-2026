@@ -106,6 +106,7 @@ mod delete_accommodation; // delete-accommodation — remove a domestic_accommod
 mod add_accommodation_image;    // add-accommodation-image — gallery photo for a domestic stay (slug-keyed)
 mod list_accommodation_images;  // list-accommodation-images — gallery photos + per-hotel counts (read-only)
 mod delete_accommodation_image; // delete-accommodation-image — remove one/all gallery photos (slug-keyed)
+mod set_accommodation_rating;   // set-accommodation-rating — per-source guest rating (slug-keyed)
 
 use std::{env, io::Read, process};
 
@@ -442,6 +443,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "delete-accommodation-image" => {
             delete_accommodation_image::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "set-accommodation-rating" => {
+            set_accommodation_rating::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "set-process-status" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
@@ -968,6 +972,7 @@ VALIDATE / CHECKS\n\
   add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
   add-accommodation | update-accommodation --id <id> [--image-url u] [--booking-url u] | delete-accommodation --id <id>  (domestic stay reference data; no --plan-id)\n\
   add-accommodation-image --id <id> --url <u> [--label t] | delete-accommodation-image --id <id> (--url u | --all)  (candidate gallery; no --plan-id)\n\
+  set-accommodation-rating --id <id> --source <s> --score <n> [--reviews N] [--clear]  (per-source guest rating; no --plan-id)\n\
   run-status | run-list | resolve-plan [--plan-id|--travel-date ...]\n\
 \n\
 COMPARE / UTIL\n\

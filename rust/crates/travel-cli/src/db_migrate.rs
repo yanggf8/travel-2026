@@ -1533,6 +1533,35 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "ALTER TABLE domestic_accommodations ADD COLUMN booking_url TEXT;",
     )
     .await;
+    // Decision facts the dashboard shows next to the price. All nullable: a stay
+    // researched only from a hotel's own site legitimately has none of them.
+    // `price_checked_at` is what keeps the published page honest — a room rate and
+    // a "rooms left" count go stale, so the card renders the date they were read.
+    for ddl in [
+        "ALTER TABLE domestic_accommodations ADD COLUMN room_size_sqm INTEGER;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN price_source TEXT;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN price_checked_at DATETIME;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN free_cancel_until TEXT;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN rooms_left INTEGER;",
+    ] {
+        add_column(&conn, ddl).await;
+    }
+    // Guest ratings: one row per REVIEW SOURCE, because the scales differ
+    // (Booking.com is /10, Google is /5) and averaging them would invent a number.
+    // Normalized child table — never a "9.0/10 (266)" string in one column.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS domestic_accommodation_ratings (
+  accommodation_id TEXT NOT NULL REFERENCES domestic_accommodations(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  score REAL NOT NULL,
+  scale REAL NOT NULL,
+  review_count INTEGER,
+  checked_at DATETIME NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (accommodation_id, source)
+);"#,
+    )
+    .await;
     // `jiufen` must exist in destination_config so resolve_active_destination (and
     // the slug-keyed accommodation commands) can validate against it — a destination
     // REGISTRATION, not trip content.

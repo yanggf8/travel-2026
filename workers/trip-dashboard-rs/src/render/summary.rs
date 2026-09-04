@@ -129,6 +129,98 @@ fn render_notes(notes: &str) -> String {
     h
 }
 
+/// Guest-rating chips, one per review source. Each keeps its own scale because
+/// Booking.com scores out of 10 and Google out of 5 — normalizing them would
+/// publish a number nobody actually gave.
+fn ratings_row(ratings: &[crate::model::CandidateRating], lang: &str) -> String {
+    if ratings.is_empty() {
+        return String::new();
+    }
+    let mut h = String::from("<div class=\"candidate-ratings\">");
+    for r in ratings {
+        if r.scale <= 0.0 {
+            continue;
+        }
+        let count = if r.review_count > 0 {
+            let n = group_thousands(r.review_count);
+            if lang == "en" {
+                format!(" · {n} reviews")
+            } else {
+                format!(" · {n} 則")
+            }
+        } else {
+            String::new()
+        };
+        h.push_str(&format!(
+            "<span class=\"candidate-rating\"><b>{}</b>/{} {}{}</span>",
+            esc(&trim_num(r.score)),
+            esc(&trim_num(r.scale)),
+            esc(&r.source),
+            esc(&count)
+        ));
+    }
+    h.push_str("</div>");
+    h
+}
+
+/// "Booking.com 房價 · 2026-09-04 查 · 剩 1 間 · 9/28 前免費取消".
+/// Every part is optional; an empty result renders nothing.
+fn price_note(c: &crate::model::DomesticCandidate, lang: &str) -> String {
+    let en = lang == "en";
+    let mut parts: Vec<String> = Vec::new();
+    if !c.price_source.is_empty() {
+        parts.push(if en {
+            format!("{} rate", c.price_source)
+        } else {
+            format!("{} 房價", c.price_source)
+        });
+    }
+    if !c.price_checked_at.is_empty() {
+        let d = date_only(&c.price_checked_at);
+        parts.push(if en {
+            format!("checked {d}")
+        } else {
+            format!("{d} 查")
+        });
+    }
+    if c.rooms_left > 0 {
+        parts.push(if en {
+            format!("{} left", c.rooms_left)
+        } else {
+            format!("剩 {} 間", c.rooms_left)
+        });
+    }
+    if !c.free_cancel_until.is_empty() {
+        let d = date_only(&c.free_cancel_until);
+        parts.push(if en {
+            format!("free cancellation until {d}")
+        } else {
+            format!("{d} 前免費取消")
+        });
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<div class=\"candidate-note\">{}</div>",
+        esc(&parts.join(" · "))
+    )
+}
+
+/// `2026-09-04 01:51:21` -> `2026-09-04`. Leaves an already-bare date alone.
+fn date_only(s: &str) -> &str {
+    s.split_whitespace().next().unwrap_or(s)
+}
+
+/// `9` not `9.0`, but `4.6` stays `4.6`.
+fn trim_num(v: f64) -> String {
+    if (v - v.round()).abs() < f64::EPSILON {
+        format!("{}", v.round() as i64)
+    } else {
+        format!("{v}")
+    }
+}
+
 pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let mut h = String::new();
     // `summary-box` adds the dashed frame (user visibility request); the plan map
@@ -426,11 +518,22 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             ));
             if c.price_twd > 0 {
                 h.push_str(&format!(
-                    "<div class=\"candidate-price\">{} {}</div>",
+                    "<div class=\"candidate-price\">{} {}",
                     esc(cur),
                     group_thousands(c.price_twd)
                 ));
+                if c.room_size_sqm > 0 {
+                    h.push_str(&format!(
+                        "<span class=\"candidate-size\">{} m\u{b2}</span>",
+                        c.room_size_sqm
+                    ));
+                }
+                h.push_str("</div>");
+                // Provenance line — a published rate without its source and read
+                // date is indistinguishable from a made-up one.
+                h.push_str(&price_note(c, lang));
             }
+            h.push_str(&ratings_row(&c.ratings, lang));
             // Tags: sea view + breakfast
             let mut tags: Vec<String> = Vec::new();
             if c.sea_view == 1 {
@@ -910,6 +1013,116 @@ mod tests {
         assert!(html.contains("其他海景參考"));
         assert!(html.contains("僅供參考"));
         assert!(!html.contains("candidate-card--selecting"));
+    }
+
+    #[test]
+    fn candidate_shows_ratings_size_and_price_provenance() {
+        use crate::model::{CandidateRating, DomesticCandidate};
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "95行館".into(),
+                room_type: "海景豪華雙人房".into(),
+                price_twd: 3300,
+                currency: "TWD".into(),
+                room_size_sqm: 18,
+                rooms_left: 1,
+                free_cancel_until: "2026-09-28".into(),
+                price_source: "Booking.com".into(),
+                price_checked_at: "2026-09-04 01:51:21".into(),
+                ratings: vec![
+                    CandidateRating {
+                        source: "Booking.com".into(),
+                        score: 9.0,
+                        scale: 10.0,
+                        review_count: 266,
+                    },
+                    CandidateRating {
+                        source: "Google 地圖".into(),
+                        score: 4.6,
+                        scale: 5.0,
+                        review_count: 119,
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        // Each source keeps its own scale — never averaged into one number.
+        assert!(html.contains("<b>9</b>/10 Booking.com"), "booking chip: {html}");
+        assert!(html.contains("<b>4.6</b>/5 Google"), "google chip: {html}");
+        assert!(html.contains("266 則") && html.contains("119 則"));
+        assert!(html.contains("18 m²"), "room size beside the price");
+        // The price carries its source, read date, stock and cancellation deadline.
+        assert!(html.contains("Booking.com 房價"));
+        assert!(html.contains("2026-09-04 查"), "datetime trimmed to a date: {html}");
+        assert!(html.contains("剩 1 間"));
+        assert!(html.contains("2026-09-28 前免費取消"));
+    }
+
+    #[test]
+    fn candidate_without_facts_renders_no_empty_rows() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "海論".into(),
+                price_twd: 5200,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(!html.contains("candidate-ratings"), "no empty rating row");
+        assert!(!html.contains("candidate-note"), "no empty provenance row");
+        assert!(!html.contains("candidate-size"), "no empty size span");
+    }
+
+    #[test]
+    fn price_provenance_is_english_on_lang_en() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "95".into(),
+                price_twd: 3300,
+                rooms_left: 1,
+                price_source: "Booking.com".into(),
+                free_cancel_until: "2026-09-28".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "en", None);
+        assert!(html.contains("Booking.com rate"));
+        assert!(html.contains("1 left"));
+        assert!(html.contains("free cancellation until 2026-09-28"));
+    }
+
+    #[test]
+    fn rating_with_zero_scale_is_dropped_not_divided_by_zero() {
+        use crate::model::CandidateRating;
+        let out = ratings_row(
+            &[CandidateRating {
+                source: "Bogus".into(),
+                score: 4.0,
+                scale: 0.0,
+                review_count: 0,
+            }],
+            "zh",
+        );
+        assert!(!out.contains("Bogus"), "a scale-less rating is unrenderable: {out}");
+    }
+
+    #[test]
+    fn trim_num_drops_only_trailing_zero_decimals() {
+        assert_eq!(trim_num(9.0), "9");
+        assert_eq!(trim_num(4.6), "4.6");
+        assert_eq!(trim_num(10.0), "10");
     }
 
     #[test]

@@ -16,19 +16,33 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn ensure_domestic_seed() {
-    let _ = db_exec(
+/// Seed three per-run fixture stays and return their hotel names.
+///
+/// Ids and names carry `n` because the tests in this file run in PARALLEL: they
+/// used to share one fixture id, so the first test to finish ran its Guard and
+/// deleted the rows the others were still reading. Names stay short — the CLI
+/// table truncates hotel_name at 16 chars, and a truncated name fails `contains`.
+fn ensure_domestic_seed(n: u128) -> [String; 3] {
+    let sfx = n % 100_000_000;
+    let names = [
+        format!("ZZ海景一{sfx:08}"),
+        format!("ZZ海景二{sfx:08}"),
+        format!("ZZ海景三{sfx:08}"),
+    ];
+    let _ = db_exec(&format!(
         "INSERT OR IGNORE INTO domestic_accommodations \
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
-         ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
-    );
+         ('zz_test_{n}_5200','jiufen','{}','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_7200','jiufen','{}','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_4200','jiufen','{}','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+        names[0], names[1], names[2]
+    ));
     let _ = db_exec(
-        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin, lat, lon) \
-         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan',25.109,121.844)",
+        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
+         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan')",
     );
+    names
 }
 
 #[test]
@@ -38,8 +52,6 @@ fn query_accommodation_without_date_shows_dash() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("test-qacc-nodate-{n}");
     let dest = "jiufen";
@@ -50,14 +62,16 @@ fn query_accommodation_without_date_shows_dash() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
     common::seed_plan(&plan, dest, 1);
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
 
     // Without --date
     let (ok, stdout, stderr) = run(&[
@@ -81,9 +95,9 @@ fn query_accommodation_without_date_shows_dash() {
         "header should show date=- when no --date given: {stdout}"
     );
     // Still lists hotels
-    assert!(stdout.contains("海論"), "should contain 海論: {stdout}");
-    assert!(stdout.contains("ZZ測試海景館"), "should contain the test-only third row: {stdout}");
-    assert!(stdout.contains("山城逸境"), "should contain 山城逸境: {stdout}");
+    assert!(stdout.contains(&fx[0]), "should contain fixture 1: {stdout}");
+    assert!(stdout.contains(&fx[1]), "should contain the test-only third row: {stdout}");
+    assert!(stdout.contains(&fx[2]), "should contain fixture 3: {stdout}");
 }
 
 #[test]
@@ -93,8 +107,6 @@ fn query_accommodation_with_date_lists_normally() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("test-qacc-withdate-{n}");
     let dest = "jiufen";
@@ -105,14 +117,16 @@ fn query_accommodation_with_date_lists_normally() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
     common::seed_plan(&plan, dest, 1);
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
 
     let (ok, stdout, stderr) = run(&[
         "query-accommodation",
@@ -135,6 +149,6 @@ fn query_accommodation_with_date_lists_normally() {
         stdout.contains("2026-11-01"),
         "header should contain provided date: {stdout}"
     );
-    assert!(stdout.contains("海論"), "should contain 海論: {stdout}");
+    assert!(stdout.contains(&fx[0]), "should contain fixture 1: {stdout}");
     assert!(stdout.contains("5200"), "should contain price 5200: {stdout}");
 }

@@ -11,19 +11,33 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn ensure_domestic_seed() {
-    let _ = db_exec(
+/// Seed three per-run fixture stays and return their hotel names.
+///
+/// Ids and names carry `n` because the tests in this file run in PARALLEL: they
+/// used to share one fixture id, so the first test to finish ran its Guard and
+/// deleted the rows the others were still reading. Names stay short — the CLI
+/// table truncates hotel_name at 16 chars, and a truncated name fails `contains`.
+fn ensure_domestic_seed(n: u128) -> [String; 3] {
+    let sfx = n % 100_000_000;
+    let names = [
+        format!("ZZ海景一{sfx:08}"),
+        format!("ZZ海景二{sfx:08}"),
+        format!("ZZ海景三{sfx:08}"),
+    ];
+    let _ = db_exec(&format!(
         "INSERT OR IGNORE INTO domestic_accommodations \
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
-         ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
-    );
+         ('zz_test_{n}_5200','jiufen','{}','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_7200','jiufen','{}','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_4200','jiufen','{}','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+        names[0], names[1], names[2]
+    ));
     let _ = db_exec(
         "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
          VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan')",
     );
+    names
 }
 
 fn seed_p4_pending(plan: &str, dest: &str) {
@@ -42,8 +56,6 @@ fn set_accommodation_books_and_advances_p4() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("zz-setacc-{n}");
     let dest = "jiufen";
@@ -53,15 +65,17 @@ fn set_accommodation_books_and_advances_p4() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
     teardown_plan(&plan, dest);
     common::seed_plan(&plan, dest, 1);
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
     seed_p4_pending(&plan, dest);
 
     // Clean any prior bookings for this plan
@@ -72,7 +86,7 @@ fn set_accommodation_books_and_advances_p4() {
     let (ok, stdout, stderr) = run(&[
         "set-accommodation",
         "--hotel",
-        "海論",
+        fx[0].as_str(),
         "--room-type",
         "海景雙人房",
         "--price",
@@ -90,7 +104,7 @@ fn set_accommodation_books_and_advances_p4() {
     }
     assert!(ok, "set-accommodation should succeed; stdout={stdout} stderr={stderr}");
     assert!(stdout.contains("✅ Booked accommodation:"), "output: {stdout}");
-    assert!(stdout.contains("海論") && stdout.contains("海景雙人房"), "hotel/room in output: {stdout}");
+    assert!(stdout.contains(&fx[0]) && stdout.contains("海景雙人房"), "hotel/room in output: {stdout}");
     assert!(stdout.contains("5200"), "price in output: {stdout}");
     assert!(stdout.contains(dest), "dest in output: {stdout}");
     assert!(stdout.contains(&plan), "plan in output: {stdout}");
@@ -104,7 +118,7 @@ fn set_accommodation_books_and_advances_p4() {
 
     // Assert title + price
     let row = db_exec(&format!("SELECT title AS t FROM bookings_current WHERE trip_id = '{plan}'")).unwrap();
-    assert!(row.raw().contains("海論 海景雙人房"), "title format '海論 海景雙人房': {}", row.raw());
+    assert!(row.raw().contains(&format!("{} 海景雙人房", fx[0])), "title format '<hotel> <room>': {}", row.raw());
 
     // Assert P4 is booked
     let ps = db_exec(&format!("SELECT status AS v FROM process_statuses WHERE plan_id = '{plan}' AND destination = '{dest}' AND process_id = 'process_4_accommodation'")).unwrap();
@@ -121,7 +135,6 @@ fn set_accommodation_rejects_unknown_hotel() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
     let n = common::nanos();
     let plan = format!("zz-setacc-unk-{n}");
     let dest = "jiufen";
@@ -130,15 +143,17 @@ fn set_accommodation_rejects_unknown_hotel() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
     teardown_plan(&plan, dest);
     common::seed_plan(&plan, dest, 1);
-    ensure_domestic_seed();
+    let _fx = ensure_domestic_seed(n);
     seed_p4_pending(&plan, dest);
 
     let (ok, _out, err) = run(&[
@@ -168,7 +183,7 @@ fn set_accommodation_validates_required_flags() {
     let (ok, _out, err) = run(&[
         "set-accommodation",
         "--hotel",
-        "海論",
+        "任一飯店",
         "--room-type",
         "海景雙人房",
         "--plan-id",
@@ -180,7 +195,7 @@ fn set_accommodation_validates_required_flags() {
     let (ok2, _out2, err2) = run(&[
         "set-accommodation",
         "--hotel",
-        "海論",
+        "任一飯店",
         "--room-type",
         "海景雙人房",
         "--price",

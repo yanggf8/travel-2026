@@ -139,6 +139,48 @@ fn print_table(
     }
     println!("{bar}");
     println!("Showing {} of max {} results.", rows.len(), args.limit);
+
+    // Second block: the decision facts the dashboard renders beside the price.
+    // Printed separately so the main table stays readable on a narrow terminal.
+    if rows.iter().any(has_decision_facts) {
+        println!("\nDecision facts (rendered on the dashboard card):");
+        for r in rows.iter().filter(|r| has_decision_facts(r)) {
+            println!(
+                "  {} — size={} rooms_left={} free_cancel_until={} price_source={} price_checked={}",
+                r.hotel_name,
+                num(&r.room_size_sqm, "m²"),
+                num(&r.rooms_left, ""),
+                opt(&r.free_cancel_until),
+                opt(&r.price_source),
+                opt(&r.price_checked_at),
+            );
+        }
+    }
+}
+
+/// True when the row carries at least one optional decision fact worth printing.
+fn has_decision_facts(
+    r: &travel_db::repo::domestic_accommodations::DomesticAccommodationRow,
+) -> bool {
+    r.room_size_sqm.is_some()
+        || r.rooms_left.is_some()
+        || r.free_cancel_until.is_some()
+        || r.price_source.is_some()
+        || r.price_checked_at.is_some()
+}
+
+fn opt(v: &Option<String>) -> String {
+    match v.as_deref() {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => "-".to_string(),
+    }
+}
+
+fn num(v: &Option<i64>, unit: &str) -> String {
+    match v {
+        Some(n) => format!("{n}{unit}"),
+        None => "-".to_string(),
+    }
 }
 
 #[cfg(test)]

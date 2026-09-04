@@ -14,24 +14,33 @@ fn run(args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn ensure_domestic_seed() {
-    let _ = db_exec(
-        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin, lat, lon) \
-         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan',25.109,121.844)",
-    );
-    // If row already existed without coords, fill them.
-    let _ = db_exec(
-        "UPDATE destination_config SET lat = 25.109, lon = 121.844 \
-         WHERE slug = 'jiufen' AND (lat IS NULL OR lon IS NULL)",
-    );
-    let _ = db_exec(
+/// Seed three per-run fixture stays and return their hotel names.
+///
+/// Ids and names carry `n` because the tests in this file run in PARALLEL: they
+/// used to share one fixture id, so the first test to finish ran its Guard and
+/// deleted the rows the others were still reading. Names stay short — the CLI
+/// table truncates hotel_name at 16 chars, and a truncated name fails `contains`.
+fn ensure_domestic_seed(n: u128) -> [String; 3] {
+    let sfx = n % 100_000_000;
+    let names = [
+        format!("ZZ海景一{sfx:08}"),
+        format!("ZZ海景二{sfx:08}"),
+        format!("ZZ海景三{sfx:08}"),
+    ];
+    let _ = db_exec(&format!(
         "INSERT OR IGNORE INTO domestic_accommodations \
          (id, destination, hotel_name, room_type, sea_view, price_twd, currency, breakfast_included, source, updated_at) \
          VALUES \
-         ('jiufen_hailun_seaview_5200','jiufen','海論','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
-         ('zz_test_seaview_7200','jiufen','ZZ測試海景館','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
-         ('jiufen_shancheng_seaview_4200','jiufen','山城逸境','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+         ('zz_test_{n}_5200','jiufen','{}','海景雙人房',1,5200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_7200','jiufen','{}','海景雙人房',1,7200,'TWD',1,'manual',datetime('now')), \
+         ('zz_test_{n}_4200','jiufen','{}','海景雙人房',1,4200,'TWD',1,'manual',datetime('now'))",
+        names[0], names[1], names[2]
+    ));
+    let _ = db_exec(
+        "INSERT OR IGNORE INTO destination_config (slug, display_name, timezone, currency, language, origin) \
+         VALUES ('jiufen','九份','Asia/Taipei','TWD','zh-TW','taiwan')",
     );
+    names
 }
 
 #[test]
@@ -41,8 +50,6 @@ fn domestic_jiufen_flow_query_then_book() {
         return;
     };
     let _ = run(&["db", "migrate"]);
-    ensure_domestic_seed();
-
     let n = common::nanos();
     let plan = format!("test-domestic-e2e-jiufen-{n}");
     let dest = "jiufen";
@@ -54,15 +61,17 @@ fn domestic_jiufen_flow_query_then_book() {
         move || {
             // The test-only third candidate is NOT plan-keyed, so teardown_plan
             // does not cover it — delete it explicitly or it leaks into shared Turso.
+            // These fixture rows are NOT plan-keyed, so teardown_plan does not cover
+            // them — delete them explicitly or they leak into shared Turso.
             let _ = common::db_exec_teardown(
-                "DELETE FROM domestic_accommodations WHERE id = 'zz_test_seaview_7200'",
+                &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
             teardown_plan(&plan, &dest);
         }
     });
 
     // Re-ensure after pre-clean (destination_config is not plan-keyed; domestic rows survive teardown but keep idempotent).
-    ensure_domestic_seed();
+    let fx = ensure_domestic_seed(n);
 
     // 4. create-plan
     let (ok, stdout, stderr) = run(&[
@@ -145,15 +154,15 @@ fn domestic_jiufen_flow_query_then_book() {
         ok,
         "query-accommodation should succeed; stdout={stdout} stderr={stderr}"
     );
-    assert!(stdout.contains("海論"), "should contain 海論: {stdout}");
-    assert!(stdout.contains("ZZ測試海景館"), "should contain the test-only third row: {stdout}");
-    assert!(stdout.contains("山城逸境"), "should contain 山城逸境: {stdout}");
+    assert!(stdout.contains(&fx[0]), "should contain fixture 1: {stdout}");
+    assert!(stdout.contains(&fx[1]), "should contain the test-only third row: {stdout}");
+    assert!(stdout.contains(&fx[2]), "should contain fixture 3: {stdout}");
 
     // 9. set-accommodation
     let (ok, stdout, stderr) = run(&[
         "set-accommodation",
         "--hotel",
-        "海論",
+        fx[0].as_str(),
         "--room-type",
         "海景雙人房",
         "--price",
@@ -190,8 +199,8 @@ fn domestic_jiufen_flow_query_then_book() {
     ))
     .unwrap();
     assert!(
-        row.raw().contains("海論"),
-        "title should contain 海論: {}",
+        row.raw().contains(&fx[0]),
+        "title should contain fixture 1: {}",
         row.raw()
     );
 

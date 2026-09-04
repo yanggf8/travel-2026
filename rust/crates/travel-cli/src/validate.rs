@@ -1401,7 +1401,9 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
     };
     let mut rows = match conn
         .query(
-            "SELECT id, destination, hotel_name, image_url, booking_url FROM domestic_accommodations ORDER BY destination, id",
+            "SELECT id, destination, hotel_name, image_url, booking_url, price_source, price_checked_at, \
+             CAST(julianday('now') - julianday(price_checked_at) AS INTEGER) AS price_age_days \
+             FROM domestic_accommodations ORDER BY destination, id",
             (),
         )
         .await
@@ -1452,6 +1454,39 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
                 file: Some("turso:domestic_accommodations".to_string()),
                 line: None,
             });
+        }
+        // A published rate goes stale. WARN once it is older than PRICE_STALE_DAYS,
+        // and INFO when a price was recorded with no read date at all — the
+        // dashboard renders that date, so a missing one publishes an undated number.
+        let price_source: Option<String> = row.get(5).ok();
+        let price_checked: Option<String> = row.get(6).ok();
+        let age_days: Option<i64> = row.get(7).ok();
+        if price_source.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+            match (price_checked.as_deref(), age_days) {
+                (Some(c), Some(age)) if !c.trim().is_empty() && age > PRICE_STALE_DAYS => {
+                    issues.push(Issue {
+                        category: "domestic-accommodations".to_string(),
+                        severity: Severity::Warning,
+                        message: format!(
+                            "{dest}/{hotel} ({id}) price was last checked {c} ({age} days ago) — the dashboard publishes that date; re-check and run update-accommodation --id {id} --price-source <name>"
+                        ),
+                        file: Some("turso:domestic_accommodations".to_string()),
+                        line: None,
+                    });
+                }
+                (None, _) | (Some(""), _) => {
+                    issues.push(Issue {
+                        category: "domestic-accommodations".to_string(),
+                        severity: Severity::Info,
+                        message: format!(
+                            "{dest}/{hotel} ({id}) has a price_source but no price_checked_at — set it via update-accommodation --id {id} --price-source <name> so the published rate carries its read date"
+                        ),
+                        file: Some("turso:domestic_accommodations".to_string()),
+                        line: None,
+                    });
+                }
+                _ => {}
+            }
         }
         stays.push((id, dest, hotel));
     }
@@ -1504,6 +1539,10 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
 
 /// Minimum extra gallery photos a candidate should carry beyond its hero image.
 const GALLERY_MIN: i64 = 3;
+
+/// A published room rate older than this is flagged — OTA rates and "rooms left"
+/// move week to week, and the dashboard shows the date it was read.
+const PRICE_STALE_DAYS: i64 = 21;
 
 // --- DB check: reference tables ---
 
