@@ -208,6 +208,11 @@ fn price_note(c: &crate::model::DomesticCandidate, lang: &str) -> String {
         } else {
             format!("{d} 前免費取消")
         });
+    } else if !c.price_source.is_empty() {
+        // We looked up a rate but recorded no cancellation deadline. Saying nothing
+        // let a reader assume this stay cancels as freely as the ones beside it —
+        // the same trap the missing breakfast tag set.
+        parts.push(t("cancelUnknown", lang).to_string());
     }
     if parts.is_empty() {
         return String::new();
@@ -1086,6 +1091,31 @@ mod tests {
         );
 
         assert!(html.contains("2026-09-28 前免費取消"));
+    }
+
+    #[test]
+    fn missing_cancellation_policy_is_stated_not_left_silent() {
+        use crate::model::DomesticCandidate;
+        let mk = |until: &str| Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 3710,
+                price_source: "Cloudbeds".into(),
+                price_checked_at: "2026-09-04".into(),
+                free_cancel_until: until.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // Recorded → show the deadline.
+        assert!(render(&mk("2026-09-28"), "zh", None).contains("2026-09-28 前免費取消"));
+        // Not recorded → say so, rather than letting the reader assume it matches
+        // the cards beside it.
+        let blank = render(&mk(""), "zh", None);
+        assert!(blank.contains("取消政策未查"), "{blank}");
+        assert!(render(&mk(""), "en", None).contains("cancellation policy not checked"));
     }
 
     #[test]

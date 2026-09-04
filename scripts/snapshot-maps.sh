@@ -205,15 +205,24 @@ geocode_place() {
 # day_route_segments place sequence (from_place of seg 0, then each to_place).
 day_coords() {
   local d="$1"
-  # 1. sightseeing POIs linked to this day's activities (already geocoded)
+  # 1. sightseeing POIs linked to this day's activities (already geocoded).
+  #    Ordered by SESSION first, then sort_order. sort_order restarts at 0 in every
+  #    session, so ordering by it alone drew the day backwards whenever a later
+  #    session held the lower number — a jiufen day-2 map numbered the afternoon
+  #    stop 1 and the morning stop 2, pointing the drive the wrong way down the
+  #    coast. Session order matches model.rs SESSION_ORDER.
   local poi
   poi="$($CHROMEPORT db query "SELECT p.lat, p.lon \
     FROM activities a JOIN destination_pois p \
       ON (p.poi_id = a.poi_id OR (a.poi_id IS NULL AND p.title = a.title)) AND p.slug='${DEST}' \
     WHERE a.plan_id='${PLAN}' AND a.day_number=${d} AND p.lat IS NOT NULL AND p.lon IS NOT NULL \
-    ORDER BY a.sort_order" 2>/dev/null \
+    ORDER BY CASE a.session_type WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'afternoon' THEN 2 WHEN 'evening' THEN 3 ELSE 4 END, a.sort_order" 2>/dev/null \
     | awk -F'\t' 'NR>1 && $1 ~ /^-?[0-9]+\.?[0-9]*$/ && $2 ~ /^-?[0-9]+\.?[0-9]*$/ {print $1","$2}')"
-  if [ -n "$poi" ]; then printf '%s\n' "$poi"; return 0; fi
+  # Collapse consecutive stops at the SAME coordinates. Two activities linked to one
+  # POI (a day that starts and ends on the same street) otherwise emit two markers on
+  # the same pixel: the second draws over the first, so the visible numbering appears
+  # to start at 2 and the plan overview looks like it is missing a stop.
+  if [ -n "$poi" ]; then printf '%s\n' "$poi" | awk '$0 != prev { print } { prev = $0 }'; return 0; fi
 
   # 2. no POI stops → build the route from day_route_segments place names (geocoded).
   # Reject the chromeport "(N rows)" footer: a real segment row has a numeric

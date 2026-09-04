@@ -29,6 +29,10 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         // include one, so an omitted tag was being read as "included".
         ("noBreakfast", false) => "No breakfast",
         ("noBreakfast", true) => "不含早餐",
+        // Silence about cancellation reads as "same as the others". It is not:
+        // an empty free_cancel_until means nobody checked.
+        ("cancelUnknown", false) => "cancellation policy not checked",
+        ("cancelUnknown", true) => "取消政策未查",
         ("perNight", false) => "per room / night",
         ("perNight", true) => "每房每晚",
         ("notBookedYet", false) => "Nothing booked yet — comparing these three",
