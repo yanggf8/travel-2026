@@ -1,20 +1,24 @@
 -- =============================================================================
 -- travel-2026 Database Schema (Turso / libSQL)
--- AUTO-GENERATED from the live DB via scripts/turso-migrate.ts's output.
--- Regenerate: npx ts-node scripts/gen-schema-sql.ts  (do NOT hand-edit)
--- Source of truth = scripts/turso-migrate.ts; this mirrors the applied schema.
--- Generated: 2026-06-29
--- Tables: 115 | Indexes: 21
--- =============================================================================
+-- AUTO-GENERATED from the live DB's sqlite_master. Do NOT hand-edit.
+-- Source of truth = rust/crates/travel-cli/src/db_migrate.rs (the only migrator);
+-- this file mirrors what `./bin/travel db migrate` has actually applied.
 --
--- Naming conventions:
---   plan_id      : kebab-case (e.g. 'tokyo-2026')
---   destination  : snake_case (e.g. 'tokyo_2026')
---
--- NOTE (de-JSON program, 2026-06): no JSON-encoded values are stored in any
--- column. Former *_json columns were re-normalized into child tables / typed
--- columns / *_text fields. See memory no-json-in-rdb.
+-- Regenerate (the old TS gen-schema-sql.ts / turso-migrate.ts are RETIRED):
+--   TU=$(grep '^TURSO_URL=' .env | cut -d= -f2- | sed 's|^libsql://|https://|')
+--   TT=$(grep '^TURSO_TOKEN=' .env | cut -d= -f2-)
+--   curl -s -X POST "$TU/v2/pipeline" -H "Authorization: Bearer $TT" \
+--     -H 'Content-Type: application/json' -d '{"requests":[{"type":"execute","stmt":
+--     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
+--     {"type":"close"}]}'
+--   then emit each `sql` verbatim, tables before indexes.
+-- Generated: 2026-09-04
+-- Tables: 135 | Indexes: 26
 -- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- TABLES
+-- ---------------------------------------------------------------------------
 
 CREATE TABLE accommodation_location_zone (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
@@ -26,7 +30,6 @@ CREATE TABLE activities (
     id TEXT PRIMARY KEY,
     plan_id TEXT NOT NULL,
     destination TEXT NOT NULL,
-    poi_id TEXT,
     day_number INTEGER NOT NULL,
     session_type TEXT NOT NULL CHECK(session_type IN ('morning','noon','afternoon','evening')),
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -45,9 +48,8 @@ CREATE TABLE activities (
     cost_estimate INTEGER,
     notes TEXT,
     priority TEXT NOT NULL DEFAULT 'want' CHECK(priority IN ('must','want','optional')),
-    source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed','ai_recommended')),
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
+  , poi_id TEXT, source TEXT NOT NULL DEFAULT 'confirmed');
 
 CREATE TABLE activity_tags (
   activity_id TEXT NOT NULL, tag TEXT NOT NULL,
@@ -122,11 +124,11 @@ CREATE TABLE bookings (
   PRIMARY KEY (destination, offer_id)
 );
 
-CREATE TABLE bookings_current (
+CREATE TABLE "bookings_current" (
   booking_key TEXT PRIMARY KEY,
   trip_id TEXT NOT NULL,
   destination TEXT NOT NULL,
-  category TEXT NOT NULL CHECK(category IN ('package','transfer','activity')),
+  category TEXT NOT NULL CHECK(category IN ('package','transfer','activity','accommodation')),
   subtype TEXT,
   title TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('pending','planned','booked','confirmed','waitlist','skipped','cancelled')),
@@ -165,7 +167,7 @@ CREATE TABLE bookings_events (
   amount INTEGER,
   currency TEXT,
   event_at DATETIME DEFAULT CURRENT_TIMESTAMP
-, event_data_text TEXT);
+);
 
 CREATE TABLE captures (capture_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT, title TEXT, captured_at TEXT NOT NULL, raw_text TEXT NOT NULL);
 
@@ -202,6 +204,14 @@ CREATE TABLE cascade_triggers (
   PRIMARY KEY (plan_id, trigger_id)
 );
 
+CREATE TABLE catalog_runs (
+  run_id TEXT PRIMARY KEY,
+  command_type TEXT NOT NULL,
+  command_summary TEXT,
+  status TEXT NOT NULL,
+  changed_at TEXT NOT NULL
+);
+
 CREATE TABLE comparison_rules (
     id INTEGER PRIMARY KEY,
     rule TEXT,
@@ -210,6 +220,8 @@ CREATE TABLE comparison_rules (
     fetched_at TEXT,
     confidence TEXT
   );
+
+CREATE TABLE coverage_block_reasons (code TEXT PRIMARY KEY, description TEXT);
 
 CREATE TABLE date_anchors (
   plan_id TEXT NOT NULL,
@@ -232,8 +244,7 @@ CREATE TABLE day_route_segments (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
   day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
   from_place TEXT NOT NULL, to_place TEXT NOT NULL,
-  mode TEXT NOT NULL, duration_min INTEGER, notes TEXT, start_time TEXT,
-  source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed','ai_recommended')),
+  mode TEXT NOT NULL, duration_min INTEGER, notes TEXT, start_time TEXT, source TEXT NOT NULL DEFAULT 'confirmed',
   PRIMARY KEY (plan_id, destination, day_number, sort_order)
 );
 
@@ -334,6 +345,29 @@ CREATE TABLE destination_markets (
     PRIMARY KEY (slug, sort_order)
   );
 
+CREATE TABLE destination_omiyage_items (
+  slug TEXT,
+  item_id TEXT,
+  name TEXT,
+  category TEXT,
+  notes TEXT,
+  source_url TEXT,
+  fetched_at TEXT,
+  confidence TEXT,
+  PRIMARY KEY (slug, item_id)
+);
+
+CREATE TABLE destination_omiyage_locations (
+  slug TEXT,
+  item_id TEXT,
+  poi_id TEXT,
+  purchase_note TEXT,
+  source_url TEXT,
+  fetched_at TEXT,
+  confidence TEXT,
+  PRIMARY KEY (slug, item_id, poi_id)
+);
+
 CREATE TABLE destination_poi_tags (
     slug TEXT, poi_id TEXT, tag TEXT, sort_order INTEGER,
     PRIMARY KEY (slug, poi_id, sort_order)
@@ -354,9 +388,7 @@ CREATE TABLE destination_pois (
     address TEXT,
     source_url TEXT,
     fetched_at TEXT,
-    confidence TEXT,
-    lat REAL,
-    lon REAL,
+    confidence TEXT, lat REAL, lon REAL,
     PRIMARY KEY (slug, poi_id)
   );
 
@@ -379,29 +411,6 @@ CREATE TABLE destination_transit (
     PRIMARY KEY (slug, pair_key)
   );
 
-CREATE TABLE destination_omiyage_items (
-    slug TEXT,
-    item_id TEXT,
-    name TEXT,
-    category TEXT,
-    notes TEXT,
-    source_url TEXT,
-    fetched_at TEXT,
-    confidence TEXT,
-    PRIMARY KEY (slug, item_id)
-  );
-
-CREATE TABLE destination_omiyage_locations (
-    slug TEXT,
-    item_id TEXT,
-    poi_id TEXT,
-    purchase_note TEXT,
-    source_url TEXT,
-    fetched_at TEXT,
-    confidence TEXT,
-    PRIMARY KEY (slug, item_id, poi_id)
-  );
-
 CREATE TABLE destinations (
     slug TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -410,6 +419,38 @@ CREATE TABLE destinations (
     primary_airports TEXT,  -- JSON array
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE domestic_accommodation_images (
+  accommodation_id TEXT NOT NULL REFERENCES domestic_accommodations(id) ON DELETE CASCADE,
+  image_url TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (accommodation_id, image_url)
+);
+
+CREATE TABLE domestic_accommodation_ratings (
+  accommodation_id TEXT NOT NULL REFERENCES domestic_accommodations(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  score REAL NOT NULL,
+  scale REAL NOT NULL,
+  review_count INTEGER,
+  checked_at DATETIME NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (accommodation_id, source)
+);
+
+CREATE TABLE domestic_accommodations (
+  id TEXT PRIMARY KEY,
+  destination TEXT NOT NULL,
+  hotel_name TEXT NOT NULL,
+  room_type TEXT NOT NULL,
+  sea_view INTEGER NOT NULL CHECK(sea_view IN (0,1)),
+  max_occupancy INTEGER,
+  price_twd INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'TWD',
+  breakfast_included INTEGER NOT NULL CHECK(breakfast_included IN (0,1)),
+  source TEXT,
+  updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+, image_url TEXT, booking_url TEXT, link_url TEXT, room_size_sqm INTEGER, price_source TEXT, price_checked_at DATETIME, free_cancel_until TEXT, rooms_left INTEGER);
 
 CREATE TABLE event_log_dest_processes (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL, process_id TEXT NOT NULL,
@@ -518,7 +559,7 @@ CREATE TABLE hotels (
   name TEXT,
   check_in TEXT,
   notes TEXT,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, name_zh TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, name_zh TEXT, voucher_url TEXT,
   PRIMARY KEY (plan_id, destination)
 );
 
@@ -541,7 +582,18 @@ CREATE TABLE location_zone_candidates (
     PRIMARY KEY (plan_id, destination, sort_order)
   );
 
-CREATE TABLE "offers" (id TEXT NOT NULL, source_id TEXT NOT NULL, type TEXT CHECK(type IN ('package', 'flight', 'hotel')), name TEXT, price_per_person INTEGER, currency TEXT DEFAULT 'TWD', region TEXT, destination TEXT, departure_date TEXT, return_date TEXT, nights INTEGER, availability TEXT CHECK(availability IN ('available', 'sold_out', 'limited')), hotel_name TEXT, hotel_area TEXT, airline TEXT, flight_outbound TEXT, flight_return TEXT, includes TEXT, scraped_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, source_file TEXT, capture_id TEXT, produced_by_job_id TEXT, produced_by_attempt_id TEXT, parser_method TEXT CHECK(parser_method IS NULL OR parser_method IN ('agent_parse','regex')), capture_checksum TEXT, parser_rule_checksum TEXT, normalizer_version TEXT, PRIMARY KEY (id, scraped_at));
+CREATE TABLE map_artifacts (
+  plan_id TEXT NOT NULL,
+  map_key TEXT NOT NULL,
+  byte_size INTEGER,
+  sha256 TEXT,
+  status TEXT NOT NULL,
+  skip_reason TEXT,
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY (plan_id, map_key)
+);
+
+CREATE TABLE "offers" (id TEXT NOT NULL, source_id TEXT NOT NULL, type TEXT CHECK(type IN ('package', 'flight', 'hotel')), name TEXT, price_per_person INTEGER, currency TEXT DEFAULT 'TWD', region TEXT, destination TEXT, departure_date TEXT, return_date TEXT, nights INTEGER, availability TEXT CHECK(availability IN ('available', 'sold_out', 'limited')), hotel_name TEXT, hotel_area TEXT, airline TEXT, flight_outbound TEXT, flight_return TEXT, includes TEXT, scraped_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, source_file TEXT, capture_id TEXT, produced_by_job_id TEXT, produced_by_attempt_id TEXT, parser_method TEXT CHECK (parser_method IS NULL OR parser_method IN ('agent_parse', 'regex')), capture_checksum TEXT, parser_rule_checksum TEXT, normalizer_version TEXT, offer_key TEXT, dedup_key TEXT, last_seen_at TEXT, PRIMARY KEY (id, scraped_at));
 
 CREATE TABLE operation_runs (
   run_id TEXT PRIMARY KEY,
@@ -588,9 +640,9 @@ CREATE TABLE ota_attempts (
   UNIQUE(job_id, attempt_no)
 );
 
-CREATE TABLE ota_job_params (
+CREATE TABLE "ota_job_params" (
   job_id TEXT NOT NULL,
-  param_key TEXT NOT NULL CHECK(param_key IN ('depart_date','return_date','nights','pax','region_code','region_label')),
+  param_key TEXT NOT NULL CHECK(param_key IN ('depart_date','return_date','nights','pax','region_code','region_label','destination','origin','currency','rooms','hotel')),
   param_value TEXT NOT NULL,
   PRIMARY KEY (job_id, param_key)
 );
@@ -614,6 +666,14 @@ CREATE TABLE ota_jobs (
   CHECK(status!='blocked' OR blocked_reason_code IS NOT NULL)
 );
 
+CREATE TABLE ota_notes_migration_audit (
+  source_id TEXT,
+  raw_note TEXT,
+  checksum TEXT,
+  normalized_at TEXT,
+  disposition TEXT CHECK(disposition IN ('normalized','discarded_recipe'))
+);
+
 CREATE TABLE ota_observations (
   observation_id TEXT PRIMARY KEY,
   source_id TEXT NOT NULL,
@@ -634,6 +694,26 @@ CREATE TABLE ota_observations (
   observed_at TEXT NOT NULL
 );
 
+CREATE TABLE ota_source_coverage (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  proven INTEGER NOT NULL DEFAULT 0 CHECK(proven IN (0,1)),
+  proven_at TEXT,
+  method TEXT CHECK(method IS NULL OR method IN ('agent_parse','regex')),
+  search_url TEXT,
+  blocked_reason_code TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (source_id, product_type)
+);
+
+CREATE TABLE ota_source_region_codes (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  region_label TEXT NOT NULL,
+  region_code TEXT NOT NULL,
+  PRIMARY KEY (source_id, product_type, region_label)
+);
+
 CREATE TABLE ota_source_regions (
       source_id TEXT, region TEXT, PRIMARY KEY (source_id, region)
     );
@@ -641,6 +721,30 @@ CREATE TABLE ota_source_regions (
 CREATE TABLE ota_source_types (
       source_id TEXT, type TEXT, PRIMARY KEY (source_id, type)
     );
+
+CREATE TABLE ota_source_url_param (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  url_param_name TEXT NOT NULL,
+  input_name TEXT NOT NULL,
+  input_value TEXT NOT NULL,
+  url_value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (source_id, product_type, url_param_name, input_name, input_value)
+);
+
+CREATE TABLE "ota_source_workflow" (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL,
+  nav_kind TEXT NOT NULL DEFAULT 'get' CHECK(nav_kind = 'get' OR nav_kind LIKE 'custom:%'),
+  url_template TEXT NOT NULL,
+  capture_url_contains TEXT,
+  settle_marker TEXT,
+  settle_ms INTEGER NOT NULL DEFAULT 0,
+  agent_extraction_note TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (source_id, product_type)
+);
 
 CREATE TABLE ota_sources (
   source_id TEXT PRIMARY KEY,
@@ -652,26 +756,26 @@ CREATE TABLE ota_sources (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE parser_rules (
-                    source_id TEXT NOT NULL,
-                    product_type TEXT NOT NULL DEFAULT 'fit',
-                    date_range_rx TEXT NOT NULL,
-                    nights_rx TEXT NOT NULL,
-                    nights_is_days INTEGER DEFAULT 0,
-                    price_marker TEXT NOT NULL,
-                    price_amount_rx TEXT NOT NULL,
-                    price_basis TEXT DEFAULT 'total',
-                    pax_divisor INTEGER DEFAULT 2,
-                    flight_rx TEXT NOT NULL,
-                    hotel_anchor_rx TEXT NOT NULL,
-                    currency TEXT DEFAULT 'TWD',
-                    has_custom_parser INTEGER DEFAULT 0,
-                    source_url TEXT,
-                    fetched_at TEXT,
-                    airline_rx TEXT DEFAULT '',
-                    hotel_name_rx TEXT DEFAULT '',
-                    PRIMARY KEY (source_id, product_type)
-                 );
+CREATE TABLE "parser_rules" (
+  source_id TEXT NOT NULL,
+  product_type TEXT NOT NULL DEFAULT 'fit',
+  date_range_rx TEXT NOT NULL,
+  nights_rx TEXT NOT NULL,
+  nights_is_days INTEGER DEFAULT 0,
+  price_marker TEXT NOT NULL,
+  price_amount_rx TEXT NOT NULL,
+  price_basis TEXT DEFAULT 'total',
+  pax_divisor INTEGER DEFAULT 2,
+  flight_rx TEXT NOT NULL,
+  hotel_anchor_rx TEXT NOT NULL,
+  currency TEXT DEFAULT 'TWD',
+  has_custom_parser INTEGER DEFAULT 0,
+  source_url TEXT,
+  fetched_at TEXT,
+  airline_rx TEXT DEFAULT '',
+  hotel_name_rx TEXT DEFAULT '',
+  PRIMARY KEY (source_id, product_type)
+);
 
 CREATE TABLE plan_budget (
   plan_id TEXT PRIMARY KEY,
@@ -708,6 +812,11 @@ CREATE TABLE plan_events (
     event TEXT, event_at TEXT, from_state TEXT, to_state TEXT,
     PRIMARY KEY (plan_id, scope, destination, process_id, sort_order)
   );
+
+CREATE TABLE plan_map_snapshots (
+  plan_id TEXT NOT NULL PRIMARY KEY,
+  snapshotted_at TEXT NOT NULL
+);
 
 CREATE TABLE plan_metadata (
   plan_id TEXT PRIMARY KEY,
@@ -832,11 +941,17 @@ CREATE TABLE plan_schema_contract_nodes (
     PRIMARY KEY (plan_id, sort_order)
   );
 
+CREATE TABLE plan_share_tokens (
+  plan_id TEXT NOT NULL,
+  token TEXT NOT NULL PRIMARY KEY,
+  created_at TEXT NOT NULL
+, status TEXT NOT NULL DEFAULT 'active', created_by TEXT, deactivated_at TEXT, deactivated_by TEXT);
+
 CREATE TABLE "plans" (
   plan_id TEXT PRIMARY KEY,
   schema_version TEXT NOT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-, version INTEGER NOT NULL DEFAULT 0);
+, version INTEGER NOT NULL DEFAULT 0, deleted_at TEXT);
 
 CREATE TABLE platform_behavior_baggage_labels (
     platform TEXT NOT NULL, label TEXT NOT NULL, description TEXT,
@@ -866,6 +981,58 @@ CREATE TABLE process_statuses (
   PRIMARY KEY (plan_id, destination, process_id)
 );
 
+CREATE TABLE product_type_inputs (
+  product_type TEXT NOT NULL,
+  input_name TEXT NOT NULL,
+  input_class TEXT NOT NULL CHECK(input_class IN ('common','token_key')),
+  required INTEGER NOT NULL DEFAULT 1 CHECK(required IN (0,1)),
+  default_source TEXT CHECK(default_source IS NULL OR default_source IN ('caller','db','code')),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (product_type, input_name)
+);
+
+CREATE TABLE product_types (code TEXT PRIMARY KEY, description TEXT);
+
+CREATE TABLE route_place_geocodes (
+  query_key TEXT NOT NULL,
+  raw_place TEXT NOT NULL,
+  lat REAL,
+  lon REAL,
+  display_name TEXT,
+  osm_id TEXT,
+  osm_type TEXT,
+  provider TEXT NOT NULL,
+  confidence TEXT,
+  review INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (query_key)
+);
+
+CREATE TABLE route_road_leg_points (
+  leg_key TEXT NOT NULL,
+  point_order INTEGER NOT NULL,
+  lat REAL NOT NULL,
+  lon REAL NOT NULL,
+  PRIMARY KEY (leg_key, point_order)
+);
+
+CREATE TABLE route_road_legs (
+  leg_key TEXT NOT NULL,
+  from_lat REAL NOT NULL,
+  from_lon REAL NOT NULL,
+  to_lat REAL NOT NULL,
+  to_lon REAL NOT NULL,
+  provider TEXT NOT NULL,
+  profile TEXT NOT NULL,
+  status TEXT NOT NULL,
+  point_count INTEGER NOT NULL DEFAULT 0,
+  distance_m REAL,
+  failure_reason TEXT,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (leg_key)
+);
+
 CREATE TABLE session_activities_zh (
     plan_id TEXT NOT NULL, destination TEXT NOT NULL,
     day_number INTEGER NOT NULL, session_type TEXT NOT NULL,
@@ -877,8 +1044,7 @@ CREATE TABLE session_meals (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
   day_number INTEGER NOT NULL, session_type TEXT NOT NULL,
   sort_order INTEGER NOT NULL, meal TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'confirmed' CHECK(source IN ('confirmed','ai_recommended')),
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, source TEXT NOT NULL DEFAULT 'confirmed',
   PRIMARY KEY (plan_id, destination, day_number, session_type, sort_order)
 );
 
@@ -1085,27 +1251,32 @@ CREATE TABLE transportation_extras (
   PRIMARY KEY (plan_id, destination)
 );
 
--- =====================
--- Indexes
--- =====================
+-- ---------------------------------------------------------------------------
+-- INDEXES
+-- ---------------------------------------------------------------------------
 
 CREATE INDEX idx_activities_booking ON activities(plan_id, booking_status);
 CREATE INDEX idx_activities_session ON activities(plan_id, destination, day_number, session_type, sort_order);
-CREATE INDEX idx_bc_dest ON bookings_current(destination, category);
-CREATE INDEX idx_bc_offer ON bookings_current(offer_id);
-CREATE INDEX idx_bc_status ON bookings_current(status);
+CREATE INDEX idx_bc_dest ON bookings_current (destination, category);
+CREATE INDEX idx_bc_offer ON bookings_current (offer_id);
+CREATE INDEX idx_bc_status ON bookings_current (status);
 CREATE INDEX idx_be_key ON bookings_events(booking_key, event_at);
+CREATE INDEX idx_domestic_accommodations_dest ON domestic_accommodations (destination);
 CREATE INDEX idx_events_dest ON events(destination);
 CREATE UNIQUE INDEX idx_events_external_id ON events(external_id);
 CREATE INDEX idx_events_type ON events(event_type);
 CREATE INDEX idx_holidays_country_date ON holidays(country, date);
 CREATE INDEX idx_offers_date ON offers (departure_date);
 CREATE UNIQUE INDEX idx_offers_dedup ON offers(id, scraped_at);
+CREATE UNIQUE INDEX idx_offers_dedup_key ON offers (dedup_key);
+CREATE INDEX idx_offers_last_seen ON offers (last_seen_at);
+CREATE INDEX idx_offers_offer_key ON offers (offer_key, scraped_at);
 CREATE INDEX idx_offers_price ON offers (price_per_person);
 CREATE INDEX idx_offers_region ON offers (region);
 CREATE INDEX idx_offers_source ON offers (source_id);
 CREATE UNIQUE INDEX idx_operation_runs_idempotency ON operation_runs(plan_id, idempotency_key);
 CREATE INDEX idx_operation_runs_plan ON operation_runs(plan_id, started_at DESC);
+CREATE INDEX idx_plan_share_tokens_plan_status_created ON plan_share_tokens (plan_id, status, created_at DESC);
 CREATE INDEX idx_s0_cand_run ON shaping_candidates(run_id, rank);
 CREATE INDEX idx_s0_shaping_run ON shaping_rules(run_id, aspect, role);
 CREATE UNIQUE INDEX uq_s0_shaping_value
