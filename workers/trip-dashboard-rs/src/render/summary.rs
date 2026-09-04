@@ -175,19 +175,30 @@ fn price_note(c: &crate::model::DomesticCandidate, lang: &str) -> String {
             format!("{} 房價", c.price_source)
         });
     }
+    // Stock is a SNAPSHOT, so it hangs off the check date instead of standing on its
+    // own — "1 left" on its own reads as a live OTA counter.
     if !c.price_checked_at.is_empty() {
         let d = date_only(&c.price_checked_at);
-        parts.push(if en {
-            format!("checked {d}")
+        let stock = if c.rooms_left > 0 {
+            if en {
+                format!(" ({} left then)", c.rooms_left)
+            } else {
+                format!("（當時剩 {} 間）", c.rooms_left)
+            }
         } else {
-            format!("{d} 查")
+            String::new()
+        };
+        parts.push(if en {
+            format!("checked {d}{stock}")
+        } else {
+            format!("{d} 查價{stock}")
         });
-    }
-    if c.rooms_left > 0 {
+    } else if c.rooms_left > 0 {
+        // No read date: say so rather than implying the count is current.
         parts.push(if en {
-            format!("{} left", c.rooms_left)
+            format!("{} left (date unknown)", c.rooms_left)
         } else {
-            format!("剩 {} 間", c.rooms_left)
+            format!("剩 {} 間（查價日不明）", c.rooms_left)
         });
     }
     if !c.free_cancel_until.is_empty() {
@@ -479,7 +490,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 ));
             } else {
                 h.push_str(&format!(
-                    "<img class=\"candidate-image\" src=\"{}\" alt=\"{}\" loading=\"lazy\" />",
+                    "<img class=\"candidate-image\" src=\"{}\" alt=\"{}\" loading=\"lazy\" referrerpolicy=\"no-referrer\" />",
                     esc_url_attr(&c.image_url),
                     esc(&c.hotel_name)
                 ));
@@ -497,7 +508,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     h.push_str("<figure class=\"candidate-gallery-item\">");
                     h.push_str(&format!(
                         "<a href=\"{}\" target=\"_blank\" rel=\"noopener\">\
-                         <img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" /></a>",
+                         <img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" referrerpolicy=\"no-referrer\" /></a>",
                         esc_url_attr(&g.image_url),
                         esc_url_attr(&g.image_url),
                         esc(if g.label.is_empty() { &c.hotel_name } else { &g.label }),
@@ -545,7 +556,8 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             if !tags.is_empty() {
                 h.push_str(&format!("<div class=\"candidate-tags\">{}</div>", tags.join(" ")));
             }
-            // External "查看更多房型" link (official rooms page / OTA listing).
+            // External rooms/availability link — it opens a real booking engine, so the label
+            // says so rather than promising a passive room list.
             if !c.link_url.is_empty() {
                 h.push_str(&format!(
                     "<a class=\"candidate-link\" href=\"{}\" target=\"_blank\" rel=\"noopener\">{}</a>",
@@ -1057,8 +1069,14 @@ mod tests {
         assert!(html.contains("18 m²"), "room size beside the price");
         // The price carries its source, read date, stock and cancellation deadline.
         assert!(html.contains("Booking.com 房價"));
-        assert!(html.contains("2026-09-04 查"), "datetime trimmed to a date: {html}");
-        assert!(html.contains("剩 1 間"));
+        assert!(html.contains("2026-09-04 查價"), "datetime trimmed to a date: {html}");
+        // Stock hangs off the read date — never a bare "剩 1 間" that reads as live stock.
+        assert!(html.contains("2026-09-04 查價（當時剩 1 間）"), "stock tied to the date: {html}");
+        assert!(
+            !html.contains("· 剩 1 間"),
+            "stock must not stand as its own clause: {html}"
+        );
+
         assert!(html.contains("2026-09-28 前免費取消"));
     }
 
@@ -1092,6 +1110,7 @@ mod tests {
                 price_twd: 3300,
                 rooms_left: 1,
                 price_source: "Booking.com".into(),
+                price_checked_at: "2026-09-04".into(),
                 free_cancel_until: "2026-09-28".into(),
                 ..Default::default()
             }],
@@ -1099,8 +1118,30 @@ mod tests {
         };
         let html = render(&plan, "en", None);
         assert!(html.contains("Booking.com rate"));
-        assert!(html.contains("1 left"));
+        assert!(html.contains("checked 2026-09-04 (1 left then)"), "stock tied to the date: {html}");
+        assert!(!html.contains("· 1 left "), "stock must not stand alone in English either");
         assert!(html.contains("free cancellation until 2026-09-28"));
+    }
+
+    // A stock count with no read date must SAY the date is unknown rather than
+    // silently implying the number is current.
+    #[test]
+    fn rooms_left_without_a_check_date_is_marked_unknown() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 3300,
+                rooms_left: 2,
+                price_source: "Booking.com".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(render(&plan, "zh", None).contains("剩 2 間（查價日不明）"));
+        assert!(render(&plan, "en", None).contains("2 left (date unknown)"));
     }
 
     #[test]
@@ -1162,12 +1203,19 @@ mod tests {
         assert!(html.contains("公區"));
         assert!(!html.contains("不該出現"), "placeholder gallery rows skipped");
         assert_eq!(html.matches("candidate-gallery-img").count(), 2);
+        // Hotlinked photos must not leak the referrer — Booking's CDN 403s on some
+        // external Referers, and Google's signed URLs are equally picky.
+        assert_eq!(
+            html.matches("referrerpolicy=\"no-referrer\"").count(),
+            3,
+            "hero + 2 gallery imgs each need it: {html}"
+        );
         // thumbs link to the full image in a new tab
         assert!(html.contains("target=\"_blank\""));
-        // 查看更多房型 external link
+        // rooms-and-availability external link
         assert!(html.contains("class=\"candidate-link\""));
         assert!(html.contains("href=\"https://example.com/rooms\""));
-        assert!(html.contains("查看更多房型 ↗"));
+        assert!(html.contains("查看房型與空房 ↗"));
     }
 
     #[test]
