@@ -104,15 +104,11 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         .secret("SESSION_SECRET")
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let allowed = env
-        .var("ALLOWED_LOGIN")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
-    let allowed_id = gho::allowed_id(&env);
+    let pairs = gho::allowed_pairs(&env);
     let session_cookie = gho::read_cookie(&req, &cfg.session_cookie());
     let session_login = session_cookie
         .as_deref()
-        .and_then(|c| gho::verify_session(&secret, &allowed, allowed_id, c));
+        .and_then(|c| gho::verify_session_any(&secret, &pairs, c));
     let is_owner_session = session_login.is_some();
 
     // /diag/d1-compare — D1 read-mirror pilot (Phase G, compare-only). Owner-only; 404 unless the
@@ -145,7 +141,8 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         }
         let write_token = env.secret("TURSO_WRITE_TOKEN")?.to_string();
         let csrf = GrantCsrf::new(&secret, session_cookie.as_deref().unwrap_or(""));
-        let owner_login = session_login.as_deref().unwrap_or(allowed.as_str());
+        let owner_login = session_login.as_deref()
+            .unwrap_or_else(|| pairs.first().map(|(login, _)| login.as_str()).unwrap_or(""));
         return handle_grant_post(
             &mut req,
             &path,
@@ -229,9 +226,10 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         )
         .await?;
         let rows = plans.first().cloned().unwrap_or_default();
-        // Owner banner name: the session login if present, else the configured
-        // ALLOWED_LOGIN (never a hardcoded handle — honors "no hardcode").
-        let owner_login = session_login.as_deref().unwrap_or(allowed.as_str());
+        // Owner banner name: the session login, else the first configured pair
+        // login (or empty when no pairs are configured).
+        let owner_login = session_login.as_deref()
+            .unwrap_or_else(|| pairs.first().map(|(login, _)| login.as_str()).unwrap_or(""));
         let csrf = GrantCsrf::new(&secret, session_cookie.as_deref().unwrap_or(""));
         let body = format!(
             "{}{}{}",
@@ -257,7 +255,8 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         // the request ?token= and never the session cookie. Viewers opening a share
         // link get no chrome (they are not logged in as owner).
         let owner_chrome = if is_owner_session {
-            let login = session_login.as_deref().unwrap_or(allowed.as_str());
+            let login = session_login.as_deref()
+            .unwrap_or_else(|| pairs.first().map(|(login, _)| login.as_str()).unwrap_or(""));
             let csrf = GrantCsrf::new(&secret, session_cookie.as_deref().unwrap_or(""));
             render::share::owner_plan_chrome(
                 slug,
@@ -388,11 +387,11 @@ async fn grant_plan_exists(turso_url: &str, write_token: &str, plan: &str) -> Re
 // SAFETY — interpolation: `turso::pipeline` sends raw SQL with NO bind parameters, so
 // every interpolated value must be safe by construction. `plan` and `token` reach here
 // only after `is_safe_slug` / `is_grant_token` (enforced in `decide_grant_post`).
-// `owner_login` originates ONLY from `gho::verify_session`, which returns the login
-// solely after it matches the allow-listed `ALLOWED_LOGIN`, so it can only ever be that
-// one constant value; `sql_quote` (single-quote doubling) is kept as defense-in-depth.
-// If the OAuth crate is ever relaxed to accept multiple logins / org members, this
-// becomes an injection sink — keep the allow-list invariant or switch to bound params.
+// `owner_login` originates ONLY from `gho::verify_session_any`, which returns the login
+// solely after an exact login/id pair match. It is one of N allow-listed constants,
+// so remains safe by construction; `sql_quote` is kept as defense-in-depth.
+// If the gate is ever relaxed to org-membership or arbitrary users, this becomes an
+// injection sink and bound parameters would be required.
 
 fn build_create_grant_sql(plan: &str, token: &str, owner_login: &str) -> String {
     let owner_sql = sql_quote(owner_login);

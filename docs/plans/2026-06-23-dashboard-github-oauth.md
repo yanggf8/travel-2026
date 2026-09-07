@@ -139,3 +139,10 @@ way forward. **Every denial must offer a path forward.**
 Both prior open questions are settled: the styled-denial page + the OAuth flow shipped together
 (one pass, via the shared crate); the GitHub App steps are the checklist above. The auth core lives
 in the shared `gwebcdb/crates/worker-github-oauth` crate, reused by finance + travel.
+
+Multi-admin update: `ALLOWED_LOGIN="yanggf8,lisyanggf"` and
+`ALLOWED_GITHUB_ID="48974237,56065649"` are comma-separated lists paired by index.
+Segments are trimmed and empty segments dropped; empty lists, unequal lengths, or
+any unparseable id deny all. OAuth callbacks and sessions require an exact pair
+match via `allowed_pairs` / `verify_session_any`; cross-pair matches are rejected.
+Single-value configuration remains supported, and the finance worker is unchanged.
