@@ -85,7 +85,17 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         "/auth/callback" => {
             return match gho::callback(&req, &env, &cfg, &url).await? {
                 CallbackOutcome::Authorized(r) => Ok(r),
-                CallbackOutcome::BadState(r) => Ok(r),
+                CallbackOutcome::BadState(r) => {
+                    // 403s (expired/replayed state, failed token exchange or user
+                    // fetch) get a styled retry page; the crate's 500 ("auth not
+                    // configured") passes through unchanged.
+                    if r.status_code() == 403 {
+                        Ok(html_no_store(render::auth::oauth_retry_page(lang))?
+                            .with_status(403))
+                    } else {
+                        Ok(r)
+                    }
+                }
                 CallbackOutcome::Denied { login, .. } => Ok(html_no_store(
                     render::auth::not_authorized_page(&login, lang),
                 )?

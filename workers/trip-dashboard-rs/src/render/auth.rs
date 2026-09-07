@@ -55,6 +55,13 @@ pub fn logged_out_page(lang: &str) -> String {
     page(t("signIn", lang), &body, lang)
 }
 
+/// Styled retry page for a failed OAuth callback (expired/replayed state, failed
+/// token exchange or user fetch) — every one of those has "sign in again" as the
+/// path forward, so they share one generic message.
+pub fn oauth_retry_page(lang: &str) -> String {
+    oauth_error_page(t("oauthError", lang), lang)
+}
+
 pub fn oauth_error_page(message: &str, lang: &str) -> String {
     let body = format!(
         r#"<div class="auth-page"><h1>{}</h1><p>{}</p><p><a href="/auth/login">{}</a></p></div>"#,
@@ -101,5 +108,16 @@ mod tests {
     fn bad_share_page_can_preserve_plan_login_target() {
         let html = bad_share_page("/auth/login?next=%2F%3Fplan%3Dokinawa-2026", "en");
         assert!(html.contains(r#"href="/auth/login?next=%2F%3Fplan%3Dokinawa-2026""#));
+    }
+
+    #[test]
+    fn oauth_retry_page_explains_and_points_back_to_sign_in() {
+        let zh = oauth_retry_page("zh");
+        assert!(zh.contains("請重新登入"));
+        assert!(zh.contains("/auth/login"));
+        let en = oauth_retry_page("en");
+        assert!(en.contains("sign in again"));
+        assert!(en.contains("/auth/login"));
+        assert!(!en.contains("請重新登入"));
     }
 }

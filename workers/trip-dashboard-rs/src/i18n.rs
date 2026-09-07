@@ -86,6 +86,8 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("notAuthorized", true) => "未授權",
         ("notAuthorizedBody", false) => "This account does not have access to the owner dashboard.",
         ("notAuthorizedBody", true) => "此帳號無法存取擁有者儀表板。",
+        ("oauthError", false) => "The sign-in session expired or did not complete. Please sign in again.",
+        ("oauthError", true) => "登入程序未完成或已逾時,請重新登入。",
         ("badShare", false) => "Invalid share link",
         ("badShare", true) => "分享連結無效",
         ("badShareBody", false) => "This trip link needs a valid share token.",
