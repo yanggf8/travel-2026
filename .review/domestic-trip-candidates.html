@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
+<title>國內小旅行候選評估</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@700;900&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+  :root{
+    --bg:#F3F5F1;
+    --surface:#FAFCF7;
+    --surface-pick:#E7EEE2;
+    --ink:#232821;
+    --ink-2:#63695D;
+    --ink-3:#8B917F;
+    --line:#D3D9C9;
+    --accent:#3F6B4A;
+    --accent-deep:#2F5138;
+    --on-accent:#F3F9EE;
+    --pro:#3F6B4A;
+    --con:#9A6B25;
+    --stage-open:#3F6B4A;
+    --stage-surcharge:#B57A22;
+    --stage-full:#9A9584;
+    --stage-ink:#FDF9F1;
+    --font-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    --font-disp:"Noto Serif TC","Songti TC","PMingLiU",serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#1C1F1A;
+      --surface:#242822;
+      --surface-pick:#2B3227;
+      --ink:#E5EADF;
+      --ink-2:#A2A896;
+      --ink-3:#7C8271;
+      --line:#39402F;
+      --accent:#7BAE88;
+      --accent-deep:#98C5A3;
+      --on-accent:#16211A;
+      --pro:#7BAE88;
+      --con:#D0A468;
+      --stage-open:#7BAE88;
+      --stage-surcharge:#C99A52;
+      --stage-full:#6E7462;
+      --stage-ink:#18211A;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#1C1F1A;
+    --surface:#242822;
+    --surface-pick:#2B3227;
+    --ink:#E5EADF;
+    --ink-2:#A2A896;
+    --ink-3:#7C8271;
+    --line:#39402F;
+    --accent:#7BAE88;
+    --accent-deep:#98C5A3;
+    --on-accent:#16211A;
+    --pro:#7BAE88;
+    --con:#D0A468;
+    --stage-open:#7BAE88;
+    --stage-surcharge:#C99A52;
+    --stage-full:#6E7462;
+    --stage-ink:#18211A;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--font-body);
+    font-size:15px;
+    line-height:1.8;
+    padding:44px 20px 56px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:660px;margin:0 auto;}
+
+  .eyebrow{
+    font-size:12px;letter-spacing:.22em;color:var(--ink-3);
+    text-transform:uppercase;margin-bottom:10px;
+  }
+  h1{
+    font-family:var(--font-disp);font-weight:900;
+    font-size:clamp(28px,7.6vw,38px);line-height:1.3;
+    text-wrap:balance;margin-bottom:14px;
+  }
+  .lede{color:var(--ink-2);max-width:34em;margin-bottom:14px;}
+  .meta{
+    font-family:var(--font-mono);font-size:12px;color:var(--ink-3);
+    letter-spacing:.02em;margin-bottom:18px;
+  }
+
+  section{margin-top:52px;}
+  .sec-eyebrow{
+    font-size:11px;letter-spacing:.24em;color:var(--ink-3);
+    margin-bottom:6px;
+  }
+  h2{
+    font-family:var(--font-disp);font-weight:700;font-size:22px;
+    line-height:1.4;text-wrap:balance;margin-bottom:16px;
+  }
+  h2 small{font-family:var(--font-body);font-weight:400;font-size:13px;color:var(--ink-2);margin-left:8px;}
+
+  .tour{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px;}
+  .tour + .tour{margin-top:14px;}
+  .tour-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px;}
+  .tour-head h3{font-family:var(--font-disp);font-weight:700;font-size:18px;}
+  .tour-head .code{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);margin-left:auto;letter-spacing:.03em;}
+  .tour-sub{font-size:13px;color:var(--ink-2);}
+  .tour-verdict{font-size:14px;margin:10px 0 4px;}
+  ul.pl{list-style:none;margin-top:8px;}
+  ul.pl li{padding-left:1.4em;position:relative;margin-top:6px;font-size:14px;}
+  ul.pl li::before{position:absolute;left:0;top:0;font-weight:700;}
+  ul.pl .good::before{content:"＋";color:var(--pro);}
+  ul.pl .bad::before{content:"−";color:var(--con);}
+  ul.pl .todo::before{content:"？";color:var(--ink-3);}
+
+  .rank{
+    font-size:12px;font-weight:700;letter-spacing:.14em;
+    padding:2px 10px 3px;border-radius:999px;
+    color:var(--ink-2);border:1px solid var(--line);
+  }
+  .rank.is-pending{color:var(--ink-3);border-style:dashed;}
+  .rank.is-top{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+
+  .pick{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px 18px 16px;}
+  .pick + .pick{margin-top:12px;}
+  .pick.is-top{background:var(--surface-pick);border-color:var(--accent);}
+  .pick .pc-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+  .pick h3{font-family:var(--font-disp);font-weight:700;font-size:19px;line-height:1.45;}
+  .pick h3 small{display:block;font-family:var(--font-body);font-weight:400;font-size:12.5px;color:var(--ink-2);margin-top:2px;}
+  .pc-line{font-size:13px;color:var(--ink-2);margin-top:6px;}
+  .pc-price{font-size:20px;font-weight:700;margin-top:8px;font-variant-numeric:tabular-nums;}
+  .pc-price span{font-size:12.5px;font-weight:400;color:var(--ink-2);margin-left:6px;}
+  .pc-verdict{margin-top:10px;font-size:14px;}
+  .pc-verdict b{color:var(--accent-deep);}
+
+  .datepill.is-forming{border-color:var(--stage-surcharge);color:var(--con);}
+
+  .scroll{
+    overflow-x:auto;-webkit-overflow-scrolling:touch;
+    background:var(--surface);
+    border:1px solid var(--line);border-radius:14px;
+  }
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:520px;}
+  th,td{
+    padding:10px 12px;border-bottom:1px solid var(--line);
+    font-size:13px;vertical-align:middle;text-align:center;
+    font-variant-numeric:tabular-nums;
+  }
+  tr:last-child th, tr:last-child td{border-bottom:none;}
+  thead th{
+    font-size:11.5px;font-weight:700;letter-spacing:.08em;color:var(--ink-2);
+    padding-top:12px;white-space:nowrap;
+  }
+  tbody th{
+    text-align:left;font-weight:500;color:var(--ink-2);
+    font-size:12.5px;white-space:nowrap;min-width:5.5em;
+  }
+  th:first-child,td:first-child{
+    position:sticky;left:0;z-index:1;
+    background:var(--surface);
+    box-shadow:1px 0 0 var(--line);
+    text-align:left;
+  }
+  td .sub{display:block;font-size:11px;color:var(--ink-3);line-height:1.5;}
+  .tbl-note{font-size:12.5px;color:var(--ink-2);margin:10px 2px 0;}
+
+  .datepill{
+    display:inline-flex;align-items:center;gap:4px;
+    padding:3px 9px;border-radius:999px;margin:2px 3px 2px 0;
+    font-size:12.5px;border:1px solid var(--line);
+  }
+  .datepill.is-open{border-color:var(--stage-open);color:var(--accent-deep);}
+  .datepill.is-surcharge{border-color:var(--stage-surcharge);color:var(--con);}
+  .datepill.is-full{color:var(--stage-full);text-decoration:line-through;border-style:dashed;}
+  .legend{
+    display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;
+    margin-top:10px;font-size:12.5px;color:var(--ink-2);
+  }
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+
+  ol.check{list-style:none;counter-reset:ck;margin-top:4px;}
+  ol.check li{
+    counter-increment:ck;position:relative;
+    padding:12px 14px 12px 46px;margin-top:10px;
+    border:1px solid var(--line);border-radius:12px;background:var(--surface);
+    font-size:14px;
+  }
+  ol.check li::before{
+    content:counter(ck);
+    position:absolute;left:14px;top:14px;
+    width:20px;height:20px;border-radius:6px;
+    border:1.5px solid var(--accent);color:var(--accent-deep);
+    font-size:12px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  ol.check li b{display:block;font-size:14px;}
+  ol.check li span{display:block;font-size:13px;color:var(--ink-2);}
+
+  .waiting{
+    border:1px dashed var(--line);border-radius:14px;
+    padding:16px 18px;font-size:13.5px;color:var(--ink-2);
+    margin-top:14px;
+  }
+
+  footer{
+    margin-top:56px;padding-top:16px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--ink-3);line-height:1.8;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">行程評估 · 國內旅遊海報</p>
+    <h1>國內小旅行候選評估</h1>
+    <p class="lede">三張海報是三種不同性質的短行程：日月潭雲品是「飯店＋私人接送」半自助package，太魯閣晶英跟礁溪風華是有領隊的小團體遊覽車行程。天數、價格帶、目的地都不一樣，很難直接說誰贏誰，所以下面先按「適合誰」分，再各自列清楚待確認事項。</p>
+    <p class="meta">候選數：3 · 更新 2026/09/12</p>
+  </header>
+
+  <section>
+    <p class="sec-eyebrow">VERDICT</p>
+    <h2>怎麼分</h2>
+
+    <article class="pick is-top">
+      <div class="pc-top">
+        <span class="rank is-top">最划算</span>
+      </div>
+      <h3>礁溪風華湯旅2日<small>空ㄟ農場 X 山嵐夜色</small></h3>
+      <p class="pc-line">11/9（一）、11/23（一）、12/30（三）· 台北出發 · 20人精緻小團（1人2座）</p>
+      <p class="pc-price">NT$4,688 / 人 <span>＋領隊小費 2天共200元/人</span></p>
+      <p class="pc-verdict"><b>三團裡單價最低，內容卻不寒酸。</b>礁溪風華渡假酒店 2023 年新開幕，一房一湯陽台獨立風呂——這種「房內就有湯」的規格通常是這類行程裡最容易讓人有度假感的一項。20人小團＋1人2座代表車上不會太擠。搭配「4大保證」（不進購物站／不收行政費／小費不亂漲），適合想快速充電、預算有限的溫泉小旅行。</p>
+    </article>
+
+    <article class="pick">
+      <div class="pc-top">
+        <span class="rank">內容最豐富</span>
+      </div>
+      <h3>太魯閣晶英3日<small>feat. 瑞穗天合</small></h3>
+      <p class="pc-line">9/15（二）、10/13（二）、11/10（二）、12/15（二）· 台北出發 · 火車來回</p>
+      <p class="pc-price">NT$12,800 起 / 人 <span>＋領隊小費 3天共300元/人</span></p>
+      <p class="pc-verdict"><b>價格是三團最高，但也是唯一 3 天、唯一住兩間五星飯店（峽谷型＋城堡型）的行程。</b>火車來回省了自駕/遊覽車在花蓮蜿蜒山路的體力消耗，走讀天祥還配「故事領路人」導覽，是三團裡唯一有文化導覽性質的。如果預算夠、想要一次把太魯閣＋瑞穗溫泉都收進兩晚裡，這團內容密度最高。</p>
+    </article>
+
+    <article class="pick">
+      <div class="pc-top">
+        <span class="rank is-pending">資料待補</span>
+      </div>
+      <h3>日月潭雲品<small>出雲之境 味假期</small></h3>
+      <p class="pc-line">1泊三食 · 9–12月共9個梯次（4個已標「已成團」）</p>
+      <p class="pc-price">NT$6,999 / 人 <span>早／午餐內容、房型、旅行社名稱都待確認</span></p>
+      <p class="pc-verdict"><b>唯一一個「非領隊小團」，比較像飯店住宿package＋私人接送。</b>價格介於另外兩團之間，賣點是雲品飯店本身＋包船遊湖＋腳踏車，但海報缺的資訊最多（早午餐、房型、訂金、取消政策、代訂單位都沒寫），加上熱門日期已經少了四個，排它之前最需要先補資料。</p>
+    </article>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">AT A GLANCE</p>
+    <h2>三團基本盤</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">項目</th>
+            <th scope="col">日月潭雲品</th>
+            <th scope="col">太魯閣晶英3日</th>
+            <th scope="col" class="is-top">礁溪風華2日</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">天數／晚數</th><td>1泊（2天1夜）</td><td>2泊6食（3天2夜）</td><td>1泊（2天1夜）</td></tr>
+          <tr><th scope="row">團費</th><td>6,999/人</td><td>12,800起/人</td><td><b>4,688/人</b></td></tr>
+          <tr><th scope="row">領隊小費</th><td>未列（無領隊，私人接送）</td><td>3天共300/人</td><td>2天共200/人</td></tr>
+          <tr><th scope="row">出發地</th><td>未列<span class="sub">待確認</span></td><td>台北</td><td>台北</td></tr>
+          <tr><th scope="row">交通方式</th><td>2022年全新賓士<span class="sub">私人接送，非遊覽車</span></td><td>火車來回</td><td>遊覽車<span class="sub">20人小團・1人2座</span></td></tr>
+          <tr><th scope="row">團型</th><td>無領隊（半自助）</td><td>有領隊小團</td><td>有領隊小團（20人）</td></tr>
+          <tr><th scope="row">住宿亮點</th><td>雲品（日月潭湖景五星）</td><td>雙五星：峽谷型＋城堡型</td><td>礁溪風華・一房一湯陽台風呂</td></tr>
+          <tr><th scope="row">餐食</th><td>三食（僅晚餐指名）</td><td>六食・早晚Buffet</td><td>未列<span class="sub">待確認</span></td></tr>
+          <tr><th scope="row">附加活動</th><td>包船遊湖＋腳踏車</td><td>走讀天祥（故事領路人）＋音樂城堡下午茶</td><td>藍湖酒吧飲品1杯</td></tr>
+          <tr><th scope="row">4大保證／防坑條款</th><td>未列</td><td>不進購物站／不收行政費／小費不亂漲</td><td>不進購物站／不收行政費／小費不亂漲</td></tr>
+          <tr><th scope="row">可訂日期</th><td>9個梯次（4個已滿）</td><td>4個梯次<span class="sub">10/13標「即將成團」</span></td><td>3個梯次</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">太魯閣晶英跟礁溪風華兩張海報的「4大保證」欄位第1項海報上寫「無車購」，字面意思看不太懂，很可能是排版/字型問題，實際保證內容建議直接跟業務確認，不要照字面猜。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">CANDIDATE 1</p>
+    <h2>日月潭雲品<small>出雲之境 味假期</small></h2>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">候選一</span>
+        <h3>一泊三食</h3>
+        <span class="code">南投・日月潭</span>
+      </div>
+      <p class="tour-sub">NT$6,999 / 人（一泊三食）· 保證使用 2022 年出廠全新賓士接送</p>
+      <p class="tour-verdict">主打「不趕行程、留時間享受飯店」——只有一晚，賣點集中在雲品本身的房型視野、晚餐、包船遊湖跟腳踏車，不是那種塞滿景點的團體遊覽車行程。</p>
+      <ul class="pl">
+        <li class="good">保證 2022 年出廠全新賓士接送——寫明車輛年份，不是隨便調度</li>
+        <li class="good">日月潭包船遊湖 + 腳踏車，含在團費內，不用自己額外訂船班</li>
+        <li class="good">雲品丹彤西式自助晚餐——三食裡唯一指名的一餐，算是賣點餐廳</li>
+        <li class="good">出發日選擇多（9–12 月共 9 個梯次），淡季平日也有班</li>
+        <li class="bad">熱門日期已經賣完：10/7、10/15、10/22、11/10 都標「已成團」（紅字劃線），可選的其實只剩 9/9、9/17、11/18、12/3、12/17 五個，加上 11/5 要多付 500 元/人</li>
+        <li class="todo">早、午餐內容沒寫——海報只點名晚餐，「三食」裡另外兩餐是飯店內用還是外帶／簡餐待確認</li>
+        <li class="todo">沒有旅行社／代訂單位名稱、訂金、取消政策、房型（幾人一室、湖景/山景）——這些海報上都沒有，訂之前要問清楚</li>
+        <li class="todo">6,999 元是雙人房均攤還是單人價，海報沒寫清楚，需確認</li>
+      </ul>
+    </article>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th scope="col">出發日期</th><th scope="col">狀態</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">9/9（三）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">9/17（四）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">10/7（三）</th><td><span class="datepill is-full">已成團</span></td></tr>
+          <tr><th scope="row">10/15（四）</th><td><span class="datepill is-full">已成團</span></td></tr>
+          <tr><th scope="row">10/22（四）</th><td><span class="datepill is-full">已成團</span></td></tr>
+          <tr><th scope="row">11/5（四）</th><td><span class="datepill is-surcharge">可訂 · +500元/人</span></td></tr>
+          <tr><th scope="row">11/10（二）</th><td><span class="datepill is-full">已成團</span></td></tr>
+          <tr><th scope="row">11/18（三）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">12/3（四）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">12/17（四）</th><td><span class="datepill is-open">可訂</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">海報說「紅色日期為已成團」——已成團通常代表當團已經滿團出發，不是「還能候補」的意思，若這五個可訂日期之外的日子你也想去，建議直接問是否有加開梯次。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">CANDIDATE 2</p>
+    <h2>太魯閣晶英3日<small>feat. 瑞穗天合</small></h2>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">候選二</span>
+        <h3>2泊6食</h3>
+        <span class="code">花蓮・太魯閣＋瑞穗</span>
+      </div>
+      <p class="tour-sub">NT$12,800 起 / 人（不含領隊小費，3天共300元/人）· 台北出發 · 火車來回</p>
+      <p class="tour-verdict">主題「靜謐重生・絕美重現・溫暖如昔」——太魯閣晶英酒店（峽谷型）＋瑞穗天合（城堡型）雙五星住宿，加上火車來回省掉山路奔波，是三團裡唯一 3 天、唯一有文化導覽（走讀天祥）的行程。</p>
+      <ul class="pl">
+        <li class="good">台北到花蓮火車來回，不用坐遊覽車走蘇花/中橫山路，體力負擔最小</li>
+        <li class="good">走讀天祥安排「故事領路人」——三團裡唯一的深度導覽內容，不只是走馬看花拍照</li>
+        <li class="good">雙五星飯店：峽谷型＋城堡型各一晚，2泊6食含早晚Buffet，館內設施豐富</li>
+        <li class="good">獨家加碼贈送音樂城堡下午茶；4大保證（不進購物站／不收行政費／小費不亂漲100/天）</li>
+        <li class="bad">價格是三團最高（12,800起，"起"字代表可能有更高房型加價），加小費實付會更高</li>
+        <li class="bad">只有 4 個出發日可選，且都是週二出發，上班族要特別排假；10/13 標「即將成團」（尚未滿團，需注意能否如期出發）</li>
+        <li class="todo">"12,800起"起價對應哪種房型、雙人房均攤與否，海報沒寫，需跟業務確認</li>
+        <li class="todo">「4大保證」第1項字面寫「無車購」，意思不明，建議直接問實際保證內容</li>
+      </ul>
+    </article>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th scope="col">出發日期</th><th scope="col">狀態</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">9/15（二）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">10/13（二）</th><td><span class="datepill is-forming">即將成團</span></td></tr>
+          <tr><th scope="row">11/10（二）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">12/15（二）</th><td><span class="datepill is-open">可訂</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">海報上「即將成團」是綠色標示，跟日月潭團的紅字「已成團」不同——即將成團代表接近確認出發但可能還沒滿，10/13 這團若考慮要盡快問業務目前人數。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">CANDIDATE 3</p>
+    <h2>礁溪風華湯旅2日<small>空ㄟ農場 X 山嵐夜色</small></h2>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">候選三</span>
+        <h3>1泊・20人小團</h3>
+        <span class="code">宜蘭・礁溪</span>
+      </div>
+      <p class="tour-sub">NT$4,688 / 人（不含領隊小費，2天共200元/人）· 台北出發 · 20人精緻小團（1人2座）</p>
+      <p class="tour-verdict">主打星空農場夜景＋礁溪風華渡假酒店（2023年新開幕，一房一湯陽台獨立風呂）——三團中單價最低，但溫泉房型規格反而是三團最個人化的一種。</p>
+      <ul class="pl">
+        <li class="good">單價全場最低（4,688/人），2天1夜的溫泉小旅行門檻很低</li>
+        <li class="good">一房一湯陽台獨立風呂——每間房自己就有湯屋，不用跟其他房客共用大眾池</li>
+        <li class="good">20人精緻小團＋1人2座，車上空間比一般40人團寬鬆</li>
+        <li class="good">4大保證同太魯閣團（不進購物站／不收行政費／小費不亂漲100/天），贈藍湖酒吧飲品1杯</li>
+        <li class="bad">只有 2 天 1 夜，行程內容（除了農場夜景＋酒店）海報上沒有列其他景點，這團更像是「衝一晚溫泉」而非深度遊程</li>
+        <li class="bad">3 個出發日都在平日（週一、週三），不像太魯閣團至少都排週二</li>
+        <li class="todo">除了空ㄟ農場、礁溪風華酒店，白天/隔天還有沒有其他行程點，海報沒寫，需確認</li>
+        <li class="todo">早晚餐內容、房型（雙人/四人房）都待確認</li>
+      </ul>
+    </article>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th scope="col">出發日期</th><th scope="col">狀態</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">11/9（一）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">11/23（一）</th><td><span class="datepill is-open">可訂</span></td></tr>
+          <tr><th scope="row">12/30（三）</th><td><span class="datepill is-open">可訂</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">HOW TO CHOOSE</p>
+    <h2>怎麼選</h2>
+    <ol class="check">
+      <li><b>預算有限、想快速衝一晚溫泉</b><span>礁溪風華湯旅2日——單價最低、房內就有獨立風呂。</span></li>
+      <li><b>預算夠、想要內容最豐富的一趟</b><span>太魯閣晶英3日——唯一3天、雙五星、有文化導覽，火車代步不用自駕/坐車走山路。</span></li>
+      <li><b>指名要去日月潭、不想跟團、想要飯店本身的體驗</b><span>日月潭雲品——但先把早午餐、房型、取消政策這些洞補上再訂。</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">BEFORE YOU BOOK</p>
+    <h2>報名前確認清單</h2>
+    <ol class="check">
+      <li><b>日月潭團：早、午餐吃什麼？</b><span>海報只點名晚餐是「雲品丹彤西式自助」，早餐、午餐要問清楚。</span></li>
+      <li><b>日月潭團：6,999 元的計價基礎？</b><span>是雙人房兩人均攤，還是單人報名也是這個價？有沒有單人房差、有沒有旅行社/代訂單位名稱、訂金與取消規則。</span></li>
+      <li><b>太魯閣團：12,800 起價對應什麼房型？</b><span>"起"字通常代表有更高等級房型要加價，出發前確認實際會被分配到哪個房型。</span></li>
+      <li><b>太魯閣團：10/13「即將成團」是否確定出發？</b><span>綠色標示代表接近成團但未必已滿，若鎖定這天先跟業務確認目前人數與確認出發的最後期限。</span></li>
+      <li><b>礁溪團：除了農場和酒店還有沒有其他行程？</b><span>海報只提到星空農場夜景跟酒店本身，2天1夜的其餘時段（白天／退房後）安排了什麼要問清楚。</span></li>
+      <li><b>三團共同：「4大保證」的實際條款內容？</b><span>太魯閣、礁溪兩張海報同一句「1.無車購」字面看不懂，建議直接請業務用白話解釋這四項保證具體內容，不要照海報字面猜。</span></li>
+    </ol>
+  </section>
+
+  <footer>
+    <p>資料來源：日月潭雲品「出雲之境 味假期」、太魯閣晶英「feat. 瑞穗天合」、礁溪風華「空ㄟ農場 X 山嵐夜色」三張促銷海報（截圖收到日 2026-09-12）。價格與可訂日期以海報為準，實際請以業務最新回覆為主；本頁隨候選團增加持續更新。</p>
+  </footer>
+
+</div>
+</body>
+</html>
