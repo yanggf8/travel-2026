@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
+<title>東北・四國賞楓四團評估</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@700;900&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+  :root{
+    --bg:#F5F3ED;
+    --surface:#FCFAF5;
+    --surface-pick:#F5E9E3;
+    --ink:#28231C;
+    --ink-2:#6E6455;
+    --ink-3:#988D7B;
+    --line:#DCD5C6;
+    --accent:#A63D33;
+    --accent-deep:#83302A;
+    --on-accent:#FBF6EE;
+    --pro:#43704E;
+    --con:#9A6B25;
+    --stage-peak:#A63D33;
+    --stage-ok:#B57A22;
+    --stage-tail:#7D7A4E;
+    --stage-off:#98907E;
+    --stage-skip:#B9B09D;
+    --stage-ink:#FDF9F1;
+    --font-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    --font-disp:"Noto Serif TC","Songti TC","PMingLiU",serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#1F1C17;
+      --surface:#28241E;
+      --surface-pick:#312720;
+      --ink:#EAE3D6;
+      --ink-2:#A29685;
+      --ink-3:#7E7464;
+      --line:#3B362D;
+      --accent:#CE6E5C;
+      --accent-deep:#E08A76;
+      --on-accent:#221C16;
+      --pro:#8CB894;
+      --con:#D0A468;
+      --stage-peak:#CE6E5C;
+      --stage-ok:#C99A52;
+      --stage-tail:#9A9770;
+      --stage-off:#736D5F;
+      --stage-skip:#56503F;
+      --stage-ink:#211D18;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#1F1C17;
+    --surface:#28241E;
+    --surface-pick:#312720;
+    --ink:#EAE3D6;
+    --ink-2:#A29685;
+    --ink-3:#7E7464;
+    --line:#3B362D;
+    --accent:#CE6E5C;
+    --accent-deep:#E08A76;
+    --on-accent:#221C16;
+    --pro:#8CB894;
+    --con:#D0A468;
+    --stage-peak:#CE6E5C;
+    --stage-ok:#C99A52;
+    --stage-tail:#9A9770;
+    --stage-off:#736D5F;
+    --stage-skip:#56503F;
+    --stage-ink:#211D18;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--font-body);
+    font-size:15px;
+    line-height:1.8;
+    padding:44px 20px 56px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:660px;margin:0 auto;}
+
+  /* ---------- header ---------- */
+  .eyebrow{
+    font-size:12px;letter-spacing:.22em;color:var(--ink-3);
+    text-transform:uppercase;margin-bottom:10px;
+  }
+  h1{
+    font-family:var(--font-disp);font-weight:900;
+    font-size:clamp(28px,7.6vw,38px);line-height:1.3;
+    text-wrap:balance;margin-bottom:14px;
+  }
+  .lede{color:var(--ink-2);max-width:34em;margin-bottom:14px;}
+  .meta{
+    font-family:var(--font-mono);font-size:12px;color:var(--ink-3);
+    letter-spacing:.02em;margin-bottom:18px;
+  }
+  .ramp{
+    height:3px;border-radius:2px;
+    background:linear-gradient(90deg,var(--stage-tail),var(--stage-ok),var(--stage-peak));
+    margin-bottom:8px;
+  }
+  .ramp-cap{font-size:12px;color:var(--ink-3);margin-bottom:0;}
+
+  /* ---------- sections ---------- */
+  section{margin-top:52px;}
+  .sec-eyebrow{
+    font-size:11px;letter-spacing:.24em;color:var(--ink-3);
+    margin-bottom:6px;
+  }
+  h2{
+    font-family:var(--font-disp);font-weight:700;font-size:22px;
+    line-height:1.4;text-wrap:balance;margin-bottom:16px;
+  }
+  h2 small{font-family:var(--font-body);font-weight:400;font-size:13px;color:var(--ink-2);margin-left:8px;}
+
+  /* ---------- verdict cards ---------- */
+  .pick{
+    border:1px solid var(--line);border-radius:14px;
+    background:var(--surface);
+    padding:18px 18px 16px;
+  }
+  .pick + .pick{margin-top:12px;}
+  .pick.is-top{background:var(--surface-pick);border-color:var(--accent);}
+  .pick.is-pending{border-style:dashed;}
+  .rank.is-pending{color:var(--ink-3);border-style:dashed;}
+  .pc-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+  .rank{
+    font-size:12px;font-weight:700;letter-spacing:.14em;
+    padding:2px 10px 3px;border-radius:999px;
+    color:var(--ink-2);border:1px solid var(--line);
+  }
+  .is-top .rank{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+  .meter{display:inline-flex;align-items:center;gap:5px;margin-left:auto;}
+  .meter i{width:7px;height:7px;border-radius:50%;background:var(--line);}
+  .meter.m3 i:nth-child(-n+3),.meter.m2 i:nth-child(-n+2),.meter.m1 i:nth-child(-n+1){background:var(--accent);}
+  .meter em{font-style:normal;font-size:12px;color:var(--ink-3);margin-left:3px;}
+  .pick h3{
+    font-family:var(--font-disp);font-weight:700;font-size:19px;line-height:1.45;
+  }
+  .pick h3 small{
+    display:block;font-family:var(--font-body);font-weight:400;
+    font-size:12.5px;color:var(--ink-2);margin-top:2px;
+  }
+  .pc-line{font-size:13px;color:var(--ink-2);margin-top:6px;}
+  .pc-price{
+    font-size:20px;font-weight:700;margin-top:8px;
+    font-variant-numeric:tabular-nums;
+  }
+  .pc-price span{font-size:12.5px;font-weight:400;color:var(--ink-2);margin-left:6px;}
+  .pc-verdict{margin-top:10px;font-size:14px;}
+  .pc-verdict b{color:var(--accent-deep);}
+
+  /* ---------- tables ---------- */
+  .tbl-note{font-size:12.5px;color:var(--ink-2);margin:10px 2px 0;}
+  .scroll{
+    overflow-x:auto;-webkit-overflow-scrolling:touch;
+    background:var(--surface);
+    border:1px solid var(--line);border-radius:14px;
+  }
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:560px;}
+  caption{text-align:left;padding:0;}
+  th,td{
+    padding:10px 12px;border-bottom:1px solid var(--line);
+    font-size:13px;vertical-align:middle;text-align:center;
+    font-variant-numeric:tabular-nums;
+  }
+  tr:last-child th, tr:last-child td{border-bottom:none;}
+  thead th{
+    font-size:11.5px;font-weight:700;letter-spacing:.08em;color:var(--ink-2);
+    padding-top:12px;white-space:nowrap;
+  }
+  thead th .rank{font-size:10px;letter-spacing:.1em;padding:1px 7px 2px;margin-left:4px;vertical-align:1px;}
+  thead th.is-top{color:var(--accent-deep);}
+  tbody th{
+    text-align:left;font-weight:500;color:var(--ink-2);
+    font-size:12.5px;white-space:nowrap;min-width:5.5em;
+  }
+  th:first-child,td:first-child{
+    position:sticky;left:0;z-index:1;
+    background:var(--surface);
+    box-shadow:1px 0 0 var(--line);
+  }
+  td b{font-weight:700;}
+  td .sub{display:block;font-size:11px;color:var(--ink-3);line-height:1.5;}
+
+  /* foliage badges */
+  .b{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:26px;height:26px;border-radius:8px;
+    font-size:13px;font-weight:700;color:var(--stage-ink);
+  }
+  .b-peak{background:var(--stage-peak);}
+  .b-ok{background:var(--stage-ok);}
+  .b-tail{background:var(--stage-tail);}
+  .b-off{background:var(--stage-off);}
+  .b-skip{background:transparent;color:var(--stage-skip);border:1px dashed var(--stage-skip);}
+  .cell-note{display:block;font-size:10.5px;color:var(--ink-3);line-height:1.4;margin-top:2px;}
+  .legend{
+    display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;
+    margin-top:12px;font-size:12.5px;color:var(--ink-2);
+  }
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+
+  /* ---------- pro/con cards ---------- */
+  .tour{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px;}
+  .tour + .tour{margin-top:14px;}
+  .tour-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px;}
+  .tour-head h3{font-family:var(--font-disp);font-weight:700;font-size:18px;}
+  .tour-head .code{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);margin-left:auto;letter-spacing:.03em;}
+  .tour-sub{font-size:13px;color:var(--ink-2);}
+  .tour-sub .fl{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3);display:block;margin-top:2px;letter-spacing:.02em;}
+  .tour-verdict{font-size:14px;margin:10px 0 4px;}
+  ul.pl{list-style:none;margin-top:8px;}
+  ul.pl li{padding-left:1.4em;position:relative;margin-top:6px;font-size:14px;}
+  ul.pl li::before{position:absolute;left:0;top:0;font-weight:700;}
+  ul.pl .good::before{content:"＋";color:var(--pro);}
+  ul.pl .bad::before{content:"−";color:var(--con);}
+
+  /* ---------- choose rows ---------- */
+  .choose{border-top:1px solid var(--line);}
+  .choose div{
+    display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;
+    padding:13px 2px;border-bottom:1px solid var(--line);
+  }
+  .choose .q{flex:1 1 16em;font-size:14px;}
+  .choose .a{
+    font-family:var(--font-disp);font-weight:700;font-size:15px;color:var(--accent-deep);
+    white-space:nowrap;
+  }
+  .choose .a::before{content:"→ ";color:var(--ink-3);font-family:var(--font-body);font-weight:400;}
+
+  /* ---------- checklist ---------- */
+  ol.check{list-style:none;counter-reset:ck;margin-top:4px;}
+  ol.check li{
+    counter-increment:ck;position:relative;
+    padding:12px 14px 12px 46px;margin-top:10px;
+    border:1px solid var(--line);border-radius:12px;background:var(--surface);
+    font-size:14px;
+  }
+  ol.check li::before{
+    content:counter(ck);
+    position:absolute;left:14px;top:14px;
+    width:20px;height:20px;border-radius:6px;
+    border:1.5px solid var(--accent);color:var(--accent-deep);
+    font-size:12px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  ol.check li b{display:block;font-size:14px;}
+  ol.check li span{display:block;font-size:13px;color:var(--ink-2);}
+
+  footer{
+    margin-top:56px;padding-top:16px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--ink-3);line-height:1.8;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">行程評估 · 賓士旅行社報價 ＋ 四國候選團海報</p>
+    <h1>東北・四國賞楓四團評估</h1>
+    <p class="lede">四個團都以 2026 年 11 月紅葉狩為賣點：三團在東北（花卷／新瀉／星宇），資訊完整可直接排序；第四團是國泰航空「四國瀨戶內海楓紀行6日」，目前只有海報等級的資訊，先以候選身分附在後面，還不能公平排入名次。</p>
+    <p class="meta">東北三團報價 2026/09 · 出發窗口 2026/11/02 – 11/19 · 四國候選海報 2026/08/12 · 單人含小費估列</p>
+    <div class="ramp" role="presentation"></div>
+    <p class="ramp-cap">橄欖 → 琥珀 → 緋紅：本頁所有紅葉狀態都用這組色階表示。</p>
+  </header>
+
+  <section>
+    <p class="sec-eyebrow">VERDICT</p>
+    <h2>推薦順序</h2>
+
+    <article class="pick is-top">
+      <div class="pc-top">
+        <span class="rank">首選</span>
+        <span class="meter m2" aria-label="楓期命中：中"><i></i><i></i><i></i><em>楓期命中 中</em></span>
+      </div>
+      <h3>花卷五日<small>紅葉戀曲 東北奧入瀨溪雙溫泉5日（HNA05261107A）</small></h3>
+      <p class="pc-line">11/7（六）– 11/11（三）· 虎航包機 花卷進出 · 15 人成團</p>
+      <p class="pc-price">NT$38,900 <span>＋小費 1,500 · 訂金 15,000</span></p>
+      <p class="pc-verdict"><b>綜合效益最佳。</b>只請 11/9–11 三天假、價格最低，五天塞進奧入瀨、十和田、銀山溫泉、鳴子峽、猊鼻溪、松島——精華密度三團最高。賭的是奧入瀨落在見頃尾端，偏晚年份才滿色。</p>
+    </article>
+
+    <article class="pick">
+      <div class="pc-top">
+        <span class="rank">次選</span>
+        <span class="meter m3" aria-label="楓期命中：高"><i></i><i></i><i></i><em>楓期命中 高</em></span>
+      </div>
+      <h3>新瀉五日<small>楓采東北百選溫泉5日（KIJ05261102A）</small></h3>
+      <p class="pc-line">11/2（一）– 11/6（五）· 虎航包機 新瀉進出 · 15 人成團</p>
+      <p class="pc-price">NT$39,900 <span>＋小費 1,500 · 訂金 15,000</span></p>
+      <p class="pc-verdict"><b>楓紅窗口最準。</b>銀山溫泉、會津城、大內宿正好見頃，內容組合最多元（古城、茅葺聚落、紅葉百選道路、狐狸村、松島、五色沼、採果）。代價是要請 5 天假，而且少了奧入瀨／鳴子峽這類峽谷王牌。</p>
+    </article>
+
+    <article class="pick">
+      <div class="pc-top">
+        <span class="rank">第三</span>
+        <span class="meter m1" aria-label="楓期命中：低"><i></i><i></i><i></i><em>楓期命中 低</em></span>
+      </div>
+      <h3>星宇七日<small>秋楓紅葉狩の旅 奧入瀨與阿信故鄉7日（TYO07261113B）</small></h3>
+      <p class="pc-line">11/13（五）– 11/19（四）· 星宇 成田進出 · 16–45 人聯合出團</p>
+      <p class="pc-price">NT$45,900 <span>＋小費 2,100 · 訂金 20,000</span></p>
+      <p class="pc-verdict"><b>最舒適、走最完整，但當紅葉狩會失望。</b>11 月中旬對奧入瀨、鳴子峽、五色沼已過見頃，實際看楓主要剩山寺。把它當「星宇＋四晚溫泉＋環東北散策團」就值得。</p>
+    </article>
+
+    <article class="pick is-pending">
+      <div class="pc-top">
+        <span class="rank is-pending">候選 · 資料待補</span>
+      </div>
+      <h3>四國六日<small>國泰航空「四國瀨戶內海楓紀行6日」· 出發日 11/5 或 11/12</small></h3>
+      <p class="pc-line">目前只有促銷海報，沒有逐日行程、航班、飯店與費用包含明細——無法比照上面三團用同樣深度排名。</p>
+      <p class="pc-price">NT$39,900 起 <span>其餘費用（小費／訂金／稅金燃油）待確認</span></p>
+      <p class="pc-verdict"><b>先當第四個「待確認」候選，別急著下單。</b>海報主打「楓紀行」，但九個景點裡真正跟紅葉相關的只有寒霞溪、大步危小步危／祖谷、栗林公園三處；11/5、11/12 兩個候選出發日對這三處來說都偏早，賞楓命中率待打問號。詳見下方「四國候選速覽」與「報名前確認清單」。</p>
+    </article>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">AT A GLANCE</p>
+    <h2>三團基本盤</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">項目</th>
+            <th scope="col" class="is-top">花卷五日<span class="rank">首選</span></th>
+            <th scope="col">新瀉五日<span class="rank">次選</span></th>
+            <th scope="col">星宇七日<span class="rank">第三</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">出發 – 回國</th><td>11/7（六）– 11/11（三）</td><td>11/2（一）– 11/6（五）</td><td>11/13（五）– 11/19（四）</td></tr>
+          <tr><th scope="row">請假天數</th><td><b>3 天</b><span class="sub">11/9–11</span></td><td>5 天</td><td>5 天</td></tr>
+          <tr><th scope="row">團費＋小費</th><td>38,900＋1,500</td><td>39,900＋1,500</td><td>45,900＋2,100</td></tr>
+          <tr><th scope="row">單日成本</th><td>NT$8,080</td><td>NT$8,280</td><td><b>NT$6,857</b></td></tr>
+          <tr><th scope="row">航班與進出</th><td>虎航包機<span class="sub">花卷進出・零繞路</span></td><td>虎航包機<span class="sub">新瀉進出</span></td><td>星宇正班<span class="sub">成田進出</span></td></tr>
+          <tr><th scope="row">溫泉晚數</th><td>2 晚</td><td>2 晚</td><td>標榜 4 晚<span class="sub">備案含商務飯店※</span></td></tr>
+          <tr><th scope="row">成團人數</th><td>15 人</td><td>15 人</td><td>16–45 人</td></tr>
+          <tr><th scope="row">訂金</th><td>NT$15,000</td><td>NT$15,000</td><td>NT$20,000</td></tr>
+          <tr><th scope="row">購物站</th><td>免稅店＋AEON×2</td><td>免稅店＋AEON</td><td>免稅店＋AEON</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">※ 「保證四晚溫泉」的飯店備用名單混有 Route-Inn／ART／盛岡大都會等商務飯店，報名前需確認溫泉保證的定義。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">FOLIAGE TIMING</p>
+    <h2>楓紅時間軸<small>常態見頃 vs 三個出發日</small></h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">景點</th>
+            <th scope="col">常態見頃</th>
+            <th scope="col" class="is-top">花卷<span class="sub" style="display:inline">11/7–11</span></th>
+            <th scope="col">新瀉<span class="sub" style="display:inline">11/2–6</span></th>
+            <th scope="col">星宇<span class="sub" style="display:inline">11/13–19</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">銀山溫泉</th><td>10月下 – 11月上</td>
+            <td><span class="b b-ok">○</span></td>
+            <td><span class="b b-peak">◎</span></td>
+            <td><span class="b b-tail">△</span></td>
+          </tr>
+          <tr>
+            <th scope="row">會津城・大內宿</th><td>10月中 – 11月上</td>
+            <td><span class="b b-ok">○</span></td>
+            <td><span class="b b-peak">◎</span></td>
+            <td><span class="b b-off">✕</span></td>
+          </tr>
+          <tr>
+            <th scope="row">奧入瀨・十和田</th><td>10月下 – 11月上</td>
+            <td><span class="b b-tail">△</span><span class="cell-note">尾聲・小賭</span></td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-off">✕</span></td>
+          </tr>
+          <tr>
+            <th scope="row">鳴子峽</th><td>10月中 – 11月初</td>
+            <td><span class="b b-tail">△</span><span class="cell-note">尾聲</span></td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-off">✕</span></td>
+          </tr>
+          <tr>
+            <th scope="row">五色沼・裏磐梯</th><td>10月上 – 10月下</td>
+            <td><span class="b b-off">✕</span></td>
+            <td><span class="b b-tail">△</span><span class="cell-note">尾聲</span></td>
+            <td><span class="b b-off">✕</span></td>
+          </tr>
+          <tr>
+            <th scope="row">吾妻天空步道</th><td>9月下 – 10月中<span class="sub">海拔 1,350m 偏早</span></td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-ok">○</span><span class="cell-note">低海拔段</span></td>
+            <td><span class="b b-off">✕</span></td>
+          </tr>
+          <tr>
+            <th scope="row">山寺</th><td>11月中前後</td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-peak">◎</span></td>
+          </tr>
+          <tr>
+            <th scope="row">松島</th><td>11月下 – 12月上</td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-ok">○</span><span class="cell-note">剛開始</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><span class="b b-peak">◎</span>見頃中</span>
+      <span><span class="b b-ok">○</span>尚可</span>
+      <span><span class="b b-tail">△</span>尾聲／賭一把</span>
+      <span><span class="b b-off">✕</span>已過期</span>
+      <span><span class="b b-skip">—</span>行程不走</span>
+    </div>
+    <p class="tbl-note">近年日本紅葉有偏晚數天到一週的趨勢，對星宇團略有幫助，但 11/13–19 看奧入瀨、鳴子峽仍是硬傷；花卷團 11/8 抵奧入瀨，落在見頃尾端。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">DETAILS</p>
+    <h2>各團優缺點</h2>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">首選</span>
+        <h3>花卷五日</h3>
+        <span class="code">HNA05261107A</span>
+      </div>
+      <p class="tour-sub">11/7（六）– 11/11（三）· NT$38,900 · 15 人成團
+        <span class="fl">IT258 TPE 12:15 → 花卷 16:30 ｜ IT259 花卷 17:50 → TPE 21:00</span>
+      </p>
+      <p class="tour-verdict">精華密度最高的一團：奧入瀨＋十和田＋銀山溫泉＋鳴子峽＋猊鼻溪＋松島，花卷進出就在岩手，零繞路。</p>
+      <ul class="pl">
+        <li class="good">價格最低、只請 3 天假（週六出發）；含機場稅燃油與 20kg 行李，頁面明載</li>
+        <li class="good">雫石星空銀河纜車夜間觀星、涮涮鍋飲料暢飲、仙台牛舌</li>
+        <li class="good">溫泉兩晚：雫石王子／岩手大江戶物語等</li>
+        <li class="bad">11/8 抵奧入瀨落在見頃尾端——楓色偏晚的年份才滿色，這團的小賭</li>
+        <li class="bad">星空纜車看天氣，停駛改安比雲海纜車、仍無法搭則每人退 ¥800</li>
+        <li class="bad">D3 四個景點（小岩井／達谷窟／猊鼻溪／抱返溪谷）行程緊</li>
+      </ul>
+    </article>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">次選</span>
+        <h3>新瀉五日</h3>
+        <span class="code">KIJ05261102A</span>
+      </div>
+      <p class="tour-sub">11/2（一）– 11/6（五）· NT$39,900 · 15 人成團
+        <span class="fl">IT228 TPE 13:55 → 新瀉 18:00 ｜ IT229 新瀉 19:00 → TPE 22:15</span>
+      </p>
+      <p class="tour-verdict">楓紅窗口最準：銀山溫泉、會津城、大內宿都在見頃；新瀉進出繞會津→山形→仙台一環，路線合理。</p>
+      <ul class="pl">
+        <li class="good">銀山溫泉／會津城／大內宿正對見頃，紅葉命中率三團最高</li>
+        <li class="good">組合多元：古城＋茅葺聚落＋紅葉百選道路＋狐狸村＋松島遊船＋五色沼＋採果＋烤牡蠣</li>
+        <li class="good">回程 19:00 起飛，最後一天還能走彌彥公園＋AEON</li>
+        <li class="bad">少了奧入瀨／鳴子峽峽谷王牌；D3 吾妻→銀山→狐狸村→仙台很趕</li>
+        <li class="bad">11/3（D2）撞日本文化之日連休，會津一帶人潮偏多</li>
+        <li class="bad">要請 5 天假；頁面「費用包含」只列保險——稅簽／行李要跟業務確認</li>
+      </ul>
+    </article>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">第三</span>
+        <h3>星宇七日</h3>
+        <span class="code">TYO07261113B</span>
+      </div>
+      <p class="tour-sub">11/13（五）– 11/19（四）· NT$45,900 · 16–45 人聯合出團（日本精緻假期）
+        <span class="fl">JX804 TPE 15:00 → 成田 19:25 ｜ JX801 成田 13:45 → TPE 16:50</span>
+      </p>
+      <p class="tour-verdict">最舒適、走最完整：塔崖、大內宿、五色沼、山寺、銀山溫泉、鳴子峽、十和田、奧入瀨健走、猊鼻溪、嚴美溪全都有。</p>
+      <ul class="pl">
+        <li class="good">星宇正航班（非包機），唯一搭 full-service carrier 的一團</li>
+        <li class="good">奧入瀨 2.5 小時健走賞楓，三團唯一；標榜四晚溫泉（名單含星野磐梯山、花卷溫泉、雫石王子）</li>
+        <li class="good">單日成本最低（約 NT$6,857／天）</li>
+        <li class="bad">11 月中旬對奧入瀨／鳴子峽／五色沼已過見頃，實際看楓主要剩山寺</li>
+        <li class="bad">「四晚溫泉保證」備用名單混商務飯店，需確認定義</li>
+        <li class="bad">D1 抵成田 19:25，拉車到水戶／宇都宮約 22:00 才進房；尾段阿武隈洞、日立海濱公園有填充感（掃帚草 10 月已無）</li>
+      </ul>
+    </article>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">CANDIDATE · 資料不全</p>
+    <h2>四國候選速覽<small>國泰航空「四國瀨戶內海楓紀行6日」</small></h2>
+    <p class="lede" style="margin-bottom:16px;">來源只有一張促銷海報（截圖日期 2026-08-12），上網查了東南、可樂、山富、五福、燦星等旅行社的四國行程頁，都沒找到完全對得上的同名團——很可能是限量預售、只在 LINE／FB 私訊發送，還沒上架成公開行程頁。以下先用海報上寫的內容做速覽，未列出的欄位一律「待確認」，不是查不到就假設沒有。</p>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">項目</th>
+            <th scope="col">四國六日（候選）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">出發日期</th><td>海報列 11/5・11/12・（另兩檔顯示已滿）<span class="sub">你在考慮 11/5 或 11/12</span></td></tr>
+          <tr><th scope="row">航空</th><td>國泰航空<span class="sub">TPE 無直飛四國，慣例經香港轉機——待跟業務確認實際轉機時間</span></td></tr>
+          <tr><th scope="row">團費</th><td>NT$39,900 起</td></tr>
+          <tr><th scope="row">小費／訂金／稅金燃油</th><td>待確認</td></tr>
+          <tr><th scope="row">逐日行程／航班時刻</th><td>待確認</td></tr>
+          <tr><th scope="row">溫泉／飯店晚數</th><td>待確認<span class="sub">海報未提溫泉保證晚數，跟前三團不同</span></td></tr>
+          <tr><th scope="row">成團人數</th><td>待確認</td></tr>
+          <tr><th scope="row">景點（海報列出）</th><td>小豆島橄欖公園、天使之路、寒霞溪纜車、栗林公園、金刀比羅宮、松山城、大鳴門橋渦之道、道後溫泉、祖谷葛藤橋、大小步危遊船、香川烏龍麵DIY、AEON MALL</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="tbl-note" style="margin-top:24px;">九個「行程特色」景點裡，真正吃紅葉時序的只有三個——寒霞溪、大步危小步危／祖谷、栗林公園。松山城、道後溫泉、天使之路、金刀比羅宮、渦之道、AEON 都是常態景點／溫泉／購物站，跟出發日期早晚無關。</p>
+
+    <div class="scroll" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">景點</th>
+            <th scope="col">常態見頃</th>
+            <th scope="col">11/5 候選</th>
+            <th scope="col">11/12 候選</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">寒霞溪纜車</th><td>11月上旬 – 11月下旬<span class="sub">山頂先紅，山腳晚半個月</span></td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早，多半仍綠</span></td>
+            <td><span class="b b-tail">△</span><span class="cell-note">山頂段可能起色</span></td>
+          </tr>
+          <tr>
+            <th scope="row">大步危・小步危／祖谷</th><td>11月上旬 – 11月中旬</td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-tail">△</span><span class="cell-note">尾聲前、賭一把</span></td>
+          </tr>
+          <tr>
+            <th scope="row">栗林公園</th><td>11月中旬 – 12月上旬</td>
+            <td><span class="b b-off">✕</span><span class="cell-note">明顯偏早</span></td>
+            <td><span class="b b-off">✕</span><span class="cell-note">仍偏早</span></td>
+          </tr>
+          <tr>
+            <th scope="row">松山城・道後溫泉・天使之路・金刀比羅宮・渦之道</th><td>非賞楓景點<span class="sub">古城／溫泉／沙洲／神社／漩渦，跟紅葉無關</span></td>
+            <td><span class="b b-skip">—</span></td>
+            <td><span class="b b-skip">—</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">見頃區間為四國近年常態估計，非本團當年官方預測；出發前務必查當年氣象廳／tenki.jp 紅葉情報，兩個候選日期看起來都偏早，尤其栗林公園。</p>
+
+    <article class="tour" style="margin-top:24px;">
+      <div class="tour-head">
+        <span class="rank is-pending">候選</span>
+        <h3>四國六日</h3>
+        <span class="code">資料不全，非正式代號</span>
+      </div>
+      <p class="tour-sub">出發日待選：11/5 或 11/12 · NT$39,900 起 · 國泰航空</p>
+      <p class="tour-verdict">唯一非東北的候選，也是唯一橫跨瀨戶內海＋德島山區的路線；但目前的資訊深度不足以跟前三團正面比較。</p>
+      <ul class="pl">
+        <li class="good">價格起價全場最低（39,900 起），且是四團中唯一走瀨戶內海／四國路線，景點組合（橄欖公園＋纜車＋古城＋漩渦＋溫泉＋烏龍麵DIY）多元，不只是紅葉單一賣點</li>
+        <li class="good">若以「瀨戶內海秋季小旅行」而非「賞楓團」看待，兩個候選日期都還算合理</li>
+        <li class="bad">兩個候選出發日（11/5、11/12）對海報主打的紅葉景點（寒霞溪／大步危小步危／栗林公園）都偏早，最有機會的栗林公園反而落空最多</li>
+        <li class="bad">國泰航空 TPE—四國沒有直飛，多半要經香港轉機，實際總飛行＋轉機時間可能比另外三團的包機／直飛多，會排擠假期天數，待業務確認</li>
+        <li class="bad">沒有逐日行程、航班時刻、溫泉晚數、費用包含／不含、成團人數、訂金——起價 39,900 底下藏什麼還看不到</li>
+      </ul>
+    </article>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">HOW TO CHOOSE</p>
+    <h2>怎麼選</h2>
+    <div class="choose">
+      <div><p class="q">想看紅葉，假期又緊</p><p class="a">花卷五日</p></div>
+      <div><p class="q">紅葉把握要最大</p><p class="a">新瀉五日</p></div>
+      <div><p class="q">舒適優先、想一次走完東北、愛星宇</p><p class="a">星宇七日</p></div>
+      <div><p class="q">在東北賞楓和四國候選之間猶豫</p><p class="a">先補資料再比</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">BEFORE YOU BOOK</p>
+    <h2>報名前跟孫嘉雯確認</h2>
+    <ol class="check">
+      <li><b>新瀉團的團費包含什麼？</b><span>行程頁「費用包含」只列責任保險——機場稅、燃油、行李是否含在 NT$39,900 內要問清楚。</span></li>
+      <li><b>星宇團「保證四晚溫泉」的定義？</b><span>飯店備用名單有 Route-Inn／ART／盛岡大都會等商務飯店，確認溫泉保證是否涵蓋備案。</span></li>
+      <li><b>兩個虎航包機的異動處理。</b><span>包機有調時、取消風險，問清楚若航班異動的改期／退費機制。</span></li>
+      <li><b>星宇團是聯合出團（16–45 人）。</b><span>以「日本精緻假期」名義出團，領隊由哪家旅行社派出、實際團體人數上限先問。</span></li>
+      <li><b>四國團跟哪家旅行社拿的？要完整行程頁。</b><span>海報沒有代理旅行社名稱和產品代號，先跟出海報的人要正式行程頁連結或 PDF，才能比照前三團查航班、飯店、費用包含。</span></li>
+      <li><b>四國團的飛航路線是否經香港轉機？來回總時數多少？</b><span>國泰航空 TPE 沒有四國直飛航班，先確認去回程實際航班與轉機時間，避免跟前三團的包機／直飛比出不公平的假期成本。</span></li>
+      <li><b>11/5 跟 11/12 兩個候選日期，當年紅葉預測抓什麼？</b><span>依常態見頃估算兩天都偏早，尤其栗林公園；出發前一到兩週查當年 tenki.jp／氣象廳紅葉情報，或直接問業務今年賞楓景點的預期見頃。</span></li>
+      <li><b>39,900 起價含不含稅金燃油、行李、小費、訂金？</b><span>海報只有起價一個數字，前三團的稅金燃油／行李／小費／訂金都是分開列的，四國團要一併問清楚才能算真實單日成本。</span></li>
+    </ol>
+  </section>
+
+  <footer>
+    <p>資料來源：東北三團行程頁（KIJ05261102A・HNA05261107A 於 joyeetour，TYO07261113B 於 newamazing），2026/09/11 抓取；售價引自 LINE 報價。四國候選團僅有一張促銷海報（截圖日期 2026-08-12），已搜尋東南、可樂、山富、五福、燦星、ezfly、太平洋等旅行社四國行程頁比對，未找到完全相符的同名／同代號產品——很可能尚未公開上架，需請業務補正式行程頁才能確認。楓紅時期為歷年常態見頃，實際以當年氣候為準。各項內容與價格以出發前說明會資料為主。</p>
+  </footer>
+
+</div>
+</body>
+</html>

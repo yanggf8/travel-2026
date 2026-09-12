@@ -1,0 +1,7 @@
+# Static evaluation page: 東北賞楓三團評估 (2026/11 三團比較)
+# Assets-only worker — no script, wrangler serves ./public as-is.
+name = "tohoku-koyo-2026"
+compatibility_date = "2024-12-01"
+
+[assets]
+directory = "./public"
