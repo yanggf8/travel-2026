@@ -155,6 +155,31 @@
   .pc-verdict{margin-top:10px;font-size:14px;}
   .pc-verdict b{color:var(--accent-deep);}
 
+  /* ---------- range map ---------- */
+  .range-map{
+    border:1px solid var(--line);border-radius:14px;background:var(--surface);
+    padding:14px 14px 12px;margin-bottom:14px;
+  }
+  .range-map-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
+  .range-map-head h3{font-family:var(--font-disp);font-size:17px;}
+  .range-map-head span{font-size:11px;color:var(--ink-3);}
+  .range-map svg{display:block;width:100%;height:auto;margin:2px 0 3px;}
+  .map-legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12px;color:var(--ink-2);}
+  .map-legend span{display:inline-flex;align-items:center;gap:6px;}
+  .map-key{width:10px;height:10px;border-radius:50%;display:inline-block;}
+  .map-key.kansai{background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 18%,transparent);}
+  .map-key.tohoku{background:var(--pro);box-shadow:0 0 0 4px color-mix(in srgb,var(--pro) 18%,transparent);}
+  .range-map-note{font-size:11px;color:var(--ink-3);margin-top:5px;}
+
+  /* ---------- movement cost ---------- */
+  .move-callout{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;}
+  .move-stat{border:1px solid var(--line);border-radius:12px;padding:12px 13px;background:var(--surface);}
+  .move-stat.is-top{border-color:var(--accent);background:var(--surface-pick);}
+  .move-stat b{display:block;font-size:12px;color:var(--ink-2);}
+  .move-stat strong{display:block;font-family:var(--font-mono);font-size:22px;line-height:1.35;margin-top:2px;}
+  .move-stat span{display:block;font-size:11.5px;color:var(--ink-2);line-height:1.5;}
+  @media(max-width:520px){.move-callout{grid-template-columns:1fr;}}
+
   /* ---------- tables ---------- */
   .tbl-note{font-size:12.5px;color:var(--ink-2);margin:10px 2px 0;}
   .scroll{
@@ -275,6 +300,36 @@
     <p class="sec-eyebrow">VERDICT</p>
     <h2>推薦順序</h2>
 
+    <figure class="range-map">
+      <div class="range-map-head"><h3>兩案在日本的位置</h3><span>範圍示意，非比例地圖</span></div>
+      <svg viewBox="0 0 640 275" role="img" aria-label="日本地圖示意：關西集中在京都與大阪，東北由仙台延伸至銀山、鳴子、山寺與奧入瀨">
+        <defs>
+          <filter id="map-shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#28231C" flood-opacity=".13"/></filter>
+        </defs>
+        <rect x="0" y="0" width="640" height="275" rx="10" fill="var(--bg)"/>
+        <path d="M470 27 530 18 576 34 586 63 559 82 514 76 480 58Z" fill="var(--line)" opacity=".72"/>
+        <path d="M124 62 178 45 249 48 316 67 380 78 445 99 485 119 480 139 438 147 397 139 355 151 314 143 276 156 237 148 196 159 156 143 124 122Z" fill="var(--line)" opacity=".82" filter="url(#map-shadow)"/>
+        <path d="M249 160 284 157 316 169 300 185 264 183 238 174Z" fill="var(--line)" opacity=".82"/>
+        <path d="M101 164 137 156 157 174 146 204 119 214 94 198Z" fill="var(--line)" opacity=".82"/>
+        <path d="M461 105 485 100 505 113 493 131 468 134 452 121Z" fill="var(--pro)" opacity=".28"/>
+        <path d="M445 118 C458 108 474 104 490 112 C505 121 514 130 528 143" fill="none" stroke="var(--pro)" stroke-width="10" stroke-linecap="round" opacity=".38"/>
+        <path d="M342 126 C329 132 318 139 307 147 C296 155 285 163 274 171" fill="none" stroke="var(--accent)" stroke-width="12" stroke-linecap="round" opacity=".36"/>
+        <g fill="var(--pro)" stroke="var(--surface)" stroke-width="3">
+          <circle cx="465" cy="117" r="6"/><circle cx="478" cy="108" r="5"/><circle cx="488" cy="126" r="5"/><circle cx="522" cy="143" r="6"/>
+        </g>
+        <g fill="var(--accent)" stroke="var(--surface)" stroke-width="3"><circle cx="326" cy="137" r="7"/><circle cx="349" cy="128" r="5"/><circle cx="274" cy="171" r="5"/></g>
+        <g font-family="var(--font-body)" font-size="12" fill="var(--ink)">
+          <text x="517" y="104">奧入瀨</text><text x="492" y="98">八戶</text><text x="452" y="101">仙台</text><text x="484" y="151">松島</text>
+          <text x="454" y="139">鳴子</text><text x="490" y="119">銀山・山寺</text>
+          <text x="304" y="125">京都・大阪</text><text x="253" y="190">KIX</text>
+          <text x="52" y="245" fill="var(--ink-3)" font-size="11">九州</text><text x="555" y="13" fill="var(--ink-3)" font-size="11">北海道</text>
+        </g>
+        <text x="18" y="24" font-family="var(--font-mono)" font-size="10" fill="var(--ink-3)" letter-spacing=".08em">JAPAN / TRAVEL RANGE</text>
+      </svg>
+      <div class="map-legend"><span><i class="map-key kansai"></i>關西：KIX／京都一帶，景點集中</span><span><i class="map-key tohoku"></i>東北：仙台 ↔ 鳴子／銀山／山寺 ↔ 八戶／奧入瀨，跨區移動</span></div>
+      <p class="range-map-note">地圖用來看「範圍與密度」：關西是京都周邊放射，東北是仙台進出、橫跨山形與青森的長距離線。</p>
+    </figure>
+
     <article class="pick is-top">
       <div class="pc-top">
         <span class="rank">首選 · 已鎖定</span>
@@ -349,6 +404,32 @@
       </table>
     </div>
     <p class="tbl-note">關西與東北 FIT 的交通成本意外同構：京都端是「利木津＋市內 4 日」，東北端是「JR PASS 5 日」——換成租車（¥60,000÷2 = ¥30,000/人）剛好與 JR PASS 同價，差別在自由度與駕駛疲勞，不在錢。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">TIME COST</p>
+    <h2>交通移動時間成本<small>依目前草案粗估</small></h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th scope="col">日程／指標</th><th scope="col" class="is-top">關西自由行</th><th scope="col">東北 FIT</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">D1 抵達</th><td>約 1.5–2 小時<span class="sub">KIX → 京都站 → 入宿</span></td><td>約 2–3 小時<span class="sub">SDJ → 松島 → 仙台</span></td></tr>
+          <tr><th scope="row">D2</th><td>約 4–5 小時<span class="sub">京都 → 高雄 → 貴船 → 京都</span></td><td>約 5–6 小時<span class="sub">仙台 → 鳴子 → 新庄／大石田 → 銀山</span></td></tr>
+          <tr><th scope="row">D3</th><td>約 2.5–3.5 小時<span class="sub">京都 → 大原 → 洛東，市區短接駁</span></td><td>約 3–4 小時<span class="sub">銀山 → 大石田 → 山寺 → 仙台</span></td></tr>
+          <tr><th scope="row">D4</th><td>約 1.5–2.5 小時<span class="sub">京都 → 嵐山／洛中，景點間多步行</span></td><td><b>約 10–12 小時</b><span class="sub">仙台 → 八戶 → 奧入瀨 → 十和田湖 → 返回；全程最硬</span></td></tr>
+          <tr><th scope="row">D5 離境</th><td>約 1.5–2 小時<span class="sub">京都 → KIX</span></td><td>約 1–1.5 小時<span class="sub">仙台市區 → SDJ</span></td></tr>
+          <tr><th scope="row"><b>五日移動合計</b></th><td><b>約 11–15 小時</b></td><td><b>約 21–26 小時</b></td></tr>
+          <tr><th scope="row">可真正停留景點</th><td><b>約 23–28 小時</b><span class="sub">景點集中，D2 以外多數日仍有半日至完整日</span></td><td><b>約 14–20 小時</b><span class="sub">D2、D4 被長距離移動切碎，D4 只剩短健走窗口</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="move-callout">
+      <div class="move-stat is-top"><b>關西：移動占活動時間</b><strong>約 30–40%</strong><span>代價集中在高雄／貴船那天；其餘景點密度高，抵達後能留較久。</span></div>
+      <div class="move-stat"><b>東北：移動占活動時間</b><strong>約 50–65%</strong><span>尤其 D4 來回仙台—八戶—奧入瀨；若改自駕住奧入瀨，能減少折返但仍是長途。</span></div>
+    </div>
+    <p class="tbl-note">以上是把機場接駁、鐵路／巴士、轉車等待與市區主要接駁算進去的「活動時間成本」粗估；不把景點內散步算成交通。東北的問題不是交通費一定更貴，而是五天內跨越的距離更長，真正停在景點看楓、泡湯、慢慢走的時間明顯較少。</p>
   </section>
 
   <section>
