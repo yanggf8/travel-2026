@@ -215,15 +215,16 @@
 
   /* foliage badges */
   .b{
-    display:inline-flex;align-items:center;justify-content:center;
-    width:26px;height:26px;border-radius:8px;
-    font-size:13px;font-weight:700;color:var(--stage-ink);
+    display:inline-block;width:24px;height:24px;
+    background:var(--stage-off);
+    clip-path:polygon(50% 0,58% 17%,73% 8%,72% 25%,94% 21%,82% 39%,100% 48%,80% 57%,87% 78%,67% 70%,61% 100%,50% 82%,39% 100%,33% 70%,13% 78%,20% 57%,0 48%,18% 39%,6% 21%,28% 25%,27% 8%,42% 17%);
+    vertical-align:middle;
   }
   .b-peak{background:var(--stage-peak);}
   .b-ok{background:var(--stage-ok);}
   .b-tail{background:var(--stage-tail);}
-  .b-off{background:var(--stage-off);}
-  .b-skip{background:transparent;color:var(--stage-skip);border:1px dashed var(--stage-skip);}
+  .b-off{background:var(--stage-off);opacity:.55;}
+  .b-skip{width:auto;height:auto;background:transparent;clip-path:none;color:var(--stage-skip);font-size:18px;line-height:1;}
   .cell-note{display:block;font-size:10.5px;color:var(--ink-3);line-height:1.4;margin-top:2px;}
   .legend{
     display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;
@@ -458,72 +459,72 @@
         <tbody>
           <tr>
             <th scope="row">奧入瀨・十和田</th><td>10月下 – 11月上</td>
-            <td><span class="b b-ok">○</span><span class="cell-note">見頃尾段</span></td>
+            <td><span class="b b-ok" aria-label="尚可"></span><span class="cell-note">見頃尾段</span></td>
             <td><span class="b b-skip">—</span></td>
           </tr>
           <tr>
             <th scope="row">鳴子峽</th><td>10月中 – 11月初</td>
-            <td><span class="b b-tail">△</span><span class="cell-note">尾聲</span></td>
+            <td><span class="b b-tail" aria-label="尾聲"></span><span class="cell-note">尾聲</span></td>
             <td><span class="b b-skip">—</span></td>
           </tr>
           <tr>
             <th scope="row">銀山溫泉</th><td>10月下 – 11月上</td>
-            <td><span class="b b-peak">◎</span></td>
+            <td><span class="b b-peak" aria-label="見頃中"></span></td>
             <td><span class="b b-skip">—</span></td>
           </tr>
           <tr>
             <th scope="row">山寺</th><td>11月中前後</td>
-            <td><span class="b b-off">✕</span><span class="cell-note">偏早・順路看初色</span></td>
+            <td><span class="b b-off" aria-label="偏早"></span><span class="cell-note">偏早・順路看初色</span></td>
             <td><span class="b b-skip">—</span></td>
           </tr>
           <tr>
             <th scope="row">松島</th><td>11月下 – 12月上</td>
-            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-off" aria-label="偏早"></span><span class="cell-note">偏早</span></td>
             <td><span class="b b-skip">—</span></td>
           </tr>
           <tr>
             <th scope="row">高雄神護寺</th><td>11月上 – 中</td>
-            <td><span class="b b-ok">○</span><span class="cell-note">起色</span></td>
-            <td><span class="b b-peak">◎</span><span class="cell-note">正峰</span></td>
+            <td><span class="b b-ok" aria-label="尚可"></span><span class="cell-note">起色</span></td>
+            <td><span class="b b-peak" aria-label="見頃中"></span><span class="cell-note">正峰</span></td>
           </tr>
           <tr>
             <th scope="row">大原三千院</th><td>11月中前後</td>
-            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
-            <td><span class="b b-peak">◎</span><span class="cell-note">正峰</span></td>
+            <td><span class="b b-off" aria-label="偏早"></span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-peak" aria-label="見頃中"></span><span class="cell-note">正峰</span></td>
           </tr>
           <tr>
             <th scope="row">貴船</th><td>11月中</td>
-            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
-            <td><span class="b b-peak">◎</span><span class="cell-note">點燈 11/7–24</span></td>
+            <td><span class="b b-off" aria-label="偏早"></span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-peak" aria-label="見頃中"></span><span class="cell-note">點燈 11/7–24</span></td>
           </tr>
           <tr>
             <th scope="row">永觀堂</th><td>11月下 – 12月上</td>
             <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
-            <td><span class="b b-ok">○</span><span class="cell-note">日間偏早・夜楓 11/11 起</span></td>
+            <td><span class="b b-ok" aria-label="尚可"></span><span class="cell-note">日間偏早・夜楓 11/11 起</span></td>
           </tr>
           <tr>
             <th scope="row">東福寺</th><td>11月中 – 下</td>
             <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
-            <td><span class="b b-ok">○</span><span class="cell-note">約 6–8 成色</span></td>
+            <td><span class="b b-ok" aria-label="尚可"></span><span class="cell-note">約 6–8 成色</span></td>
           </tr>
           <tr>
             <th scope="row">嵐山</th><td>11月中 – 下</td>
             <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
-            <td><span class="b b-ok">○</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-ok" aria-label="尚可"></span><span class="cell-note">偏早</span></td>
           </tr>
           <tr>
             <th scope="row">清水寺（夜楓）</th><td>日間 11月中 – 下<span class="sub">夜楓 11/21 – 12/7</span></td>
             <td><span class="b b-skip">—</span></td>
-            <td><span class="b b-off">✕</span><span class="cell-note">夜楓錯過・日間尚可</span></td>
+            <td><span class="b b-off" aria-label="偏早"></span><span class="cell-note">夜楓錯過・日間尚可</span></td>
           </tr>
         </tbody>
       </table>
     </div>
     <div class="legend">
-      <span><span class="b b-peak">◎</span>見頃中</span>
-      <span><span class="b b-ok">○</span>尚可</span>
-      <span><span class="b b-tail">△</span>尾聲／賭一把</span>
-      <span><span class="b b-off">✕</span>已過期／偏早</span>
+      <span><span class="b b-peak" aria-label="見頃中"></span>見頃中</span>
+      <span><span class="b b-ok" aria-label="尚可"></span>尚可</span>
+      <span><span class="b b-tail" aria-label="尾聲"></span>尾聲／賭一把</span>
+      <span><span class="b b-off" aria-label="偏早"></span>已過期／偏早</span>
       <span><span class="b b-skip">—</span>行程不走</span>
     </div>
     <p class="tbl-note">見頃為歷年常態估計，近年偏晚數天到一週的趨勢對「✕偏早」的格子略有幫助、對「△尾聲」的格子有害。出發前一至兩週以 tenki.jp／氣象廳紅葉情報校正。東北 FIT 把山寺排進 D3 是「順路看初色」的定位，不是楓紅主打。</p>
