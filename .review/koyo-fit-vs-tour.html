@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
+<title>關西・東北賞楓自由行評估</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@700;900&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+  :root{
+    --bg:#F5F3ED;
+    --surface:#FCFAF5;
+    --surface-pick:#F5E9E3;
+    --ink:#28231C;
+    --ink-2:#6E6455;
+    --ink-3:#988D7B;
+    --line:#DCD5C6;
+    --accent:#A63D33;
+    --accent-deep:#83302A;
+    --on-accent:#FBF6EE;
+    --pro:#43704E;
+    --con:#9A6B25;
+    --stage-peak:#A63D33;
+    --stage-ok:#B57A22;
+    --stage-tail:#7D7A4E;
+    --stage-off:#98907E;
+    --stage-skip:#B9B09D;
+    --stage-ink:#FDF9F1;
+    --font-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    --font-disp:"Noto Serif TC","Songti TC","PMingLiU",serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#1F1C17;
+      --surface:#28241E;
+      --surface-pick:#312720;
+      --ink:#EAE3D6;
+      --ink-2:#A29685;
+      --ink-3:#7E7464;
+      --line:#3B362D;
+      --accent:#CE6E5C;
+      --accent-deep:#E08A76;
+      --on-accent:#221C16;
+      --pro:#8CB894;
+      --con:#D0A468;
+      --stage-peak:#CE6E5C;
+      --stage-ok:#C99A52;
+      --stage-tail:#9A9770;
+      --stage-off:#736D5F;
+      --stage-skip:#56503F;
+      --stage-ink:#211D18;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#1F1C17;
+    --surface:#28241E;
+    --surface-pick:#312720;
+    --ink:#EAE3D6;
+    --ink-2:#A29685;
+    --ink-3:#7E7464;
+    --line:#3B362D;
+    --accent:#CE6E5C;
+    --accent-deep:#E08A76;
+    --on-accent:#221C16;
+    --pro:#8CB894;
+    --con:#D0A468;
+    --stage-peak:#CE6E5C;
+    --stage-ok:#C99A52;
+    --stage-tail:#9A9770;
+    --stage-off:#736D5F;
+    --stage-skip:#56503F;
+    --stage-ink:#211D18;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--font-body);
+    font-size:15px;
+    line-height:1.8;
+    padding:44px 20px 56px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:660px;margin:0 auto;}
+
+  /* ---------- header ---------- */
+  .eyebrow{
+    font-size:12px;letter-spacing:.22em;color:var(--ink-3);
+    text-transform:uppercase;margin-bottom:10px;
+  }
+  h1{
+    font-family:var(--font-disp);font-weight:900;
+    font-size:clamp(28px,7.6vw,38px);line-height:1.3;
+    text-wrap:balance;margin-bottom:14px;
+  }
+  .lede{color:var(--ink-2);max-width:34em;margin-bottom:14px;}
+  .meta{
+    font-family:var(--font-mono);font-size:12px;color:var(--ink-3);
+    letter-spacing:.02em;margin-bottom:18px;
+  }
+  .ramp{
+    height:3px;border-radius:2px;
+    background:linear-gradient(90deg,var(--stage-tail),var(--stage-ok),var(--stage-peak));
+    margin-bottom:8px;
+  }
+  .ramp-cap{font-size:12px;color:var(--ink-3);margin-bottom:0;}
+
+  /* ---------- sections ---------- */
+  section{margin-top:52px;}
+  .sec-eyebrow{
+    font-size:11px;letter-spacing:.24em;color:var(--ink-3);
+    margin-bottom:6px;
+  }
+  h2{
+    font-family:var(--font-disp);font-weight:700;font-size:22px;
+    line-height:1.4;text-wrap:balance;margin-bottom:16px;
+  }
+  h2 small{font-family:var(--font-body);font-weight:400;font-size:13px;color:var(--ink-2);margin-left:8px;}
+
+  /* ---------- verdict cards ---------- */
+  .pick{
+    border:1px solid var(--line);border-radius:14px;
+    background:var(--surface);
+    padding:18px 18px 16px;
+  }
+  .pick + .pick{margin-top:12px;}
+  .pick.is-top{background:var(--surface-pick);border-color:var(--accent);}
+  .rank.is-pending{color:var(--ink-3);border-style:dashed;}
+  .pc-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+  .rank{
+    font-size:12px;font-weight:700;letter-spacing:.14em;
+    padding:2px 10px 3px;border-radius:999px;
+    color:var(--ink-2);border:1px solid var(--line);
+  }
+  .is-top .rank{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+  .meter{display:inline-flex;align-items:center;gap:5px;margin-left:auto;}
+  .meter i{width:7px;height:7px;border-radius:50%;background:var(--line);}
+  .meter.m3 i:nth-child(-n+3),.meter.m2 i:nth-child(-n+2),.meter.m1 i:nth-child(-n+1){background:var(--accent);}
+  .meter em{font-style:normal;font-size:12px;color:var(--ink-3);margin-left:3px;}
+  .pick h3{
+    font-family:var(--font-disp);font-weight:700;font-size:19px;line-height:1.45;
+  }
+  .pick h3 small{
+    display:block;font-family:var(--font-body);font-weight:400;
+    font-size:12.5px;color:var(--ink-2);margin-top:2px;
+  }
+  .pc-line{font-size:13px;color:var(--ink-2);margin-top:6px;}
+  .pc-price{
+    font-size:20px;font-weight:700;margin-top:8px;
+    font-variant-numeric:tabular-nums;
+  }
+  .pc-price span{font-size:12.5px;font-weight:400;color:var(--ink-2);margin-left:6px;}
+  .pc-verdict{margin-top:10px;font-size:14px;}
+  .pc-verdict b{color:var(--accent-deep);}
+
+  /* ---------- tables ---------- */
+  .tbl-note{font-size:12.5px;color:var(--ink-2);margin:10px 2px 0;}
+  .scroll{
+    overflow-x:auto;-webkit-overflow-scrolling:touch;
+    background:var(--surface);
+    border:1px solid var(--line);border-radius:14px;
+  }
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:560px;}
+  caption{text-align:left;padding:0;}
+  th,td{
+    padding:10px 12px;border-bottom:1px solid var(--line);
+    font-size:13px;vertical-align:middle;text-align:center;
+    font-variant-numeric:tabular-nums;
+  }
+  tr:last-child th, tr:last-child td{border-bottom:none;}
+  thead th{
+    font-size:11.5px;font-weight:700;letter-spacing:.08em;color:var(--ink-2);
+    padding-top:12px;white-space:nowrap;
+  }
+  thead th .rank{font-size:10px;letter-spacing:.1em;padding:1px 7px 2px;margin-left:4px;vertical-align:1px;}
+  thead th.is-top{color:var(--accent-deep);}
+  tbody th{
+    text-align:left;font-weight:500;color:var(--ink-2);
+    font-size:12.5px;white-space:nowrap;min-width:5.5em;
+  }
+  th:first-child,td:first-child{
+    position:sticky;left:0;z-index:1;
+    background:var(--surface);
+    box-shadow:1px 0 0 var(--line);
+  }
+  td b{font-weight:700;}
+  td .sub{display:block;font-size:11px;color:var(--ink-3);line-height:1.5;}
+
+  /* foliage badges */
+  .b{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:26px;height:26px;border-radius:8px;
+    font-size:13px;font-weight:700;color:var(--stage-ink);
+  }
+  .b-peak{background:var(--stage-peak);}
+  .b-ok{background:var(--stage-ok);}
+  .b-tail{background:var(--stage-tail);}
+  .b-off{background:var(--stage-off);}
+  .b-skip{background:transparent;color:var(--stage-skip);border:1px dashed var(--stage-skip);}
+  .cell-note{display:block;font-size:10.5px;color:var(--ink-3);line-height:1.4;margin-top:2px;}
+  .legend{
+    display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;
+    margin-top:12px;font-size:12.5px;color:var(--ink-2);
+  }
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+
+  /* ---------- pro/con cards ---------- */
+  .tour{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:18px;}
+  .tour + .tour{margin-top:14px;}
+  .tour-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px;}
+  .tour-head h3{font-family:var(--font-disp);font-weight:700;font-size:18px;}
+  .tour-head .code{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);margin-left:auto;letter-spacing:.03em;}
+  .tour-sub{font-size:13px;color:var(--ink-2);}
+  .tour-sub .fl{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3);display:block;margin-top:2px;letter-spacing:.02em;}
+  .tour-verdict{font-size:14px;margin:10px 0 4px;}
+  ul.pl{list-style:none;margin-top:8px;}
+  ul.pl li{padding-left:1.4em;position:relative;margin-top:6px;font-size:14px;}
+  ul.pl li::before{position:absolute;left:0;top:0;font-weight:700;}
+  ul.pl .good::before{content:"＋";color:var(--pro);}
+  ul.pl .bad::before{content:"−";color:var(--con);}
+
+  /* ---------- choose rows ---------- */
+  .choose{border-top:1px solid var(--line);}
+  .choose div{
+    display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;
+    padding:13px 2px;border-bottom:1px solid var(--line);
+  }
+  .choose .q{flex:1 1 16em;font-size:14px;}
+  .choose .a{
+    font-family:var(--font-disp);font-weight:700;font-size:15px;color:var(--accent-deep);
+    white-space:nowrap;
+  }
+  .choose .a::before{content:"→ ";color:var(--ink-3);font-family:var(--font-body);font-weight:400;}
+
+  /* ---------- checklist ---------- */
+  ol.check{list-style:none;counter-reset:ck;margin-top:4px;}
+  ol.check li{
+    counter-increment:ck;position:relative;
+    padding:12px 14px 12px 46px;margin-top:10px;
+    border:1px solid var(--line);border-radius:12px;background:var(--surface);
+    font-size:14px;
+  }
+  ol.check li::before{
+    content:counter(ck);
+    position:absolute;left:14px;top:14px;
+    width:20px;height:20px;border-radius:6px;
+    border:1.5px solid var(--accent);color:var(--accent-deep);
+    font-size:12px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  ol.check li b{display:block;font-size:14px;}
+  ol.check li span{display:block;font-size:13px;color:var(--ink-2);}
+
+  footer{
+    margin-top:56px;padding-top:16px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--ink-3);line-height:1.8;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">行程評估 · 兩個自由行 · 兩地研究完成</p>
+    <h1>關西・東北賞楓自由行評估</h1>
+    <p class="lede">把「已鎖定的關西自由行」與「若加一場的東北自由行（FIT）」放在一起比：每人總成本、楓紅命中率、硬限制與出發前要辦的事，一次列齊。關西這場機票與飯店已在手，本頁是排行程前的定調。</p>
+    <p class="meta">關西 2026/11/12–16 · 東北 FIT 建議窗 2026/11/5–9 · 每人總成本含回程機票與住宿 · 匯率 1 JPY ≈ NT$0.21 推估 · 研究 2026/09/19–20（回程查價 09/20）</p>
+    <div class="ramp" role="presentation"></div>
+    <p class="ramp-cap">橄欖 → 琥珀 → 緋紅：本頁所有紅葉狀態都用這組色階表示。</p>
+  </header>
+
+  <section>
+    <p class="sec-eyebrow">VERDICT</p>
+    <h2>推薦順序</h2>
+
+    <article class="pick is-top">
+      <div class="pc-top">
+        <span class="rank">首選 · 已鎖定</span>
+        <span class="meter m3" aria-label="楓期命中：高"><i></i><i></i><i></i><em>楓期命中 高</em></span>
+      </div>
+      <h3>關西自由行<small>京都站北 APA 為基地 · 東福寺／永觀堂／高雄／大原／嵐山／貴船</small></h3>
+      <p class="pc-line">11/12（四）– 11/16（一）五天四夜 · 直飛 KIX，去程已訂 TPE 09:40 → KIX 13:10（正常時段）· 回程建議 樂桃 KIX 10:10 → TPE 12:40（正常時段上午班）· APA 京都站北 4 晚（報價已抓，11/11 前免費取消）</p>
+      <p class="pc-price">≈ NT$28,900–29,700 <span>機 15,741（去 9,860＋回 5,881）＋住 8,942＋當地 4,100–4,800＋京都住宿稅</span></p>
+      <p class="pc-verdict"><b>最省、最穩、也已經辦到一半。</b>京都山區（高雄／大原／貴船）正峰穩定命中，永觀堂夜楓 11/11 開跑全程可看，點燈期間可看 7 處以上；市區經典比滿開早一週，但峰前人潮少約三成。已改訂正常時段班（09:40→13:10，比原 18:50 晚班多約 NT$1,800）：13:10 落地、15:30 前後入宿，Day 1 有完整的京都塔夜景＋京都站晚餐。回程同樣抓上午班：主選樂桃 10:10→12:40（單程 5,881，中午落地桃園）；想留最後一個上午則捷星 14:55→17:15（5,748）；要全服務上午班則長榮 10:55→13:10（11,462）。</p>
+    </article>
+
+    <article class="pick">
+      <div class="pc-top">
+        <span class="rank">次選 · 加場東北就選這個</span>
+        <span class="meter m2" aria-label="楓期命中：中"><i></i><i></i><i></i><em>楓期命中 中</em></span>
+      </div>
+      <h3>東北自由行 FIT<small>仙台進出 · 銀山溫泉 1 泊＋仙台 3 泊 · 自駕或 JR PASS</small></h3>
+      <p class="pc-line">建議 11/5（四）– 11/9（一）五天四夜 · 長榮 BR118 10:05→SDJ 14:35／BR117 16:05→18:55（或星宇 JX862 11:35→16:00／JX863 17:25→20:35）· 鳴子峽／銀山溫泉／山寺／奧入瀨／松島</p>
+      <p class="pc-price">≈ NT$29,000–37,000 <span>機（星宇／長榮正常時段）＋JR PASS ¥30,000 或租車全包 ¥60,000÷2——分攤後幾乎同價</span></p>
+      <p class="pc-verdict"><b>正常時段直飛＋路線自由</b>（銀山溫泉街過夜、山寺順路）。代價是全部自己扛：奧入瀨巴士 11/11 死線、鳴子峽鐵路 2026 是否復駛待確認、銀山溫泉楓季訂房要搶。虎航（10,000–13,000，下午班）只是省錢備案——用它的話總價才是 22,000–28,000。</p>
+    </article>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">AT A GLANCE</p>
+    <h2>三方基本盤</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">項目</th>
+            <th scope="col" class="is-top">關西自由行<span class="rank">首選</span></th>
+            <th scope="col">東北 FIT<span class="sub" style="display:inline">11/5–9</span></th>
+                      </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">出發 – 回國</th><td>11/12（四）– 11/16（一）<span class="sub">五天四夜</span></td><td>11/5（四）– 11/9（一）建議<span class="sub">五天四夜</span></td></tr>
+          <tr><th scope="row">請假天數</th><td><b>3 天</b><span class="sub">11/12・13・16</span></td><td><b>3 天</b><span class="sub">11/5・6・9</span></td></tr>
+          <tr><th scope="row">機票（每人）</th><td>15,741<span class="sub">去 9,860 已訂＋回 5,881 樂桃 10:10→12:40</span></td><td>17,000–22,000 星宇／長榮<span class="sub">BR118 10:05→14:35・BR117 16:05→18:55；虎航備案 10,000–13,000</span></td></tr>
+          <tr><th scope="row">住宿（每人）</th><td>8,942<span class="sub">APA 京都站北 4 晚，已抓價</span></td><td>5,400–8,000<span class="sub">銀山溫泉 1 泊＋仙台 3 晚</span></td></tr>
+          <tr><th scope="row">當地交通＋門票</th><td>≈ 4,100–4,800</td><td>≈ 6,900</td></tr>
+          <tr><th scope="row">每人合計</th><td><b>≈ 28,900–29,700</b><span class="sub">捷星午後班版 ≈28,800–29,500；華航回程版 ≈35,000–35,700</span></td><td><b>≈ 29,000–37,000</b><span class="sub">虎航備案版 22,000–28,000</span></td></tr>
+          <tr><th scope="row">溫泉晚數</th><td>0</td><td>1（銀山溫泉一泊二食）</td></tr>
+          <tr><th scope="row">規劃負擔</th><td>低（只剩排行程）</td><td><b>高</b><span class="sub">巴士時刻＋訂房＋路線全自來</span></td></tr>
+          <tr><th scope="row">主要風險</th><td>回程未開票<span class="sub">建議班次已定：樂桃 10:10→12:40</span></td><td>奧入瀨巴士 11/11 死線<span class="sub">鳴子峽鐵路待確認</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">成本皆為單人概估（2 人同行分攤）、不含餐食；日圓項目按 1 JPY ≈ NT$0.21 推估，實際以付款日匯率為準。東北 FIT 機票以星宇／長榮正常時段為基準（區間推估），虎航只列省錢備案；開票前以官網實價確認。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">COST DETAIL</p>
+    <h2>成本明細</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">項目</th>
+            <th scope="col" class="is-top">關西自由行</th>
+            <th scope="col">東北 FIT</th>
+                      </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">機票</th><td>NT$15,741<span class="sub">去程已訂 9,860（TPE 09:40→KIX 13:10）＋回程 5,881（樂桃 KIX 10:10→TPE 12:40 上午班）；捷星 14:55→17:15 版 15,608、長榮 10:55→13:10 版 21,322</span></td><td>NT$17,000–22,000<span class="sub">星宇／長榮正常時段；虎航備案 10,000–13,000</span></td></tr>
+          <tr><th scope="row">住宿</th><td>NT$8,942<span class="sub">APA 京都站北 ¥NT4,471/晚 ÷2人 ×4</span></td><td>NT$5,400–8,000<span class="sub">銀山 ¥14–20k÷2＋仙台 ¥4–6k×3÷… 雙人分攤</span></td></tr>
+          <tr><th scope="row">當地交通</th><td>NT$4,100–4,800<span class="sub">利木津 ¥2,800＋京都 4 日 ¥16–20k</span></td><td>NT$6,300<span class="sub">JR PASS ¥30,000；或租車油費過路 ¥60k÷2 同價＋雜支 ¥3k</span></td></tr>
+          <tr><th scope="row">門票／夜楓</th><td>已含上列<span class="sub">¥4–5k/日 之內</span></td><td>NT$630<span class="sub">鳴子紅葉號巴士、遊船等</span></td></tr>
+          <tr><th scope="row">稅費小費</th><td>京都住宿稅 ≈ NT$170</td><td>—</td></tr>
+          <tr><th scope="row"><b>合計（每人）</b></th><td><b>≈ 28,900–29,700</b><span class="sub">機票去回＋住宿 4 晚全計入</span></td><td><b>≈ 29,000–37,000</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">關西與東北 FIT 的交通成本意外同構：京都端是「利木津＋市內 4 日」，東北端是「JR PASS 5 日」——換成租車（¥60,000÷2 = ¥30,000/人）剛好與 JR PASS 同價，差別在自由度與駕駛疲勞，不在錢。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">FOLIAGE TIMING</p>
+    <h2>楓紅時間軸<small>常態見頃 vs 三個窗口</small></h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">景點</th>
+            <th scope="col">常態見頃</th>
+            <th scope="col">東北 FIT<span class="sub" style="display:inline">11/5–9</span></th>
+                        <th scope="col" class="is-top">關西<span class="sub" style="display:inline">11/12–16</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">奧入瀨・十和田</th><td>10月下 – 11月上</td>
+            <td><span class="b b-ok">○</span><span class="cell-note">見頃尾段</span></td>
+            <td><span class="b b-skip">—</span></td>
+          </tr>
+          <tr>
+            <th scope="row">鳴子峽</th><td>10月中 – 11月初</td>
+            <td><span class="b b-tail">△</span><span class="cell-note">尾聲</span></td>
+            <td><span class="b b-skip">—</span></td>
+          </tr>
+          <tr>
+            <th scope="row">銀山溫泉</th><td>10月下 – 11月上</td>
+            <td><span class="b b-peak">◎</span></td>
+            <td><span class="b b-skip">—</span></td>
+          </tr>
+          <tr>
+            <th scope="row">山寺</th><td>11月中前後</td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早・順路看初色</span></td>
+            <td><span class="b b-skip">—</span></td>
+          </tr>
+          <tr>
+            <th scope="row">松島</th><td>11月下 – 12月上</td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-skip">—</span></td>
+          </tr>
+          <tr>
+            <th scope="row">高雄神護寺</th><td>11月上 – 中</td>
+            <td><span class="b b-ok">○</span><span class="cell-note">起色</span></td>
+            <td><span class="b b-peak">◎</span><span class="cell-note">正峰</span></td>
+          </tr>
+          <tr>
+            <th scope="row">大原三千院</th><td>11月中前後</td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-peak">◎</span><span class="cell-note">正峰</span></td>
+          </tr>
+          <tr>
+            <th scope="row">貴船</th><td>11月中</td>
+            <td><span class="b b-off">✕</span><span class="cell-note">偏早</span></td>
+            <td><span class="b b-peak">◎</span><span class="cell-note">點燈 11/7–24</span></td>
+          </tr>
+          <tr>
+            <th scope="row">永觀堂</th><td>11月下 – 12月上</td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-ok">○</span><span class="cell-note">日間偏早・夜楓 11/11 起</span></td>
+          </tr>
+          <tr>
+            <th scope="row">東福寺</th><td>11月中 – 下</td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-ok">○</span><span class="cell-note">約 6–8 成色</span></td>
+          </tr>
+          <tr>
+            <th scope="row">嵐山</th><td>11月中 – 下</td>
+            <td><span class="b b-skip">—</span><span class="cell-note">不走</span></td>
+            <td><span class="b b-ok">○</span><span class="cell-note">偏早</span></td>
+          </tr>
+          <tr>
+            <th scope="row">清水寺（夜楓）</th><td>日間 11月中 – 下<span class="sub">夜楓 11/21 – 12/7</span></td>
+            <td><span class="b b-skip">—</span></td>
+            <td><span class="b b-off">✕</span><span class="cell-note">夜楓錯過・日間尚可</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><span class="b b-peak">◎</span>見頃中</span>
+      <span><span class="b b-ok">○</span>尚可</span>
+      <span><span class="b b-tail">△</span>尾聲／賭一把</span>
+      <span><span class="b b-off">✕</span>已過期／偏早</span>
+      <span><span class="b b-skip">—</span>行程不走</span>
+    </div>
+    <p class="tbl-note">見頃為歷年常態估計，近年偏晚數天到一週的趨勢對「✕偏早」的格子略有幫助、對「△尾聲」的格子有害。出發前一至兩週以 tenki.jp／氣象廳紅葉情報校正。東北 FIT 把山寺排進 D3 是「順路看初色」的定位，不是楓紅主打。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">HARD CONSTRAINTS</p>
+    <h2>東北 FIT 的三道硬限制</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">限制</th>
+            <th scope="col">事實</th>
+            <th scope="col">對策</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">奧入瀨巴士死線</th>
+            <td>JR 巴士「みずうみ号／おいらせ号」奧入瀨溪流～十和田湖段，多數班次運行只到 <b>11/11</b>；11/12–17 僅剩個位數班次，之後冬季班表（溪流段封閉）</td>
+            <td>東北 FIT 必須在 11/11 前走完奧入瀨；建議窗口因此壓在 11/5–9</td>
+          </tr>
+          <tr>
+            <th scope="row">鳴子峽雙重險</th>
+            <td>見頃 10月中–11月初（11 月初已尾聲）；2025 年陸羽東線鳴子溫泉–新庄段因大雨災害<b>停駛、改代行巴士</b>，2026 年是否復駛未定</td>
+            <td>出發前向 JR 東日本確認；自駕版不受影響（古川 IC 國道 47 號，33km）</td>
+          </tr>
+          <tr>
+            <th scope="row">銀山溫泉訂房</th>
+            <td>一泊二食每人 ¥12,000（旅館松本）–¥25,000 起（能登屋）；楓季＋雪前是旺季，熱門旅館 2–3 個月前滿房</td>
+            <td>決定當週就下訂；訂不到改 30 分外「觀松館」（每房約 ¥25,000 起，有接駁車）</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tbl-note">自己排就得自己消化這三道限制——旅館、巴士、鐵路的每一步都是出發前要自己盯的前置作業。</p>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">DAY BY DAY</p>
+    <h2>兩條路線草案</h2>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">關西</span>
+        <h3>京都站北 APA 為基地</h3>
+        <span class="code">11/12–16</span>
+      </div>
+      <p class="tour-sub">機票已訂 · 飯店已抓報價（11/11 前免費取消）</p>
+      <ul class="pl">
+        <li class="good">11/12（四）：TPE 09:40 → KIX 13:10 → HARUKA／利木津 → 15:30 前後入宿 → 京都塔夜景＋京都站晚餐</li>
+        <li class="good">11/13（五）：高雄正峰（神護寺→西明寺→高山寺）＋ 貴船夜楓（點燈期間內）——同日兩個正峰山區</li>
+        <li class="good">11/14（六）：早出發大原三千院正峰 → 午後洛東（南禪寺日間）→ 永觀堂夜楓（11/11 開跑）</li>
+        <li class="good">11/15（日）：嵐山（天龍寺→常寂光寺→竹林）→ 寶嚴院夜楓（11/14 點燈首段）或高台寺</li>
+        <li class="good">11/16（一）：清晨退房 → 07:30 HARUKA 赴 KIX → 樂桃 10:10 回台（12:40 落地桃園）</li>
+        <li class="bad">回程改上午班後 Day 5 無法再排點——東寺／西本願寺挪到 Day 2–4 清晨或捨棄；清水寺夜楓（11/21 起）本檔期錯過；瑠璃光院 10 月要搶約</li>
+      </ul>
+    </article>
+
+    <article class="tour">
+      <div class="tour-head">
+        <span class="rank">東北 FIT</span>
+        <h3>仙台進出放射＋環線</h3>
+        <span class="code">11/5–9 建議</span>
+      </div>
+      <p class="tour-sub">長榮 BR118/BR117（或星宇 JX862/863）＋JR EAST PASS 東北 5 日 ¥30,000（含 JR 巴士奧入瀨段）；自駕則為仙台機場取車</p>
+      <ul class="pl">
+        <li class="good">D1：BR118 10:05→14:35 抵仙台 → 松島半日（瑞巖寺・観瀾亭，依抵達時間調整）→ 宿仙台商務飯店</li>
+        <li class="good">D2：JR 陸羽東線 → 鳴子峽（尾聲色＋步道）→ 新庄轉山形新幹線 → 大石田 → 巴士入銀山溫泉（宿，一泊二食）</li>
+        <li class="good">D3：銀山溫泉晨遊 → 大石田 → 山形 → 仙山線山寺（順路看初色）→ 宿仙台</li>
+        <li class="good">D4：仙台 → 八戶 → JR 巴士奧入瀨溪流健走 → 十和田湖 → 返回仙台（當天最硬，巴士班次少）</li>
+        <li class="good">D5：仙台市區（定禪寺通・伊達政宗騎像）→ BR117 16:05→18:55 回台</li>
+        <li class="bad">自駕版可以把 D4 拆成「宿奧入瀨或八戶」，也免去鳴子鐵路停駛風險；代價是右駕＋山區早晚低溫</li>
+      </ul>
+    </article>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">HOW TO CHOOSE</p>
+    <h2>怎麼選</h2>
+    <div class="choose">
+      <div><p class="q">已訂好機酒、要最省最穩</p><p class="a">關西自由行——把行程排好即可</p></div>
+      <div><p class="q">想再追一場東北紅葉＋溫泉</p><p class="a">東北自駕 FIT</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-eyebrow">BEFORE YOU BOOK</p>
+    <h2>動手前要辦的事</h2>
+    <ol class="check">
+      <li><b>若決定東北 FIT：銀山溫泉立刻訂房。</b><span>楓季＋雪前是旺季，熱門旅館 2–3 個月前滿房；訂不到改觀松館（有接駁車）。</span></li>
+      <li><b>開票前確認星宇／長榮 11 月上旬 TPE–SDJ 實際票價與時刻。</b><span>本頁以正常航空為基準（BR118 10:05／JX862 11:35 出發，NT$17,000–22,000 推估）；時刻與票價以官網為準，虎航（下午班）只作省錢備案。</span></li>
+      <li><b>確認陸羽東線鳴子段 2026 年是否復駛。</b><span>2025 年大雨災害停駛中、代行巴士營運；搭 JR 版行程的 D2 要靠它。</span></li>
+      <li><b>行前查 JR巴士東北當年度時刻表。</b><span>奧入瀨溪流～十和田湖段多數班次只到 11/11，每班車的運行結束日不同，逐一確認。</span></li>
+      <li><b>京都：10 月搶約瑠璃光院。</b><span>11/13–12/6 完全預約制，本檔期（11/13 起）剛好可用，錯過不候。</span></li>
+      <li><b>京都：回程機票開票（樂桃 KIX 10:10→TPE 12:40，單程約 5,881）。</b><span>去回皆上午班、中午前後落地；想留最後一個上午改捷星 14:55→17:15（5,748）。票價為 2026/09/20 Google Flights 單程查價，開票前以官網實價確認。</span></li>
+          </ol>
+  </section>
+
+  <footer>
+    <p>資料來源：JR巴士東北（奧入瀨巴士運行期間）、JR東日本官網（JR EAST PASS 東北 5 日 ¥30,000）、長榮航空（BR118 10:05→14:35／BR117 16:05→18:55）、星宇航空（JX862 11:35→16:00／JX863 17:25→20:35）與 KAYAK／易遊網（TPE–SDJ 票價區間）、Google Flights（2026/09/20 KIX–TPE 11/16 單程查價：樂桃 10:10→12:40／捷星 14:55→17:15／長榮 10:55→13:10）、京阪巴士・阪急觀光巴士（KIX–京都利木津末班 23:07）、JR西日本（HARUKA 末班 22:16）、銀山溫泉各旅館公布價、鳴子溫泉觀光協會（2025 鳴子峽紅葉號＋陸羽東線停駛資訊）、京都各寺社 2026 點燈公告。機票與住宿價格含推估成分，開票／下訂前以實價為準；見頃為歷年常態估計，實際以當年 tenki.jp／氣象廳紅葉情報為準。成本為 2 人同行單人概估、不含餐食。</p>
+  </footer>
+
+</div>
+</body>
+</html>

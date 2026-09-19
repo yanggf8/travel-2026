@@ -1,0 +1,7 @@
+# Static evaluation page: 關西・東北賞楓三方評估 (FIT vs 跟團, 2026/11)
+# Assets-only worker — no script, wrangler serves ./public as-is.
+name = "koyo-compare-2026"
+compatibility_date = "2024-12-01"
+
+[assets]
+directory = "./public"
