@@ -308,11 +308,11 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         }
 
         h.push_str("<div class=\"fit-agency-list\">");
-        for (group_index, (source_id, offers)) in groups.iter().enumerate() {
+        for (source_id, offers) in &groups {
             let source = if source_id.is_empty() { "—" } else { fit_source_label(source_id) };
-            h.push_str(&format!("<details class=\"fit-agency\"{}>", if group_index == 0 { " open" } else { "" }));
+            h.push_str("<details class=\"fit-agency\" open>");
             h.push_str(&format!(
-                "<summary><span class=\"fit-agency-name\">{}</span><span class=\"fit-agency-count\">{} {}</span></summary>",
+                "<summary><span class=\"fit-agency-heading\"><span class=\"fit-agency-chevron\" aria-hidden=\"true\">▶</span><span class=\"fit-agency-name\">{}</span></span><span class=\"fit-agency-count\">{} {}</span></summary>",
                 esc(source),
                 offers.len(),
                 esc(if lang == "en" { "offers" } else { "個方案" })

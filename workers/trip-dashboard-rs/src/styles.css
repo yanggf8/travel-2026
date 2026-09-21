@@ -115,9 +115,10 @@ h1 {
   gap: 10px;
   padding: 11px 13px;
   font-weight: 700;
-  list-style-position: inside;
 }
-.fit-agency > summary::marker { color: var(--accent); }
+.fit-agency-heading { display: inline-flex; align-items: center; gap: 8px; }
+.fit-agency-chevron { color: var(--accent); font-size: 10px; transition: transform .15s ease; }
+.fit-agency[open] .fit-agency-chevron { transform: rotate(90deg); }
 .fit-agency-name { font-size: 14px; }
 .fit-agency-count { font-size: 11px; font-weight: 500; color: var(--text-dim); }
 .fit-agency-body { padding: 0 13px 11px; border-top: 1px solid var(--border); }
