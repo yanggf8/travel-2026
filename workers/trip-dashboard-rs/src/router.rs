@@ -714,8 +714,10 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              FROM offers \
              WHERE destination = {dest_expr} AND type = 'package' \
              AND departure_date = (SELECT start_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
-             AND return_date = (SELECT end_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
+               AND return_date = (SELECT end_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
                AND nights = 4 AND availability = 'available' \
+               AND (flight_outbound GLOB '* 0[0-9]:[0-5][0-9]*' OR flight_outbound GLOB '* 1[01]:[0-5][0-9]*') \
+               AND (flight_return GLOB '* 0[0-9]:[0-5][0-9]*' OR flight_return GLOB '* 1[01]:[0-5][0-9]*') \
                AND ((source_id = 'settour' AND hotel_name LIKE '%THE POCKET HOTEL 京都烏丸五条%') \
                  OR (source_id = 'liontravel' AND hotel_name LIKE '%APA 京都站前飯店%')) \
              ORDER BY is_selected DESC, price_per_person ASC"
