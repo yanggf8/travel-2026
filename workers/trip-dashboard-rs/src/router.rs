@@ -696,14 +696,29 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         // price_per_person when there is no date-specific row). Booking-summary package row.
         format!(
             "SELECT o.source_id, o.product_code, o.price_per_person, o.currency, \
-             sel.selected_date, dp.price AS date_price \
+             o.title, '' AS hotel_name, '' AS airline, '' AS flight_outbound, \
+             '' AS flight_return, 0 AS nights, '' AS departure_date, '' AS return_date, '' AS availability, \
+             sel.selected_date, dp.price AS date_price, '1' AS is_selected, '0' AS is_fit \
              FROM plan_offer_selection sel \
              JOIN plan_offers o ON o.plan_id = sel.plan_id AND o.destination = sel.destination \
                AND o.id = sel.selected_offer_id \
              LEFT JOIN plan_offer_date_pricing dp ON dp.plan_id = sel.plan_id \
                AND dp.destination = sel.destination AND dp.offer_id = sel.selected_offer_id \
                AND dp.date = sel.selected_date \
-             WHERE sel.plan_id = '{slug}'"
+             WHERE sel.plan_id = '{slug}' \
+             UNION ALL \
+             SELECT source_id, '' AS product_code, price_per_person, currency, \
+             name AS title, hotel_name, airline, flight_outbound, flight_return, \
+             COALESCE(nights, 0), departure_date, return_date, availability, departure_date, \
+             NULL AS date_price, '0' AS is_selected, '1' AS is_fit \
+             FROM offers \
+             WHERE destination = {dest_expr} AND type = 'package' \
+             AND departure_date = (SELECT start_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
+             AND return_date = (SELECT end_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
+               AND nights = 4 AND availability = 'available' \
+               AND ((source_id = 'settour' AND hotel_name LIKE '%THE POCKET HOTEL 京都烏丸五条%') \
+                 OR (source_id = 'liontravel' AND hotel_name LIKE '%APA 京都站前飯店%')) \
+             ORDER BY is_selected DESC, price_per_person ASC"
         ),
         // [13] hotel access lines (transit directions to the hotel) — booking-summary hotel block.
         format!(

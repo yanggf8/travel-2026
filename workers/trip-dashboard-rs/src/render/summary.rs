@@ -56,6 +56,18 @@ fn join_parts(parts: &[String]) -> String {
         .join(" ")
 }
 
+fn fit_source_label(source: &str) -> &str {
+    match source {
+        "liontravel" => "雄獅",
+        "travel4u" => "山富",
+        "besttour" => "喜鴻",
+        "lifetour" => "五福",
+        "settour" => "東南",
+        "liangyou" => "良友",
+        other => other,
+    }
+}
+
 /// Wrap flight display text in a Google search link (opens new tab). Port of the
 /// TS worker's `flightLink` (render.ts:979-982): the search query is the
 /// PERCENT-ENCODED flight number ONLY (`number.trim()`), never the airline. With
@@ -247,7 +259,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     // selected-date price. Only shown when a package was selected (flight+hotel
     // booked-separately plans have no offer). Ported from render.ts:1078-1089.
     if let Some(offer) = &plan.offer {
-        h.push_str(&format!("<h2>{}</h2>", esc(t("package", lang))));
+        // Agoda is hotel-only; it must not become a package headline.
+        if offer.source_id != "agoda" {
+        let heading = t("package", lang);
+        h.push_str(&format!("<h2>{}</h2>", esc(heading)));
         h.push_str("<div class=\"booking-grid\">");
         h.push_str("<div class=\"booking-item package\">");
         h.push_str("<span class=\"booking-icon\">📦</span>");
@@ -274,6 +289,81 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         }
         h.push_str("</div></div>");
         h.push_str("</div>");
+        }
+    }
+
+    // FIT alternatives are shown as a comparison row, never as the current
+    // selection. Agoda/separate-booking stays remain in the normal hotel block.
+    if !plan.fit_offers.is_empty() {
+        h.push_str(&format!("<h2>{}</h2>", esc(if lang == "en" { "FIT options (preferred comparison)" } else { "FIT 方案比較（優先評估，非已訂）" })));
+        // Group by travel agency. Each agency is one collapsed disclosure so the
+        // reader sees agency → flights → hotel in a stable, repeatable order.
+        let mut groups: Vec<(String, Vec<&crate::model::FitOffer>)> = Vec::new();
+        for fit in &plan.fit_offers {
+            if let Some((_, offers)) = groups.iter_mut().find(|(source, _)| source == &fit.source_id) {
+                offers.push(fit);
+            } else {
+                groups.push((fit.source_id.clone(), vec![fit]));
+            }
+        }
+
+        h.push_str("<div class=\"fit-agency-list\">");
+        for (group_index, (source_id, offers)) in groups.iter().enumerate() {
+            let source = if source_id.is_empty() { "—" } else { fit_source_label(source_id) };
+            h.push_str(&format!("<details class=\"fit-agency\"{}>", if group_index == 0 { " open" } else { "" }));
+            h.push_str(&format!(
+                "<summary><span class=\"fit-agency-name\">{}</span><span class=\"fit-agency-count\">{} {}</span></summary>",
+                esc(source),
+                offers.len(),
+                esc(if lang == "en" { "offers" } else { "個方案" })
+            ));
+            h.push_str("<div class=\"fit-agency-body\">");
+            for fit in offers {
+                let hotel = if !fit.hotel_name.is_empty() { &fit.hotel_name } else if !fit.title.is_empty() { &fit.title } else { "—" };
+                let price = if fit.price > 0 {
+                    format!("{} {}／人", if fit.currency.is_empty() { "TWD" } else { &fit.currency }, group_thousands(fit.price))
+                } else { "價格未確認".to_string() };
+                let mut date_text = if fit.departure_date.is_empty() {
+                    "日期未確認".to_string()
+                } else if fit.return_date.is_empty() {
+                    format!("{} 起（回程未確認）", fit.departure_date)
+                } else {
+                    format!("{}–{}", fit.departure_date, fit.return_date)
+                };
+                if fit.nights > 0 {
+                    date_text.push_str(&format!(" · {} 晚", fit.nights));
+                }
+                if !fit.availability.is_empty() {
+                    date_text.push_str(&format!(" · {}", fit.availability));
+                }
+
+                h.push_str("<div class=\"fit-agency-offer\">");
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Agency" } else { "旅行社" }), esc(source)));
+                let flights = [fit.airline.as_str(), fit.flight_outbound.as_str(), fit.flight_return.as_str()]
+                    .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Flights" } else { "班機" }), esc(if flights.is_empty() { "—" } else { &flights })));
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Hotel" } else { "酒店" }), esc(hotel)));
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span class=\"fit-detail-price\">{}</span></div>", esc(if lang == "en" { "Price" } else { "價格" }), esc(&price)));
+                h.push_str(&format!("<div class=\"fit-detail-meta\">{}</div>", esc(&date_text)));
+                h.push_str("</div>");
+            }
+            h.push_str("</div></details>");
+        }
+        h.push_str("</div>");
+        h.push_str(&format!("<div class=\"fit-offer-note\">{}</div>", esc(if lang == "en" { "FIT is evaluated first by preference; dates may differ when the foliage outcome is comparable." } else { "依偏好優先評估 FIT；日期可以不同，但楓紅效果必須可比。" })));
+    }
+
+    // A separately booked flight + hotel is the current plan shape. Give the
+    // combined choice one truthful name; Agoda remains only the hotel source.
+    if plan.offer.as_ref().map(|o| o.source_id.as_str()) == Some("agoda") {
+        h.push_str(&format!(
+            "<h2>{}</h2>",
+            esc(if lang == "en" {
+                "Custom flight + hotel"
+            } else {
+                "自訂機酒"
+            })
+        ));
     }
 
     // Flights

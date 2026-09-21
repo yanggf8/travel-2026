@@ -202,6 +202,9 @@ pub struct Plan {
     /// Selected package offer for the booking summary, if one is chosen. None when
     /// no plan_offer_selection row exists (e.g. flight+hotel booked separately).
     pub offer: Option<Offer>,
+    /// Comparable FIT package offers for the locked dates. These are alternatives,
+    /// never silently presented as the selected Agoda/separate-booking choice.
+    pub fit_offers: Vec<FitOffer>,
     /// Hotel access lines (transit directions to the hotel), in sort_order.
     pub hotel_access_lines: Vec<String>,
     /// Destination currency (e.g. "JPY"); drives the Japan-only entry-info rows.
@@ -223,6 +226,22 @@ pub struct Offer {
     /// else the offer's base price_per_person.
     pub price: i64,
     pub currency: String,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct FitOffer {
+    pub source_id: String,
+    pub title: String,
+    pub price: i64,
+    pub currency: String,
+    pub hotel_name: String,
+    pub airline: String,
+    pub flight_outbound: String,
+    pub flight_return: String,
+    pub nights: i64,
+    pub departure_date: String,
+    pub return_date: String,
+    pub availability: String,
 }
 
 /// Assemble a Plan from the pipeline result vectors (query order defined in the router/loader).
@@ -272,7 +291,11 @@ pub fn assemble(
         .collect();
     // ---- booking-summary additions (TS-parity) ----
     // Selected package offer: prefer the selected-date price, fall back to base price_per_person.
-    plan.offer = offer_rows.first().map(|o| {
+    let selected = offer_rows
+        .iter()
+        .find(|o| s(o, "is_selected") == "1")
+        .or_else(|| offer_rows.iter().find(|o| s(o, "is_fit") != "1"));
+    plan.offer = selected.map(|o| {
         let date_price = i(o, "date_price");
         let price = if date_price > 0 {
             date_price
@@ -286,6 +309,27 @@ pub fn assemble(
             currency: s(o, "currency"),
         }
     });
+    plan.fit_offers = offer_rows
+        .iter()
+        .filter(|o| s(o, "is_fit") == "1")
+        .map(|o| FitOffer {
+            source_id: s(o, "source_id"),
+            title: s(o, "title"),
+            price: {
+                let date_price = i(o, "date_price");
+                if date_price > 0 { date_price } else { i(o, "price_per_person") }
+            },
+            currency: s(o, "currency"),
+            hotel_name: s(o, "hotel_name"),
+            airline: s(o, "airline"),
+            flight_outbound: s(o, "flight_outbound"),
+            flight_return: s(o, "flight_return"),
+            nights: i(o, "nights"),
+            departure_date: s(o, "departure_date"),
+            return_date: s(o, "return_date"),
+            availability: s(o, "availability"),
+        })
+        .collect();
     plan.hotel_access_lines = hotel_access_rows.iter().map(|r| s(r, "line")).collect();
     if let Some(c) = dest_config_rows.first() {
         plan.currency = s(c, "currency");

@@ -99,6 +99,36 @@ h1 {
 
 .booking-sub { font-size: 12px; color: var(--text-dim); }
 
+/* FIT comparison: one collapsible section per agency, with a fixed reading order. */
+.fit-agency-list { display: grid; gap: 8px; }
+.fit-agency {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fffdf7;
+  overflow: hidden;
+}
+.fit-agency > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 13px;
+  font-weight: 700;
+  list-style-position: inside;
+}
+.fit-agency > summary::marker { color: var(--accent); }
+.fit-agency-name { font-size: 14px; }
+.fit-agency-count { font-size: 11px; font-weight: 500; color: var(--text-dim); }
+.fit-agency-body { padding: 0 13px 11px; border-top: 1px solid var(--border); }
+.fit-agency-offer { padding: 10px 0; border-bottom: 1px dashed var(--border); }
+.fit-agency-offer:last-child { border-bottom: 0; padding-bottom: 2px; }
+.fit-detail-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; font-size: 12px; line-height: 1.55; }
+.fit-detail-label { color: var(--text-dim); }
+.fit-detail-price { font-weight: 700; color: var(--accent); }
+.fit-detail-meta, .fit-offer-note { font-size: 11px; color: var(--text-dim); margin-top: 5px; }
+.fit-offer-note { margin-top: 8px; }
+
 /* Booked domestic stay — obvious green "已訂" treatment. */
 .booking-item.domestic--booked {
   background: #f0fdf4;
