@@ -350,7 +350,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             h.push_str("</div></details>");
         }
         h.push_str("</div>");
-        h.push_str(&format!("<div class=\"fit-offer-note\">{}</div>", esc(if lang == "en" { "Only FIT options with both outbound and return flights before noon are shown; dates may differ when the foliage outcome is comparable." } else { "只列去回程都在中午前的 FIT；日期可以不同，但楓紅效果必須可比。未符合者不列入。" })));
+        h.push_str(&format!("<div class=\"fit-offer-note\">{}</div>", esc(if lang == "en" { "Only FIT options with a morning outbound and an afternoon return are shown; dates may differ when the foliage outcome is comparable." } else { "只列上午去程、午後回程的 FIT；日期可以不同，但楓紅效果必須可比。未符合者不列入。" })));
     }
 
     // A separately booked flight + hotel is the current plan shape. Give the
