@@ -58,6 +58,8 @@ fn map_package_status(status: Option<&str>) -> String {
     match status {
         Some("booked") => "booked",
         Some("confirmed") => "confirmed",
+        Some("waitlist") => "waitlist",
+        Some("cancelled") => "cancelled",
         _ => "pending",
     }
     .to_string()
@@ -179,29 +181,99 @@ async fn extract_package(
         None => None,
     };
 
+    let booking_key = build_key(&[trip_id, dest, "package", &selected_offer_id]);
+
+    // Preserve human-entered confirmation details (for example an OTA order
+    // number and waitlist status) across the derived-booking resync. These
+    // fields live in bookings_current because they are booking facts, not plan
+    // content; without this read-through, sync-bookings would erase them.
+    let mut status = map_package_status(status.as_deref());
+    let mut reference: Option<String> = None;
+    let mut book_by: Option<String> = None;
+    let mut booked_at: Option<String> = None;
+    let mut source_id: Option<String> = None;
+    let mut selected_date: Option<String> = None;
+    let mut price_amount: Option<i64> = None;
+    let mut price_currency = "TWD".to_string();
+    let mut payload: Vec<(String, String)> = Vec::new();
+
+    let mut current = conn
+        .query(
+            "SELECT status, reference, book_by, booked_at, source_id, selected_date, \
+                    price_amount, price_currency \
+             FROM bookings_current WHERE booking_key = ?1",
+            params![booking_key.clone()],
+        )
+        .await
+        .map_err(|e| format!("bookings_current package query failed: {e}"))?;
+    if let Some(row) = current
+        .next()
+        .await
+        .map_err(|e| format!("bookings_current package row read failed: {e}"))?
+    {
+        let existing_status: Option<String> = row.get(0).ok().flatten();
+        if matches!(existing_status.as_deref(), Some("waitlist" | "cancelled"))
+            && !matches!(status.as_str(), "booked" | "confirmed")
+        {
+            status = existing_status.unwrap_or(status);
+        }
+        reference = row.get(1).ok().flatten();
+        book_by = row.get(2).ok().flatten();
+        booked_at = row.get(3).ok().flatten();
+        source_id = row.get(4).ok().flatten();
+        selected_date = row.get(5).ok().flatten();
+        price_amount = row.get(6).ok().flatten();
+        price_currency = row
+            .get::<Option<String>>(7)
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "TWD".to_string());
+
+        let mut payload_rows = conn
+            .query(
+                "SELECT key, value FROM bookings_current_payload \
+                 WHERE booking_key = ?1 ORDER BY sort_order",
+                params![booking_key.clone()],
+            )
+            .await
+            .map_err(|e| format!("bookings_current_payload query failed: {e}"))?;
+        while let Some(payload_row) = payload_rows
+            .next()
+            .await
+            .map_err(|e| format!("bookings_current_payload row read failed: {e}"))?
+        {
+            let key: String = payload_row.get(0).unwrap_or_default();
+            let value: String = payload_row.get(1).unwrap_or_default();
+            if !key.is_empty() && !value.is_empty() {
+                payload.push((key, value));
+            }
+        }
+    }
+
     // The assembled plan does not surface source_id / price / hotel name /
-    // selected_date / selected_at to the TS extractor, so these degrade to
-    // NULL and the title becomes `package - <offer_id>`. Reproduce that.
+    // selected_date / selected_at to the TS extractor, so these remain empty
+    // unless a booking record already supplied them. Reproduce that shape.
     let title = format!("package - {selected_offer_id}");
 
     Ok(vec![BookingRow {
-        booking_key: build_key(&[trip_id, dest, "package", &selected_offer_id]),
+        booking_key,
         trip_id: trip_id.to_string(),
         destination: dest.to_string(),
         category: "package".to_string(),
         subtype: Some("package".to_string()),
         title,
-        status: map_package_status(status.as_deref()),
-        reference: None,
-        book_by: None,
-        booked_at: None,
-        source_id: None,
+        status,
+        reference,
+        book_by,
+        booked_at,
+        source_id,
         offer_id: Some(selected_offer_id),
-        selected_date: None,
-        price_amount: None,
-        price_currency: "TWD".to_string(),
+        selected_date,
+        price_amount,
+        price_currency,
         origin_path: format!("destinations.{dest}.process_3_4_packages"),
-        payload: Vec::new(),
+        payload,
     }])
 }
 
