@@ -620,7 +620,7 @@ fn owner_login_href_for_plan(slug: &str, lang: &str) -> String {
     format!("/auth/login?next={}", render::urlencode(&next))
 }
 
-/// Load the full plan via a 19-statement Turso pipeline. Query order matches
+/// Load the full plan via a 21-statement Turso pipeline. Query order matches
 /// model::assemble()'s argument order exactly.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
@@ -698,7 +698,10 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             "SELECT o.source_id, o.product_code, o.price_per_person, o.currency, \
              o.title, '' AS hotel_name, '' AS airline, '' AS flight_outbound, \
              '' AS flight_return, 0 AS nights, '' AS departure_date, '' AS return_date, '' AS availability, \
-             sel.selected_date, dp.price AS date_price, '1' AS is_selected, '0' AS is_fit \
+             sel.selected_date, dp.price AS date_price, '1' AS is_selected, '0' AS is_fit, \
+             '0' AS fit_recommended, '' AS fit_note_zh, '' AS fit_note_en, \
+             '' AS fit_compare_zh, '' AS fit_compare_en, \
+             '' AS fit_room_zh, '' AS fit_room_en \
              FROM plan_offer_selection sel \
              JOIN plan_offers o ON o.plan_id = sel.plan_id AND o.destination = sel.destination \
                AND o.id = sel.selected_offer_id \
@@ -707,20 +710,31 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
                AND dp.date = sel.selected_date \
              WHERE sel.plan_id = '{slug}' \
              UNION ALL \
-             SELECT source_id, '' AS product_code, price_per_person, currency, \
-             name AS title, hotel_name, airline, flight_outbound, flight_return, \
-             COALESCE(nights, 0), departure_date, return_date, availability, departure_date, \
-             NULL AS date_price, '0' AS is_selected, '1' AS is_fit \
-             FROM offers \
-             WHERE destination = {dest_expr} AND type = 'package' \
-             AND departure_date = (SELECT start_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
-               AND return_date = (SELECT end_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
-               AND nights = 4 AND COALESCE(availability, '') <> 'sold_out' \
-               AND (flight_outbound GLOB '* 0[0-9]:[0-5][0-9]*' OR flight_outbound GLOB '* 1[01]:[0-5][0-9]*') \
-               AND (flight_return GLOB '* 1[2-9]:[0-5][0-9]*' OR flight_return GLOB '* 2[0-3]:[0-5][0-9]*') \
-               AND ((source_id = 'lifetour' AND hotel_name LIKE '%TAVINOS KYOTO%') \
-                 OR (source_id = 'liontravel' AND hotel_name LIKE '%APA HOTEL KYOTO EKIMAE%') \
-                 OR (source_id = 'settour' AND hotel_name LIKE '%THE POCKET HOTEL 京都烏丸五条%' AND flight_outbound LIKE 'CX564%')) \
+             SELECT o.source_id, '' AS product_code, o.price_per_person, o.currency, \
+             o.name AS title, o.hotel_name, o.airline, o.flight_outbound, o.flight_return, \
+             COALESCE(o.nights, 0), o.departure_date, o.return_date, o.availability, o.departure_date, \
+             NULL AS date_price, '0' AS is_selected, '1' AS is_fit, \
+             COALESCE(n.recommended, 0) AS fit_recommended, \
+             COALESCE(n.body_zh, '') AS fit_note_zh, \
+             COALESCE(n.body_en, '') AS fit_note_en, \
+             COALESCE(c.body_zh, '') AS fit_compare_zh, \
+             COALESCE(c.body_en, '') AS fit_compare_en, \
+             COALESCE(n.room_zh, '') AS fit_room_zh, \
+             COALESCE(n.room_en, '') AS fit_room_en \
+             FROM offers o \
+             LEFT JOIN plan_fit_notes n ON n.plan_id = '{slug}' AND n.destination = {dest_expr} \
+               AND n.source_id = o.source_id \
+             LEFT JOIN plan_fit_notes c ON c.plan_id = '{slug}' AND c.destination = {dest_expr} \
+               AND c.source_id = '' \
+             WHERE o.destination = {dest_expr} AND o.type = 'package' \
+             AND o.departure_date = (SELECT start_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
+               AND o.return_date = (SELECT end_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
+               AND o.nights = 4 AND COALESCE(o.availability, '') <> 'sold_out' \
+               AND (o.flight_outbound GLOB '* 0[0-9]:[0-5][0-9]*' OR o.flight_outbound GLOB '* 1[01]:[0-5][0-9]*') \
+               AND (o.flight_return GLOB '* 1[2-9]:[0-5][0-9]*' OR o.flight_return GLOB '* 2[0-3]:[0-5][0-9]*') \
+               AND ((o.source_id = 'lifetour' AND o.hotel_name LIKE '%TAVINOS KYOTO%') \
+                 OR (o.source_id = 'liontravel' AND o.hotel_name LIKE '%APA HOTEL KYOTO EKIMAE%') \
+                 OR (o.source_id = 'settour' AND o.hotel_name LIKE '%THE POCKET HOTEL 京都烏丸五条%' AND o.flight_outbound LIKE 'CX564%')) \
              ORDER BY is_selected DESC, price_per_person ASC"
         ),
         // [13] hotel access lines (transit directions to the hotel) — booking-summary hotel block.

@@ -11,6 +11,7 @@ pub mod observations;
 pub mod offers;
 pub mod omiyage;
 pub mod ota_catalog;
+pub mod plan_fit_notes;
 pub mod plan_lifecycle;
 pub mod plan_offers;
 pub mod origin;

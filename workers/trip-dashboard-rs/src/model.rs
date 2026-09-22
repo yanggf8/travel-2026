@@ -205,6 +205,9 @@ pub struct Plan {
     /// Comparable FIT package offers for the locked dates. These are alternatives,
     /// never silently presented as the selected Agoda/separate-booking choice.
     pub fit_offers: Vec<FitOffer>,
+    /// Section paragraph for the FIT comparison (`plan_fit_notes.source_id = ''`).
+    pub fit_compare_zh: String,
+    pub fit_compare_en: String,
     /// Hotel access lines (transit directions to the hotel), in sort_order.
     pub hotel_access_lines: Vec<String>,
     /// Destination currency (e.g. "JPY"); drives the Japan-only entry-info rows.
@@ -242,6 +245,14 @@ pub struct FitOffer {
     pub departure_date: String,
     pub return_date: String,
     pub availability: String,
+    /// Authored reason for this agency. The Recommended badge is `recommended`;
+    /// lowest-price and price-delta badges are computed at render time.
+    pub recommended: bool,
+    pub note_zh: String,
+    pub note_en: String,
+    /// Room size for the card's 面積 row. Empty hides the row.
+    pub room_zh: String,
+    pub room_en: String,
 }
 
 /// Assemble a Plan from the pipeline result vectors (query order defined in the router/loader).
@@ -317,7 +328,11 @@ pub fn assemble(
             title: s(o, "title"),
             price: {
                 let date_price = i(o, "date_price");
-                if date_price > 0 { date_price } else { i(o, "price_per_person") }
+                if date_price > 0 {
+                    date_price
+                } else {
+                    i(o, "price_per_person")
+                }
             },
             currency: s(o, "currency"),
             hotel_name: s(o, "hotel_name"),
@@ -328,8 +343,20 @@ pub fn assemble(
             departure_date: s(o, "departure_date"),
             return_date: s(o, "return_date"),
             availability: s(o, "availability"),
+            recommended: i(o, "fit_recommended") == 1,
+            note_zh: s(o, "fit_note_zh"),
+            note_en: s(o, "fit_note_en"),
+            room_zh: s(o, "fit_room_zh"),
+            room_en: s(o, "fit_room_en"),
         })
         .collect();
+    if let Some(note) = offer_rows.iter().find(|o| {
+        s(o, "is_fit") == "1"
+            && (!s(o, "fit_compare_zh").is_empty() || !s(o, "fit_compare_en").is_empty())
+    }) {
+        plan.fit_compare_zh = s(note, "fit_compare_zh");
+        plan.fit_compare_en = s(note, "fit_compare_en");
+    }
     plan.hotel_access_lines = hotel_access_rows.iter().map(|r| s(r, "line")).collect();
     if let Some(c) = dest_config_rows.first() {
         plan.currency = s(c, "currency");
@@ -345,18 +372,29 @@ pub fn assemble(
             // hotel_name / room_type derived from title when separate columns absent.
             // title is "海論 海景雙人房" — split on first space as heuristic, else full title.
             let (hotel_name, room_type) = if let Some(idx) = title.find(' ') {
-                (title[..idx].trim().to_string(), title[idx..].trim().to_string())
+                (
+                    title[..idx].trim().to_string(),
+                    title[idx..].trim().to_string(),
+                )
             } else {
                 (title.clone(), String::new())
             };
             DomesticStay {
                 title: title.clone(),
-                hotel_name: if hotel_name.is_empty() { title.clone() } else { hotel_name },
+                hotel_name: if hotel_name.is_empty() {
+                    title.clone()
+                } else {
+                    hotel_name
+                },
                 room_type,
                 price_twd: i(r, "price_amount"),
                 currency: {
                     let c = s(r, "price_currency");
-                    if c.is_empty() { "TWD".to_string() } else { c }
+                    if c.is_empty() {
+                        "TWD".to_string()
+                    } else {
+                        c
+                    }
                 },
                 selected_date: s(r, "selected_date"),
                 status: s(r, "status"),
@@ -395,7 +433,11 @@ pub fn assemble(
                 price_twd: i(r, "price_twd"),
                 currency: {
                     let c = s(r, "currency");
-                    if c.is_empty() { "TWD".to_string() } else { c }
+                    if c.is_empty() {
+                        "TWD".to_string()
+                    } else {
+                        c
+                    }
                 },
                 sea_view: i(r, "sea_view"),
                 breakfast_included: i(r, "breakfast_included"),

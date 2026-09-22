@@ -68,6 +68,104 @@ fn fit_source_label(source: &str) -> &str {
     }
 }
 
+/// Prefer the page language, then the other, so a ZH-only note still shows on `?lang=en`.
+fn fit_text(lang: &str, zh: &str, en: &str) -> String {
+    if lang == "en" {
+        if !en.is_empty() {
+            en.to_string()
+        } else {
+            zh.to_string()
+        }
+    } else if !zh.is_empty() {
+        zh.to_string()
+    } else {
+        en.to_string()
+    }
+}
+
+fn fit_currency(currency: &str) -> &str {
+    if currency.is_empty() {
+        "TWD"
+    } else {
+        currency
+    }
+}
+
+/// Lowest / price-delta against the cheapest shown offer. Skipped when fewer
+/// than two priced offers share one currency — a single price, or a mixed-currency
+/// list, is not a comparison.
+fn fit_price_badge(
+    fit: &crate::model::FitOffer,
+    all: &[crate::model::FitOffer],
+) -> Option<FitPriceBadge> {
+    let priced: Vec<&crate::model::FitOffer> = all.iter().filter(|o| o.price > 0).collect();
+    if priced.len() < 2 {
+        return None;
+    }
+    let cur = fit_currency(&priced[0].currency);
+    if !priced.iter().all(|o| fit_currency(&o.currency) == cur) {
+        return None;
+    }
+    if fit.price <= 0 || fit_currency(&fit.currency) != cur {
+        return None;
+    }
+    let min = priced.iter().map(|o| o.price).min()?;
+    if fit.price == min {
+        Some(FitPriceBadge::Lowest)
+    } else {
+        Some(FitPriceBadge::Delta {
+            amount: fit.price - min,
+            currency: cur.to_string(),
+        })
+    }
+}
+
+enum FitPriceBadge {
+    Lowest,
+    Delta { amount: i64, currency: String },
+}
+
+fn fit_badge_html(lang: &str, recommended: bool, price: Option<FitPriceBadge>) -> String {
+    let mut badges = String::new();
+    if recommended {
+        let label = if lang == "en" {
+            "Recommended"
+        } else {
+            "推薦"
+        };
+        badges.push_str(&format!(
+            "<span class=\"fit-badge fit-badge-rec\">{}</span>",
+            esc(label)
+        ));
+    }
+    match price {
+        Some(FitPriceBadge::Lowest) => {
+            let label = if lang == "en" { "Lowest" } else { "最低價" };
+            badges.push_str(&format!(
+                "<span class=\"fit-badge fit-badge-low\">{}</span>",
+                esc(label)
+            ));
+        }
+        Some(FitPriceBadge::Delta { amount, currency }) => {
+            let label = if lang == "en" {
+                format!("+{currency} {} / person", group_thousands(amount))
+            } else {
+                format!("貴 {currency} {}／人", group_thousands(amount))
+            };
+            badges.push_str(&format!(
+                "<span class=\"fit-badge fit-badge-delta\">{}</span>",
+                esc(&label)
+            ));
+        }
+        None => {}
+    }
+    if badges.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"fit-badges\">{badges}</div>")
+    }
+}
+
 /// Wrap flight display text in a Google search link (opens new tab). Port of the
 /// TS worker's `flightLink` (render.ts:979-982): the search query is the
 /// PERCENT-ENCODED flight number ONLY (`number.trim()`), never the airline. With
@@ -261,46 +359,63 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     if let Some(offer) = &plan.offer {
         // Agoda is hotel-only; it must not become a package headline.
         if offer.source_id != "agoda" {
-        let heading = t("package", lang);
-        h.push_str(&format!("<h2>{}</h2>", esc(heading)));
-        h.push_str("<div class=\"booking-grid\">");
-        h.push_str("<div class=\"booking-item package\">");
-        h.push_str("<span class=\"booking-icon\">📦</span>");
-        h.push_str("<div class=\"booking-detail\">");
-        let title = join_parts(&[offer.source_id.clone(), offer.product_code.clone()]);
-        h.push_str(&format!(
-            "<div class=\"booking-value\">{}</div>",
-            esc(if title.is_empty() { "—" } else { &title })
-        ));
-        if offer.price > 0 {
-            let cur = if offer.currency.is_empty() {
-                "TWD"
-            } else {
-                &offer.currency
-            };
+            let heading = t("package", lang);
+            h.push_str(&format!("<h2>{}</h2>", esc(heading)));
+            h.push_str("<div class=\"booking-grid\">");
+            h.push_str("<div class=\"booking-item package\">");
+            h.push_str("<span class=\"booking-icon\">📦</span>");
+            h.push_str("<div class=\"booking-detail\">");
+            let title = join_parts(&[offer.source_id.clone(), offer.product_code.clone()]);
             h.push_str(&format!(
-                "<div class=\"booking-sub\">{} {}{} ({} {})</div>",
-                esc(cur),
-                group_thousands(offer.price),
-                esc(t("perPerson", lang)),
-                esc(t("forTwo", lang)),
-                group_thousands(offer.price * 2),
+                "<div class=\"booking-value\">{}</div>",
+                esc(if title.is_empty() { "—" } else { &title })
             ));
-        }
-        h.push_str("</div></div>");
-        h.push_str("</div>");
+            if offer.price > 0 {
+                let cur = if offer.currency.is_empty() {
+                    "TWD"
+                } else {
+                    &offer.currency
+                };
+                h.push_str(&format!(
+                    "<div class=\"booking-sub\">{} {}{} ({} {})</div>",
+                    esc(cur),
+                    group_thousands(offer.price),
+                    esc(t("perPerson", lang)),
+                    esc(t("forTwo", lang)),
+                    group_thousands(offer.price * 2),
+                ));
+            }
+            h.push_str("</div></div>");
+            h.push_str("</div>");
         }
     }
 
     // FIT alternatives are shown as a comparison row, never as the current
     // selection. Agoda/separate-booking stays remain in the normal hotel block.
     if !plan.fit_offers.is_empty() {
-        h.push_str(&format!("<h2>{}</h2>", esc(if lang == "en" { "FIT options (preferred comparison)" } else { "FIT 方案比較（優先評估，非已訂）" })));
+        h.push_str(&format!(
+            "<h2>{}</h2>",
+            esc(if lang == "en" {
+                "FIT options (preferred comparison)"
+            } else {
+                "FIT 方案比較（優先評估，非已訂）"
+            })
+        ));
+        let compare = fit_text(lang, &plan.fit_compare_zh, &plan.fit_compare_en);
+        if !compare.is_empty() {
+            h.push_str(&format!(
+                "<div class=\"fit-compare\">{}</div>",
+                esc(&compare)
+            ));
+        }
         // Group by travel agency. Each agency is one collapsed disclosure so the
         // reader sees agency → flights → hotel in a stable, repeatable order.
         let mut groups: Vec<(String, Vec<&crate::model::FitOffer>)> = Vec::new();
         for fit in &plan.fit_offers {
-            if let Some((_, offers)) = groups.iter_mut().find(|(source, _)| source == &fit.source_id) {
+            if let Some((_, offers)) = groups
+                .iter_mut()
+                .find(|(source, _)| source == &fit.source_id)
+            {
                 offers.push(fit);
             } else {
                 groups.push((fit.source_id.clone(), vec![fit]));
@@ -309,20 +424,54 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
 
         h.push_str("<div class=\"fit-agency-list\">");
         for (source_id, offers) in &groups {
-            let source = if source_id.is_empty() { "—" } else { fit_source_label(source_id) };
-            h.push_str("<details class=\"fit-agency\" open>");
+            let source = if source_id.is_empty() {
+                "—"
+            } else {
+                fit_source_label(source_id)
+            };
+            let recommended = offers.iter().any(|fit| fit.recommended);
+            let rec_class = if recommended { " is-recommended" } else { "" };
+            let header_badge = if recommended {
+                format!(
+                    "<span class=\"fit-badge fit-badge-rec\">{}</span>",
+                    esc(if lang == "en" {
+                        "Recommended"
+                    } else {
+                        "推薦"
+                    })
+                )
+            } else {
+                String::new()
+            };
+            h.push_str(&format!("<details class=\"fit-agency{rec_class}\" open>"));
             h.push_str(&format!(
-                "<summary><span class=\"fit-agency-heading\"><span class=\"fit-agency-chevron\" aria-hidden=\"true\">▶</span><span class=\"fit-agency-name\">{}</span></span><span class=\"fit-agency-count\">{} {}</span></summary>",
+                "<summary><span class=\"fit-agency-heading\"><span class=\"fit-agency-chevron\" aria-hidden=\"true\">▶</span><span class=\"fit-agency-name\">{}</span>{header_badge}</span><span class=\"fit-agency-count\">{} {}</span></summary>",
                 esc(source),
                 offers.len(),
                 esc(if lang == "en" { "offers" } else { "個方案" })
             ));
             h.push_str("<div class=\"fit-agency-body\">");
             for fit in offers {
-                let hotel = if !fit.hotel_name.is_empty() { &fit.hotel_name } else if !fit.title.is_empty() { &fit.title } else { "—" };
+                let hotel = if !fit.hotel_name.is_empty() {
+                    &fit.hotel_name
+                } else if !fit.title.is_empty() {
+                    &fit.title
+                } else {
+                    "—"
+                };
                 let price = if fit.price > 0 {
-                    format!("{} {}／人", if fit.currency.is_empty() { "TWD" } else { &fit.currency }, group_thousands(fit.price))
-                } else { "價格未確認".to_string() };
+                    format!(
+                        "{} {}／人",
+                        if fit.currency.is_empty() {
+                            "TWD"
+                        } else {
+                            &fit.currency
+                        },
+                        group_thousands(fit.price)
+                    )
+                } else {
+                    "價格未確認".to_string()
+                };
                 let mut date_text = if fit.departure_date.is_empty() {
                     "日期未確認".to_string()
                 } else if fit.return_date.is_empty() {
@@ -339,12 +488,42 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
 
                 h.push_str("<div class=\"fit-agency-offer\">");
                 h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Agency" } else { "旅行社" }), esc(source)));
-                let flights = [fit.airline.as_str(), fit.flight_outbound.as_str(), fit.flight_return.as_str()]
-                    .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+                let flights = [
+                    fit.airline.as_str(),
+                    fit.flight_outbound.as_str(),
+                    fit.flight_return.as_str(),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
                 h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Flights" } else { "班機" }), esc(if flights.is_empty() { "—" } else { &flights })));
                 h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Hotel" } else { "酒店" }), esc(hotel)));
+                let room = fit_text(lang, &fit.room_zh, &fit.room_en);
+                if !room.is_empty() {
+                    h.push_str(&format!(
+                        "<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>",
+                        esc(if lang == "en" { "Size" } else { "面積" }),
+                        esc(&room)
+                    ));
+                }
                 h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span class=\"fit-detail-price\">{}</span></div>", esc(if lang == "en" { "Price" } else { "價格" }), esc(&price)));
-                h.push_str(&format!("<div class=\"fit-detail-meta\">{}</div>", esc(&date_text)));
+                h.push_str(&fit_badge_html(
+                    lang,
+                    fit.recommended,
+                    fit_price_badge(fit, &plan.fit_offers),
+                ));
+                let reason = fit_text(lang, &fit.note_zh, &fit.note_en);
+                if !reason.is_empty() {
+                    h.push_str(&format!(
+                        "<div class=\"fit-offer-reason\">{}</div>",
+                        esc(&reason)
+                    ));
+                }
+                h.push_str(&format!(
+                    "<div class=\"fit-detail-meta\">{}</div>",
+                    esc(&date_text)
+                ));
                 h.push_str("</div>");
             }
             h.push_str("</div></details>");
@@ -476,7 +655,11 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let is_booked = plan.p4_status == "booked";
     if !plan.domestic_stays.is_empty() {
         let domestic_title = if is_booked {
-            if lang == "zh" { "🏠 已訂住宿" } else { "🏠 Booked Accommodation" }
+            if lang == "zh" {
+                "🏠 已訂住宿"
+            } else {
+                "🏠 Booked Accommodation"
+            }
         } else {
             t("domesticStay", lang)
         };
@@ -549,19 +732,36 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     if !plan.candidates.is_empty() {
         let (cand_title, cand_sub): (&str, Option<&str>) = if is_booked {
             (
-                if lang == "zh" { "其他海景參考" } else { "Other Sea-View References" },
-                Some(if lang == "zh" { "僅供參考 · 已選定住宿" } else { "For reference · accommodation booked" }),
+                if lang == "zh" {
+                    "其他海景參考"
+                } else {
+                    "Other Sea-View References"
+                },
+                Some(if lang == "zh" {
+                    "僅供參考 · 已選定住宿"
+                } else {
+                    "For reference · accommodation booked"
+                }),
             )
         } else {
             (
-                if lang == "zh" { "🏨 海景候選 · 正在選" } else { "🏨 Sea-View Candidates · Selecting" },
+                if lang == "zh" {
+                    "🏨 海景候選 · 正在選"
+                } else {
+                    "🏨 Sea-View Candidates · Selecting"
+                },
                 None,
             )
         };
         h.push_str(&format!("<h2>{}</h2>", esc(cand_title)));
         // Say it in words, not only through a dashed border a reader may not decode.
-        let sub_text = cand_sub.map(str::to_string).unwrap_or_else(|| t("notBookedYet", lang).to_string());
-        h.push_str(&format!("<div class=\"candidate-sub\">{}</div>", esc(&sub_text)));
+        let sub_text = cand_sub
+            .map(str::to_string)
+            .unwrap_or_else(|| t("notBookedYet", lang).to_string());
+        h.push_str(&format!(
+            "<div class=\"candidate-sub\">{}</div>",
+            esc(&sub_text)
+        ));
         h.push_str("<div class=\"candidate-grid\">");
         for c in &plan.candidates {
             let title = if c.room_type.is_empty() {
@@ -569,7 +769,11 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             } else {
                 format!("{} {}", c.hotel_name, c.room_type)
             };
-            let cur = if c.currency.is_empty() { "TWD" } else { &c.currency };
+            let cur = if c.currency.is_empty() {
+                "TWD"
+            } else {
+                &c.currency
+            };
             // Selecting state → dashed frame on each card (visual "not booked yet").
             let card_class = if is_booked {
                 "candidate-card"
@@ -647,17 +851,29 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             // Tags: sea view + breakfast
             let mut tags: Vec<String> = Vec::new();
             if c.sea_view == 1 {
-                tags.push(format!("<span class=\"candidate-tag candidate-tag--sea\">{}</span>", esc(t("seaView", lang))));
+                tags.push(format!(
+                    "<span class=\"candidate-tag candidate-tag--sea\">{}</span>",
+                    esc(t("seaView", lang))
+                ));
             }
             if c.breakfast_included == 1 {
-                tags.push(format!("<span class=\"candidate-tag candidate-tag--bf\">{}</span>", esc(t("breakfast", lang))));
+                tags.push(format!(
+                    "<span class=\"candidate-tag candidate-tag--bf\">{}</span>",
+                    esc(t("breakfast", lang))
+                ));
             } else {
                 // State it. An absent breakfast tag was indistinguishable from
                 // "we never checked", and a NT$7,199 room reads as half-board by default.
-                tags.push(format!("<span class=\"candidate-tag candidate-tag--nobf\">{}</span>", esc(t("noBreakfast", lang))));
+                tags.push(format!(
+                    "<span class=\"candidate-tag candidate-tag--nobf\">{}</span>",
+                    esc(t("noBreakfast", lang))
+                ));
             }
             if !tags.is_empty() {
-                h.push_str(&format!("<div class=\"candidate-tags\">{}</div>", tags.join(" ")));
+                h.push_str(&format!(
+                    "<div class=\"candidate-tags\">{}</div>",
+                    tags.join(" ")
+                ));
             }
             // External rooms/availability link — it opens a real booking engine, so the label
             // says so rather than promising a passive room list.
@@ -751,7 +967,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Offer, Plan};
+    use crate::model::{FitOffer, Offer, Plan};
     use crate::turso::Row;
 
     #[test]
@@ -779,6 +995,115 @@ mod tests {
         assert!(html.contains("TYO06MM260213AM2"));
         assert!(html.contains("TWD 27,888")); // per-person, grouped
         assert!(html.contains("55,776")); // for-2 = price*2
+    }
+
+    fn sample_fit(
+        source: &str,
+        price: i64,
+        currency: &str,
+        recommended: bool,
+        note_zh: &str,
+    ) -> FitOffer {
+        FitOffer {
+            source_id: source.into(),
+            price,
+            currency: currency.into(),
+            hotel_name: source.into(),
+            recommended,
+            note_zh: note_zh.into(),
+            note_en: if note_zh.is_empty() {
+                String::new()
+            } else {
+                format!("en-{source}")
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fit_comparison_renders_recommendation_lowest_and_delta() {
+        let plan = Plan {
+            fit_compare_zh: "三家都是上午去、午後回。".into(),
+            fit_compare_en: "Morning out, afternoon back.".into(),
+            fit_offers: vec![
+                sample_fit("lifetour", 18990, "TWD", true, "同已訂去程時刻，最低價。"),
+                sample_fit("liontravel", 21646, "TWD", false, "同一組樂桃。"),
+                sample_fit("settour", 25467, "TWD", false, ""),
+            ],
+            ..Default::default()
+        };
+        let mut plan = plan;
+        plan.fit_offers[0].room_zh = "約 12㎡（約 3.6 坪）".into();
+        plan.fit_offers[0].room_en = "about 12 m² (about 3.6 ping)".into();
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("fit-compare"));
+        assert!(zh.contains("面積"));
+        assert!(zh.contains("約 12㎡（約 3.6 坪）"));
+        assert!(zh.contains("三家都是上午去、午後回。"));
+        assert!(zh.contains("fit-badge-rec"));
+        assert!(zh.contains("推薦"));
+        assert!(zh.contains("is-recommended"));
+        assert!(zh.contains("最低價"));
+        assert!(zh.contains("貴 TWD 2,656／人"));
+        assert!(zh.contains("貴 TWD 6,477／人"));
+        assert!(zh.contains("同已訂去程時刻，最低價。"));
+        assert!(zh.contains("同一組樂桃。"));
+        // The cheapest card is not also labeled as more expensive.
+        let lifetour = zh.split("fit-agency-offer").nth(1).unwrap_or("");
+        assert!(lifetour.contains("最低價"), "{lifetour}");
+        assert!(!lifetour.contains("貴 TWD"), "{lifetour}");
+
+        let en = render(&plan, "en", None);
+        assert!(en.contains("Recommended"));
+        assert!(en.contains("Lowest"));
+        assert!(en.contains("+TWD 2,656 / person"));
+        assert!(en.contains("+TWD 6,477 / person"));
+        assert!(en.contains("Morning out, afternoon back."));
+        assert!(en.contains("en-lifetour"));
+        assert!(en.contains("Size"));
+        assert!(en.contains("about 12 m² (about 3.6 ping)"));
+    }
+
+    #[test]
+    fn fit_price_badges_skip_a_single_offer_and_mixed_currency() {
+        let one = Plan {
+            fit_offers: vec![sample_fit("lifetour", 18990, "TWD", true, "只有一家。")],
+            ..Default::default()
+        };
+        let html = render(&one, "zh", None);
+        assert!(html.contains("推薦"));
+        assert!(!html.contains("最低價"));
+        assert!(!html.contains("fit-badge-delta"));
+
+        let mixed = Plan {
+            fit_offers: vec![
+                sample_fit("lifetour", 18990, "TWD", false, ""),
+                sample_fit("liontravel", 80000, "JPY", true, "不同幣別。"),
+            ],
+            ..Default::default()
+        };
+        let html = render(&mixed, "zh", None);
+        assert!(html.contains("推薦"));
+        assert!(html.contains("不同幣別。"));
+        assert!(!html.contains("最低價"));
+        assert!(!html.contains("fit-badge-delta"));
+    }
+
+    #[test]
+    fn fit_reason_is_escaped() {
+        let plan = Plan {
+            fit_offers: vec![sample_fit(
+                "lifetour",
+                100,
+                "TWD",
+                false,
+                "<script>alert(1)</script>",
+            )],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(!html.contains("<script>"));
     }
 
     #[test]
@@ -1105,8 +1430,14 @@ mod tests {
             ..Default::default()
         };
         let html = render(&plan, "zh", None);
-        assert!(html.contains("🏨 海景候選 · 正在選"), "selecting h2, got: {html}");
-        assert!(html.contains("candidate-card--selecting"), "dashed card class");
+        assert!(
+            html.contains("🏨 海景候選 · 正在選"),
+            "selecting h2, got: {html}"
+        );
+        assert!(
+            html.contains("candidate-card--selecting"),
+            "dashed card class"
+        );
         assert!(!html.contains("已訂住宿"));
     }
 
@@ -1166,15 +1497,24 @@ mod tests {
         };
         let html = render(&plan, "zh", None);
         // Each source keeps its own scale — never averaged into one number.
-        assert!(html.contains("<b>9</b>/10 Booking.com"), "booking chip: {html}");
+        assert!(
+            html.contains("<b>9</b>/10 Booking.com"),
+            "booking chip: {html}"
+        );
         assert!(html.contains("<b>4.6</b>/5 Google"), "google chip: {html}");
         assert!(html.contains("266 則") && html.contains("119 則"));
         assert!(html.contains("18 m²"), "room size beside the price");
         // The price carries its source, read date, stock and cancellation deadline.
         assert!(html.contains("Booking.com 房價"));
-        assert!(html.contains("2026-09-04 查價"), "datetime trimmed to a date: {html}");
+        assert!(
+            html.contains("2026-09-04 查價"),
+            "datetime trimmed to a date: {html}"
+        );
         // Stock hangs off the read date — never a bare "剩 1 間" that reads as live stock.
-        assert!(html.contains("2026-09-04 查價（當時剩 1 間）"), "stock tied to the date: {html}");
+        assert!(
+            html.contains("2026-09-04 查價（當時剩 1 間）"),
+            "stock tied to the date: {html}"
+        );
         assert!(
             !html.contains("· 剩 1 間"),
             "stock must not stand as its own clause: {html}"
@@ -1225,7 +1565,10 @@ mod tests {
         // 0 must SAY so — an absent tag reads as "included" for a Taiwanese guesthouse.
         let none = render(&mk(0), "zh", None);
         assert!(none.contains("不含早餐"), "{none}");
-        assert!(!none.contains("含早餐</span>") || none.contains("不含早餐"), "{none}");
+        assert!(
+            !none.contains("含早餐</span>") || none.contains("不含早餐"),
+            "{none}"
+        );
         assert!(render(&mk(0), "en", None).contains("No breakfast"));
         // 1 keeps the positive tag and must NOT also claim the negative.
         let yes = render(&mk(1), "zh", None);
@@ -1247,8 +1590,14 @@ mod tests {
             ..Default::default()
         };
         let zh = render(&plan, "zh", None);
-        assert!(zh.contains("每房每晚"), "a bare number does not say per night: {zh}");
-        assert!(zh.contains("尚未預訂"), "say it in words, not only a dashed border: {zh}");
+        assert!(
+            zh.contains("每房每晚"),
+            "a bare number does not say per night: {zh}"
+        );
+        assert!(
+            zh.contains("尚未預訂"),
+            "say it in words, not only a dashed border: {zh}"
+        );
         let en = render(&plan, "en", None);
         assert!(en.contains("per room / night"));
         assert!(en.contains("Nothing booked yet"));
@@ -1292,8 +1641,14 @@ mod tests {
         };
         let html = render(&plan, "en", None);
         assert!(html.contains("Booking.com rate"));
-        assert!(html.contains("checked 2026-09-04 (1 left then)"), "stock tied to the date: {html}");
-        assert!(!html.contains("· 1 left "), "stock must not stand alone in English either");
+        assert!(
+            html.contains("checked 2026-09-04 (1 left then)"),
+            "stock tied to the date: {html}"
+        );
+        assert!(
+            !html.contains("· 1 left "),
+            "stock must not stand alone in English either"
+        );
         assert!(html.contains("free cancellation until 2026-09-28"));
     }
 
@@ -1330,7 +1685,10 @@ mod tests {
             }],
             "zh",
         );
-        assert!(!out.contains("Bogus"), "a scale-less rating is unrenderable: {out}");
+        assert!(
+            !out.contains("Bogus"),
+            "a scale-less rating is unrenderable: {out}"
+        );
     }
 
     #[test]
@@ -1375,7 +1733,10 @@ mod tests {
         assert!(html.contains("https://example.com/quad.webp"));
         assert!(html.contains("海景高級四人房"));
         assert!(html.contains("公區"));
-        assert!(!html.contains("不該出現"), "placeholder gallery rows skipped");
+        assert!(
+            !html.contains("不該出現"),
+            "placeholder gallery rows skipped"
+        );
         assert_eq!(html.matches("candidate-gallery-img").count(), 2);
         // Hotlinked photos must not leak the referrer — Booking's CDN 403s on some
         // external Referers, and Google's signed URLs are equally picky.

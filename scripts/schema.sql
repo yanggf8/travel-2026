@@ -12,8 +12,8 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-09-04
--- Tables: 135 | Indexes: 26
+-- Generated: 2026-09-22
+-- Tables: 136 | Indexes: 27
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -813,6 +813,19 @@ CREATE TABLE plan_events (
     PRIMARY KEY (plan_id, scope, destination, process_id, sort_order)
   );
 
+CREATE TABLE plan_fit_notes (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  source_id TEXT NOT NULL DEFAULT '',
+  recommended INTEGER NOT NULL DEFAULT 0 CHECK(recommended IN (0, 1)),
+  body_zh TEXT NOT NULL DEFAULT '',
+  body_en TEXT NOT NULL DEFAULT '',
+  room_zh TEXT NOT NULL DEFAULT '',
+  room_en TEXT NOT NULL DEFAULT '',
+  updated_at TEXT,
+  PRIMARY KEY (plan_id, destination, source_id)
+);
+
 CREATE TABLE plan_map_snapshots (
   plan_id TEXT NOT NULL PRIMARY KEY,
   snapshotted_at TEXT NOT NULL
@@ -1276,6 +1289,7 @@ CREATE INDEX idx_offers_region ON offers (region);
 CREATE INDEX idx_offers_source ON offers (source_id);
 CREATE UNIQUE INDEX idx_operation_runs_idempotency ON operation_runs(plan_id, idempotency_key);
 CREATE INDEX idx_operation_runs_plan ON operation_runs(plan_id, started_at DESC);
+CREATE UNIQUE INDEX idx_plan_fit_notes_one_pick ON plan_fit_notes(plan_id, destination) WHERE recommended = 1;
 CREATE INDEX idx_plan_share_tokens_plan_status_created ON plan_share_tokens (plan_id, status, created_at DESC);
 CREATE INDEX idx_s0_cand_run ON shaping_candidates(run_id, rank);
 CREATE INDEX idx_s0_shaping_run ON shaping_rules(run_id, aspect, role);

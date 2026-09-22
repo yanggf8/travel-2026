@@ -399,6 +399,32 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "CREATE INDEX IF NOT EXISTS idx_activities_booking ON activities(plan_id, booking_status)",
     )
     .await;
+    // At most one recommended FIT agency per plan+destination. source_id '' is the
+    // comparison paragraph and is never recommended; the CLI clears the previous
+    // pick before setting a new one so this index can commit. Fail loud: a
+    // swallowed error here would let two Recommended badges land.
+    if let Err(e) = exec(
+        &conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_fit_notes_one_pick ON plan_fit_notes(plan_id, destination) WHERE recommended = 1",
+    )
+    .await
+    {
+        if !e.contains("already exists") {
+            return Err(format!("plan_fit_notes pick index: {e}"));
+        }
+    }
+    // Room size is its own card row. CREATE TABLE below already has the columns
+    // on a new database; these ALTERs cover a table created before the row existed.
+    add_column(
+        &conn,
+        "ALTER TABLE plan_fit_notes ADD COLUMN room_zh TEXT NOT NULL DEFAULT '';",
+    )
+    .await;
+    add_column(
+        &conn,
+        "ALTER TABLE plan_fit_notes ADD COLUMN room_en TEXT NOT NULL DEFAULT '';",
+    )
+    .await;
 
     // 11. version column on the plans/plans_current table (whichever exists).
     let plans_table = if table_exists(&conn, "plans_current").await {
@@ -2484,6 +2510,22 @@ const PHASE1_TABLES: &[&str] = &[
   created_by TEXT,
   deactivated_at TEXT,
   deactivated_by TEXT
+)"#,
+    // Dashboard FIT comparison: one comparison paragraph (source_id '') plus one
+    // reason per agency. recommended=1 is the single Recommended badge; lowest-price
+    // and price-delta badges are computed at render time and are not stored.
+    // room_zh/room_en are the 面積 row on that agency's card.
+    r#"CREATE TABLE IF NOT EXISTS plan_fit_notes (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  source_id TEXT NOT NULL DEFAULT '',
+  recommended INTEGER NOT NULL DEFAULT 0 CHECK(recommended IN (0, 1)),
+  body_zh TEXT NOT NULL DEFAULT '',
+  body_en TEXT NOT NULL DEFAULT '',
+  room_zh TEXT NOT NULL DEFAULT '',
+  room_en TEXT NOT NULL DEFAULT '',
+  updated_at TEXT,
+  PRIMARY KEY (plan_id, destination, source_id)
 )"#,
 ];
 

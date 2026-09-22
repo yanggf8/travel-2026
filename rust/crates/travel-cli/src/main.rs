@@ -92,6 +92,7 @@ mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
 mod create_plan;        // create-plan (fast-path plan seed)
 mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
 mod set_plan_name;      // set-plan-name (rename plan_destinations.display_name)
+mod set_fit_note;       // set-fit-note (FIT comparison note, Recommended pick, room-size row)
 mod set_active_destination; // set-active-destination (switch plan_metadata.active_destination)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
@@ -385,6 +386,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_active_destination::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-fit-note" => {
+            if wants_help(
+                rest,
+                "travel set-fit-note [--source <id>] --zh \"<text>\" [--en \"<text>\"] [--room-zh \"<size>\"] [--room-en \"<size>\"] [--recommend | --clear-recommend] [--clear] [--dest <slug>]\n  Write the dashboard FIT comparison paragraph (omit --source, or --source compare) or one agency's reason.\n  --room-zh is the 面積 row on that agency's card. --recommend marks that agency as the single Recommended pick. Lowest-price and price-delta badges are computed on the page, not stored.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_fit_note::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "share-token" => {
@@ -980,6 +992,7 @@ COMPARE / UTIL\n\
   normalize flights --text '<...>' --url '<...>' | leave calc <start> <end> [country]\n\
   fetch-weather [--dest slug] | share-token | mark-plan-deleted <plan>\n\
   set-plan-name <name> [--dest <slug>] | set-active-destination <slug>\n\
+  set-fit-note [--source <id>] --zh \"<text>\" [--en \"<text>\"] [--room-zh \"<size>\"] [--recommend] [--clear]  FIT comparison note (audited)\n\
 \n\
 DB\n\
   db status | db token-status | db schema [<table>] | db exec \"<SQL>\" | db migrate\n\
