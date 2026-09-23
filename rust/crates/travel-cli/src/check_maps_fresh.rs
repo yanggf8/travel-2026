@@ -3,21 +3,21 @@
 // manifest is incomplete (MISSING/EMPTY keys).
 //
 // The dashboard's map images are STATIC PNG snapshots (captured by
-// scripts/snapshot-maps.sh via chromeport → R2) baked from the plan's POI
+// Rust travel snapshot-maps renderer → R2) baked from the plan's POI
 // coordinates at capture time. When the itinerary changes (activities
 // added/moved/removed, days changed, meals edited), those PNGs silently no
 // longer match the day's stops — same silent-drift class we've been killing.
 //
 // Timestamp-based staleness (user-chosen design):
 //   - plan_map_snapshots.snapshotted_at records the last snapshot time
-//     (stamped by `mark-maps-snapshotted`, called at the end of snapshot-maps.sh).
+//     (stamped by `mark-maps-snapshotted`, written by travel snapshot-maps).
 //   - We take MAX(updated_at) across the four itinerary tables that carry an
 //     `updated_at` column — `days`, `timesofday`, `activities`, `session_meals` —
 //     for the plan. If the latest itinerary edit is newer than the snapshot,
 //     the maps are STALE.
 //
 // Completeness (manifest-based):
-//   - `map_artifacts` rows are written by snapshot-maps.sh (one per expected key).
+//   - `map_artifacts` rows are written by travel snapshot-maps (one per expected key).
 //   - Expected keys: `plan.png`, `plan-logistics.png` + `day-{n}.png` for each day.
 //   - Each key is MISSING (no row), EMPTY (status != uploaded or byte_size <= 64),
 //     or OK.
@@ -71,13 +71,13 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             Status::NeverSnapshotted => {
                 stale += 1;
                 println!(
-                    "⚠ {plan_id}: maps never snapshotted — run scripts/snapshot-maps.sh {plan_id} <dest>"
+                    "⚠ {plan_id}: maps never snapshotted — run travel snapshot-maps --plan-id {plan_id}"
                 );
             }
             Status::Stale { snapshotted_at } => {
                 stale += 1;
                 println!(
-                    "⚠ {plan_id}: itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run scripts/snapshot-maps.sh"
+                    "⚠ {plan_id}: itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run travel snapshot-maps"
                 );
             }
             Status::Fresh { snapshotted_at } => {
@@ -105,7 +105,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         println!("Summary: all {} plan(s) have fresh maps.", plan_ids.len());
     } else {
         println!(
-            "Summary: {stale} of {} plan(s) have stale maps — re-run scripts/snapshot-maps.sh.",
+            "Summary: {stale} of {} plan(s) have stale maps — re-run travel snapshot-maps.",
             plan_ids.len()
         );
     }

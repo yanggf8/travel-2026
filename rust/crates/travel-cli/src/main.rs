@@ -97,7 +97,7 @@ mod set_active_destination; // set-active-destination (switch plan_metadata.acti
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
-mod snapshot_maps;      // snapshot-maps (wrap scripts/snapshot-maps.sh: capture+upload route maps)
+mod snapshot_maps;      // snapshot-maps (Turso → Rust PNG renderer → R2)
 mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
 mod clear_accommodation; // clear-accommodation — cancel domestic accommodation (P4 -> selecting)
 mod list_accommodations; // list-accommodations — list domestic_accommodations (slug-keyed, no --plan-id)

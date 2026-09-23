@@ -469,7 +469,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
 
     // 12b. plan_map_snapshots — records when the dashboard's static map PNGs
-    //      were last snapshotted (by scripts/snapshot-maps.sh via chromeport→R2)
+    //      were last snapshotted (by Rust `travel snapshot-maps` via PNG renderer→R2)
     //      so the `check-maps-fresh` lint can flag maps that have gone stale
     //      relative to the latest itinerary edit. Side table keyed by plan_id.
     exec_create(
@@ -482,7 +482,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
 
     // 12c. map_artifacts — manifest of dashboard map PNGs uploaded to R2 by
-    //      scripts/snapshot-maps.sh. The CLI lint reads this (no R2 client) to
+    //      the Rust `travel snapshot-maps` command. The CLI lint reads this (no R2 client) to
     //      flag MISSING/EMPTY keys per plan.
     exec_create(
         &conn,
@@ -501,7 +501,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 
     // 12d. route_place_geocodes — keyless-geocoding cache (Nominatim/OSM) for
     //      day_route_segments place names (hotel/airport/restaurant/mall/etc. that
-    //      are NOT sightseeing destination_pois). snapshot-maps.sh resolves each
+    //      are NOT sightseeing destination_pois). Rust `travel snapshot-maps` resolves each
     //      route place to lat/lon via this cache (write-through), so a re-run is
     //      free and we respect Nominatim's ≤1 req/s policy. `query_key` is the
     //      normalized lookup key; `confidence`/`review` gate plotting low-quality
@@ -527,7 +527,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
 
     // 12e. route_road_legs / route_road_leg_points — keyless road-geometry cache (OSRM
-    //      public demo) for snapshot-maps.sh Tier 2. One LEG = one ordered pair of stop
+    //      public demo) for the Rust `travel snapshot-maps` command. One LEG = one ordered pair of stop
     //      coords (a per-day route is N-1 legs). The header row records provider/profile/
     //      status (ok|error) + fetched_at so a re-run makes ZERO OSRM calls and
     //      failures aren't re-hit; the child rows store the road polyline as NORMALIZED

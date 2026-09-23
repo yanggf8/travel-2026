@@ -115,8 +115,8 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 #   After minting: logged-in owner can also copy the viewer URL from the dashboard/plan page UI (Copy share link button).
 #   Recipients open the copied link logged-out — no GitHub login. Plan: docs/plans/2026-06-25-dashboard-share-link-copy.md
 
-# Route maps (per-day route PNGs + sightseeing-only plan overview + separate hotel/airport overview; chromeport→Leaflet→R2).
-./bin/travel snapshot-maps [--dest <slug>]        # (re)capture + upload the route-map PNGs (wraps scripts/snapshot-maps.sh). Needs Chrome at the chromeport CDP endpoint + wrangler auth.
+# Route diagrams (per-day PNGs + sightseeing-only overview + separate hotel/airport overview; local grid, no OSM raster tile requests).
+./bin/travel snapshot-maps [--dest <slug>]        # Renders route-diagram PNGs in Rust and uploads them to R2. Requires Wrangler auth.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
 ./bin/travel set-poi-coords <slug> <poi_id> <lat> <lon> [--source <s>] [--confidence <c>]    # geocode a destination_pois row (feeds the POI-coord map path). GLOBAL/slug-keyed reference data — takes NO --plan-id, NO audit triad. `validate data` WARNs on ungeocoded POIs.
 ./bin/travel add-transit <slug> <from_station> <to_station> --minutes N [--line "<t>"] [--kind metro|rail|walk|bus|estimate] [--source <s>] [--confidence verified|reviewed|estimate]    # add a destination_transit station pair (transit time/line that derive-routes attaches to auto-derived legs). GLOBAL/slug-keyed reference data — NO --plan-id, NO audit triad. Idempotent (INSERT OR REPLACE). pair_key uses derive-routes' own normalization, so the pair is found by the next `derive-routes` run — no more raw `db exec INSERT` for discovered pairs.

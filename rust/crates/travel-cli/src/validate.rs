@@ -187,7 +187,7 @@ async fn validate_maps_fresh_all_plans(issues: &mut Vec<Issue>) {
                     category: "maps-fresh".to_string(),
                     severity: Severity::Warning,
                     message: format!(
-                        "maps never snapshotted — run scripts/snapshot-maps.sh {plan_id} <dest>"
+                        "maps never snapshotted — run travel snapshot-maps --plan-id {plan_id}"
                     ),
                     file: Some(format!("plan:{plan_id}")),
                     line: None,
@@ -198,7 +198,7 @@ async fn validate_maps_fresh_all_plans(issues: &mut Vec<Issue>) {
                     category: "maps-fresh".to_string(),
                     severity: Severity::Warning,
                     message: format!(
-                        "itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run scripts/snapshot-maps.sh"
+                        "itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run travel snapshot-maps"
                     ),
                     file: Some(format!("plan:{plan_id}")),
                     line: None,
@@ -1866,7 +1866,7 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
                 category: "maps-fresh".to_string(),
                 severity: PublishSeverity::Warn,
                 message: format!(
-                    "maps never snapshotted — run scripts/snapshot-maps.sh {plan_id} {destination}"
+                    "maps never snapshotted — run travel snapshot-maps --plan-id {plan_id} --dest {destination}"
                 ),
             });
         }
@@ -1875,7 +1875,7 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
                 category: "maps-fresh".to_string(),
                 severity: PublishSeverity::Warn,
                 message: format!(
-                    "itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run scripts/snapshot-maps.sh"
+                    "itinerary changed since maps snapshotted ({snapshotted_at}) — maps STALE, re-run travel snapshot-maps"
                 ),
             });
         }
@@ -1892,7 +1892,7 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
                 category: "maps-complete".to_string(),
                 severity: PublishSeverity::Warn,
                 message: format!(
-                    "no map manifest — plan.png not uploaded; run scripts/snapshot-maps.sh {plan_id} {destination}"
+                    "no map manifest — plan.png not uploaded; run travel snapshot-maps --plan-id {plan_id} --dest {destination}"
                 ),
             });
         }

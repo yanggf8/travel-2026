@@ -1,3 +1,5 @@
+> **Superseded for the basemap (2026-09-24):** `travel snapshot-maps` now renders stored OSM-derived route geometry and markers directly in Rust. It never requests `tile.openstreetmap.org` or saves tile composites. `scripts/snapshot-maps.sh` is only a compatibility wrapper. Keep this policy boundary in place; do not restore an OSM/CARTO raster tile layer to the snapshot pipeline without an explicitly authorized static-map provider.
+
 # Dashboard Route Maps — Visual Upgrade (catch up to Wanderlog)
 
 Status: **PLAN COMPLETE — TIER 1 + TIER 2 DONE & COMMITTED; TIER 3 DECLINED (out of scope).**

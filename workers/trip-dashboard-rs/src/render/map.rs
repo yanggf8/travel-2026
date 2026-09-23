@@ -7,10 +7,10 @@ use std::collections::HashMap;
 const PNG_MAGIC: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
 
 /// Minimum byte length for a real map PNG — kept in sync with `MIN_PNG_BYTES` in
-/// scripts/snapshot-maps.sh so the upload gate and the serve gate agree. This is only
-/// a tiny-garbage/stub guard (a real 640×440 map is hundreds of KB); it does NOT detect
-/// a blank-but-valid PNG — that is prevented upstream by the tile-load readiness gate in
-/// snapshot-maps.sh (MAP_READY fires only after tiles paint).
+/// travel-cli snapshot_maps.rs so the upload gate and the serve gate agree. This is only
+/// a tiny-garbage/stub guard (a real route diagram is hundreds of KB); it does NOT detect
+/// a blank-but-valid PNG — `travel snapshot-maps` validates that it rendered itinerary
+/// points and writes the PNG directly in Rust before uploading it to R2.
 pub const MIN_MAP_PNG_BYTES: usize = 200;
 
 /// Server-side map availability for a plan page render. Built in the async router
@@ -30,7 +30,7 @@ pub struct MapStatus {
 }
 
 /// True when the body is a real PNG map (not a 1-byte garbage capture or tiny stub).
-/// Uses `>=` to match the script's `sz -lt MIN_PNG_BYTES` reject (i.e. a PNG of exactly
+/// Uses `>=` to match the Rust renderer's `png.len() < MIN_PNG_BYTES` reject (i.e. a PNG of exactly
 /// MIN bytes is accepted by BOTH the upload gate and this serve gate — no boundary gap).
 pub fn is_valid_map_png(bytes: &[u8]) -> bool {
     bytes.len() >= MIN_MAP_PNG_BYTES
@@ -57,7 +57,7 @@ pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str) -> String
             esc(caption),
             esc_url_attr(plan_id),
             cache_bust(v),
-            esc(caption),
+            map_caption(caption),
         )
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
@@ -81,7 +81,7 @@ pub fn plan_logistics_map_slot(plan_id: &str, version: Option<&str>, lang: &str)
             esc(caption),
             esc_url_attr(plan_id),
             cache_bust(v),
-            esc(caption),
+            map_caption(caption),
         )
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
@@ -105,7 +105,7 @@ pub fn day_map_slot(plan_id: &str, day_number: i64, version: Option<&str>, lang:
             esc_url_attr(plan_id),
             day_number,
             cache_bust(v),
-            esc(&caption),
+            map_caption(&caption),
         )
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
@@ -116,6 +116,15 @@ pub fn day_map_slot(plan_id: &str, day_number: i64, version: Option<&str>, lang:
             esc(&caption),
         )
     }
+}
+
+/// OSM attribution is printed into each PNG and linked in the surrounding HTML so viewers
+/// can reach the data licence and source information.
+fn map_caption(caption: &str) -> String {
+    format!(
+        "{} <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span>",
+        esc(caption)
+    )
 }
 
 /// A list of stops with their Google Maps links (keyless q=lat,lon). The

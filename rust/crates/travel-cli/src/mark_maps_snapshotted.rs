@@ -1,8 +1,8 @@
 // `travel mark-maps-snapshotted <plan_id>` — record that the dashboard's static
 // map PNGs were just (re)snapshotted for this plan.
 //
-// The dashboard map images are STATIC PNGs captured by scripts/snapshot-maps.sh
-// (chromeport → R2) from the plan's POI coordinates at capture time. When the
+// The dashboard map images are STATIC PNGs rendered by the Rust `travel snapshot-maps` command
+// (Turso → Rust PNG renderer → R2) from the plan's POI coordinates at capture time. When the
 // itinerary later changes, those PNGs silently go stale. This command stamps a
 // `plan_map_snapshots.snapshotted_at` row; the `check-maps-fresh` lint compares
 // it against the latest itinerary edit to flag staleness.
@@ -101,7 +101,7 @@ fn print_usage() {
          Stamps plan_map_snapshots.snapshotted_at = now for the plan, recording that the\n\
          dashboard's static map PNGs were just (re)snapshotted. The `check-maps-fresh` lint\n\
          compares this stamp against the latest itinerary edit to flag stale maps.\n\
-         Intended to be called at the end of scripts/snapshot-maps.sh."
+         Use after manually uploading a complete map set; `travel snapshot-maps` stamps automatically."
     );
 }
 
