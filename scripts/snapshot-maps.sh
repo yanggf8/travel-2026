@@ -51,15 +51,18 @@ OSRM_BASE="https://router.project-osrm.org/route/v1/driving"
 OSRM_PROFILE="driving"
 OSRM_PROVIDER="osrm-demo"
 ROAD_DP=5                     # coord precision for the leg cache key (~1.1m)
-# Geocode context appended to every route-place query to disambiguate a bare place
-# name (e.g. "おもろまち"/"イオン那覇" geocode poorly without a city). DERIVED from the
-# destination, NOT hardcoded — a Naha hardcode resolved Tokyo/Kyoto stops to Okinawa
-# coords (wrong maps). Use destination_config.display_name for $DEST → "<City>, Japan";
-# fall back to "Japan" if the row/name is missing (still better than a wrong city).
+# Geocode context appended to every route-place query to disambiguate a bare place.
+# A composite display name such as "Osaka + Kyoto" is too broad for Nominatim and can
+# return unrelated coordinates; prefer an explicit override, then destination-specific
+# city context, then destination_config.display_name.
 GEO_CITY="$($CHROMEPORT db query "SELECT display_name FROM destination_config \
   WHERE slug='$(printf '%s' "$DEST" | sed "s/'/''/g")'" 2>/dev/null \
   | awk -F'\t' 'NR>1 && $1!="" {print $1; exit}')"
-if [ -n "$GEO_CITY" ]; then
+if [ -n "${MAPS_GEO_CONTEXT:-}" ]; then
+  GEO_CONTEXT="$MAPS_GEO_CONTEXT"
+elif [[ "${DEST,,}" == *kyoto* ]]; then
+  GEO_CONTEXT="Kyoto, Japan"
+elif [ -n "$GEO_CITY" ]; then
   GEO_CONTEXT="${GEO_CITY}, Japan"
 else
   echo "WARN: no destination_config.display_name for '$DEST' — geocoding with bare 'Japan' context." >&2
@@ -84,45 +87,48 @@ declare -A DAY_COORDS=()
 # (empty = no road geometry → straight-line fallback for that day).
 declare -A DAY_ROADS=()
 
-# --- acquire an ISOLATED, PERSISTENT Chrome via the gwebcdb per-agent allocator ---
-# The harness reaps any process backgrounded inside a Bash call, so we CANNOT start
-# our own long-lived Chrome (nohup/setsid/disown all die when the call returns). The
-# allocator launches Chrome detached from Python (start_new_session=True) so it
-# survives across this script's many chromeport subprocess calls. Chrome picks its own
-# port; we point chromeport (a CDP *client*) at it via CHROMEPORT_CDP_ENDPOINT — no
-# more hardcoded :9222, no shared-tab collisions with another agent's Chrome.
-GWEBCDB="${GWEBCDB_DIR:-$HOME/b/gwebcdb}"
-# Fail with a CLEAR message if the gwebcdb allocator checkout is missing, rather than
-# a generic "acquire failed" that points the operator at Chrome/CDP. (.env + gwebcdb
-# are provisioned out-of-band per CLAUDE.md.)
-[ -f "$GWEBCDB/bridge/chrome_session.py" ] || {
-  echo "ERROR: gwebcdb checkout not found at '$GWEBCDB' (need bridge/chrome_session.py)."
-  echo "       Set GWEBCDB_DIR or clone ~/b/gwebcdb. This script self-acquires its Chrome from it."; exit 1; }
-echo "== acquire isolated Chrome session (gwebcdb) =="
-# python3 throughout (the rest of this script uses python3; a host with only python3
-# and no `python` alias would otherwise fail at this first step only).
-SESSION_OUT="$(cd "$GWEBCDB" && timeout 45 python3 bridge/chrome_session.py acquire 2>&1)" || {
-  echo "ERROR: chrome_session.py acquire failed:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
-# acquire has now launched a detached Chrome + written session.json. Arm the release
-# trap IMMEDIATELY — BEFORE parsing the port — so an early exit (e.g. a malformed
-# port line below) can't leak the Chrome we just acquired. cleanup releases by
-# whichever id we managed to parse (session name preferred; port as fallback), warns
-# (does not silently swallow) if release fails, and is bounded by a timeout so a hung
-# release can't wedge the EXIT trap (and thus the whole script's exit) forever.
-SESSION_NAME="$(printf '%s\n' "$SESSION_OUT" | sed -n 's/^session'$'\t''//p')"
-CDP_PORT="$(printf '%s\n' "$SESSION_OUT" | sed -n 's/^port'$'\t''//p')"
-cleanup() {
-  local sel=""
-  if [ -n "${SESSION_NAME:-}" ]; then sel="--session $SESSION_NAME"
-  elif [ -n "${CDP_PORT:-}" ]; then sel="--port $CDP_PORT"
-  else return 0; fi
-  (cd "$GWEBCDB" && timeout 20 python3 bridge/chrome_session.py release $sel >/dev/null 2>&1) \
-    || echo "   WARN: could not release Chrome session ($sel) — check: cd $GWEBCDB && python3 bridge/chrome_session.py list" >&2
-}
-trap cleanup EXIT
-[ -n "$CDP_PORT" ] || { echo "ERROR: could not read port from acquire output:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
-export CHROMEPORT_CDP_ENDPOINT="http://127.0.0.1:${CDP_PORT}"
-echo "   chrome on ${CHROMEPORT_CDP_ENDPOINT} (isolated profile; released on exit)"
+# --- use a supplied CDP endpoint, or acquire an isolated Chrome via gwebcdb ---
+# Supplying CHROMEPORT_CDP_ENDPOINT lets operators use an already-running headless
+# Chrome when WSLg launch is unavailable. The caller owns that browser's lifecycle.
+# Otherwise the allocator launches a detached, isolated Chrome and we release it on exit.
+if [ -n "${CHROMEPORT_CDP_ENDPOINT:-}" ]; then
+  echo "== use supplied Chrome session =="
+  echo "   chrome at ${CHROMEPORT_CDP_ENDPOINT} (caller-managed lifecycle)"
+else
+  GWEBCDB="${GWEBCDB_DIR:-$HOME/b/gwebcdb}"
+  # Some existing checkouts keep the allocator under archive/bridge; recognize that
+  # layout automatically while preferring the current root-level bridge when present.
+  if [ ! -f "$GWEBCDB/bridge/chrome_session.py" ] && \
+     [ -f "$GWEBCDB/archive/bridge/chrome_session.py" ]; then
+    GWEBCDB="$GWEBCDB/archive"
+  fi
+  [ -f "$GWEBCDB/bridge/chrome_session.py" ] || {
+    echo "ERROR: gwebcdb allocator not found under '$GWEBCDB' (need bridge/chrome_session.py)."
+    echo "       Set GWEBCDB_DIR, or provide CHROMEPORT_CDP_ENDPOINT for an existing Chrome."; exit 1; }
+  echo "== acquire isolated Chrome session (gwebcdb) =="
+  SESSION_OUT="$(cd "$GWEBCDB" && timeout 45 python3 bridge/chrome_session.py acquire 2>&1)" || {
+    echo "ERROR: chrome_session.py acquire failed:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
+  SESSION_NAME="$(printf '%s\n' "$SESSION_OUT" | sed -n 's/^session'$'\t''//p')"
+  CDP_PORT="$(printf '%s\n' "$SESSION_OUT" | sed -n 's/^port'$'\t''//p')"
+  cleanup() {
+    local selector=""
+    if [ -n "${SESSION_NAME:-}" ]; then
+      selector="--session $SESSION_NAME"
+      (cd "$GWEBCDB" && timeout 20 python3 bridge/chrome_session.py release --session "$SESSION_NAME" >/dev/null 2>&1) || {
+        echo "   WARN: could not release Chrome session ($selector) — check: cd $GWEBCDB && python3 bridge/chrome_session.py list" >&2
+      }
+    elif [ -n "${CDP_PORT:-}" ]; then
+      selector="--port $CDP_PORT"
+      (cd "$GWEBCDB" && timeout 20 python3 bridge/chrome_session.py release --port "$CDP_PORT" >/dev/null 2>&1) || {
+        echo "   WARN: could not release Chrome session ($selector) — check: cd $GWEBCDB && python3 bridge/chrome_session.py list" >&2
+      }
+    fi
+  }
+  trap cleanup EXIT
+  [ -n "$CDP_PORT" ] || { echo "ERROR: could not read port from acquire output:"; printf '%s\n' "$SESSION_OUT"; exit 1; }
+  export CHROMEPORT_CDP_ENDPOINT="http://127.0.0.1:${CDP_PORT}"
+  echo "   chrome on ${CHROMEPORT_CDP_ENDPOINT} (isolated profile; released on exit)"
+fi
 
 echo "== chromeport / Chrome reachability =="
 $CHROMEPORT browser doctor >/dev/null || { echo "Chrome not reachable at ${CHROMEPORT_CDP_ENDPOINT}"; exit 1; }
@@ -150,8 +156,35 @@ record_artifact() {
 geocode_place() {
   local place="$1"
   [ -z "$place" ] && return 0
+  # Prefer the plan's already-reviewed POI coordinates over a fuzzy geocoder match.
+  # Route labels often use a shorter Chinese/Japanese name than the linked activity.
+  local place_sql poi_coord
+  place_sql="$(sql_escape "$place")"
+  poi_coord="$($CHROMEPORT db query "SELECT p.lat, p.lon FROM destination_pois p \
+    WHERE p.slug='${DEST}' AND p.lat IS NOT NULL AND p.lon IS NOT NULL \
+      AND p.title LIKE '%${place_sql}%' LIMIT 1" 2>/dev/null \
+    | awk -F'\t' 'NR>1 && $1 ~ /^-?[0-9]+\.?[0-9]*$/ && $2 ~ /^-?[0-9]+\.?[0-9]*$/ {print $1","$2; exit}')"
+  if [ -n "$poi_coord" ]; then printf '%s' "$poi_coord"; return 0; fi
+
+  # Normalize a few common itinerary labels before Nominatim. In particular, a
+  # Chinese “京都站” search can resolve to the wrong station, while the English name
+  # is unambiguous. Airport queries use the airport's own city, not the trip city.
+  local search_place="$place" search_context="$GEO_CONTEXT"
+  case "$place" in
+    "KIX T2") search_place="Kansai International Airport"; search_context="Osaka, Japan" ;;
+    "京都站"|"京都駅") search_place="Kyoto Station Building"; search_context="Kyoto, Japan" ;;
+    "HOTEL TAVINOS KYOTO") search_place="Hotel Tavinos Kyoto"; search_context="Kyoto, Japan" ;;
+    "高台寺") search_place="Kodaiji Temple"; search_context="Kyoto, Japan" ;;
+    "天龍寺") search_place="Tenryu-ji Temple"; search_context="Kyoto, Japan" ;;
+    "竹林之道") search_place="Arashiyama Bamboo Grove"; search_context="Kyoto, Japan" ;;
+    "祇園白川") search_place="Gion Shirakawa"; search_context="Kyoto, Japan" ;;
+    "大原") search_place="Ohara"; search_context="Kyoto, Japan" ;;
+    "嵐山站") search_place="Saga-Arashiyama Station"; search_context="Kyoto, Japan" ;;
+    "京都拉麵小路") search_place="Kyoto Ramen Koji"; search_context="Kyoto, Japan" ;;
+    "山城高雄バス停") search_place="Yamashiro Takao bus stop"; search_context="Kyoto, Japan" ;;
+  esac
   # normalized cache key (lowercased, trimmed, context-appended)
-  local key; key="$(printf '%s' "$place" | tr 'A-Z' 'a-z' | sed 's/^ *//;s/ *$//')|${GEO_CONTEXT}"
+  local key; key="$(printf '%s' "$search_place" | tr '[:upper:]' '[:lower:]' | sed 's/^ *//;s/ *$//')|${search_context}"
   local kq; kq="$(sql_escape "$key")"
 
   # 1. cache hit?
@@ -166,7 +199,7 @@ geocode_place() {
 
   # 2. live Nominatim (rate-limited, identifying UA, JSON; context-disambiguated)
   sleep 1.1
-  local q; q="${place}, ${GEO_CONTEXT}"
+  local q; q="${search_place}, ${search_context}"
   local resp
   resp="$(curl -s --max-time 20 -H "User-Agent: ${UA}" \
     --data-urlencode "q=${q}" --data-urlencode "format=jsonv2" \
@@ -200,17 +233,30 @@ geocode_place() {
   fi
 }
 
-# --- collect ORDERED stop coords for a day, from POIs first, else route places ---
-# Writes "lat,lon" lines to stdout in itinerary order. Falls back to geocoding the
-# day_route_segments place sequence (from_place of seg 0, then each to_place).
+# --- collect ORDERED stop coords for a day, from route places first, else POIs ---
+# Route segments include the day's full path (hotel/airport/transit endpoints as well
+# as attractions); use them first so one linked POI cannot hide the rest of the day.
 day_coords() {
   local d="$1"
-  # 1. sightseeing POIs linked to this day's activities (already geocoded).
-  #    Ordered by SESSION first, then sort_order. sort_order restarts at 0 in every
-  #    session, so ordering by it alone drew the day backwards whenever a later
-  #    session held the lower number — a jiufen day-2 map numbered the afternoon
-  #    stop 1 and the morning stop 2, pointing the drive the wrong way down the
-  #    coast. Session order matches model.rs SESSION_ORDER.
+  local seg_places
+  seg_places="$($CHROMEPORT db query "SELECT sort_order, from_place, to_place \
+    FROM day_route_segments WHERE plan_id='${PLAN}' AND day_number=${d} ORDER BY sort_order" 2>/dev/null \
+    | awk -F'\t' 'NR>1 && $1 ~ /^[0-9]+$/ {print $2"\n"$3}')"
+  if [ -n "$seg_places" ]; then
+    local seg_coords
+    seg_coords="$(printf '%s\n' "$seg_places" | awk 'NF && $0 != prev {print; prev=$0}' \
+      | while IFS= read -r place; do
+          coord="$(geocode_place "$place")"
+          if [ -n "$coord" ] && [ "$coord" != "${prev_coord:-}" ]; then
+            printf '%s\n' "$coord"
+            prev_coord="$coord"
+          fi
+        done)"
+    if [ -n "$seg_coords" ]; then printf '%s\n' "$seg_coords"; return 0; fi
+  fi
+
+  # If route places are absent or none can be geocoded, use linked activity POIs.
+  # Ordered by session then activity; sort_order restarts in each session.
   local poi
   poi="$($CHROMEPORT db query "SELECT p.lat, p.lon \
     FROM activities a JOIN destination_pois p \
@@ -218,33 +264,9 @@ day_coords() {
     WHERE a.plan_id='${PLAN}' AND a.day_number=${d} AND p.lat IS NOT NULL AND p.lon IS NOT NULL \
     ORDER BY CASE a.session_type WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'afternoon' THEN 2 WHEN 'evening' THEN 3 ELSE 4 END, a.sort_order" 2>/dev/null \
     | awk -F'\t' 'NR>1 && $1 ~ /^-?[0-9]+\.?[0-9]*$/ && $2 ~ /^-?[0-9]+\.?[0-9]*$/ {print $1","$2}')"
-  # Collapse consecutive stops at the SAME coordinates. Two activities linked to one
-  # POI (a day that starts and ends on the same street) otherwise emit two markers on
-  # the same pixel: the second draws over the first, so the visible numbering appears
-  # to start at 2 and the plan overview looks like it is missing a stop.
-  if [ -n "$poi" ]; then printf '%s\n' "$poi" | awk '$0 != prev { print } { prev = $0 }'; return 0; fi
-
-  # 2. no POI stops → build the route from day_route_segments place names (geocoded).
-  # Reject the chromeport "(N rows)" footer: a real segment row has a numeric
-  # sort_order in $1; the footer line does not.
-  local seg_places
-  seg_places="$($CHROMEPORT db query "SELECT sort_order, from_place, to_place \
-    FROM day_route_segments WHERE plan_id='${PLAN}' AND day_number=${d} ORDER BY sort_order" 2>/dev/null \
-    | awk -F'\t' 'NR>1 && $1 ~ /^[0-9]+$/ {print $2"\n"$3}')"   # from + to of each segment, in order
-  [ -z "$seg_places" ] && return 0
-  # de-dup consecutive repeats (to_place of seg i == from_place of seg i+1)
-  local prev="" place coord
-  printf '%s\n' "$seg_places" | while IFS= read -r place; do
-    [ -z "$place" ] && continue
-    [ "$place" = "$prev" ] && continue
-    prev="$place"
-    coord="$(geocode_place "$place")"
-    [ -n "$coord" ] && printf '%s\n' "$coord"
-  done
-  # The `printf | while read` pipeline exits with the final `read`'s status — non-zero
-  # at EOF — which under `set -e` would abort the caller (line 543) even though the
-  # coords were emitted fine. This bit Tokyo/Kyoto (segment-path days) but never Okinawa
-  # (POI-path days return at line 216). Force success: emission already happened above.
+  if [ -n "$poi" ]; then
+    printf '%s\n' "$poi" | awk '$0 != prev { print } { prev = $0 }'
+  fi
   return 0
 }
 
@@ -321,9 +343,11 @@ except Exception:
       >/dev/null 2>&1 || true
     # rewrite child points in ONE batched multi-row INSERT (not 382 subprocess calls)
     $CHROMEPORT db exec "DELETE FROM route_road_leg_points WHERE leg_key='$kq'" >/dev/null 2>&1 || true
-    [ -n "$values" ] && $CHROMEPORT db exec \
-      "INSERT OR REPLACE INTO route_road_leg_points (leg_key, point_order, lat, lon) VALUES $values" \
-      >/dev/null 2>&1 || true
+    if [ -n "$values" ]; then
+      $CHROMEPORT db exec \
+        "INSERT OR REPLACE INTO route_road_leg_points (leg_key, point_order, lat, lon) VALUES $values" \
+        >/dev/null 2>&1 || true
+    fi
     printf '%s\n' "$pts"
   else
     # cache the failure so we don't re-hit; emit nothing → straight-line fallback
@@ -534,15 +558,19 @@ render_map() {
 </script></body></html>
 HTML
 
-  local data_url
-  data_url="$(python3 -c 'import urllib.parse,sys; print("data:text/html,"+urllib.parse.quote(open(sys.argv[1]).read()))' "$html")"
+  # Navigate to the generated local HTML directly. A data: URL expands every road
+  # vertex into percent-encoding (the multi-day overview can be hundreds of KB),
+  # making CDP navigation flaky or timing out before Chrome writes the screenshot.
+  local page_url="file://${html}"
   # --wait is a MAX: chromeport returns as soon as the page sets MAP_READY and errors on
   # MAP_FAILED. The page's 14s tile-timeout is the real budget (it captures whatever has
   # painted by then, or fails only if the basemap is blank); --wait 20s just gives
   # chromeport headroom to OBSERVE that 14s outcome. A healthy map returns in ~1-2s.
-  # grep keeps 'failed' so a MAP_FAILED reason (tileerror / blank-no-tiles) is logged.
-  $CHROMEPORT screenshot "$data_url" --out "${OUT}/${name}.png" \
-    --width 640 --height 440 --wait 20000 2>&1 | grep -iE 'screenshot|error|ready|failed' || true
+  # Drop the `navigating` line: it contains the full data URL (the whole HTML page),
+  # which otherwise floods CLI output and can drown out actual screenshot diagnostics.
+  $CHROMEPORT screenshot "$page_url" --out "${OUT}/${name}.png" \
+    --width 640 --height 440 --wait 20000 2>&1 \
+    | sed '/^navigating[[:space:]]/d' | grep -iE 'screenshot|error|ready|failed' || true
   sleep 1
   # FAIL-LOUD: a real PNG must exist, start with the PNG magic, and exceed the
   # min size. Otherwise remove the stub so it can never be uploaded.
@@ -559,7 +587,9 @@ HTML
 
 # Render a day map, upload on success, and record the manifest row either way.
 process_day() {
-  local d="$1" key="day-${d}.png" color="${DAY_COLORS[$(( (d-1) % ${#DAY_COLORS[@]} ))]}"
+  local d="$1" key color
+  key="day-${d}.png"
+  color="${DAY_COLORS[$(( (d-1) % ${#DAY_COLORS[@]} ))]}"
   local coords; coords="$(day_coords "$d")"
   DAY_COORDS[$d]="$coords"   # cache for the overview (computed once here)
   if [ -z "$coords" ]; then
@@ -586,11 +616,31 @@ upload_and_record() {
   local key="$1" file="$2"
   local sz; sz=$(wc -c < "$file")
   unset CLOUDFLARE_API_TOKEN
-  if npx wrangler r2 object put "${BUCKET}/${PLAN}/${key}" --file "$file" --content-type image/png --remote 2>&1 | grep -iqE 'upload|creating'; then
+  local node_major
+  node_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+  if [ "$node_major" -lt 22 ]; then
+    local node22
+    node22="$(find "$HOME/.nvm/versions/node" -mindepth 3 -maxdepth 3 -type f -path '*/bin/node' -print 2>/dev/null | sort -V | tail -1)"
+    if [ -n "$node22" ]; then
+      local node_bin_dir
+      node_bin_dir="$(dirname "$node22")"
+      export PATH="${node_bin_dir}:$PATH"
+      node_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+    fi
+  fi
+  if [ "$node_major" -lt 22 ]; then
+    echo "   FAIL upload ${key}: Wrangler 4 requires Node.js 22+ (found ${node_major})"
+    record_artifact "$key" "failed" "$sz" "Node.js 22+ required for Wrangler"; FAILED=1
+    return 0
+  fi
+  local wrangler_out
+  if wrangler_out="$(npx wrangler r2 object put "${BUCKET}/${PLAN}/${key}" --file "$file" --content-type image/png --remote 2>&1)"; then
+    printf '%s\n' "$wrangler_out" | grep -iE 'upload complete|creating object|warning' | tail -4
     echo "   uploaded ${key} (${sz}B)"
     record_artifact "$key" "uploaded" "$sz" ""
   else
-    echo "   FAIL upload ${key}"
+    echo "   FAIL upload ${key}:"
+    printf '%s\n' "$wrangler_out" | tail -20
     record_artifact "$key" "failed" "$sz" "upload failed"; FAILED=1
   fi
 }
