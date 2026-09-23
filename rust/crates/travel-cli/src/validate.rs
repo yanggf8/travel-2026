@@ -1883,7 +1883,7 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
         Err(_) => {}
     }
 
-    // Maps completeness (WARN) — map_artifacts must hold an uploaded plan.png
+    // Maps completeness (WARN) — map_artifacts must hold both plan overviews
     // (plus one day-N.png per itinerary day). Reuses the doctor completeness
     // classifier: a key is OK only when status='uploaded' and byte_size > 64.
     match crate::check_maps_fresh::evaluate_completeness(&conn, plan_id).await {

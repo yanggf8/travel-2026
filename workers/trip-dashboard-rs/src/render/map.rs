@@ -24,6 +24,8 @@ pub struct MapStatus {
     /// which is exactly how a batch of watermarked maps kept being served after they
     /// had been regenerated.
     pub plan: Option<String>,
+    /// Plan-wide map containing only hotel and airport route endpoints.
+    pub plan_logistics: Option<String>,
     pub days: HashMap<i64, Option<String>>,
 }
 
@@ -52,6 +54,30 @@ pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str) -> String
         format!(
             "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
              src=\"/map/{}/plan.png{}\"><figcaption>{}</figcaption></figure>",
+            esc(caption),
+            esc_url_attr(plan_id),
+            cache_bust(v),
+            esc(caption),
+        )
+    } else {
+        let not_avail = i18n::t("mapNotAvailable", lang);
+        format!(
+            "<figure class=\"map-frame map-missing\"><div class=\"map-missing-box\">{}</div>\
+             <figcaption>{}</figcaption></figure>",
+            esc(not_avail),
+            esc(caption),
+        )
+    }
+}
+
+/// Separate plan-wide hotel/airport map so distant endpoints do not flatten the
+/// sightseeing overview's zoom level.
+pub fn plan_logistics_map_slot(plan_id: &str, version: Option<&str>, lang: &str) -> String {
+    let caption = i18n::t("planLogisticsMap", lang);
+    if let Some(v) = version {
+        format!(
+            "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
+             src=\"/map/{}/plan-logistics.png{}\"><figcaption>{}</figcaption></figure>",
             esc(caption),
             esc_url_attr(plan_id),
             cache_bust(v),
@@ -254,7 +280,7 @@ mod tests {
         assert!(h.contains("map-frame"));
         assert!(h.contains("class=\"planmap\""));
         assert!(h.contains("/map/okinawa-2026/plan.png"));
-        assert!(h.contains("<figcaption>Trip overview</figcaption>"));
+        assert!(h.contains("<figcaption>Sightseeing overview</figcaption>"));
         assert!(!h.contains("map-missing"));
     }
 
@@ -264,7 +290,7 @@ mod tests {
         assert!(h.contains("map-frame map-missing"));
         assert!(h.contains("map-missing-box"));
         assert!(h.contains("Map not available yet"));
-        assert!(h.contains("<figcaption>Trip overview</figcaption>"));
+        assert!(h.contains("<figcaption>Sightseeing overview</figcaption>"));
         assert!(!h.contains("src=\"/map"));
         assert!(!h.contains("<img"));
     }

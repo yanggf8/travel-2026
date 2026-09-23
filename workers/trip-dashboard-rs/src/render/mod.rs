@@ -47,6 +47,11 @@ pub fn render_plan(
     // Plan overview map ABOVE the booking summary (its own frame, never inside
     // the summary's dashed box) — user visibility request.
     body.push_str(&map::plan_map_slot(&plan.plan_id, map_status.plan.as_deref(), lang));
+    body.push_str(&map::plan_logistics_map_slot(
+        &plan.plan_id,
+        map_status.plan_logistics.as_deref(),
+        lang,
+    ));
     body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
         let map_ver = map_status
@@ -174,6 +179,7 @@ mod tests {
         };
         let map_status = map::MapStatus {
             plan: Some("etag1".into()),
+            plan_logistics: Some("etag3".into()),
             days: [(1i64, Some("etag2".into()))].into_iter().collect(),
         };
         let html = render_plan(&plan, "en", None, &map_status, "");

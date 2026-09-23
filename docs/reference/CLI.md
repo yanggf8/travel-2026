@@ -115,7 +115,7 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 #   After minting: logged-in owner can also copy the viewer URL from the dashboard/plan page UI (Copy share link button).
 #   Recipients open the copied link logged-out — no GitHub login. Plan: docs/plans/2026-06-25-dashboard-share-link-copy.md
 
-# Route maps (per-day + plan PNGs: numbered markers + route polyline, auto-framed; chromeport→Leaflet→R2).
+# Route maps (per-day route PNGs + sightseeing-only plan overview + separate hotel/airport overview; chromeport→Leaflet→R2).
 ./bin/travel snapshot-maps [--dest <slug>]        # (re)capture + upload the route-map PNGs (wraps scripts/snapshot-maps.sh). Needs Chrome at the chromeport CDP endpoint + wrangler auth.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
 ./bin/travel set-poi-coords <slug> <poi_id> <lat> <lon> [--source <s>] [--confidence <c>]    # geocode a destination_pois row (feeds the POI-coord map path). GLOBAL/slug-keyed reference data — takes NO --plan-id, NO audit triad. `validate data` WARNs on ungeocoded POIs.

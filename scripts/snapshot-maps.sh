@@ -14,8 +14,8 @@
 #      resolved to coords via a keyless Nominatim/OSM geocode CACHED in Turso
 #      (route_place_geocodes) — so days with no sightseeing POI (e.g. arrival/
 #      departure/shopping days) still get a real route map.
-# The plan overview draws each day as its OWN colored polyline (days are NOT
-# chained end-to-end), so it reads as N day-routes, not one tangled line.
+# The plan overview leaves hotels and airports out of its bounds so sightseeing
+# pins stay readable. A separate plan-logistics map shows those hotel/airport points.
 #
 # FAIL-LOUD / no-garbage: a failed or undersized screenshot ABORTS that file's
 # upload (never a 1-byte PNG). Every expected key's outcome (uploaded / skipped /
@@ -32,7 +32,7 @@
 #   e.g. scripts/snapshot-maps.sh okinawa-2026 okinawa_2026
 #
 # Map key convention (MUST match render/map.rs + the worker /map/* route):
-#   <plan-id>/plan.png  and  <plan-id>/day-<n>.png
+#   <plan-id>/plan.png, <plan-id>/plan-logistics.png, and <plan-id>/day-<n>.png
 set -euo pipefail
 
 PLAN="${1:?usage: snapshot-maps.sh <plan-id> <dest-slug>}"
@@ -77,15 +77,11 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 
 FAILED=0   # set if any required capture/upload fails → suppress the freshness stamp
 declare -a MANIFEST_KEYS=()   # keys we wrote a manifest row for
-# Per-day coords computed ONCE in the per-day loop and reused for the overview, so
-# the overview doesn't re-run every day's POI/segment SELECTs (+ a cache lookup per
-# place) through fresh chromeport subprocesses. Key = day number; value = the
-# newline-joined "lat,lon" lines (empty string for an un-mappable day).
-declare -A DAY_COORDS=()
-# Per-day road geometry (OSRM), computed once in the per-day loop and reused for the
-# overview so the overview makes ZERO extra OSRM calls. Value = "lat,lon lat,lon ..."
-# (empty = no road geometry → straight-line fallback for that day).
-declare -A DAY_ROADS=()
+# Per-day sightseeing coords (hotel/airport endpoints excluded), computed once in
+# the per-day loop so the overview doesn't re-run every day's SELECTs. Key = day
+# number; value = the newline-joined "lat,lon" lines (empty string for an
+# un-mappable day).
+declare -A DAY_OVERVIEW_COORDS=()
 
 # --- use a supplied CDP endpoint, or acquire an isolated Chrome via gwebcdb ---
 # Supplying CHROMEPORT_CDP_ENDPOINT lets operators use an already-running headless
@@ -171,7 +167,11 @@ geocode_place() {
   # is unambiguous. Airport queries use the airport's own city, not the trip city.
   local search_place="$place" search_context="$GEO_CONTEXT"
   case "$place" in
-    "KIX T2") search_place="Kansai International Airport"; search_context="Osaka, Japan" ;;
+    "KIX"|"KIX T1"|"KIX T2") search_place="Kansai International Airport"; search_context="Osaka, Japan" ;;
+    "ITM") search_place="Osaka International Airport"; search_context="Osaka, Japan" ;;
+    "TPE"|"TPE T1"|"TPE T2") search_place="Taiwan Taoyuan International Airport"; search_context="Taoyuan City, Taiwan" ;;
+    "NRT") search_place="Narita International Airport"; search_context="Narita, Japan" ;;
+    "HND") search_place="Haneda Airport"; search_context="Tokyo, Japan" ;;
     "京都站"|"京都駅") search_place="Kyoto Station Building"; search_context="Kyoto, Japan" ;;
     "HOTEL TAVINOS KYOTO") search_place="Hotel Tavinos Kyoto"; search_context="Kyoto, Japan" ;;
     "高台寺") search_place="Kodaiji Temple"; search_context="Kyoto, Japan" ;;
@@ -233,11 +233,24 @@ geocode_place() {
   fi
 }
 
+# Classify itinerary route labels for the plan overview split. Keep the daily route
+# maps complete; only the plan-wide overview separates these far-away endpoints.
+map_place_kind() {
+  local lower="${1,,}"
+  case "$lower" in
+    *airport*|*機場*|*空港*|tpe|tpe\ t[0-9]|kix|kix\ t[0-9]|itm|nrt|hnd) printf 'airport' ;;
+    *hotel*|*hostel*|*ryokan*|*旅館*|*飯店*|*民宿*|inn|*\ inn|*\ inn\ *) printf 'hotel' ;;
+    *)
+      if [[ "$1" =~ ^[A-Z]{3}([[:space:]]T[0-9])?$ ]]; then printf 'airport'; else printf 'other'; fi
+      ;;
+  esac
+}
+
 # --- collect ORDERED stop coords for a day, from route places first, else POIs ---
 # Route segments include the day's full path (hotel/airport/transit endpoints as well
 # as attractions); use them first so one linked POI cannot hide the rest of the day.
 day_coords() {
-  local d="$1"
+  local d="$1" mode="${2:-all}"
   local seg_places
   seg_places="$($CHROMEPORT db query "SELECT sort_order, from_place, to_place \
     FROM day_route_segments WHERE plan_id='${PLAN}' AND day_number=${d} ORDER BY sort_order" 2>/dev/null \
@@ -246,14 +259,22 @@ day_coords() {
     local seg_coords
     seg_coords="$(printf '%s\n' "$seg_places" | awk 'NF && $0 != prev {print; prev=$0}' \
       | while IFS= read -r place; do
+          local kind; kind="$(map_place_kind "$place")"
+          if [ "$mode" = "overview" ] && [ "$kind" != "other" ]; then continue; fi
+          if [ "$mode" = "logistics" ] && [ "$kind" = "other" ]; then continue; fi
           coord="$(geocode_place "$place")"
-          if [ -n "$coord" ] && [ "$coord" != "${prev_coord:-}" ]; then
-            printf '%s\n' "$coord"
-            prev_coord="$coord"
+          local coord_key="$coord"
+          [ "$mode" = "logistics" ] && coord_key="${coord},${kind}"
+          if [ -n "$coord" ] && [ "$coord_key" != "${prev_coord:-}" ]; then
+            if [ "$mode" = "logistics" ]; then printf '%s,%s\n' "$coord" "$kind"; else printf '%s\n' "$coord"; fi
+            prev_coord="$coord_key"
           fi
         done)"
     if [ -n "$seg_coords" ]; then printf '%s\n' "$seg_coords"; return 0; fi
   fi
+
+  # A missing route endpoint list is not evidence for a hotel/airport location.
+  [ "$mode" = "logistics" ] && return 0
 
   # If route places are absent or none can be geocoded, use linked activity POIs.
   # Ordered by session then activity; sort_order restarts in each session.
@@ -268,6 +289,37 @@ day_coords() {
     printf '%s\n' "$poi" | awk '$0 != prev { print } { prev = $0 }'
   fi
   return 0
+}
+
+# Collect plan-level accommodation and airport points from normalized booking/flight
+# rows, with route endpoints as a fallback for plans whose source tables are sparse.
+plan_logistics_coords() {
+  local p dest rows route_rows
+  p="$(sql_escape "$PLAN")"
+  dest="$(sql_escape "$DEST")"
+  rows="$($CHROMEPORT db query "SELECT kind, place FROM (
+    SELECT 'hotel' AS kind, name AS place FROM hotels WHERE plan_id='$p' AND destination='$dest'
+    UNION
+    SELECT 'airport' AS kind, COALESCE(NULLIF(departure_code,''), departure_airport) AS place \
+      FROM flight_legs WHERE plan_id='$p' AND destination='$dest'
+    UNION
+    SELECT 'airport' AS kind, COALESCE(NULLIF(arrival_code,''), arrival_airport) AS place \
+      FROM flight_legs WHERE plan_id='$p' AND destination='$dest'
+  ) WHERE place IS NOT NULL AND TRIM(place) <> '' ORDER BY kind, place" 2>/dev/null \
+    | awk -F'\t' 'NR>1 && $1!="" && $2!="" {print $1"\t"$2}')"
+  route_rows="$($CHROMEPORT db query "SELECT from_place, to_place FROM day_route_segments \
+    WHERE plan_id='$p' AND destination='$dest' ORDER BY day_number, sort_order" 2>/dev/null \
+    | awk -F'\t' 'NR>1 {if($1!="") print "route\t"$1; if($2!="") print "route\t"$2}')"
+  {
+    [ -n "$rows" ] && printf '%s\n' "$rows"
+    [ -n "$route_rows" ] && printf '%s\n' "$route_rows"
+  } | awk -F'\t' '!seen[$1 FS $2]++' \
+    | while IFS=$'\t' read -r kind place; do
+        [ "$kind" = "route" ] && kind="$(map_place_kind "$place")"
+        [ "$kind" != "other" ] || continue
+        coord="$(geocode_place "$place")"
+        [ -n "$coord" ] && printf '%s,%s\n' "$coord" "$kind"
+      done | awk -F',' '{key=$1","$2","$3; if(!seen[key]++) print}'
 }
 
 # --- OSRM road geometry for ONE leg (from "lat,lon" → to "lat,lon") -----------------
@@ -401,6 +453,11 @@ road_geometry() {
 render_map() {
   local name="$1"
   local routes_file="${2:-}"
+  local connect_stops=1 legend=""
+  if [ "$name" = "plan-logistics" ]; then
+    connect_stops=0
+    legend='<div class="legend"><span class="airport"></span>機場 / Airport &nbsp; <span class="hotel"></span>住宿 / Hotel</div>'
+  fi
   local rows; rows="$(cat)"
   [ -z "$rows" ] && { echo "   skip ${name}: no points"; return 1; }
 
@@ -440,11 +497,17 @@ render_map() {
      attribution control is disabled — OSM tiles require credit. */
   .credit{position:absolute;right:3px;bottom:2px;z-index:1000;font:10px/13px sans-serif;
     color:#555;background:rgba(255,255,255,.7);padding:0 4px;border-radius:3px}
+  .legend{position:absolute;left:6px;top:6px;z-index:1000;font:12px/18px sans-serif;
+    color:#222;background:rgba(255,255,255,.9);padding:4px 7px;border-radius:4px}
+  .legend span{display:inline-block;width:10px;height:10px;border-radius:50%;margin:0 3px 0 5px}
+  .legend .airport{background:#ef6c00}.legend .hotel{background:#1565c0}
 </style></head><body><div id="map"></div>
+${legend}
 <div class="credit">© OpenStreetMap contributors</div><script>
   var pts = ${arr};
   var roads = ${roads};        // [[color,kind,[[lat,lon],...]],...]  one entry per LEG
   var haveRoutes = ${have_routes};
+  var connectStops = ${connect_stops};
   var ll = pts.map(function(p){return [p[0],p[1]];});
   document.title = 'MAP_LOADING';
   var map = L.map('map',{zoomControl:false,attributionControl:false});
@@ -536,7 +599,7 @@ render_map() {
   // is no routes file at all (the routes file, when present, is the complete leg set).
   var run=[], runColor=null;
   function flush(){
-    if(!haveRoutes && run.length>1){
+    if(connectStops && !haveRoutes && run.length>1){
       L.polyline(run,{color:'#fff',weight:7,opacity:.7}).addTo(map);                    // casing
       L.polyline(run,{color:runColor,weight:4,opacity:.9,dashArray:'6,8'}).addTo(map);  // dashed connector
     }
@@ -591,7 +654,7 @@ process_day() {
   key="day-${d}.png"
   color="${DAY_COLORS[$(( (d-1) % ${#DAY_COLORS[@]} ))]}"
   local coords; coords="$(day_coords "$d")"
-  DAY_COORDS[$d]="$coords"   # cache for the overview (computed once here)
+  DAY_OVERVIEW_COORDS[$d]="$(day_coords "$d" overview)"
   if [ -z "$coords" ]; then
     echo "   skip day-${d}: no mappable stops (no POI link, no geocodable route place)"
     record_artifact "$key" "skipped" 0 "no mappable stops"
@@ -600,7 +663,6 @@ process_day() {
   # road-follow the day's stops → one "COLOR<TAB>KIND<TAB>verts" routes line PER LEG
   # (road or straight). Fail-soft: unroutable legs come back as 'straight' lines.
   local road; road="$(printf '%s\n' "$coords" | road_geometry "$color")"
-  DAY_ROADS[$d]="$road"   # cache the per-leg routes lines for the overview (no 2nd OSRM pass)
   local rf="${OUT}/day-${d}.routes"
   : > "$rf"
   [ -n "$road" ] && printf '%s\n' "$road" > "$rf"
@@ -654,16 +716,16 @@ echo "   plan days: $(printf '%s' "$ALL_DAYS" | tr '\n' ' ')"
 echo "== render per-day route maps =="
 for d in $ALL_DAYS; do process_day "$d"; done
 
-echo "== render plan overview (each day its own colored route) =="
-# Build the overview from each day's coords + road geometry, each tagged with that
-# day's color. Reuses DAY_COORDS / DAY_ROADS cached by process_day above — no second
-# round of per-day POI/segment/geocode queries OR OSRM calls.
+echo "== render sightseeing overview (hotel/airport endpoints excluded) =="
+# Build the plan overview from nearby route places only. Full routes stay available on
+# per-day maps; excluding their far-away hotel/airport endpoints keeps sightseeing pins
+# at a useful zoom level.
 PLAN_RF="${OUT}/plan.routes"; : > "$PLAN_RF"
 # Count mappable vs total days up front so the log explains WHY plan.png was
 # skipped (not just "no mappable stops across any day" — which is opaque when the
 # operator knows the destination has 4 POIs).
 MAPPABLE_DAYS=0; TOTAL_DAYS=0
-for d in $ALL_DAYS; do TOTAL_DAYS=$((TOTAL_DAYS+1)); [ -n "${DAY_COORDS[$d]:-}" ] && MAPPABLE_DAYS=$((MAPPABLE_DAYS+1)); done
+for d in $ALL_DAYS; do TOTAL_DAYS=$((TOTAL_DAYS+1)); [ -n "${DAY_OVERVIEW_COORDS[$d]:-}" ] && MAPPABLE_DAYS=$((MAPPABLE_DAYS+1)); done
 echo "   overview source: ${MAPPABLE_DAYS}/${TOTAL_DAYS} day(s) have mappable stops (4 POIs for jiufen should give 2/2)"
 if [ "$MAPPABLE_DAYS" -eq 0 ]; then
   # Diagnose: are there any activities at all? (poi coords may simply be missing)
@@ -675,12 +737,9 @@ if [ "$MAPPABLE_DAYS" -eq 0 ]; then
   fi
 fi
 OVERVIEW="$(for d in $ALL_DAYS; do
-  [ -n "${DAY_COORDS[$d]:-}" ] || continue
+  [ -n "${DAY_OVERVIEW_COORDS[$d]:-}" ] || continue
   color="${DAY_COLORS[$(( (d-1) % ${#DAY_COLORS[@]} ))]}"
-  # DAY_ROADS already holds complete color-tagged per-leg "COLOR<TAB>KIND<TAB>verts"
-  # lines for this day — append them directly (no re-wrapping).
-  [ -n "${DAY_ROADS[$d]:-}" ] && printf '%s\n' "${DAY_ROADS[$d]}" >> "$PLAN_RF"
-  printf '%s\n' "${DAY_COORDS[$d]}" | awk -F',' -v c="$color" 'NF>=2{print $1","$2","c}'
+  printf '%s\n' "${DAY_OVERVIEW_COORDS[$d]}" | awk -F',' -v c="$color" 'NF>=2{print $1","$2","c}'
 done)"
 if [ -n "$OVERVIEW" ] && printf '%s\n' "$OVERVIEW" | render_map "plan" "$PLAN_RF"; then
   upload_and_record "plan.png" "${OUT}/plan.png"
@@ -698,6 +757,16 @@ else
   if [ -z "$OVERVIEW" ]; then
     record_artifact "plan.png" "skipped" 0 "no mappable stops (${MAPPABLE_DAYS}/${TOTAL_DAYS} days had coords)"
   fi
+fi
+
+echo "== render hotel/airport overview =="
+LOGISTICS="$(plan_logistics_coords | awk -F',' '
+  NF>=3 { color=($3=="airport" ? "#ef6c00" : "#1565c0"); print $1","$2","color }')"
+if [ -n "$LOGISTICS" ] && printf '%s\n' "$LOGISTICS" | render_map "plan-logistics"; then
+  upload_and_record "plan-logistics.png" "${OUT}/plan-logistics.png"
+else
+  echo "   skip plan-logistics.png: no geocoded hotel/airport route endpoints"
+  record_artifact "plan-logistics.png" "skipped" 0 "no geocoded hotel/airport endpoints"
 fi
 
 echo "== record snapshot timestamp =="

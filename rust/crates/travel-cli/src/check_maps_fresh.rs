@@ -18,7 +18,7 @@
 //
 // Completeness (manifest-based):
 //   - `map_artifacts` rows are written by snapshot-maps.sh (one per expected key).
-//   - Expected keys: `plan.png` + `day-{n}.png` for each day in the plan.
+//   - Expected keys: `plan.png`, `plan-logistics.png` + `day-{n}.png` for each day.
 //   - Each key is MISSING (no row), EMPTY (status != uploaded or byte_size <= 64),
 //     or OK.
 //
@@ -155,9 +155,9 @@ pub enum ArtifactClass {
     Ok,
 }
 
-/// Build the expected map keys for a plan: `plan.png` plus `day-{n}.png` per day.
+/// Build the expected map keys for a plan: both overviews plus `day-{n}.png` per day.
 pub fn expected_map_keys(day_numbers: &[i64]) -> Vec<String> {
-    let mut keys = vec!["plan.png".to_string()];
+    let mut keys = vec!["plan.png".to_string(), "plan-logistics.png".to_string()];
     let mut sorted = day_numbers.to_vec();
     sorted.sort_unstable();
     for n in sorted {
@@ -430,6 +430,7 @@ mod tests {
             expected_map_keys(&[3, 1, 2]),
             vec![
                 "plan.png".to_string(),
+                "plan-logistics.png".to_string(),
                 "day-1.png".to_string(),
                 "day-2.png".to_string(),
                 "day-3.png".to_string(),
@@ -472,8 +473,8 @@ mod tests {
             ("day-3.png", 4000, "uploaded"),
         ]);
         let line = format_completeness_line("okinawa-2026", &expected, &m);
-        assert!(line.contains("okinawa-2026: maps 2/6 ok"));
-        assert!(line.contains("MISSING: day-1.png, day-4.png, day-5.png"));
+        assert!(line.contains("okinawa-2026: maps 3/7 ok"));
+        assert!(line.contains("MISSING: plan-logistics.png, day-1.png, day-4.png, day-5.png"));
         assert!(line.contains("EMPTY: plan.png (run snapshot-maps)"));
     }
 
@@ -482,10 +483,11 @@ mod tests {
         let expected = expected_map_keys(&[1, 2]);
         let m = manifest(&[
             ("plan.png", 1000, "uploaded"),
+            ("plan-logistics.png", 1200, "uploaded"),
             ("day-1.png", 2000, "uploaded"),
             ("day-2.png", 3000, "uploaded"),
         ]);
         let line = format_completeness_line("tokyo-2026", &expected, &m);
-        assert_eq!(line, "tokyo-2026: maps 3/3 ok");
+        assert_eq!(line, "tokyo-2026: maps 4/4 ok");
     }
 }
