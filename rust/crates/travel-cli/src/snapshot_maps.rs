@@ -1,9 +1,10 @@
 //! `travel snapshot-maps` — query Turso, render route diagrams in Rust, and upload PNGs to R2.
 //!
-//! The renderer uses itinerary endpoints, cached Nominatim coordinates, and cached OSRM road
-//! geometry. It never fetches raster map tiles; automated/headless tile downloads and saved tile
-//! composites are prohibited by the OpenStreetMap tile policy. OSM-derived data is credited in
-//! every generated image.
+//! The renderer prefers destination POI coordinates over Nominatim, then uses itinerary
+//! endpoints, cached Nominatim coordinates, and cached OSRM road geometry. It never fetches
+//! raster map tiles; automated/headless tile downloads and saved tile composites are
+//! prohibited by the OpenStreetMap tile policy. OSM-derived data is credited in every
+//! generated image.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -76,6 +77,14 @@ struct RouteLine {
     color: [u8; 3],
 }
 
+#[derive(Clone, Debug)]
+struct PoiRow {
+    poi_id: String,
+    title: String,
+    lat: f64,
+    lon: f64,
+}
+
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print_usage();
@@ -99,6 +108,8 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let mut cache = load_geocodes(&read).await?;
     let segments = query_segments(&read, &plan_id, &dest).await?;
     let pois = query_pois(&read, &plan_id, &dest).await?;
+    let dest_pois = query_destination_pois(&read, &dest).await?;
+    let hotel_names = query_hotel_names(&read, &plan_id, &dest).await?;
     let mut day_points = HashMap::<i64, Vec<Point>>::new();
     let mut day_routes = HashMap::<i64, Vec<RouteLine>>::new();
 
@@ -110,15 +121,23 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 if label.trim().is_empty() {
                     continue;
                 }
-                if let Some((lat, lon)) =
-                    resolve_place(&read, &write, label, &context, &mut cache).await?
+                if let Some((lat, lon, kind)) = resolve_segment_label(
+                    &read,
+                    &write,
+                    label,
+                    &context,
+                    &mut cache,
+                    &dest_pois,
+                    &hotel_names,
+                )
+                .await?
                 {
                     if seen.insert(coord_key(lat, lon)) {
                         points.push(Point {
                             lat,
                             lon,
                             color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
-                            kind: classify(label),
+                            kind,
                         });
                     }
                 }
@@ -155,6 +174,8 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 None,
                 "skipped",
                 Some("no mappable stops"),
+                None,
+                None,
             )
             .await?;
             println!("   skipped day-{day}.png (no mappable stops)");
@@ -193,6 +214,8 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             None,
             "skipped",
             Some("no sightseeing points"),
+            None,
+            None,
         )
         .await?;
         println!("   skipped plan.png (no sightseeing points)");
@@ -225,7 +248,17 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
     }
 
-    let logistics = await_logistics(&read, &write, &plan_id, &dest, &context, &mut cache).await?;
+    let logistics = await_logistics(
+        &read,
+        &write,
+        &plan_id,
+        &dest,
+        &context,
+        &mut cache,
+        &dest_pois,
+        &hotel_names,
+    )
+    .await?;
     if logistics.is_empty() {
         record_artifact(
             &write,
@@ -235,6 +268,8 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             None,
             "skipped",
             Some("no geocoded hotel/airport endpoints"),
+            None,
+            None,
         )
         .await?;
         println!("   skipped plan-logistics.png (no geocoded hotel/airport endpoints)");
@@ -282,7 +317,14 @@ async fn upload_map(
     routes: &[RouteLine],
     kind: MapKind,
 ) -> Result<bool, String> {
+    let input_sha = map_input_sha256(title, kind, points, routes);
     let roads = fetch_road_web(padded_bounds(points, routes)).await;
+    if roads.is_empty() && previous_map_reusable(conn, plan, key, &input_sha).await? {
+        println!(
+            "   kept {key} (road web unavailable; previous map has same stops + roads)"
+        );
+        return Ok(true);
+    }
     let png = render_png(title, points, routes, &roads, kind)?;
     if png.len() < MIN_PNG_BYTES {
         return Err(format!(
@@ -309,6 +351,7 @@ async fn upload_map(
         .args(["--content-type", "image/png", "--remote"])
         .status()
         .map_err(|e| format!("failed to run Wrangler for {key}: {e}"))?;
+    let has_roads = if roads.is_empty() { 0 } else { 1 };
     if !status.success() {
         record_artifact(
             conn,
@@ -318,14 +361,105 @@ async fn upload_map(
             Some(&sha),
             "failed",
             Some("Wrangler upload failed"),
+            Some(&input_sha),
+            Some(has_roads),
         )
         .await?;
         eprintln!("   FAIL {key}: Wrangler exited with {status}");
         return Ok(false);
     }
-    record_artifact(conn, plan, key, png.len(), Some(&sha), "uploaded", None).await?;
+    record_artifact(
+        conn,
+        plan,
+        key,
+        png.len(),
+        Some(&sha),
+        "uploaded",
+        None,
+        Some(&input_sha),
+        Some(has_roads),
+    )
+    .await?;
+    if roads.is_empty() {
+        println!(
+            "   warn: {key} uploaded WITHOUT road web (Overpass unavailable); re-run snapshot-maps later"
+        );
+    }
     println!("   uploaded {key} ({} bytes)", png.len());
     Ok(true)
+}
+
+fn map_kind_tag(kind: MapKind) -> &'static str {
+    match kind {
+        MapKind::Day => "day",
+        MapKind::Plan => "plan",
+        MapKind::Logistics => "logistics",
+    }
+}
+
+fn kind_tag(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Sightseeing => "sightseeing",
+        Kind::Hotel => "hotel",
+        Kind::Airport => "airport",
+    }
+}
+
+fn map_input_sha256(
+    title: &str,
+    kind: MapKind,
+    points: &[Point],
+    routes: &[RouteLine],
+) -> String {
+    let mut hasher = Sha256::new();
+    fn put_str(hasher: &mut Sha256, s: &str) {
+        hasher.update((s.len() as u64).to_le_bytes());
+        hasher.update(s.as_bytes());
+    }
+    put_str(&mut hasher, title);
+    put_str(&mut hasher, map_kind_tag(kind));
+    hasher.update((points.len() as u64).to_le_bytes());
+    for p in points {
+        hasher.update(p.lat.to_le_bytes());
+        hasher.update(p.lon.to_le_bytes());
+        put_str(&mut hasher, kind_tag(p.kind));
+        hasher.update(&p.color);
+    }
+    hasher.update((routes.len() as u64).to_le_bytes());
+    for r in routes {
+        hasher.update((r.points.len() as u64).to_le_bytes());
+        for (lat, lon) in &r.points {
+            hasher.update(lat.to_le_bytes());
+            hasher.update(lon.to_le_bytes());
+        }
+        hasher.update([u8::from(r.routed)]);
+        hasher.update(&r.color);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+async fn previous_map_reusable(
+    conn: &Connection,
+    plan: &str,
+    key: &str,
+    input_sha: &str,
+) -> Result<bool, String> {
+    let mut r = conn
+        .query(
+            "SELECT status, has_roads, input_sha256 FROM map_artifacts WHERE plan_id=?1 AND map_key=?2",
+            params![plan.to_string(), key.to_string()],
+        )
+        .await
+        .map_err(err("map artifact lookup"))?;
+    let Some(row) = r.next().await.map_err(err("map artifact lookup read"))? else {
+        return Ok(false);
+    };
+    let status = row.get::<Option<String>>(0).ok().flatten();
+    let has_roads = row.get::<Option<i64>>(1).ok().flatten();
+    let prev_sha = row.get::<Option<String>>(2).ok().flatten();
+    Ok(status.as_deref() == Some("uploaded")
+        && has_roads == Some(1)
+        && prev_sha.as_deref() == Some(input_sha))
 }
 
 fn render_png(
@@ -835,6 +969,23 @@ async fn fetch_road_web(bounds: (f64, f64, f64, f64)) -> Vec<RoadWay> {
     Vec::new()
 }
 
+/// A drift-tolerant leg match reuses geometry fetched for slightly different endpoints
+/// (e.g. a Nominatim answer vs the POI coordinate now pinned), so join the line to the
+/// actual pins instead of leaving it ending a few hundred metres short.
+fn anchor_to_stops(
+    mut road: Vec<(f64, f64)>,
+    from: (f64, f64),
+    to: (f64, f64),
+) -> Vec<(f64, f64)> {
+    if road.first() != Some(&from) {
+        road.insert(0, from);
+    }
+    if road.last() != Some(&to) {
+        road.push(to);
+    }
+    road
+}
+
 async fn cached_routes(c: &Connection, points: &[Point]) -> Result<Vec<RouteLine>, String> {
     let mut leg_rows = c
         .query(
@@ -901,7 +1052,7 @@ async fn cached_routes(c: &Connection, points: &[Point]) -> Result<Vec<RouteLine
         }
         if road.len() > 1 {
             routes.push(RouteLine {
-                points: road,
+                points: anchor_to_stops(road, (pair[0].lat, pair[0].lon), (pair[1].lat, pair[1].lon)),
                 routed: true,
                 color: pair[0].color,
             });
@@ -952,6 +1103,47 @@ async fn query_pois(
     }
     Ok(v)
 }
+async fn query_destination_pois(c: &Connection, d: &str) -> Result<Vec<PoiRow>, String> {
+    let mut r = c
+        .query(
+            "SELECT poi_id, title, lat, lon FROM destination_pois WHERE slug=?1 AND lat IS NOT NULL AND lon IS NOT NULL",
+            params![d.to_string()],
+        )
+        .await
+        .map_err(err("destination POI query"))?;
+    let mut v = Vec::new();
+    while let Some(x) = r.next().await.map_err(err("destination POI read"))? {
+        let (Ok(poi_id), Ok(title), Ok(lat), Ok(lon)) = (x.get(0), x.get(1), x.get(2), x.get(3))
+        else {
+            continue;
+        };
+        v.push(PoiRow {
+            poi_id,
+            title,
+            lat,
+            lon,
+        });
+    }
+    Ok(v)
+}
+async fn query_hotel_names(c: &Connection, p: &str, d: &str) -> Result<Vec<String>, String> {
+    let mut r = c
+        .query(
+            "SELECT name FROM hotels WHERE plan_id=?1 AND destination=?2",
+            params![p.to_string(), d.to_string()],
+        )
+        .await
+        .map_err(err("hotel names query"))?;
+    let mut v = Vec::new();
+    while let Some(x) = r.next().await.map_err(err("hotel names read"))? {
+        if let Ok(name) = x.get::<String>(0) {
+            if !name.trim().is_empty() {
+                v.push(name);
+            }
+        }
+    }
+    Ok(v)
+}
 async fn geocode_context(c: &Connection, d: &str) -> Result<String, String> {
     let mut r = c
         .query(
@@ -990,6 +1182,100 @@ async fn load_geocodes(c: &Connection) -> Result<HashMap<String, (f64, f64)>, St
         m.insert(name.to_ascii_lowercase(), (lat, lon));
     }
     Ok(m)
+}
+
+async fn resolve_segment_label(
+    read: &Connection,
+    write: &Connection,
+    label: &str,
+    context: &str,
+    cache: &mut HashMap<String, (f64, f64)>,
+    dest_pois: &[PoiRow],
+    hotel_names: &[String],
+) -> Result<Option<(f64, f64, Kind)>, String> {
+    if let Some((lat, lon)) = match_poi(label, dest_pois) {
+        return Ok(Some((lat, lon, Kind::Sightseeing)));
+    }
+    let place = match match_hotel(label, hotel_names) {
+        Some(name) => name,
+        None => label.to_string(),
+    };
+    Ok(resolve_place(read, write, &place, context, cache)
+        .await?
+        .map(|(lat, lon)| (lat, lon, classify(label))))
+}
+
+fn norm(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn trailing_paren_parts(s: &str) -> (String, Option<String>) {
+    let s = s.trim();
+    for (open, close) in [("(", ")"), ("（", "）")] {
+        if let Some(stripped) = s.strip_suffix(close) {
+            if let Some(idx) = stripped.rfind(open) {
+                let inner = stripped[idx + open.len()..].trim();
+                let outer = stripped[..idx].trim();
+                if !inner.is_empty() {
+                    return (outer.to_string(), Some(inner.to_string()));
+                }
+            }
+        }
+    }
+    (s.to_string(), None)
+}
+
+fn push_norm(keys: &mut Vec<String>, raw: &str) {
+    let k = norm(raw);
+    if !k.is_empty() && !keys.contains(&k) {
+        keys.push(k);
+    }
+}
+
+fn keys_of(s: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    push_norm(&mut keys, s);
+    let (outer, inner) = trailing_paren_parts(s);
+    push_norm(&mut keys, &outer);
+    if let Some(inner) = inner {
+        push_norm(&mut keys, &inner);
+    }
+    keys
+}
+
+fn match_poi(label: &str, pois: &[PoiRow]) -> Option<(f64, f64)> {
+    let wanted: HashSet<String> = keys_of(label).into_iter().collect();
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut coords = HashSet::new();
+    let mut hit = None;
+    for poi in pois {
+        let mut keys = keys_of(&poi.title);
+        push_norm(&mut keys, &poi.poi_id);
+        if keys.iter().any(|k| wanted.contains(k)) {
+            coords.insert(coord_key(poi.lat, poi.lon));
+            hit = Some((poi.lat, poi.lon));
+        }
+    }
+    if coords.len() == 1 { hit } else { None }
+}
+
+fn match_hotel(label: &str, hotel_names: &[String]) -> Option<String> {
+    let wanted: HashSet<String> = keys_of(label).into_iter().collect();
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut hits = Vec::new();
+    for name in hotel_names {
+        if keys_of(name).iter().any(|k| wanted.contains(k)) && !hits.iter().any(|h| h == name) {
+            hits.push(name.clone());
+        }
+    }
+    if hits.len() == 1 { hits.pop() } else { None }
 }
 
 async fn resolve_place(
@@ -1127,19 +1413,12 @@ async fn await_logistics(
     d: &str,
     ctx: &str,
     cache: &mut HashMap<String, (f64, f64)>,
+    dest_pois: &[PoiRow],
+    hotel_names: &[String],
 ) -> Result<Vec<Point>, String> {
-    let mut labels = Vec::<(String, Kind)>::new();
-    let mut r = read
-        .query(
-            "SELECT name FROM hotels WHERE plan_id=?1 AND destination=?2",
-            params![p.to_string(), d.to_string()],
-        )
-        .await
-        .map_err(err("hotel map query"))?;
-    while let Some(x) = r.next().await.map_err(err("hotel map read"))? {
-        if let Ok(name) = x.get::<String>(0) {
-            labels.push((name, Kind::Hotel));
-        }
+    let mut labels = Vec::<(String, Kind, bool)>::new();
+    for name in hotel_names {
+        labels.push((name.clone(), Kind::Hotel, false));
     }
     let mut f=read.query("SELECT departure_code, arrival_code, departure_airport, arrival_airport, flight_number, direction FROM flight_legs WHERE plan_id=?1 AND destination=?2 ORDER BY direction,leg_order",params![p.to_string(),d.to_string()]).await.map_err(err("flight map query"))?;
     // Home-airport codes to EXCLUDE from the logistics map: the first code of the
@@ -1152,7 +1431,7 @@ async fn await_logistics(
         for i in 0..4 {
             if let Ok(Some(s)) = x.get::<Option<String>>(i) {
                 if !s.trim().is_empty() {
-                    labels.push((s, Kind::Airport));
+                    labels.push((s, Kind::Airport, false));
                 }
             }
         }
@@ -1190,7 +1469,7 @@ async fn await_logistics(
     for (codes, _) in rows {
         for code in codes {
             if !home_codes.contains(&code) {
-                labels.push((code, Kind::Airport));
+                labels.push((code, Kind::Airport, false));
             }
         }
     }
@@ -1200,15 +1479,26 @@ async fn await_logistics(
             if let Ok(s) = x.get::<String>(i) {
                 let k = classify(&s);
                 if k != Kind::Sightseeing {
-                    labels.push((s, k));
+                    labels.push((s, k, true));
                 }
             }
         }
     }
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    for (label, kind) in labels {
-        if let Some((lat, lon)) = resolve_place(read, write, &label, ctx, cache).await? {
+    for (label, kind, from_segment) in labels {
+        // Keep the label's hotel/airport kind: this map only draws logistics endpoints,
+        // so a label that happens to share a POI key must not turn into a sightseeing pin.
+        let resolved = if from_segment {
+            resolve_segment_label(read, write, &label, ctx, cache, dest_pois, hotel_names)
+                .await?
+                .map(|(lat, lon, _)| (lat, lon, kind))
+        } else {
+            resolve_place(read, write, &label, ctx, cache)
+                .await?
+                .map(|(lat, lon)| (lat, lon, kind))
+        };
+        if let Some((lat, lon, kind)) = resolved {
             let key = coord_key(lat, lon);
             if seen.insert((key, kind as u8)) {
                 out.push(Point {
@@ -1255,9 +1545,11 @@ async fn record_artifact(
     sha: Option<&str>,
     status: &str,
     reason: Option<&str>,
+    input_sha: Option<&str>,
+    has_roads: Option<i64>,
 ) -> Result<(), String> {
     let now = chrono::Utc::now().to_rfc3339();
-    c.execute("INSERT INTO map_artifacts (plan_id,map_key,byte_size,sha256,status,skip_reason,generated_at) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(plan_id,map_key) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256,status=excluded.status,skip_reason=excluded.skip_reason,generated_at=excluded.generated_at",params![p.to_string(),key.to_string(),size as i64,sha.unwrap_or_default().to_string(),status.to_string(),reason.map(str::to_string),now]).await.map_err(err("map manifest write"))?;
+    c.execute("INSERT INTO map_artifacts (plan_id,map_key,byte_size,sha256,status,skip_reason,generated_at,input_sha256,has_roads) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(plan_id,map_key) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256,status=excluded.status,skip_reason=excluded.skip_reason,generated_at=excluded.generated_at,input_sha256=excluded.input_sha256,has_roads=excluded.has_roads",params![p.to_string(),key.to_string(),size as i64,sha.unwrap_or_default().to_string(),status.to_string(),reason.map(str::to_string),now,input_sha.map(str::to_string),has_roads]).await.map_err(err("map manifest write"))?;
     Ok(())
 }
 fn wrangler_command() -> Command {
@@ -1327,6 +1619,17 @@ mod tests {
             from,
             to,
         }
+    }
+
+    #[test]
+    fn anchor_to_stops_joins_drifted_geometry_to_pins() {
+        let road = vec![(35.0010, 135.0010), (35.0050, 135.0050)];
+        let got = anchor_to_stops(road, (35.0, 135.0), (35.006, 135.006));
+        assert_eq!(got.first(), Some(&(35.0, 135.0)));
+        assert_eq!(got.last(), Some(&(35.006, 135.006)));
+        assert_eq!(got.len(), 4);
+        let exact = vec![(35.0, 135.0), (35.006, 135.006)];
+        assert_eq!(anchor_to_stops(exact.clone(), (35.0, 135.0), (35.006, 135.006)), exact);
     }
 
     #[test]
@@ -1441,5 +1744,101 @@ mod tests {
         let with = render_png("T", &points, &[], &roads, MapKind::Day).unwrap();
         assert!(bare.len() >= MIN_PNG_BYTES && with.len() >= MIN_PNG_BYTES);
         assert_ne!(bare, with, "road web must visibly change the render");
+    }
+
+    fn poi(id: &str, title: &str, lat: f64, lon: f64) -> PoiRow {
+        PoiRow {
+            poi_id: id.into(),
+            title: title.into(),
+            lat,
+            lon,
+        }
+    }
+
+    #[test]
+    fn match_poi_uses_id_and_title_keys() {
+        let pois = vec![
+            poi("kozanji", "Kozanji Temple (高山寺)", 35.06000, 135.58000),
+            poi("nonomiya", "Nonomiya Shrine (野宮神社)", 35.01500, 135.67000),
+            poi(
+                "nishi-hongwanji",
+                "Nishi Hongwanji (西本願寺)",
+                34.99100,
+                135.75100,
+            ),
+            poi(
+                "arashiyama-bamboo-grove",
+                "Arashiyama Bamboo Grove",
+                35.01700,
+                135.67200,
+            ),
+        ];
+        assert_eq!(
+            match_poi("Kozanji", &pois),
+            Some((35.06000, 135.58000))
+        );
+        assert_eq!(match_poi("高山寺", &pois), Some((35.06000, 135.58000)));
+        assert_eq!(
+            match_poi("Nonomiya Shrine", &pois),
+            Some((35.01500, 135.67000))
+        );
+        assert_eq!(
+            match_poi("Nishi Hongwanji", &pois),
+            Some((34.99100, 135.75100))
+        );
+        assert!(match_poi("Gion-Shirakawa", &pois).is_none());
+        assert!(
+            match_poi("Bamboo Grove", &pois).is_none(),
+            "substring must not match"
+        );
+    }
+
+    #[test]
+    fn match_poi_ambiguous_coords_are_none() {
+        let pois = vec![
+            poi("a", "Foo", 1.0, 1.0),
+            poi("b", "Foo", 2.0, 2.0),
+        ];
+        assert!(match_poi("Foo", &pois).is_none());
+    }
+
+    #[test]
+    fn match_hotel_uses_parenthetical_ascii_name() {
+        let hotels = vec!["京都哈頓飯店 (Hearton Hotel Kyoto)".to_string()];
+        assert_eq!(
+            match_hotel("Hearton Hotel Kyoto", &hotels).as_deref(),
+            Some("京都哈頓飯店 (Hearton Hotel Kyoto)")
+        );
+        assert!(match_hotel("APA HOTEL KYOTO EKIHIGASHI", &hotels).is_none());
+    }
+
+    #[test]
+    fn map_input_sha256_is_deterministic_and_sensitive() {
+        let points = vec![
+            Point {
+                lat: 35.0,
+                lon: 135.0,
+                color: [1, 2, 3],
+                kind: Kind::Sightseeing,
+            },
+            Point {
+                lat: 35.1,
+                lon: 135.2,
+                color: [4, 5, 6],
+                kind: Kind::Hotel,
+            },
+        ];
+        let routes = vec![RouteLine {
+            points: vec![(35.0, 135.0), (35.1, 135.2)],
+            routed: true,
+            color: [7, 8, 9],
+        }];
+        let a = map_input_sha256("Day 1 route", MapKind::Day, &points, &routes);
+        let b = map_input_sha256("Day 1 route", MapKind::Day, &points, &routes);
+        assert_eq!(a, b);
+        let mut moved = points.clone();
+        moved[0].lat = 35.01;
+        let c = map_input_sha256("Day 1 route", MapKind::Day, &moved, &routes);
+        assert_ne!(a, c);
     }
 }

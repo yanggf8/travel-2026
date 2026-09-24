@@ -498,6 +498,18 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
+    // Snapshot-maps reuse: skip re-rendering a road-bearing map when Overpass
+    // returns empty but the itinerary inputs (stops/routes) have not changed.
+    add_column(
+        &conn,
+        "ALTER TABLE map_artifacts ADD COLUMN input_sha256 TEXT;",
+    )
+    .await;
+    add_column(
+        &conn,
+        "ALTER TABLE map_artifacts ADD COLUMN has_roads INTEGER;",
+    )
+    .await;
 
     // 12d. route_place_geocodes — keyless-geocoding cache (Nominatim/OSM) for
     //      day_route_segments place names (hotel/airport/restaurant/mall/etc. that

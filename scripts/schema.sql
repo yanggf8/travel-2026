@@ -589,7 +589,7 @@ CREATE TABLE map_artifacts (
   sha256 TEXT,
   status TEXT NOT NULL,
   skip_reason TEXT,
-  generated_at TEXT NOT NULL,
+  generated_at TEXT NOT NULL, input_sha256 TEXT, has_roads INTEGER,
   PRIMARY KEY (plan_id, map_key)
 );
 
