@@ -2,8 +2,22 @@ name = "trip-dashboard-rs"
 main = "build/worker/shim.mjs"
 compatibility_date = "2024-12-01"
 
+# Custom domain on the user's own zone (ahexagram.com) — same pattern as the finance
+# plan-viewer-rs. wrangler creates the DNS record + route on deploy; workers.dev stays
+# enabled. OAuth callback follows the request origin (router.rs `oauth_callback_url`),
+# so BOTH hosts can sign in — register each origin's callback URL on the GitHub OAuth App:
+#   https://trip-dashboard-rs.yanggf.workers.dev/auth/callback
+#   https://travel.ahexagram.com/auth/callback
+routes = [
+  { pattern = "travel.ahexagram.com", custom_domain = true }
+]
+# Keep the workers.dev URL alive alongside the custom domain — existing share
+# links point at it (and trip-dashboard-redirect 301s the old TS URL here).
+workers_dev = true
+
 # OAuth allow-list (non-secret config; secrets SESSION_SECRET / GITHUB_CLIENT_ID /
-# GITHUB_CLIENT_SECRET / PUBLIC_ORIGIN go via `wrangler secret put`). The crate gates
+# GITHUB_CLIENT_SECRET go via `wrangler secret put`; the old PUBLIC_ORIGIN secret is no
+# longer read — the callback is request-derived). The crate gates
 # on the immutable GitHub numeric id AND login. This worker allow-lists two logins; the finance worker is unchanged.
 [vars]
 ALLOWED_LOGIN = "yanggf8,lisyanggf"
@@ -24,14 +38,17 @@ bucket_name = "trip-dashboard-maps"
 binding = "VOUCHERS"
 bucket_name = "trip-dashboard-vouchers"
 
-# ── Cutover env: reclaim the trip-dashboard.yanggf.workers.dev URL from the legacy TS worker ──
-# `npx wrangler deploy --env production` ships THIS worker under name="trip-dashboard".
+# ── Cutover env (SUPERSEDED — DO NOT DEPLOY) ──
+# name="trip-dashboard" is now owned by workers/trip-dashboard-redirect (301 → -rs,
+# per CLAUDE.md). Deploying this env clobbers the redirect and re-breaks the old URL —
+# that is exactly what the mystery 2026-09-21 deploy did (old URL 500'd until the
+# redirect was redeployed 2026-09-24). Kept for history; do not `wrangler deploy --env production`.
 # Runbook (incl. the PUBLIC_ORIGIN secret + GitHub OAuth callback update — do NOT skip):
 # docs/plans/2026-07-02-dashboard-cutover-ts-to-rs.md
 # NOTE: wrangler env blocks do NOT inherit top-level bindings/vars, so they are re-declared here.
-# Secrets (SESSION_SECRET/GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET/PUBLIC_ORIGIN/TURSO_URL/TURSO_TOKEN)
-# are env-scoped: set them with `wrangler secret put <NAME> --env production`. PUBLIC_ORIGIN MUST be
-# https://trip-dashboard.yanggf.workers.dev for OAuth callback to resolve.
+# Secrets (SESSION_SECRET/GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET/TURSO_URL/TURSO_TOKEN)
+# are env-scoped: set them with `wrangler secret put <NAME> --env production`. (PUBLIC_ORIGIN is
+# obsolete: the OAuth callback is derived from the request origin — see `oauth_callback_url`.)
 [env.production]
 name = "trip-dashboard"
 

@@ -13,6 +13,15 @@ use worker_github_oauth::{self as gho, CallbackOutcome, OauthConfig};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// The request's own origin (https://host[:port]). Deriving it per request — instead of
+/// a fixed PUBLIC_ORIGIN secret — lets the worker serve every host it's deployed to
+/// (workers.dev + custom domain): the OAuth callback stays symmetric with the
+/// host-scoped state cookie (each origin registered on the GitHub OAuth App), and
+/// copied share links point at the host the owner is actually on.
+fn request_origin(url: &url::Url) -> String {
+    url.origin().ascii_serialization()
+}
+
 /// 1×1 transparent PNG — returned when an R2 map image is missing, so the
 /// browser never shows a broken-image icon. Generated offline (standard
 /// zlib-flate empty IDAT + standard PNG header/chunks).
@@ -60,7 +69,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         return serve_placeholder();
     }
 
-    let public_origin = env.secret("PUBLIC_ORIGIN")?.to_string();
+    let public_origin = request_origin(&url);
     let cfg = OauthConfig {
         callback_url: format!("{public_origin}/auth/callback"),
         user_agent: "trip-dashboard-rs".into(),
@@ -799,6 +808,20 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_callback_follows_request_origin() {
+        // Both deployed hosts must round-trip their own origin: redirect_uri is
+        // sent to GitHub at login-start and must match the callback URL
+        // registered on the OAuth App for that host.
+        for host in ["travel.ahexagram.com", "trip-dashboard-rs.yanggf.workers.dev"] {
+            let u = url::Url::parse(&format!("https://{host}/?plan=kyoto-2026")).unwrap();
+            assert_eq!(
+                request_origin(&u),
+                format!("https://{host}")
+            );
+        }
+    }
 
     #[test]
     fn dest_subquery_reads_the_slug_column() {
