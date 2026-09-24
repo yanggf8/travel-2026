@@ -289,7 +289,9 @@ mod tests {
         assert!(h.contains("map-frame"));
         assert!(h.contains("class=\"planmap\""));
         assert!(h.contains("/map/okinawa-2026/plan.png"));
-        assert!(h.contains("<figcaption>Sightseeing overview</figcaption>"));
+        // With a map, the caption carries the linked OSM attribution (map_caption).
+        assert!(h.contains("<figcaption>Sightseeing overview <span"));
+        assert!(h.contains("OpenStreetMap contributors"));
         assert!(!h.contains("map-missing"));
     }
 
