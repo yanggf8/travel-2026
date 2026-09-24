@@ -23,6 +23,18 @@ const WIDTH: u32 = 640;
 const HEIGHT: u32 = 440;
 const MIN_PNG_BYTES: usize = 200;
 const BUCKET: &str = "trip-dashboard-maps";
+/// Overpass vector endpoints (vector data, NOT raster tiles — the OSM tile-policy
+/// ban is on automated tile fetching/composites; the Overpass API is the sanctioned
+/// vector path, same family as the OSRM/Nominatim calls this module already makes).
+/// The public main instance rate-limits bursts, so a mirror is tried in the same
+/// round before backing off.
+const OVERPASS_URLS: [&str; 2] = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+];
+/// How far beyond the stop/route bounds the road background reaches, as a fraction
+/// of the bounds' span, so the frame edges are not bare.
+const ROAD_PAD_FRAC: f64 = 0.20;
 const USER_AGENT: &str =
     "travel-2026-route-geocoder/1.1 (+https://trip-dashboard-rs.yanggf.workers.dev/)";
 const DAY_COLORS: [[u8; 3]; 7] = [
@@ -270,7 +282,8 @@ async fn upload_map(
     routes: &[RouteLine],
     kind: MapKind,
 ) -> Result<bool, String> {
-    let png = render_png(title, points, routes, kind)?;
+    let roads = fetch_road_web(padded_bounds(points, routes)).await;
+    let png = render_png(title, points, routes, &roads, kind)?;
     if png.len() < MIN_PNG_BYTES {
         return Err(format!(
             "rendered map {key} is undersized ({} bytes)",
@@ -319,6 +332,7 @@ fn render_png(
     title: &str,
     points: &[Point],
     routes: &[RouteLine],
+    roads: &[RoadWay],
     kind: MapKind,
 ) -> Result<Vec<u8>, String> {
     if points.is_empty() {
@@ -344,6 +358,25 @@ fn render_png(
         bounds.extend(line.iter().copied());
     }
     let projection = Projection::fit(&bounds, WIDTH as f64, HEIGHT as f64);
+    // Road web FIRST (under everything): a light OSM-derived street context drawn
+    // from vector geometry so the corridor line no longer floats on a bare grid.
+    // Off-canvas points are clipped by Raster::put.
+    for road in roads {
+        let color = if road.major {
+            [186, 196, 208]
+        } else {
+            [222, 228, 234]
+        };
+        let width = if road.major { 2 } else { 1 };
+        let pts: Vec<_> = road
+            .points
+            .iter()
+            .map(|(lat, lon)| projection.point(mercator(*lat, *lon)))
+            .collect();
+        for pair in pts.windows(2) {
+            raster.line(pair[0], pair[1], color, width, false);
+        }
+    }
     for (idx, line) in route_xy.iter().enumerate() {
         let color = routes[idx].color;
         for pair in line.windows(2) {
@@ -630,30 +663,240 @@ async fn query_days(c: &Connection, p: &str) -> Result<Vec<i64>, String> {
     Ok(v)
 }
 
+/// Great-circle distance in metres (haversine, mean-earth radius).
+fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (lat1, lon1) = (a.0.to_radians(), a.1.to_radians());
+    let (lat2, lon2) = (b.0.to_radians(), b.1.to_radians());
+    let dlat = lat2 - lat1;
+    let dlon = lon2 - lon1;
+    let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    2.0 * 6_371_008.8 * h.sqrt().asin()
+}
+
+/// One cached ok leg's endpoints (geometry points are pulled per matched key).
+struct LegRow {
+    key: String,
+    from: (f64, f64),
+    to: (f64, f64),
+}
+
+/// Nominatim answers drift between the leg-fetch run and the render run (limit=1
+/// feature choice moves a stop by hundreds of metres), so an exact 5-dp key match
+/// misses and every leg falls back to a straight dashed connector — the "empty map"
+/// regression. A cached leg therefore also matches when BOTH endpoints sit within
+/// MATCH_RADIUS_M of the stop pair; the closest such leg wins. Exact key first.
+const MATCH_RADIUS_M: f64 = 500.0;
+
+fn match_leg<'a>(legs: &'a [LegRow], from: (f64, f64), to: (f64, f64)) -> Option<&'a LegRow> {
+    legs.iter()
+        .filter(|l| {
+            haversine_m(l.from, from) <= MATCH_RADIUS_M && haversine_m(l.to, to) <= MATCH_RADIUS_M
+        })
+        .min_by(|a, b| {
+            let da = haversine_m(a.from, from) + haversine_m(a.to, to);
+            let db = haversine_m(b.from, from) + haversine_m(b.to, to);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+/// One OSM way from the road web (major = motorway/trunk/primary, minor =
+/// secondary/tertiary). Drawn as the map's light background context.
+struct RoadWay {
+    points: Vec<(f64, f64)>,
+    major: bool,
+}
+
+/// lat/lon bounds (min_lat, min_lon, max_lat, max_lon) of the stops and cached
+/// route geometry, padded by ROAD_PAD_FRAC of its own span.
+fn padded_bounds(points: &[Point], routes: &[RouteLine]) -> (f64, f64, f64, f64) {
+    let mut min_lat = f64::INFINITY;
+    let mut max_lat = f64::NEG_INFINITY;
+    let mut min_lon = f64::INFINITY;
+    let mut max_lon = f64::NEG_INFINITY;
+    let mut fold = |lat: f64, lon: f64| {
+        min_lat = min_lat.min(lat);
+        max_lat = max_lat.max(lat);
+        min_lon = min_lon.min(lon);
+        max_lon = max_lon.max(lon);
+    };
+    for p in points {
+        fold(p.lat, p.lon);
+    }
+    for r in routes {
+        for (lat, lon) in &r.points {
+            fold(*lat, *lon);
+        }
+    }
+    let pad_lat = (max_lat - min_lat) * ROAD_PAD_FRAC;
+    let pad_lon = (max_lon - min_lon) * ROAD_PAD_FRAC;
+    (min_lat - pad_lat, min_lon - pad_lon, max_lat + pad_lat, max_lon + pad_lon)
+}
+
+/// Parse an Overpass `out geom` JSON body into drawable ways. `None` = the body
+/// is NOT a valid Overpass response (rate-limit/error HTML or JSON without an
+/// `elements` array) and the caller should retry; `Some(vec)` = authoritative
+/// answer (possibly an empty bbox). Pure — unit-tested.
+fn parse_overpass_ways(body: &[u8]) -> Option<Vec<RoadWay>> {
+    let parsed: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let mut ways = Vec::new();
+    let elements = parsed.get("elements")?.as_array()?;
+    if elements.is_empty() && parsed.get("remark").is_some() {
+        // Empty result WITH a remark = server-side timeout/abort (e.g. a bbox too
+        // large), not an authoritative empty bbox — make the caller retry.
+        return None;
+    }
+    for el in elements {
+        if el.get("type").and_then(|v| v.as_str()) != Some("way") {
+            continue;
+        }
+        let highway = el
+            .get("tags")
+            .and_then(|t| t.get("highway"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let (keep, major) = match highway {
+            "motorway" | "trunk" | "primary" => (true, true),
+            "secondary" | "tertiary" => (true, false),
+            _ => (false, false),
+        };
+        if !keep {
+            continue;
+        }
+        let Some(geom) = el.get("geometry").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let pts: Vec<(f64, f64)> = geom
+            .iter()
+            .filter_map(|g| {
+                let lat = g.get("lat").and_then(|v| v.as_f64())?;
+                let lon = g.get("lon").and_then(|v| v.as_f64())?;
+                Some((lat, lon))
+            })
+            .collect();
+        if pts.len() > 1 {
+            ways.push(RoadWay { points: pts, major });
+        }
+    }
+    Some(ways)
+}
+
+/// Fetch the road web for one map's bbox from Overpass (vector data; NOT raster
+/// tiles — see OVERPASS_URL note). Fail-soft: after retries the map renders
+/// without background, exactly like a geocode failure. Never fails the snapshot.
+async fn fetch_road_web(bounds: (f64, f64, f64, f64)) -> Vec<RoadWay> {
+    let (min_lat, min_lon, max_lat, max_lon) = bounds;
+    let query = format!(
+        "[out:json][timeout:25];way['highway'~'^(motorway|trunk|primary|secondary|tertiary)$']({min_lat},{min_lon},{max_lat},{max_lon});out geom;"
+    );
+    // Politeness spacing + retry with backoff: the public endpoint rate-limits
+    // bursts (429/error bodies), which read as "no elements" — retry those (trying
+    // the mirror in the same round), but honour an authoritative empty bbox.
+    thread::sleep(Duration::from_millis(2000));
+    for attempt in 1..=3 {
+        for url in OVERPASS_URLS {
+            let output = match Command::new("curl")
+                .args(["-sS", "--max-time", "45", "-X", "POST", "-d"])
+                .arg(&query)
+                .args(["-H", &format!("User-Agent: {USER_AGENT}"), url])
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("   warn: Overpass spawn failed ({e}); trying next endpoint");
+                    continue;
+                }
+            };
+            if !output.status.success() {
+                eprintln!(
+                    "   warn: Overpass attempt {attempt} at {url} exited {}; trying next endpoint",
+                    output.status
+                );
+                continue;
+            }
+            match parse_overpass_ways(&output.stdout) {
+                Some(ways) => {
+                    if ways.is_empty() {
+                        eprintln!("   warn: Overpass returned zero roads for this bbox; rendering without road web");
+                    }
+                    return ways;
+                }
+                None => {
+                    eprintln!("   warn: Overpass attempt {attempt} at {url} invalid response (rate limit?); trying next endpoint");
+                }
+            }
+        }
+        if attempt < 3 {
+            let backoff = attempt * 5;
+            eprintln!("   warn: Overpass round {attempt} exhausted; retrying in {backoff}s");
+            thread::sleep(Duration::from_secs(backoff as u64));
+        }
+    }
+    eprintln!("   warn: Overpass gave no valid response after 3 rounds; rendering without road web");
+    Vec::new()
+}
+
 async fn cached_routes(c: &Connection, points: &[Point]) -> Result<Vec<RouteLine>, String> {
+    let mut leg_rows = c
+        .query(
+            "SELECT leg_key, from_lat, from_lon, to_lat, to_lon FROM route_road_legs WHERE status='ok'",
+            params![],
+        )
+        .await
+        .map_err(err("cached road legs query"))?;
+    let mut legs = Vec::new();
+    while let Some(row) = leg_rows
+        .next()
+        .await
+        .map_err(err("cached road legs read"))?
+    {
+        let (Ok(key), Ok(flat), Ok(flon), Ok(tlat), Ok(tlon)) = (
+            row.get::<String>(0),
+            row.get::<f64>(1),
+            row.get::<f64>(2),
+            row.get::<f64>(3),
+            row.get::<f64>(4),
+        ) else {
+            continue;
+        };
+        legs.push(LegRow {
+            key,
+            from: (flat, flon),
+            to: (tlat, tlon),
+        });
+    }
+    drop(leg_rows);
+
     let mut routes = Vec::new();
     for pair in points.windows(2) {
-        let key = format!(
+        let exact = format!(
             "{:.5},{:.5}>{:.5},{:.5}|osrm-demo|driving",
             pair[0].lat, pair[0].lon, pair[1].lat, pair[1].lon
         );
-        let mut rows = c
-            .query(
-                "SELECT p.lat, p.lon FROM route_road_leg_points p \
-             JOIN route_road_legs l ON l.leg_key=p.leg_key \
-             WHERE p.leg_key=?1 AND l.status='ok' ORDER BY p.point_order",
-                params![key],
-            )
-            .await
-            .map_err(err("cached road geometry query"))?;
+        // Exact 5-dp key hit, else the nearest cached leg whose endpoints both sit
+        // within MATCH_RADIUS_M (geocode drift tolerance).
+        let leg = legs
+            .iter()
+            .find(|l| l.key == exact)
+            .or_else(|| match_leg(&legs, (pair[0].lat, pair[0].lon), (pair[1].lat, pair[1].lon)));
         let mut road = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(err("cached road geometry read"))?
-        {
-            if let (Ok(lat), Ok(lon)) = (row.get::<f64>(0), row.get::<f64>(1)) {
-                road.push((lat, lon));
+        if let Some(leg) = leg {
+            let mut rows = c
+                .query(
+                    "SELECT p.lat, p.lon FROM route_road_leg_points p \
+                 JOIN route_road_legs l ON l.leg_key=p.leg_key \
+                 WHERE p.leg_key=?1 AND l.status='ok' ORDER BY p.point_order",
+                    params![leg.key.as_str()],
+                )
+                .await
+                .map_err(err("cached road geometry query"))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(err("cached road geometry read"))?
+            {
+                if let (Ok(lat), Ok(lon)) = (row.get::<f64>(0), row.get::<f64>(1)) {
+                    road.push((lat, lon));
+                }
             }
         }
         if road.len() > 1 {
@@ -856,7 +1099,24 @@ fn normalize_place(place: &str, context: &str) -> (String, String) {
         {
             ("APA Hotel Kyoto Eki Higashi".into(), "Kyoto, Japan".into())
         }
-        p => (p.to_string(), context.to_string()),
+        // CJK-first labels usually carry the searchable ASCII name in parens —
+        // "京都哈頓飯店 (Hearton Hotel Kyoto)" geocodes as "Hearton Hotel Kyoto".
+        p => {
+            if let Some(open) = p.find('(') {
+                if let Some(len) = p[open + 1..].find(')') {
+                    let inner = p[open + 1..open + 1 + len].trim();
+                    if !inner.is_empty()
+                        && inner.chars().all(|c| {
+                            c.is_ascii_alphanumeric()
+                                || matches!(c, ' ' | '&' | '-' | '.' | '\'')
+                        })
+                    {
+                        return (inner.to_string(), context.to_string());
+                    }
+                }
+            }
+            (p.to_string(), context.to_string())
+        }
     }
 }
 
@@ -881,7 +1141,13 @@ async fn await_logistics(
             labels.push((name, Kind::Hotel));
         }
     }
-    let mut f=read.query("SELECT departure_code, arrival_code, departure_airport, arrival_airport, flight_number FROM flight_legs WHERE plan_id=?1 AND destination=?2 ORDER BY direction,leg_order",params![p.to_string(),d.to_string()]).await.map_err(err("flight map query"))?;
+    let mut f=read.query("SELECT departure_code, arrival_code, departure_airport, arrival_airport, flight_number, direction FROM flight_legs WHERE plan_id=?1 AND destination=?2 ORDER BY direction,leg_order",params![p.to_string(),d.to_string()]).await.map_err(err("flight map query"))?;
+    // Home-airport codes to EXCLUDE from the logistics map: the first code of the
+    // first outbound flight and the last code of the last return flight. Including
+    // the home airport stretches the bbox across countries (e.g. TPE↔KIX, ~1000 km),
+    // which flattens the map to empty and times the road-web query out.
+    let mut home_codes = Vec::new();
+    let mut rows: Vec<(Vec<String>, String)> = Vec::new();
     while let Some(x) = f.next().await.map_err(err("flight map read"))? {
         for i in 0..4 {
             if let Ok(Some(s)) = x.get::<Option<String>>(i) {
@@ -890,6 +1156,8 @@ async fn await_logistics(
                 }
             }
         }
+        let direction = x.get::<String>(5).unwrap_or_default();
+        let mut codes = Vec::new();
         if let Ok(flight) = x.get::<String>(4) {
             for pair in flight.split_whitespace() {
                 if let Some((a, b)) = pair.split_once('-') {
@@ -898,10 +1166,31 @@ async fn await_logistics(
                         && a.chars().all(|c| c.is_ascii_uppercase())
                         && b.chars().all(|c| c.is_ascii_uppercase())
                     {
-                        labels.push((a.into(), Kind::Airport));
-                        labels.push((b.into(), Kind::Airport));
+                        codes.push(a.into());
+                        codes.push(b.into());
                     }
                 }
+            }
+        }
+        rows.push((codes, direction));
+    }
+    // rows are ordered (direction, leg_order): outbound legs first. First row =
+    // first outbound leg → its first code is home; last row = last return leg →
+    // its last code is home.
+    if let Some((codes, _)) = rows.first() {
+        if let Some(first) = codes.first() {
+            home_codes.push(first.clone());
+        }
+    }
+    if let Some((codes, _)) = rows.last() {
+        if let Some(last) = codes.last() {
+            home_codes.push(last.clone());
+        }
+    }
+    for (codes, _) in rows {
+        for code in codes {
+            if !home_codes.contains(&code) {
+                labels.push((code, Kind::Airport));
             }
         }
     }
@@ -1026,4 +1315,131 @@ fn print_usage() {
 }
 fn err<T: std::fmt::Display>(ctx: &'static str) -> impl FnOnce(T) -> String {
     move |e| format!("{ctx}: {e}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leg(key: &str, from: (f64, f64), to: (f64, f64)) -> LegRow {
+        LegRow {
+            key: key.into(),
+            from,
+            to,
+        }
+    }
+
+    #[test]
+    fn haversine_known_distance() {
+        // ~111 km per degree of latitude.
+        let d = haversine_m((35.0, 135.0), (36.0, 135.0));
+        assert!((110_500.0..=112_000.0).contains(&d), "got {d} m");
+    }
+
+    #[test]
+    fn match_leg_tolerates_geocode_drift() {
+        // Sanzen-in regression: fetched 35.11902,135.83018 vs rendered 35.11964,135.83492
+        // (~435 m apart) — exact key misses, fuzzy match must recover the leg.
+        let legs = vec![leg(
+            "34.99123,135.75839>35.11902,135.83018|osrm-demo|driving",
+            (34.99123, 135.75839),
+            (35.11902, 135.83018),
+        )];
+        let m = match_leg(&legs, (34.99164, 135.75888), (35.11964, 135.83492));
+        assert!(m.is_some(), "drifted pair must still match the cached leg");
+    }
+
+    #[test]
+    fn match_leg_rejects_far_endpoints() {
+        let legs = vec![leg(
+            "a",
+            (35.0, 135.0),
+            (35.5, 135.5),
+        )];
+        assert!(match_leg(&legs, (35.0, 135.0), (36.0, 136.0)).is_none());
+        assert!(match_leg(&legs, (40.0, 140.0), (35.5, 135.5)).is_none());
+    }
+
+    #[test]
+    fn match_leg_prefers_closest() {
+        let near = leg("near", (35.1000, 135.1000), (35.2000, 135.2000));
+        let far = leg("far", (35.1010, 135.1010), (35.2020, 135.2020));
+        let legs = vec![far, near];
+        let m = match_leg(&legs, (35.1000, 135.1000), (35.2000, 135.2000));
+        assert_eq!(m.unwrap().key, "near");
+    }
+
+    #[test]
+    fn parse_overpass_ways_keeps_major_roads_only() {
+        let body = br#"{"elements":[
+            {"type":"node","id":1,"lat":35.0,"lon":135.0},
+            {"type":"way","id":2,"tags":{"highway":"motorway"},"geometry":[
+                {"lat":35.00,"lon":135.00},{"lat":35.01,"lon":135.01}]},
+            {"type":"way","id":3,"tags":{"highway":"tertiary"},"geometry":[
+                {"lat":35.02,"lon":135.00},{"lat":35.02,"lon":135.02}]},
+            {"type":"way","id":4,"tags":{"highway":"residential"},"geometry":[
+                {"lat":35.03,"lon":135.00},{"lat":35.03,"lon":135.02}]},
+            {"type":"way","id":5,"tags":{"highway":"primary"},"geometry":[
+                {"lat":35.04,"lon":135.00}]}
+        ]}"#;
+        let ways = parse_overpass_ways(body).expect("valid response");
+        assert_eq!(ways.len(), 2, "motorway+tertiary in, residential and 1-point way out");
+        assert!(ways[0].major, "motorway is major");
+        assert!(!ways[1].major, "tertiary is minor");
+    }
+
+    #[test]
+    fn parse_overpass_ways_garbage_is_invalid_not_empty() {
+        // Garbage / error bodies are None (retry), NOT Some(empty) (authoritative).
+        assert!(parse_overpass_ways(b"not json").is_none());
+        assert!(parse_overpass_ways(br#"{"elements":"nope"}"#).is_none());
+        assert!(parse_overpass_ways(br#"{"error":"runtime error: query timed out"}"#).is_none());
+        // A valid response with zero matching ways is authoritative Some(empty).
+        assert!(parse_overpass_ways(br#"{"elements":[]}"#).is_some_and(|w| w.is_empty()));
+    }
+
+    #[test]
+    fn padded_bounds_pads_by_span_fraction() {
+        let points = vec![
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing },
+        ];
+        let (s, w, n, e) = padded_bounds(&points, &[]);
+        assert!((s - 34.98).abs() < 1e-9, "south pad = 0.02 (20% of 0.1°): {s}");
+        assert!((w - 134.96).abs() < 1e-9, "west pad = 0.04 (20% of 0.2°): {w}");
+        assert!((n - 35.12).abs() < 1e-9 && (e - 135.24).abs() < 1e-9);
+    }
+
+    #[test]
+    fn normalize_place_extracts_ascii_name_from_parens() {
+        let (search, _) = normalize_place("京都哈頓飯店 (Hearton Hotel Kyoto)", "Kyoto, Japan");
+        assert_eq!(search, "Hearton Hotel Kyoto");
+        // Pure-ASCII and CJK-only labels pass through unchanged.
+        assert_eq!(normalize_place("Kifune Shrine", "Kyoto, Japan").0, "Kifune Shrine");
+        assert_eq!(normalize_place("貴船神社", "Kyoto, Japan").0, "貴船神社");
+    }
+
+    #[test]
+    fn parse_overpass_ways_remark_empty_is_retryable() {
+        // Server-side timeout: empty elements + remark → None (retry), unlike a
+        // clean empty bbox which is Some(empty).
+        let body = br#"{"elements":[],"remark":"runtime error: query timed out"}"#;
+        assert!(parse_overpass_ways(body).is_none());
+    }
+
+    #[test]
+    fn render_png_with_road_web_changes_output() {
+        let points = vec![
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing },
+        ];
+        let roads = vec![RoadWay {
+            points: vec![(35.0, 135.0), (35.005, 135.008), (35.01, 135.01)],
+            major: true,
+        }];
+        let bare = render_png("T", &points, &[], &[], MapKind::Day).unwrap();
+        let with = render_png("T", &points, &[], &roads, MapKind::Day).unwrap();
+        assert!(bare.len() >= MIN_PNG_BYTES && with.len() >= MIN_PNG_BYTES);
+        assert_ne!(bare, with, "road web must visibly change the render");
+    }
 }
