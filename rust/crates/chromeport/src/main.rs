@@ -25,7 +25,7 @@ const SETTLE_TIMEOUT_SECS: u64 = 18;
 /// `(source_id, product_type)` table (review finding F3, 2026-06-29), so the OTA-parse subcommands
 /// fail loud rather than corrupt the schema or write half a row.
 const OTA_PARSE_RETIRED: &str = "chromeport OTA parse/verify is RETIRED — OTA capture+parse moved \
-to gwebcdb on WSLg (python bridge/ota_capture.py + bridge/ota_cli.py parse). See CLAUDE.md \"URL \
+to gwebcdb on WSLg (`gwebcdb-ota capture`, then agent-first `travel ota write-offers`). See CLAUDE.md \"URL \
 Routing\". chromeport now only provides browser/screenshot/db for snapshot-maps.";
 
 fn main() -> ExitCode {
@@ -367,7 +367,7 @@ impl Cli {
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  chromeport [--endpoint http://127.0.0.1:9222] browser doctor\n  chromeport [--endpoint http://127.0.0.1:9222] browser pages\n  chromeport [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch url <url> --source <id> [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  chromeport [--endpoint http://127.0.0.1:9222] screenshot <url> --out <path.png> [--width <px>] [--height <px>] [--wait <ms>] [--full-page]\n  chromeport db query <sql>\n  chromeport db exec <sql>\n  chromeport db token-status <read|write|secrets>\n\nRETIRED: `parse capture` / `verify` / `parser rules seed-defaults` — OTA capture+parse moved to\ngwebcdb on WSLg (python bridge/ota_capture.py + bridge/ota_cli.py parse; see CLAUDE.md \"URL Routing\").\nchromeport now only provides browser/screenshot/db (used by snapshot-maps).\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  CHROMEPORT_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
+    "Usage:\n  chromeport [--endpoint http://127.0.0.1:9222] browser doctor\n  chromeport [--endpoint http://127.0.0.1:9222] browser pages\n  chromeport [--endpoint http://127.0.0.1:9222] browser snapshot --page <N> [--source <id>] [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch url <url> --source <id> [--html]\n  chromeport [--endpoint http://127.0.0.1:9222] fetch interact <url> --source <id> [--step <kind>]... [--html] [--i-understand-profile]\n  chromeport [--endpoint http://127.0.0.1:9222] screenshot <url> --out <path.png> [--width <px>] [--height <px>] [--wait <ms>] [--full-page]\n  chromeport db query <sql>\n  chromeport db exec <sql>\n  chromeport db token-status <read|write|secrets>\n\nRETIRED: `parse capture` / `verify` / `parser rules seed-defaults` — OTA capture+parse moved to\ngwebcdb on WSLg (`gwebcdb-ota capture`, then agent-first `travel ota write-offers`; see CLAUDE.md \"URL Routing\").\nchromeport now only provides browser/screenshot/db (used by snapshot-maps).\n\nCaptures are stored as rows in the Turso `captures` table (plain text, no JSON files).\n\nSteps:\n  --step 'fill:SEL=VALUE'\n  --step 'click:SEL'\n  --step 'wait:MS'\n  --step 'waitfor:SEL'\n\nEnv:\n  CHROMEPORT_CDP_ENDPOINT overrides the default endpoint.\n  Turso credentials are resolved through minted tier tokens via turso-util; run `turso auth login` if token resolution fails.\n"
 }
 
 fn parse_token_tier(raw: &str) -> Result<TokenTier, CliError> {

@@ -104,12 +104,12 @@ async fn run_capture_only_resolves_destination_tokens_for_verified_sources() {
         return;
     }
 
-    // The capture step shells out to gwebcdb's bridge/ota_capture.py, which reads TURSO_URL /
+    // The capture step shells out to gwebcdb's `gwebcdb-ota capture`, which reads TURSO_URL /
     // TURSO_TOKEN directly from the environment (it has no .env loader — see CLAUDE.md "OTA
     // scraping"). The Rust CLI uses TRAVEL_TURSO_* and can be credentialed without those, so gate
     // on them explicitly and skip cleanly rather than fail when only the CLI creds are present.
     if std::env::var("TURSO_URL").is_err() || std::env::var("TURSO_TOKEN").is_err() {
-        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for ota_capture.py)");
+        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for gwebcdb-ota capture)");
         return;
     }
 
@@ -284,7 +284,7 @@ async fn run_capture_only_rejects_ambiguous_token_candidates_before_navigation()
         return;
     }
     if std::env::var("TURSO_URL").is_err() || std::env::var("TURSO_TOKEN").is_err() {
-        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for ota_capture.py)");
+        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for gwebcdb-ota capture)");
         return;
     }
 
@@ -370,7 +370,7 @@ async fn run_capture_only_rejects_ambiguous_token_candidates_before_navigation()
     assert!(lower.contains("destination"), "output={combined}");
     assert!(lower.contains("hotel"), "output={combined}");
     assert!(
-        !lower.contains("navigate.py") && !lower.contains("ota_capture.py"),
+        !lower.contains("gwebcdb-bridge navigate") && !lower.contains("gwebcdb-ota capture"),
         "validation should fail before navigation/capture; output={combined}"
     );
 }
@@ -391,7 +391,7 @@ async fn run_capture_only_rejects_url_param_input_name_not_declared_for_product_
         return;
     }
     if std::env::var("TURSO_URL").is_err() || std::env::var("TURSO_TOKEN").is_err() {
-        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for ota_capture.py)");
+        eprintln!("skipping (gwebcdb needs TURSO_URL/TURSO_TOKEN in env for gwebcdb-ota capture)");
         return;
     }
 
@@ -472,7 +472,7 @@ async fn run_capture_only_rejects_url_param_input_name_not_declared_for_product_
     assert!(lower.contains("token_key"), "output={combined}");
     assert!(lower.contains("hotel"), "output={combined}");
     assert!(
-        !lower.contains("navigate.py") && !lower.contains("ota_capture.py"),
+        !lower.contains("gwebcdb-bridge navigate") && !lower.contains("gwebcdb-ota capture"),
         "validation should fail before navigation/capture; output={combined}"
     );
 }

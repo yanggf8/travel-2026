@@ -234,7 +234,7 @@ URLs 404 / hit the wrong page.
 
 > **OTA scraping = gwebcdb on WSLg (current, verified 2026-06-25) — read first.** The browser
 > layer is **gwebcdb** (`~/b/gwebcdb`), the shared WSLg-based CDP toolset, AND it now owns the OTA
-> extraction too (now Rust `gwebcdb-*` CLIs; the Python bridge was ARCHIVED 2026-07-24 — `~/b/gwebcdb/bridge` is a symlink into `archive/`, never run `python bridge/*.py`). **`chromeport` is RETIRED** — its OTA
+> extraction too (now Rust `gwebcdb-*` CLIs; the Python bridge was archived 2026-07-24 and DELETED 2026-09-25 — never run `python bridge/*.py`). **`chromeport` is RETIRED** — its OTA
 > `parse` / `verify` / `parser rules` subcommands are **removed** (they now fail loud, exit 1, and
 > point to gwebcdb; the dead parser code was deleted 2026-06-29). chromeport only still provides
 > `browser` / `screenshot` / `db` for `snapshot-maps`. It was the fragile Windows-Chrome path that
@@ -311,7 +311,7 @@ Provider coverage is DB data — run `travel ota-status` (catalog edited via `tr
 Python scrapers archived under `archive/broken-python-scrapers/` — never run. **The entire OTA
 pipeline now lives in `gwebcdb`** (`~/b/gwebcdb`): WSLg-native Chrome is the verified default
 backend, and the extraction half (`parser_rules` → verify → parse → `offers`) was ported to gwebcdb
-(now the Rust `gwebcdb-ota capture|verify|parse|write-llm`; the Python bridge is archived).
+(now the Rust `gwebcdb-ota capture|verify|parse|write-llm`; the Python bridge was deleted).
 **`chromeport` (the old Rust CDP driver) is RETIRED** — don't run `./bin/chromeport`, repair it, or
 treat it as a fallback; WSLg replaced it because it was too fragile. The verified command recipe is
 in gwebcdb's `CLAUDE.md` ("OTA scraping — end-to-end usage"); see also the URL Routing banner above

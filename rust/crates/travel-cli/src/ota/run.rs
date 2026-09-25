@@ -380,39 +380,33 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 
             let url = resolve_url(&workflow.url_template, &map)?;
 
-            let gwebcdb_dir =
-                std::env::var("GWEBCDB_DIR").unwrap_or_else(|_| "/home/yanggf/b/gwebcdb".to_string());
-
-            let nav_out = Command::new("python")
-                .current_dir(&gwebcdb_dir)
-                .arg("bridge/navigate.py")
+            // gwebcdb's Rust bins (on PATH via ~/.local/bin; `armo` lists them). The Python
+            // bridge they replaced was deleted — never shell out to `python bridge/*.py`.
+            let nav_out = Command::new("gwebcdb-bridge")
+                .arg("navigate")
                 .arg(&url)
                 .output()
-                .map_err(|e| format!("failed to run navigate.py: {e}"))?;
+                .map_err(|e| format!("failed to run gwebcdb-bridge navigate: {e}"))?;
             if !nav_out.status.success() {
                 return Err(format!(
-                    "navigate.py failed: {}",
+                    "gwebcdb-bridge navigate failed: {}",
                     String::from_utf8_lossy(&nav_out.stderr)
                 ));
             }
 
             thread::sleep(Duration::from_millis(workflow.settle_ms as u64));
 
-            let mut capture_cmd = Command::new("python");
-            capture_cmd
-                .current_dir(&gwebcdb_dir)
-                .arg("bridge/ota_capture.py")
-                .arg("--source")
-                .arg(source_id);
+            let mut capture_cmd = Command::new("gwebcdb-ota");
+            capture_cmd.arg("capture").arg("--source").arg(source_id);
             if let Some(ref contains) = workflow.capture_url_contains {
                 capture_cmd.arg("--url-contains").arg(contains);
             }
             let capture_out = capture_cmd
                 .output()
-                .map_err(|e| format!("failed to run ota_capture.py: {e}"))?;
+                .map_err(|e| format!("failed to run gwebcdb-ota capture: {e}"))?;
             if !capture_out.status.success() {
                 return Err(format!(
-                    "ota_capture.py failed: {}",
+                    "gwebcdb-ota capture failed: {}",
                     String::from_utf8_lossy(&capture_out.stderr)
                 ));
             }
@@ -421,7 +415,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             let capture_id = stdout
                 .lines()
                 .find_map(|l| l.strip_prefix("capture_id\t").map(|v| v.trim().to_string()))
-                .ok_or_else(|| format!("ota_capture.py did not print capture_id; stdout={stdout}"))?;
+                .ok_or_else(|| format!("gwebcdb-ota capture did not print capture_id; stdout={stdout}"))?;
 
             println!("job_id\t{}", claimed.job_id);
             println!("claim_token\t{}", claimed.claim_token);
