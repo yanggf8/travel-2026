@@ -96,7 +96,7 @@ the status ON-CONFLICT upsert — don't re-roll a per-module copy.
 ```
 Rust binary invoked directly — no npm at the repo root:
   ./bin/travel <cmd>        (built from rust/crates/travel-cli)
-  (OTA capture: chromeport RETIRED — use gwebcdb's Python bridge tools on WSLg; see URL Routing)
+  (OTA capture: chromeport RETIRED — use gwebcdb's Rust CLIs (`gwebcdb-bridge` / `gwebcdb-ota`, see `armo`); see URL Routing)
 Workers under workers/ (trip-dashboard-rs, trip-dashboard-redirect) keep their own wrangler/npm setup.
 Python/other → OTA scraping = gwebcdb (~/b/gwebcdb) on WSLg; old Python scrapers archived
 ```
@@ -234,23 +234,23 @@ URLs 404 / hit the wrong page.
 
 > **OTA scraping = gwebcdb on WSLg (current, verified 2026-06-25) — read first.** The browser
 > layer is **gwebcdb** (`~/b/gwebcdb`), the shared WSLg-based CDP toolset, AND it now owns the OTA
-> extraction too (Phase 0 Python port SHIPPED). **`chromeport` is RETIRED** — its OTA
+> extraction too (now Rust `gwebcdb-*` CLIs; the Python bridge was ARCHIVED 2026-07-24 — `~/b/gwebcdb/bridge` is a symlink into `archive/`, never run `python bridge/*.py`). **`chromeport` is RETIRED** — its OTA
 > `parse` / `verify` / `parser rules` subcommands are **removed** (they now fail loud, exit 1, and
 > point to gwebcdb; the dead parser code was deleted 2026-06-29). chromeport only still provides
 > `browser` / `screenshot` / `db` for `snapshot-maps`. It was the fragile Windows-Chrome path that
 > WSLg replaces, not a fallback to keep working. WSLg-native Chrome is the **standing verified
 > backend** (live on this host: `running_backend=wslg`, CDP up on :9222, bridge attached). Drive
-> everything with gwebcdb's Python bridge tools. Full recipe + gotchas: **gwebcdb `CLAUDE.md` →
+> everything with gwebcdb's Rust CLIs (`armo` lists them). Full recipe + gotchas: **gwebcdb `CLAUDE.md` →
 > "OTA scraping — end-to-end usage"**; per-source gate: `docs/plans/2026-06-24-ota-migration-chromeport.md`.
 > For sign-in OTAs the human logs in / settles 2FA in the WSLg Chrome window (session persists in
 > the `~/.local/share/gwebcdb/codex-browser` profile) or via gwebcdb's approval-gated `login_assist`.
 
 OTA capture flow (run from `~/b/gwebcdb`; export `TURSO_URL`/`TURSO_TOKEN` from this repo's `.env`
-first — gwebcdb's `turso_db.py` has no `.env` loader):
+first — gwebcdb has no `.env` loader):
 
 | URL Contains | Action |
 |-------------|--------|
-| Any OTA (besttour / liontravel / lifetour / settour / …) | Start Chrome, drive the page, capture, then **the agent reads the capture text and writes offers** (no in-CLI parser): <br>`./scripts/start-chrome-cdp-wslg.sh` (idempotent; CDP on :9222) <br>→ `python bridge/navigate.py "<url>"` (+ `form_fill`/`combo_select`/`form_click` for SPA searches; let async price/hotel SPAs settle ~25s) <br>→ `python bridge/ota_capture.py --source <id> [--url-contains <s>]` (UNREDACTED text → `captures`; prints `capture_id`) <br>→ **agent reads `captures.raw_text`, extracts the offers, emits TSV** <br>→ `./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>` (under a claimed `ota_jobs` job; writes `offers` + provenance + attempt audit) |
+| Any OTA (besttour / liontravel / lifetour / settour / …) | Start Chrome, drive the page, capture, then **the agent reads the capture text and writes offers** (no in-CLI parser): <br>`gwebcdb-chrome start` (idempotent; CDP on :9222) <br>→ `gwebcdb-bridge navigate "<url>"` (+ `gwebcdb-bridge form-fill`/`combo-select`/`form-click` for SPA searches; let async price/hotel SPAs settle ~25s) <br>→ `gwebcdb-ota capture --source <id> [--url-contains <s>]` (UNREDACTED text → `captures`; prints `capture_id`) <br>→ **agent reads `captures.raw_text`, extracts the offers, emits TSV** <br>→ `./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>` (under a claimed `ota_jobs` job; writes `offers` + provenance + attempt audit) |
 | Non-OTA URL | Use WebFetch as normal |
 
 The bridge navigates/clicks the actual UI (no fragile URL templates). Captures live in the Turso
@@ -310,8 +310,8 @@ Provider coverage is DB data — run `travel ota-status` (catalog edited via `tr
 ### Scrapers — DECOMMISSIONED; OTA pipeline lives in gwebcdb (WSLg)
 Python scrapers archived under `archive/broken-python-scrapers/` — never run. **The entire OTA
 pipeline now lives in `gwebcdb`** (`~/b/gwebcdb`): WSLg-native Chrome is the verified default
-backend, and the extraction half (`parser_rules` → verify → parse → `offers`) was ported to Python
-bridge tools (`turso_db.py`, `ota_capture.py`, `ota_parse.py`, `ota_cli.py` — Phase 0 SHIPPED).
+backend, and the extraction half (`parser_rules` → verify → parse → `offers`) was ported to gwebcdb
+(now the Rust `gwebcdb-ota capture|verify|parse|write-llm`; the Python bridge is archived).
 **`chromeport` (the old Rust CDP driver) is RETIRED** — don't run `./bin/chromeport`, repair it, or
 treat it as a fallback; WSLg replaced it because it was too fragile. The verified command recipe is
 in gwebcdb's `CLAUDE.md` ("OTA scraping — end-to-end usage"); see also the URL Routing banner above
@@ -335,8 +335,8 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 ./bin/travel shaping-init --origin TPE --start 2026-06-18 --end 2026-06-20 \
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2]
 # After shaping-init: capture offers via gwebcdb (WSLg), agent-extract, then import + compare:
-#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
-#   → python bridge/ota_capture.py --source <id>   # → capture_id (UNREDACTED → captures)
+#   cd ~/b/gwebcdb && gwebcdb-chrome start && gwebcdb-bridge navigate "<url>"
+#   → gwebcdb-ota capture --source <id>   # → capture_id (UNREDACTED → captures)
 #   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job> --capture <id> --claim-token <tok> --tsv <path> --dest <slug>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id>
@@ -360,8 +360,8 @@ Most-used commands inline; the **canonical full reference** (every mutation, com
 # Extraction is AGENT-FIRST: capture, then the coding agent reads raw_text and writes offers (no in-CLI parser).
 #   export TURSO_URL=$(grep '^TURSO_URL=' ~/b/travel-2026/.env | cut -d= -f2-)
 #   export TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ~/b/travel-2026/.env | cut -d= -f2-)
-#   ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
-#   → python bridge/ota_capture.py --source <id>            # → capture_id (UNREDACTED → captures)
+#   gwebcdb-chrome start && gwebcdb-bridge navigate "<url>"
+#   → gwebcdb-ota capture --source <id>            # → capture_id (UNREDACTED → captures)
 #   → AGENT reads captures.raw_text, extracts offers, emits TSV
 #   → ./bin/travel ota write-offers <job> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>  # → Turso offers + provenance
 # (`travel ota parse` / the regex parser_rules path is RETIRED.) See URL Routing + gwebcdb CLAUDE.md + src/skills/scrape-ota/SKILL.md.

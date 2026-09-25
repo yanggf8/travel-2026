@@ -29,8 +29,8 @@ with `travel ota write-offers`.
 **Usage** (full flow in `/scrape-ota`):
 ```bash
 # Drive + capture an OTA page in ~/b/gwebcdb (clicks/fills the actual UI — no URL templates)
-python bridge/navigate.py "<url>"
-python bridge/ota_capture.py --source <source_id> [--url-contains <substr>]   # → capture_id
+gwebcdb-bridge navigate "<url>"
+gwebcdb-ota capture --source <source_id> [--url-contains <substr>]   # → capture_id
 
 # Agent-extract TSV from captures.raw_text, then persist Turso offers
 ./rust/target/debug/travel ota write-offers <job_id> --capture <capture_id> --claim-token <token> --tsv <path>

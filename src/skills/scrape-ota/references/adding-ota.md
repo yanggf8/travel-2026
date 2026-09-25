@@ -21,8 +21,8 @@ Step-by-step guide to register a new OTA for the gwebcdb capture + agent `ota wr
 3. Capture a real page once to land a plain-text capture in the `captures` table:
    ```bash
    # from ~/b/gwebcdb, after exporting TURSO_URL/TURSO_TOKEN
-   python bridge/navigate.py "<url>"
-   python bridge/ota_capture.py --source new_ota [--url-contains <substr>]   # → capture_id
+   gwebcdb-bridge navigate "<url>"
+   gwebcdb-ota capture --source new_ota [--url-contains <substr>]   # → capture_id
    ```
 
 4. Read `captures.raw_text` and extract the decision-relevant offer fields:

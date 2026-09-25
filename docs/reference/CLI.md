@@ -45,9 +45,9 @@ coding agent reads `captures.raw_text`, emits TSV, then persists normalized `off
 
 ```bash
 # from ~/b/gwebcdb (export TURSO_URL/TURSO_TOKEN from this repo's .env first)
-./scripts/start-chrome-cdp-wslg.sh                                # CDP on :9222
-python bridge/navigate.py "<url>"                                 # + form_fill/combo_select for SPAs; settle ~25s
-python bridge/ota_capture.py --source <id> [--url-contains <s>]   # → capture_id; UNREDACTED → captures
+gwebcdb-chrome start                                # CDP on :9222
+gwebcdb-bridge navigate "<url>"                                 # + gwebcdb-bridge form-fill/combo-select for SPAs; settle ~25s
+gwebcdb-ota capture --source <id> [--url-contains <s>]   # → capture_id; UNREDACTED → captures
 # AGENT reads captures.raw_text, extracts offers, emits TSV, then:
 ./bin/travel ota show-capture <capture_id>                        # read-only: raw_text → stdout; source_id/url/captured_at → stderr
 ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>   # → Turso offers + provenance
@@ -195,8 +195,8 @@ Explore departure date × destination × flight price together before any plan e
   --dest KIX:"Osaka (KIX)" --dest NRT:"Tokyo (NRT)" --nights 6 --nights 7 [--pax 2] [--rate 32] \
   [--shaping ASPECT:ROLE:KIND:VALUE[:NOTES] ...]   # e.g. date:hard_constraint:return_no_later_than:2026-06-27
 # After shaping-init: capture via gwebcdb (WSLg), agent-extract, then import + compare:
-#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
-#   → python bridge/ota_capture.py --source <id>   # → capture_id
+#   cd ~/b/gwebcdb && gwebcdb-chrome start && gwebcdb-bridge navigate "<url>"
+#   → gwebcdb-ota capture --source <id>   # → capture_id
 #   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 ./bin/travel shaping-compare --run <run_id> [--limit N]

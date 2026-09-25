@@ -111,8 +111,8 @@ this trip went through Shaping rather than the known-flights fast-path:
 ```bash
 # Flight candidates: capture via gwebcdb on WSLg (e.g. --source google_flights), agent-extract TSV,
 # write offers, then import into the run:
-#   cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<flights-url>"
-#   → python bridge/ota_capture.py --source google_flights   # → capture_id
+#   cd ~/b/gwebcdb && gwebcdb-chrome start && gwebcdb-bridge navigate "<flights-url>"
+#   → gwebcdb-ota capture --source google_flights   # → capture_id
 #   → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 #   → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 # FIT/tour-group offers: capture via gwebcdb → import-tour-group-offers --run <run_id> --file ...

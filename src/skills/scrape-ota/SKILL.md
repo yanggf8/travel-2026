@@ -39,7 +39,7 @@ you can't read once the capture returns.
 
 ## End-to-end flow (the verified path)
 
-Run gwebcdb steps from `~/b/gwebcdb`; export Turso creds first (`turso_db.py` has no `.env` loader):
+Run gwebcdb steps from `~/b/gwebcdb`; export Turso creds first (gwebcdb has no `.env` loader):
 
 ```bash
 export TURSO_URL=$(grep '^TURSO_URL=' ~/b/travel-2026/.env | cut -d= -f2-)
@@ -53,11 +53,11 @@ export TURSO_TOKEN=$(grep '^TURSO_TOKEN=' ~/b/travel-2026/.env | cut -d= -f2-)
    ```
 2. **Drive the page + capture** (gwebcdb on WSLg):
    ```bash
-   ./scripts/start-chrome-cdp-wslg.sh                 # idempotent; CDP on :9222 (WSLg-native Chrome)
-   python bridge/navigate.py "<url>"                  # + form_fill/combo_select/form_click for SPA searches
+   gwebcdb-chrome start                 # idempotent; CDP on :9222 (WSLg-native Chrome)
+   gwebcdb-bridge navigate "<url>"                  # + gwebcdb-bridge form-fill/combo-select/form-click for SPA searches
    # For async price/hotel SPAs, let the page settle (~25s) before capturing — a too-early capture
    # shows placeholders like 正在努力查詢最優惠的價格.. and an amount of `--`.
-   python bridge/ota_capture.py --source <source_id> [--url-contains <substr>]   # → capture_id (UNREDACTED → captures)
+   gwebcdb-ota capture --source <source_id> [--url-contains <substr>]   # → capture_id (UNREDACTED → captures)
    ```
 3. **You extract** — read `captures.raw_text` and pull the offer fields:
    ```bash
