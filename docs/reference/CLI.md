@@ -117,6 +117,11 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 
 # Route diagrams (per-day PNGs + sightseeing-only overview + separate hotel/airport overview; local grid, no OSM raster tile requests).
 ./bin/travel snapshot-maps [--dest <slug>]        # Renders route-diagram PNGs in Rust and uploads them to R2. Requires Wrangler auth.
+#   Stop coordinates: a route-segment label is matched (exact normalized poi_id / title / parenthetical)
+#   against destination_pois, then hotels.name, and only then geocoded via Nominatim — so name a stop
+#   after its POI to pin it exactly. If Overpass is rate-limited, a map whose stops+routes are unchanged
+#   and whose last upload had a road web is KEPT (map_artifacts.input_sha256 / has_roads); otherwise it
+#   uploads road-less with a "warn: ... WITHOUT road web" line — re-run later to restore the roads.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
 ./bin/travel set-poi-coords <slug> <poi_id> <lat> <lon> [--source <s>] [--confidence <c>]    # geocode a destination_pois row (feeds the POI-coord map path). GLOBAL/slug-keyed reference data — takes NO --plan-id, NO audit triad. `validate data` WARNs on ungeocoded POIs.
 ./bin/travel add-transit <slug> <from_station> <to_station> --minutes N [--line "<t>"] [--kind metro|rail|walk|bus|estimate] [--source <s>] [--confidence verified|reviewed|estimate]    # add a destination_transit station pair (transit time/line that derive-routes attaches to auto-derived legs). GLOBAL/slug-keyed reference data — NO --plan-id, NO audit triad. Idempotent (INSERT OR REPLACE). pair_key uses derive-routes' own normalization, so the pair is found by the next `derive-routes` run — no more raw `db exec INSERT` for discovered pairs.

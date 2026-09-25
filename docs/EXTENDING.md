@@ -124,8 +124,8 @@ Logical groupings for trip planning:
 >   --dest KIX:"Kyoto via KIX" --nights 4
 >
 > # 2. Capture offers via gwebcdb (WSLg), agent-extract, then import candidates
-> cd ~/b/gwebcdb && ./scripts/start-chrome-cdp-wslg.sh && python bridge/navigate.py "<url>"
-> → python bridge/ota_capture.py --source <id>   # → capture_id
+> cd ~/b/gwebcdb && gwebcdb-chrome start && gwebcdb-bridge navigate "<url>"
+> → gwebcdb-ota capture --source <id>   # → capture_id
 > → AGENT reads captures.raw_text, emits TSV → ./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path>
 > → ./bin/travel shaping-import --run <run_id> --file <handoff.json>
 >
@@ -150,143 +150,19 @@ Logical groupings for trip planning:
 
 ## Adding New OTA Scrapers
 
-### Step 1: Register in ota-sources.json
-
-```json
-{
-  "klook": {
-    "source_id": "klook",
-    "display_name": "Klook",
-    "display_name_en": "Klook",
-    "types": ["activity", "package"],
-    "base_url": "https://www.klook.com",
-    "markets": ["TW", "HK", "SG", "MY"],
-    "currency": "TWD",
-    "supported": true,
-    "scraper_script": "scripts/scrape_klook.py",
-    "rate_limit": {
-      "requests_per_minute": 5
-    },
-    "notes": "Activity tickets and some packages"
-  }
-}
-```
-
-### Step 2: Create Scraper Class
-
-```typescript
-// src/scrapers/klook-scraper.ts
-import { BaseScraper, OtaSearchParams, ScrapeResult, CanonicalOffer } from './';
-
-export class KlookScraper extends BaseScraper {
-  constructor() {
-    super('klook'); // Must match source_id
-  }
-
-  async search(params: OtaSearchParams): Promise<ScrapeResult> {
-    const startTime = Date.now();
-
-    try {
-      // Build search URL
-      const url = this.buildSearchUrl(params);
-
-      // Use Python scraper via child_process or implement in TS
-      const rawData = await this.callPythonScraper(url);
-
-      // Normalize to canonical format
-      const offers = this.normalizeOffers(rawData);
-
-      return this.createSuccessResult(params, offers, startTime);
-    } catch (err) {
-      return this.createErrorResult(params, [(err as Error).message], startTime);
-    }
-  }
-
-  async scrapeProduct(url: string): Promise<ScrapeResult> {
-    const startTime = Date.now();
-    // Implement single product scraping
-    return this.createSuccessResult({ destination: '', startDate: '', endDate: '', pax: 1 }, [], startTime);
-  }
-
-  private buildSearchUrl(params: OtaSearchParams): string {
-    // Build Klook-specific URL
-    return `${this.config.baseUrl}/search?city=${params.destination}`;
-  }
-
-  private normalizeOffers(rawData: any[]): CanonicalOffer[] {
-    return rawData.map((item) => ({
-      id: this.generateOfferId(item.id),
-      sourceId: this.sourceId,
-      type: 'package',
-      title: item.name,
-      url: item.url,
-      currency: this.config.currency,
-      pricePerPerson: item.price,
-      availability: 'available',
-      scrapedAt: new Date().toISOString(),
-    }));
-  }
-}
-```
-
-### Step 3: Register Scraper
-
-```typescript
-// src/scrapers/index.ts (add export)
-export * from './klook-scraper';
-
-// In your app initialization
-import { globalRegistry, KlookScraper } from './scrapers';
-globalRegistry.register(new KlookScraper());
-```
-
-### Step 4: Create Python Scraper (Optional)
-
-If using Playwright for complex JavaScript rendering:
-
-```python
-# scripts/scrape_klook.py
-#!/usr/bin/env python3
-"""Klook scraper using Playwright."""
-
-import asyncio
-import json
-import sys
-from playwright.async_api import async_playwright
-
-async def scrape_klook(url: str) -> dict:
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, wait_until="networkidle")
-        
-        # Extract data
-        items = await page.query_selector_all('.activity-card')
-        results = []
-        
-        for item in items:
-            title = await item.query_selector('.title')
-            price = await item.query_selector('.price')
-            results.append({
-                'name': await title.inner_text() if title else '',
-                'price': await price.inner_text() if price else '',
-            })
-        
-        await browser.close()
-        return {'items': results}
-
-if __name__ == '__main__':
-    url = sys.argv[1]
-    output = sys.argv[2] if len(sys.argv) > 2 else None
-    
-    result = asyncio.run(scrape_klook(url))
-    
-    if output:
-        with open(output, 'w') as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
-    else:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-```
+> **Replaced.** The TypeScript scraper classes and Python/Playwright scrapers this section used to
+> describe are gone (the TS CLI is archived under `archive/ts-cli-retired/`, the Python scrapers under
+> `archive/broken-python-scrapers/`, and gwebcdb deleted its Python bridge on 2026-09-25). There is no
+> per-OTA scraper or parser to write any more:
+>
+> 1. Register the source in the Turso `ota_sources` table.
+> 2. Capture a real page with gwebcdb's Rust CLIs: `gwebcdb-bridge navigate "<url>"` (plus
+>    `gwebcdb-bridge form-fill` / `combo-select` / `form-click` for SPA searches), then
+>    `gwebcdb-ota capture --source <id>` → `capture_id`.
+> 3. The coding agent reads `captures.raw_text`, extracts the offers, and writes them with
+>    `./bin/travel ota write-offers <job_id> --capture <capture_id> --claim-token <tok> --tsv <path> --dest <slug>`.
+>
+> Full steps: [`src/skills/scrape-ota/references/adding-ota.md`](../src/skills/scrape-ota/references/adding-ota.md).
 
 ---
 
