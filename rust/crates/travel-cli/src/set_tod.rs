@@ -417,6 +417,17 @@ pub async fn run_zh(
 // which the dashboard renders as a clickable place link.
 pub async fn run_meals(args: &[String], plan_id: String) -> Result<(), String> {
     let parsed = parse_meals(args)?;
+
+    // Write-time map-link guard: a meal may embed a Maps URL besides the
+    // "｜map:<query>" marker. The /maps/dir/?...&... form is truncated at the first
+    // '&' by the dashboard linkifier (dead link), so reject it before any DB
+    // connection — same guard set-activity-title / populate-itinerary use.
+    for meal in &parsed.meals {
+        if let Err(reason) = crate::checks::check_title_map_url(meal) {
+            return Err(format!("meal \"{meal}\" has a {reason}"));
+        }
+    }
+
     let conn = crate::db::connect_write().await?;
     let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
     require_session(&conn, &plan_id, &destination, parsed.day, &parsed.session).await?;
