@@ -362,7 +362,7 @@ async fn validate_ota_sources(issues: &mut Vec<Issue>) -> Option<OtaSourcesFile>
         issues.push(Issue {
             category: "ota-sources".to_string(),
             severity: Severity::Error,
-            message: "Turso ota_sources has no rows. Run npm run db:migrate:turso.".to_string(),
+            message: "Turso ota_sources has no rows. Run ./bin/travel db migrate.".to_string(),
             file: Some("turso:ota_sources".to_string()),
             line: None,
         });
@@ -773,7 +773,7 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
         issues.push(Issue {
             category: "destinations".to_string(),
             severity: Severity::Error,
-            message: "Turso destination_config has no rows. Run npm run db:migrate:turso.".to_string(),
+            message: "Turso destination_config has no rows. Run ./bin/travel db migrate.".to_string(),
             file: Some("turso:destination_config".to_string()),
             line: None,
         });
@@ -980,7 +980,7 @@ async fn validate_holiday_calendars(issues: &mut Vec<Issue>) {
         issues.push(Issue {
             category: "holidays".to_string(),
             severity: Severity::Error,
-            message: "Turso holidays has no rows. Run npm run db:migrate:turso and npm run db:fetch:holidays:tw -- <DGPA CSV URL>.".to_string(),
+            message: "Turso holidays has no rows. Run ./bin/travel db migrate and ./bin/travel db fetch holidays <DGPA CSV URL>.".to_string(),
             file: Some("turso:holidays".to_string()),
             line: None,
         });

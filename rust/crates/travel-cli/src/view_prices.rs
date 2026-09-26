@@ -131,7 +131,7 @@ async fn show_price_comparison(opts: &Opts) -> Result<(), String> {
     let flight_offers = query_flights(&conn, opts).await?;
     if flight_offers.is_empty() {
         return Err(
-            "Missing Turso flight offers. Import scraper output with npm run db:import:turso before running view-prices.".to_string(),
+            "Missing Turso flight offers. Import scraper output with ./bin/travel import-offers before running view-prices.".to_string(),
         );
     }
 

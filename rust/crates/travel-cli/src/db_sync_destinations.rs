@@ -9,5 +9,5 @@
 
 pub async fn run(args: &[String]) -> Result<(), String> {
     let _ = args;
-    Err("Destination sync from local files is disabled. Use npm run db:migrate:turso or direct Turso SQL for destination_config changes.".to_string())
+    Err("Destination sync from local files is disabled. Use ./bin/travel db migrate or direct Turso SQL for destination_config changes.".to_string())
 }

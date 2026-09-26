@@ -83,7 +83,6 @@ Plan state lives in Turso (no JSON state files). For the full command list see `
 │   ├── shaping_research.py          # Shaping Stage aggregator (zero Turso I/O)
 │   └── filter_packages.py          # Filter scraped packages by criteria
 ├── workers/trip-dashboard-rs/ # Cloudflare Worker — live dashboard (Rust, reads Turso)
-└── tsconfig.json
 ```
 
 > Plan state lives in Turso, not JSON files. `data/` only holds reference data (holidays, hotel zones, transit routes). See **CLAUDE.md → Turso DB** for the schema.

@@ -184,7 +184,7 @@ pub async fn run(opts: &CompareDatesArgs) -> Result<(), String> {
     let package_offers = query_offers(opts, "package").await?;
     let flight_offers = query_offers(opts, "flight").await?;
     if package_offers.is_empty() && flight_offers.is_empty() {
-        return Err("Missing Turso offers for compare-dates. Import scrape output with npm run db:import:turso before running this command.".to_string());
+        return Err("Missing Turso offers for compare-dates. Import scrape output with ./bin/travel import-offers before running this command.".to_string());
     }
 
     // cheapest package per departure_date

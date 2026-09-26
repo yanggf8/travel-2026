@@ -104,7 +104,7 @@ pub async fn run_compare(args: &[String]) -> Result<(), String> {
     let offers = load_scraped_offers(&region, filter_date.as_deref(), pax).await?;
     if offers.is_empty() {
         println!("\nNo Turso offers found for region \"{region}\".");
-        println!("Import scraper output with npm run db:import:turso before running compare-offers.");
+        println!("Import scraper output with ./bin/travel import-offers before running compare-offers.");
         std::process::exit(1);
     }
 

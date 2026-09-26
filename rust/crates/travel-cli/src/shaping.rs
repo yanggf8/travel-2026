@@ -600,7 +600,7 @@ pub async fn run_adopt(args: &[String]) -> Result<(), String> {
         println!("   Destination: {dest_slug}");
         println!("   P1 dates and P2 destination are seeded from the Shaping Stage candidate.");
         println!(
-            "   Next: npm run travel -- scaffold-itinerary --plan-id {plan_id} --dest {dest_slug}"
+            "   Next: ./bin/travel scaffold-itinerary --plan-id {plan_id} --dest {dest_slug}"
         );
         return Ok(());
     }
@@ -1369,7 +1369,7 @@ pub async fn run_import(args: &[String]) -> Result<(), String> {
         "✅ Imported {inserted} candidates for {run_id} ({} total), ranked.",
         all.len()
     );
-    println!("   View: npm run travel -- shaping-compare --run {run_id}");
+    println!("   View: ./bin/travel shaping-compare --run {run_id}");
     Ok(())
 }
 

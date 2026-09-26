@@ -1,6 +1,6 @@
 -- Normalized itinerary tables (Phase 1)
 -- Replaces itinerary data currently embedded in plans.plan_json blob.
--- Run via: npm run db:migrate:turso
+-- Run via: ./bin/travel db migrate
 
 -- ============================================================================
 -- Core itinerary tables
