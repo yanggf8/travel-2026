@@ -1,10 +1,14 @@
 //! `travel snapshot-maps` — query Turso, render route diagrams in Rust, and upload PNGs to R2.
 //!
 //! The renderer prefers destination POI coordinates over Nominatim, then uses itinerary
-//! endpoints, cached Nominatim coordinates, and cached OSRM road geometry. It never fetches
-//! raster map tiles; automated/headless tile downloads and saved tile composites are
-//! prohibited by the OpenStreetMap tile policy. OSM-derived data is credited in every
-//! generated image.
+//! endpoints, cached Nominatim coordinates, and cached OSRM road geometry. The geographic
+//! background is an ArcGIS Online static basemap (World Street Map, falling back to World
+//! Topo Map) fetched via the MapServer `export` endpoint in Web Mercator, which matches the
+//! renderer's own Mercator projection 1:1; when ArcGIS is unreachable it falls back to an
+//! Overpass-derived road web. It never fetches OpenStreetMap raster tiles; automated/headless
+//! tile downloads and saved tile composites are prohibited by the OpenStreetMap tile policy.
+//! OSM-derived data is credited in every generated image, and Esri is credited whenever a
+//! basemap is composited.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -33,6 +37,17 @@ const OVERPASS_URLS: [&str; 2] = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ];
+/// ArcGIS Online static basemap export endpoints (one PNG per request, NOT raster tiles —
+/// the OSM tile-policy ban is on automated fetching of tile.openstreetmap.org; these are
+/// Esri-hosted services rendered to an exact Web Mercator bbox). Tried in order: street map
+/// first (closest to the old road-web look), topo map as fallback.
+const ARCGIS_BASEMAPS: [&str; 2] = [
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export",
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/export",
+];
+/// Web Mercator sphere radius (EPSG:3857), converting the renderer's unitless Mercator
+/// coordinates into the metres the ArcGIS export endpoint expects.
+const WEB_MERCATOR_R: f64 = 6_378_137.0;
 /// How far beyond the stop/route bounds the road background reaches, as a fraction
 /// of the bounds' span, so the frame edges are not bare.
 const ROAD_PAD_FRAC: f64 = 0.20;
@@ -292,7 +307,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             "INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) VALUES (?1, datetime('now')) ON CONFLICT(plan_id) DO UPDATE SET snapshotted_at=datetime('now')",
             params![plan_id.clone()],
         ).await.map_err(|e| format!("map freshness stamp failed: {e}"))?;
-        println!("snapshot-maps: completed {plan_id} ({dest}); no raster map tiles requested");
+        println!("snapshot-maps: completed {plan_id} ({dest}); no OSM raster tiles requested");
         Ok(())
     } else {
         Err(format!(
@@ -318,14 +333,45 @@ async fn upload_map(
     kind: MapKind,
 ) -> Result<bool, String> {
     let input_sha = map_input_sha256(title, kind, points, routes);
-    let roads = fetch_road_web(padded_bounds(points, routes)).await;
-    if roads.is_empty() && previous_map_reusable(conn, plan, key, &input_sha).await? {
+    let projection = map_projection(points, routes);
+    // Geographic background: ArcGIS static basemap first; only when ArcGIS is
+    // unreachable fall back to the Overpass road web (slower, rate-limited, and
+    // much sparser than a real basemap).
+    let basemap = fetch_basemap(&projection).await;
+    let roads = if basemap.is_some() {
+        Vec::new()
+    } else {
+        fetch_road_web(padded_bounds(points, routes)).await
+    };
+    let has_background = basemap.is_some() || !roads.is_empty();
+    if !has_background && previous_map_reusable(conn, plan, key, &input_sha).await? {
         println!(
-            "   kept {key} (road web unavailable; previous map has same stops + roads)"
+            "   kept {key} (geographic background unavailable; previous map has same stops + background)"
         );
         return Ok(true);
     }
-    let png = render_png(title, points, routes, &roads, kind)?;
+    // A grid with pins is not a map.  It is especially misleading for the
+    // long-distance koyo routes, where a failed Overpass request used to be
+    // uploaded as a successful (mostly white) PNG.  Leave the previous good
+    // artifact in place when possible; otherwise record a failed artifact so
+    // the dashboard shows its missing-map state and freshness is not stamped.
+    if !has_background {
+        record_artifact(
+            conn,
+            plan,
+            key,
+            0,
+            None,
+            "failed",
+            Some("no geographic background (ArcGIS basemap and Overpass road web both unavailable)"),
+            Some(&input_sha),
+            Some(0),
+        )
+        .await?;
+        eprintln!("   FAIL {key}: no geographic background; map was not uploaded");
+        return Ok(false);
+    }
+    let png = render_png(title, points, routes, &roads, basemap.as_deref(), kind)?;
     if png.len() < MIN_PNG_BYTES {
         return Err(format!(
             "rendered map {key} is undersized ({} bytes)",
@@ -351,7 +397,9 @@ async fn upload_map(
         .args(["--content-type", "image/png", "--remote"])
         .status()
         .map_err(|e| format!("failed to run Wrangler for {key}: {e}"))?;
-    let has_roads = if roads.is_empty() { 0 } else { 1 };
+    // has_roads = "has a geographic background" (ArcGIS basemap or Overpass road web);
+    // by this point has_background is guaranteed true.
+    let has_roads = 1;
     if !status.success() {
         record_artifact(
             conn,
@@ -380,11 +428,6 @@ async fn upload_map(
         Some(has_roads),
     )
     .await?;
-    if roads.is_empty() {
-        println!(
-            "   warn: {key} uploaded WITHOUT road web (Overpass unavailable); re-run snapshot-maps later"
-        );
-    }
     println!("   uploaded {key} ({} bytes)", png.len());
     Ok(true)
 }
@@ -467,13 +510,22 @@ fn render_png(
     points: &[Point],
     routes: &[RouteLine],
     roads: &[RoadWay],
+    basemap: Option<&[u8]>,
     kind: MapKind,
 ) -> Result<Vec<u8>, String> {
     if points.is_empty() {
         return Err("cannot render a map without points".into());
     }
+    // A basemap that is not exactly one canvas of RGBA is not a basemap.
+    let basemap = basemap.filter(|b| b.len() == (WIDTH * HEIGHT * 4) as usize);
     let mut raster = Raster::new(WIDTH as usize, HEIGHT as usize);
-    raster.grid();
+    // ArcGIS basemap first (under everything); without it, the old light grid.
+    if let Some(pixels) = basemap {
+        raster.blit(pixels);
+    } else {
+        raster.grid();
+    }
+    let projection = map_projection(points, routes);
     let xy = points
         .iter()
         .map(|p| mercator(p.lat, p.lon))
@@ -487,11 +539,6 @@ fn render_png(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let mut bounds = xy.clone();
-    for line in &route_xy {
-        bounds.extend(line.iter().copied());
-    }
-    let projection = Projection::fit(&bounds, WIDTH as f64, HEIGHT as f64);
     // Road web FIRST (under everything): a light OSM-derived street context drawn
     // from vector geometry so the corridor line no longer floats on a bare grid.
     // Off-canvas points are clipped by Raster::put.
@@ -537,30 +584,142 @@ fn render_png(
         };
         raster.pin(x, y, color, i + 1);
     }
-    raster.text(12, 10, &title.to_ascii_uppercase(), [45, 61, 75], 2);
+    let title = title.to_ascii_uppercase();
+    if basemap.is_some() {
+        // Solid backing strips keep title and credits readable over the basemap.
+        raster.fill_rect(8, 8, title.len() as i32 * 12 + 8, 20, [255, 255, 255]);
+        raster.fill_rect(366, HEIGHT as i32 - 18, 218, 14, [255, 255, 255]);
+    }
+    raster.text(12, 10, &title, [45, 61, 75], 2);
     if matches!(kind, MapKind::Logistics) {
         raster.legend(12, 31, "HOTEL", [21, 101, 192]);
         raster.legend(105, 31, "AIRPORT", [239, 108, 0]);
     }
-    raster.text(
-        370,
-        HEIGHT as i32 - 14,
-        "© OPENSTREETMAP CONTRIBUTORS",
-        [70, 82, 94],
-        1,
-    );
+    let credit = if basemap.is_some() {
+        "© ESRI + OPENSTREETMAP CONTRIBUTORS"
+    } else {
+        "© OPENSTREETMAP CONTRIBUTORS"
+    };
+    raster.text(370, HEIGHT as i32 - 14, credit, [70, 82, 94], 1);
+    encode_rgba_png(&raster.pixels, WIDTH, HEIGHT)
+}
+
+fn encode_rgba_png(pixels: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     let mut out = Cursor::new(Vec::new());
-    let mut encoder = Encoder::new(&mut out, WIDTH, HEIGHT);
+    let mut encoder = Encoder::new(&mut out, w, h);
     encoder.set_color(ColorType::Rgba);
     encoder.set_depth(BitDepth::Eight);
     let mut writer = encoder
         .write_header()
         .map_err(|e| format!("PNG header failed: {e}"))?;
     writer
-        .write_image_data(&raster.pixels)
+        .write_image_data(pixels)
         .map_err(|e| format!("PNG encoding failed: {e}"))?;
     drop(writer);
     Ok(out.into_inner())
+}
+
+/// Mercator-space projection covering all stops and route geometry on the canvas.
+/// Extracted so `upload_map` can fetch a basemap for exactly the rendered extent.
+fn map_projection(points: &[Point], routes: &[RouteLine]) -> Projection {
+    let mut bounds: Vec<(f64, f64)> = points.iter().map(|p| mercator(p.lat, p.lon)).collect();
+    for r in routes {
+        bounds.extend(r.points.iter().map(|(lat, lon)| mercator(*lat, *lon)));
+    }
+    Projection::fit(&bounds, WIDTH as f64, HEIGHT as f64)
+}
+
+/// Web Mercator (EPSG:3857) bbox in metres covering the FULL canvas under this projection,
+/// so the returned ArcGIS export aligns 1:1 with canvas pixels. `Projection.min_x`/`max_y`
+/// hold the Mercator-space centre (see Projection::fit).
+fn basemap_bbox(p: &Projection) -> (f64, f64, f64, f64) {
+    let half_w = WIDTH as f64 / 2.0 / p.scale;
+    let half_h = HEIGHT as f64 / 2.0 / p.scale;
+    (
+        (p.min_x - half_w) * WEB_MERCATOR_R,
+        (p.max_y - half_h) * WEB_MERCATOR_R,
+        (p.min_x + half_w) * WEB_MERCATOR_R,
+        (p.max_y + half_h) * WEB_MERCATOR_R,
+    )
+}
+
+/// Fetch the ArcGIS static basemap covering the rendered canvas. Returns RGBA8 pixels
+/// (WIDTH*HEIGHT*4) on success, None when every endpoint fails or returns a non-image
+/// body (ArcGIS answers errors as JSON even on HTTP 200 — the PNG decode rejects those).
+async fn fetch_basemap(p: &Projection) -> Option<Vec<u8>> {
+    let (min_x, min_y, max_x, max_y) = basemap_bbox(p);
+    for base in ARCGIS_BASEMAPS {
+        let url = format!(
+            "{base}?bbox={min_x},{min_y},{max_x},{max_y}&bboxSR=3857&imageSR=3857&size={WIDTH},{HEIGHT}&format=png32&transparent=false&f=image"
+        );
+        let output = match Command::new("curl")
+            .args(["-sS", "--max-time", "30", "-H"])
+            .arg(format!("User-Agent: {USER_AGENT}"))
+            .arg(&url)
+            .output()
+        {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("   warn: ArcGIS basemap spawn failed ({e}); trying next basemap");
+                continue;
+            }
+        };
+        if !output.status.success() {
+            eprintln!(
+                "   warn: ArcGIS basemap at {base} exited {}; trying next basemap",
+                output.status
+            );
+            continue;
+        }
+        match decode_rgba_png(&output.stdout) {
+            Some(pixels) => return Some(pixels),
+            None => {
+                eprintln!("   warn: ArcGIS basemap at {base} returned a non-map body; trying next basemap");
+            }
+        }
+    }
+    eprintln!("   warn: no ArcGIS basemap available; falling back to the Overpass road web");
+    None
+}
+
+/// Decode a PNG body into RGBA8 pixels of exactly WIDTH×HEIGHT. Pure — unit-tested.
+fn decode_rgba_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut decoder = png::Decoder::new(Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.width != WIDTH || info.height != HEIGHT || info.bit_depth != BitDepth::Eight {
+        return None;
+    }
+    let px = (WIDTH * HEIGHT) as usize;
+    let buf = &buf[..info.buffer_size()];
+    match info.color_type {
+        ColorType::Rgba if buf.len() == px * 4 => Some(buf.to_vec()),
+        ColorType::Rgb if buf.len() == px * 3 => {
+            let mut out = vec![255u8; px * 4];
+            for i in 0..px {
+                out[i * 4..i * 4 + 3].copy_from_slice(&buf[i * 3..i * 3 + 3]);
+            }
+            Some(out)
+        }
+        ColorType::Grayscale if buf.len() == px => {
+            let mut out = vec![255u8; px * 4];
+            for i in 0..px {
+                out[i * 4..i * 4 + 3].copy_from_slice(&[buf[i]; 3]);
+            }
+            Some(out)
+        }
+        ColorType::GrayscaleAlpha if buf.len() == px * 2 => {
+            let mut out = vec![255u8; px * 4];
+            for i in 0..px {
+                out[i * 4..i * 4 + 3].copy_from_slice(&[buf[i * 2]; 3]);
+                out[i * 4 + 3] = buf[i * 2 + 1];
+            }
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 struct Projection {
@@ -641,6 +800,18 @@ impl Raster {
         }
         let i = (y as usize * self.w + x as usize) * 4;
         self.pixels[i..i + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
+    }
+    fn blit(&mut self, rgba: &[u8]) {
+        if rgba.len() == self.pixels.len() {
+            self.pixels.copy_from_slice(rgba);
+        }
+    }
+    fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: [u8; 3]) {
+        for yy in y..y + h {
+            for xx in x..x + w {
+                self.put(xx, yy, c);
+            }
+        }
     }
     fn grid(&mut self) {
         for y in 0..self.h {
@@ -1602,7 +1773,7 @@ fn parse_dest(args: &[String]) -> Result<Option<String>, String> {
 }
 fn print_usage() {
     println!(
-        "Usage:\n  travel snapshot-maps [--dest <slug>]\n\nRenders route diagrams directly in Rust from Turso itinerary and cached place data, uploads PNGs to the dashboard R2 bucket, and stamps map freshness. It does not fetch raster map tiles. Requires Wrangler authentication."
+        "Usage:\n  travel snapshot-maps [--dest <slug>]\n\nRenders route-diagram PNGs in Rust from Turso itinerary and cached place data, uploads them to the dashboard R2 bucket, and stamps map freshness. Geographic background: ArcGIS static basemap (Web Mercator export), falling back to an Overpass road web; it never fetches OSM raster tiles. Requires Wrangler authentication."
     );
 }
 fn err<T: std::fmt::Display>(ctx: &'static str) -> impl FnOnce(T) -> String {
@@ -1740,10 +1911,62 @@ mod tests {
             points: vec![(35.0, 135.0), (35.005, 135.008), (35.01, 135.01)],
             major: true,
         }];
-        let bare = render_png("T", &points, &[], &[], MapKind::Day).unwrap();
-        let with = render_png("T", &points, &[], &roads, MapKind::Day).unwrap();
+        let bare = render_png("T", &points, &[], &[], None, MapKind::Day).unwrap();
+        let with = render_png("T", &points, &[], &roads, None, MapKind::Day).unwrap();
         assert!(bare.len() >= MIN_PNG_BYTES && with.len() >= MIN_PNG_BYTES);
         assert_ne!(bare, with, "road web must visibly change the render");
+    }
+
+    #[test]
+    fn render_png_with_basemap_replaces_grid_background() {
+        let points = vec![
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing },
+        ];
+        let mut base = vec![255u8; (WIDTH * HEIGHT * 4) as usize];
+        for i in 0..(WIDTH * HEIGHT) as usize {
+            base[i * 4..i * 4 + 3].copy_from_slice(&[10, 20, 30]);
+        }
+        let grid = render_png("T", &points, &[], &[], None, MapKind::Day).unwrap();
+        let based = render_png("T", &points, &[], &[], Some(&base), MapKind::Day).unwrap();
+        assert!(based.len() >= MIN_PNG_BYTES);
+        assert_ne!(grid, based, "basemap must visibly change the render");
+        // A wrong-sized basemap is ignored rather than corrupting the render.
+        let wrong = render_png("T", &points, &[], &[], Some(&base[..16]), MapKind::Day).unwrap();
+        assert_eq!(grid, wrong);
+    }
+
+    #[test]
+    fn basemap_bbox_covers_full_canvas_in_mercator_meters() {
+        let points = vec![
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing },
+        ];
+        let p = map_projection(&points, &[]);
+        let (min_x, min_y, max_x, max_y) = basemap_bbox(&p);
+        // Symmetric around the projection centre (min_x/max_y fields hold the centre).
+        let cx = (min_x + max_x) / 2.0;
+        let cy = (min_y + max_y) / 2.0;
+        assert!((cx - p.min_x * WEB_MERCATOR_R).abs() < 1e-4, "cx {cx}");
+        assert!((cy - p.max_y * WEB_MERCATOR_R).abs() < 1e-4, "cy {cy}");
+        // Span = full canvas in Mercator units × sphere radius.
+        let span_x = (max_x - min_x) - WIDTH as f64 / p.scale * WEB_MERCATOR_R;
+        let span_y = (max_y - min_y) - HEIGHT as f64 / p.scale * WEB_MERCATOR_R;
+        assert!(span_x.abs() < 1e-4 && span_y.abs() < 1e-4, "{span_x} {span_y}");
+    }
+
+    #[test]
+    fn decode_rgba_png_roundtrips_and_rejects_bad_bodies() {
+        let pixels = vec![128u8; (WIDTH * HEIGHT * 4) as usize];
+        let bytes = encode_rgba_png(&pixels, WIDTH, HEIGHT).unwrap();
+        let decoded = decode_rgba_png(&bytes).expect("own encoder output must decode");
+        assert_eq!(decoded, pixels);
+        // ArcGIS error bodies are JSON (HTTP 200), HTML, or empty — all rejected.
+        assert!(decode_rgba_png(b"{\"error\":{\"code\":400}}").is_none());
+        assert!(decode_rgba_png(b"").is_none());
+        // Wrong-sized images are rejected (no rescaling — alignment would break).
+        let small = encode_rgba_png(&vec![0u8; 100 * 100 * 4], 100, 100).unwrap();
+        assert!(decode_rgba_png(&small).is_none());
     }
 
     fn poi(id: &str, title: &str, lat: f64, lon: f64) -> PoiRow {

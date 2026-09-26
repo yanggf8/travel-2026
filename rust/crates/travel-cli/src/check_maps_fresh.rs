@@ -147,6 +147,16 @@ pub struct ManifestRow {
     pub status: String,
 }
 
+/// A map without geographic context is not publishable, even if the PNG bytes
+/// and upload status look valid.
+pub fn effective_manifest_status(status: &str, has_roads: i64) -> String {
+    if has_roads == 1 {
+        status.to_string()
+    } else {
+        "failed".to_string()
+    }
+}
+
 /// Per-key classification for the map-artifact manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactClass {
@@ -348,14 +358,17 @@ async fn read_map_artifacts(
 ) -> Result<HashMap<String, ManifestRow>, String> {
     let mut rows = match conn
         .query(
-            "SELECT map_key, byte_size, status FROM map_artifacts WHERE plan_id = ?1",
+            "SELECT map_key, byte_size, status, has_roads FROM map_artifacts WHERE plan_id = ?1",
             libsql::params![plan_id.to_string()],
         )
         .await
     {
         Ok(r) => r,
         // Table not migrated yet → treat as empty manifest (advisory lint, never crash).
-        Err(e) if e.to_string().contains("no such table: map_artifacts") => {
+        Err(e)
+            if e.to_string().contains("no such table: map_artifacts")
+                || e.to_string().contains("no such column: has_roads") =>
+        {
             return Ok(HashMap::new());
         }
         Err(e) => return Err(format!("map_artifacts query failed: {e}")),
@@ -371,6 +384,8 @@ async fn read_map_artifacts(
             .map_err(|e| format!("map_key read failed: {e}"))?;
         let byte_size = row.get::<i64>(1).unwrap_or(0);
         let status = row.get::<String>(2).unwrap_or_default();
+        let has_roads = row.get::<i64>(3).unwrap_or_default();
+        let status = effective_manifest_status(&status, has_roads);
         out.insert(key, ManifestRow { byte_size, status });
     }
     Ok(out)
@@ -465,6 +480,13 @@ mod tests {
     }
 
     #[test]
+    fn artifact_without_geographic_background_is_failed() {
+        assert_eq!(effective_manifest_status("uploaded", 0), "failed");
+        assert_eq!(effective_manifest_status("uploaded", 1), "uploaded");
+        assert_eq!(effective_manifest_status("failed", 1), "failed");
+    }
+
+    #[test]
     fn format_completeness_line_okinawa_example() {
         let expected = expected_map_keys(&[1, 2, 3, 4, 5]);
         let m = manifest(&[
@@ -473,7 +495,7 @@ mod tests {
             ("day-3.png", 4000, "uploaded"),
         ]);
         let line = format_completeness_line("okinawa-2026", &expected, &m);
-        assert!(line.contains("okinawa-2026: maps 3/7 ok"));
+        assert!(line.contains("okinawa-2026: maps 2/7 ok"));
         assert!(line.contains("MISSING: plan-logistics.png, day-1.png, day-4.png, day-5.png"));
         assert!(line.contains("EMPTY: plan.png (run snapshot-maps)"));
     }
