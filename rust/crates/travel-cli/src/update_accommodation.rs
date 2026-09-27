@@ -36,7 +36,7 @@ impl Args {
     /// owned here — only values are bound.
     fn sets(&self) -> Vec<(&'static str, Value)> {
         let mut out: Vec<(&'static str, Value)> = Vec::new();
-        let mut text = |col: &'static str, v: &Option<String>, out: &mut Vec<(&'static str, Value)>| {
+        let text = |col: &'static str, v: &Option<String>, out: &mut Vec<(&'static str, Value)>| {
             if let Some(s) = v {
                 out.push((col, Value::Text(s.clone())));
             }
