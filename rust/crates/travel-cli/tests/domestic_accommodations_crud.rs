@@ -57,7 +57,8 @@ fn accommodation_crud_roundtrip() {
         }
     });
 
-    // 1. add-accommodation
+    // 1. add-accommodation — with the full decision-fact set, so a scraped
+    //    candidate is ONE mutation: price+read date, size, cancel deadline, stock.
     let (ok, stdout, stderr) = run(&[
         "add-accommodation",
         "--dest", dest,
@@ -65,6 +66,10 @@ fn accommodation_crud_roundtrip() {
         "--room-type", room,
         "--price", "3900",
         "--sea-view",
+        "--room-size", "42",
+        "--rooms-left", "2",
+        "--free-cancel-until", "2026-10-05",
+        "--price-source", "Booking.com",
     ]);
     if is_credless(&stderr) {
         eprintln!("credless on add-accommodation — skip");
@@ -79,6 +84,14 @@ fn accommodation_crud_roundtrip() {
         .expect("add-accommodation must print the new id")
         .to_string();
     assert!(id.starts_with("jiufen_"), "id should be dest-scoped: {id}");
+
+    // The add-time facts must land in the row (no follow-up update needed).
+    let facts = scalar(&format!(
+        "SELECT room_size_sqm || '/' || rooms_left || '/' || free_cancel_until || '/' || price_source \
+           || '/' || length(COALESCE(price_checked_at,'')) AS v \
+         FROM domestic_accommodations WHERE id = '{id}'"
+    ));
+    assert_eq!(facts.as_deref(), Some("42/2/2026-10-05/Booking.com/10"), "add-time decision facts: {facts:?}");
 
     // add again → idempotent dedup (exit 0, "already exists", still one row)
     let (ok2, stdout2, stderr2) = run(&[

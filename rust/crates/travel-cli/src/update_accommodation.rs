@@ -103,7 +103,7 @@ fn usage() -> &'static str {
 }
 
 /// `YYYY-MM-DD` shape check — a malformed date would render as garbage on the page.
-fn valid_date(s: &str) -> bool {
+pub(crate) fn valid_date(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 10
         && b[4] == b'-'
@@ -114,7 +114,7 @@ fn valid_date(s: &str) -> bool {
             .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
-fn today() -> String {
+pub(crate) fn today() -> String {
     // Local date without pulling in chrono: the CLI already links time via libsql,
     // but a plain UTC date is enough for a "checked on" stamp.
     let secs = std::time::SystemTime::now()
@@ -233,13 +233,13 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-fn val(raw: &[String], i: usize, flag: &str) -> Result<String, String> {
+pub(crate) fn val(raw: &[String], i: usize, flag: &str) -> Result<String, String> {
     raw.get(i + 1)
         .cloned()
         .ok_or_else(|| format!("{flag} requires a value"))
 }
 
-fn int(raw: &[String], i: usize, flag: &str, min: i64) -> Result<i64, String> {
+pub(crate) fn int(raw: &[String], i: usize, flag: &str, min: i64) -> Result<i64, String> {
     let v = val(raw, i, flag)?;
     let n: i64 = v
         .parse()
@@ -250,7 +250,7 @@ fn int(raw: &[String], i: usize, flag: &str, min: i64) -> Result<i64, String> {
     Ok(n)
 }
 
-fn date(raw: &[String], i: usize, flag: &str) -> Result<String, String> {
+pub(crate) fn date(raw: &[String], i: usize, flag: &str) -> Result<String, String> {
     let v = val(raw, i, flag)?;
     if !valid_date(&v) {
         return Err(format!("{flag} must be YYYY-MM-DD"));

@@ -149,6 +149,14 @@ pub struct NewDomesticAccommodation {
     pub source: Option<String>,
     pub image_url: Option<String>,
     pub booking_url: Option<String>,
+    /// Optional decision facts, same columns update-accommodation writes. A rate
+    /// quoted at add time must carry its read date — the CLI stamps
+    /// price_checked_at = today when --price-source is given without --price-checked.
+    pub room_size_sqm: Option<i64>,
+    pub price_source: Option<String>,
+    pub price_checked_at: Option<String>,
+    pub free_cancel_until: Option<String>,
+    pub rooms_left: Option<i64>,
 }
 
 /// INSERT OR IGNORE one row. Returns affected rows: 1 = inserted, 0 = id already
@@ -156,8 +164,8 @@ pub struct NewDomesticAccommodation {
 pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result<u64, String> {
     conn.execute(
         "INSERT OR IGNORE INTO domestic_accommodations \
-         (id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'TWD', ?8, ?9, ?10, ?11, datetime('now'))",
+         (id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'TWD', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'))",
         libsql::params![
             row.id.clone(),
             row.destination.clone(),
@@ -170,6 +178,11 @@ pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result
             row.source.clone(),
             row.image_url.clone(),
             row.booking_url.clone(),
+            row.room_size_sqm,
+            row.price_source.clone(),
+            row.price_checked_at.clone(),
+            row.free_cancel_until.clone(),
+            row.rooms_left,
         ],
     )
     .await

@@ -1,6 +1,14 @@
 // `travel add-accommodation --dest <slug> --hotel <name> --room-type <type> --price <twd>
-//   [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast]`
+//   [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast]
+//   [--room-size <sqm>] [--rooms-left <n>] [--free-cancel-until YYYY-MM-DD]
+//   [--price-source <name>] [--price-checked YYYY-MM-DD]`
 // — add one `domestic_accommodations` row (Taiwan domestic stay reference data).
+//
+// The decision-fact flags mirror update-accommodation's so a candidate scraped off
+// an OTA page is ONE mutation, not add-then-update: splitting the write is how a
+// half-recorded candidate (price with no read date, cancel deadline assumed rather
+// than read) ends up as wrong data that a later verification pass has to catch.
+// `--price-source` without `--price-checked` stamps today — same rule as update.
 //
 // Slug-keyed GLOBAL reference data — NO --plan-id, NO audit triad (same family as
 // add-transit / add-omiyage). The slug is validated against destination_config
@@ -25,6 +33,11 @@ struct Args {
     booking_url: Option<String>,
     sea_view: bool,
     breakfast: bool,
+    room_size: Option<i64>,
+    rooms_left: Option<i64>,
+    free_cancel_until: Option<String>,
+    price_source: Option<String>,
+    price_checked: Option<String>,
 }
 
 pub async fn run(raw: &[String]) -> Result<(), String> {
@@ -55,12 +68,17 @@ pub async fn run(raw: &[String]) -> Result<(), String> {
         source: Some("manual".to_string()),
         image_url: args.image_url.clone(),
         booking_url: args.booking_url.clone(),
+        room_size_sqm: args.room_size,
+        price_source: args.price_source.clone(),
+        price_checked_at: args.price_checked.clone(),
+        free_cancel_until: args.free_cancel_until.clone(),
+        rooms_left: args.rooms_left,
     };
 
     let affected = insert(&conn, &row).await?;
     if affected == 0 {
         println!("Accommodation already exists (id={id}) — nothing added.");
-        println!("Next: update links via `travel update-accommodation --id {id} [--image-url <url>] [--booking-url <url>]`.");
+        println!("Next: update facts via `travel update-accommodation --id {id} [--image-url <url>] [--price <twd>] ...`.");
         return Ok(());
     }
 
@@ -69,6 +87,18 @@ pub async fn run(raw: &[String]) -> Result<(), String> {
         args.hotel, args.room_type, args.price, args.dest
     );
     println!("  id: {id}");
+    if let Some(n) = args.room_size {
+        println!("  room size: {n}m²");
+    }
+    if let Some(s) = &args.price_source {
+        println!("  price source: {s} (checked {})", args.price_checked.as_deref().unwrap_or("?"));
+    }
+    if let Some(d) = &args.free_cancel_until {
+        println!("  free cancel until: {d}");
+    }
+    if let Some(n) = args.rooms_left {
+        println!("  rooms left: {n}");
+    }
     if args.image_url.is_none() {
         println!("  image: (none) — add via `travel update-accommodation --id {id} --image-url <url>`");
     }
@@ -98,11 +128,16 @@ fn fnv1a64(s: &str) -> u64 {
 
 fn usage() -> &'static str {
     "Usage:\n  travel add-accommodation --dest <slug> --hotel <name> --room-type <type> --price <twd> \
-     [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast]\n  \
-     (slug-keyed reference data — no --plan-id; idempotent on the same dest|hotel|room|price)"
+     [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast] \
+     [--room-size <sqm>] [--rooms-left <n>] [--free-cancel-until <YYYY-MM-DD>] \
+     [--price-source <name>] [--price-checked <YYYY-MM-DD>]\n  \
+     (slug-keyed reference data — no --plan-id; idempotent on the same dest|hotel|room|price.\n  \
+      --price-source without --price-checked stamps today, so a quoted rate always carries its read date.)"
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
+    use crate::update_accommodation::{date, int};
+
     let mut dest: Option<String> = None;
     let mut hotel: Option<String> = None;
     let mut room_type: Option<String> = None;
@@ -111,6 +146,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut booking_url: Option<String> = None;
     let mut sea_view = false;
     let mut breakfast = false;
+    let mut room_size: Option<i64> = None;
+    let mut rooms_left: Option<i64> = None;
+    let mut free_cancel_until: Option<String> = None;
+    let mut price_source: Option<String> = None;
+    let mut price_checked: Option<String> = None;
     let mut i = 0;
     while i < raw.len() {
         let k = raw[i].as_str();
@@ -158,6 +198,30 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 booking_url = Some(val(raw, i, k)?);
                 i += 2;
             }
+            "--room-size" | "--sqm" => {
+                room_size = Some(int(raw, i, k, 1)?);
+                i += 2;
+            }
+            "--rooms-left" => {
+                rooms_left = Some(int(raw, i, k, 0)?);
+                i += 2;
+            }
+            "--free-cancel-until" => {
+                free_cancel_until = Some(date(raw, i, k)?);
+                i += 2;
+            }
+            "--price-source" => {
+                let v = val(raw, i, k)?;
+                if v.trim().is_empty() {
+                    return Err("--price-source cannot be empty".to_string());
+                }
+                price_source = Some(v);
+                i += 2;
+            }
+            "--price-checked" | "--price-checked-at" => {
+                price_checked = Some(date(raw, i, k)?);
+                i += 2;
+            }
             "--sea-view" => {
                 sea_view = true;
                 i += 1;
@@ -183,6 +247,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let hotel = hotel.ok_or_else(|| "--hotel <name> is required".to_string())?;
     let room_type = room_type.ok_or_else(|| "--room-type <type> is required".to_string())?;
     let price = price.ok_or_else(|| "--price <twd> is required".to_string())?;
+    // A quoted rate is only meaningful with the date it was read — same rule as
+    // update-accommodation, applied at add time so the first row is already complete.
+    if price_source.is_some() && price_checked.is_none() {
+        price_checked = Some(crate::update_accommodation::today());
+    }
     Ok(Args {
         dest,
         hotel,
@@ -192,6 +261,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         booking_url,
         sea_view,
         breakfast,
+        room_size,
+        rooms_left,
+        free_cancel_until,
+        price_source,
+        price_checked,
     })
 }
 
@@ -221,6 +295,8 @@ mod tests {
         assert!(o.image_url.is_none());
         assert!(o.booking_url.is_none());
         assert!(!o.sea_view);
+        assert!(o.room_size.is_none());
+        assert!(o.price_source.is_none());
     }
 
     #[test]
@@ -234,6 +310,63 @@ mod tests {
         assert_eq!(o.booking_url.as_deref(), Some("https://book"));
         assert!(o.sea_view);
         assert!(o.breakfast);
+    }
+
+    #[test]
+    fn parses_decision_facts_in_one_command() {
+        let o = parse_args(&a(&[
+            "--dest", "jiufen", "--hotel", "不厭晴", "--room-type", "海景豪華四人房（附陽台）",
+            "--price", "5800", "--sea-view", "--room-size", "45", "--rooms-left", "3",
+            "--free-cancel-until", "2026-10-05", "--price-source", "Booking.com",
+            "--price-checked", "2026-09-27",
+        ]))
+        .unwrap();
+        assert_eq!(o.room_size, Some(45));
+        assert_eq!(o.rooms_left, Some(3));
+        assert_eq!(o.free_cancel_until.as_deref(), Some("2026-10-05"));
+        assert_eq!(o.price_source.as_deref(), Some("Booking.com"));
+        assert_eq!(o.price_checked.as_deref(), Some("2026-09-27"));
+    }
+
+    #[test]
+    fn price_source_stamps_today_when_no_date_given() {
+        let o = parse_args(&a(&[
+            "--dest", "jiufen", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--price-source", "Booking.com",
+        ]))
+        .unwrap();
+        let d = o.price_checked.expect("price_checked must be stamped");
+        assert!(crate::update_accommodation::valid_date(&d), "stamped date must be YYYY-MM-DD: {d}");
+        assert!(d >= "2026-01-01".to_string(), "sane stamp: {d}");
+    }
+
+    #[test]
+    fn rooms_left_zero_is_allowed_but_negative_is_not() {
+        assert_eq!(
+            parse_args(&a(&["--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1", "--rooms-left", "0"]))
+                .unwrap()
+                .rooms_left,
+            Some(0)
+        );
+        assert!(parse_args(&a(&["--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1", "--rooms-left", "-1"]))
+            .unwrap_err()
+            .contains(">= 0"));
+    }
+
+    #[test]
+    fn rejects_bad_date_facts() {
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--free-cancel-until", "2026/10/05",
+        ]))
+        .unwrap_err()
+        .contains("YYYY-MM-DD"));
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--price-checked", "09-27",
+        ]))
+        .unwrap_err()
+        .contains("YYYY-MM-DD"));
     }
 
     #[test]
