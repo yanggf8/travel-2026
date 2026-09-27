@@ -31,12 +31,11 @@ async fn list_plans() -> Result<Vec<PlanSummary>, String> {
             "SELECT pm.plan_id, pm.active_destination,
                     da.destination, da.start_date, da.end_date,
                     p1.set_out_date AS window_start, p1.return_date AS window_end
-             FROM plan_metadata pm
+             FROM plans p
+             JOIN plan_metadata pm ON pm.plan_id = p.plan_id
              LEFT JOIN date_anchors da ON da.plan_id = pm.plan_id
              LEFT JOIN plan_root_date_anchor p1 ON p1.plan_id = pm.plan_id
-             WHERE pm.plan_id NOT IN (
-                 SELECT plan_id FROM plans WHERE deleted_at IS NOT NULL
-             )
+             WHERE p.deleted_at IS NULL
              ORDER BY pm.updated_at DESC, da.start_date ASC",
             (),
         )
