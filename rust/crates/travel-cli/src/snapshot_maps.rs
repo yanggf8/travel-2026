@@ -1530,25 +1530,31 @@ async fn query_domestic_stay(
 pub(crate) async fn geocode_context(c: &Connection, d: &str) -> Result<String, String> {
     let mut r = c
         .query(
-            "SELECT display_name FROM destination_config WHERE slug=?1 LIMIT 1",
+            "SELECT display_name, currency FROM destination_config WHERE slug=?1 LIMIT 1",
             params![d.to_string()],
         )
         .await
         .map_err(err("destination context query"))?;
-    let display = if let Some(x) = r.next().await.map_err(err("destination context read"))? {
-        x.get::<Option<String>>(0)
-            .ok()
-            .flatten()
-            .unwrap_or_default()
+    let (display, currency) = if let Some(x) = r.next().await.map_err(err("destination context read"))? {
+        (
+            x.get::<Option<String>>(0)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+            x.get::<Option<String>>(1)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        )
     } else {
-        String::new()
+        (String::new(), String::new())
     };
     if d.to_ascii_lowercase().contains("kyoto") {
         Ok("Kyoto, Japan".into())
     } else if !display.is_empty() {
-        Ok(format!("{display}, Japan"))
+        Ok(format!("{display}, {}", country_for(&currency)))
     } else {
-        Ok("Japan".into())
+        Ok(country_for(&currency).to_string())
     }
 }
 async fn load_geocodes(c: &Connection) -> Result<HashMap<String, (f64, f64)>, String> {
@@ -1769,6 +1775,17 @@ async fn resolve_place(
     cache.insert(key, (lat, lon));
     Ok(Some((lat, lon)))
 }
+/// Country suffix for Nominatim search context, from the destination's
+/// currency (the same signal that classifies a plan as domestic). The old
+/// code hardcoded ", Japan" — a Taiwan trip then searched "淡水, 九份, Japan"
+/// and every such lookup missed.
+pub(crate) fn country_for(currency: &str) -> &'static str {
+    match currency.trim().to_ascii_uppercase().as_str() {
+        "TWD" => "Taiwan",
+        _ => "Japan",
+    }
+}
+
 pub(crate) fn normalize_place(place: &str, context: &str) -> (String, String) {
     match place.trim() {
         "KIX" | "KIX T1" | "KIX T2" => {
@@ -2055,6 +2072,14 @@ mod tests {
             from,
             to,
         }
+    }
+
+    #[test]
+    fn country_for_maps_currency_to_country() {
+        assert_eq!(country_for("TWD"), "Taiwan");
+        assert_eq!(country_for("twd"), "Taiwan");
+        assert_eq!(country_for("JPY"), "Japan");
+        assert_eq!(country_for(""), "Japan");
     }
 
     #[test]
