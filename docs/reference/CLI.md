@@ -136,6 +136,19 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 #   rename refreshes legend rows without re-rendering. Skip/fail runs leave previous rows in place (the
 #   previous PNG is still served from R2). A bare generic "hotel" segment endpoint resolves to the plan's
 #   unique hotel (hotels.name), not an arbitrary Nominatim hotel hit.
+./bin/travel road-leg list                        # READ-ONLY plain-text table of every cached OSRM road leg (distance/points/fetched_at, newest first) — the geometry snapshot-maps draws.
+./bin/travel road-leg refetch --from <place|lat,lon> --to <place|lat,lon> [--via "<a;b;c>"] [--dest <slug>]
+                                                   # Re-fetch one leg's road geometry from OSRM and overwrite the cache under the
+                                                   # SAME 5-dp leg key (an existing leg matching both endpoints keeps its exact
+                                                   # endpoints, so itinerary stop pairs keep their exact-key hit). --via waypoints
+                                                   # (place names or lat,lon, semicolon-separated, IN ORDER between from/to) force a
+                                                   # specific road: OSRM always returns its FASTEST path, so re-fetching without
+                                                   # vias reproduces the same road (the 金山→淡水 regression — text said 台2 coastal,
+                                                   # the cached polyline still cut through 陽明山). Place tokens resolve as
+                                                   # lat,lon literal → destination POI (needs --dest) → route_place_geocodes cache →
+                                                   # Nominatim (needs --dest; pin unresolvable labels with set-place-geocode).
+                                                   # Global OSRM-derived cache data — NO --plan-id, NO audit triad. Run
+                                                   # `snapshot-maps` afterwards to re-render the map.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
 ./bin/travel set-poi-title <slug> <poi_id> <title> [--segments]
                                                    # Rename a POI title (localization: English seed → Chinese/Japanese).

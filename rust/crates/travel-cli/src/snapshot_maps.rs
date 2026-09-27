@@ -97,11 +97,11 @@ struct RouteLine {
 }
 
 #[derive(Clone, Debug)]
-struct PoiRow {
-    poi_id: String,
-    title: String,
-    lat: f64,
-    lon: f64,
+pub(crate) struct PoiRow {
+    pub(crate) poi_id: String,
+    pub(crate) title: String,
+    pub(crate) lat: f64,
+    pub(crate) lon: f64,
 }
 
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
@@ -1064,10 +1064,10 @@ fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
 }
 
 /// One cached ok leg's endpoints (geometry points are pulled per matched key).
-struct LegRow {
-    key: String,
-    from: (f64, f64),
-    to: (f64, f64),
+pub(crate) struct LegRow {
+    pub(crate) key: String,
+    pub(crate) from: (f64, f64),
+    pub(crate) to: (f64, f64),
 }
 
 /// Nominatim answers drift between the leg-fetch run and the render run (limit=1
@@ -1077,7 +1077,7 @@ struct LegRow {
 /// MATCH_RADIUS_M of the stop pair; the closest such leg wins. Exact key first.
 const MATCH_RADIUS_M: f64 = 500.0;
 
-fn match_leg<'a>(legs: &'a [LegRow], from: (f64, f64), to: (f64, f64)) -> Option<&'a LegRow> {
+pub(crate) fn match_leg<'a>(legs: &'a [LegRow], from: (f64, f64), to: (f64, f64)) -> Option<&'a LegRow> {
     legs.iter()
         .filter(|l| {
             haversine_m(l.from, from) <= MATCH_RADIUS_M && haversine_m(l.to, to) <= MATCH_RADIUS_M
@@ -1244,15 +1244,17 @@ fn anchor_to_stops(
 
 /// OSRM demo-router URL for one driving leg. OSRM wants {lon},{lat}; every key
 /// and geometry stored in this project is (lat, lon) — the flip happens only
-/// here and back again after parsing.
-fn osrm_url(from: (f64, f64), to: (f64, f64)) -> String {
-    format!(
-        "https://router.project-osrm.org/route/v1/driving/{lon1:.6},{lat1:.6};{lon2:.6},{lat2:.6}?overview=full&geometries=geojson",
-        lon1 = from.1,
-        lat1 = from.0,
-        lon2 = to.1,
-        lat2 = to.0
-    )
+/// here and back again after parsing. `via` waypoints (in order, between from
+/// and to) force the router off its default fastest path — that is the ONLY way
+/// a leg like 金山→淡水 becomes the 台2 coastal route instead of the mountain
+/// shortcut OSRM prefers (re-fetching without waypoints returns the same road).
+pub(crate) fn osrm_url(from: (f64, f64), to: (f64, f64), via: &[(f64, f64)]) -> String {
+    let mut coords = String::new();
+    for (lat, lon) in std::iter::once(from).chain(via.iter().copied()) {
+        coords.push_str(&format!("{lon:.6},{lat:.6};"));
+    }
+    coords.push_str(&format!("{:.6},{:.6}", to.1, to.0));
+    format!("https://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=geojson")
 }
 
 /// Fetch road-following geometry for one leg from the OSRM demo router and
@@ -1260,10 +1262,14 @@ fn osrm_url(from: (f64, f64), to: (f64, f64)) -> String {
 /// port of the old Tier-2 renderer could only READ this cache, so any leg
 /// nobody had cached yet (every new trip) rendered as a straight line; a
 /// cache miss now fetches once and persists, keeping later renders offline.
-async fn fetch_osrm_leg(
+/// Shared with `road_leg refetch` — the CLI surface for replacing a cached leg
+/// (e.g. forcing the coastal route). `via` is empty for the snapshot-maps
+/// cache-miss path and ordered waypoints for a directed re-fetch.
+pub(crate) async fn fetch_osrm_leg(
     write: &Connection,
     from: (f64, f64),
     to: (f64, f64),
+    via: Vec<(f64, f64)>,
 ) -> Result<Vec<(f64, f64)>, String> {
     let key = format!(
         "{:.5},{:.5}>{:.5},{:.5}|osrm-demo|driving",
@@ -1271,7 +1277,7 @@ async fn fetch_osrm_leg(
     );
     thread::sleep(Duration::from_millis(1100)); // demo router: stay a polite caller
     let output = Command::new("curl")
-        .args(["-sS", "--max-time", "20", &osrm_url(from, to)])
+        .args(["-sS", "--max-time", "20", &osrm_url(from, to, &via)])
         .output()
         .map_err(|e| format!("OSRM request failed: {e}"))?;
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
@@ -1427,7 +1433,7 @@ async fn cached_routes(
             if let Some(pts) = live.get(&live_key) {
                 road = pts.clone();
             } else {
-                match fetch_osrm_leg(w, f, t).await {
+                match fetch_osrm_leg(w, f, t, vec![]).await {
                     Ok(pts) => {
                         live.insert(live_key, pts.clone());
                         road = pts;
@@ -1491,7 +1497,7 @@ async fn query_pois(
     }
     Ok(v)
 }
-async fn query_destination_pois(c: &Connection, d: &str) -> Result<Vec<PoiRow>, String> {
+pub(crate) async fn query_destination_pois(c: &Connection, d: &str) -> Result<Vec<PoiRow>, String> {
     let mut r = c
         .query(
             "SELECT poi_id, title, lat, lon FROM destination_pois WHERE slug=?1 AND lat IS NOT NULL AND lon IS NOT NULL",
@@ -1592,7 +1598,7 @@ pub(crate) async fn geocode_context(c: &Connection, d: &str) -> Result<String, S
         Ok(country_for(&currency).to_string())
     }
 }
-async fn load_geocodes(c: &Connection) -> Result<HashMap<String, (f64, f64)>, String> {
+pub(crate) async fn load_geocodes(c: &Connection) -> Result<HashMap<String, (f64, f64)>, String> {
     let mut r=c.query("SELECT raw_place, lat, lon FROM route_place_geocodes WHERE lat IS NOT NULL AND lon IS NOT NULL",params![]).await.map_err(err("geocode cache query"))?;
     let mut m = HashMap::new();
     while let Some(x) = r.next().await.map_err(err("geocode cache read"))? {
@@ -1670,7 +1676,7 @@ fn keys_of(s: &str) -> Vec<String> {
     keys
 }
 
-fn match_poi(label: &str, pois: &[PoiRow]) -> Option<(f64, f64)> {
+pub(crate) fn match_poi(label: &str, pois: &[PoiRow]) -> Option<(f64, f64)> {
     let wanted: HashSet<String> = keys_of(label).into_iter().collect();
     if wanted.is_empty() {
         return None;
@@ -1725,7 +1731,7 @@ fn display_label(label: &str, hotel_names: &[String]) -> String {
     match_hotel(label, hotel_names).unwrap_or_else(|| label.to_string())
 }
 
-async fn resolve_place(
+pub(crate) async fn resolve_place(
     read: &Connection,
     write: &Connection,
     place: &str,
@@ -2120,10 +2126,26 @@ mod tests {
     #[test]
     fn osrm_url_flips_to_lon_lat() {
         // 九份海論 → 野柳: storage is (lat, lon); OSRM wants {lon},{lat}.
-        let u = osrm_url((25.1103, 121.8451), (25.2113, 121.6964));
+        let u = osrm_url((25.1103, 121.8451), (25.2113, 121.6964), &[]);
         assert!(
             u.starts_with(
                 "https://router.project-osrm.org/route/v1/driving/121.845100,25.110300;121.696400,25.211300?"
+            ),
+            "got {u}"
+        );
+    }
+
+    #[test]
+    fn osrm_url_appends_via_waypoints_in_order() {
+        // 金山 → 石門 → 三芝 → 淡水 (coastal 台2): vias sit between the endpoints.
+        let u = osrm_url(
+            (25.2219, 121.6362),
+            (25.1727, 121.4377),
+            &[(25.2897, 121.5690), (25.2317, 121.5018)],
+        );
+        assert!(
+            u.starts_with(
+                "https://router.project-osrm.org/route/v1/driving/121.636200,25.221900;121.569000,25.289700;121.501800,25.231700;121.437700,25.172700?"
             ),
             "got {u}"
         );

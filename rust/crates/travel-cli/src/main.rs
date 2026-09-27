@@ -100,6 +100,7 @@ mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 mod snapshot_maps;      // snapshot-maps (Turso → Rust PNG renderer → R2)
+mod road_leg;           // road-leg list|refetch — OSRM road-geometry cache management
 mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
 mod clear_accommodation; // clear-accommodation — cancel domestic accommodation (P4 -> selecting)
 mod list_accommodations; // list-accommodations — list domestic_accommodations (slug-keyed, no --plan-id)
@@ -697,6 +698,11 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             snapshot_maps::run(rest, plan_id).await?;
             Ok(())
         }
+        // OSRM road-geometry cache management (global, no --plan-id).
+        [cmd, rest @ ..] if cmd == "road-leg" => {
+            road_leg::run(rest).await?;
+            Ok(())
+        }
 
         // ── P1 Rust-port dispatch (pre-wired; modules filled per batch) ──
 
@@ -991,6 +997,7 @@ VALIDATE / CHECKS\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
   set-poi-title <slug> <poi_id> <title> [--segments]  (rename a POI title, optionally matching segment labels too)\n\
   set-place-geocode \"<place>\" --lat N --lon N (--dest slug|--context ctx)  (manually pin a label Nominatim can't resolve)\n\
+  road-leg {{list|refetch --from <p|lat,lon> --to <p|lat,lon> [--via a;b] [--dest slug]}}  (OSRM road cache; --via forces a specific road)\n\
   add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
   add-accommodation | update-accommodation --id <id> [--image-url u] [--booking-url u] | delete-accommodation --id <id>  (domestic stay reference data; no --plan-id)\n\
   add-accommodation-image --id <id> --url <u> [--label t] | delete-accommodation-image --id <id> (--url u | --all)  (candidate gallery; no --plan-id)\n\
