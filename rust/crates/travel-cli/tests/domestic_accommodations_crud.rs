@@ -70,6 +70,7 @@ fn accommodation_crud_roundtrip() {
         "--rooms-left", "2",
         "--free-cancel-until", "2026-10-05",
         "--price-source", "Booking.com",
+        "--bathtub", "no",
     ]);
     if is_credless(&stderr) {
         eprintln!("credless on add-accommodation — skip");
@@ -88,10 +89,10 @@ fn accommodation_crud_roundtrip() {
     // The add-time facts must land in the row (no follow-up update needed).
     let facts = scalar(&format!(
         "SELECT room_size_sqm || '/' || rooms_left || '/' || free_cancel_until || '/' || price_source \
-           || '/' || length(COALESCE(price_checked_at,'')) AS v \
+           || '/' || length(COALESCE(price_checked_at,'')) || '/' || COALESCE(has_bathtub, 'null') AS v \
          FROM domestic_accommodations WHERE id = '{id}'"
     ));
-    assert_eq!(facts.as_deref(), Some("42/2/2026-10-05/Booking.com/10"), "add-time decision facts: {facts:?}");
+    assert_eq!(facts.as_deref(), Some("42/2/2026-10-05/Booking.com/10/0"), "add-time decision facts: {facts:?}");
 
     // add again → idempotent dedup (exit 0, "already exists", still one row)
     let (ok2, stdout2, stderr2) = run(&[
@@ -136,6 +137,40 @@ fn accommodation_crud_roundtrip() {
         "SELECT booking_url AS v FROM domestic_accommodations WHERE id = '{id}'"
     ));
     assert_eq!(book.as_deref(), Some("https://agoda.com/example"));
+
+    // 4b. bathtub is tri-state on update: --bathtub yes flips the verified fact.
+    let (ok, stdout, stderr) = run(&["update-accommodation", "--id", &id, "--bathtub", "yes"]);
+    assert!(ok, "update-accommodation --bathtub should succeed; stdout={stdout} stderr={stderr}");
+    let tub = scalar(&format!(
+        "SELECT has_bathtub AS v FROM domestic_accommodations WHERE id = '{id}'"
+    ));
+    assert_eq!(tub.as_deref(), Some("1"), "verified bathtub flips to 1: {tub:?}");
+
+    // 4c. --lat/--lon write the minimap coordinates (pair-only; clear via `clear`).
+    let (ok, stdout, stderr) = run(&[
+        "update-accommodation", "--id", &id, "--lat", "25.1330327", "--lon", "121.807191",
+    ]);
+    assert!(ok, "update-accommodation --lat/--lon should succeed; stdout={stdout} stderr={stderr}");
+    let ll = scalar(&format!(
+        "SELECT latitude || ',' || longitude AS v FROM domestic_accommodations WHERE id = '{id}'"
+    ));
+    assert!(
+        ll.as_deref().unwrap_or_default().starts_with("25.1330327,121.807191"),
+        "coords persisted: {ll:?}"
+    );
+    // Half a pair fails loud — a minimap centered on one axis alone is wrong data.
+    let (ok, _, stderr) = run(&["update-accommodation", "--id", &id, "--lat", "25.1"]);
+    assert!(!ok, "--lat without --lon must fail");
+    assert!(stderr.contains("together"), "stderr: {stderr}");
+    // clear returns both columns to NULL.
+    let (ok, _, stderr) = run(&[
+        "update-accommodation", "--id", &id, "--lat", "clear", "--lon", "clear",
+    ]);
+    assert!(ok, "coord clear should succeed; stderr={stderr}");
+    let nulled = scalar(&format!(
+        "SELECT (latitude IS NULL) || ',' || (longitude IS NULL) AS v FROM domestic_accommodations WHERE id = '{id}'"
+    ));
+    assert_eq!(nulled.as_deref(), Some("1,1"), "coords cleared to NULL: {nulled:?}");
 
     // 5. update/delete on an unknown id fail loud (exit 1)
     let (ok, _, stderr) = run(&[

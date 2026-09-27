@@ -146,13 +146,26 @@ fn print_table(
         println!("\nDecision facts (rendered on the dashboard card):");
         for r in rows.iter().filter(|r| has_decision_facts(r)) {
             println!(
-                "  {} — size={} rooms_left={} free_cancel_until={} price_source={} price_checked={}",
+                "  {} — size={} rooms_left={} free_cancel_until={} price_source={} price_checked={} bathtub={} rank={}",
                 r.hotel_name,
                 num(&r.room_size_sqm, "m²"),
                 num(&r.rooms_left, ""),
                 opt(&r.free_cancel_until),
                 opt(&r.price_source),
                 opt(&r.price_checked_at),
+                bathtub(&r.has_bathtub),
+                num(&r.ranking, ""),
+            );
+            // The comparison content the 推薦排序 block renders — shown in full
+            // because this is exactly what the agent is asked to provide.
+            if let Some(n) = &r.notes {
+                println!("      notes: {n}");
+            }
+        }
+        if rows.iter().any(|r| r.notes.is_none() || r.ranking.is_none()) {
+            println!(
+                "\n💡 有候選缺少比較內容（notes=優劣與推薦理由、rank=推薦順位）—— \
+                 `travel update-accommodation --id <id> --notes \"...\" --rank <n|0=清除>`"
             );
         }
     }
@@ -167,6 +180,18 @@ fn has_decision_facts(
         || r.free_cancel_until.is_some()
         || r.price_source.is_some()
         || r.price_checked_at.is_some()
+        || r.has_bathtub.is_some()
+        || r.ranking.is_some()
+        || r.notes.is_some()
+}
+
+/// NULL = 未查（不可當成「沒有」）；1 = 有浴缸；0 = 查過、無浴缸。
+fn bathtub(v: &Option<i64>) -> &'static str {
+    match *v {
+        Some(1) => "yes",
+        Some(_) => "no",
+        None => "?",
+    }
 }
 
 fn opt(v: &Option<String>) -> String {
@@ -226,5 +251,12 @@ mod tests {
     fn rejects_plan_id() {
         let e = parse_args(&a(&["--dest", "jiufen", "--plan-id", "x"])).unwrap_err();
         assert!(e.contains("no --plan-id"));
+    }
+
+    #[test]
+    fn bathtub_renders_three_states() {
+        assert_eq!(bathtub(&Some(1)), "yes");
+        assert_eq!(bathtub(&Some(0)), "no");
+        assert_eq!(bathtub(&None), "?"); // unverified ≠ no
     }
 }

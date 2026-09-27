@@ -338,6 +338,131 @@ fn date_only(s: &str) -> &str {
     s.split_whitespace().next().unwrap_or(s)
 }
 
+/// Per-candidate location minimap: ArcGIS World Street Map static export with
+/// the stay's 📍 AND the trip's itinerary points (plan.png legend stops) as
+/// small labeled dots — the position only means something RELATIVE to the trip's
+/// own places (九份老街/野柳/金山/淡水 for jiufen), which a tight stay-centered
+/// street grid hides. The bbox covers stay + stops; pins are positioned by
+/// Mercator math over the known bbox (the ArcGIS `marker` param is silently
+/// ignored, verified). Never requests OSM raster tiles (tile policy) — same
+/// sanctioned ArcGIS static basemap the route snapshots composite. Keep the
+/// © Esri credit whenever this renders.
+fn candidate_minimap(
+    c: &crate::model::DomesticCandidate,
+    lat: f64,
+    lon: f64,
+    stops: &[crate::model::PoiStop],
+    lang: &str,
+) -> String {
+    // ---- bbox: cover the stay + every reference stop (pad 12%), then force
+    // the lon/lat span ratio to the 300:200 image aspect (1.5/cos(lat)) so the
+    // export maps the bbox exactly onto the image with no letterboxing — the
+    // percentage-positioned pins then land on the right pixels.
+    let lat_span_min = 0.0032; // stay-only fallback: ~355 m tall, enough context
+    let (mut lat_min, mut lat_max) = (lat, lat);
+    let (mut lon_min, mut lon_max) = (lon, lon);
+    for s in stops {
+        lat_min = lat_min.min(s.lat);
+        lat_max = lat_max.max(s.lat);
+        lon_min = lon_min.min(s.lon);
+        lon_max = lon_max.max(s.lon);
+    }
+    let lat_mid = (lat_min + lat_max) / 2.0;
+    let pad = 0.12;
+    let aspect = 1.5 / lat_mid.to_radians().cos(); // lon_span / lat_span for square ground pixels
+    // Minimal spans that cover the padded bounds in BOTH dims while holding
+    // the 1.5/cos(lat) lon/lat ratio (expanding only lon would not cover a
+    // north-south-spread set, and vice versa).
+    let (lat_span, lon_span) = {
+        let need_lat = (lat_max - lat_min) * (1.0 + 2.0 * pad);
+        let need_lon = (lon_max - lon_min) * (1.0 + 2.0 * pad);
+        let ls = need_lat.max(need_lon / aspect).max(lat_span_min);
+        (ls, ls * aspect)
+    };
+    let (lat_min, lat_max) = (lat_mid - lat_span / 2.0, lat_mid + lat_span / 2.0);
+    let lon_mid = (lon_min + lon_max) / 2.0;
+    let (lon_min, lon_max) = (lon_mid - lon_span / 2.0, lon_mid + lon_span / 2.0);
+    let bbox = format!(
+        "{:.6},{:.6},{:.6},{:.6}",
+        lon_min, lat_min, lon_max, lat_max
+    );
+    let img = format!(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox={}&bboxSR=4326&size=300,200&format=png&f=image",
+        bbox
+    );
+    // ---- Mercator positioning: ArcGIS renders in Web Mercator, so y is not
+    // linear in latitude. y(lat) = ln(tan(π/4 + φ/2)).
+    let merc = |la: f64| (std::f64::consts::PI / 4.0 + la.to_radians() / 2.0).tan().ln();
+    let y_top = merc(lat_max);
+    let y_span = merc(lat_max) - merc(lat_min);
+    let pos = |la: f64, lo: f64| -> (f64, f64) {
+        let x = (lo - lon_min) / lon_span * 100.0;
+        let y = (y_top - merc(la)) / y_span * 100.0;
+        (x.clamp(0.0, 100.0), y.clamp(0.0, 100.0))
+    };
+    // ---- stay pin (large 📍, tip on the point).
+    let (px, py) = pos(lat, lon);
+    let mut pins = format!(
+        "<span class=\"cand-minimap-pin\" style=\"left:{px:.2}%;top:{py:.2}%\">\u{1F4CD}</span>"
+    );
+    // ---- itinerary reference dots with labels. Labels flip to the LEFT of
+    // the dot near the right edge (overflow:hidden would clip them) and
+    // alternate above/below so near-coincident stops (九份老街 vs 九份住宿)
+    // don't overwrite each other.
+    for (i, s) in stops.iter().enumerate() {
+        let (x, y) = pos(s.lat, s.lon);
+        let side = if x > 78.0 { " cand-minimap-poi--left" } else { "" };
+        let vert = if i % 2 == 0 { " cand-minimap-poi--above" } else { "" };
+        pins.push_str(&format!(
+            "<span class=\"cand-minimap-poi{side}{vert}\" style=\"left:{x:.2}%;top:{y:.2}%\">\
+             <i class=\"cand-minimap-dot\"></i><em class=\"cand-minimap-poi-label\">{}</em></span>",
+            esc(&s.label)
+        ));
+    }
+    // ---- caption: distance to the NEAREST itinerary point — the number that
+    // answers "how far is this stay from where we're actually going?".
+    let dist_note = stops
+        .iter()
+        .map(|s| (distance_km(lat, lon, s.lat, s.lon), &s.label))
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let dist_txt = match dist_note {
+        Some((km, label)) if lang == "en" => format!("~{km:.1} km from {label}"),
+        Some((km, label)) => format!("距{label} 約 {km:.1} km"),
+        None => String::new(),
+    };
+    let maps = format!("https://www.google.com/maps?q={:.6},{:.6}", lat, lon);
+    let alt = if lang == "en" {
+        format!("{} location map", c.hotel_name)
+    } else {
+        format!("{} 位置圖", c.hotel_name)
+    };
+    let caption = if dist_txt.is_empty() {
+        format!("{} · \u{00A9} Esri", t("locationMap", lang))
+    } else {
+        format!("{} · {} · \u{00A9} Esri", t("locationMap", lang), dist_txt)
+    };
+    format!(
+        "<div class=\"cand-minimap\">\
+         <a class=\"cand-minimap-link\" href=\"{}\" target=\"_blank\" rel=\"noopener\" title=\"{}\">\
+         <img class=\"cand-minimap-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" />{}</a>\
+         <span class=\"cand-minimap-caption\">{}</span>\
+         </div>",
+        esc_url_attr(&maps),
+        esc(t("openMap", lang)),
+        esc_url_attr(&img),
+        esc(&alt),
+        pins,
+        esc(&caption),
+    )
+}
+
+/// Equirectangular distance in km (fine at Taiwan scale — minimap caption only).
+fn distance_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let dy = (lat2 - lat1) * 110.574;
+    let dx = (lon2 - lon1) * 111.320 * lat1.to_radians().cos();
+    (dx * dx + dy * dy).sqrt()
+}
+
 /// `9` not `9.0`, but `4.6` stays `4.6`.
 fn trim_num(v: f64) -> String {
     if (v - v.round()).abs() < f64::EPSILON {
@@ -755,13 +880,51 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         };
         h.push_str(&format!("<h2>{}</h2>", esc(cand_title)));
         // Say it in words, not only through a dashed border a reader may not decode.
-        let sub_text = cand_sub
-            .map(str::to_string)
-            .unwrap_or_else(|| t("notBookedYet", lang).to_string());
+        // The count is the REAL candidate count — a hardcoded "三間" once disagreed
+        // with the five cards under it.
+        let sub_text = cand_sub.map(str::to_string).unwrap_or_else(|| {
+            t("notBookedYet", lang).replace("{n}", &plan.candidates.len().to_string())
+        });
         h.push_str(&format!(
             "<div class=\"candidate-sub\">{}</div>",
             esc(&sub_text)
         ));
+        // 推薦排序 — the section must not be a bare price grid: when rankings
+        // exist, state the order and the reason (user request 2026-09-28).
+        let ranked: Vec<&crate::model::DomesticCandidate> = plan
+            .candidates
+            .iter()
+            .filter(|c| c.ranking.is_some())
+            .collect();
+        if !ranked.is_empty() && !is_booked {
+            h.push_str(&format!(
+                "<div class=\"candidate-ranking\"><span class=\"candidate-ranking-title\">{}</span><ol>",
+                esc(t("recommendOrder", lang))
+            ));
+            for c in &ranked {
+                let title = if c.room_type.is_empty() {
+                    c.hotel_name.clone()
+                } else {
+                    format!("{} {}", c.hotel_name, c.room_type)
+                };
+                let badge = if c.ranking == Some(1) {
+                    t("firstChoice", lang)
+                } else {
+                    ""
+                };
+                h.push_str(&format!(
+                    "<li><span class=\"candidate-ranking-name\">{}</span>{}<span class=\"candidate-ranking-notes\">{}</span></li>",
+                    esc(&title),
+                    if badge.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<span class=\"candidate-rank-badge\">{}</span>", esc(badge))
+                    },
+                    esc(&c.notes)
+                ));
+            }
+            h.push_str("</ol></div>");
+        }
         h.push_str("<div class=\"candidate-grid\">");
         for c in &plan.candidates {
             let title = if c.room_type.is_empty() {
@@ -822,8 +985,28 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 }
                 h.push_str("</div>");
             }
+            // Rank badge on the card (selecting state only — once booked the
+            // ranking is history, not current advice).
+            let rank_badge = if is_booked {
+                String::new()
+            } else {
+                match c.ranking {
+                    Some(1) => format!(
+                        "<span class=\"candidate-rank-badge candidate-rank-badge--first\">{}</span>",
+                        esc(t("firstChoice", lang))
+                    ),
+                    Some(n) => format!(
+                        "<span class=\"candidate-rank-badge\">No.{n}</span>"
+                    ),
+                    None => format!(
+                        "<span class=\"candidate-rank-badge candidate-rank-badge--none\">{}</span>",
+                        esc(t("notRanked", lang))
+                    ),
+                }
+            };
             h.push_str(&format!(
-                "<div class=\"candidate-name\">{}</div>",
+                "<div class=\"candidate-name\">{}{}</div>",
+                rank_badge,
                 esc(&title)
             ));
             if c.price_twd > 0 {
@@ -869,11 +1052,45 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     esc(t("noBreakfast", lang))
                 ));
             }
+            // Bathtub: verified per ROOM TYPE (property-level filters lie — a 浴缸
+            // filter can match via other room types). NULL (未查) renders no tag:
+            // unverified is not "no".
+            match c.has_bathtub {
+                Some(1) => tags.push(format!(
+                    "<span class=\"candidate-tag candidate-tag--tub\">{}</span>",
+                    esc(t("bathtub", lang))
+                )),
+                Some(_) => tags.push(format!(
+                    "<span class=\"candidate-tag candidate-tag--notub\">{}</span>",
+                    esc(t("noBathtub", lang))
+                )),
+                None => {}
+            }
             if !tags.is_empty() {
                 h.push_str(&format!(
                     "<div class=\"candidate-tags\">{}</div>",
                     tags.join(" ")
                 ));
+            }
+            // 優劣比較 — the card carries its own pros/cons text so the reader
+            // can decide without cross-referencing the ranking list.
+            if !c.notes.is_empty() {
+                h.push_str(&format!(
+                    "<div class=\"candidate-notes\"><b>{}：</b>{}</div>",
+                    esc(t("prosConsLabel", lang)),
+                    esc(&c.notes)
+                ));
+            }
+            // 位置小圖 — a small static basemap so the reader can see WHERE the
+            // stay actually sits, RELATIVE to the trip's own points (九份老街/
+            // 野柳/金山/淡水 — a tight street-grid crop around the stay hides
+            // exactly the question the reader is asking). The bbox covers the
+            // stay + itinerary stops; the 📍 and the stop dots are positioned
+            // by Mercator math; the whole image links to Google Maps. We never
+            // request OSM raster tiles (policy) — this is the sanctioned ArcGIS
+            // static basemap the route snapshots already composite.
+            if let (Some(lat), Some(lon)) = (c.latitude, c.longitude) {
+                h.push_str(&candidate_minimap(c, lat, lon, &plan.poi_stops, lang));
             }
             // External rooms/availability link — it opens a real booking engine, so the label
             // says so rather than promising a passive room list.
@@ -1462,6 +1679,106 @@ mod tests {
     }
 
     #[test]
+    fn candidate_minimap_shows_stay_relative_to_itinerary_stops() {
+        use crate::model::{DomesticCandidate, PoiStop};
+        // The live jiufen-2026 legend set (plan.png stops) + a stay OUTSIDE the
+        // 九份 cluster — exactly the case a tight street-grid crop hides.
+        let stops = vec![
+            PoiStop { label: "九份老街".into(), lat: 25.108719, lon: 121.8435077 },
+            PoiStop { label: "九份住宿".into(), lat: 25.1081276, lon: 121.8383274 },
+            PoiStop { label: "野柳地質公園".into(), lat: 25.2113474, lon: 121.6963751 },
+            PoiStop { label: "金山老街".into(), lat: 25.221883, lon: 121.6361852 },
+            PoiStop { label: "淡水".into(), lat: 25.1727, lon: 121.4377 },
+        ];
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            poi_stops: stops,
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "魚礁十五號".into(),
+                room_type: "四人房－附浴缸".into(),
+                price_twd: 4000,
+                latitude: Some(25.1330327),
+                longitude: Some(121.807191),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        // ArcGIS static basemap with a bbox covering stay + all stops (padded
+        // 12%, aspect-corrected to the 300:200 export) — computed reference:
+        assert!(
+            html.contains("server.arcgisonline.com"),
+            "basemap host: {html}"
+        );
+        assert!(
+            html.contains("bbox=121.389003,25.013192,121.892205,25.316819"),
+            "bbox covers stay+stops: {html}"
+        );
+        // Stay pin at its Mercator position (83.11%, 60.56%), NOT centered.
+        assert!(html.contains("cand-minimap-pin"), "CSS pin overlay: {html}");
+        assert!(
+            html.contains("left:83.11%;top:60.56%"),
+            "stay pin at computed position: {html}"
+        );
+        // Every itinerary stop renders a labeled dot; 九份老街 (x=90.3%) flips
+        // its label left so overflow:hidden cannot clip it.
+        assert!(html.contains("cand-minimap-dot"), "POI dot: {html}");
+        for label in ["九份老街", "野柳地質公園", "金山老街", "淡水"] {
+            assert!(html.contains(label), "POI label {label}: {html}");
+        }
+        assert!(
+            html.contains("cand-minimap-poi--left"),
+            "right-edge label flip: {html}"
+        );
+        // Caption carries the distance to the NEAREST stop — the question the
+        // map exists to answer (魚礁十五號 ≈ 4.2 km from 九份住宿).
+        assert!(
+            html.contains("距九份住宿 約 4.2 km"),
+            "nearest-POI distance in caption: {html}"
+        );
+        // Google Maps click-through + Esri credit.
+        assert!(
+            html.contains("https://www.google.com/maps?q=25.133033,121.807191"),
+            "maps link: {html}"
+        );
+        assert!(html.contains("© Esri"), "attribution: {html}");
+    }
+
+    #[test]
+    fn candidate_minimap_falls_back_to_tight_bbox_without_stops() {
+        use crate::model::DomesticCandidate;
+        let with_coords = |lat: Option<f64>, lon: Option<f64>| Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "魚礁十五號".into(),
+                room_type: "四人房－附浴缸".into(),
+                price_twd: 4000,
+                latitude: lat,
+                longitude: lon,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // No stops (plan.png legend empty / map status missing) → v1 behavior:
+        // stay-centered ±0.0016° bbox, pin at the center, no distance note.
+        let html = render(&with_coords(Some(25.1330327), Some(121.807191)), "zh", None);
+        assert!(html.contains("server.arcgisonline.com"), "basemap host: {html}");
+        assert!(
+            html.contains("bbox=121.804540,25.131433,121.809842,25.134633"),
+            "tight fallback bbox: {html}"
+        );
+        assert!(html.contains("left:50.00%;top:50.00%"), "centered pin: {html}");
+        assert!(!html.contains("cand-minimap-dot"), "no POI dots: {html}");
+        assert!(html.contains("© Esri"), "attribution: {html}");
+        assert!(html.contains("位置"), "ZH caption label: {html}");
+        // No coordinates → no minimap block at all (not a broken placeholder).
+        let html = render(&with_coords(None, None), "zh", None);
+        assert!(!html.contains("cand-minimap"), "no minimap without coords: {html}");
+    }
+
+    #[test]
     fn candidate_shows_ratings_size_and_price_provenance() {
         use crate::model::{CandidateRating, DomesticCandidate};
         let plan = Plan {
@@ -1546,6 +1863,121 @@ mod tests {
         let blank = render(&mk(""), "zh", None);
         assert!(blank.contains("取消政策未查"), "{blank}");
         assert!(render(&mk(""), "en", None).contains("cancellation policy not checked"));
+    }
+
+    #[test]
+    fn bathtub_tag_is_three_state() {
+        use crate::model::DomesticCandidate;
+        let mk = |tub: Option<i64>| Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 1600,
+                has_bathtub: tub,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // Verified yes → positive tag.
+        let yes = render(&mk(Some(1)), "zh", None);
+        assert!(yes.contains("candidate-tag--tub") && yes.contains("浴缸"), "{yes}");
+        assert!(!yes.contains("無浴缸"), "{yes}");
+        // Verified no → stated, not silent.
+        let no = render(&mk(Some(0)), "zh", None);
+        assert!(no.contains("candidate-tag--notub") && no.contains("無浴缸"), "{no}");
+        assert!(render(&mk(Some(0)), "en", None).contains("No bathtub"));
+        // Unverified (NULL) → no tag at all: 未查 ≠ 無浴缸.
+        let unknown = render(&mk(None), "zh", None);
+        assert!(!unknown.contains("浴缸"), "{unknown}");
+    }
+
+    #[test]
+    fn ranking_and_notes_render_comparison_block() {
+        use crate::model::DomesticCandidate;
+        let mk = |ranking: Option<i64>, notes: &str| DomesticCandidate {
+            id: "c1".into(),
+            hotel_name: "魚礁十五號".into(),
+            room_type: "四人房－附浴缸".into(),
+            price_twd: 4000,
+            ranking,
+            notes: notes.into(),
+            ..Default::default()
+        };
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![
+                mk(Some(1), "9.6 評分傑出；免訂金、可免費取消；缺點：無電梯"),
+                mk(None, ""),
+            ],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        // The sub line counts the REAL candidates (was hardcoded 三間).
+        assert!(html.contains("2 間比較中"), "{html}");
+        assert!(!html.contains("三間比較中"), "{html}");
+        // 推薦排序 block: ordered list, first-choice badge, the reason text.
+        assert!(html.contains("candidate-ranking"), "{html}");
+        assert!(html.contains("推薦排序"), "{html}");
+        assert!(html.contains("首選"), "{html}");
+        assert!(html.contains("無電梯"), "{html}");
+        // Ranked candidate appears ONCE in the <ol>; the unranked one does not.
+        let ol = html.split("<ol>").nth(1).unwrap_or("").split("</ol>").next().unwrap_or("");
+        assert!(ol.contains("魚礁十五號"), "{ol}");
+        // Card-level: notes block + rank badge; unranked card states 未列入推薦.
+        assert!(html.contains("candidate-notes"), "{html}");
+        assert!(html.contains("優劣比較"), "{html}");
+        assert!(html.contains("未列入推薦"), "{html}");
+        // EN labels render for ?lang=en.
+        let en = render(&plan, "en", None);
+        assert!(en.contains("Recommended order"), "{en}");
+        assert!(en.contains("Top pick"), "{en}");
+        assert!(en.contains("comparing 2 stays"), "{en}");
+    }
+
+    #[test]
+    fn no_ranking_means_no_comparison_block_but_count_still_shown() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 1600,
+                ranking: None,
+                notes: String::new(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(!html.contains("candidate-ranking"), "{html}");
+        assert!(html.contains("1 間比較中"), "{html}");
+        // No notes → no notes block (nothing to compare yet).
+        assert!(!html.contains("candidate-notes"), "{html}");
+    }
+
+    #[test]
+    fn booked_state_hides_ranking_advice() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "booked".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 1600,
+                ranking: Some(1),
+                notes: "理由".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        // Booked → the block is reference-only; ranking advice is history.
+        assert!(!html.contains("candidate-ranking"), "{html}");
+        assert!(!html.contains("candidate-rank-badge"), "{html}");
+        // Notes stay — they describe the property, useful as reference.
+        assert!(html.contains("candidate-notes"), "{html}");
     }
 
     #[test]

@@ -18,6 +18,11 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("candidates", true) => "海景候選",
         ("seaView", false) => "Sea view",
         ("seaView", true) => "海景",
+        // Per-room bathtub fact. NULL (未查) renders NO tag — unverified ≠ 無浴缸.
+        ("bathtub", false) => "Bathtub",
+        ("bathtub", true) => "浴缸",
+        ("noBathtub", false) => "No bathtub",
+        ("noBathtub", true) => "無浴缸",
         ("breakfast", false) => "Breakfast included",
         ("breakfast", true) => "含早餐",
         // candidate gallery + external room-types link (domestic accommodations)
@@ -35,8 +40,23 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("cancelUnknown", true) => "取消政策未查",
         ("perNight", false) => "per room / night",
         ("perNight", true) => "每房每晚",
-        ("notBookedYet", false) => "Nothing booked yet — comparing these three",
-        ("notBookedYet", true) => "尚未預訂 · 三間比較中",
+        ("notBookedYet", false) => "Nothing booked yet — comparing {n} stays",
+        ("notBookedYet", true) => "尚未預訂 · {n} 間比較中",
+        // Comparison block: explicit ranking with reasons (user request 2026-09-28 —
+        // the section must say which candidates, their pros/cons, and the order).
+        ("recommendOrder", false) => "Recommended order",
+        ("recommendOrder", true) => "推薦排序",
+        ("firstChoice", false) => "Top pick",
+        ("firstChoice", true) => "首選",
+        ("prosConsLabel", false) => "Pros & cons",
+        ("prosConsLabel", true) => "優劣比較",
+        ("notRanked", false) => "Not in the recommendation",
+        ("notRanked", true) => "未列入推薦",
+        // candidate location minimap (ArcGIS static basemap, pin = the stay)
+        ("locationMap", false) => "Location",
+        ("locationMap", true) => "位置",
+        ("openMap", false) => "Open in Google Maps",
+        ("openMap", true) => "在 Google 地圖開啟",
         ("plans", false) => "Plans",
         ("plans", true) => "行程",
         ("details", false) => "Booking details",

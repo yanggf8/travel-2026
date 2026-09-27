@@ -231,6 +231,63 @@ h1 {
   color: var(--text-dim);
   margin: -4px 0 8px;
 }
+/* ---- 推薦排序 + 優劣比較 (comparison block above the card grid) ---- */
+.candidate-ranking {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--green);
+  border-radius: 8px;
+  background: var(--card);
+}
+.candidate-ranking-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.candidate-ranking ol {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+.candidate-ranking li {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.candidate-ranking-name { font-weight: 600; }
+.candidate-ranking-notes { color: var(--text-dim); }
+.candidate-rank-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+.candidate-rank-badge--first {
+  background: #e6f4ea; /* light green — matches the 推薦排序 border */
+  border-color: #a8d5b5;
+  color: #1a6b34;
+}
+.candidate-rank-badge--none {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.candidate-notes {
+  margin: 6px 10px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
 
 .candidate-card {
   border: 1px solid var(--border);
@@ -350,6 +407,16 @@ h1 {
   border-color: #fde68a;
   color: #92400e;
 }
+.candidate-tag--tub {
+  background: #e0e7ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+.candidate-tag--notub {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
 
 /* Candidate gallery — one thumbnail per room type / area, each opens the
    full image in a new tab (SSR-only, no JS lightbox). */
@@ -396,6 +463,74 @@ h1 {
   text-decoration: none;
 }
 .candidate-link:hover { text-decoration: underline; }
+
+/* Candidate location minimap — ArcGIS static basemap covering the stay + the
+   trip's itinerary stops (position means something only relative to them).
+   📍 marks the stay, small dots + labels mark the stops; pins are positioned
+   inline by Mercator math over the known bbox. Whole image links to Google Maps. */
+.cand-minimap {
+  padding: 8px 10px 0;
+}
+.cand-minimap-link {
+  position: relative;
+  display: block;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.cand-minimap-img {
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  display: block;
+  background: var(--bg);
+}
+.cand-minimap-pin {
+  position: absolute;
+  transform: translate(-50%, -100%); /* pin tip on the point; left/top set inline */
+  font-size: 18px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
+}
+.cand-minimap-poi {
+  position: absolute; /* left/top set inline (dot center on the point) */
+  transform: translate(-50%, -50%);
+}
+.cand-minimap-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1a73e8;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+}
+.cand-minimap-poi-label {
+  position: absolute;
+  left: 10px; /* to the right of the dot by default */
+  top: 50%;
+  transform: translateY(-50%);
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1.1;
+  white-space: nowrap;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.9);
+}
+.cand-minimap-poi--left .cand-minimap-poi-label {
+  left: auto;
+  right: 10px; /* flip near the right edge — overflow:hidden would clip it */
+}
+.cand-minimap-poi--above .cand-minimap-poi-label {
+  top: auto;
+  bottom: 8px;
+  transform: none;
+}
+.cand-minimap-caption {
+  display: block;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
 
 /* ---- Plan map / day map slots ---- */
 .map-frame {
@@ -478,6 +613,19 @@ h1 {
     var(--card) 16px
   );
 }
+/* ---- Logistics map inset (崁入小圖) ----
+   The overview map stays the page's primary map; the hotel/airport logistics
+   map is a supplementary 機場/住宿示意, so it renders compact: narrower,
+   right-aligned on wide screens, smaller legend/caption. */
+.map-frame--inset {
+  max-width: 360px;
+  margin-left: auto;
+  margin-right: 0;
+}
+.map-frame--inset figcaption { font-size: 11px; padding: 4px 8px; }
+.map-frame--inset .map-legend { padding: 5px 8px; gap: 3px 5px; }
+.map-frame--inset .map-legend li { font-size: 11px; }
+.map-frame--inset .map-missing-box { min-height: 72px; font-size: 12px; padding: 10px; }
 
 /* ---- Day cards ---- */
 .day {

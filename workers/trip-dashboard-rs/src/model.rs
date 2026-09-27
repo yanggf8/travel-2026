@@ -86,6 +86,13 @@ fn i(row: &Row, key: &str) -> i64 {
         .or_else(|| row.get(key).and_then(|v| v.as_i64()))
         .unwrap_or(0)
 }
+/// Optional integer column: NULL stays None (未查), never a defaulted 0.
+fn opt_i(row: &Row, key: &str) -> Option<i64> {
+    row.get(key)
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .or_else(|| row.get(key).and_then(|v| v.as_i64()))
+}
 /// Optional float column. Turso returns REALs as strings; accept either.
 /// Returns None when the column is absent or NULL.
 fn f(row: &Row, key: &str) -> Option<f64> {
@@ -175,10 +182,32 @@ pub struct DomesticCandidate {
     pub room_size_sqm: i64,
     pub rooms_left: i64,
     pub free_cancel_until: String,
+    /// Per-ROOM bathtub: None = 未查 (no tag rendered — not the same as "no"),
+    /// Some(1)/Some(0) = verified from the room-type facility list.
+    pub has_bathtub: Option<i64>,
+    /// Recommended order: Some(1) = 首選, Some(n) = n-th, None = unranked
+    /// (not part of the recommendation).
+    pub ranking: Option<i64>,
+    /// 優劣比較與推薦理由 — the comparison content the section renders on the
+    /// card and in the 推薦排序 list. Empty = not written yet.
+    pub notes: String,
+    /// WGS84 location for the per-candidate minimap. None = no minimap (the
+    /// card just omits the 位置小圖 block). Sourced from Google Maps place
+    /// search / OSM — never guessed.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
     pub price_source: String,
     /// Date the rate was read — rendered so a stale published price is visible as stale.
     pub price_checked_at: String,
     pub source: String,
+}
+
+/// One itinerary reference point for the candidate location minimaps.
+#[derive(Debug, Default, Clone)]
+pub struct PoiStop {
+    pub label: String,
+    pub lat: f64,
+    pub lon: f64,
 }
 
 #[derive(Debug, Default)]
@@ -191,6 +220,11 @@ pub struct Plan {
     pub flights: Vec<Row>,
     pub hotel: Option<Row>,
     pub transfers: Vec<Row>,
+    /// Itinerary reference points (the plan.png map legend stops) — the candidate
+    /// 位置小圖 renders each stay RELATIVE to these, so a reader can see where the
+    /// stay sits vs. the trip's actual places. Filled by the router from
+    /// MapStatus; empty when no maps exist yet (minimap falls back to stay-only).
+    pub poi_stops: Vec<PoiStop>,
     // ---- transit cheat-sheet (feature #4) ----
     /// `transit_hotel_station` / `_zh` from itinerary_metadata (home base).
     pub transit_hotel_station: String,
@@ -448,6 +482,15 @@ pub fn assemble(
                 room_size_sqm: i(r, "room_size_sqm"),
                 rooms_left: i(r, "rooms_left"),
                 free_cancel_until: s(r, "free_cancel_until"),
+                has_bathtub: opt_i(r, "has_bathtub"),
+                /// Recommended order (1 = 首選); NULL = unranked — renders after the
+                /// ranked candidates, outside the 推薦排序 block.
+                ranking: opt_i(r, "ranking"),
+                /// 優劣比較與推薦理由 — the comparison text the section renders.
+                notes: s(r, "notes"),
+                /// WGS84 coordinates for the per-candidate location minimap.
+                latitude: f(r, "latitude"),
+                longitude: f(r, "longitude"),
                 price_source: s(r, "price_source"),
                 price_checked_at: s(r, "price_checked_at"),
                 source: s(r, "source"),

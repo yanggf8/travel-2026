@@ -52,12 +52,19 @@ pub fn render_plan(
         lang,
         map_status.legend_for("plan.png"),
     ));
-    body.push_str(&map::plan_logistics_map_slot(
-        &plan.plan_id,
-        map_status.plan_logistics.as_deref(),
-        lang,
-        map_status.legend_for("plan-logistics.png"),
-    ));
+    // The logistics map only exists where the trip has an airport segment
+    // (flights). A DOMESTIC self-drive plan has none — rendering the slot
+    // anyway just showed a 地圖尚未產生 placeholder that wasted vertical
+    // space (user request 2026-09-28). With flights it renders as a compact
+    // inset (崁入小圖) instead of a second full-size map.
+    if map_status.plan_logistics.is_some() || !plan.flights.is_empty() {
+        body.push_str(&map::plan_logistics_map_slot(
+            &plan.plan_id,
+            map_status.plan_logistics.as_deref(),
+            lang,
+            map_status.legend_for("plan-logistics.png"),
+        ));
+    }
     body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
         let map_ver = map_status
@@ -239,5 +246,57 @@ mod tests {
         let day_map = html.find("day-1.png").expect("day map img");
         assert!(plan_leg > plan_map, "plan legend sits under its map");
         assert!(day_leg > day_map, "day legend sits under its map");
+    }
+
+    #[test]
+    fn render_plan_omits_logistics_map_for_domestic() {
+        // Domestic plan: no flights AND no logistics PNG in R2 → the slot must
+        // not render at all (it used to show a 地圖尚未產生 placeholder that
+        // wasted the vertical space a self-drive trip does not need).
+        use crate::model::Plan;
+        let plan = Plan {
+            plan_id: "jiufen-2026".into(),
+            display_name: "九份".into(),
+            ..Default::default()
+        };
+        let map_status = map::MapStatus {
+            plan: Some("etag1".into()),
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map_status, "");
+        assert!(html.contains("/map/jiufen-2026/plan.png"));
+        assert!(
+            !html.contains("plan-logistics.png"),
+            "domestic plan must not render the logistics map slot: {html}"
+        );
+        assert!(!html.contains("地圖尚未產生"), "{html}");
+    }
+
+    #[test]
+    fn render_plan_keeps_logistics_slot_when_flights_exist() {
+        // A Japan plan with flights keeps the logistics slot even before the PNG
+        // exists (so the missing-map state is visible, prompting a snapshot run)
+        // — it renders as a compact inset, not a second full-size map.
+        use crate::model::Plan;
+        use crate::turso::Row;
+        let mut f = Row::new();
+        f.insert("flight_number".into(), serde_json::json!("CI120"));
+        f.insert("departure_code".into(), serde_json::json!("TPE"));
+        f.insert("arrival_code".into(), serde_json::json!("KIX"));
+        let plan = Plan {
+            plan_id: "kyoto-2026".into(),
+            display_name: "Kyoto".into(),
+            flights: vec![f],
+            ..Default::default()
+        };
+        let map_status = map::MapStatus::default();
+        let html = render_plan(&plan, "zh", None, &map_status, "");
+        // The placeholder branch emits no <img>, so assert on the slot's caption
+        // and its inset frame — not on the PNG URL.
+        assert!(
+            html.contains("住宿與機場"),
+            "flights exist → logistics slot must render: {html}"
+        );
+        assert!(html.contains("map-frame--inset"), "{html}");
     }
 }

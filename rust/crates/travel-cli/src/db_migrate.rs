@@ -1558,6 +1558,11 @@ pub async fn run(args: &[String]) -> Result<(), String> {
   source TEXT,
   image_url TEXT,
   booking_url TEXT,
+  has_bathtub INTEGER, -- NULL = unverified, 1 = bathtub, 0 = no bathtub
+  ranking INTEGER, -- NULL = 未排序, 1 = 推薦首選, 2.. = 之後的推薦順位
+  notes TEXT, -- 優劣比較與推薦理由（ZH 自由文字，卡片與推薦排序共用）
+  latitude REAL, -- WGS84; the dashboard renders a per-candidate location minimap from it
+  longitude REAL,
   updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );"#,
     )
@@ -1602,6 +1607,11 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "ALTER TABLE domestic_accommodations ADD COLUMN price_checked_at DATETIME;",
         "ALTER TABLE domestic_accommodations ADD COLUMN free_cancel_until TEXT;",
         "ALTER TABLE domestic_accommodations ADD COLUMN rooms_left INTEGER;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN has_bathtub INTEGER;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN ranking INTEGER;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN notes TEXT;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN latitude REAL;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN longitude REAL;",
     ] {
         add_column(&conn, ddl).await;
     }

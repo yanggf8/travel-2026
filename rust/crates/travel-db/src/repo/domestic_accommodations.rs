@@ -27,6 +27,18 @@ pub struct DomesticAccommodationRow {
     pub price_checked_at: Option<String>,
     pub free_cancel_until: Option<String>,
     pub rooms_left: Option<i64>,
+    /// Bathtub in THIS room type: NULL = unverified, 1 = yes, 0 = no. Property-level
+    /// filters lie (a 浴缸 filter can match via other room types) — this is per-room.
+    pub has_bathtub: Option<i64>,
+    /// Recommended order: 1 = first choice, 2.. = follow-up order. NULL = not ranked
+    /// (not in the recommendation — e.g. fails a hard requirement).
+    pub ranking: Option<i64>,
+    /// 優劣比較與推薦理由 (ZH free text). Rendered on the candidate card and in the
+    /// 推薦排序 block. NULL/empty = comparison content not written yet.
+    pub notes: Option<String>,
+    /// WGS84 coordinates for the dashboard's per-candidate location minimap.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
     pub updated_at: String,
 }
 
@@ -97,7 +109,7 @@ pub async fn query(
 ) -> Result<Vec<DomesticAccommodationRow>, String> {
     let built = filter.build();
     let sql = format!(
-        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, updated_at \
+        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, has_bathtub, ranking, notes, latitude, longitude, updated_at \
          FROM domestic_accommodations {} ORDER BY price_twd ASC, hotel_name ASC LIMIT {limit}",
         built.clause
     );
@@ -129,7 +141,12 @@ pub async fn query(
             price_checked_at: row.get(14).ok(),
             free_cancel_until: row.get(15).ok(),
             rooms_left: row.get(16).ok(),
-            updated_at: row.get(17).unwrap_or_default(),
+            has_bathtub: row.get(17).ok(),
+            ranking: row.get(18).ok(),
+            notes: row.get(19).ok(),
+            latitude: row.get(20).ok(),
+            longitude: row.get(21).ok(),
+            updated_at: row.get(22).unwrap_or_default(),
         });
     }
     Ok(out)
@@ -157,6 +174,18 @@ pub struct NewDomesticAccommodation {
     pub price_checked_at: Option<String>,
     pub free_cancel_until: Option<String>,
     pub rooms_left: Option<i64>,
+    /// Per-room bathtub: None = unverified (NULL), Some(1)/Some(0) = verified yes/no.
+    /// Valued flag `--bathtub yes|no` — an unverified room stays NULL, never a guessed 0.
+    pub has_bathtub: Option<i64>,
+    /// Recommended order at add time (optional — usually set later via update-accommodation
+    /// once the comparison is written). 1 = first choice.
+    pub ranking: Option<i64>,
+    /// 優劣比較與推薦理由 at add time (optional).
+    pub notes: Option<String>,
+    /// WGS84 coordinates (optional) — geocode via Google Maps place search or
+    /// OSM/Nominatim; the dashboard renders the location minimap from them.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 /// INSERT OR IGNORE one row. Returns affected rows: 1 = inserted, 0 = id already
@@ -164,8 +193,8 @@ pub struct NewDomesticAccommodation {
 pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result<u64, String> {
     conn.execute(
         "INSERT OR IGNORE INTO domestic_accommodations \
-         (id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'TWD', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'))",
+         (id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, has_bathtub, ranking, notes, latitude, longitude, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'TWD', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, datetime('now'))",
         libsql::params![
             row.id.clone(),
             row.destination.clone(),
@@ -183,6 +212,11 @@ pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result
             row.price_checked_at.clone(),
             row.free_cancel_until.clone(),
             row.rooms_left,
+            row.has_bathtub,
+            row.ranking,
+            row.notes.clone(),
+            row.latitude,
+            row.longitude,
         ],
     )
     .await

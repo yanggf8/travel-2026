@@ -119,7 +119,10 @@ pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str, legend: &
 }
 
 /// Separate plan-wide hotel/airport map so distant endpoints do not flatten the
-/// sightseeing overview's zoom level.
+/// sightseeing overview's zoom level. Rendered as a COMPACT INSET (崁入小圖),
+/// not a second full-size map — the overview is the page's primary map; this
+/// one is a supplementary 機場/住宿示意 (user request 2026-09-28). Domestic
+/// plans (no airport segment) never render this slot at all — see render/mod.rs.
 pub fn plan_logistics_map_slot(
     plan_id: &str,
     version: Option<&str>,
@@ -129,7 +132,7 @@ pub fn plan_logistics_map_slot(
     let caption = i18n::t("planLogisticsMap", lang);
     if let Some(v) = version {
         format!(
-            "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
+            "<figure class=\"map-frame map-frame--inset\"><img class=\"planmap planmap--inset\" alt=\"{}\" \
              src=\"/map/{}/plan-logistics.png{}\"><figcaption>{}</figcaption>{}</figure>",
             esc(caption),
             esc_url_attr(plan_id),
@@ -140,7 +143,7 @@ pub fn plan_logistics_map_slot(
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
         format!(
-            "<figure class=\"map-frame map-missing\"><div class=\"map-missing-box\">{}</div>\
+            "<figure class=\"map-frame map-frame--inset map-missing\"><div class=\"map-missing-box\">{}</div>\
              <figcaption>{}</figcaption></figure>",
             esc(not_avail),
             esc(caption),
@@ -421,6 +424,23 @@ mod tests {
         assert!(h.contains("<figcaption>Sightseeing overview</figcaption>"));
         assert!(!h.contains("src=\"/map"));
         assert!(!h.contains("<img"));
+    }
+
+    #[test]
+    fn plan_logistics_map_slot_renders_as_compact_inset() {
+        // With a map: inset frame + inset img class (崁入小圖, not a second full map).
+        let h = plan_logistics_map_slot("kyoto-2026", Some("v1"), "zh", &[]);
+        assert!(h.contains("map-frame map-frame--inset"), "{h}");
+        assert!(h.contains("planmap planmap--inset"), "{h}");
+        assert!(h.contains("/map/kyoto-2026/plan-logistics.png"));
+        // The overview map stays full-size (no inset classes leak into it).
+        let overview = plan_map_slot("kyoto-2026", Some("v1"), "zh", &[]);
+        assert!(!overview.contains("map-frame--inset"), "{overview}");
+        assert!(!overview.contains("planmap--inset"), "{overview}");
+        // Missing logistics map: still compact (smaller placeholder box).
+        let m = plan_logistics_map_slot("kyoto-2026", None, "zh", &[]);
+        assert!(m.contains("map-frame--inset"), "{m}");
+        assert!(m.contains("map-missing"));
     }
 
     #[test]

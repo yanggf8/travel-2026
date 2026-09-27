@@ -1,7 +1,7 @@
 // `travel add-accommodation --dest <slug> --hotel <name> --room-type <type> --price <twd>
 //   [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast]
 //   [--room-size <sqm>] [--rooms-left <n>] [--free-cancel-until YYYY-MM-DD]
-//   [--price-source <name>] [--price-checked YYYY-MM-DD]`
+//   [--price-source <name>] [--price-checked YYYY-MM-DD] [--bathtub yes|no]`
 // — add one `domestic_accommodations` row (Taiwan domestic stay reference data).
 //
 // The decision-fact flags mirror update-accommodation's so a candidate scraped off
@@ -38,6 +38,19 @@ struct Args {
     free_cancel_until: Option<String>,
     price_source: Option<String>,
     price_checked: Option<String>,
+    /// Per-room bathtub: None = unverified (stays NULL), Some(1)/Some(0) = read off
+    /// the room-type facility list. Valued `yes|no` — NOT a bare flag, because an
+    /// absent flag must mean "not verified", never a guessed "no".
+    bathtub: Option<i64>,
+    /// Recommended order (1 = first choice). Usually set later, after the whole
+    /// shortlist is compared — hence the reminder when it is missing.
+    ranking: Option<i64>,
+    /// 優劣比較與推薦理由 — the comparison content the dashboard renders.
+    notes: Option<String>,
+    /// WGS84 coordinates for the dashboard's per-candidate location minimap.
+    /// Sourced from a Google Maps place search or OSM/Nominatim — never guessed.
+    latitude: Option<f64>,
+    longitude: Option<f64>,
 }
 
 pub async fn run(raw: &[String]) -> Result<(), String> {
@@ -73,6 +86,11 @@ pub async fn run(raw: &[String]) -> Result<(), String> {
         price_checked_at: args.price_checked.clone(),
         free_cancel_until: args.free_cancel_until.clone(),
         rooms_left: args.rooms_left,
+        has_bathtub: args.bathtub,
+        ranking: args.ranking,
+        notes: args.notes.clone(),
+        latitude: args.latitude,
+        longitude: args.longitude,
     };
 
     let affected = insert(&conn, &row).await?;
@@ -99,11 +117,41 @@ pub async fn run(raw: &[String]) -> Result<(), String> {
     if let Some(n) = args.rooms_left {
         println!("  rooms left: {n}");
     }
+    if let Some(t) = args.bathtub {
+        println!("  bathtub: {}", if t == 1 { "yes" } else { "no" });
+    }
+    if let Some(n) = args.ranking {
+        println!("  rank: {n}");
+    }
+    if let Some(s) = &args.notes {
+        println!("  notes: {s}");
+    }
+    if let (Some(lat), Some(lon)) = (args.latitude, args.longitude) {
+        println!("  location: {lat}, {lon}");
+    }
+    // Location reminder — the dashboard's candidate minimap renders from lat/lon;
+    // without them the card has no 位置小圖.
+    if args.latitude.is_none() {
+        println!(
+            "💡 位置未定：查得 WGS84 座標後卡片才有位置小圖 —— \
+             `travel update-accommodation --id {id} --lat <f> --lon <f>`（Google Maps place search 或 OSM 查得，不可猜測）"
+        );
+    }
     if args.image_url.is_none() {
         println!("  image: (none) — add via `travel update-accommodation --id {id} --image-url <url>`");
     }
     if args.booking_url.is_none() {
         println!("  booking: (none) — add via `travel update-accommodation --id {id} --booking-url <url>`");
+    }
+    // Comparison content reminder — the dashboard's 比較/推薦排序 block renders from
+    // `notes` + `ranking`; a candidate added without them shows up as a bare card.
+    // The agent (or human) writing candidates should finish the comparison, not
+    // leave the section as a bare price grid.
+    if args.notes.is_none() || args.ranking.is_none() {
+        println!(
+            "💡 比較內容未齊：寫入優劣與推薦順位後卡片才有比較段落 —— \
+             `travel update-accommodation --id {id} --notes \"<優劣與推薦理由>\" --rank <1=首選>`"
+        );
     }
     Ok(())
 }
@@ -130,9 +178,13 @@ fn usage() -> &'static str {
     "Usage:\n  travel add-accommodation --dest <slug> --hotel <name> --room-type <type> --price <twd> \
      [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast] \
      [--room-size <sqm>] [--rooms-left <n>] [--free-cancel-until <YYYY-MM-DD>] \
-     [--price-source <name>] [--price-checked <YYYY-MM-DD>]\n  \
+     [--price-source <name>] [--price-checked <YYYY-MM-DD>] [--bathtub <yes|no>] \
+     [--rank <n>] [--notes \"<優劣比較與推薦理由>\"] [--lat <f> --lon <f>]\n  \
      (slug-keyed reference data — no --plan-id; idempotent on the same dest|hotel|room|price.\n  \
-      --price-source without --price-checked stamps today, so a quoted rate always carries its read date.)"
+      --price-source without --price-checked stamps today, so a quoted rate always carries its read date.\n  \
+      --lat/--lon 是 WGS84 座標（Google Maps place search 或 OSM 查得，不可猜測），\n  \
+      dashboard 會用它渲染每張候選卡的位置小圖。)\n  \
+      --notes/--rank 是比較段落的內容來源；補齊前 CLI 會提醒。)"
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -151,6 +203,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut free_cancel_until: Option<String> = None;
     let mut price_source: Option<String> = None;
     let mut price_checked: Option<String> = None;
+    let mut bathtub: Option<i64> = None;
+    let mut ranking: Option<i64> = None;
+    let mut notes: Option<String> = None;
+    let mut latitude: Option<f64> = None;
+    let mut longitude: Option<f64> = None;
     let mut i = 0;
     while i < raw.len() {
         let k = raw[i].as_str();
@@ -222,6 +279,37 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 price_checked = Some(date(raw, i, k)?);
                 i += 2;
             }
+            "--bathtub" => {
+                let v = val(raw, i, k)?;
+                bathtub = Some(match v.as_str() {
+                    "yes" | "true" | "1" => 1,
+                    "no" | "false" | "0" => 0,
+                    other => {
+                        return Err(format!("--bathtub must be yes or no (got '{other}')"))
+                    }
+                });
+                i += 2;
+            }
+            "--rank" | "--ranking" => {
+                ranking = Some(int(raw, i, k, 1)?);
+                i += 2;
+            }
+            "--notes" | "--note" => {
+                let v = val(raw, i, k)?;
+                if v.trim().is_empty() {
+                    return Err("--notes cannot be empty (omit the flag, or use update-accommodation to clear)".to_string());
+                }
+                notes = Some(v);
+                i += 2;
+            }
+            "--lat" | "--latitude" => {
+                latitude = Some(coord(raw, i, k, -90.0, 90.0)?);
+                i += 2;
+            }
+            "--lon" | "--lng" | "--longitude" => {
+                longitude = Some(coord(raw, i, k, -180.0, 180.0)?);
+                i += 2;
+            }
             "--sea-view" => {
                 sea_view = true;
                 i += 1;
@@ -252,6 +340,19 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if price_source.is_some() && price_checked.is_none() {
         price_checked = Some(crate::update_accommodation::today());
     }
+    // Half a coordinate pair would render a minimap centered in the ocean —
+    // the pair must arrive together (and be updated together).
+    match (latitude, longitude) {
+        (Some(_), None) | (None, Some(_)) => {
+            return Err("--lat and --lon must be given together".to_string());
+        }
+        (Some(lat), Some(lon)) => {
+            if (lat == 0.0 && lon == 0.0) || (lat.abs() < 1e-9 && lon.abs() < 1e-9) {
+                return Err("--lat/--lon look like a null island (0,0) — geocode a real place".to_string());
+            }
+        }
+        _ => {}
+    }
     Ok(Args {
         dest,
         hotel,
@@ -266,7 +367,24 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         free_cancel_until,
         price_source,
         price_checked,
+        bathtub,
+        ranking,
+        notes,
+        latitude,
+        longitude,
     })
+}
+
+/// Parse a coordinate flag value as f64 within [min, max].
+fn coord(raw: &[String], i: usize, flag: &str, min: f64, max: f64) -> Result<f64, String> {
+    let v = val(raw, i, flag)?;
+    let n: f64 = v
+        .parse()
+        .map_err(|_| format!("{flag} must be a decimal number (got '{v}')"))?;
+    if !(min..=max).contains(&n) {
+        return Err(format!("{flag} must be between {min} and {max} (got {v})"));
+    }
+    Ok(n)
 }
 
 fn val(raw: &[String], i: usize, flag: &str) -> Result<String, String> {
@@ -326,6 +444,116 @@ mod tests {
         assert_eq!(o.free_cancel_until.as_deref(), Some("2026-10-05"));
         assert_eq!(o.price_source.as_deref(), Some("Booking.com"));
         assert_eq!(o.price_checked.as_deref(), Some("2026-09-27"));
+    }
+
+    #[test]
+    fn bathtub_yes_no_and_unverified_default() {
+        let yes = parse_args(&a(&[
+            "--dest", "jiufen", "--hotel", "曉宅山", "--room-type", "四人房附浴缸（暮宅山）",
+            "--price", "7895", "--bathtub", "yes",
+        ]))
+        .unwrap();
+        assert_eq!(yes.bathtub, Some(1));
+        let no = parse_args(&a(&[
+            "--dest", "jiufen", "--hotel", "柳園", "--room-type", "側面海景豪華雙人房",
+            "--price", "1600", "--bathtub", "no",
+        ]))
+        .unwrap();
+        assert_eq!(no.bathtub, Some(0));
+        // Omitting the flag means UNVERIFIED (NULL) — never a guessed "no".
+        let unverified = parse_args(&a(&[
+            "--dest", "jiufen", "--hotel", "H", "--room-type", "R", "--price", "1",
+        ]))
+        .unwrap();
+        assert_eq!(unverified.bathtub, None);
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1", "--bathtub", "maybe",
+        ]))
+        .unwrap_err()
+        .contains("yes or no"));
+    }
+
+    #[test]
+    fn parses_rank_and_notes() {
+        let o = parse_args(&a(&[
+            "--dest", "jiufen", "--hotel", "魚礁十五號", "--room-type", "四人房－附浴缸",
+            "--price", "4000", "--rank", "1",
+            "--notes", "9.6 評分傑出＋44m²；免訂金、10/5 前免費取消；缺點：無電梯",
+        ]))
+        .unwrap();
+        assert_eq!(o.ranking, Some(1));
+        assert!(o.notes.as_deref().unwrap().contains("無電梯"));
+    }
+
+    #[test]
+    fn rank_and_notes_default_to_none_and_reject_bad_input() {
+        let o = parse_args(&a(&["--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1"]))
+            .unwrap();
+        assert_eq!(o.ranking, None);
+        assert_eq!(o.notes, None);
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1", "--rank", "0",
+        ]))
+        .unwrap_err()
+        .contains(">= 1"));
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1", "--notes", "  ",
+        ]))
+        .unwrap_err()
+        .contains("cannot be empty"));
+    }
+
+    #[test]
+    fn parses_lat_lon_pair() {
+        let o = parse_args(&a(&[
+            "--dest", "jiufen", "--hotel", "魚礁十五號", "--room-type", "四人房－附浴缸",
+            "--price", "4000", "--lat", "25.1330327", "--lon", "121.807191",
+        ]))
+        .unwrap();
+        assert!((o.latitude.unwrap() - 25.1330327).abs() < 1e-9);
+        assert!((o.longitude.unwrap() - 121.807191).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lat_lon_must_come_as_a_pair_and_be_in_range() {
+        // Half a pair → reject (a minimap needs both).
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1", "--lat", "25.1",
+        ]))
+        .unwrap_err()
+        .contains("together"));
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1", "--lon", "121.8",
+        ]))
+        .unwrap_err()
+        .contains("together"));
+        // Out of range → reject.
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--lat", "91", "--lon", "121",
+        ]))
+        .unwrap_err()
+        .contains("between -90 and 90"));
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--lat", "25", "--lon", "200",
+        ]))
+        .unwrap_err()
+        .contains("between -180 and 180"));
+        // Non-numeric → reject.
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--lat", "north", "--lon", "121",
+        ]))
+        .unwrap_err()
+        .contains("decimal number"));
+        // Null island → reject (0,0 is a sentinel, not a place).
+        assert!(parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--lat", "0", "--lon", "0",
+        ]))
+        .unwrap_err()
+        .contains("null island"));
     }
 
     #[test]

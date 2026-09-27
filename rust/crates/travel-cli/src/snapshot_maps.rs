@@ -229,7 +229,38 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
     }
 
-    if all_sightseeing.is_empty() {
+    // Logistics endpoints are computed BEFORE plan.png so a DOMESTIC trip (no
+    // airport segment — every endpoint is the stay) can merge the hotel pin into
+    // the overview map instead of emitting a second full-size map: for a
+    // self-drive domestic stay the hotel IS an itinerary place, and the second
+    // map slot only wasted vertical space (user request 2026-09-28). Plans WITH
+    // airport endpoints (Japan) keep the split — distant endpoints must not
+    // flatten the sightseeing overview's zoom level.
+    let logistics = await_logistics(
+        &read,
+        &write,
+        &plan_id,
+        &dest,
+        &context,
+        &mut cache,
+        &dest_pois,
+        &hotel_names,
+    )
+    .await?;
+    let has_airport = logistics.iter().any(|p| p.kind == Kind::Airport);
+    let mut plan_points = all_sightseeing.clone();
+    if !has_airport {
+        for p in logistics.iter().filter(|p| p.kind == Kind::Hotel) {
+            if !plan_points
+                .iter()
+                .any(|existing: &Point| existing.lat == p.lat && existing.lon == p.lon)
+            {
+                plan_points.push(p.clone());
+            }
+        }
+    }
+
+    if plan_points.is_empty() {
         record_artifact(
             &write,
             &plan_id,
@@ -262,7 +293,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             &plan_id,
             "plan.png",
             "Sightseeing overview",
-            &all_sightseeing,
+            &plan_points,
             &routes,
             MapKind::Plan,
         )
@@ -272,17 +303,6 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
     }
 
-    let logistics = await_logistics(
-        &read,
-        &write,
-        &plan_id,
-        &dest,
-        &context,
-        &mut cache,
-        &dest_pois,
-        &hotel_names,
-    )
-    .await?;
     if logistics.is_empty() {
         record_artifact(
             &write,
@@ -297,6 +317,21 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         )
         .await?;
         println!("   skipped plan-logistics.png (no geocoded hotel/airport endpoints)");
+    } else if !has_airport {
+        // Domestic: the stay is already a pin on plan.png — no separate logistics map.
+        record_artifact(
+            &write,
+            &plan_id,
+            "plan-logistics.png",
+            0,
+            None,
+            "skipped",
+            Some("domestic trip: no airport endpoints; stay merged into plan.png"),
+            None,
+            None,
+        )
+        .await?;
+        println!("   skipped plan-logistics.png (domestic: stay merged into plan.png, no airport endpoints)");
     } else if !upload_map(
         &write,
         &plan_id,

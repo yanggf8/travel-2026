@@ -158,10 +158,10 @@ fn print_table(
         println!("No accommodations found.");
         return;
     }
-    // Columns: hotel_name | room_type | sea_view | price_twd | breakfast | source
+    // Columns: hotel_name | room_type | sea_view | price_twd | breakfast | bathtub | rank | source
     let header = format!(
-        "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {}",
-        "hotel_name", "room_type", "sea_view", "price_twd", "breakfast", "source"
+        "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {:<7} │ {:<4} │ {}",
+        "hotel_name", "room_type", "sea_view", "price_twd", "breakfast", "bathtub", "rank", "source"
     );
     let bar = "─".repeat(header.chars().count());
     println!("{bar}");
@@ -170,21 +170,47 @@ fn print_table(
     for r in rows {
         let sea = if r.sea_view == 1 { "yes" } else { "no" };
         let bf = if r.breakfast_included == 1 { "yes" } else { "no" };
+        // NULL = 未查（不可當成「沒有」）；1 = 有浴缸；0 = 查過、無浴缸。
+        let tub = match r.has_bathtub {
+            Some(1) => "yes",
+            Some(_) => "no",
+            None => "?",
+        };
+        // ranking: NULL = 未排序（不列入推薦）。
+        let rank = match r.ranking {
+            Some(n) => n.to_string(),
+            None => "-".to_string(),
+        };
         let hotel: String = r.hotel_name.chars().take(16).collect();
         let room: String = r.room_type.chars().take(14).collect();
         let src = r.source.as_deref().unwrap_or("-");
         println!(
-            "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {}",
+            "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {:<7} │ {:<4} │ {}",
             dash(&hotel),
             dash(&room),
             sea,
             format!("TWD {}", r.price_twd),
             bf,
+            tub,
+            rank,
             dash(src)
         );
     }
     println!("{bar}");
     println!("Showing {} of max {} results.", rows.len(), args.limit);
+    // 比較內容（推薦排序段落渲染的來源）——有 notes 才印，提醒缺件的補齊。
+    let with_notes: Vec<&_> = rows.iter().filter(|r| r.notes.is_some()).collect();
+    if !with_notes.is_empty() {
+        println!("\nNotes (優劣比較與推薦理由):");
+        for r in with_notes {
+            println!("  {} — {}", r.hotel_name, r.notes.as_deref().unwrap_or(""));
+        }
+    }
+    if rows.iter().any(|r| r.notes.is_none() || r.ranking.is_none()) {
+        println!(
+            "\n💡 有候選缺少比較內容（notes/rank）—— `travel update-accommodation --id <id> --notes \"...\" --rank <n>`"
+        );
+    }
 }
 
 #[cfg(test)]

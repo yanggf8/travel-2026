@@ -1402,7 +1402,8 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
     let mut rows = match conn
         .query(
             "SELECT id, destination, hotel_name, image_url, booking_url, price_source, price_checked_at, \
-             CAST(julianday('now') - julianday(price_checked_at) AS INTEGER) AS price_age_days \
+             CAST(julianday('now') - julianday(price_checked_at) AS INTEGER) AS price_age_days, \
+             ranking, notes \
              FROM domestic_accommodations ORDER BY destination, id",
             (),
         )
@@ -1450,6 +1451,35 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
                 severity: Severity::Info,
                 message: format!(
                     "{dest}/{hotel} ({id}) has no booking_url — add the Agoda/booking link via update-accommodation --id {id} --booking-url <url>"
+                ),
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+        }
+        // 比較內容 — the dashboard's comparison section renders from these. A candidate
+        // without notes is a bare price grid the reader cannot decide from, so it is a
+        // WARN (this is the standing reminder for the agent writing candidates);
+        // ranking (推薦順位) missing is an INFO — a shortlist can be fully written
+        // before the final order is picked.
+        let ranking: Option<i64> = row.get(8).ok();
+        let notes: Option<String> = row.get(9).ok();
+        if notes.as_deref().is_none_or(|s| s.trim().is_empty()) {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "{dest}/{hotel} ({id}) has no comparison notes (優劣比較與推薦理由) — the dashboard comparison section renders from notes; write them via update-accommodation --id {id} --notes \"<優劣與推薦理由>\""
+                ),
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+        }
+        if ranking.is_none() {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Info,
+                message: format!(
+                    "{dest}/{hotel} ({id}) has no ranking (推薦順位, 1=首選) — set via update-accommodation --id {id} --rank <n>"
                 ),
                 file: Some("turso:domestic_accommodations".to_string()),
                 line: None,
@@ -1658,32 +1688,41 @@ fn validate_completed_items(issues: &mut Vec<Issue>) {
 // --- Filesystem check: skill SKILL.md files ---
 
 fn validate_skill_files(issues: &mut Vec<Issue>) {
-    let content = match read_file("CLAUDE.md") {
-        Some(c) => c,
-        None => return,
-    };
+    // Skills may be listed in CLAUDE.md OR docs/reference/routing.md — the
+    // Skill Decision Tree + Available Skills table moved to routing.md in the
+    // 2026-09-28 rules-only CLAUDE.md restructure.
+    let docs = ["CLAUDE.md", "docs/reference/routing.md"];
+    let contents: Vec<(&str, String)> = docs
+        .iter()
+        .filter_map(|d| read_file(d).map(|c| (*d, c)))
+        .collect();
+    if contents.is_empty() {
+        return;
+    }
     let skill_path_re = match regex::Regex::new(r"`(src/skills/[^`]+/SKILL\.md)`") {
         Ok(r) => r,
         Err(_) => return,
     };
     let mut checked: HashSet<String> = HashSet::new();
-    for m in skill_path_re.find_iter(&content) {
-        let path = m
-            .as_str()
-            .trim_start_matches('`')
-            .trim_end_matches('`')
-            .to_string();
-        if !checked.insert(path.clone()) {
-            continue;
-        }
-        if !file_exists(&path) {
-            issues.push(Issue {
-                category: "skill-files".to_string(),
-                severity: Severity::Error,
-                message: format!("Skill file not found: {path}"),
-                file: Some("CLAUDE.md".to_string()),
-                line: None,
-            });
+    for (doc, content) in &contents {
+        for m in skill_path_re.find_iter(content) {
+            let path = m
+                .as_str()
+                .trim_start_matches('`')
+                .trim_end_matches('`')
+                .to_string();
+            if !checked.insert(path.clone()) {
+                continue;
+            }
+            if !file_exists(&path) {
+                issues.push(Issue {
+                    category: "skill-files".to_string(),
+                    severity: Severity::Error,
+                    message: format!("Skill file not found: {path}"),
+                    file: Some(doc.to_string()),
+                    line: None,
+                });
+            }
         }
     }
 
@@ -1701,7 +1740,9 @@ fn validate_skill_files(issues: &mut Vec<Issue>) {
                 issues.push(Issue {
                     category: "skill-files".to_string(),
                     severity: Severity::Warning,
-                    message: format!("Skill exists but not listed in CLAUDE.md: {skill_md}"),
+                    message: format!(
+                        "Skill exists but not listed in CLAUDE.md or docs/reference/routing.md: {skill_md}"
+                    ),
                     file: None,
                     line: None,
                 });

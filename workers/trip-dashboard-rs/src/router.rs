@@ -267,8 +267,20 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
                 html_no_store(render::auth::bad_share_page(&login_href, lang))?.with_status(403),
             );
         }
-        let plan = load_plan(&turso_url, &turso_token, slug).await?;
+        let mut plan = load_plan(&turso_url, &turso_token, slug).await?;
         let map_status = check_map_status(&env, &turso_url, &turso_token, &plan.plan_id, &plan.days).await?;
+        // Itinerary reference points for the candidate 位置小圖: the plan.png
+        // legend stops (九份老街/野柳/金山/淡水 for jiufen). A stay's position
+        // only means something relative to the trip's own places.
+        plan.poi_stops = map_status
+            .legend_for("plan.png")
+            .iter()
+            .map(|s| crate::model::PoiStop {
+                label: s.label.clone(),
+                lat: s.lat,
+                lon: s.lon,
+            })
+            .collect();
         let token = query.get("token").map(|s| s.as_str());
         // Logged-in owner: copy a viewer share URL (share token) for others — never
         // the request ?token= and never the session cookie. Viewers opening a share
@@ -815,9 +827,10 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         format!(
             "SELECT trip_id, destination, title, price_amount, price_currency, status, selected_date FROM bookings_current WHERE trip_id = '{slug}' AND category = 'accommodation' AND status = 'booked' AND destination = {dest_expr_own}"
         ),
-        // [17] domestic accommodation candidates (sea-view shortlist) — jiufen three
+        // [17] domestic accommodation candidates (sea-view shortlist) — ranked
+        // candidates first (ranking 1 = 首選), then price order for the unranked.
         format!(
-            "SELECT id, hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, booking_url, room_size_sqm, rooms_left, free_cancel_until, price_source, price_checked_at, source FROM domestic_accommodations WHERE destination = {dest_expr} ORDER BY price_twd ASC"
+            "SELECT id, hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, booking_url, room_size_sqm, rooms_left, free_cancel_until, has_bathtub, price_source, price_checked_at, source, ranking, notes, latitude, longitude FROM domestic_accommodations WHERE destination = {dest_expr} ORDER BY COALESCE(ranking, 999) ASC, price_twd ASC"
         ),
         // [18] P4 accommodation process status — drives booked vs selecting UI.
         format!(
