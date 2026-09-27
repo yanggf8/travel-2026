@@ -119,7 +119,10 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 ./bin/travel snapshot-maps [--dest <slug>]        # Renders route-diagram PNGs in Rust and uploads them to R2. Requires Wrangler auth.
 #   Stop coordinates: a route-segment label is matched (exact normalized poi_id / title / parenthetical)
 #   against destination_pois, then hotels.name, and only then geocoded via Nominatim — so name a stop
-#   after its POI to pin it exactly. Background: ArcGIS World Street Map (World Topo Map fallback) via the
+#   after its POI to pin it exactly. Domestic stays: plan-logistics pins the booked stay from
+#   bookings_current (the same view the dashboard stay card reads; `hotels` is Japan-path only) — a
+#   destination_pois title containing the hotel name wins, else the geocode chain.
+#   Background: ArcGIS World Street Map (World Topo Map fallback) via the
 #   MapServer export endpoint; only when ArcGIS is unreachable does it query Overpass for a road web. If BOTH
 #   are unavailable, a map whose stops+routes are unchanged and whose last upload had a background is KEPT
 #   (map_artifacts.input_sha256 / has_roads); otherwise it is marked failed (dashboard shows the missing-map

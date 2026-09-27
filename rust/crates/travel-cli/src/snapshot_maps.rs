@@ -1362,6 +1362,36 @@ async fn query_hotel_names(c: &Connection, p: &str, d: &str) -> Result<Vec<Strin
     }
     Ok(v)
 }
+/// Domestic (Taiwan) booked stay for this plan — the SAME source the dashboard
+/// stay card reads (`bookings_current` + its `hotel` payload KV). The `hotels`
+/// table is the Japan path only, so without this a domestic stay never pins on
+/// the logistics map. Returns (title, hotel_name).
+async fn query_domestic_stay(
+    c: &Connection,
+    p: &str,
+    d: &str,
+) -> Result<Option<(String, String)>, String> {
+    let mut r = c
+        .query(
+            "SELECT bc.title, bp.value FROM bookings_current bc \
+             JOIN bookings_current_payload bp ON bp.booking_key = bc.booking_key AND bp.key='hotel' \
+             WHERE bc.trip_id=?1 AND bc.destination=?2 AND bc.category='accommodation' \
+               AND bc.status='booked' \
+             LIMIT 1",
+            params![p.to_string(), d.to_string()],
+        )
+        .await
+        .map_err(err("domestic stay query"))?;
+    if let Some(x) = r.next().await.map_err(err("domestic stay read"))? {
+        let title: String = x.get(0).map_err(|e| e.to_string())?;
+        let hotel: String = x.get(1).map_err(|e| e.to_string())?;
+        if !hotel.trim().is_empty() {
+            return Ok(Some((title, hotel)));
+        }
+    }
+    Ok(None)
+}
+
 async fn geocode_context(c: &Connection, d: &str) -> Result<String, String> {
     let mut r = c
         .query(
@@ -1733,6 +1763,29 @@ async fn await_logistics(
     }
     let mut out = Vec::new();
     let mut seen = HashSet::new();
+    // Domestic stay: `hotels` is Japan-path only, so the booked domestic stay
+    // arrives here instead. Prefer its geocoded destination_pois row (title
+    // contains the hotel name, e.g. 海論 → 海論海景民宿); only if no POI matches
+    // does the label fall through to the shared geocode chain below.
+    if let Some((_title, hotel)) = query_domestic_stay(read, p, d).await? {
+        match dest_pois
+            .iter()
+            .find(|poi| norm(&poi.title).contains(&norm(&hotel)))
+        {
+            Some(poi) => {
+                if seen.insert((coord_key(poi.lat, poi.lon), Kind::Hotel as u8)) {
+                    out.push(Point {
+                        lat: poi.lat,
+                        lon: poi.lon,
+                        color: [21, 101, 192],
+                        kind: Kind::Hotel,
+                        label: hotel,
+                    });
+                }
+            }
+            None => labels.push((hotel, Kind::Hotel, false)),
+        }
+    }
     for (label, kind, from_segment) in labels {
         // Keep the label's hotel/airport kind: this map only draws logistics endpoints,
         // so a label that happens to share a POI key must not turn into a sightseeing pin.
