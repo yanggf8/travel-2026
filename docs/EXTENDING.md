@@ -2,7 +2,7 @@
 
 > ⚠️ **Legacy — partial accuracy.** This guide was written when destinations and OTAs lived in `data/destinations.json` / `data/ota-sources.json`. Those files no longer exist — both live in Turso tables (`destination_config`, `ota_sources`). The reference-file/scraper-class/validator/CLI sections still apply, but the "Step 1: Register in destinations.json" / "Register in ota-sources.json" steps do not.
 >
-> For new destinations, use the `/new-destination` skill (`src/skills/new-destination/SKILL.md`). For new OTA sources, insert a row into the `ota_sources` table — the table is described under **`## Turso DB`** in CLAUDE.md (search for `ota_sources`). The rest of this guide (reference files, scraper subclassing, validators, CLI command structure) is still current.
+> For new destinations, use the `/new-destination` skill (`src/skills/new-destination/SKILL.md`). For new OTA sources, insert a row into the `ota_sources` table — the table lives in Turso and is described in **`docs/reference/architecture.md`** (search for `ota_sources`). The rest of this guide (reference files, scraper subclassing, validators, CLI command structure) is still current.
 
 This guide explains how to extend the skill pack for new destinations, OTAs, and custom validation rules.
 

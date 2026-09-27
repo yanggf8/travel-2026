@@ -7,8 +7,10 @@ larger Rust dashboard redesign.
 ---
 
 You are fixing bugs in the Cloudflare trip-dashboard Worker (TypeScript) at
-`/home/yanggf/b/travel-2026/workers/trip-dashboard/`. Read `CLAUDE.md` (repo root) first for the
-dashboard architecture, the Turso pipeline, and the deploy commands.
+`/home/yanggf/b/travel-2026/workers/trip-dashboard/`. (Historical note: that TS worker is retired —
+the live worker is `workers/trip-dashboard-rs`.) Read the repo-root `CLAUDE.md` and
+`docs/reference/dashboard.md` first for the dashboard architecture, the Turso pipeline, and the
+deploy commands.
 
 ## Context
 The `okinawa-2026` plan is fully populated in Turso (flights, hotel, 5-day session-based
