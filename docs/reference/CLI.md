@@ -127,6 +127,9 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 #   are unavailable, a map whose stops+routes are unchanged and whose last upload had a background is KEPT
 #   (map_artifacts.input_sha256 / has_roads); otherwise it is marked failed (dashboard shows the missing-map
 #   state) — re-run later to restore the background.
+#   Route lines: road-following geometry per consecutive stop pair, read from the route_road_legs
+#   cache (osrm-demo|driving); a cache-miss leg is fetched from the OSRM demo router once, persisted,
+#   and reused for the rest of the run — straight lines only appear if that fetch fails.
 #   Numbered-pin legend: every rendered/reused PNG also (re)writes map_legend_stops rows (seq = pin number,
 #   label = segment label / hotel full name / POI title), which trip-dashboard-rs renders as the clickable
 #   number→name legend under each map (the PNG font has no CJK glyphs). Labels are NOT in input_sha256, so a
