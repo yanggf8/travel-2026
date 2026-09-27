@@ -12,8 +12,8 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-09-22
--- Tables: 136 | Indexes: 27
+-- Generated: 2026-09-27
+-- Tables: 137 | Indexes: 27
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -593,6 +593,16 @@ CREATE TABLE map_artifacts (
   PRIMARY KEY (plan_id, map_key)
 );
 
+CREATE TABLE map_legend_stops (
+  plan_id TEXT NOT NULL,
+  map_key TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lon REAL NOT NULL,
+  PRIMARY KEY (plan_id, map_key, seq)
+);
+
 CREATE TABLE "offers" (id TEXT NOT NULL, source_id TEXT NOT NULL, type TEXT CHECK(type IN ('package', 'flight', 'hotel')), name TEXT, price_per_person INTEGER, currency TEXT DEFAULT 'TWD', region TEXT, destination TEXT, departure_date TEXT, return_date TEXT, nights INTEGER, availability TEXT CHECK(availability IN ('available', 'sold_out', 'limited')), hotel_name TEXT, hotel_area TEXT, airline TEXT, flight_outbound TEXT, flight_return TEXT, includes TEXT, scraped_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, source_file TEXT, capture_id TEXT, produced_by_job_id TEXT, produced_by_attempt_id TEXT, parser_method TEXT CHECK (parser_method IS NULL OR parser_method IN ('agent_parse', 'regex')), capture_checksum TEXT, parser_rule_checksum TEXT, normalizer_version TEXT, offer_key TEXT, dedup_key TEXT, last_seen_at TEXT, PRIMARY KEY (id, scraped_at));
 
 CREATE TABLE operation_runs (
@@ -820,9 +830,7 @@ CREATE TABLE plan_fit_notes (
   recommended INTEGER NOT NULL DEFAULT 0 CHECK(recommended IN (0, 1)),
   body_zh TEXT NOT NULL DEFAULT '',
   body_en TEXT NOT NULL DEFAULT '',
-  room_zh TEXT NOT NULL DEFAULT '',
-  room_en TEXT NOT NULL DEFAULT '',
-  updated_at TEXT,
+  updated_at TEXT, room_zh TEXT NOT NULL DEFAULT '', room_en TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (plan_id, destination, source_id)
 );
 
@@ -1289,10 +1297,11 @@ CREATE INDEX idx_offers_region ON offers (region);
 CREATE INDEX idx_offers_source ON offers (source_id);
 CREATE UNIQUE INDEX idx_operation_runs_idempotency ON operation_runs(plan_id, idempotency_key);
 CREATE INDEX idx_operation_runs_plan ON operation_runs(plan_id, started_at DESC);
-CREATE UNIQUE INDEX idx_plan_fit_notes_one_pick ON plan_fit_notes(plan_id, destination) WHERE recommended = 1;
+CREATE UNIQUE INDEX idx_plan_fit_notes_one_pick ON plan_fit_notes (plan_id, destination) WHERE recommended = 1;
 CREATE INDEX idx_plan_share_tokens_plan_status_created ON plan_share_tokens (plan_id, status, created_at DESC);
 CREATE INDEX idx_s0_cand_run ON shaping_candidates(run_id, rank);
 CREATE INDEX idx_s0_shaping_run ON shaping_rules(run_id, aspect, role);
+CREATE INDEX idx_s0_tg_offers_lookup ON shaping_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);
 CREATE UNIQUE INDEX uq_s0_shaping_value
     ON shaping_rules(
       run_id, aspect, role, kind,
@@ -1300,4 +1309,3 @@ CREATE UNIQUE INDEX uq_s0_shaping_value
       COALESCE(value_date, ''),
       COALESCE(value_integer, 0)
     );
-CREATE INDEX idx_s0_tg_offers_lookup ON shaping_tour_group_offers(run_id, dest_region, nights, price_per_person_twd);

@@ -1,7 +1,7 @@
 //! Proof test for the canonical `common::teardown_plan` / `teardown_offers` helpers.
 //!
 //! Verifies dynamic plan-keyed table discovery (drift-proof), full cleanup of a
-//! seeded plan across 57 tables, and that bogus-plan calls do not panic. Uses
+//! seeded plan across 59 tables, and that bogus-plan calls do not panic. Uses
 //! panic-safe Guard. Skips cleanly if no Turso creds.
 
 use std::process::Command;
@@ -131,7 +131,7 @@ async fn canonical_teardown_plan_cleans_all_plan_keyed_tables() {
     assert!(ok_list, "table list query must succeed; err={err_list}");
 
     let tables = column(&list_out);
-    assert_eq!(tables.len(), 57, "expected 57 plan-keyed tables; got {}: {:?}", tables.len(), tables);
+    assert_eq!(tables.len(), 59, "expected 59 plan-keyed tables (incl. map_legend_stops); got {}: {:?}", tables.len(), tables);
 
     // CRITICAL: each COUNT as SINGLE db exec (not batched) so parse yields plain 'n: 0'
     // (batched would be '[N/M] n: 0')

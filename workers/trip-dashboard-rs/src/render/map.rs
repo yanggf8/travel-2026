@@ -27,6 +27,31 @@ pub struct MapStatus {
     /// Plan-wide map containing only hotel and airport route endpoints.
     pub plan_logistics: Option<String>,
     pub days: HashMap<i64, Option<String>>,
+    /// Numbered-pin legends per map key (`plan.png`, `day-3.png`, …), loaded from
+    /// the `map_legend_stops` rows the CLI's snapshot-maps writes in lockstep with
+    /// the PNG it uploads. Empty for snapshots taken before the table existed —
+    /// the map then renders without a legend, exactly as before.
+    pub legends: HashMap<String, Vec<LegendStop>>,
+}
+
+/// One numbered map pin's legend entry: `seq` is the number drawn on the PNG
+/// (assigned by snapshot-maps in pin order), `label` the place name in the
+/// itinerary's own language, `lat`/`lon` the pin coordinates for the keyless
+/// Google Maps link (same pattern as `Stop::maps_link`).
+#[derive(Clone, Debug)]
+pub struct LegendStop {
+    pub seq: i64,
+    pub label: String,
+    pub lat: f64,
+    pub lon: f64,
+}
+
+impl MapStatus {
+    /// Legend rows for one map key (`"plan.png"`, `"day-3.png"`, …), empty when
+    /// none were recorded for it.
+    pub fn legend_for(&self, map_key: &str) -> &[LegendStop] {
+        self.legends.get(map_key).map(|v| v.as_slice()).unwrap_or(&[])
+    }
 }
 
 /// True when the body is a real PNG map (not a 1-byte garbage capture or tiny stub).
@@ -46,18 +71,41 @@ fn day_route_caption(day_number: i64, lang: &str) -> String {
     }
 }
 
+/// Numbered-pin legend under a map: one item per pin, "N name", each linking to a
+/// keyless Google Maps search on the pin's coordinates. Rendered only when the map
+/// itself is present — stale legend rows for an absent map must not leak out.
+fn map_legend_html(legend: &[LegendStop]) -> String {
+    if legend.is_empty() {
+        return String::new();
+    }
+    let mut h = String::from("<ol class=\"map-legend\">");
+    for s in legend {
+        h.push_str(&format!(
+            "<li><span class=\"leg-num\">{}</span><a href=\"https://www.google.com/maps?q={},{}\" \
+             target=\"_blank\" rel=\"noopener\">{}</a></li>",
+            s.seq,
+            s.lat,
+            s.lon,
+            esc(&s.label),
+        ));
+    }
+    h.push_str("</ol>");
+    h
+}
+
 /// Framed plan-overview map slot. Emits a real `<img>` only when `has_map` is true;
 /// otherwise a styled missing placeholder (never a blind broken-image `<img>`).
-pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str) -> String {
+pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str, legend: &[LegendStop]) -> String {
     let caption = i18n::t("tripOverview", lang);
     if let Some(v) = version {
         format!(
             "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
-             src=\"/map/{}/plan.png{}\"><figcaption>{}</figcaption></figure>",
+             src=\"/map/{}/plan.png{}\"><figcaption>{}</figcaption>{}</figure>",
             esc(caption),
             esc_url_attr(plan_id),
             cache_bust(v),
             map_caption(caption),
+            map_legend_html(legend),
         )
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
@@ -72,16 +120,22 @@ pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str) -> String
 
 /// Separate plan-wide hotel/airport map so distant endpoints do not flatten the
 /// sightseeing overview's zoom level.
-pub fn plan_logistics_map_slot(plan_id: &str, version: Option<&str>, lang: &str) -> String {
+pub fn plan_logistics_map_slot(
+    plan_id: &str,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+) -> String {
     let caption = i18n::t("planLogisticsMap", lang);
     if let Some(v) = version {
         format!(
             "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
-             src=\"/map/{}/plan-logistics.png{}\"><figcaption>{}</figcaption></figure>",
+             src=\"/map/{}/plan-logistics.png{}\"><figcaption>{}</figcaption>{}</figure>",
             esc(caption),
             esc_url_attr(plan_id),
             cache_bust(v),
             map_caption(caption),
+            map_legend_html(legend),
         )
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
@@ -95,17 +149,24 @@ pub fn plan_logistics_map_slot(plan_id: &str, version: Option<&str>, lang: &str)
 }
 
 /// Framed per-day route map slot. Same contract as `plan_map_slot`.
-pub fn day_map_slot(plan_id: &str, day_number: i64, version: Option<&str>, lang: &str) -> String {
+pub fn day_map_slot(
+    plan_id: &str,
+    day_number: i64,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+) -> String {
     let caption = day_route_caption(day_number, lang);
     if let Some(v) = version {
         format!(
             "<figure class=\"map-frame\"><img class=\"daymap\" alt=\"{}\" \
-             src=\"/map/{}/day-{}.png{}\"><figcaption>{}</figcaption></figure>",
+             src=\"/map/{}/day-{}.png{}\"><figcaption>{}</figcaption>{}</figure>",
             esc(&caption),
             esc_url_attr(plan_id),
             day_number,
             cache_bust(v),
             map_caption(&caption),
+            map_legend_html(legend),
         )
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
@@ -208,6 +269,62 @@ mod tests {
     use super::*;
     use crate::model::Stop;
 
+    fn leg(seq: i64, label: &str, lat: f64, lon: f64) -> LegendStop {
+        LegendStop {
+            seq,
+            label: label.into(),
+            lat,
+            lon,
+        }
+    }
+
+    #[test]
+    fn map_legend_lists_numbered_clickable_stops() {
+        let legend = vec![
+            leg(1, "金閣寺", 35.0394, 135.7292),
+            leg(2, "北野天滿宮", 35.0117, 135.7409),
+        ];
+        let h = map_legend_html(&legend);
+        assert!(h.contains("<ol class=\"map-legend\">"), "got: {h}");
+        assert!(h.contains("<span class=\"leg-num\">1</span>"), "got: {h}");
+        assert!(h.contains("<span class=\"leg-num\">2</span>"), "got: {h}");
+        // Keyless Google Maps link, same pattern as stop_list.
+        assert!(h.contains("https://www.google.com/maps?q=35.0394,135.7292"), "got: {h}");
+        assert!(h.contains(">金閣寺</a>"), "got: {h}");
+        // Legend order follows seq (pin numbering).
+        let p1 = h.find("金閣寺").expect("first label");
+        let p2 = h.find("北野天滿宮").expect("second label");
+        assert!(p1 < p2, "seq order must be preserved");
+    }
+
+    #[test]
+    fn empty_map_legend_renders_nothing() {
+        assert_eq!(map_legend_html(&[]), "");
+    }
+
+    #[test]
+    fn plan_map_slot_renders_legend_under_caption_when_map_present() {
+        let legend = vec![leg(1, "金閣寺", 35.0394, 135.7292)];
+        let h = plan_map_slot("kyoto-2026", Some("v1"), "zh", &legend);
+        assert!(h.contains("<ol class=\"map-legend\">"), "got: {h}");
+        let cap = h.find("</figcaption>").expect("caption");
+        let legend_pos = h.find("<ol class=\"map-legend\">").expect("legend");
+        assert!(legend_pos > cap, "legend renders after the caption");
+        // No map → no legend, even when rows exist (stale rows for an absent map).
+        let missing = plan_map_slot("kyoto-2026", None, "zh", &legend);
+        assert!(!missing.contains("map-legend"), "got: {missing}");
+    }
+
+    #[test]
+    fn day_map_slot_renders_legend_when_map_present() {
+        let legend = vec![leg(3, "二年坂", 34.9976, 135.7817)];
+        let h = day_map_slot("kyoto-2026", 2, Some("v1"), "zh", &legend);
+        assert!(h.contains("<span class=\"leg-num\">3</span>"), "got: {h}");
+        assert!(h.contains("https://www.google.com/maps?q=34.9976,135.7817"), "got: {h}");
+        let missing = day_map_slot("kyoto-2026", 2, None, "zh", &legend);
+        assert!(!missing.contains("map-legend"), "got: {missing}");
+    }
+
     #[test]
     fn stop_list_links_to_maps() {
         let stops = vec![Stop {
@@ -267,25 +384,25 @@ mod tests {
     fn map_url_carries_a_cache_busting_version() {
         // Map PNGs are served max-age=86400. Without a version in the URL a
         // re-snapshot stays invisible to anyone who already opened the page.
-        let h = plan_map_slot("jiufen-2026", Some("\"abc123\""), "zh");
+        let h = plan_map_slot("jiufen-2026", Some("\"abc123\""), "zh", &[]);
         assert!(h.contains("/map/jiufen-2026/plan.png?v=abc123"), "{h}");
-        let d = day_map_slot("jiufen-2026", 2, Some("W/\"deadbeef\""), "zh");
+        let d = day_map_slot("jiufen-2026", 2, Some("W/\"deadbeef\""), "zh", &[]);
         assert!(d.contains("/map/jiufen-2026/day-2.png?v=Wdeadbeef"), "{d}");
         // A different PNG must produce a different URL.
-        let other = plan_map_slot("jiufen-2026", Some("zzz999"), "zh");
+        let other = plan_map_slot("jiufen-2026", Some("zzz999"), "zh", &[]);
         assert_ne!(h, other);
     }
 
     #[test]
     fn unusable_version_emits_no_query_string() {
-        let h = plan_map_slot("jiufen-2026", Some("\"\""), "zh");
+        let h = plan_map_slot("jiufen-2026", Some("\"\""), "zh", &[]);
         assert!(h.contains("/map/jiufen-2026/plan.png\""), "no dangling ?v=: {h}");
         assert!(!h.contains("?v="), "{h}");
     }
 
     #[test]
     fn plan_map_slot_with_map_emits_img() {
-        let h = plan_map_slot("okinawa-2026", Some("v1"), "en");
+        let h = plan_map_slot("okinawa-2026", Some("v1"), "en", &[]);
         assert!(h.contains("map-frame"));
         assert!(h.contains("class=\"planmap\""));
         assert!(h.contains("/map/okinawa-2026/plan.png"));
@@ -297,7 +414,7 @@ mod tests {
 
     #[test]
     fn plan_map_slot_without_map_emits_placeholder() {
-        let h = plan_map_slot("okinawa-2026", None, "en");
+        let h = plan_map_slot("okinawa-2026", None, "en", &[]);
         assert!(h.contains("map-frame map-missing"));
         assert!(h.contains("map-missing-box"));
         assert!(h.contains("Map not available yet"));
@@ -308,7 +425,7 @@ mod tests {
 
     #[test]
     fn day_map_slot_with_map_emits_img() {
-        let h = day_map_slot("okinawa-2026", 2, Some("v1"), "zh");
+        let h = day_map_slot("okinawa-2026", 2, Some("v1"), "zh", &[]);
         assert!(h.contains("map-frame"));
         assert!(h.contains("class=\"daymap\""));
         assert!(h.contains("/map/okinawa-2026/day-2.png"));
@@ -318,7 +435,7 @@ mod tests {
 
     #[test]
     fn day_map_slot_without_map_emits_placeholder_zh() {
-        let h = day_map_slot("okinawa-2026", 3, None, "zh");
+        let h = day_map_slot("okinawa-2026", 3, None, "zh", &[]);
         assert!(h.contains("map-missing"));
         assert!(h.contains("地圖尚未產生"));
         assert!(h.contains("第 3 天路線"));

@@ -268,7 +268,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
             );
         }
         let plan = load_plan(&turso_url, &turso_token, slug).await?;
-        let map_status = check_map_status(&env, &plan.plan_id, &plan.days).await?;
+        let map_status = check_map_status(&env, &turso_url, &turso_token, &plan.plan_id, &plan.days).await?;
         let token = query.get("token").map(|s| s.as_str());
         // Logged-in owner: copy a viewer share URL (share token) for others — never
         // the request ?token= and never the session cookie. Viewers opening a share
@@ -563,6 +563,8 @@ impl GrantCsrf {
 /// Probe R2 for each expected map key and record whether a real PNG is present.
 async fn check_map_status(
     env: &Env,
+    turso_url: &str,
+    turso_token: &str,
     plan_id: &str,
     days: &[model::Day],
 ) -> Result<render::map::MapStatus> {
@@ -576,11 +578,56 @@ async fn check_map_status(
         let key = format!("{plan_id}/day-{}.png", d.day_number);
         day_status.insert(d.day_number, r2_map_version(&bucket, &key).await?);
     }
+    let legends = load_map_legends(turso_url, turso_token, plan_id).await?;
     Ok(render::map::MapStatus {
         plan,
         plan_logistics,
         days: day_status,
+        legends,
     })
+}
+
+/// Load the numbered-pin legend rows snapshot-maps wrote for this plan, grouped by
+/// map key. The slug is `[a-z0-9_-]+`-validated before load_plan ever runs, same
+/// trust level as every other load_plan query.
+async fn load_map_legends(
+    turso_url: &str,
+    turso_token: &str,
+    plan_id: &str,
+) -> Result<HashMap<String, Vec<render::map::LegendStop>>> {
+    let sql = format!(
+        "SELECT map_key, seq, label, lat, lon FROM map_legend_stops \
+         WHERE plan_id = '{plan_id}' ORDER BY map_key, seq"
+    );
+    let rows = turso::pipeline(turso_url, turso_token, &[sql]).await?;
+    let mut out: HashMap<String, Vec<render::map::LegendStop>> = HashMap::new();
+    for row in rows.first().into_iter().flatten() {
+        if let Some((map_key, stop)) = decode_legend_row(row) {
+            out.entry(map_key).or_default().push(stop);
+        }
+    }
+    Ok(out)
+}
+
+/// Decode one map_legend_stops row into (map_key, LegendStop). Returns None on
+/// missing/NULL columns — a pin without coordinates has no link target.
+fn decode_legend_row(row: &turso::Row) -> Option<(String, render::map::LegendStop)> {
+    let map_key = row.get("map_key")?.as_str()?.to_string();
+    let label = row.get("label")?.as_str()?.to_string();
+    let seq = row
+        .get("seq")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))?;
+    let lat = row.get("lat").and_then(model::json_f64)?;
+    let lon = row.get("lon").and_then(model::json_f64)?;
+    Some((
+        map_key,
+        render::map::LegendStop {
+            seq,
+            label,
+            lat,
+            lon,
+        },
+    ))
 }
 
 /// `Some(etag)` when the key holds a real PNG. The ETag is the cache-bust version:
@@ -808,6 +855,51 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_legend_row_accepts_turso_string_scalars() {
+        // Turso's pipeline returns INTEGER/REAL as strings; the legend rows must
+        // decode from that shape (and from plain JSON numbers), NULL coords drop.
+        use serde_json::json;
+        use turso::Row;
+        let stringly: Row = [
+            ("map_key", json!("plan.png")),
+            ("seq", json!("1")),
+            ("label", json!("金閣寺")),
+            ("lat", json!("35.0394")),
+            ("lon", json!("135.7292")),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let got = decode_legend_row(&stringly).expect("string-typed row must decode");
+        assert_eq!(got.0, "plan.png");
+        assert_eq!(got.1.seq, 1);
+        assert_eq!(got.1.label, "金閣寺");
+        assert_eq!(got.1.lat, 35.0394);
+        let numeric: Row = [
+            ("map_key", json!("day-1.png")),
+            ("seq", json!(2)),
+            ("label", json!("京都駅")),
+            ("lat", json!(34.9853)),
+            ("lon", json!(135.7588)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        assert_eq!(decode_legend_row(&numeric).unwrap().1.seq, 2);
+        let nulled: Row = [
+            ("map_key", json!("plan.png")),
+            ("seq", json!("3")),
+            ("label", json!("x")),
+            ("lat", serde_json::Value::Null),
+            ("lon", serde_json::Value::Null),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        assert!(decode_legend_row(&nulled).is_none());
+    }
 
     #[test]
     fn oauth_callback_follows_request_origin() {

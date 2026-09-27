@@ -124,6 +124,12 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 #   are unavailable, a map whose stops+routes are unchanged and whose last upload had a background is KEPT
 #   (map_artifacts.input_sha256 / has_roads); otherwise it is marked failed (dashboard shows the missing-map
 #   state) — re-run later to restore the background.
+#   Numbered-pin legend: every rendered/reused PNG also (re)writes map_legend_stops rows (seq = pin number,
+#   label = segment label / hotel full name / POI title), which trip-dashboard-rs renders as the clickable
+#   number→name legend under each map (the PNG font has no CJK glyphs). Labels are NOT in input_sha256, so a
+#   rename refreshes legend rows without re-rendering. Skip/fail runs leave previous rows in place (the
+#   previous PNG is still served from R2). A bare generic "hotel" segment endpoint resolves to the plan's
+#   unique hotel (hotels.name), not an arbitrary Nominatim hotel hit.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
 ./bin/travel set-poi-coords <slug> <poi_id> <lat> <lon> [--source <s>] [--confidence <c>]    # geocode a destination_pois row (feeds the POI-coord map path). GLOBAL/slug-keyed reference data — takes NO --plan-id, NO audit triad. `validate data` WARNs on ungeocoded POIs.
 ./bin/travel add-transit <slug> <from_station> <to_station> --minutes N [--line "<t>"] [--kind metro|rail|walk|bus|estimate] [--source <s>] [--confidence verified|reviewed|estimate]    # add a destination_transit station pair (transit time/line that derive-routes attaches to auto-derived legs). GLOBAL/slug-keyed reference data — NO --plan-id, NO audit triad. Idempotent (INSERT OR REPLACE). pair_key uses derive-routes' own normalization, so the pair is found by the next `derive-routes` run — no more raw `db exec INSERT` for discovered pairs.

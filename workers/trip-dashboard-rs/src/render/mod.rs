@@ -46,11 +46,17 @@ pub fn render_plan(
     body.push_str(&alerts::render_pending_alerts(plan, lang, false));
     // Plan overview map ABOVE the booking summary (its own frame, never inside
     // the summary's dashed box) — user visibility request.
-    body.push_str(&map::plan_map_slot(&plan.plan_id, map_status.plan.as_deref(), lang));
+    body.push_str(&map::plan_map_slot(
+        &plan.plan_id,
+        map_status.plan.as_deref(),
+        lang,
+        map_status.legend_for("plan.png"),
+    ));
     body.push_str(&map::plan_logistics_map_slot(
         &plan.plan_id,
         map_status.plan_logistics.as_deref(),
         lang,
+        map_status.legend_for("plan-logistics.png"),
     ));
     body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
@@ -58,7 +64,13 @@ pub fn render_plan(
             .days
             .get(&d.day_number)
             .and_then(|v| v.as_deref());
-        body.push_str(&day::render(d, &plan.plan_id, lang, map_ver));
+        body.push_str(&day::render(
+            d,
+            &plan.plan_id,
+            lang,
+            map_ver,
+            map_status.legend_for(&format!("day-{}.png", d.day_number)),
+        ));
     }
     // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),
     // then the transit cheat-sheet (mirror render.ts:1394).
@@ -181,6 +193,28 @@ mod tests {
             plan: Some("etag1".into()),
             plan_logistics: Some("etag3".into()),
             days: [(1i64, Some("etag2".into()))].into_iter().collect(),
+            legends: [
+                (
+                    "plan.png".to_string(),
+                    vec![map::LegendStop {
+                        seq: 1,
+                        label: "首里城".into(),
+                        lat: 26.2186,
+                        lon: 127.7196,
+                    }],
+                ),
+                (
+                    "day-1.png".to_string(),
+                    vec![map::LegendStop {
+                        seq: 2,
+                        label: "国際通り".into(),
+                        lat: 26.2125,
+                        lon: 127.6809,
+                    }],
+                ),
+            ]
+            .into_iter()
+            .collect(),
         };
         let html = render_plan(&plan, "en", None, &map_status, "");
         assert!(html.contains("booking-summary"));
@@ -196,5 +230,14 @@ mod tests {
         );
         // Summary carries the dashed-frame class.
         assert!(html.contains("booking-summary summary-box"));
+        // Legends thread through to the plan map and the day map from MapStatus.
+        assert!(html.contains(">首里城</a>"), "plan legend missing: {html}");
+        assert!(html.contains(">国際通り</a>"), "day legend missing: {html}");
+        let plan_leg = html.find("首里城").expect("plan legend");
+        let day_leg = html.find("国際通り").expect("day legend");
+        let plan_map = html.find("plan.png").expect("plan map img");
+        let day_map = html.find("day-1.png").expect("day map img");
+        assert!(plan_leg > plan_map, "plan legend sits under its map");
+        assert!(day_leg > day_map, "day legend sits under its map");
     }
 }

@@ -573,7 +573,10 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
     }
 }
 
-fn json_f64(v: &Value) -> Option<f64> {
+/// Shared numeric-scalar decode (Turso pipeline returns REALs/INTEGERs as JSON
+/// strings; accept either shape). Used by the model row-helpers and the router's
+/// map-legend loader — do NOT re-roll per call site.
+pub(crate) fn json_f64(v: &Value) -> Option<f64> {
     v.as_f64()
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }

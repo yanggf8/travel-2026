@@ -69,6 +69,10 @@ struct Point {
     lon: f64,
     color: [u8; 3],
     kind: Kind,
+    /// Legend name for this pin. Rendered by the dashboard worker from
+    /// `map_legend_stops` (the PNG bitmap font has no CJK glyphs, so the
+    /// number→name mapping cannot be drawn into the image itself).
+    label: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,6 +157,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                             lon,
                             color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
                             kind,
+                            label: display_label(label, &hotel_names),
                         });
                     }
                 }
@@ -166,6 +171,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                         lon: p.3,
                         color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
                         kind: Kind::Sightseeing,
+                        label: p.1.clone(),
                     });
                 }
             }
@@ -348,6 +354,9 @@ async fn upload_map(
         println!(
             "   kept {key} (geographic background unavailable; previous map has same stops + background)"
         );
+        // Same PNG re-served, but labels may have changed (input_sha deliberately
+        // excludes them) — refresh the legend to the current point names.
+        write_legend_stops(conn, plan, key, points).await?;
         return Ok(true);
     }
     // A grid with pins is not a map.  It is especially misleading for the
@@ -428,8 +437,46 @@ async fn upload_map(
         Some(has_roads),
     )
     .await?;
+    write_legend_stops(conn, plan, key, points).await?;
     println!("   uploaded {key} ({} bytes)", png.len());
     Ok(true)
+}
+
+/// Rewrite the numbered-pin legend rows for one map key. `seq` mirrors the pin
+/// numbers `render_png` draws (`points.iter().enumerate()` + 1); the PNG and
+/// this table are written from the same `points` slice, so they cannot drift.
+/// Called ONLY on paths that (re)serve the current PNG (upload success and the
+/// reusable-keep path): skip/fail paths leave the previous rows in place because
+/// the dashboard still serves the previous PNG from R2, and its legend must keep
+/// matching it.
+async fn write_legend_stops(
+    conn: &Connection,
+    plan: &str,
+    key: &str,
+    points: &[Point],
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM map_legend_stops WHERE plan_id=?1 AND map_key=?2",
+        params![plan.to_string(), key.to_string()],
+    )
+    .await
+    .map_err(err("map legend delete"))?;
+    for (i, p) in points.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO map_legend_stops (plan_id, map_key, seq, label, lat, lon) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                plan.to_string(),
+                key.to_string(),
+                (i + 1) as i64,
+                p.label.clone(),
+                p.lat,
+                p.lon
+            ],
+        )
+        .await
+        .map_err(err("map legend insert"))?;
+    }
+    Ok(())
 }
 
 fn map_kind_tag(kind: MapKind) -> &'static str {
@@ -1446,7 +1493,30 @@ fn match_hotel(label: &str, hotel_names: &[String]) -> Option<String> {
             hits.push(name.clone());
         }
     }
+    if hits.is_empty() && is_generic_hotel_token(label) && hotel_names.len() == 1 {
+        // Route segments use a bare generic token ("hotel") for the stay; with
+        // exactly one candidate it resolves to that hotel instead of geocoding
+        // "hotel, <city>" to an arbitrary first Nominatim hit.
+        return hotel_names.first().cloned();
+    }
     if hits.len() == 1 { hits.pop() } else { None }
+}
+
+/// A bare stay word used as a segment endpoint, resolvable when the plan has a
+/// unique hotel. Case-insensitive for the ASCII tokens.
+fn is_generic_hotel_token(label: &str) -> bool {
+    let t = label.trim();
+    t.eq_ignore_ascii_case("hotel")
+        || t.eq_ignore_ascii_case("hostel")
+        || t.eq_ignore_ascii_case("ryokan")
+        || matches!(t, "飯店" | "旅館" | "民宿" | "ホテル")
+}
+
+/// Legend label for a segment endpoint: the hotel's full name when the label
+/// resolves to the plan's hotel, else the segment label verbatim — the legend
+/// must speak the itinerary's own naming, not a re-derived one.
+fn display_label(label: &str, hotel_names: &[String]) -> String {
+    match_hotel(label, hotel_names).unwrap_or_else(|| label.to_string())
 }
 
 async fn resolve_place(
@@ -1558,23 +1628,29 @@ fn normalize_place(place: &str, context: &str) -> (String, String) {
         }
         // CJK-first labels usually carry the searchable ASCII name in parens —
         // "京都哈頓飯店 (Hearton Hotel Kyoto)" geocodes as "Hearton Hotel Kyoto".
+        // When the parenthetical is itself CJK ("APA Hotel Kyoto Ekimae (APA京都站前)"),
+        // the ASCII outer name is the searchable part.
         p => {
-            if let Some(open) = p.find('(') {
-                if let Some(len) = p[open + 1..].find(')') {
-                    let inner = p[open + 1..open + 1 + len].trim();
-                    if !inner.is_empty()
-                        && inner.chars().all(|c| {
-                            c.is_ascii_alphanumeric()
-                                || matches!(c, ' ' | '&' | '-' | '.' | '\'')
-                        })
-                    {
-                        return (inner.to_string(), context.to_string());
-                    }
-                }
+            let (outer, inner) = trailing_paren_parts(p);
+            let ascii_inner = inner.as_deref().filter(|i| is_searchable_ascii(i));
+            if let Some(inner) = ascii_inner {
+                return (inner.to_string(), context.to_string());
+            }
+            if inner.is_some() && is_searchable_ascii(&outer) {
+                return (outer, context.to_string());
             }
             (p.to_string(), context.to_string())
         }
     }
+}
+
+/// A geocodable ASCII name fragment (Nominatim-friendly): alphanumerics plus the
+/// few separators that survive URL encoding. Empty is not searchable.
+fn is_searchable_ascii(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, ' ' | '&' | '-' | '.' | '\'')
+        })
 }
 
 async fn await_logistics(
@@ -1681,6 +1757,7 @@ async fn await_logistics(
                         [239, 108, 0]
                     },
                     kind,
+                    label: display_label(&label, hotel_names),
                 });
             }
         }
@@ -1875,8 +1952,8 @@ mod tests {
     #[test]
     fn padded_bounds_pads_by_span_fraction() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing },
-            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing },
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
         ];
         let (s, w, n, e) = padded_bounds(&points, &[]);
         assert!((s - 34.98).abs() < 1e-9, "south pad = 0.02 (20% of 0.1°): {s}");
@@ -1894,6 +1971,17 @@ mod tests {
     }
 
     #[test]
+    fn normalize_place_falls_back_to_ascii_outer_when_inner_is_cjk() {
+        // "APA Hotel Kyoto Ekimae (APA京都站前)": the parenthetical is mixed CJK, but
+        // the outer name is the searchable ASCII one — searching the full string
+        // returns no_result and drops the hotel pin from every map.
+        let (search, _) = normalize_place("APA Hotel Kyoto Ekimae (APA京都站前)", "Kyoto, Japan");
+        assert_eq!(search, "APA Hotel Kyoto Ekimae");
+        // Both parts non-searchable → unchanged full-string passthrough.
+        assert_eq!(normalize_place("嘟嘟房桃園機場貨運1站", "Kyoto, Japan").0, "嘟嘟房桃園機場貨運1站");
+    }
+
+    #[test]
     fn parse_overpass_ways_remark_empty_is_retryable() {
         // Server-side timeout: empty elements + remark → None (retry), unlike a
         // clean empty bbox which is Some(empty).
@@ -1904,8 +1992,8 @@ mod tests {
     #[test]
     fn render_png_with_road_web_changes_output() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing },
-            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing },
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
         ];
         let roads = vec![RoadWay {
             points: vec![(35.0, 135.0), (35.005, 135.008), (35.01, 135.01)],
@@ -1920,8 +2008,8 @@ mod tests {
     #[test]
     fn render_png_with_basemap_replaces_grid_background() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing },
-            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing },
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
         ];
         let mut base = vec![255u8; (WIDTH * HEIGHT * 4) as usize];
         for i in 0..(WIDTH * HEIGHT) as usize {
@@ -1939,8 +2027,8 @@ mod tests {
     #[test]
     fn basemap_bbox_covers_full_canvas_in_mercator_meters() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing },
-            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing },
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
         ];
         let p = map_projection(&points, &[]);
         let (min_x, min_y, max_x, max_y) = basemap_bbox(&p);
@@ -2036,6 +2124,47 @@ mod tests {
     }
 
     #[test]
+    fn match_hotel_generic_token_resolves_when_single_hotel() {
+        // Route segments use a bare "hotel" endpoint; with exactly one candidate the
+        // pin (and its legend label) must resolve to that hotel, not to a Nominatim
+        // "hotel, <city>" first-hit.
+        let one = vec!["APA Hotel Kyoto Eki Higashi".to_string()];
+        assert_eq!(match_hotel("hotel", &one).as_deref(), Some("APA Hotel Kyoto Eki Higashi"));
+        assert_eq!(match_hotel("飯店", &one).as_deref(), Some("APA Hotel Kyoto Eki Higashi"));
+        // Ambiguous (two hotels) or non-generic labels keep the old exact-key rules.
+        let two = vec!["APA Hotel".to_string(), "Miyako Hotel".to_string()];
+        assert!(match_hotel("hotel", &two).is_none());
+        assert!(match_hotel("金閣寺", &one).is_none());
+    }
+
+    #[test]
+    fn display_label_prefers_matched_hotel_full_name() {
+        let hotels = vec!["京都哈頓飯店 (Hearton Hotel Kyoto)".to_string()];
+        assert_eq!(display_label("hotel", &hotels), "京都哈頓飯店 (Hearton Hotel Kyoto)");
+        // Non-hotel labels pass through verbatim — the legend must speak the
+        // itinerary's own naming (segment label), not a re-derived one.
+        assert_eq!(display_label("金閣寺", &hotels), "金閣寺");
+    }
+
+    #[test]
+    fn input_sha_ignores_labels_so_a_rename_needs_no_rerender() {
+        // The PNG carries no labels; only the legend table does. A label-only edit
+        // must not change the reuse hash (it refreshes legend rows on the keep path).
+        let base = Point {
+            lat: 35.0,
+            lon: 135.0,
+            color: [1, 2, 3],
+            kind: Kind::Sightseeing,
+            label: "金閣寺".into(),
+        };
+        let renamed = Point { label: "Kinkaku-ji".into(), ..base.clone() };
+        assert_eq!(
+            map_input_sha256("Day 1 route", MapKind::Day, &[base], &[]),
+            map_input_sha256("Day 1 route", MapKind::Day, &[renamed], &[])
+        );
+    }
+
+    #[test]
     fn map_input_sha256_is_deterministic_and_sensitive() {
         let points = vec![
             Point {
@@ -2043,12 +2172,14 @@ mod tests {
                 lon: 135.0,
                 color: [1, 2, 3],
                 kind: Kind::Sightseeing,
+                label: String::new(),
             },
             Point {
                 lat: 35.1,
                 lon: 135.2,
                 color: [4, 5, 6],
                 kind: Kind::Hotel,
+                label: String::new(),
             },
         ];
         let routes = vec![RouteLine {

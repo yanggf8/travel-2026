@@ -576,6 +576,27 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // 12f. map_legend_stops — the numbered-pin legend for each rendered map PNG.
+    //      `travel snapshot-maps` writes one row per pin, in lockstep with the PNG it
+    //      uploads (seq = the number drawn on the image). The PNG's bitmap font has no
+    //      CJK glyphs, so the trip-dashboard-rs worker renders the number→name legend
+    //      in HTML from these rows. Labels are refreshed on every run (they are NOT in
+    //      map_artifacts.input_sha256), while skip/fail runs leave previous rows in
+    //      place to keep matching the previous PNG still served from R2.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS map_legend_stops (
+  plan_id TEXT NOT NULL,
+  map_key TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lon REAL NOT NULL,
+  PRIMARY KEY (plan_id, map_key, seq)
+);"#,
+    )
+    .await;
+
     // 13. Rename plans_current → plans.
     if table_exists(&conn, "plans_current").await {
         exec_lenient(&conn, "ALTER TABLE plans_current RENAME TO plans").await;

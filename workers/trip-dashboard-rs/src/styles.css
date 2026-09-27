@@ -424,6 +424,39 @@ h1 {
   box-shadow: none;
   margin-top: 0;
 }
+/* Numbered-pin legend under a map — explains what each pin number on the PNG
+   is (the PNG font has no CJK glyphs, so the legend lives here in HTML). */
+.map-legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding: 8px 10px;
+  margin: 0;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+}
+.map-legend li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.map-legend .leg-num {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #2d3d4f;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
 .map-missing {
   border: 2px dashed var(--border);
   box-shadow: none;
