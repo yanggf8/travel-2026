@@ -464,10 +464,11 @@ h1 {
 }
 .candidate-link:hover { text-decoration: underline; }
 
-/* Candidate location minimap — ArcGIS static basemap covering the stay + the
-   trip's itinerary stops (position means something only relative to them).
-   📍 marks the stay, small dots + labels mark the stops; pins are positioned
-   inline by Mercator math over the known bbox. Whole image links to Google Maps. */
+/* Candidate location minimap — ArcGIS static basemap centered on the trip's
+   旅遊地 hub (🚩 at the image center) with the stay 📍 on the quarter line and
+   a dashed hub→stay connector; remaining itinerary stops are small dots.
+   Pins are positioned inline by Mercator math over the known bbox. Whole
+   image links to Google Maps. */
 .cand-minimap {
   padding: 8px 10px 0;
 }
@@ -490,6 +491,42 @@ h1 {
   font-size: 18px;
   line-height: 1;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
+}
+.cand-minimap-hub {
+  position: absolute; /* flag pole base on the point; left/top set inline */
+  transform: translate(-12%, -88%);
+  font-size: 15px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
+}
+.cand-minimap-hub-label {
+  position: absolute;
+  top: 110%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+  color: #b3261e;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.cand-minimap-route {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.cand-minimap-route line {
+  stroke: #c5221f;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  stroke-linecap: round;
+  opacity: 0.85;
 }
 .cand-minimap-poi {
   position: absolute; /* left/top set inline (dot center on the point) */

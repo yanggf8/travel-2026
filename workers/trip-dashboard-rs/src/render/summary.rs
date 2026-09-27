@@ -338,15 +338,19 @@ fn date_only(s: &str) -> &str {
     s.split_whitespace().next().unwrap_or(s)
 }
 
-/// Per-candidate location minimap: ArcGIS World Street Map static export with
-/// the stay's 📍 AND the trip's itinerary points (plan.png legend stops) as
-/// small labeled dots — the position only means something RELATIVE to the trip's
-/// own places (九份老街/野柳/金山/淡水 for jiufen), which a tight stay-centered
-/// street grid hides. The bbox covers stay + stops; pins are positioned by
-/// Mercator math over the known bbox (the ArcGIS `marker` param is silently
-/// ignored, verified). Never requests OSM raster tiles (tile policy) — same
-/// sanctioned ArcGIS static basemap the route snapshots composite. Keep the
-/// © Esri credit whenever this renders.
+/// Per-candidate location minimap: ArcGIS World Street Map static export,
+/// CENTERED on the trip's 旅遊地 (the itinerary's hub cluster, e.g. 九份) with
+/// the stay placed at the quarter line — exactly midway between the hub and
+/// the map edge — so every card reads "this far, this direction from where
+/// we're going" at a glance. Zoom adapts to the stay's distance (a
+/// 0.2 km-in-cluster stay gets a street-scale map; a 4 km outlier pulls out),
+/// and stops beyond the frame are simply not drawn (the caption's
+/// nearest-stop distance covers them) — including ALL stops made every card a
+/// 40 km north-coast overview where the cluster-vs-stay contrast vanished.
+/// Pins are positioned by Mercator math over the known bbox (the ArcGIS
+/// `marker` param is silently ignored, verified). Never requests OSM raster
+/// tiles (tile policy) — same sanctioned ArcGIS static basemap the route
+/// snapshots composite. Keep the © Esri credit whenever this renders.
 fn candidate_minimap(
     c: &crate::model::DomesticCandidate,
     lat: f64,
@@ -354,40 +358,62 @@ fn candidate_minimap(
     stops: &[crate::model::PoiStop],
     lang: &str,
 ) -> String {
-    // ---- bbox: cover the stay + every reference stop (pad 12%), then force
-    // the lon/lat span ratio to the 300:200 image aspect (1.5/cos(lat)) so the
-    // export maps the bbox exactly onto the image with no letterboxing — the
-    // percentage-positioned pins then land on the right pixels.
-    let lat_span_min = 0.0032; // stay-only fallback: ~355 m tall, enough context
-    let (mut lat_min, mut lat_max) = (lat, lat);
-    let (mut lon_min, mut lon_max) = (lon, lon);
-    for s in stops {
-        lat_min = lat_min.min(s.lat);
-        lat_max = lat_max.max(s.lat);
-        lon_min = lon_min.min(s.lon);
-        lon_max = lon_max.max(s.lon);
-    }
-    let lat_mid = (lat_min + lat_max) / 2.0;
-    let pad = 0.12;
-    let aspect = 1.5 / lat_mid.to_radians().cos(); // lon_span / lat_span for square ground pixels
-    // Minimal spans that cover the padded bounds in BOTH dims while holding
-    // the 1.5/cos(lat) lon/lat ratio (expanding only lon would not cover a
-    // north-south-spread set, and vice versa).
-    let (lat_span, lon_span) = {
-        let need_lat = (lat_max - lat_min) * (1.0 + 2.0 * pad);
-        let need_lon = (lon_max - lon_min) * (1.0 + 2.0 * pad);
-        let ls = need_lat.max(need_lon / aspect).max(lat_span_min);
-        (ls, ls * aspect)
-    };
-    let (lat_min, lat_max) = (lat_mid - lat_span / 2.0, lat_mid + lat_span / 2.0);
-    let lon_mid = (lon_min + lon_max) / 2.0;
-    let (lon_min, lon_max) = (lon_mid - lon_span / 2.0, lon_mid + lon_span / 2.0);
+    // ---- frame: either destination-centered quarter geometry (v3) or, with
+    // no stops at all, the v1 tight stay-centered fallback. The lon/lat span
+    // ratio is always the 3:2 image aspect (1.5/cos(lat)) so the export
+    // maps the bbox exactly onto the image — the percentage-positioned pins
+    // then land on the right pixels.
+    let (lat_min, lat_max, lon_min, lon_max, visible, hub): (
+        f64,
+        f64,
+        f64,
+        f64,
+        Vec<&crate::model::PoiStop>,
+        Option<&crate::model::PoiStop>,
+    ) = if stops.is_empty() {
+        let lat_span = 0.0032; // ~355 m tall, enough street context
+        let lon_span = lat_span * 1.5 / lat.to_radians().cos();
+        (
+            lat - lat_span / 2.0,
+            lat + lat_span / 2.0,
+            lon - lon_span / 2.0,
+            lon + lon_span / 2.0,
+            Vec::new(),
+            None,
+        )
+        } else {
+            let hub = &stops[hub_stop(stops)];
+            let (c_lat, c_lon) = (hub.lat, hub.lon);
+            let aspect = 1.5 / c_lat.to_radians().cos();
+            // Span so the stay lands at 25% from center along its DOMINANT
+            // axis (full span = 4× the offset): 中間是旅遊目的，住宿剛好在
+            // 旅遊目的和地圖邊的中間. Floor keeps a coincident stay readable.
+            let d_lat = (lat - c_lat).abs();
+            let d_lon = (lon - c_lon).abs();
+            let lat_span = (4.0 * d_lat.max(d_lon / aspect)).max(0.004);
+            let lon_span = lat_span * aspect;
+            let (la_min, la_max) = (c_lat - lat_span / 2.0, c_lat + lat_span / 2.0);
+            let (lo_min, lo_max) = (c_lon - lon_span / 2.0, c_lon + lon_span / 2.0);
+            // Off-frame stops are omitted, NOT clamped — a dot pinned to the
+            // edge would claim a position the stay-geometry never gave it.
+            let visible = stops
+                .iter()
+                .filter(|s| {
+                    s.lat >= la_min && s.lat <= la_max && s.lon >= lo_min && s.lon <= lo_max
+                })
+                .collect();
+            (la_min, la_max, lo_min, lo_max, visible, Some(hub))
+        };
+    let lat_span = lat_max - lat_min;
+    let lon_span = lon_max - lon_min;
     let bbox = format!(
         "{:.6},{:.6},{:.6},{:.6}",
         lon_min, lat_min, lon_max, lat_max
     );
     let img = format!(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox={}&bboxSR=4326&size=300,200&format=png&f=image",
+        // 600,400 = the 3:2 frame at 2× — same geometry, crisp labels (the
+        // 300,200 export upscaled on the card rendered blurry place names).
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox={}&bboxSR=4326&size=600,400&format=png&f=image",
         bbox
     );
     // ---- Mercator positioning: ArcGIS renders in Web Mercator, so y is not
@@ -400,16 +426,37 @@ fn candidate_minimap(
         let y = (y_top - merc(la)) / y_span * 100.0;
         (x.clamp(0.0, 100.0), y.clamp(0.0, 100.0))
     };
-    // ---- stay pin (large 📍, tip on the point).
+    // ---- 旅遊地 marker: 🚩 on the hub stop. The bbox is centered on it, so
+    // the flag sits at the image center — the visible answer to 中間是旅遊
+    // 目的地. A dashed hub→stay connector (percent-coordinate SVG, no client
+    // JS) makes the pair read as a 交通路線圖.
     let (px, py) = pos(lat, lon);
-    let mut pins = format!(
+    let mut pins = String::new();
+    if let Some(h) = hub {
+        let (hx, hy) = pos(h.lat, h.lon);
+        pins.push_str(&format!(
+            "<span class=\"cand-minimap-hub\" style=\"left:{hx:.2}%;top:{hy:.2}%\">\u{1F6A9}\
+             <em class=\"cand-minimap-hub-label\">{}</em></span>",
+            esc(&h.label)
+        ));
+        pins.push_str(&format!(
+            "<svg class=\"cand-minimap-route\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">\
+             <line x1=\"{hx:.2}\" y1=\"{hy:.2}\" x2=\"{px:.2}\" y2=\"{py:.2}\" \
+             vector-effect=\"non-scaling-stroke\" /></svg>"
+        ));
+    }
+    // ---- stay pin (large 📍, tip on the point).
+    pins.push_str(&format!(
         "<span class=\"cand-minimap-pin\" style=\"left:{px:.2}%;top:{py:.2}%\">\u{1F4CD}</span>"
-    );
-    // ---- itinerary reference dots with labels. Labels flip to the LEFT of
-    // the dot near the right edge (overflow:hidden would clip them) and
-    // alternate above/below so near-coincident stops (九份老街 vs 九份住宿)
-    // don't overwrite each other.
-    for (i, s) in stops.iter().enumerate() {
+    ));
+    // ---- itinerary reference dots with labels (visible ones only). Labels
+    // flip to the LEFT of the dot near the right edge (overflow:hidden would
+    // clip them) and alternate above/below so near-coincident stops (九份老街
+    // vs 九份住宿) don't overwrite each other.
+    for (i, s) in visible.iter().enumerate() {
+        if hub.is_some_and(|h| std::ptr::eq(*s, h)) {
+            continue; // the hub stop is the 🚩 旅遊地, not a blue dot
+        }
         let (x, y) = pos(s.lat, s.lon);
         let side = if x > 78.0 { " cand-minimap-poi--left" } else { "" };
         let vert = if i % 2 == 0 { " cand-minimap-poi--above" } else { "" };
@@ -419,15 +466,18 @@ fn candidate_minimap(
             esc(&s.label)
         ));
     }
-    // ---- caption: distance to the NEAREST itinerary point — the number that
-    // answers "how far is this stay from where we're actually going?".
-    let dist_note = stops
-        .iter()
-        .map(|s| (distance_km(lat, lon, s.lat, s.lon), &s.label))
-        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let dist_txt = match dist_note {
-        Some((km, label)) if lang == "en" => format!("~{km:.1} km from {label}"),
-        Some((km, label)) => format!("距{label} 約 {km:.1} km"),
+    // ---- caption: distance to the 旅遊地 hub — the same endpoint the dashed
+    // connector draws to, so the number and the line tell ONE story. (With no
+    // stops there is no hub and no distance note at all.)
+    let dist_txt = match hub {
+        Some(h) if lang == "en" => {
+            format!("~{:.1} km from {}", distance_km(lat, lon, h.lat, h.lon), h.label)
+        }
+        Some(h) => format!(
+            "距{} 約 {:.1} km",
+            h.label,
+            distance_km(lat, lon, h.lat, h.lon)
+        ),
         None => String::new(),
     };
     let maps = format!("https://www.google.com/maps?q={:.6},{:.6}", lat, lon);
@@ -456,7 +506,29 @@ fn candidate_minimap(
     )
 }
 
-/// Equirectangular distance in km (fine at Taiwan scale — minimap caption only).
+/// The trip's 旅遊地: the stop with the most neighbors within 5 km (tie →
+/// earliest) — where the itinerary CONCENTRATES (the 九份 base for jiufen).
+/// Excursion stops (野柳/金山/淡水) must not drag the center off the base.
+/// Returns its INDEX; the bbox is centered on the stop itself so the 🚩 sits
+/// exactly at the image center and the stay lands on the quarter line.
+fn hub_stop(stops: &[crate::model::PoiStop]) -> usize {
+    let mut best = 0usize;
+    let mut best_cnt = 0usize;
+    for (i, s) in stops.iter().enumerate() {
+        let cnt = stops
+            .iter()
+            .enumerate()
+            .filter(|(j, t)| *j != i && distance_km(s.lat, s.lon, t.lat, t.lon) <= 5.0)
+            .count();
+        if cnt > best_cnt {
+            best_cnt = cnt;
+            best = i;
+        }
+    }
+    best
+}
+
+/// Equirectangular distance in km (fine at Taiwan scale — minimap geometry only).
 fn distance_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dy = (lat2 - lat1) * 110.574;
     let dx = (lon2 - lon1) * 111.320 * lat1.to_radians().cos();
@@ -1679,10 +1751,10 @@ mod tests {
     }
 
     #[test]
-    fn candidate_minimap_shows_stay_relative_to_itinerary_stops() {
+    fn candidate_minimap_centers_on_destination_with_stay_at_quarter() {
         use crate::model::{DomesticCandidate, PoiStop};
         // The live jiufen-2026 legend set (plan.png stops) + a stay OUTSIDE the
-        // 九份 cluster — exactly the case a tight street-grid crop hides.
+        // 九份 cluster — the case the quarter geometry exists to expose.
         let stops = vec![
             PoiStop { label: "九份老街".into(), lat: 25.108719, lon: 121.8435077 },
             PoiStop { label: "九份住宿".into(), lat: 25.1081276, lon: 121.8383274 },
@@ -1690,59 +1762,84 @@ mod tests {
             PoiStop { label: "金山老街".into(), lat: 25.221883, lon: 121.6361852 },
             PoiStop { label: "淡水".into(), lat: 25.1727, lon: 121.4377 },
         ];
-        let plan = Plan {
+        let plan = |lat: f64, lon: f64| Plan {
             p4_status: "selecting".into(),
-            poi_stops: stops,
+            poi_stops: stops.clone(),
             candidates: vec![DomesticCandidate {
                 id: "c1".into(),
                 hotel_name: "魚礁十五號".into(),
                 room_type: "四人房－附浴缸".into(),
                 price_twd: 4000,
-                latitude: Some(25.1330327),
-                longitude: Some(121.807191),
+                latitude: Some(lat),
+                longitude: Some(lon),
                 ..Default::default()
             }],
             ..Default::default()
         };
-        let html = render(&plan, "zh", None);
-        // ArcGIS static basemap with a bbox covering stay + all stops (padded
-        // 12%, aspect-corrected to the 300:200 export) — computed reference:
+        // ---- OUTLIER stay (4.5 km from the hub 九份老街): bbox centered ON the
+        // hub stop (🚩 at the image center), span = 4× the stay's dominant-axis
+        // offset → stay on the quarter line, dashed connector in between.
+        let html = render(&plan(25.1330327, 121.807191), "zh", None);
         assert!(
             html.contains("server.arcgisonline.com"),
             "basemap host: {html}"
         );
         assert!(
-            html.contains("bbox=121.389003,25.013192,121.892205,25.316819"),
-            "bbox covers stay+stops: {html}"
+            html.contains("bbox=121.762955,25.060092,121.924061,25.157346"),
+            "destination-centered bbox: {html}"
         );
-        // Stay pin at its Mercator position (83.11%, 60.56%), NOT centered.
         assert!(html.contains("cand-minimap-pin"), "CSS pin overlay: {html}");
         assert!(
-            html.contains("left:83.11%;top:60.56%"),
-            "stay pin at computed position: {html}"
+            html.contains("left:27.46%;top:25.01%"),
+            "stay pin on the quarter line: {html}"
         );
-        // Every itinerary stop renders a labeled dot; 九份老街 (x=90.3%) flips
-        // its label left so overflow:hidden cannot clip it.
+        // The 旅遊地 is marked — a 🚩 on the hub stop with its label, not just
+        // another blue dot, and a dashed hub→stay connector (交通路線).
+        assert!(
+            html.contains("🚩<em class=\"cand-minimap-hub-label\">九份老街"),
+            "hub flag + label at the image center: {html}"
+        );
+        assert!(
+            html.contains("cand-minimap-route") && html.contains("<line "),
+            "dashed hub→stay connector: {html}"
+        );
+        // Hub-cluster dot renders; off-frame excursion stops are OMITTED (a
+        // clamped dot would claim a position the geometry never gave it).
         assert!(html.contains("cand-minimap-dot"), "POI dot: {html}");
-        for label in ["九份老街", "野柳地質公園", "金山老街", "淡水"] {
-            assert!(html.contains(label), "POI label {label}: {html}");
+        for label in ["九份老街", "九份住宿"] {
+            assert!(html.contains(label), "on-frame POI label {label}: {html}");
         }
+        for label in ["野柳地質公園", "金山老街", "淡水"] {
+            assert!(!html.contains(label), "off-frame POI {label} omitted: {html}");
+        }
+        // Caption distance is to the HUB — the same endpoint the connector
+        // draws to, so the number and the line tell one story.
         assert!(
-            html.contains("cand-minimap-poi--left"),
-            "right-edge label flip: {html}"
+            html.contains("距九份老街 約 4.5 km"),
+            "hub distance in caption: {html}"
         );
-        // Caption carries the distance to the NEAREST stop — the question the
-        // map exists to answer (魚礁十五號 ≈ 4.2 km from 九份住宿).
-        assert!(
-            html.contains("距九份住宿 約 4.2 km"),
-            "nearest-POI distance in caption: {html}"
-        );
-        // Google Maps click-through + Esri credit.
         assert!(
             html.contains("https://www.google.com/maps?q=25.133033,121.807191"),
             "maps link: {html}"
         );
         assert!(html.contains("© Esri"), "attribution: {html}");
+
+        // ---- IN-CLUSTER stay (0.2 km from the hub): street-scale map, still
+        // destination-centered with the stay at the quarter line — not the
+        // 40 km full-coast overview that pulled every card out.
+        let html = render(&plan(25.1095, 121.8415), "zh", None);
+        assert!(
+            html.contains("bbox=121.839492,25.106295,121.847523,25.111143"),
+            "in-cluster street-scale bbox: {html}"
+        );
+        assert!(
+            html.contains("left:25.00%;top:33.89%"),
+            "in-cluster stay on the quarter line: {html}"
+        );
+        assert!(
+            html.contains("cand-minimap-hub-label\">九份老街"),
+            "in-cluster hub flag: {html}"
+        );
     }
 
     #[test]
@@ -1771,6 +1868,10 @@ mod tests {
         );
         assert!(html.contains("left:50.00%;top:50.00%"), "centered pin: {html}");
         assert!(!html.contains("cand-minimap-dot"), "no POI dots: {html}");
+        assert!(
+            !html.contains("cand-minimap-hub") && !html.contains("cand-minimap-route"),
+            "no hub flag / connector without stops: {html}"
+        );
         assert!(html.contains("© Esri"), "attribution: {html}");
         assert!(html.contains("位置"), "ZH caption label: {html}");
         // No coordinates → no minimap block at all (not a broken placeholder).
