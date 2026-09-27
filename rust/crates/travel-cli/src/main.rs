@@ -28,6 +28,8 @@ mod plans;
 mod scrape_parser;
 mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-param catalog mutations
 mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-keyed, no audit triad)
+mod set_poi_title; // set-poi-title — rename a destination_pois title (+ --segments labels; slug-keyed, no audit triad)
+mod set_place_geocode; // set-place-geocode — manually pin a segment place label Nominatim can't resolve (cache row, no audit triad)
 mod add_transit; // add-transit — add a destination_transit station pair (slug-keyed, no audit; feeds derive-routes)
 mod add_omiyage; // add-omiyage — omiyage item + purchase location (slug-keyed, no audit triad)
 mod query_omiyage; // query-omiyage — read-only grouped omiyage view (slug-keyed reference data)
@@ -240,6 +242,12 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-poi-coords" => {
             set_poi_coords::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "set-poi-title" => {
+            set_poi_title::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "set-place-geocode" => {
+            set_place_geocode::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "add-transit" => {
             add_transit::run(rest).await
@@ -981,6 +989,8 @@ VALIDATE / CHECKS\n\
   validate data | validate publish | doctor | validate-itinerary | check-hours\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
+  set-poi-title <slug> <poi_id> <title> [--segments]  (rename a POI title, optionally matching segment labels too)\n\
+  set-place-geocode \"<place>\" --lat N --lon N (--dest slug|--context ctx)  (manually pin a label Nominatim can't resolve)\n\
   add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
   add-accommodation | update-accommodation --id <id> [--image-url u] [--booking-url u] | delete-accommodation --id <id>  (domestic stay reference data; no --plan-id)\n\
   add-accommodation-image --id <id> --url <u> [--label t] | delete-accommodation-image --id <id> (--url u | --all)  (candidate gallery; no --plan-id)\n\

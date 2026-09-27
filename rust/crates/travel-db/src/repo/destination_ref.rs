@@ -307,6 +307,47 @@ pub async fn set_poi_coords(
     .map_err(|e| format!("destination_pois coords UPDATE failed: {e}"))
 }
 
+/// Current title of one POI (None when the (slug, poi_id) row does not exist).
+pub async fn poi_title(
+    conn: &Connection,
+    slug: &str,
+    poi_id: &str,
+) -> Result<Option<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT title FROM destination_pois WHERE slug = ?1 AND poi_id = ?2",
+            libsql::params![slug.to_string(), poi_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("destination_pois title query failed: {e}"))?;
+    match rows
+        .next()
+        .await
+        .map_err(|e| format!("destination_pois title row read failed: {e}"))?
+    {
+        Some(row) => Ok(row
+            .get::<Option<String>>(0)
+            .map_err(|e| format!("destination_pois title cell read failed: {e}"))?),
+        None => Ok(None),
+    }
+}
+
+/// Rename one POI's title (slug-keyed reference data, no audit triad). Returns
+/// the affected-row count (caller asserts == 1).
+pub async fn set_poi_title(
+    conn: &Connection,
+    slug: &str,
+    poi_id: &str,
+    title: &str,
+) -> Result<u64, String> {
+    conn.execute(
+        "UPDATE destination_pois SET title = ?1 WHERE slug = ?2 AND poi_id = ?3",
+        libsql::params![title.to_string(), slug.to_string(), poi_id.to_string()],
+    )
+    .await
+    .map_err(|e| format!("destination_pois title UPDATE failed: {e}"))
+}
+
 /// Upsert one `destination_transit` row (slug-keyed reference data, no audit
 /// triad — mirrors the rest of this module). The caller computes `pair_key` via
 /// `transit_key::primary_pair_key` (the SAME normalization `derive-routes`

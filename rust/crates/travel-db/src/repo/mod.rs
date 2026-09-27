@@ -5,6 +5,7 @@ pub mod days;
 pub mod destination_ref;
 pub mod flight_legs;
 pub mod freshness;
+pub mod geocodes;
 pub mod hotels;
 pub mod itinerary;
 pub mod observations;

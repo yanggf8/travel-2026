@@ -131,6 +131,43 @@ pub async fn touch_day(
     Ok(())
 }
 
+/// Rename a place label across every segment of one destination (both endpoint
+/// columns). Used by `set-poi-title --segments` so a renamed POI keeps its
+/// exact-key match with the segment labels that reference it. Returns
+/// (from_count, to_count).
+pub async fn rename_place_labels(
+    conn: &Connection,
+    destination: &str,
+    old: &str,
+    new: &str,
+) -> Result<(u64, u64), String> {
+    let from_n = conn
+        .execute(
+            "UPDATE day_route_segments SET from_place = ?1 \
+             WHERE destination = ?2 AND from_place = ?3",
+            libsql::params![
+                new.to_string(),
+                destination.to_string(),
+                old.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("day_route_segments from_place rename failed: {e}"))?;
+    let to_n = conn
+        .execute(
+            "UPDATE day_route_segments SET to_place = ?1 \
+             WHERE destination = ?2 AND to_place = ?3",
+            libsql::params![
+                new.to_string(),
+                destination.to_string(),
+                old.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("day_route_segments to_place rename failed: {e}"))?;
+    Ok((from_n, to_n))
+}
+
 /// Flip `ai_recommended` route segments to `confirmed`, scoped by optional day.
 /// `day_route_segments` has no `session_type` or `updated_at` column.
 pub async fn confirm_routes(

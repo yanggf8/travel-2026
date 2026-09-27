@@ -137,6 +137,14 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 #   previous PNG is still served from R2). A bare generic "hotel" segment endpoint resolves to the plan's
 #   unique hotel (hotels.name), not an arbitrary Nominatim hotel hit.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
+./bin/travel set-poi-title <slug> <poi_id> <title> [--segments]
+                                                   # Rename a POI title (localization: English seed → Chinese/Japanese).
+                                                   # --segments also renames the day_route_segments endpoint labels equal to the
+                                                   # OLD title of that destination (labels match POIs by exact title keys).
+./bin/travel set-place-geocode "<place>" --lat N --lon N (--dest <slug> | --context "<ctx>")
+                                                   # Manually pin a segment place label Nominatim cannot resolve (e.g. a Chinese
+                                                   # name in Japan). Writes the exact route_place_geocodes key snapshot-maps
+                                                   # reads (same normalize_place formula) — re-run snapshot-maps to pick it up.
 ./bin/travel set-poi-coords <slug> <poi_id> <lat> <lon> [--source <s>] [--confidence <c>]    # geocode a destination_pois row (feeds the POI-coord map path). GLOBAL/slug-keyed reference data — takes NO --plan-id, NO audit triad. `validate data` WARNs on ungeocoded POIs.
 ./bin/travel add-transit <slug> <from_station> <to_station> --minutes N [--line "<t>"] [--kind metro|rail|walk|bus|estimate] [--source <s>] [--confidence verified|reviewed|estimate]    # add a destination_transit station pair (transit time/line that derive-routes attaches to auto-derived legs). GLOBAL/slug-keyed reference data — NO --plan-id, NO audit triad. Idempotent (INSERT OR REPLACE). pair_key uses derive-routes' own normalization, so the pair is found by the next `derive-routes` run — no more raw `db exec INSERT` for discovered pairs.
 ./bin/travel add-omiyage <slug> <item_id> --buy-at <poi_id> --location-source-url <url> --location-confidence verified|reviewed [--name <t>] [--category <t>] [--item-source-url <url>] [--item-confidence verified|reviewed] [--notes <t>] [--purchase-note <t>]    # add/update an omiyage (souvenir) item + purchase location. GLOBAL/slug-keyed reference data — NO --plan-id, NO audit triad. First write for an item_id requires the full item bundle (name/category/item-source-url/item-confidence); subsequent sellers omit the bundle (or must MATCH if supplied). location is always upserted. confidence ∈ {verified, reviewed} only; source URLs must start with http(s)://.

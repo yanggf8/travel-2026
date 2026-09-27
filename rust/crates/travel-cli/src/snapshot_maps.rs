@@ -1527,7 +1527,7 @@ async fn query_domestic_stay(
     Ok(None)
 }
 
-async fn geocode_context(c: &Connection, d: &str) -> Result<String, String> {
+pub(crate) async fn geocode_context(c: &Connection, d: &str) -> Result<String, String> {
     let mut r = c
         .query(
             "SELECT display_name FROM destination_config WHERE slug=?1 LIMIT 1",
@@ -1769,7 +1769,7 @@ async fn resolve_place(
     cache.insert(key, (lat, lon));
     Ok(Some((lat, lon)))
 }
-fn normalize_place(place: &str, context: &str) -> (String, String) {
+pub(crate) fn normalize_place(place: &str, context: &str) -> (String, String) {
     match place.trim() {
         "KIX" | "KIX T1" | "KIX T2" => {
             ("Kansai International Airport".into(), "Osaka, Japan".into())
