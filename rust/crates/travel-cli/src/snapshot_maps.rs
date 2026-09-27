@@ -131,6 +131,9 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let hotel_names = query_hotel_names(&read, &plan_id, &dest).await?;
     let mut day_points = HashMap::<i64, Vec<Point>>::new();
     let mut day_routes = HashMap::<i64, Vec<RouteLine>>::new();
+    // OSRM legs fetched this run, shared by the per-day and overview renders so
+    // the same pair is fetched (and persisted) at most once per snapshot run.
+    let mut osrm_live = HashMap::<String, Vec<(f64, f64)>>::new();
 
     for day in &days {
         let mut points = Vec::new();
@@ -177,7 +180,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             }
         }
         if points.len() > 1 {
-            day_routes.insert(*day, cached_routes(&read, &points).await?);
+            day_routes.insert(*day, cached_routes(&read, &write, &mut osrm_live, &points).await?);
         }
         day_points.insert(*day, points);
     }
@@ -251,7 +254,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 .cloned()
                 .collect::<Vec<_>>();
             if points.len() > 1 {
-                routes.extend(cached_routes(&read, &points).await?);
+                routes.extend(cached_routes(&read, &write, &mut osrm_live, &points).await?);
             }
         }
         if !upload_map(
@@ -1204,7 +1207,119 @@ fn anchor_to_stops(
     road
 }
 
-async fn cached_routes(c: &Connection, points: &[Point]) -> Result<Vec<RouteLine>, String> {
+/// OSRM demo-router URL for one driving leg. OSRM wants {lon},{lat}; every key
+/// and geometry stored in this project is (lat, lon) — the flip happens only
+/// here and back again after parsing.
+fn osrm_url(from: (f64, f64), to: (f64, f64)) -> String {
+    format!(
+        "https://router.project-osrm.org/route/v1/driving/{lon1:.6},{lat1:.6};{lon2:.6},{lat2:.6}?overview=full&geometries=geojson",
+        lon1 = from.1,
+        lat1 = from.0,
+        lon2 = to.1,
+        lat2 = to.0
+    )
+}
+
+/// Fetch road-following geometry for one leg from the OSRM demo router and
+/// write it through into route_road_legs + route_road_leg_points. The Rust
+/// port of the old Tier-2 renderer could only READ this cache, so any leg
+/// nobody had cached yet (every new trip) rendered as a straight line; a
+/// cache miss now fetches once and persists, keeping later renders offline.
+async fn fetch_osrm_leg(
+    write: &Connection,
+    from: (f64, f64),
+    to: (f64, f64),
+) -> Result<Vec<(f64, f64)>, String> {
+    let key = format!(
+        "{:.5},{:.5}>{:.5},{:.5}|osrm-demo|driving",
+        from.0, from.1, to.0, to.1
+    );
+    thread::sleep(Duration::from_millis(1100)); // demo router: stay a polite caller
+    let output = Command::new("curl")
+        .args(["-sS", "--max-time", "20", &osrm_url(from, to)])
+        .output()
+        .map_err(|e| format!("OSRM request failed: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("OSRM response parse failed: {e}"))?;
+    let Some(route) = parsed.get("routes").and_then(|r| r.get(0)) else {
+        return Err("OSRM returned no route".to_string());
+    };
+    let mut pts = Vec::new();
+    if let Some(coords) = route
+        .get("geometry")
+        .and_then(|g| g.get("coordinates"))
+        .and_then(|c| c.as_array())
+    {
+        for c in coords {
+            if let (Some(lon), Some(lat)) = (
+                c.get(0).and_then(|v| v.as_f64()),
+                c.get(1).and_then(|v| v.as_f64()),
+            ) {
+                pts.push((lat, lon));
+            }
+        }
+    }
+    if pts.len() < 2 {
+        return Err("OSRM geometry degenerate".to_string());
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let distance = route.get("distance").and_then(|d| d.as_f64());
+    write
+        .execute(
+            "INSERT INTO route_road_legs (leg_key, from_lat, from_lon, to_lat, to_lon, provider, profile, status, point_count, distance_m, failure_reason, fetched_at) \
+             VALUES (?1,?2,?3,?4,?5,'osrm-demo','driving','ok',?6,?7,NULL,?8) \
+             ON CONFLICT(leg_key) DO UPDATE SET status='ok', point_count=excluded.point_count, \
+             distance_m=excluded.distance_m, failure_reason=NULL, fetched_at=excluded.fetched_at",
+            params![key.clone(), from.0, from.1, to.0, to.1, pts.len() as i64, distance, now],
+        )
+        .await
+        .map_err(|e| format!("route_road_legs upsert failed: {e}"))?;
+    write
+        .execute(
+            "DELETE FROM route_road_leg_points WHERE leg_key=?1",
+            params![key.clone()],
+        )
+        .await
+        .map_err(|e| format!("route_road_leg_points clear failed: {e}"))?;
+    // One multi-row INSERT per chunk — a full leg is hundreds of points and
+    // that many sequential round-trips would crawl over Turso HTTP.
+    for (ci, chunk) in pts.chunks(50).enumerate() {
+        let mut sql = String::from(
+            "INSERT INTO route_road_leg_points (leg_key, point_order, lat, lon) VALUES ",
+        );
+        let mut bind: Vec<libsql::Value> = Vec::with_capacity(chunk.len() * 4 + 1);
+        bind.push(libsql::Value::Text(key.clone()));
+        for (i, (lat, lon)) in chunk.iter().enumerate() {
+            let base = bind.len() as i64 + 1; // ?1 is the key; points follow
+            sql.push_str(&format!(
+                "(?1,?{},?{},?{}),",
+                base,
+                base + 1,
+                base + 2
+            ));
+            bind.push(libsql::Value::Integer((ci * 50 + i) as i64));
+            bind.push(libsql::Value::Real(*lat));
+            bind.push(libsql::Value::Real(*lon));
+        }
+        sql.pop(); // trailing comma
+        write
+            .execute(&sql, libsql::params_from_iter(bind))
+            .await
+            .map_err(|e| format!("route_road_leg_points insert failed: {e}"))?;
+    }
+    Ok(pts)
+}
+
+/// Road-following lines for consecutive stop pairs. Reads the route_road_legs
+/// cache first; a leg with no cached geometry is fetched from OSRM right here
+/// (persisted via `w`, deduped across the day/plan renders of one run through
+/// `live`) so a fresh trip follows roads on its FIRST render.
+async fn cached_routes(
+    c: &Connection,
+    w: &Connection,
+    live: &mut HashMap<String, Vec<(f64, f64)>>,
+    points: &[Point],
+) -> Result<Vec<RouteLine>, String> {
     let mut leg_rows = c
         .query(
             "SELECT leg_key, from_lat, from_lon, to_lat, to_lon FROM route_road_legs WHERE status='ok'",
@@ -1265,6 +1380,26 @@ async fn cached_routes(c: &Connection, points: &[Point]) -> Result<Vec<RouteLine
             {
                 if let (Ok(lat), Ok(lon)) = (row.get::<f64>(0), row.get::<f64>(1)) {
                     road.push((lat, lon));
+                }
+            }
+        }
+        if road.len() <= 1 {
+            // Cache miss (a leg no earlier render ever fetched): pull the road
+            // geometry once, persist it, and reuse it for the rest of this run.
+            let f = (pair[0].lat, pair[0].lon);
+            let t = (pair[1].lat, pair[1].lon);
+            let live_key = format!("{:.5},{:.5}>{:.5},{:.5}", f.0, f.1, t.0, t.1);
+            if let Some(pts) = live.get(&live_key) {
+                road = pts.clone();
+            } else {
+                match fetch_osrm_leg(w, f, t).await {
+                    Ok(pts) => {
+                        live.insert(live_key, pts.clone());
+                        road = pts;
+                    }
+                    Err(reason) => {
+                        eprintln!("   warn: {reason} — leg renders as a straight line");
+                    }
                 }
             }
         }
@@ -1920,6 +2055,18 @@ mod tests {
             from,
             to,
         }
+    }
+
+    #[test]
+    fn osrm_url_flips_to_lon_lat() {
+        // 九份海論 → 野柳: storage is (lat, lon); OSRM wants {lon},{lat}.
+        let u = osrm_url((25.1103, 121.8451), (25.2113, 121.6964));
+        assert!(
+            u.starts_with(
+                "https://router.project-osrm.org/route/v1/driving/121.845100,25.110300;121.696400,25.211300?"
+            ),
+            "got {u}"
+        );
     }
 
     #[test]
