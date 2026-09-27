@@ -230,8 +230,10 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
             &turso_token,
             &[
                 // One row per plan (GROUP BY collapses the destination/anchor joins),
-                // ordered chronologically by the plan's earliest trip date — earliest
-                // first; plans with no date anchor sort last (NULL → far-future key).
+                // ordered by the plan's earliest trip date, NEWEST FIRST — the
+                // current trip lands at the top instead of a scroll to the bottom
+                // (request 2026-09-28); plans with no date anchor still sort last
+                // (NULL → far-past key under DESC).
                 "SELECT p.plan_id, MIN(pd.display_name) AS display_name, \
                         MIN(d.start_date) AS start_date, MAX(d.end_date) AS end_date \
                  FROM plans p \
@@ -239,7 +241,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
                  LEFT JOIN date_anchors d ON d.plan_id = p.plan_id \
                  WHERE p.deleted_at IS NULL \
                  GROUP BY p.plan_id \
-                 ORDER BY COALESCE(MIN(d.start_date), '9999-12-31') ASC, p.plan_id ASC"
+                 ORDER BY COALESCE(MIN(d.start_date), '0000-01-01') DESC, p.plan_id ASC"
                     .to_string(),
             ],
         )
