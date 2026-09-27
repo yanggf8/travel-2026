@@ -1731,6 +1731,35 @@ fn display_label(label: &str, hotel_names: &[String]) -> String {
     match_hotel(label, hotel_names).unwrap_or_else(|| label.to_string())
 }
 
+/// A resolved place, with what Nominatim said about it. `area_centroid` marks
+/// an administrative AREA (district/town) resolved to its geometric centre —
+/// usually inland, OFF the road a `road-leg refetch --via` caller wants (the
+/// 三芝 → 101 縣道 miss: the via "resolved", then OSRM shortcut inland from it).
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedPlace {
+    pub(crate) coords: (f64, f64),
+    pub(crate) display_name: String,
+    pub(crate) area_centroid: bool,
+}
+
+/// Nominatim category/type → administrative area? jsonv2 emits `category`
+/// (e.g. "boundary", "place") and `type` (e.g. "administrative", "town").
+pub(crate) fn nominatim_is_area(category: &str, ntype: &str) -> bool {
+    category == "boundary"
+        || matches!(
+            ntype,
+            "administrative"
+                | "city"
+                | "town"
+                | "village"
+                | "district"
+                | "borough"
+                | "suburb"
+                | "municipality"
+                | "county"
+        )
+}
+
 pub(crate) async fn resolve_place(
     read: &Connection,
     write: &Connection,
@@ -1738,25 +1767,50 @@ pub(crate) async fn resolve_place(
     context: &str,
     cache: &mut HashMap<String, (f64, f64)>,
 ) -> Result<Option<(f64, f64)>, String> {
+    Ok(
+        resolve_place_meta(read, write, place, context, cache)
+            .await?
+            .map(|p| p.coords),
+    )
+}
+
+pub(crate) async fn resolve_place_meta(
+    read: &Connection,
+    write: &Connection,
+    place: &str,
+    context: &str,
+    cache: &mut HashMap<String, (f64, f64)>,
+) -> Result<Option<ResolvedPlace>, String> {
     let key = place.trim().to_ascii_lowercase();
     if let Some(p) = cache.get(&key) {
-        return Ok(Some(*p));
+        // In-memory hit: coords only (metadata is advisory, best-effort).
+        return Ok(Some(ResolvedPlace {
+            coords: *p,
+            display_name: String::new(),
+            area_centroid: false,
+        }));
     }
     let (search, ctx) = normalize_place(place, context);
     let query_key = format!("{}|{}", search.trim().to_ascii_lowercase(), ctx);
     let mut r = read
         .query(
-            "SELECT lat, lon FROM route_place_geocodes WHERE query_key=?1",
+            "SELECT lat, lon, display_name FROM route_place_geocodes WHERE query_key=?1",
             params![query_key.clone()],
         )
         .await
         .map_err(err("geocode cache lookup"))?;
     if let Some(row) = r.next().await.map_err(err("geocode cache lookup read"))? {
-        if let (Ok(Some(lat)), Ok(Some(lon))) =
-            (row.get::<Option<f64>>(0), row.get::<Option<f64>>(1))
-        {
+        if let (Ok(Some(lat)), Ok(Some(lon)), Ok(display)) = (
+            row.get::<Option<f64>>(0),
+            row.get::<Option<f64>>(1),
+            row.get::<Option<String>>(2),
+        ) {
             cache.insert(key, (lat, lon));
-            return Ok(Some((lat, lon)));
+            return Ok(Some(ResolvedPlace {
+                coords: (lat, lon),
+                display_name: display.unwrap_or_default(),
+                area_centroid: false, // category is not persisted; unknown here
+            }));
         }
         return Ok(None);
     }
@@ -1805,6 +1859,8 @@ pub(crate) async fn resolve_place(
         .get("display_name")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let category = item.get("category").and_then(|v| v.as_str()).unwrap_or("");
+    let ntype = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let osm_id = item
         .get("osm_id")
         .and_then(|v| v.as_i64())
@@ -1814,7 +1870,11 @@ pub(crate) async fn resolve_place(
     let now = chrono::Utc::now().to_rfc3339();
     write.execute("INSERT INTO route_place_geocodes (query_key,raw_place,lat,lon,display_name,osm_id,osm_type,provider,confidence,review,failure_reason,fetched_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'nominatim','ok',0,NULL,?8) ON CONFLICT(query_key) DO UPDATE SET raw_place=excluded.raw_place,lat=excluded.lat,lon=excluded.lon,display_name=excluded.display_name,osm_id=excluded.osm_id,osm_type=excluded.osm_type,provider='nominatim',confidence='ok',failure_reason=NULL,fetched_at=excluded.fetched_at",params![query_key,place.to_string(),lat,lon,display.to_string(),osm_id,osm_type.to_string(),now]).await.map_err(err("geocode cache write"))?;
     cache.insert(key, (lat, lon));
-    Ok(Some((lat, lon)))
+    Ok(Some(ResolvedPlace {
+        coords: (lat, lon),
+        display_name: display.to_string(),
+        area_centroid: nominatim_is_area(category, ntype),
+    }))
 }
 /// Country suffix for Nominatim search context, from the destination's
 /// currency (the same signal that classifies a plan as domestic). The old
@@ -2121,6 +2181,21 @@ mod tests {
         assert_eq!(country_for("twd"), "Taiwan");
         assert_eq!(country_for("JPY"), "Japan");
         assert_eq!(country_for(""), "Japan");
+    }
+
+    #[test]
+    fn nominatim_is_area_flags_centroids_not_landmarks() {
+        // The 三芝 regression: a bare district name resolves to a boundary/
+        // administrative centroid (inland), while a landmark on the road
+        // (淺水灣, 淡金公路) resolves to a place/point feature.
+        assert!(nominatim_is_area("boundary", "administrative"));
+        assert!(nominatim_is_area("place", "town"));
+        assert!(nominatim_is_area("place", "district"));
+        assert!(nominatim_is_area("place", "village"));
+        assert!(!nominatim_is_area("place", "house"));
+        assert!(!nominatim_is_area("tourism", "attraction"));
+        assert!(!nominatim_is_area("highway", "bus_stop"));
+        assert!(!nominatim_is_area("", ""));
     }
 
     #[test]

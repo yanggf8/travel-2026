@@ -140,6 +140,9 @@ fn parse_latlon(tok: &str) -> Option<(f64, f64)> {
 /// Resolve one place token: a literal lat,lon; else a destination POI (when
 /// --dest is given); else the geocode cache; else Nominatim (needs --dest for
 /// country context — fail loud rather than geocode into the wrong country).
+/// Returns the resolved coords plus whatever is known about the match, so the
+/// caller can surface "what did this actually resolve to" and warn on area
+/// centroids (a via on a district centroid pulls the route inland).
 async fn resolve_token(
     tok: &str,
     read: &Connection,
@@ -147,17 +150,30 @@ async fn resolve_token(
     dest: Option<&str>,
     dest_pois: &[crate::snapshot_maps::PoiRow],
     geocodes: &mut std::collections::HashMap<String, (f64, f64)>,
-) -> Result<(f64, f64), String> {
-    if let Some(c) = parse_latlon(tok) {
-        return Ok(c);
+) -> Result<crate::snapshot_maps::ResolvedPlace, String> {
+    use crate::snapshot_maps::ResolvedPlace;
+    if let Some((lat, lon)) = parse_latlon(tok) {
+        return Ok(ResolvedPlace {
+            coords: (lat, lon),
+            display_name: String::new(),
+            area_centroid: false,
+        });
     }
     // dest_pois is already scoped to --dest (empty when absent).
-    if let Some(c) = crate::snapshot_maps::match_poi(tok, dest_pois) {
-        return Ok(c);
+    if let Some((lat, lon)) = crate::snapshot_maps::match_poi(tok, dest_pois) {
+        return Ok(ResolvedPlace {
+            coords: (lat, lon),
+            display_name: String::new(),
+            area_centroid: false,
+        });
     }
     let key = tok.trim().to_ascii_lowercase();
-    if let Some(&c) = geocodes.get(&key) {
-        return Ok(c);
+    if let Some(&(lat, lon)) = geocodes.get(&key) {
+        return Ok(ResolvedPlace {
+            coords: (lat, lon),
+            display_name: String::new(),
+            area_centroid: false,
+        });
     }
     let Some(dest) = dest else {
         return Err(format!(
@@ -165,12 +181,58 @@ async fn resolve_token(
              pass --dest <slug> or use literal lat,lon"
         ));
     };
-    let context = crate::snapshot_maps::geocode_context(read, dest).await?;
-    match crate::snapshot_maps::resolve_place(read, write, tok, &context, geocodes).await? {
-        Some(c) => Ok(c),
+    // Vias usually sit OUTSIDE the destination (石門/三芝 for a 九份 trip), so the
+    // geocode context is the COUNTRY, not the destination — "三芝, 九份, Taiwan"
+    // has no Nominatim hit while "三芝, Taiwan" resolves (to its district
+    // centroid, which the ⚠ warning then flags).
+    let context = broad_context(read, dest).await?;
+    match crate::snapshot_maps::resolve_place_meta(read, write, tok, &context, geocodes).await? {
+        Some(rp) => Ok(rp),
         None => Err(format!("Nominatim could not resolve place '{tok}' (context {context}); \
              pin it with set-place-geocode or use literal lat,lon")),
     }
+}
+
+/// Country-only geocode context for a destination slug (Taiwan for TWD, else
+/// Japan) — the destination itself is usually the wrong context for a via.
+async fn broad_context(read: &Connection, dest: &str) -> Result<String, String> {
+    let mut r = read
+        .query(
+            "SELECT currency FROM destination_config WHERE slug=?1 LIMIT 1",
+            params![dest.to_string()],
+        )
+        .await
+        .map_err(|e| format!("destination_config query failed: {e}"))?;
+    let currency = match r
+        .next()
+        .await
+        .map_err(|e| format!("destination_config read failed: {e}"))?
+    {
+        Some(row) => row
+            .get::<Option<String>>(0)
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        None => return Err(format!("unknown --dest '{dest}' (not in destination_config)")),
+    };
+    Ok(crate::snapshot_maps::country_for(&currency).to_string())
+}
+
+/// One resolved endpoint/via line: what it resolved to, plus an advisory ⚠ when
+/// it landed on an administrative area's CENTROID — off-road by construction,
+/// so OSRM routes to the nearest (often inland) road and shortcuts from there
+/// (the 三芝 → 101 縣道 miss). On-road landmarks show the road in display_name.
+fn resolved_line(label: &str, tok: &str, rp: &crate::snapshot_maps::ResolvedPlace) -> String {
+    let mut s = format!("  {label}: {tok}  →  {:.5},{:.5}", rp.coords.0, rp.coords.1);
+    if !rp.display_name.is_empty() {
+        s.push_str(&format!("  ({})", rp.display_name));
+    }
+    if rp.area_centroid {
+        s.push_str(&format!(
+            "\n  ⚠ '{tok}' 解析到行政區重心（不在道路上）——OSRM 會繞到最近的內陸路再抄捷徑；\n    --via 換成 display_name 帶路名的地標（例如 淡金公路 上的點）或 lat,lon"
+        ));
+    }
+    s
 }
 
 async fn refetch(args: &[String]) -> Result<(), String> {
@@ -194,22 +256,21 @@ async fn refetch(args: &[String]) -> Result<(), String> {
     let from = resolve_token(&from_tok, &read, &write, p.dest.as_deref(), &dest_pois, &mut geocodes)
         .await
         .map_err(|e| format!("--from: {e}"))?;
+    println!("{}", resolved_line("from", &from_tok, &from));
     let to = resolve_token(&to_tok, &read, &write, p.dest.as_deref(), &dest_pois, &mut geocodes)
         .await
         .map_err(|e| format!("--to: {e}"))?;
     let mut via = Vec::new();
     for (i, v) in p.via.iter().enumerate() {
-        via.push(
+        let rp =
             resolve_token(v, &read, &write, p.dest.as_deref(), &dest_pois, &mut geocodes)
                 .await
-                .map_err(|e| format!("--via #{}: {e}", i + 1))?,
-        );
+                .map_err(|e| format!("--via #{}: {e}", i + 1))?;
+        println!("{}", resolved_line(&format!("via {}", i + 1), v, &rp));
+        via.push(rp.coords);
     }
-    println!("  from: {from_tok}  →  {:.5},{:.5}", from.0, from.1);
-    for (i, c) in via.iter().enumerate() {
-        println!("  via {}: {}  →  {:.5},{:.5}", i + 1, p.via[i], c.0, c.1);
-    }
-    println!("  to:   {to_tok}  →  {:.5},{:.5}", to.0, to.1);
+    println!("{}", resolved_line("to  ", &to_tok, &to));
+    let (from, to) = (from.coords, to.coords);
 
     // An existing leg matching the resolved endpoints keeps its exact
     // coordinates for the re-fetch — the itinerary's stop pair built that key,
@@ -278,4 +339,43 @@ async fn refetch(args: &[String]) -> Result<(), String> {
     println!("  {dist_km:.1} km, {} geometry points", pts.len());
     println!("  run `travel snapshot-maps` to re-render the map with this route");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_line;
+    use crate::snapshot_maps::ResolvedPlace;
+
+    fn rp(coords: (f64, f64), display: &str, area: bool) -> ResolvedPlace {
+        ResolvedPlace {
+            coords,
+            display_name: display.to_string(),
+            area_centroid: area,
+        }
+    }
+
+    #[test]
+    fn resolved_line_shows_display_name_when_known() {
+        let s = resolved_line(
+            "via 1",
+            "淺水灣",
+            &rp((25.24963, 121.46655), "淺水灣, 淡金公路, 後厝里, 三芝區, 新北市", false),
+        );
+        assert!(s.contains("via 1: 淺水灣  →  25.24963,121.46655"));
+        assert!(s.contains("(淺水灣, 淡金公路"));
+        assert!(!s.contains("⚠"), "no centroid warning for an on-road landmark");
+    }
+
+    #[test]
+    fn resolved_line_warns_on_area_centroid() {
+        let s = resolved_line("via 2", "三芝", &rp((25.2317, 121.5018), "三芝區, 新北市", true));
+        assert!(s.contains("⚠ '三芝' 解析到行政區重心"), "got: {s}");
+        assert!(s.contains("淡金公路"), "the warning names the fix (on-road landmark)");
+    }
+
+    #[test]
+    fn resolved_line_is_quiet_for_literals() {
+        let s = resolved_line("from", "25.22188,121.63619", &rp((25.22188, 121.63619), "", false));
+        assert_eq!(s, "  from: 25.22188,121.63619  →  25.22188,121.63619");
+    }
 }

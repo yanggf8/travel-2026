@@ -147,6 +147,10 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
                                                    # the cached polyline still cut through 陽明山). Place tokens resolve as
                                                    # lat,lon literal → destination POI (needs --dest) → route_place_geocodes cache →
                                                    # Nominatim (needs --dest; pin unresolvable labels with set-place-geocode).
+                                                   # Via points must sit ON the road you want (a landmark whose Nominatim
+                                                   # display_name contains the road name — 石門洞/淺水灣 on 淡金公路): a bare
+                                                   # area name like 三芝 geocodes to the district CENTROID, which is inland,
+                                                   # and OSRM then shortcuts inland from it (the 101 縣道 miss).
                                                    # Global OSRM-derived cache data — NO --plan-id, NO audit triad. Run
                                                    # `snapshot-maps` afterwards to re-render the map.
 ./bin/travel mark-maps-snapshotted <plan_id>      # stamp the freshness timestamp (snapshot-maps does this automatically on success)
