@@ -726,7 +726,10 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
     };
 
     let mut rows = match conn
-        .query("SELECT slug FROM destination_config ORDER BY slug", ())
+        .query(
+            "SELECT slug, currency FROM destination_config ORDER BY slug",
+            (),
+        )
         .await
     {
         Ok(r) => r,
@@ -743,6 +746,7 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
     };
 
     let mut slugs: Vec<String> = Vec::new();
+    let mut jpy_slugs: Vec<String> = Vec::new();
     while let Some(row) = match rows.next().await {
         Ok(r) => r,
         Err(err) => {
@@ -757,7 +761,14 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
         }
     } {
         let slug: String = row.get(0).unwrap_or_default();
-        slugs.push(slug);
+        let currency: String = row.get(1).unwrap_or_default();
+        slugs.push(slug.clone());
+        // destination_areas is Japan Shaping machinery (seed covers only
+        // Japan destinations). Domestic destinations have no area research
+        // path — an empty destination_areas there is not a gap.
+        if currency == "JPY" {
+            jpy_slugs.push(slug);
+        }
     }
 
     if slugs.is_empty() {
@@ -797,7 +808,7 @@ async fn validate_destinations(issues: &mut Vec<Issue>) {
         count_by_slug.insert(slug, n);
     }
 
-    for slug in &slugs {
+    for slug in &jpy_slugs {
         let n = count_by_slug.get(slug).copied().unwrap_or(0);
         if n == 0 {
             issues.push(Issue {
