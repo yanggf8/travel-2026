@@ -148,9 +148,11 @@ pub struct ManifestRow {
 }
 
 /// A map without geographic context is not publishable, even if the PNG bytes
-/// and upload status look valid.
+/// and upload status look valid. A SKIPPED key is a by-design non-map (no
+/// bytes at all, hence has_roads=0) — pass the skip through untouched so the
+/// classifier can tell "deliberately not produced" from "produced but hollow".
 pub fn effective_manifest_status(status: &str, has_roads: i64) -> String {
-    if has_roads == 1 {
+    if status == "skipped" || has_roads == 1 {
         status.to_string()
     } else {
         "failed".to_string()
@@ -163,6 +165,13 @@ pub enum ArtifactClass {
     Missing,
     Empty,
     Ok,
+    /// snapshot-maps deliberately produced nothing for this key (status
+    /// `skipped`, reason in `map_artifacts.skip_reason`) — e.g. a DOMESTIC
+    /// plan's plan-logistics.png (no airport endpoints; the stay merged into
+    /// plan.png), or a day with no mappable stops. Not incomplete, not ok;
+    /// re-running snapshot-maps will skip it again, so it must NOT be advised
+    /// as "EMPTY (run snapshot-maps)".
+    Skipped,
 }
 
 /// Build the expected map keys for a plan: both overviews plus `day-{n}.png` per day.
@@ -181,7 +190,9 @@ pub fn classify_artifact(manifest_row: Option<&ManifestRow>) -> ArtifactClass {
     match manifest_row {
         None => ArtifactClass::Missing,
         Some(row) => {
-            if row.status != "uploaded" || row.byte_size <= 64 {
+            if row.status == "skipped" {
+                ArtifactClass::Skipped
+            } else if row.status != "uploaded" || row.byte_size <= 64 {
                 ArtifactClass::Empty
             } else {
                 ArtifactClass::Ok
@@ -200,17 +211,25 @@ pub fn format_completeness_line(
     let mut ok_count = 0usize;
     let mut missing = Vec::new();
     let mut empty = Vec::new();
+    let mut skipped = Vec::new();
 
     for key in expected {
         match classify_artifact(manifest.get(key)) {
             ArtifactClass::Ok => ok_count += 1,
+            ArtifactClass::Skipped => skipped.push(key.as_str()),
             ArtifactClass::Missing => missing.push(key.as_str()),
             ArtifactClass::Empty => empty.push(key.as_str()),
         }
     }
 
     if missing.is_empty() && empty.is_empty() {
-        return format!("{plan_id}: maps {ok_count}/{total} ok");
+        if skipped.is_empty() {
+            return format!("{plan_id}: maps {ok_count}/{total} ok");
+        }
+        return format!(
+            "{plan_id}: maps {ok_count}/{total} ok — SKIPPED by snapshot-maps: {} (reason in map_artifacts.skip_reason; link POIs if these should have maps)",
+            skipped.join(", ")
+        );
     }
 
     let mut parts = vec![format!("{plan_id}: maps {ok_count}/{total} ok")];
@@ -221,6 +240,12 @@ pub fn format_completeness_line(
         parts.push(format!(
             "EMPTY: {} (run snapshot-maps)",
             empty.join(", ")
+        ));
+    }
+    if !skipped.is_empty() {
+        parts.push(format!(
+            "SKIPPED by snapshot-maps: {} (reason in map_artifacts.skip_reason)",
+            skipped.join(", ")
         ));
     }
     parts.join(" — ")
@@ -261,11 +286,17 @@ pub async fn evaluate_completeness(
     }
 
     let line = format_completeness_line(plan_id, &expected, &manifest);
-    let all_ok = expected.iter().all(|k| {
-        classify_artifact(manifest.get(k)) == ArtifactClass::Ok
+    // Skipped keys are by-design gaps (snapshot-maps wrote skip_reason), not
+    // incompleteness — re-running snapshot-maps would skip them again. Only
+    // MISSING/EMPTY keys make the manifest Incomplete.
+    let no_gaps = expected.iter().all(|k| {
+        !matches!(
+            classify_artifact(manifest.get(k)),
+            ArtifactClass::Missing | ArtifactClass::Empty
+        )
     });
 
-    if all_ok {
+    if no_gaps {
         Ok(CompletenessVerdict::Complete { line })
     } else {
         Ok(CompletenessVerdict::Incomplete { line })
@@ -484,6 +515,8 @@ mod tests {
         assert_eq!(effective_manifest_status("uploaded", 0), "failed");
         assert_eq!(effective_manifest_status("uploaded", 1), "uploaded");
         assert_eq!(effective_manifest_status("failed", 1), "failed");
+        // A skip is not a hollow upload — it must survive has_roads=0.
+        assert_eq!(effective_manifest_status("skipped", 0), "skipped");
     }
 
     #[test]
@@ -511,5 +544,36 @@ mod tests {
         ]);
         let line = format_completeness_line("tokyo-2026", &expected, &m);
         assert_eq!(line, "tokyo-2026: maps 4/4 ok");
+    }
+
+    #[test]
+    fn classify_skipped_is_not_empty() {
+        assert_eq!(
+            classify_artifact(Some(&ManifestRow {
+                byte_size: 0,
+                status: "skipped".into(),
+            })),
+            ArtifactClass::Skipped
+        );
+    }
+
+    #[test]
+    fn skipped_keys_are_reported_but_not_incomplete() {
+        // jiufen-2026 shape: domestic plan, plan-logistics skipped by design.
+        let expected = expected_map_keys(&[1, 2]);
+        let m = manifest(&[
+            ("plan.png", 1000, "uploaded"),
+            ("plan-logistics.png", 0, "skipped"),
+            ("day-1.png", 2000, "uploaded"),
+            ("day-2.png", 3000, "uploaded"),
+        ]);
+        let line = format_completeness_line("jiufen-2026", &expected, &m);
+        assert!(line.contains("jiufen-2026: maps 3/4 ok"), "line: {line}");
+        assert!(
+            line.contains("SKIPPED by snapshot-maps: plan-logistics.png"),
+            "line: {line}"
+        );
+        // Must NOT advise re-running snapshot-maps for a by-design skip.
+        assert!(!line.contains("run snapshot-maps"), "line: {line}");
     }
 }
