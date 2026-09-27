@@ -936,6 +936,39 @@ h1 {
 }
 
 /* ---- Plan index ---- */
+/* Server-side tabs (計畫與進行中 / 已過): plain links that reload with ?tab=. */
+.plan-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+.plan-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text-dim);
+  background: var(--card);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+}
+.plan-tab--active {
+  color: #fff;
+  background: var(--accent);
+}
+.plan-tab-count {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.8;
+}
+.plan-index-empty {
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
 .plan-index {
   list-style: none;
   display: grid;

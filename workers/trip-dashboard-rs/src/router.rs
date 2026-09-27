@@ -252,10 +252,19 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         let owner_login = session_login.as_deref()
             .unwrap_or_else(|| pairs.first().map(|(login, _)| login.as_str()).unwrap_or(""));
         let csrf = GrantCsrf::new(&secret, session_cookie.as_deref().unwrap_or(""));
+        // Tab split (計畫與進行中 / 已過): server-side, ?tab= switches groups; the
+        // boundary is today (UTC) from the JS clock, passed in as a string so the
+        // split itself stays unit-testable without the JS runtime.
+        let tab = if query.get("tab").map(|s| s.as_str()) == Some("past") {
+            "past"
+        } else {
+            "upcoming"
+        };
+        let today = render::index::today_from_ms(worker::Date::now().as_millis() as i64);
         let body = format!(
             "{}{}{}",
             render::auth::signed_in_banner(owner_login, lang),
-            render::index::render(&rows, &grants, &public_origin, &csrf, lang),
+            render::index::render(&rows, &grants, &public_origin, &csrf, lang, tab, &today),
             render::share::COPY_SCRIPT,
         );
         return html_no_store(render::page("Plans", &body, lang));
