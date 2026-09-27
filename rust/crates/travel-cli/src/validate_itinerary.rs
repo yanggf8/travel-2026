@@ -200,23 +200,6 @@ pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
         .collect()
 }
 
-/// Agent-first hook for `doctor`: dashboard activity-title map-link warnings
-/// from the dashboard branch. Kept narrow so generic advisory map-link warnings
-/// still stay in `validate-itinerary`, while this renderer-dependent shape is
-/// surfaced by doctor as before.
-pub async fn malformed_map_link_warnings(plan_id: &str) -> Vec<(i64, String)> {
-    collect_map_link_issues(plan_id)
-        .await
-        .into_iter()
-        .filter(|i| {
-            matches!(i.severity, Severity::Warning)
-                && i.message
-                    .starts_with("activity text has embedded URL + newlines")
-        })
-        .map(|i| (i.day.unwrap_or(0), i.message))
-        .collect()
-}
-
 /// Agent-first hook for `doctor`: sit-down restaurants that may need a
 /// reservation and are NOT yet enrolled in the booking ledger (no booked/pending
 /// activity in their session). Self-clearing — once you `set-activity-booking …
@@ -272,25 +255,6 @@ fn validate(days: &[DaySummary]) -> Vec<Issue> {
 //   4. an ambiguous bare-name stop (e.g. 安里 with no 駅/站/Station and no spelled-out
 //      city) that Maps can't geolocate reliably. (info)
 fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
-    // Dashboard branch guard: multi-line activity text with an embedded URL
-    // depends on the rich renderer to avoid raw/expanded Maps URLs.
-    for a in &day.activities {
-        if is_malformed_map_text(&a.title) {
-            out.push(Issue {
-                severity: Severity::Warning,
-                day: Some(day.day_number),
-                session: Some(a.session.clone()),
-                message: format!(
-                    "activity text has embedded URL + newlines — requires deployed render_activity_text to avoid an expanded/raw map URL: \"{}\"",
-                    truncate(&a.title, 50)
-                ),
-                suggestion: Some(
-                    "The Rust worker's render_activity_text turns the embedded \"Google Maps：<url>\" tail into a clean labeled link; verify deployed pages use that renderer.".to_string(),
-                ),
-            });
-        }
-    }
-
     // (1) activity-text URLs with '&'
     for url in &day.activity_map_urls {
         if url.contains('&') {
@@ -552,15 +516,6 @@ fn is_ambiguous_stop(s: &str) -> bool {
     }
     // Short bare CJK name (≤4 chars) → ambiguous.
     s.chars().count() <= 4
-}
-
-/// Renderer-dependent map-text predicate: text with BOTH a newline AND an
-/// embedded http(s) URL needs render_activity_text. Newline alone is fine; URL
-/// alone is fine. Pure + testable.
-fn is_malformed_map_text(text: &str) -> bool {
-    let has_newline = text.contains('\n');
-    let has_url = text.contains("http://") || text.contains("https://");
-    has_newline && has_url
 }
 
 fn has_meal_map_marker(text: &str) -> bool {
@@ -1275,7 +1230,7 @@ mod map_link_tests {
     // / place_country / mentions_rail_or_bus / meal_has_pin / extract_map_urls now
     // live in crate::checks and are unit-tested there. The tests below cover the
     // map-link lint BEHAVIOR (validate_map_links wiring) and the predicates that
-    // stayed local (is_ambiguous_stop, is_malformed_map_text, needs_reservation_check).
+    // stayed local (is_ambiguous_stop, needs_reservation_check).
 
     fn activity(session: &str, title: &str, booking_status: Option<&str>) -> Activity {
         Activity {
@@ -1340,63 +1295,6 @@ mod map_link_tests {
         assert!(out.iter().any(|i| i.message.contains("truncated")));
     }
 
-    #[test]
-    fn malformed_when_newline_and_embedded_url() {
-        let blob = "晚餐：ステーキ88 — 牧志駅步行5分\nGoogle Maps：https://www.google.com/maps/search/abc";
-        assert!(is_malformed_map_text(blob));
-    }
-
-    #[test]
-    fn malformed_driving_leg_with_nav_url() {
-        let blob = "04:00 自家出發開車：紅樹林 → 大園\n地址：桃園市\nGoogle Maps 導航：https://www.google.com/maps/dir/A/B";
-        assert!(is_malformed_map_text(blob));
-    }
-
-    // Clean single-line venue name — NOT malformed.
-    #[test]
-    fn clean_single_line_is_not_malformed() {
-        assert!(!is_malformed_map_text("Naminoue Shrine"));
-        assert!(!is_malformed_map_text("首里城公園"));
-    }
-
-    // Multi-line but no embedded URL — NOT malformed (newline alone is fine).
-    #[test]
-    fn multiline_without_url_is_not_malformed() {
-        assert!(!is_malformed_map_text("晚餐：安里家\n營業：週五 17:00–23:00"));
-    }
-
-    // Single-line WITH a URL — NOT malformed (no newline → search query is clean;
-    // and render_activity_text handles the inline link regardless).
-    #[test]
-    fn single_line_with_url_is_not_malformed() {
-        assert!(!is_malformed_map_text("see https://example.com/x"));
-    }
-
-    // The lint emits a WARNING (advisory), with day + session, for a bad activity.
-    #[test]
-    fn lint_warns_on_malformed_activity() {
-        let mut day = empty_day();
-        day.day_number = 2;
-        day.date = "2026-06-13".into();
-        day.theme = "test".into();
-        day.activities = vec![activity(
-            "evening",
-            "晚餐：安里家 — 飯店步行5分\nGoogle Maps：https://www.google.com/maps/search/x",
-            None,
-        )];
-        let mut out = Vec::new();
-        validate_map_links(&day, &mut out);
-        assert_eq!(out.len(), 1, "expected exactly one warning");
-        assert!(matches!(out[0].severity, Severity::Warning));
-        assert_eq!(out[0].day, Some(2));
-        assert_eq!(out[0].session.as_deref(), Some("evening"));
-        assert!(out[0].message.contains("embedded URL + newlines"), "got: {}", out[0].message);
-        assert!(out[0].message.contains("render_activity_text"), "got: {}", out[0].message);
-        // Truncation flattens the newline to a literal \n (one-line message).
-        assert!(!out[0].message.contains('\n'), "message must be single-line, got: {}", out[0].message);
-    }
-
-    // A clean day produces NO warnings.
     #[test]
     fn lint_silent_on_clean_activities() {
         let mut day = empty_day();
