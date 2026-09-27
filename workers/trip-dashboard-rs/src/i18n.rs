@@ -52,6 +52,10 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("prosConsLabel", true) => "優劣比較",
         ("notRanked", false) => "Not in the recommendation",
         ("notRanked", true) => "未列入推薦",
+        // Card grouping: ranked cards first, unranked ones demoted to a
+        // muted reference subsection (layout request 2026-09-28).
+        ("refGroupTitle", false) => "Backup & ruled-out references",
+        ("refGroupTitle", true) => "備援／淘汰參考",
         // candidate location minimap (ArcGIS static basemap, pin = the stay)
         ("locationMap", false) => "Location",
         ("locationMap", true) => "位置",

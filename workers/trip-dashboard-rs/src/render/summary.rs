@@ -998,7 +998,21 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             h.push_str("</ol></div>");
         }
         h.push_str("<div class=\"candidate-grid\">");
+        // Grouping (layout 2026-09-28): candidates render ranked-first, so the
+        // FIRST unranked card is the boundary — close the primary grid, open a
+        // muted 備援／淘汰參考 subsection for everything from there on. Booked
+        // state shows one flat grid (ranking is history then, not advice).
+        let mut ref_opened = false;
         for c in &plan.candidates {
+            if !is_booked && c.ranking.is_none() && !ref_opened {
+                h.push_str("</div>");
+                h.push_str(&format!(
+                    "<h3 class=\"candidate-ref-heading\">{}</h3>",
+                    esc(t("refGroupTitle", lang))
+                ));
+                h.push_str("<div class=\"candidate-grid candidate-grid--ref\">");
+                ref_opened = true;
+            }
             let title = if c.room_type.is_empty() {
                 c.hotel_name.clone()
             } else {
@@ -1010,10 +1024,13 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 &c.currency
             };
             // Selecting state → dashed frame on each card (visual "not booked yet").
+            // Unranked cards additionally get --ref (muted, demoted subsection).
             let card_class = if is_booked {
-                "candidate-card"
+                "candidate-card".to_string()
+            } else if c.ranking.is_none() {
+                "candidate-card candidate-card--selecting candidate-card--ref".to_string()
             } else {
-                "candidate-card candidate-card--selecting"
+                "candidate-card candidate-card--selecting".to_string()
             };
             h.push_str(&format!("<div class=\"{card_class}\">"));
             if is_placeholder_image(&c.image_url) {
@@ -1028,34 +1045,6 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     esc_url_attr(&c.image_url),
                     esc(&c.hotel_name)
                 ));
-            }
-            // Gallery: one thumbnail per room type / area (child table rows), each
-            // linking to the full image (SSR-only, no JS lightbox).
-            let gallery: Vec<_> = c
-                .images
-                .iter()
-                .filter(|g| !is_placeholder_image(&g.image_url))
-                .collect();
-            if !gallery.is_empty() {
-                h.push_str("<div class=\"candidate-gallery\">");
-                for g in gallery {
-                    h.push_str("<figure class=\"candidate-gallery-item\">");
-                    h.push_str(&format!(
-                        "<a href=\"{}\" target=\"_blank\" rel=\"noopener\">\
-                         <img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" referrerpolicy=\"no-referrer\" /></a>",
-                        esc_url_attr(&g.image_url),
-                        esc_url_attr(&g.image_url),
-                        esc(if g.label.is_empty() { &c.hotel_name } else { &g.label }),
-                    ));
-                    if !g.label.is_empty() {
-                        h.push_str(&format!(
-                            "<figcaption class=\"candidate-gallery-label\">{}</figcaption>",
-                            esc(&g.label)
-                        ));
-                    }
-                    h.push_str("</figure>");
-                }
-                h.push_str("</div>");
             }
             // Rank badge on the card (selecting state only — once booked the
             // ranking is history, not current advice).
@@ -1163,6 +1152,38 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             // static basemap the route snapshots already composite.
             if let (Some(lat), Some(lon)) = (c.latitude, c.longitude) {
                 h.push_str(&candidate_minimap(c, lat, lon, &plan.poi_stops, lang));
+            }
+            // Gallery: one thumbnail per room type / area (child table rows), each
+            // linking to the full image (SSR-only, no JS lightbox). Deliberately
+            // LAST, below the map — a decision card is facts-first (price →
+            // rating → tags → notes → 位置); photos are for the already-interested
+            // reader, not the first scroll (previously ~900px of gallery sat
+            // between the hero image and every fact on it).
+            let gallery: Vec<_> = c
+                .images
+                .iter()
+                .filter(|g| !is_placeholder_image(&g.image_url))
+                .collect();
+            if !gallery.is_empty() {
+                h.push_str("<div class=\"candidate-gallery\">");
+                for g in gallery {
+                    h.push_str("<figure class=\"candidate-gallery-item\">");
+                    h.push_str(&format!(
+                        "<a href=\"{}\" target=\"_blank\" rel=\"noopener\">\
+                         <img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" referrerpolicy=\"no-referrer\" /></a>",
+                        esc_url_attr(&g.image_url),
+                        esc_url_attr(&g.image_url),
+                        esc(if g.label.is_empty() { &c.hotel_name } else { &g.label }),
+                    ));
+                    if !g.label.is_empty() {
+                        h.push_str(&format!(
+                            "<figcaption class=\"candidate-gallery-label\">{}</figcaption>",
+                            esc(&g.label)
+                        ));
+                    }
+                    h.push_str("</figure>");
+                }
+                h.push_str("</div>");
             }
             // External rooms/availability link — it opens a real booking engine, so the label
             // says so rather than promising a passive room list.
