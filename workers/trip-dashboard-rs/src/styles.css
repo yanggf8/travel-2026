@@ -226,25 +226,16 @@ h1 {
   gap: 16px;
   grid-template-columns: 1fr;
 }
-/* 備援／淘汰參考 subsection — the unranked remainder, visually demoted so the
-   ranked shortlist stays the page's decision surface. Muted (grayscale, dim)
-   photos say "context" where full-color says "candidate". */
-.candidate-ref-heading {
-  margin: 28px 0 4px;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-dim);
-}
-.candidate-grid--ref { gap: 12px; }
-.candidate-card--ref .candidate-image,
-.candidate-card--ref .candidate-gallery-img {
-  filter: grayscale(0.7);
-  opacity: 0.75;
-}
 .candidate-sub {
   font-size: 12px;
   color: var(--text-dim);
-  margin: -4px 0 8px;
+  margin: -4px 0 2px;
+}
+/* 搜尋條件 line — what the cards were filtered against, under the count. */
+.candidate-criteria {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0 0 8px;
 }
 /* ---- 推薦排序 + 優劣比較 (comparison block above the card grid) ---- */
 .candidate-ranking {
@@ -433,8 +424,10 @@ h1 {
   color: var(--text-dim);
 }
 
-/* Candidate gallery — one thumbnail per room type / area, each opens the
-   full image in a new tab (SSR-only, no JS lightbox). */
+/* Candidate media strip — the 位置小圖 first, then one thumbnail per room
+   type / area, each opening the full image in a new tab (SSR-only, no JS
+   lightbox). The minimap is a grid cell AMONG the photos, not its own
+   full-width row (request 2026-09-28). */
 .candidate-gallery {
   display: grid;
   /* 2-up on a phone, 4-up once there is room — a 4-photo room set stays even
@@ -480,12 +473,13 @@ h1 {
 .candidate-link:hover { text-decoration: underline; }
 
 /* Candidate location minimap — ArcGIS static basemap centered on the trip's
-   旅遊地 hub (🚩 at the image center) with the stay 📍 on the quarter line and
-   a dashed hub→stay connector; remaining itinerary stops are small dots.
-   Pins are positioned inline by Mercator math over the known bbox. Whole
-   image links to Google Maps. */
+   旅遊地 hub (🚩 at the image center), the stay 📍 a third of the frame away
+   along the dominant axis, and a dashed hub→stay connector; remaining
+   itinerary stops are small dots. Pins are positioned inline by Mercator
+   math over the known bbox. Whole image links to Google Maps. It sits
+   INSIDE the media strip grid (no own padding — the strip has it). */
 .cand-minimap {
-  padding: 8px 10px 0;
+  padding: 0;
 }
 .cand-minimap-link {
   position: relative;

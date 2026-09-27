@@ -52,10 +52,12 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("prosConsLabel", true) => "優劣比較",
         ("notRanked", false) => "Not in the recommendation",
         ("notRanked", true) => "未列入推薦",
-        // Card grouping: ranked cards first, unranked ones demoted to a
-        // muted reference subsection (layout request 2026-09-28).
-        ("refGroupTitle", false) => "Backup & ruled-out references",
-        ("refGroupTitle", true) => "備援／淘汰參考",
+        // Criteria line under the candidates heading — the denominator behind
+        // 「N 間比較中」 (request 2026-09-28). {dates} is filled from the plan's
+        // date anchors; the requirement enumeration is section chrome (same
+        // precedent as the 「海景候選」 heading).
+        ("criteriaLine", false) => "Requirements: 2 guests · bathtub + sea view + free parking (self-drive) · {dates}",
+        ("criteriaLine", true) => "條件：2 人 · 浴缸＋海景＋免費停車（自駕） · {dates}",
         // candidate location minimap (ArcGIS static basemap, pin = the stay)
         ("locationMap", false) => "Location",
         ("locationMap", true) => "位置",

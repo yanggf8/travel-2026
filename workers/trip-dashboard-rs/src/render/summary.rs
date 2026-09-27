@@ -340,13 +340,15 @@ fn date_only(s: &str) -> &str {
 
 /// Per-candidate location minimap: ArcGIS World Street Map static export,
 /// CENTERED on the trip's 旅遊地 (the itinerary's hub cluster, e.g. 九份) with
-/// the stay placed at the quarter line — exactly midway between the hub and
-/// the map edge — so every card reads "this far, this direction from where
-/// we're going" at a glance. Zoom adapts to the stay's distance (a
-/// 0.2 km-in-cluster stay gets a street-scale map; a 4 km outlier pulls out),
-/// and stops beyond the frame are simply not drawn (the caption's
-/// nearest-stop distance covers them) — including ALL stops made every card a
-/// 40 km north-coast overview where the cluster-vs-stay contrast vanished.
+/// the hub→stay distance spanning a THIRD of the frame (span = 3× the stay's
+/// dominant-axis offset; was 4×/quarter line — user request 2026-09-28: 二點
+/// 距離可以佔 1/3, a slightly tighter, larger-reading crop) so every card reads
+/// "this far, this direction from where we're going" at a glance. Zoom adapts
+/// to the stay's distance (a 0.2 km-in-cluster stay gets a street-scale map; a
+/// 4 km outlier pulls out), and stops beyond the frame are simply not drawn
+/// (the caption's nearest-stop distance covers them) — including ALL stops
+/// made every card a 40 km north-coast overview where the cluster-vs-stay
+/// contrast vanished.
 /// Pins are positioned by Mercator math over the known bbox (the ArcGIS
 /// `marker` param is silently ignored, verified). Never requests OSM raster
 /// tiles (tile policy) — same sanctioned ArcGIS static basemap the route
@@ -385,12 +387,13 @@ fn candidate_minimap(
             let hub = &stops[hub_stop(stops)];
             let (c_lat, c_lon) = (hub.lat, hub.lon);
             let aspect = 1.5 / c_lat.to_radians().cos();
-            // Span so the stay lands at 25% from center along its DOMINANT
-            // axis (full span = 4× the offset): 中間是旅遊目的，住宿剛好在
-            // 旅遊目的和地圖邊的中間. Floor keeps a coincident stay readable.
+            // Span so the hub→stay offset lands at 1/3 of the frame along its
+            // DOMINANT axis (full span = 3× the offset — user request 2026-09-28,
+            // 二點距離佔 1/3; was 4× = quarter line). Floor keeps a coincident
+            // stay readable at street scale.
             let d_lat = (lat - c_lat).abs();
             let d_lon = (lon - c_lon).abs();
-            let lat_span = (4.0 * d_lat.max(d_lon / aspect)).max(0.004);
+            let lat_span = (3.0 * d_lat.max(d_lon / aspect)).max(0.004);
             let lon_span = lat_span * aspect;
             let (la_min, la_max) = (c_lat - lat_span / 2.0, c_lat + lat_span / 2.0);
             let (lo_min, lo_max) = (c_lon - lon_span / 2.0, c_lon + lon_span / 2.0);
@@ -506,11 +509,65 @@ fn candidate_minimap(
     )
 }
 
+/// The criteria line's date part, from the plan's own date anchors —
+/// 「10/12（一）1 晚」 / "Mon 10/12 · 1 night". Empty when the plan has no
+/// dates yet (nothing to state).
+fn criteria_dates(plan: &crate::model::Plan, lang: &str) -> String {
+    let parse = |d: &str| -> Option<(i64, i64, i64)> {
+        let mut it = d.split('-');
+        let y = it.next()?.parse().ok()?;
+        let m = it.next()?.parse().ok()?;
+        let day = it.next()?.parse().ok()?;
+        Some((y, m, day))
+    };
+    let Some((y, m, day)) = parse(&plan.start_date) else {
+        return String::new();
+    };
+    // days since the Unix epoch (Hinnant's civil_from_days inverse) → weekday;
+    // 1970-01-01 was a Thursday, so (days + 4) mod 7 indexes 0=Sunday.
+    let days = civil_days(y, m, day);
+    let wd_idx = (days + 4).rem_euclid(7) as usize;
+    let (wd_zh, wd_en) = [
+        ("日", "Sun"),
+        ("一", "Mon"),
+        ("二", "Tue"),
+        ("三", "Wed"),
+        ("四", "Thu"),
+        ("五", "Fri"),
+        ("六", "Sat"),
+    ][wd_idx];
+    let nights = parse(&plan.end_date)
+        .map(|(ey, em, ed)| civil_days(ey, em, ed) - days)
+        .filter(|n| *n > 0);
+    if lang == "en" {
+        match nights {
+            Some(n) => format!("{wd_en} {m}/{day} · {n} night{}", if n > 1 { "s" } else { "" }),
+            None => format!("{wd_en} {m}/{day}"),
+        }
+    } else {
+        match nights {
+            Some(n) => format!("{m}/{day}（{wd_zh}）{n} 晚"),
+            None => format!("{m}/{day}（{wd_zh}）"),
+        }
+    }
+}
+
+/// Days since 1970-01-01 for a civil (proleptic Gregorian) date.
+fn civil_days(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
 /// The trip's 旅遊地: the stop with the most neighbors within 5 km (tie →
 /// earliest) — where the itinerary CONCENTRATES (the 九份 base for jiufen).
 /// Excursion stops (野柳/金山/淡水) must not drag the center off the base.
 /// Returns its INDEX; the bbox is centered on the stop itself so the 🚩 sits
-/// exactly at the image center and the stay lands on the quarter line.
+/// exactly at the image center and the hub→stay distance spans a third of the
+/// frame.
 fn hub_stop(stops: &[crate::model::PoiStop]) -> usize {
     let mut best = 0usize;
     let mut best_cnt = 0usize;
@@ -926,7 +983,22 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     // P4-aware headings (pure HTML/CSS, no JS):
     //   booked   → 「其他海景參考」 + 小字「僅供參考」
     //   pending/selecting/empty → 「🏨 海景候選 · 正在選」 (candidates as primary, dashed frame)
-    if !plan.candidates.is_empty() {
+    // Only RANKED candidates render — an unranked row is a ruled-out/backup
+    // note that fails the trip's hard conditions (浴缸×海景 for jiufen), not a
+    // card to compare (user request 2026-09-28: 不合條件的不列出). An
+    // all-unranked set is data still being entered (nothing decided yet), so it
+    // still shows everything — an empty section would hide in-progress work.
+    let ranked: Vec<&crate::model::DomesticCandidate> = plan
+        .candidates
+        .iter()
+        .filter(|c| c.ranking.is_some())
+        .collect();
+    let show: Vec<&crate::model::DomesticCandidate> = if ranked.is_empty() {
+        plan.candidates.iter().collect()
+    } else {
+        ranked.clone()
+    };
+    if !show.is_empty() {
         let (cand_title, cand_sub): (&str, Option<&str>) = if is_booked {
             (
                 if lang == "zh" {
@@ -952,22 +1024,40 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         };
         h.push_str(&format!("<h2>{}</h2>", esc(cand_title)));
         // Say it in words, not only through a dashed border a reader may not decode.
-        // The count is the REAL candidate count — a hardcoded "三間" once disagreed
-        // with the five cards under it.
+        // The count is the cards actually RENDERED under the heading — counting
+        // plan.candidates would say 9 while only the ranked ones list (the
+        // "9 間比較中" that read as nine matching stays).
         let sub_text = cand_sub.map(str::to_string).unwrap_or_else(|| {
-            t("notBookedYet", lang).replace("{n}", &plan.candidates.len().to_string())
+            t("notBookedYet", lang).replace("{n}", &show.len().to_string())
         });
         h.push_str(&format!(
             "<div class=\"candidate-sub\">{}</div>",
             esc(&sub_text)
         ));
+        // 搜尋條件 line — what the cards were filtered against, so 「N 間比較中」
+        // has its denominator visible (user request 2026-09-28). The date part
+        // comes from the plan's anchors; the requirement enumeration is section
+        // chrome (same precedent as the 「海景候選」 heading itself) — the
+        // authoritative criteria text lives in docs/trips/<plan>.md.
+        if !is_booked {
+            let dates = criteria_dates(plan, lang);
+            // No dates yet → drop the trailing " · " the {dates} placeholder
+            // leaves behind rather than publishing "條件：… · ".
+            let criteria = t("criteriaLine", lang)
+                .replace("{dates}", &dates)
+                .trim_end()
+                .trim_end_matches('·')
+                .trim_end()
+                .to_string();
+            if !criteria.is_empty() {
+                h.push_str(&format!(
+                    "<div class=\"candidate-criteria\">{}</div>",
+                    esc(&criteria)
+                ));
+            }
+        }
         // 推薦排序 — the section must not be a bare price grid: when rankings
         // exist, state the order and the reason (user request 2026-09-28).
-        let ranked: Vec<&crate::model::DomesticCandidate> = plan
-            .candidates
-            .iter()
-            .filter(|c| c.ranking.is_some())
-            .collect();
         if !ranked.is_empty() && !is_booked {
             h.push_str(&format!(
                 "<div class=\"candidate-ranking\"><span class=\"candidate-ranking-title\">{}</span><ol>",
@@ -998,21 +1088,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             h.push_str("</ol></div>");
         }
         h.push_str("<div class=\"candidate-grid\">");
-        // Grouping (layout 2026-09-28): candidates render ranked-first, so the
-        // FIRST unranked card is the boundary — close the primary grid, open a
-        // muted 備援／淘汰參考 subsection for everything from there on. Booked
-        // state shows one flat grid (ranking is history then, not advice).
-        let mut ref_opened = false;
-        for c in &plan.candidates {
-            if !is_booked && c.ranking.is_none() && !ref_opened {
-                h.push_str("</div>");
-                h.push_str(&format!(
-                    "<h3 class=\"candidate-ref-heading\">{}</h3>",
-                    esc(t("refGroupTitle", lang))
-                ));
-                h.push_str("<div class=\"candidate-grid candidate-grid--ref\">");
-                ref_opened = true;
-            }
+        // `show` is ranked-only (or everything when nothing is ranked yet) —
+        // unranked rows are 不合條件, not cards to compare. Booked state shows
+        // the same set flat (ranking is history then, not advice).
+        for c in &show {
             let title = if c.room_type.is_empty() {
                 c.hotel_name.clone()
             } else {
@@ -1024,13 +1103,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 &c.currency
             };
             // Selecting state → dashed frame on each card (visual "not booked yet").
-            // Unranked cards additionally get --ref (muted, demoted subsection).
             let card_class = if is_booked {
-                "candidate-card".to_string()
-            } else if c.ranking.is_none() {
-                "candidate-card candidate-card--selecting candidate-card--ref".to_string()
+                "candidate-card"
             } else {
-                "candidate-card candidate-card--selecting".to_string()
+                "candidate-card candidate-card--selecting"
             };
             h.push_str(&format!("<div class=\"{card_class}\">"));
             if is_placeholder_image(&c.image_url) {
@@ -1142,30 +1218,29 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     esc(&c.notes)
                 ));
             }
-            // 位置小圖 — a small static basemap so the reader can see WHERE the
-            // stay actually sits, RELATIVE to the trip's own points (九份老街/
-            // 野柳/金山/淡水 — a tight street-grid crop around the stay hides
-            // exactly the question the reader is asking). The bbox covers the
-            // stay + itinerary stops; the 📍 and the stop dots are positioned
-            // by Mercator math; the whole image links to Google Maps. We never
-            // request OSM raster tiles (policy) — this is the sanctioned ArcGIS
-            // static basemap the route snapshots already composite.
-            if let (Some(lat), Some(lon)) = (c.latitude, c.longitude) {
-                h.push_str(&candidate_minimap(c, lat, lon, &plan.poi_stops, lang));
-            }
-            // Gallery: one thumbnail per room type / area (child table rows), each
-            // linking to the full image (SSR-only, no JS lightbox). Deliberately
-            // LAST, below the map — a decision card is facts-first (price →
-            // rating → tags → notes → 位置); photos are for the already-interested
-            // reader, not the first scroll (previously ~900px of gallery sat
-            // between the hero image and every fact on it).
+            // Media strip at the card bottom — facts-first (price → rating →
+            // tags → notes), media LAST. The 位置小圖 leads the strip (it answers
+            // the decision question — how far, which direction from 旅遊地),
+            // followed by one thumbnail per room type / area, each linking to the
+            // full image (SSR-only, no JS lightbox). The minimap is a grid cell
+            // AMONG the photos, not its own full-width row (user request
+            // 2026-09-28: 住宿點相對圖不用自己佔一格).
             let gallery: Vec<_> = c
                 .images
                 .iter()
                 .filter(|g| !is_placeholder_image(&g.image_url))
                 .collect();
-            if !gallery.is_empty() {
+            let minimap = match (c.latitude, c.longitude) {
+                (Some(lat), Some(lon)) => Some(candidate_minimap(c, lat, lon, &plan.poi_stops, lang)),
+                _ => None,
+            };
+            if minimap.is_some() || !gallery.is_empty() {
                 h.push_str("<div class=\"candidate-gallery\">");
+                if let Some(mm) = minimap {
+                    h.push_str(&format!(
+                        "<figure class=\"candidate-gallery-item candidate-gallery-item--map\">{mm}</figure>"
+                    ));
+                }
                 for g in gallery {
                     h.push_str("<figure class=\"candidate-gallery-item\">");
                     h.push_str(&format!(
@@ -1772,10 +1847,10 @@ mod tests {
     }
 
     #[test]
-    fn candidate_minimap_centers_on_destination_with_stay_at_quarter() {
+    fn candidate_minimap_centers_on_destination_with_stay_at_third() {
         use crate::model::{DomesticCandidate, PoiStop};
         // The live jiufen-2026 legend set (plan.png stops) + a stay OUTSIDE the
-        // 九份 cluster — the case the quarter geometry exists to expose.
+        // 九份 cluster — the case the two-point geometry exists to expose.
         let stops = vec![
             PoiStop { label: "九份老街".into(), lat: 25.108719, lon: 121.8435077 },
             PoiStop { label: "九份住宿".into(), lat: 25.1081276, lon: 121.8383274 },
@@ -1798,21 +1873,27 @@ mod tests {
             ..Default::default()
         };
         // ---- OUTLIER stay (4.5 km from the hub 九份老街): bbox centered ON the
-        // hub stop (🚩 at the image center), span = 4× the stay's dominant-axis
-        // offset → stay on the quarter line, dashed connector in between.
+        // hub stop (🚩 at the image center), span = 3× the stay's dominant-axis
+        // offset → hub→stay distance spans a THIRD of the frame, dashed
+        // connector in between.
         let html = render(&plan(25.1330327, 121.807191), "zh", None);
         assert!(
             html.contains("server.arcgisonline.com"),
             "basemap host: {html}"
         );
         assert!(
-            html.contains("bbox=121.762955,25.060092,121.924061,25.157346"),
+            html.contains("bbox=121.783093,25.072248,121.903922,25.145190"),
             "destination-centered bbox: {html}"
         );
         assert!(html.contains("cand-minimap-pin"), "CSS pin overlay: {html}");
         assert!(
-            html.contains("left:27.46%;top:25.01%"),
-            "stay pin on the quarter line: {html}"
+            html.contains("left:19.94%;top:16.67%"),
+            "stay pin a third of the frame from the center: {html}"
+        );
+        // The minimap is a cell in the media strip, not its own full-width row.
+        assert!(
+            html.contains("<figure class=\"candidate-gallery-item candidate-gallery-item--map\">"),
+            "minimap inside the gallery strip: {html}"
         );
         // The 旅遊地 is marked — a 🚩 on the hub stop with its label, not just
         // another blue dot, and a dashed hub→stay connector (交通路線).
@@ -1845,17 +1926,18 @@ mod tests {
         );
         assert!(html.contains("© Esri"), "attribution: {html}");
 
-        // ---- IN-CLUSTER stay (0.2 km from the hub): street-scale map, still
-        // destination-centered with the stay at the quarter line — not the
-        // 40 km full-coast overview that pulled every card out.
+        // ---- IN-CLUSTER stay (0.2 km from the hub): street-scale map (the
+        // 3× span floors at 0.004°), still destination-centered with the stay
+        // a third of the frame out — not the 40 km full-coast overview that
+        // pulled every card out.
         let html = render(&plan(25.1095, 121.8415), "zh", None);
         assert!(
-            html.contains("bbox=121.839492,25.106295,121.847523,25.111143"),
+            html.contains("bbox=121.840195,25.106719,121.846821,25.110719"),
             "in-cluster street-scale bbox: {html}"
         );
         assert!(
-            html.contains("left:25.00%;top:33.89%"),
-            "in-cluster stay on the quarter line: {html}"
+            html.contains("left:19.70%;top:30.48%"),
+            "in-cluster stay a third of the frame out: {html}"
         );
         assert!(
             html.contains("cand-minimap-hub-label\">九份老街"),
@@ -2009,9 +2091,13 @@ mod tests {
         let no = render(&mk(Some(0)), "zh", None);
         assert!(no.contains("candidate-tag--notub") && no.contains("無浴缸"), "{no}");
         assert!(render(&mk(Some(0)), "en", None).contains("No bathtub"));
-        // Unverified (NULL) → no tag at all: 未查 ≠ 無浴缸.
+        // Unverified (NULL) → no tag at all: 未查 ≠ 無浴缸. (The criteria line
+        // legitimately contains the word 浴缸 — assert on the tag, not the word.)
         let unknown = render(&mk(None), "zh", None);
-        assert!(!unknown.contains("浴缸"), "{unknown}");
+        assert!(
+            !unknown.contains("candidate-tag--tub") && !unknown.contains("candidate-tag--notub"),
+            "{unknown}"
+        );
     }
 
     #[test]
@@ -2030,14 +2116,22 @@ mod tests {
             p4_status: "selecting".into(),
             candidates: vec![
                 mk(Some(1), "9.6 評分傑出；免訂金、可免費取消；缺點：無電梯"),
-                mk(None, ""),
+                DomesticCandidate {
+                    id: "c2".into(),
+                    hotel_name: "淘汰民宿".into(),
+                    room_type: "海景雙人房".into(),
+                    price_twd: 2351,
+                    ranking: None,
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };
         let html = render(&plan, "zh", None);
-        // The sub line counts the REAL candidates (was hardcoded 三間).
-        assert!(html.contains("2 間比較中"), "{html}");
-        assert!(!html.contains("三間比較中"), "{html}");
+        // The sub line counts the cards RENDERED — unranked rows are 不合條件
+        // and do not list, so one card, not two (the "9 間比較中" overcount).
+        assert!(html.contains("1 間比較中"), "{html}");
+        assert!(!html.contains("淘汰民宿"), "unranked card not listed: {html}");
         // 推薦排序 block: ordered list, first-choice badge, the reason text.
         assert!(html.contains("candidate-ranking"), "{html}");
         assert!(html.contains("推薦排序"), "{html}");
@@ -2046,15 +2140,47 @@ mod tests {
         // Ranked candidate appears ONCE in the <ol>; the unranked one does not.
         let ol = html.split("<ol>").nth(1).unwrap_or("").split("</ol>").next().unwrap_or("");
         assert!(ol.contains("魚礁十五號"), "{ol}");
-        // Card-level: notes block + rank badge; unranked card states 未列入推薦.
+        // Card-level: notes block + rank badge + the criteria line.
         assert!(html.contains("candidate-notes"), "{html}");
         assert!(html.contains("優劣比較"), "{html}");
-        assert!(html.contains("未列入推薦"), "{html}");
+        assert!(
+            html.contains("條件：2 人 · 浴缸＋海景＋免費停車（自駕）"),
+            "criteria line: {html}"
+        );
         // EN labels render for ?lang=en.
         let en = render(&plan, "en", None);
         assert!(en.contains("Recommended order"), "{en}");
         assert!(en.contains("Top pick"), "{en}");
-        assert!(en.contains("comparing 2 stays"), "{en}");
+        assert!(en.contains("comparing 1 stays"), "{en}");
+        assert!(
+            en.contains("Requirements: 2 guests · bathtub + sea view + free parking"),
+            "EN criteria line: {en}"
+        );
+    }
+
+    #[test]
+    fn criteria_dates_render_plan_anchor_dates_with_weekday() {
+        use crate::model::DomesticCandidate;
+        let plan = Plan {
+            p4_status: "selecting".into(),
+            start_date: "2026-10-12".into(),
+            end_date: "2026-10-13".into(),
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 4000,
+                ranking: Some(1),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let zh = render(&plan, "zh", None);
+        assert!(
+            zh.contains("條件：2 人 · 浴缸＋海景＋免費停車（自駕） · 10/12（一）1 晚"),
+            "criteria line with anchor dates: {zh}"
+        );
+        let en = render(&plan, "en", None);
+        assert!(en.contains("Mon 10/12 · 1 night"), "{en}");
     }
 
     #[test]
