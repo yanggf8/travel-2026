@@ -86,12 +86,17 @@ pub fn render_plan(
             .days
             .get(&d.day_number)
             .and_then(|v| v.as_deref());
-        body.push_str(&day::render(
+        body.push_str(&day::render_with_logistics(
             d,
             &plan.plan_id,
             lang,
             map_ver,
+            map_status
+                .day_logistics
+                .get(&d.day_number)
+                .and_then(|v| v.as_deref()),
             map_status.legend_for(&format!("day-{}.png", d.day_number)),
+            map_status.legend_for(&format!("day-{}-logistics.png", d.day_number)),
         ));
     }
     // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),
@@ -216,6 +221,7 @@ mod tests {
             plan_logistics: Some("etag3".into()),
             plan_excursion: None,
             days: [(1i64, Some("etag2".into()))].into_iter().collect(),
+            day_logistics: std::collections::HashMap::new(),
             legends: [
                 (
                     "plan.png".to_string(),

@@ -599,9 +599,12 @@ async fn check_map_status(
     let excursion_key = format!("{plan_id}/plan-excursion.png");
     let plan_excursion = r2_map_version(&bucket, &excursion_key).await?;
     let mut day_status = HashMap::new();
+    let mut day_logistics_status = HashMap::new();
     for d in days {
         let key = format!("{plan_id}/day-{}.png", d.day_number);
         day_status.insert(d.day_number, r2_map_version(&bucket, &key).await?);
+        let logistics_key = format!("{plan_id}/day-{}-logistics.png", d.day_number);
+        day_logistics_status.insert(d.day_number, r2_map_version(&bucket, &logistics_key).await?);
     }
     let legends = load_map_legends(turso_url, turso_token, plan_id).await?;
     Ok(render::map::MapStatus {
@@ -609,6 +612,7 @@ async fn check_map_status(
         plan_logistics,
         plan_excursion,
         days: day_status,
+        day_logistics: day_logistics_status,
         legends,
     })
 }

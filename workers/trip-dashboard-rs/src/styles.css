@@ -672,6 +672,11 @@ h1 {
 .map-frame--inset .map-legend { padding: 5px 8px; gap: 3px 5px; }
 .map-frame--inset .map-legend li { font-size: 11px; }
 .map-frame--inset .map-missing-box { min-height: 72px; font-size: 12px; padding: 10px; }
+.map-frame--day-logistics {
+  max-width: 240px;
+  margin-left: auto;
+  margin-right: 0;
+}
 /* Insets row: the day-trip map and the hotel/airport map share the full
    width half-and-half (they wrap to a stack on a phone). A lone inset keeps
    the compact 360px right-aligned frame it always had. */
@@ -1136,7 +1141,9 @@ h1 {
   .day h2 { grid-column: 1 / -1; }
   .theme { grid-column: 1 / -1; }
   .weather { grid-column: 1 / -1; }
-  .day .map-frame { grid-column: 2; grid-row: span 20; align-self: start; margin-top: 0; }
+  .day-map-stack { grid-column: 2; grid-row: span 20; align-self: start; min-width: 0; }
+  .day-map-stack > .map-frame { margin-top: 0; }
+  .day-map-stack > .map-frame--day-logistics { margin-top: 10px; }
   .session { grid-column: 1; }
 }
 

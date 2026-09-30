@@ -202,12 +202,25 @@ fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
     h
 }
 
+#[cfg(test)]
 pub fn render(
     day: &Day,
     plan_id: &str,
     lang: &str,
     map_version: Option<&str>,
     legend: &[super::map::LegendStop],
+) -> String {
+    render_with_logistics(day, plan_id, lang, map_version, None, legend, &[])
+}
+
+pub fn render_with_logistics(
+    day: &Day,
+    plan_id: &str,
+    lang: &str,
+    map_version: Option<&str>,
+    logistics_version: Option<&str>,
+    legend: &[super::map::LegendStop],
+    logistics_legend: &[super::map::LegendStop],
 ) -> String {
     let theme = if lang == "zh" && !day.theme_zh.is_empty() {
         &day.theme_zh
@@ -226,6 +239,7 @@ pub fn render(
     ));
     h.push_str(&format!("<div class=\"theme\">{}</div>", esc(theme)));
     h.push_str(&weather_strip(day, lang));
+    h.push_str("<div class=\"day-map-stack\">");
     h.push_str(&super::map::day_map_slot(
         plan_id,
         day.day_number,
@@ -233,6 +247,14 @@ pub fn render(
         lang,
         legend,
     ));
+    h.push_str(&super::map::day_logistics_map_slot(
+        plan_id,
+        day.day_number,
+        logistics_version,
+        lang,
+        logistics_legend,
+    ));
+    h.push_str("</div>");
     if !day.landmarks.is_empty() {
         h.push_str(&render_landmarks(&day.landmarks, lang));
     }

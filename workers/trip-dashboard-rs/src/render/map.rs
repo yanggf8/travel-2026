@@ -30,6 +30,8 @@ pub struct MapStatus {
     /// kept off the overview so it doesn't flatten the city's zoom.
     pub plan_excursion: Option<String>,
     pub days: HashMap<i64, Option<String>>,
+    /// Daily hotel-to-destination return maps (`day-{n}-logistics.png`).
+    pub day_logistics: HashMap<i64, Option<String>>,
     /// Numbered-pin legends per map key (`plan.png`, `day-3.png`, …), loaded from
     /// the `map_legend_stops` rows the CLI's snapshot-maps writes in lockstep with
     /// the PNG it uploads. Empty for snapshots taken before the table existed —
@@ -204,6 +206,34 @@ pub fn day_map_slot(
             esc(not_avail),
             esc(&caption),
         )
+    }
+}
+
+/// Compact map for the day's hotel-to-destination and return legs.
+pub fn day_logistics_map_slot(
+    plan_id: &str,
+    day_number: i64,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+) -> String {
+    let caption = if lang == "en" {
+        format!("Day {day_number} hotel round trip")
+    } else {
+        format!("第 {day_number} 天・旅社來回")
+    };
+    if let Some(v) = version {
+        format!(
+            "<figure class=\"map-frame map-frame--day-logistics\"><img class=\"planmap planmap--inset\" alt=\"{}\" src=\"/map/{}/day-{}-logistics.png{}\"><figcaption>{}</figcaption>{}</figure>",
+            esc(&caption),
+            esc_url_attr(plan_id),
+            day_number,
+            cache_bust(v),
+            map_caption(&caption),
+            map_legend_html(legend),
+        )
+    } else {
+        String::new()
     }
 }
 

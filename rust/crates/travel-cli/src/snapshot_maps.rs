@@ -152,7 +152,6 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let dest_pois = query_destination_pois(&read, &dest).await?;
     let hotel_names = query_hotel_names(&read, &plan_id, &dest).await?;
     let mut day_points = HashMap::<i64, Vec<Point>>::new();
-    let mut day_routes = HashMap::<i64, Vec<RouteLine>>::new();
     // OSRM legs fetched this run, shared by the per-day and overview renders so
     // the same pair is fetched (and persisted) at most once per snapshot run.
     let mut osrm_live = HashMap::<String, Vec<(f64, f64)>>::new();
@@ -226,18 +225,17 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 }
             }
         }
-        if points.len() > 1 {
-            day_routes.insert(*day, cached_routes(&read, &write, &mut osrm_live, &points).await?);
-        }
         day_points.insert(*day, points);
     }
 
     let mut required_ok = true;
     let mut all_sightseeing = Vec::new();
     let mut excursion_points: Vec<Point> = Vec::new();
+    let mut daily_logistics = HashMap::<i64, (Vec<Point>, Vec<RouteLine>)>::new();
     for day in &days {
-        let pts = day_points.get(day).cloned().unwrap_or_default();
-        if pts.is_empty() {
+        let all_pts = day_points.get(day).cloned().unwrap_or_default();
+        let local_pts = all_pts.iter().filter(|p| p.kind == Kind::Sightseeing).cloned().collect::<Vec<_>>();
+        if local_pts.is_empty() {
             record_artifact(
                 &write,
                 &plan_id,
@@ -252,13 +250,13 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             .await?;
             println!("   skipped day-{day}.png (no mappable stops)");
         } else {
-            let routes = day_routes.get(day).cloned().unwrap_or_default();
+            let routes = cached_routes(&read, &write, &mut osrm_live, &local_pts).await?;
             if !upload_map(
                 &write,
                 &plan_id,
                 &format!("day-{day}.png"),
                 &format!("Day {day} route"),
-                &pts,
+                &local_pts,
                 &routes,
                 MapKind::Day,
             )
@@ -267,6 +265,21 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 required_ok = false;
             }
         }
+        // Keep each day's local map zoomed to its sightseeing area. A separate
+        // compact map shows the hotel, first stop, last stop, and both commute legs.
+        let hotels = all_pts.iter().filter(|p| p.kind == Kind::Hotel).cloned().collect::<Vec<_>>();
+        let sights = &local_pts;
+        if let (Some(hotel), Some(first), Some(last)) = (hotels.first(), sights.first(), sights.last()) {
+            let mut points = vec![hotel.clone()];
+            if !same_place(&points[0], first) { points.push(first.clone()); }
+            if !same_place(points.last().unwrap(), last) { points.push(last.clone()); }
+            let mut routes = cached_routes(&read, &write, &mut osrm_live, &[hotel.clone(), first.clone()]).await?;
+            if !same_place(first, last) {
+                routes.extend(cached_routes(&read, &write, &mut osrm_live, &[last.clone(), hotel.clone()]).await?);
+            }
+            daily_logistics.insert(*day, (points, routes));
+        }
+        let pts = all_pts;
         let bucket = if excursion.contains(day) {
             &mut excursion_points
         } else {
@@ -279,6 +292,18 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             {
                 bucket.push(p);
             }
+        }
+    }
+
+    for day in &days {
+        let key = format!("day-{day}-logistics.png");
+        if let Some((points, routes)) = daily_logistics.get(day) {
+            if !upload_map(&write, &plan_id, &key, &format!("Day {day} hotel round trip"), points, routes, MapKind::DayLogistics).await? {
+                required_ok = false;
+            }
+        } else {
+            record_artifact(&write, &plan_id, &key, 0, None, "skipped", Some("no geocoded hotel and sightseeing endpoints"), None, None).await?;
+            println!("   skipped {key} (no geocoded hotel and sightseeing endpoints)");
         }
     }
 
@@ -441,7 +466,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     }
 
     if required_ok {
-        write.execute(
+        crate::db::connect_write().await?.execute(
             "INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) VALUES (?1, datetime('now')) ON CONFLICT(plan_id) DO UPDATE SET snapshotted_at=datetime('now')",
             params![plan_id.clone()],
         ).await.map_err(|e| format!("map freshness stamp failed: {e}"))?;
@@ -459,6 +484,7 @@ enum MapKind {
     Day,
     Plan,
     Logistics,
+    DayLogistics,
 }
 
 async fn upload_map(
@@ -582,11 +608,13 @@ async fn upload_map(
 /// the dashboard still serves the previous PNG from R2, and its legend must keep
 /// matching it.
 async fn write_legend_stops(
-    conn: &Connection,
+    _conn: &Connection,
     plan: &str,
     key: &str,
     points: &[Point],
 ) -> Result<(), String> {
+    // Reconnect after each Wrangler upload, which can outlive Turso's idle timeout.
+    let conn = crate::db::connect_write().await?;
     conn.execute(
         "DELETE FROM map_legend_stops WHERE plan_id=?1 AND map_key=?2",
         params![plan.to_string(), key.to_string()],
@@ -616,6 +644,7 @@ fn map_kind_tag(kind: MapKind) -> &'static str {
         MapKind::Day => "day",
         MapKind::Plan => "plan",
         MapKind::Logistics => "logistics",
+        MapKind::DayLogistics => "day-logistics",
     }
 }
 
@@ -746,7 +775,7 @@ fn render_png(
             raster.line(a, b, color, 4, !routes[idx].routed);
         }
     }
-    if routes.is_empty() && !matches!(kind, MapKind::Logistics) {
+    if routes.is_empty() && !matches!(kind, MapKind::Logistics | MapKind::DayLogistics) {
         for pair in xy.windows(2) {
             let a = projection.point(pair[0]);
             let b = projection.point(pair[1]);
@@ -773,6 +802,9 @@ fn render_png(
     if matches!(kind, MapKind::Logistics) {
         raster.legend(12, 31, "HOTEL", [21, 101, 192]);
         raster.legend(105, 31, "AIRPORT", [239, 108, 0]);
+    } else if matches!(kind, MapKind::DayLogistics) {
+        raster.legend(12, 31, "HOTEL", [21, 101, 192]);
+        raster.legend(105, 31, "DESTINATION", [230, 25, 75]);
     }
     let credit = if basemap.is_some() {
         "© ESRI + OPENSTREETMAP CONTRIBUTORS"
@@ -958,6 +990,9 @@ fn mercator(lat: f64, lon: f64) -> (f64, f64) {
 }
 fn coord_key(lat: f64, lon: f64) -> String {
     format!("{lat:.5},{lon:.5}")
+}
+fn same_place(a: &Point, b: &Point) -> bool {
+    coord_key(a.lat, a.lon) == coord_key(b.lat, b.lon)
 }
 
 struct Raster {
@@ -2254,7 +2289,7 @@ async fn remove_stale_map(c: &Connection, plan: &str, key: &str, reason: &str) -
 }
 
 async fn record_artifact(
-    c: &Connection,
+    _c: &Connection,
     p: &str,
     key: &str,
     size: usize,
@@ -2265,6 +2300,7 @@ async fn record_artifact(
     has_roads: Option<i64>,
 ) -> Result<(), String> {
     let now = chrono::Utc::now().to_rfc3339();
+    let c = crate::db::connect_write().await?;
     c.execute("INSERT INTO map_artifacts (plan_id,map_key,byte_size,sha256,status,skip_reason,generated_at,input_sha256,has_roads) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(plan_id,map_key) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256,status=excluded.status,skip_reason=excluded.skip_reason,generated_at=excluded.generated_at,input_sha256=excluded.input_sha256,has_roads=excluded.has_roads",params![p.to_string(),key.to_string(),size as i64,sha.unwrap_or_default().to_string(),status.to_string(),reason.map(str::to_string),now,input_sha.map(str::to_string),has_roads]).await.map_err(err("map manifest write"))?;
     Ok(())
 }

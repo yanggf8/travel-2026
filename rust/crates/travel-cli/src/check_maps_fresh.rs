@@ -18,8 +18,8 @@
 //
 // Completeness (manifest-based):
 //   - `map_artifacts` rows are written by travel snapshot-maps (one per expected key).
-//   - Expected keys: `plan.png`, `plan-logistics.png` + `day-{n}.png` for each day,
-//     plus `plan-excursion.png` if any day is flagged as an excursion.
+//   - Expected keys: the overview maps + `day-{n}.png` and
+//     `day-{n}-logistics.png` for each day, plus `plan-excursion.png` when flagged.
 //   - Each key is MISSING (no row), EMPTY (status != uploaded or byte_size <= 64),
 //     or OK.
 //
@@ -175,13 +175,14 @@ pub enum ArtifactClass {
     Skipped,
 }
 
-/// Build the expected map keys for a plan: both overviews plus `day-{n}.png` per day.
+/// Build expected overview, local-area, and hotel round-trip map keys for a plan.
 pub fn expected_map_keys(day_numbers: &[i64]) -> Vec<String> {
     let mut keys = vec!["plan.png".to_string(), "plan-logistics.png".to_string()];
     let mut sorted = day_numbers.to_vec();
     sorted.sort_unstable();
     for n in sorted {
         keys.push(format!("day-{n}.png"));
+        keys.push(format!("day-{n}-logistics.png"));
     }
     keys
 }
@@ -470,14 +471,14 @@ mod tests {
         let days = [1, 2, 3, 4, 5];
         let normal = expected_map_keys_with_excursion(&days, false);
         let expected = expected_map_keys_with_excursion(&days, true);
-        assert_eq!(normal.len(), 7);
-        assert_eq!(expected.len(), 8);
+        assert_eq!(normal.len(), 12);
+        assert_eq!(expected.len(), 13);
         let mut m: HashMap<_, _> = normal
             .into_iter()
             .map(|key| (key, ManifestRow { byte_size: 1000, status: "uploaded".into() }))
             .collect();
         let line = format_completeness_line("test", &expected, &m);
-        assert!(line.contains("7/8 ok"));
+        assert!(line.contains("12/13 ok"));
         assert!(line.contains("MISSING: plan-excursion.png"));
         m.insert(
             "plan-excursion.png".into(),
@@ -488,7 +489,7 @@ mod tests {
             "plan-excursion.png".into(),
             ManifestRow { byte_size: 1000, status: "uploaded".into() },
         );
-        assert_eq!(format_completeness_line("test", &expected, &m), "test: maps 8/8 ok");
+        assert_eq!(format_completeness_line("test", &expected, &m), "test: maps 13/13 ok");
     }
 
     fn manifest(entries: &[(&str, i64, &str)]) -> HashMap<String, ManifestRow> {
@@ -514,8 +515,11 @@ mod tests {
                 "plan.png".to_string(),
                 "plan-logistics.png".to_string(),
                 "day-1.png".to_string(),
+                "day-1-logistics.png".to_string(),
                 "day-2.png".to_string(),
+                "day-2-logistics.png".to_string(),
                 "day-3.png".to_string(),
+                "day-3-logistics.png".to_string(),
             ]
         );
     }
@@ -564,8 +568,8 @@ mod tests {
             ("day-3.png", 4000, "uploaded"),
         ]);
         let line = format_completeness_line("okinawa-2026", &expected, &m);
-        assert!(line.contains("okinawa-2026: maps 2/7 ok"));
-        assert!(line.contains("MISSING: plan-logistics.png, day-1.png, day-4.png, day-5.png"));
+        assert!(line.contains("okinawa-2026: maps 2/12 ok"));
+        assert!(line.contains("MISSING: plan-logistics.png, day-1.png, day-1-logistics.png"));
         assert!(line.contains("EMPTY: plan.png (run snapshot-maps)"));
     }
 
@@ -576,10 +580,12 @@ mod tests {
             ("plan.png", 1000, "uploaded"),
             ("plan-logistics.png", 1200, "uploaded"),
             ("day-1.png", 2000, "uploaded"),
+            ("day-1-logistics.png", 2500, "uploaded"),
             ("day-2.png", 3000, "uploaded"),
+            ("day-2-logistics.png", 3500, "uploaded"),
         ]);
         let line = format_completeness_line("tokyo-2026", &expected, &m);
-        assert_eq!(line, "tokyo-2026: maps 4/4 ok");
+        assert_eq!(line, "tokyo-2026: maps 6/6 ok");
     }
 
     #[test]
@@ -601,10 +607,12 @@ mod tests {
             ("plan.png", 1000, "uploaded"),
             ("plan-logistics.png", 0, "skipped"),
             ("day-1.png", 2000, "uploaded"),
+            ("day-1-logistics.png", 2500, "uploaded"),
             ("day-2.png", 3000, "uploaded"),
+            ("day-2-logistics.png", 3500, "uploaded"),
         ]);
         let line = format_completeness_line("jiufen-2026", &expected, &m);
-        assert!(line.contains("jiufen-2026: maps 3/4 ok"), "line: {line}");
+        assert!(line.contains("jiufen-2026: maps 5/6 ok"), "line: {line}");
         assert!(
             line.contains("SKIPPED by snapshot-maps: plan-logistics.png"),
             "line: {line}"
