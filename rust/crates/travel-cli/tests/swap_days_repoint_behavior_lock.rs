@@ -41,7 +41,8 @@ fn seed_plan_days_and_sessions(plan: &str, dest: &str) {
            (plan_id, destination, day_number, date, theme, theme_zh, day_type, status, updated_at) \
            VALUES \
            ({p}, {d}, 1, '2026-09-01', 'A_THEME', 'A_THEME_ZH', 'arrival', 'draft', '2001-01-01 00:00:00'), \
-           ({p}, {d}, 2, '2026-09-02', 'B_THEME', 'B_THEME_ZH', 'departure', 'planned', '2001-01-02 00:00:00');"
+           ({p}, {d}, 2, '2026-09-02', 'B_THEME', 'B_THEME_ZH', 'departure', 'planned', '2001-01-02 00:00:00'); \
+         UPDATE days SET excursion = 1 WHERE plan_id = {p} AND destination = {d} AND day_number = 1;"
     ));
 
     for (day, label, morning_start, evening_start) in
@@ -292,6 +293,14 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
         ),
         &["1|B_landmark", "2|A_landmark"],
         "day_landmarks travel with the day's content",
+    );
+    assert_values(
+        &format!(
+            "SELECT day_number || '|' || excursion AS rowval \
+             FROM days WHERE plan_id = {p} AND destination = {d} ORDER BY day_number"
+        ),
+        &["1|0", "2|1"],
+        "the excursion flag travels with the day's content",
     );
 
     for table in [

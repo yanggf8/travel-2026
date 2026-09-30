@@ -97,6 +97,7 @@ mod set_plan_name;      // set-plan-name (rename plan_destinations.display_name)
 mod set_fit_note;       // set-fit-note (FIT comparison note, Recommended pick, room-size row)
 mod clear_offer;        // clear-offer (undo select-offer; no cascade)
 mod set_fit_offer;      // set-fit-offer (curate the dashboard FIT comparison list)
+mod set_day_excursion;  // set-day-excursion (far-off day trip → own inset map)
 mod set_active_destination; // set-active-destination (switch plan_metadata.active_destination)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
@@ -368,6 +369,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             clear_offer::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-day-excursion" => {
+            if wants_help(
+                rest,
+                "travel set-day-excursion <day> on|off [--dest <slug>] [--plan-id <id>]\n  Flag a far-off day trip: snapshot-maps keeps its stops off the sightseeing overview and draws them as a separate inset map (plan-excursion.png) beside the hotel/airport inset. Re-run snapshot-maps after.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_day_excursion::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "set-day-theme" => {

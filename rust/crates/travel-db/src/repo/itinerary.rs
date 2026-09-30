@@ -1092,6 +1092,65 @@ pub async fn swap_day_theme(
     Ok(())
 }
 
+/// `days.excursion` for one day (a far-off day trip kept off the sightseeing
+/// overview map); `None` when the day row does not exist.
+pub async fn day_excursion(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<Option<bool>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT excursion FROM days WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
+            libsql::params![plan_id.to_string(), destination.to_string(), day],
+        )
+        .await
+        .map_err(|e| format!("days excursion query failed: {e}"))?;
+    Ok(match rows.next().await.map_err(|e| e.to_string())? {
+        Some(r) => Some(r.get::<i64>(0).unwrap_or(0) != 0),
+        None => None,
+    })
+}
+
+/// Set `days.excursion` (no `updated_at` bump — callers touch the day themselves).
+pub async fn set_day_excursion(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    on: bool,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE days SET excursion = ?1 WHERE plan_id = ?2 AND destination = ?3 AND day_number = ?4",
+        libsql::params![on as i64, plan_id.to_string(), destination.to_string(), day],
+    )
+    .await
+    .map_err(|e| format!("days excursion UPDATE failed: {e}"))?;
+    Ok(())
+}
+
+/// Day numbers flagged `excursion = 1` for a plan+destination, ascending.
+pub async fn excursion_days(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<i64>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT day_number FROM days WHERE plan_id = ?1 AND destination = ?2 AND excursion = 1 \
+             ORDER BY day_number",
+            libsql::params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("excursion days query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next().await.map_err(|e| e.to_string())? {
+        out.push(r.get::<i64>(0).map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 /// Swap the `day_number` ownership of every session- and day-scoped content table between
 /// `day_a` and `day_b`, using the out-of-range TMP day_number dance to avoid PK
 /// collisions during the flip. Owns the fixed `SESSION_TABLES` list, the

@@ -26,6 +26,9 @@ pub struct MapStatus {
     pub plan: Option<String>,
     /// Plan-wide map containing only hotel and airport route endpoints.
     pub plan_logistics: Option<String>,
+    /// Far-off day-trip map (`plan-excursion.png`, from `set-day-excursion`),
+    /// kept off the overview so it doesn't flatten the city's zoom.
+    pub plan_excursion: Option<String>,
     pub days: HashMap<i64, Option<String>>,
     /// Numbered-pin legends per map key (`plan.png`, `day-3.png`, …), loaded from
     /// the `map_legend_stops` rows the CLI's snapshot-maps writes in lockstep with
@@ -149,6 +152,28 @@ pub fn plan_logistics_map_slot(
             esc(caption),
         )
     }
+}
+
+/// Day-trip inset (`plan-excursion.png`): a far-off excursion day drawn on its own
+/// so the sightseeing overview keeps the city's zoom. Same compact inset frame as
+/// the hotel/airport map, placed beside it. Only rendered when the PNG exists —
+/// most plans have no excursion day, so there is no placeholder.
+pub fn plan_excursion_map_slot(
+    plan_id: &str,
+    version: &str,
+    lang: &str,
+    legend: &[LegendStop],
+) -> String {
+    let caption = i18n::t("planExcursionMap", lang);
+    format!(
+        "<figure class=\"map-frame map-frame--inset\"><img class=\"planmap planmap--inset\" alt=\"{}\" \
+         src=\"/map/{}/plan-excursion.png{}\"><figcaption>{}</figcaption>{}</figure>",
+        esc(caption),
+        esc_url_attr(plan_id),
+        cache_bust(version),
+        map_caption(caption),
+        map_legend_html(legend),
+    )
 }
 
 /// Framed per-day route map slot. Same contract as `plan_map_slot`.
@@ -441,6 +466,14 @@ mod tests {
         let m = plan_logistics_map_slot("kyoto-2026", None, "zh", &[]);
         assert!(m.contains("map-frame--inset"), "{m}");
         assert!(m.contains("map-missing"));
+    }
+
+    #[test]
+    fn plan_excursion_map_slot_is_an_inset() {
+        let h = plan_excursion_map_slot("osaka-nov-2026", "v9", "zh", &[]);
+        assert!(h.contains("map-frame map-frame--inset"), "{h}");
+        assert!(h.contains("/map/osaka-nov-2026/plan-excursion.png"), "{h}");
+        assert!(h.contains("一日遊"), "{h}");
     }
 
     #[test]

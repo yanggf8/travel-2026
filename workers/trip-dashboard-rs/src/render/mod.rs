@@ -57,13 +57,28 @@ pub fn render_plan(
     // anyway just showed a 地圖尚未產生 placeholder that wasted vertical
     // space (user request 2026-09-28). With flights it renders as a compact
     // inset (崁入小圖) instead of a second full-size map.
-    if map_status.plan_logistics.is_some() || !plan.flights.is_empty() {
-        body.push_str(&map::plan_logistics_map_slot(
-            &plan.plan_id,
-            map_status.plan_logistics.as_deref(),
-            lang,
-            map_status.legend_for("plan-logistics.png"),
-        ));
+    // Supplementary insets sit side by side under the overview: the far-off
+    // day-trip map (only when one exists) and the hotel/airport map.
+    let show_logistics = map_status.plan_logistics.is_some() || !plan.flights.is_empty();
+    if map_status.plan_excursion.is_some() || show_logistics {
+        body.push_str("<div class=\"map-insets\">");
+        if let Some(v) = map_status.plan_excursion.as_deref() {
+            body.push_str(&map::plan_excursion_map_slot(
+                &plan.plan_id,
+                v,
+                lang,
+                map_status.legend_for("plan-excursion.png"),
+            ));
+        }
+        if show_logistics {
+            body.push_str(&map::plan_logistics_map_slot(
+                &plan.plan_id,
+                map_status.plan_logistics.as_deref(),
+                lang,
+                map_status.legend_for("plan-logistics.png"),
+            ));
+        }
+        body.push_str("</div>");
     }
     body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
@@ -199,6 +214,7 @@ mod tests {
         let map_status = map::MapStatus {
             plan: Some("etag1".into()),
             plan_logistics: Some("etag3".into()),
+            plan_excursion: None,
             days: [(1i64, Some("etag2".into()))].into_iter().collect(),
             legends: [
                 (
@@ -298,5 +314,32 @@ mod tests {
             "flights exist → logistics slot must render: {html}"
         );
         assert!(html.contains("map-frame--inset"), "{html}");
+    }
+
+    #[test]
+    fn render_plan_puts_excursion_inset_beside_logistics() {
+        use crate::model::Plan;
+        let plan = Plan {
+            plan_id: "osaka-nov-2026".into(),
+            display_name: "Kyoto".into(),
+            ..Default::default()
+        };
+        let map_status = map::MapStatus {
+            plan: Some("p".into()),
+            plan_logistics: Some("l".into()),
+            plan_excursion: Some("e".into()),
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map_status, "");
+        let row = html.split("<div class=\"map-insets\">").nth(1).expect("insets row");
+        let row = row.split("</figure></div>").next().unwrap_or("");
+        let exc = row.find("plan-excursion.png").expect("excursion inset in the row");
+        let log = row.find("plan-logistics.png").expect("logistics inset in the row");
+        assert!(exc < log, "day trip first, then hotels/airports: {row}");
+
+        // No excursion PNG → no day-trip slot and no placeholder for it.
+        let none = render_plan(&plan, "zh", None, &map::MapStatus { plan_logistics: Some("l".into()), ..Default::default() }, "");
+        assert!(!none.contains("plan-excursion.png"));
+        assert!(!none.contains("一日遊"), "{none}");
     }
 }

@@ -426,6 +426,14 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // A far-off day trip (e.g. a coach tour 100 km out) is flagged so snapshot-maps
+    // keeps it off the sightseeing overview and draws it as its own inset map.
+    add_column(
+        &conn,
+        "ALTER TABLE days ADD COLUMN excursion INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await;
+
     // 11. version column on the plans/plans_current table (whichever exists).
     let plans_table = if table_exists(&conn, "plans_current").await {
         "plans_current"

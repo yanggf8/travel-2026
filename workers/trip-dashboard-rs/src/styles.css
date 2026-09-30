@@ -672,6 +672,18 @@ h1 {
 .map-frame--inset .map-legend { padding: 5px 8px; gap: 3px 5px; }
 .map-frame--inset .map-legend li { font-size: 11px; }
 .map-frame--inset .map-missing-box { min-height: 72px; font-size: 12px; padding: 10px; }
+/* Insets row: the day-trip map and the hotel/airport map side by side,
+   right-aligned; they wrap to a stack on a phone. */
+.map-insets {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.map-insets .map-frame--inset {
+  flex: 1 1 300px;
+  margin-left: 0;
+}
 
 /* ---- Day cards ---- */
 .day {

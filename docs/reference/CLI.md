@@ -214,6 +214,7 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel set-activity-poi --auto [--dest slug]    # batch-link NULL-poi activities to exactly-one geocoded POI by exact/title-substring match after stripping trailing CJK/kana/fullwidth gloss; never guesses; one operation_runs row for the batch; unambiguous misses stay manual.
 ./bin/travel set-tod-time-range <day> <session> --start HH:MM --end HH:MM    # (alias: set-session-time-range)
 ./bin/travel set-day-theme <day> [theme] [--zh "<zh_title>"] [--dest slug]
+./bin/travel set-day-excursion <day> on|off [--dest slug] [--plan-id <id>]    # flag a far-off day trip: snapshot-maps keeps its stops off plan.png and draws them as plan-excursion.png, shown as an inset beside the hotel/airport inset. Stored in days.excursion; travels with swap-days. Audited; re-run snapshot-maps after.
 ./bin/travel derive-routes [--day N] [--dest slug] [--plan-id <id>]    # CASCADE: derive ai_recommended transit legs between consecutive same-day activities (from POI nearest_station + destination_transit metadata). Idempotent; skips days with a confirmed route; re-run --day N after activity edits. Run once after populate-itinerary. Legs flow into the 🤖 badge / validate-publish INFO / query-confirm lifecycle. Ends with a `⚠ ... missing destination_transit metadata` worklist (a ready-to-run `add-transit` line per pair) when a derived leg has no transit time — fill via add-transit, then re-derive.
 ./bin/travel set-route-segment <day> <sort_order> <from> <to> <mode> [--duration <min>] [--notes "<text>"] [--start-time HH:MM] [--recommended]
 ./bin/travel set-route-segments-bulk <day> --seg "from|to|mode[|duration[|start_time[|notes]]]" [--seg ...] [--recommended]    # plain-text; repeat --seg per segment. NOTE: single command is POSITIONAL; bulk uses --seg. Both reject unknown flags (a typo'd --recommended fails loud, never writes 'confirmed' silently).
@@ -227,7 +228,7 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]    # move an activity to another session/day, PRESERVING its id + poi link (vs delete+re-add)
 ./bin/travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest slug]    # rewrite sort_order; list ALL activities in the session in the desired order
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
-./bin/travel swap-days <dayA> <dayB> [--dest slug]    # swap two days' content (theme, sessions, activities, meals, ZH lists, route segments, map landmarks); dates/day_type stay put. Re-run snapshot-maps after.
+./bin/travel swap-days <dayA> <dayB> [--dest slug]    # swap two days' content (theme, excursion flag, sessions, activities, meals, ZH lists, route segments, map landmarks); dates/day_type stay put. Re-run snapshot-maps after.
 ./bin/travel fetch-weather [--dest slug] [--all]
 ```
 

@@ -134,6 +134,11 @@ async fn swap_content(
     let (theme_b, theme_zh_b) = read_day_theme(conn, plan_id, destination, day_b).await?;
     itinerary::swap_day_theme(conn, plan_id, destination, day_a, &theme_b, &theme_zh_b).await?;
     itinerary::swap_day_theme(conn, plan_id, destination, day_b, &theme_a, &theme_zh_a).await?;
+    // The excursion flag describes the content (a far-off day trip), so it moves too.
+    let exc_a = itinerary::day_excursion(conn, plan_id, destination, day_a).await?.unwrap_or(false);
+    let exc_b = itinerary::day_excursion(conn, plan_id, destination, day_b).await?.unwrap_or(false);
+    itinerary::set_day_excursion(conn, plan_id, destination, day_a, exc_b).await?;
+    itinerary::set_day_excursion(conn, plan_id, destination, day_b, exc_a).await?;
 
     // 2. Session- and day-scoped rows: timesofday, activities, session_meals,
     //    session_activities_zh, day_route_segments, day_landmarks. Re-point day_number a → TMP, b → a, TMP → b.

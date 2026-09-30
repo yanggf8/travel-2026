@@ -596,6 +596,8 @@ async fn check_map_status(
     let plan = r2_map_version(&bucket, &plan_key).await?;
     let logistics_key = format!("{plan_id}/plan-logistics.png");
     let plan_logistics = r2_map_version(&bucket, &logistics_key).await?;
+    let excursion_key = format!("{plan_id}/plan-excursion.png");
+    let plan_excursion = r2_map_version(&bucket, &excursion_key).await?;
     let mut day_status = HashMap::new();
     for d in days {
         let key = format!("{plan_id}/day-{}.png", d.day_number);
@@ -605,6 +607,7 @@ async fn check_map_status(
     Ok(render::map::MapStatus {
         plan,
         plan_logistics,
+        plan_excursion,
         days: day_status,
         legends,
     })

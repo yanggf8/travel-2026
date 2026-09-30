@@ -140,6 +140,12 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         return Err(format!("no itinerary days for plan {plan_id}"));
     }
 
+    // Far-off day trips (set-day-excursion) stay off the sightseeing overview and
+    // get their own inset map — a 100 km coach tour otherwise flattens the city.
+    let excursion: HashSet<i64> = travel_db::repo::itinerary::excursion_days(&read, &plan_id, &dest)
+        .await?
+        .into_iter()
+        .collect();
     let mut cache = load_geocodes(&read).await?;
     let segments = query_segments(&read, &plan_id, &dest).await?;
     let pois = query_pois(&read, &plan_id, &dest).await?;
@@ -228,6 +234,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
 
     let mut required_ok = true;
     let mut all_sightseeing = Vec::new();
+    let mut excursion_points: Vec<Point> = Vec::new();
     for day in &days {
         let pts = day_points.get(day).cloned().unwrap_or_default();
         if pts.is_empty() {
@@ -260,12 +267,17 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 required_ok = false;
             }
         }
+        let bucket = if excursion.contains(day) {
+            &mut excursion_points
+        } else {
+            &mut all_sightseeing
+        };
         for p in pts.into_iter().filter(|p| p.kind == Kind::Sightseeing) {
-            if !all_sightseeing
+            if !bucket
                 .iter()
                 .any(|existing: &Point| existing.lat == p.lat && existing.lon == p.lon)
             {
-                all_sightseeing.push(p);
+                bucket.push(p);
             }
         }
     }
@@ -317,7 +329,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         println!("   skipped plan.png (no sightseeing points)");
     } else {
         let mut routes = Vec::new();
-        for day in &days {
+        for day in days.iter().filter(|d| !excursion.contains(d)) {
             let points = day_points
                 .get(day)
                 .into_iter()
@@ -335,6 +347,37 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             "plan.png",
             "Sightseeing overview",
             &plan_points,
+            &routes,
+            MapKind::Plan,
+        )
+        .await?
+        {
+            required_ok = false;
+        }
+    }
+
+    if excursion_points.is_empty() {
+        remove_stale_map(&write, &plan_id, "plan-excursion.png", "no excursion day").await?;
+    } else {
+        let mut routes = Vec::new();
+        for day in days.iter().filter(|d| excursion.contains(d)) {
+            let points = day_points
+                .get(day)
+                .into_iter()
+                .flatten()
+                .filter(|p| p.kind == Kind::Sightseeing)
+                .cloned()
+                .collect::<Vec<_>>();
+            if points.len() > 1 {
+                routes.extend(cached_routes(&read, &write, &mut osrm_live, &points).await?);
+            }
+        }
+        if !upload_map(
+            &write,
+            &plan_id,
+            "plan-excursion.png",
+            "Day trip",
+            &excursion_points,
             &routes,
             MapKind::Plan,
         )
@@ -2142,6 +2185,41 @@ fn classify(s: &str) -> Kind {
     } else {
         Kind::Sightseeing
     }
+}
+
+/// Record `key` as skipped and, when an earlier run uploaded it, delete the R2
+/// object — the worker renders any PNG it finds, so a stale one would linger.
+async fn remove_stale_map(c: &Connection, plan: &str, key: &str, reason: &str) -> Result<(), String> {
+    let mut r = c
+        .query(
+            "SELECT status FROM map_artifacts WHERE plan_id = ?1 AND map_key = ?2",
+            params![plan.to_string(), key.to_string()],
+        )
+        .await
+        .map_err(err("map manifest read"))?;
+    let was_uploaded = match r.next().await.map_err(err("map manifest row"))? {
+        Some(row) => row.get::<Option<String>>(0).ok().flatten().as_deref() == Some("uploaded"),
+        None => false,
+    };
+    if was_uploaded {
+        let status = wrangler_command()
+            .args([
+                "wrangler",
+                "r2",
+                "object",
+                "delete",
+                &format!("{BUCKET}/{plan}/{key}"),
+                "--remote",
+            ])
+            .status()
+            .map_err(|e| format!("failed to run Wrangler delete for {key}: {e}"))?;
+        if !status.success() {
+            return Err(format!("Wrangler could not delete stale {key} (exit {status})"));
+        }
+        println!("   removed stale {key} ({reason})");
+    }
+    record_artifact(c, plan, key, 0, None, "skipped", Some(reason), None, None).await?;
+    Ok(())
 }
 
 async fn record_artifact(
