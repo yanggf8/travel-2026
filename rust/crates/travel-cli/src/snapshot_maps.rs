@@ -300,6 +300,16 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         &hotel_names,
     )
     .await?;
+    for day in days.iter().filter(|d| !excursion.contains(d)) {
+        if let Some(points) = day_points.get(day)
+            && let Some((stop, km)) = distant_excursion_stop(points, &logistics)
+        {
+            eprintln!(
+                "   ⚠ 建議：Day {day} 景點「{}」距飯店直線約 {km:.1} 公里（超過 40 公里），可標記一日遊地圖：travel set-day-excursion {day} on --plan-id {plan_id} --dest {dest}",
+                stop.label
+            );
+        }
+    }
     let has_airport = logistics.iter().any(|p| p.kind == Kind::Airport);
     let mut plan_points = all_sightseeing.clone();
     if !has_airport {
@@ -1145,6 +1155,27 @@ fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
     let dlon = lon2 - lon1;
     let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     2.0 * 6_371_008.8 * h.sqrt().asin()
+}
+
+/// Prefer the day's hotel pins; fall back to known logistics hotels. With
+/// multiple hotels, use the nearest one to avoid warning about a nearby stay.
+/// Airport endpoints are never excursion candidates.
+fn distant_excursion_stop<'a>(points: &'a [Point], logistics: &[Point]) -> Option<(&'a Point, f64)> {
+    let mut hotels: Vec<_> = points.iter().filter(|p| p.kind == Kind::Hotel).collect();
+    if hotels.is_empty() {
+        hotels.extend(logistics.iter().filter(|p| p.kind == Kind::Hotel));
+    }
+    points
+        .iter()
+        .filter(|p| p.kind == Kind::Sightseeing)
+        .filter_map(|p| {
+            let km = hotels
+                .iter()
+                .map(|h| haversine_m((p.lat, p.lon), (h.lat, h.lon)) / 1000.0)
+                .min_by(f64::total_cmp)?;
+            (km > 40.0).then_some((p, km))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
 }
 
 /// One cached ok leg's endpoints (geometry points are pulled per matched key).
@@ -2297,6 +2328,29 @@ fn err<T: std::fmt::Display>(ctx: &'static str) -> impl FnOnce(T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excursion_suggestion_uses_sights_and_nearest_hotel() {
+        let point = |lat, kind| Point {
+            lat,
+            lon: 135.0,
+            kind,
+            label: "test".into(),
+            color: [0; 3],
+        };
+        let hotels = vec![point(35.0, Kind::Hotel)];
+        let local = vec![point(35.3, Kind::Sightseeing), point(36.0, Kind::Airport)];
+        assert!(distant_excursion_stop(&local, &hotels).is_none());
+        let far = vec![point(35.5, Kind::Sightseeing), point(36.0, Kind::Sightseeing)];
+        let (stop, km) = distant_excursion_stop(&far, &hotels).unwrap();
+        assert_eq!(stop.lat, 36.0);
+        assert!(km > 100.0);
+        assert!(distant_excursion_stop(&far, &[]).is_none());
+        let multiple = vec![point(35.0, Kind::Hotel), point(36.0, Kind::Hotel)];
+        assert!(distant_excursion_stop(&far[1..], &multiple).is_none());
+        let day_hotel = vec![point(36.0, Kind::Sightseeing), point(36.01, Kind::Hotel)];
+        assert!(distant_excursion_stop(&day_hotel, &hotels).is_none());
+    }
 
     #[test]
     fn plausible_leg_flags_a_pin_80km_off_on_a_15min_drive() {

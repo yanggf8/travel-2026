@@ -1130,6 +1130,23 @@ pub async fn set_day_excursion(
     Ok(())
 }
 
+/// Whether any day requires a separate excursion map for this plan.
+pub async fn has_plan_excursion(conn: &Connection, plan_id: &str) -> Result<bool, String> {
+    let mut rows = conn
+        .query(
+            "SELECT EXISTS(SELECT 1 FROM days WHERE plan_id = ?1 AND excursion = 1)",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("plan excursion query failed: {e}"))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| format!("plan excursion row: {e}"))?
+        .ok_or("plan excursion query returned no row")?;
+    Ok(row.get::<i64>(0).map_err(|e| format!("plan excursion value: {e}"))? == 1)
+}
+
 /// Day numbers flagged `excursion = 1` for a plan+destination, ascending.
 pub async fn excursion_days(
     conn: &Connection,

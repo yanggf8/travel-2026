@@ -88,6 +88,13 @@ fn render(view: &PlanView, full: bool) -> String {
     // is not rendered. We replicate that quirk for byte-parity.
     // `view.selected_offer` is still read for the next view port.
 
+    for d in view.days.iter().filter(|d| d.excursion) {
+        out.push_str(&format!(
+            "\nDay {} ({}) [一日遊地圖] {}\n",
+            d.day_number, format_date(&d.date), d.theme
+        ));
+    }
+
     if full {
         render_flight(&mut out, view);
         render_transfers(&mut out, view);

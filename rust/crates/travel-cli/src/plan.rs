@@ -165,6 +165,7 @@ pub struct SelectedOffer {
 #[derive(Debug, Clone)]
 pub struct DayView {
     pub day_number: i64,
+    pub excursion: bool,
     /// `days.date` — surfaced for the next view port (itinerary header).
     #[allow(dead_code)]
     pub date: String,
@@ -440,6 +441,7 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
         };
         view.days.push(DayView {
             day_number: d.day_number,
+            excursion: d.excursion,
             date: d.date,
             theme: d.theme,
             day_type: d.day_type,

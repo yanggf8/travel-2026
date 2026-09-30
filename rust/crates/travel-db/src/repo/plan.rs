@@ -379,6 +379,7 @@ pub struct DayRow {
     pub date: String,
     pub theme: String,
     pub day_type: String,
+    pub excursion: bool,
     pub weather_label: String,
     pub temp_low_c: f64,
     pub temp_high_c: f64,
@@ -397,7 +398,7 @@ pub async fn days(
         .query(
             "SELECT day_number, date, theme, day_type, weather_label, temp_low_c, \
                     temp_high_c, precipitation_pct, weather_code, weather_source_id, \
-                    weather_sourced_at \
+                    weather_sourced_at, excursion \
              FROM days \
              WHERE plan_id = ?1 AND destination = ?2 \
              ORDER BY day_number",
@@ -419,6 +420,7 @@ pub async fn days(
             weather_code: r.get::<i64>(8).unwrap_or(0),
             weather_source_id: r.get(9).unwrap_or_default(),
             weather_sourced_at: r.get(10).unwrap_or_default(),
+            excursion: r.get::<i64>(11).map_err(|e| format!("day excursion: {e}"))? == 1,
         });
     }
     Ok(out)

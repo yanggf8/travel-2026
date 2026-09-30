@@ -232,10 +232,11 @@ fn render_day(out: &mut String, d: &DayView, view: &PlanView) {
         _ => "",
     };
     out.push_str(&format!(
-        "Day {} ({}) {}\n",
+        "Day {} ({}) {}{}\n",
         d.day_number,
         format_date(&d.date),
-        day_label
+        day_label,
+        if d.excursion { " [一日遊地圖]" } else { "" }
     ));
 
     // `Theme: <theme>` — only if theme is set.

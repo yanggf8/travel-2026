@@ -99,6 +99,7 @@ Provider coverage is DB data — run `travel ota-status` (catalog edited via `tr
 - **FIT comparison is data** — which offers list = `plan_fit_offers` (`set-fit-offer`); reasons/criteria/pick = `plan_fit_notes` (`set-fit-note`). Never hardcode offer/agency/hotel filters or trip text in the worker SQL.
 - **DOMESTIC plans have no plan-logistics map** — the worker renders the logistics slot only when flights exist; snapshot-maps merges the booked stay's pin into plan.png.
 - **`snapshot-maps` ⚠ lines are real defects** — an ungeocodable stop is dropped from the map; an implausible leg distance means a mis-pin. Fix with `set-place-geocode` (coords from Nominatim/Overpass, never guessed) before calling the maps done.
+- **`snapshot-maps` ⚠ 建議 lines are optional planning hints** — an unflagged day's sightseeing stop more than 40 km straight-line from the nearest hotel suggests `set-day-excursion`; the hint never changes itinerary data. These differ from the geocoding defects above.
 - Map PNGs are served `max-age=86400` — verify a re-snapshot with `curl`, not a browser holding the old image.
 - Sharing: per-plan share tokens (`./bin/travel share-token`) → `?token=` viewer-only; owner access is OAuth-session-only.
 

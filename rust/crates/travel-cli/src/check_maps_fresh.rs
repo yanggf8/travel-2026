@@ -18,7 +18,8 @@
 //
 // Completeness (manifest-based):
 //   - `map_artifacts` rows are written by travel snapshot-maps (one per expected key).
-//   - Expected keys: `plan.png`, `plan-logistics.png` + `day-{n}.png` for each day.
+//   - Expected keys: `plan.png`, `plan-logistics.png` + `day-{n}.png` for each day,
+//     plus `plan-excursion.png` if any day is flagged as an excursion.
 //   - Each key is MISSING (no row), EMPTY (status != uploaded or byte_size <= 64),
 //     or OK.
 //
@@ -185,6 +186,14 @@ pub fn expected_map_keys(day_numbers: &[i64]) -> Vec<String> {
     keys
 }
 
+fn expected_map_keys_with_excursion(day_numbers: &[i64], has_excursion: bool) -> Vec<String> {
+    let mut keys = expected_map_keys(day_numbers);
+    if has_excursion {
+        keys.push("plan-excursion.png".to_string());
+    }
+    keys
+}
+
 /// Classify one expected key against the manifest (pure — unit-testable).
 pub fn classify_artifact(manifest_row: Option<&ManifestRow>) -> ArtifactClass {
     match manifest_row {
@@ -278,7 +287,8 @@ pub async fn evaluate_completeness(
     plan_id: &str,
 ) -> Result<CompletenessVerdict, String> {
     let day_numbers = read_day_numbers(conn, plan_id).await?;
-    let expected = expected_map_keys(&day_numbers);
+    let has_excursion = travel_db::repo::itinerary::has_plan_excursion(conn, plan_id).await?;
+    let expected = expected_map_keys_with_excursion(&day_numbers, has_excursion);
     let manifest = read_map_artifacts(conn, plan_id).await?;
 
     if manifest.is_empty() {
@@ -454,6 +464,32 @@ async fn max_itinerary_updated_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excursion_map_is_required_and_failures_are_reported() {
+        let days = [1, 2, 3, 4, 5];
+        let normal = expected_map_keys_with_excursion(&days, false);
+        let expected = expected_map_keys_with_excursion(&days, true);
+        assert_eq!(normal.len(), 7);
+        assert_eq!(expected.len(), 8);
+        let mut m: HashMap<_, _> = normal
+            .into_iter()
+            .map(|key| (key, ManifestRow { byte_size: 1000, status: "uploaded".into() }))
+            .collect();
+        let line = format_completeness_line("test", &expected, &m);
+        assert!(line.contains("7/8 ok"));
+        assert!(line.contains("MISSING: plan-excursion.png"));
+        m.insert(
+            "plan-excursion.png".into(),
+            ManifestRow { byte_size: 0, status: "failed".into() },
+        );
+        assert!(format_completeness_line("test", &expected, &m).contains("EMPTY: plan-excursion.png"));
+        m.insert(
+            "plan-excursion.png".into(),
+            ManifestRow { byte_size: 1000, status: "uploaded".into() },
+        );
+        assert_eq!(format_completeness_line("test", &expected, &m), "test: maps 8/8 ok");
+    }
 
     fn manifest(entries: &[(&str, i64, &str)]) -> HashMap<String, ManifestRow> {
         entries
