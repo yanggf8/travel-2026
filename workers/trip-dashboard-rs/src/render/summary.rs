@@ -650,23 +650,25 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         }
     }
 
-    // FIT alternatives are shown as a comparison row, never as the current
-    // selection. Agoda/separate-booking stays remain in the normal hotel block.
-    if !plan.fit_offers.is_empty() {
-        // Once P4 is booked the comparison is history: the heading says so and the
-        // single recommended pick (set-fit-note --recommend) reads as the booked one.
-        let fit_booked = plan.p4_status == "booked";
+    // Once P4 is booked, show the chosen FIT offer as the booking result.
+    // The other comparison candidates remain stored for reference.
+    let fit_booked = plan.p4_status == "booked";
+    let shown_fit_offers: Vec<_> = plan.fit_offers
+        .iter()
+        .filter(|fit| !fit_booked || fit.recommended)
+        .collect();
+    if !shown_fit_offers.is_empty() {
         h.push_str(&format!(
             "<h2>{}</h2>",
             esc(match (fit_booked, lang == "en") {
-                (true, true) => "FIT options (booked — pre-booking comparison)",
-                (true, false) => "FIT 方案比較（已訂，以下為訂購前比價參考）",
+                (true, true) => "Booked FIT package",
+                (true, false) => "已訂 FIT 方案",
                 (false, true) => "FIT options (preferred comparison)",
                 (false, false) => "FIT 方案比較（優先評估，非已訂）",
             })
         ));
         let compare = fit_text(lang, &plan.fit_compare_zh, &plan.fit_compare_en);
-        if !compare.is_empty() {
+        if !fit_booked && !compare.is_empty() {
             h.push_str(&format!(
                 "<div class=\"fit-compare\">{}</div>",
                 esc(&compare)
@@ -675,7 +677,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         // Group by travel agency. Each agency is one collapsed disclosure so the
         // reader sees agency → flights → hotel in a stable, repeatable order.
         let mut groups: Vec<(String, Vec<&crate::model::FitOffer>)> = Vec::new();
-        for fit in &plan.fit_offers {
+        for fit in shown_fit_offers {
             if let Some((_, offers)) = groups
                 .iter_mut()
                 .find(|(source, _)| source == &fit.source_id)
@@ -777,7 +779,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     lang,
                     fit.recommended,
                     fit_booked,
-                    fit_price_badge(fit, &plan.fit_offers),
+                    if fit_booked { None } else { fit_price_badge(fit, &plan.fit_offers) },
                 ));
                 let reason = fit_text(lang, &fit.note_zh, &fit.note_en);
                 if !reason.is_empty() {
@@ -1420,6 +1422,8 @@ mod tests {
     fn fit_comparison_reads_as_booked_once_p4_is_booked() {
         let plan = Plan {
             p4_status: "booked".into(),
+            fit_compare_zh: "訂購前比價條件".into(),
+            fit_compare_en: "Pre-booking criteria".into(),
             fit_offers: vec![
                 sample_fit("liontravel", 21646, "TWD", true, "已訂雄獅。"),
                 sample_fit("lifetour", 18990, "TWD", false, ""),
@@ -1427,12 +1431,23 @@ mod tests {
             ..Default::default()
         };
         let zh = render(&plan, "zh", None);
-        assert!(zh.contains("FIT 方案比較（已訂，以下為訂購前比價參考）"), "{zh}");
+        assert!(zh.contains("<h2>已訂 FIT 方案</h2>"), "{zh}");
+        assert!(!zh.contains("FIT 方案比較"));
+        assert!(!zh.contains("訂購前比價條件"));
+        assert!(!zh.contains("18,990"));
+        assert!(!zh.contains("五福"));
+        assert!(!zh.contains("最低價"));
+        assert!(!zh.contains("貴 TWD"));
+        assert!(zh.contains("21,646"));
         assert!(!zh.contains("非已訂"));
         assert!(zh.contains("<span class=\"fit-badge fit-badge-rec\">已訂</span>"));
         assert!(!zh.contains("fit-badge-rec\">推薦"));
         let en = render(&plan, "en", None);
-        assert!(en.contains("FIT options (booked — pre-booking comparison)"));
+        assert!(en.contains("<h2>Booked FIT package</h2>"));
+        assert!(!en.contains("Pre-booking criteria"));
+        assert!(!en.contains("18,990"));
+        assert!(!en.contains("Lowest"));
+        assert!(!en.contains("+TWD"));
         assert!(en.contains("fit-badge-rec\">Booked</span>"));
     }
 
