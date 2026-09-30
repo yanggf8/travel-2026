@@ -2122,7 +2122,13 @@ fn classify(s: &str) -> Kind {
     if l.contains("airport")
         || l.contains("機場")
         || l.contains("空港")
+        || l.contains("航廈")
         || matches!(s.trim(), "KIX" | "TPE" | "NRT" | "HND" | "ITM")
+        // "KIX 第一航廈" / "TPE T1": an airport code as the first token.
+        || matches!(
+            s.split_whitespace().next(),
+            Some("KIX" | "TPE" | "NRT" | "HND" | "ITM")
+        )
     {
         Kind::Airport
     } else if l.contains("hotel")
@@ -2223,6 +2229,15 @@ mod tests {
         // The corrected pin (天橋立 智恩寺) is ~3 km away — well within.
         let ok = haversine_m((35.5578, 135.1846), (35.5868, 135.1951)) / 1000.0;
         assert!(ok <= max, "ok={ok} max={max}");
+    }
+
+    #[test]
+    fn classify_treats_airport_terminal_labels_as_airports() {
+        assert!(matches!(classify("KIX 第一航廈"), Kind::Airport));
+        assert!(matches!(classify("KIX 第二航廈"), Kind::Airport));
+        assert!(matches!(classify("TPE T1"), Kind::Airport));
+        assert!(matches!(classify("桃園機場第二航廈"), Kind::Airport));
+        assert!(matches!(classify("京都車站"), Kind::Sightseeing));
     }
 
     #[test]

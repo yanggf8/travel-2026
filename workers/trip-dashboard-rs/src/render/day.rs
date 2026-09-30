@@ -188,7 +188,10 @@ fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
         if !seg.start_time.is_empty() {
             h.push_str(&format!(" · {}", esc(&seg.start_time)));
         }
-        h.push_str(&format!(" · ~{} min", seg.duration_min));
+        // NULL duration arrives as 0 — omit it rather than publish "~0 min".
+        if seg.duration_min > 0 {
+            h.push_str(&format!(" · ~{} min", seg.duration_min));
+        }
         if !seg.notes.is_empty() {
             h.push_str(&format!(" · {}", render_activity_text(&seg.notes)));
         }
@@ -282,6 +285,26 @@ mod tests {
         assert!(html.contains("波上宮"));
         assert!(html.contains("🚗"));
         assert!(html.contains("~12 min"));
+    }
+
+    #[test]
+    fn route_leg_without_duration_omits_minutes() {
+        let day = Day {
+            day_number: 2,
+            date: "2026-11-13".into(),
+            day_type: "full".into(),
+            route_segments: vec![RouteSegment {
+                from_place: "大原".into(),
+                to_place: "京都國際會館".into(),
+                mode: "transit".into(),
+                duration_min: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&day, "osaka-nov-2026", "zh", None, &[]);
+        assert!(html.contains("京都國際會館"));
+        assert!(!html.contains("~0 min"), "{html}");
     }
 
     #[test]
