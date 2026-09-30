@@ -25,6 +25,9 @@ struct HotelInput {
     access: Vec<String>,    // split from --access by '|'
     check_in: Option<String>,
     notes: Option<String>,
+    /// `--source <text>` → hotels.populated_from (else a manual set-hotel after
+    /// select-offer keeps claiming `package:<offer>`).
+    source: Option<String>,
 }
 
 pub async fn run(
@@ -37,8 +40,9 @@ pub async fn run(
         && input.access.is_empty()
         && input.check_in.is_none()
         && input.notes.is_none()
+        && input.source.is_none()
     {
-        eprintln!("Error: set-hotel requires at least one of --name, --access, --check-in, --note");
+        eprintln!("Error: set-hotel requires at least one of --name, --access, --check-in, --note, --source");
         eprintln!("Example: set-hotel --dest kyoto_2026 --name \"APA Hotel Kyoto Ekimae\" --check-in 2026-02-24 --access \"JR Kyoto Station 3min\"");
         std::process::exit(1);
     }
@@ -114,6 +118,14 @@ fn parse_args(args: &[String]) -> Result<HotelInput, String> {
                 input.notes = Some(arg_value(args, i, "--note")?);
                 i += 2;
             }
+            "--source" => {
+                let v = arg_value(args, i, "--source")?;
+                if v.trim().is_empty() {
+                    return Err("--source must not be empty".to_string());
+                }
+                input.source = Some(v);
+                i += 2;
+            }
             // `--dest <slug>` is advertised in the Example and consumed
             // separately by read_destination(); accept-and-skip it here so
             // the catch-all below doesn't reject the documented invocation.
@@ -185,6 +197,7 @@ async fn execute(
             name: input.name.clone(),
             check_in: input.check_in.clone(),
             notes: input.notes.clone(),
+            populated_from: input.source.clone(),
             access: input.access.clone(),
         },
         &now_db,
@@ -224,6 +237,9 @@ async fn execute(
     }
     if let Some(no) = &input.notes {
         kv.push(("notes", no.clone()));
+    }
+    if let Some(src) = &input.source {
+        kv.push(("source", src.clone()));
     }
 
     insert_event(
@@ -480,6 +496,13 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(i.access, vec!["JR Tokyo 5min", "Metro Ginza 3min"]);
+    }
+
+    #[test]
+    fn parse_args_source_and_rejects_empty() {
+        let i = parse_args(&["--source".to_string(), "booking:lion_1".to_string()]).unwrap();
+        assert_eq!(i.source.as_deref(), Some("booking:lion_1"));
+        assert!(parse_args(&["--source".to_string(), " ".to_string()]).is_err());
     }
 
     #[test]

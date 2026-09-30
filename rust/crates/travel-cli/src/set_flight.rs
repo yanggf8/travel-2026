@@ -35,6 +35,9 @@ struct FlightInput {
     arrival_time: Option<String>,
     date: Option<String>,
     booked_date: Option<String>,
+    /// `--source <text>` → flight_legs.populated_from on BOTH legs. A manual
+    /// set-flight after select-offer otherwise keeps claiming `package:<offer>`.
+    source: Option<String>,
 }
 
 pub async fn run(
@@ -61,8 +64,9 @@ pub async fn run(
         && input.airline.is_none()
         && input.airline_code.is_none()
         && input.booked_date.is_none()
+        && input.source.is_none()
     {
-        eprintln!("Error: set-flight requires at least one of --flight, --from, --dep, --to, --arr, --date, --airline, --airline-code, --booked-date");
+        eprintln!("Error: set-flight requires at least one of --flight, --from, --dep, --to, --arr, --date, --airline, --airline-code, --booked-date, --source");
         eprintln!("Example: set-flight outbound --dest kyoto_2026 --flight SL396 --airline \"Thai Lion Air\" --from TPE --dep 09:00 --to KIX --arr 12:30");
         std::process::exit(1);
     }
@@ -189,6 +193,14 @@ fn parse_args(args: &[String]) -> Result<FlightInput, String> {
                 input.booked_date = Some(take(args, i, "--booked-date")?);
                 i += 2;
             }
+            "--source" => {
+                let v = take(args, i, "--source")?;
+                if v.trim().is_empty() {
+                    return Err("--source must not be empty".to_string());
+                }
+                input.source = Some(v);
+                i += 2;
+            }
             // `--dest <slug>` is advertised in the Example and consumed
             // separately by read_destination(); accept-and-skip it here so
             // the catch-all below doesn't reject the documented invocation.
@@ -267,7 +279,11 @@ async fn execute(
     //     p3.flight[direction]). The user might pass --airline while
     //     updating only the outbound leg — both legs' airline col
     //     must be updated.
-    if input.airline.is_some() || input.airline_code.is_some() || input.booked_date.is_some() {
+    if input.airline.is_some()
+        || input.airline_code.is_some()
+        || input.booked_date.is_some()
+        || input.source.is_some()
+    {
         for dir in ["outbound", "return"] {
             update_flight_shared(conn, plan_id, destination, dir, input, &now_db).await?;
         }
@@ -312,6 +328,9 @@ async fn execute(
     }
     if let Some(v) = &input.date {
         kv.push(("date", v.clone()));
+    }
+    if let Some(v) = &input.source {
+        kv.push(("source", v.clone()));
     }
     // `direction` is always added (per TS spread, the literal key is
     // added to the data object even if input has no fields).
@@ -453,6 +472,9 @@ async fn update_flight_shared(
     }
     if let Some(v) = &input.booked_date {
         cols.push(("booked_date", v.clone()));
+    }
+    if let Some(v) = &input.source {
+        cols.push(("populated_from", v.clone()));
     }
 
     flight_legs::upsert_leg(conn, plan_id, destination, direction, &cols, now_db)
@@ -636,6 +658,13 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_args_source_sets_populated_from_and_rejects_empty() {
+        let i = parse_args(&s(&["--source", "booking:liontravel_123"])).unwrap();
+        assert_eq!(i.source.as_deref(), Some("booking:liontravel_123"));
+        assert!(parse_args(&s(&["--source", "  "])).is_err());
     }
 
     #[test]

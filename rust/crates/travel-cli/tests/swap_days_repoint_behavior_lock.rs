@@ -84,7 +84,13 @@ fn seed_plan_days_and_sessions(plan: &str, dest: &str) {
                 (plan_id, destination, day_number, session_type, sort_order, activity) \
              VALUES \
                 ({p}, {d}, {day}, 'morning', 1, '{label}_activity_zh_morning'), \
-                ({p}, {d}, {day}, 'evening', 2, '{label}_activity_zh_evening');"
+                ({p}, {d}, {day}, 'evening', 2, '{label}_activity_zh_evening'); \
+             INSERT INTO day_route_segments \
+                (plan_id, destination, day_number, sort_order, from_place, to_place, mode, source) \
+             VALUES \
+                ({p}, {d}, {day}, 0, '{label}_from', '{label}_to', 'walking', 'confirmed'); \
+             INSERT INTO day_landmarks (plan_id, destination, day_number, sort_order, landmark) \
+             VALUES ({p}, {d}, {day}, 0, '{label}_landmark');"
         ));
     }
 }
@@ -268,6 +274,24 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
             "2|evening|2|A_activity_zh_evening",
         ],
         "session_activities_zh ownership should be fully re-pointed",
+    );
+    assert_values(
+        &format!(
+            "SELECT day_number || '|' || from_place AS rowval \
+             FROM day_route_segments WHERE plan_id = {p} AND destination = {d} \
+             ORDER BY day_number, sort_order"
+        ),
+        &["1|B_from", "2|A_from"],
+        "day_route_segments travel with the day's content",
+    );
+    assert_values(
+        &format!(
+            "SELECT day_number || '|' || landmark AS rowval \
+             FROM day_landmarks WHERE plan_id = {p} AND destination = {d} \
+             ORDER BY day_number, sort_order"
+        ),
+        &["1|B_landmark", "2|A_landmark"],
+        "day_landmarks travel with the day's content",
     );
 
     for table in [

@@ -95,6 +95,7 @@ mod create_plan;        // create-plan (fast-path plan seed)
 mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
 mod set_plan_name;      // set-plan-name (rename plan_destinations.display_name)
 mod set_fit_note;       // set-fit-note (FIT comparison note, Recommended pick, room-size row)
+mod clear_offer;        // clear-offer (undo select-offer; no cascade)
 mod set_active_destination; // set-active-destination (switch plan_metadata.active_destination)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
@@ -357,6 +358,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "clear-offer" => {
+            if wants_help(
+                rest,
+                "travel clear-offer [--dest <slug>] [--plan-id <id>]\n  Undo select-offer: remove the destination's selected offer (plan_offer_selection). No cascade — P3/P4, flight_legs and hotels stay; re-stamp their provenance with set-flight/set-hotel --source.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            clear_offer::run(rest, plan_id).await?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "set-day-theme" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
                 println!("Usage:\n  travel set-day-theme <day> [theme] [--zh \"<chinese_title>\"] [--dest <slug>]");
@@ -368,7 +380,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-hotel" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-hotel [--dest slug] [--name \"Hotel Name\"] [--check-in YYYY-MM-DD] [--access \"route1 | route2\"] [--note \"...\"]");
+                println!("Usage:\n  travel set-hotel [--dest slug] [--name \"Hotel Name\"] [--check-in YYYY-MM-DD] [--access \"route1 | route2\"] [--note \"...\"] [--source <provenance>]");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -419,7 +431,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-flight" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-flight <outbound|return> [--dest slug] [--flight SL396] [--airline \"...\"] [--airline-code SL] [--from TPE] [--dep HH:MM] [--dep-terminal T1] [--to KIX] [--arr HH:MM] [--arr-terminal T2] [--date YYYY-MM-DD] [--booked-date YYYY-MM-DD]");
+                println!("Usage:\n  travel set-flight <outbound|return> [--dest slug] [--flight SL396] [--airline \"...\"] [--airline-code SL] [--from TPE] [--dep HH:MM] [--dep-terminal T1] [--to KIX] [--arr HH:MM] [--arr-terminal T2] [--date YYYY-MM-DD] [--booked-date YYYY-MM-DD] [--source <provenance>]");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;

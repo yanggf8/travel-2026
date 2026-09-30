@@ -1092,7 +1092,7 @@ pub async fn swap_day_theme(
     Ok(())
 }
 
-/// Swap the `day_number` ownership of every session-scoped table between
+/// Swap the `day_number` ownership of every session- and day-scoped content table between
 /// `day_a` and `day_b`, using the out-of-range TMP day_number dance to avoid PK
 /// collisions during the flip. Owns the fixed `SESSION_TABLES` list, the
 /// `TMP = -999_999` constant, and the 3-step (a→TMP, b→a, TMP→b) sequence per
@@ -1110,6 +1110,10 @@ pub async fn swap_session_day_numbers(
         "activities",
         "session_meals",
         "session_activities_zh",
+        // Day-scoped (no session) — a day's route legs and map landmarks travel with its
+        // content; leaving them behind strands the old day's route on the swapped day.
+        "day_route_segments",
+        "day_landmarks",
     ];
     const TMP: i64 = -999_999;
     for table in SESSION_TABLES {

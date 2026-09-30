@@ -200,6 +200,9 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel mark-plan-deleted <plan_id> [--force]    # soft-delete a plan (sets deleted_at; data retained; `db cleanup-deleted` wipes). plan_id POSITIONAL.
 ./bin/travel set-dates 2026-02-13 2026-02-17
 ./bin/travel select-offer <offer-id> <date>
+./bin/travel clear-offer [--dest slug] [--plan-id <id>]    # undo select-offer: delete the destination's plan_offer_selection row (the agency fell through / booked elsewhere) so the dashboard stops showing it as the selected package. NO cascade — P3/P4, flight_legs, hotels stay; it prints how many rows still say populated_from=package:<offer> so you can re-stamp them. Fail-loud when nothing is selected. Audited.
+./bin/travel set-flight <outbound|return> [--flight MM024] [--airline "..."] [--airline-code MM] [--from TPE] [--dep HH:MM] [--dep-terminal T1] [--to KIX] [--arr HH:MM] [--arr-terminal T2] [--date YYYY-MM-DD] [--booked-date YYYY-MM-DD] [--source <provenance>] [--dest slug]    # ingest-known flight leg (no cascade). --airline/--airline-code/--booked-date/--source are shared and written to BOTH legs. --source sets flight_legs.populated_from (e.g. booking:liontravel_<order>) — without it a manual overwrite after select-offer keeps claiming package:<offer>.
+./bin/travel set-hotel [--name "..."] [--check-in YYYY-MM-DD] [--access "route1 | route2"] [--note "..."] [--source <provenance>] [--dest slug]    # ingest-known hotel (no cascade); --source sets hotels.populated_from, same reason as set-flight.
 ./bin/travel set-process-status <process_id> <target_status> [--dest slug] [--plan-id <id>]    # advance the process ladder to a status via the SHORTEST LEGAL path (BFS over the state machine); walks hop-by-hop (e.g. pending→populated→booking→booked) emitting one status_changed event per hop; idempotent no-op if already there. process_id: the 6 ids or aliases (p1/date, p2/destination, p34/packages, p3/transport/flight, p4/hotel, p5/itinerary). status: pending|researching|researched|selecting|selected|populated|booking|booked|confirmed|skipped. Used by the ingest-known path (set-flight/set-hotel are no-cascade); select-offer auto-advances P3/P4 so it needs no manual move.
 ./bin/travel set-activity-booking <day> <session> "<activity>" <status> [--ref "..."] [--book-by YYYY-MM-DD]
 ./bin/travel set-airport-transfer <arrival|departure> <planned|booked> --selected "title|route|duration|price|schedule"
@@ -222,7 +225,7 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]    # move an activity to another session/day, PRESERVING its id + poi link (vs delete+re-add)
 ./bin/travel reorder-activities <day> <session> <id-or-title> <id-or-title> ... [--dest slug]    # rewrite sort_order; list ALL activities in the session in the desired order
 ./bin/travel delete-activity <day> <session> "<activity_id_or_title>" [--plan-id <id>]    # (alias: remove-activity)
-./bin/travel swap-days <dayA> <dayB> [--dest slug]
+./bin/travel swap-days <dayA> <dayB> [--dest slug]    # swap two days' content (theme, sessions, activities, meals, ZH lists, route segments, map landmarks); dates/day_type stay put. Re-run snapshot-maps after.
 ./bin/travel fetch-weather [--dest slug] [--all]
 ```
 

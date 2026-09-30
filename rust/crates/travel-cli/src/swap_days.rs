@@ -15,6 +15,8 @@
 //   - activities rows (per-session activity rows; PK is id, so just flip
 //     day_number)
 //   - session_meals / session_activities_zh child rows
+//   - day_route_segments / day_landmarks (day-scoped: the route legs and map
+//     landmarks belong to the day's content, not to its date)
 // then touch the itinerary and emit a `days_swapped` plan_event + bump
 // plans.version + record an operation_runs audit row.
 
@@ -133,8 +135,8 @@ async fn swap_content(
     itinerary::swap_day_theme(conn, plan_id, destination, day_a, &theme_b, &theme_zh_b).await?;
     itinerary::swap_day_theme(conn, plan_id, destination, day_b, &theme_a, &theme_zh_a).await?;
 
-    // 2. Session-scoped rows: timesofday, activities, session_meals,
-    //    session_activities_zh. Re-point day_number a → TMP, b → a, TMP → b.
+    // 2. Session- and day-scoped rows: timesofday, activities, session_meals,
+    //    session_activities_zh, day_route_segments, day_landmarks. Re-point day_number a → TMP, b → a, TMP → b.
     //    A negative TMP day_number can never collide with a real day and
     //    is removed by the third step.
     itinerary::swap_session_day_numbers(conn, plan_id, destination, day_a, day_b).await?;

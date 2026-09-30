@@ -262,6 +262,42 @@ pub async fn set_selection(
     Ok(())
 }
 
+/// Remove the destination's chosen-offer selection (`clear-offer`). Returns rows deleted.
+pub async fn clear_selection(conn: &Connection, plan_id: &str, dest: &str) -> Result<u64, String> {
+    conn.execute(
+        "DELETE FROM plan_offer_selection WHERE plan_id = ?1 AND destination = ?2",
+        libsql::params![plan_id.to_string(), dest.to_string()],
+    )
+    .await
+    .map_err(|e| format!("plan_offer_selection DELETE failed: {e}"))
+}
+
+/// Count `flight_legs` + `hotels` rows still stamped `populated_from = 'package:<offer_id>'`
+/// — the provenance a cleared selection leaves behind.
+pub async fn package_populated_rows(
+    conn: &Connection,
+    plan_id: &str,
+    dest: &str,
+    offer_id: &str,
+) -> Result<i64, String> {
+    let tag = format!("package:{offer_id}");
+    let mut rows = conn
+        .query(
+            "SELECT (SELECT COUNT(*) FROM flight_legs \
+                      WHERE plan_id = ?1 AND destination = ?2 AND populated_from = ?3) + \
+                    (SELECT COUNT(*) FROM hotels \
+                      WHERE plan_id = ?1 AND destination = ?2 AND populated_from = ?3)",
+            libsql::params![plan_id.to_string(), dest.to_string(), tag],
+        )
+        .await
+        .map_err(|e| format!("package provenance count failed: {e}"))?;
+    let n = match rows.next().await.map_err(|e| e.to_string())? {
+        Some(r) => r.get::<i64>(0).unwrap_or(0),
+        None => 0,
+    };
+    Ok(n)
+}
+
 /// Payload for one imported offer + all its child rows (import-offers shape:
 /// url present, multi-row date_pricing without currency, full hotel + access,
 /// full flights, best_value). Distinct from `PlanOfferWrite` (promote's shape).
