@@ -672,8 +672,9 @@ h1 {
 .map-frame--inset .map-legend { padding: 5px 8px; gap: 3px 5px; }
 .map-frame--inset .map-legend li { font-size: 11px; }
 .map-frame--inset .map-missing-box { min-height: 72px; font-size: 12px; padding: 10px; }
-/* Insets row: the day-trip map and the hotel/airport map side by side,
-   right-aligned; they wrap to a stack on a phone. */
+/* Insets row: the day-trip map and the hotel/airport map share the full
+   width half-and-half (they wrap to a stack on a phone). A lone inset keeps
+   the compact 360px right-aligned frame it always had. */
 .map-insets {
   display: flex;
   flex-wrap: wrap;
@@ -682,7 +683,12 @@ h1 {
 }
 .map-insets .map-frame--inset {
   flex: 1 1 300px;
+  max-width: none;
   margin-left: 0;
+}
+.map-insets .map-frame--inset:only-child {
+  flex: 0 1 360px;
+  max-width: 360px;
 }
 
 /* ---- Day cards ---- */
