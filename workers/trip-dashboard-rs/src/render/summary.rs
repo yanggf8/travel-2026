@@ -125,13 +125,19 @@ enum FitPriceBadge {
     Delta { amount: i64, currency: String },
 }
 
-fn fit_badge_html(lang: &str, recommended: bool, price: Option<FitPriceBadge>) -> String {
+fn fit_badge_html(
+    lang: &str,
+    recommended: bool,
+    booked: bool,
+    price: Option<FitPriceBadge>,
+) -> String {
     let mut badges = String::new();
     if recommended {
-        let label = if lang == "en" {
-            "Recommended"
-        } else {
-            "推薦"
+        let label = match (booked, lang == "en") {
+            (true, true) => "Booked",
+            (true, false) => "已訂",
+            (false, true) => "Recommended",
+            (false, false) => "推薦",
         };
         badges.push_str(&format!(
             "<span class=\"fit-badge fit-badge-rec\">{}</span>",
@@ -647,12 +653,16 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     // FIT alternatives are shown as a comparison row, never as the current
     // selection. Agoda/separate-booking stays remain in the normal hotel block.
     if !plan.fit_offers.is_empty() {
+        // Once P4 is booked the comparison is history: the heading says so and the
+        // single recommended pick (set-fit-note --recommend) reads as the booked one.
+        let fit_booked = plan.p4_status == "booked";
         h.push_str(&format!(
             "<h2>{}</h2>",
-            esc(if lang == "en" {
-                "FIT options (preferred comparison)"
-            } else {
-                "FIT 方案比較（優先評估，非已訂）"
+            esc(match (fit_booked, lang == "en") {
+                (true, true) => "FIT options (booked — pre-booking comparison)",
+                (true, false) => "FIT 方案比較（已訂，以下為訂購前比價參考）",
+                (false, true) => "FIT options (preferred comparison)",
+                (false, false) => "FIT 方案比較（優先評估，非已訂）",
             })
         ));
         let compare = fit_text(lang, &plan.fit_compare_zh, &plan.fit_compare_en);
@@ -688,10 +698,11 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             let header_badge = if recommended {
                 format!(
                     "<span class=\"fit-badge fit-badge-rec\">{}</span>",
-                    esc(if lang == "en" {
-                        "Recommended"
-                    } else {
-                        "推薦"
+                    esc(match (fit_booked, lang == "en") {
+                        (true, true) => "Booked",
+                        (true, false) => "已訂",
+                        (false, true) => "Recommended",
+                        (false, false) => "推薦",
                     })
                 )
             } else {
@@ -765,6 +776,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 h.push_str(&fit_badge_html(
                     lang,
                     fit.recommended,
+                    fit_booked,
                     fit_price_badge(fit, &plan.fit_offers),
                 ));
                 let reason = fit_text(lang, &fit.note_zh, &fit.note_en);
@@ -1403,6 +1415,26 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn fit_comparison_reads_as_booked_once_p4_is_booked() {
+        let plan = Plan {
+            p4_status: "booked".into(),
+            fit_offers: vec![
+                sample_fit("liontravel", 21646, "TWD", true, "已訂雄獅。"),
+                sample_fit("lifetour", 18990, "TWD", false, ""),
+            ],
+            ..Default::default()
+        };
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("FIT 方案比較（已訂，以下為訂購前比價參考）"), "{zh}");
+        assert!(!zh.contains("非已訂"));
+        assert!(zh.contains("<span class=\"fit-badge fit-badge-rec\">已訂</span>"));
+        assert!(!zh.contains("fit-badge-rec\">推薦"));
+        let en = render(&plan, "en", None);
+        assert!(en.contains("FIT options (booked — pre-booking comparison)"));
+        assert!(en.contains("fit-badge-rec\">Booked</span>"));
     }
 
     #[test]
