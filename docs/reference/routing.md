@@ -58,6 +58,10 @@ User intent                          → Skill / Action
 "book separately"                    → /stage2-shop-transport (uses /separate-bookings)
 "how many leave days"                → ./bin/travel leave calc
 "book this" / "select offer"         → ./bin/travel select-offer
+"agency fell through" / "取消選定報價"  → ./bin/travel clear-offer   (undo select-offer; then re-stamp provenance: set-flight <dir> --source / set-hotel --source)
+"booked elsewhere" / "已訂XX"          → set-flight/set-hotel ... --source booking:<agency>_<order>  + set-process-status p3|p4 booked
+"which FIT offers to compare" / "FIT 比較放哪幾筆" → ./bin/travel set-fit-offer <offer-id> | --remove | --list   (+ set-fit-note for the reasons / criteria paragraph)
+"swap two days" / "對調兩天"           → ./bin/travel swap-days A B  (moves routes + landmarks too) → snapshot-maps
 "domestic stay" / "國內住宿" / "海景房候選"  → ./bin/travel list-accommodations --dest <slug>  (candidates + decision facts); add/update/delete-accommodation to edit; add-accommodation-image for the gallery; set-accommodation-rating per review source. All slug-keyed, NO --plan-id.
 "book the domestic stay" / "訂這間"   → ./bin/travel set-accommodation ... (P4 -> booked, audited) | clear-accommodation to cancel
 "plan the days" / "itinerary"        → /stage3-expand-itinerary   (populate activities → derive-routes cascades transit → agent authors AI-recommended meals, LABELED via --recommended)

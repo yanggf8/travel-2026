@@ -96,7 +96,9 @@ Provider coverage is DB data — run `travel ota-status` (catalog edited via `tr
 - **Deploy**: `cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy`. Always `unset CLOUDFLARE_API_TOKEN` first.
 - **Never request or save `tile.openstreetmap.org` raster tiles** (OSM tile policy prohibits automated/headless tile fetching). Composite the ArcGIS static basemap instead. Keep visible `© OpenStreetMap contributors` credit for OSM-derived data plus `© Esri` whenever a basemap is composited.
 - **SSR-only, default ZH** — no client JS for viewers (owner pages get the copy-share-link inline JS only); Traditional Chinese by default, `?lang=en` for English. All ZH content stored in DB, never hardcoded in worker code. `lang="zh-TW"` + notranslate meta.
+- **FIT comparison is data** — which offers list = `plan_fit_offers` (`set-fit-offer`); reasons/criteria/pick = `plan_fit_notes` (`set-fit-note`). Never hardcode offer/agency/hotel filters or trip text in the worker SQL.
 - **DOMESTIC plans have no plan-logistics map** — the worker renders the logistics slot only when flights exist; snapshot-maps merges the booked stay's pin into plan.png.
+- **`snapshot-maps` ⚠ lines are real defects** — an ungeocodable stop is dropped from the map; an implausible leg distance means a mis-pin. Fix with `set-place-geocode` (coords from Nominatim/Overpass, never guessed) before calling the maps done.
 - Map PNGs are served `max-age=86400` — verify a re-snapshot with `curl`, not a browser holding the old image.
 - Sharing: per-plan share tokens (`./bin/travel share-token`) → `?token=` viewer-only; owner access is OAuth-session-only.
 
