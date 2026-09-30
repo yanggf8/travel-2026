@@ -815,8 +815,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
                AND (o.flight_outbound GLOB '* 0[0-9]:[0-5][0-9]*' OR o.flight_outbound GLOB '* 1[01]:[0-5][0-9]*') \
                AND (o.flight_return GLOB '* 1[2-9]:[0-5][0-9]*' OR o.flight_return GLOB '* 2[0-3]:[0-5][0-9]*') \
                AND ((o.source_id = 'lifetour' AND o.hotel_name LIKE '%TAVINOS KYOTO%') \
-                 OR (o.source_id = 'liontravel' AND o.hotel_name LIKE '%APA HOTEL KYOTO EKIMAE%') \
-                 OR (o.source_id = 'settour' AND o.hotel_name LIKE '%THE POCKET HOTEL 京都烏丸五条%' AND o.flight_outbound LIKE 'CX564%')) \
+                 OR (o.source_id = 'liontravel' AND o.hotel_name LIKE '%APA HOTEL KYOTO EKIMAE%')) \
              ORDER BY is_selected DESC, price_per_person ASC"
         ),
         // [13] hotel access lines (transit directions to the hotel) — booking-summary hotel block.
