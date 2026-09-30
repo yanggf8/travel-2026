@@ -2570,6 +2570,17 @@ const PHASE1_TABLES: &[&str] = &[
   updated_at TEXT,
   PRIMARY KEY (plan_id, destination, source_id)
 )"#,
+    // Which offers the dashboard FIT comparison lists for a plan+destination —
+    // curated with `set-fit-offer` (the worker used to hardcode agency/hotel
+    // filters). sort_order is the card order before the price sort.
+    r#"CREATE TABLE IF NOT EXISTS plan_fit_offers (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  offer_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT,
+  PRIMARY KEY (plan_id, destination, offer_id)
+)"#,
 ];
 
 const SHAPING_RESEARCH_TABLES: &[&str] = &[

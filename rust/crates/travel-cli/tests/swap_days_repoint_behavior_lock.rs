@@ -2,8 +2,8 @@
 //!
 //! This pins the current un-migrated command behavior: day-level theme fields
 //! are swapped, date/day_type stay with each day_number, all four
-//! session-scoped tables are re-pointed dayA <-> dayB via the command's TMP
-//! dance, both day rows are touched, and the hand-rolled audit writes one
+//! session-scoped tables plus the day-scoped day_route_segments/day_landmarks
+//! are re-pointed dayA <-> dayB via the command's TMP dance, both day rows are touched, and the hand-rolled audit writes one
 //! operation run plus one plan version bump.
 
 use std::process::Command;

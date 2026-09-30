@@ -12,8 +12,8 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-09-27
--- Tables: 137 | Indexes: 27
+-- Generated: 2026-10-01
+-- Tables: 138 | Indexes: 27
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -450,7 +450,7 @@ CREATE TABLE domestic_accommodations (
   breakfast_included INTEGER NOT NULL CHECK(breakfast_included IN (0,1)),
   source TEXT,
   updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-, image_url TEXT, booking_url TEXT, link_url TEXT, room_size_sqm INTEGER, price_source TEXT, price_checked_at DATETIME, free_cancel_until TEXT, rooms_left INTEGER);
+, image_url TEXT, booking_url TEXT, link_url TEXT, room_size_sqm INTEGER, price_source TEXT, price_checked_at DATETIME, free_cancel_until TEXT, rooms_left INTEGER, has_bathtub INTEGER, ranking INTEGER, notes TEXT, latitude REAL, longitude REAL);
 
 CREATE TABLE event_log_dest_processes (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL, process_id TEXT NOT NULL,
@@ -832,6 +832,15 @@ CREATE TABLE plan_fit_notes (
   body_en TEXT NOT NULL DEFAULT '',
   updated_at TEXT, room_zh TEXT NOT NULL DEFAULT '', room_en TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (plan_id, destination, source_id)
+);
+
+CREATE TABLE plan_fit_offers (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  offer_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT,
+  PRIMARY KEY (plan_id, destination, offer_id)
 );
 
 CREATE TABLE plan_map_snapshots (

@@ -776,6 +776,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         // [12] selected package offer + its price at the selected date (falls back to
         // price_per_person when there is no date-specific row). Booking-summary package row.
+        // The FIT rows (UNION half) are the offers curated in plan_fit_offers (set-fit-offer).
         format!(
             "SELECT o.source_id, o.product_code, o.price_per_person, o.currency, \
              o.title, '' AS hotel_name, '' AS airline, '' AS flight_outbound, \
@@ -803,19 +804,13 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              COALESCE(c.body_en, '') AS fit_compare_en, \
              COALESCE(n.room_zh, '') AS fit_room_zh, \
              COALESCE(n.room_en, '') AS fit_room_en \
-             FROM offers o \
+             FROM plan_fit_offers f \
+             JOIN offers o ON o.id = f.offer_id \
              LEFT JOIN plan_fit_notes n ON n.plan_id = '{slug}' AND n.destination = {dest_expr} \
                AND n.source_id = o.source_id \
              LEFT JOIN plan_fit_notes c ON c.plan_id = '{slug}' AND c.destination = {dest_expr} \
                AND c.source_id = '' \
-             WHERE o.destination = {dest_expr} AND o.type = 'package' \
-             AND o.departure_date = (SELECT start_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
-               AND o.return_date = (SELECT end_date FROM date_anchors WHERE plan_id = '{slug}' AND destination = {dest_expr} LIMIT 1) \
-               AND o.nights = 4 AND COALESCE(o.availability, '') <> 'sold_out' \
-               AND (o.flight_outbound GLOB '* 0[0-9]:[0-5][0-9]*' OR o.flight_outbound GLOB '* 1[01]:[0-5][0-9]*') \
-               AND (o.flight_return GLOB '* 1[2-9]:[0-5][0-9]*' OR o.flight_return GLOB '* 2[0-3]:[0-5][0-9]*') \
-               AND ((o.source_id = 'lifetour' AND o.hotel_name LIKE '%TAVINOS KYOTO%') \
-                 OR (o.source_id = 'liontravel' AND o.hotel_name LIKE '%APA HOTEL KYOTO EKIMAE%')) \
+             WHERE f.plan_id = '{slug}' AND f.destination = {dest_expr} \
              ORDER BY is_selected DESC, price_per_person ASC"
         ),
         // [13] hotel access lines (transit directions to the hotel) — booking-summary hotel block.

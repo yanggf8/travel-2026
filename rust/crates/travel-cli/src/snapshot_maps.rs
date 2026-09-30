@@ -87,6 +87,22 @@ struct Segment {
     day: i64,
     from: String,
     to: String,
+    mode: String,
+    duration_min: Option<i64>,
+}
+
+/// Straight-line km a leg of `mode` could plausibly cover in `duration_min`, plus
+/// slack. A pair of pins farther apart than this means one end is geocoded to the
+/// wrong place (智恩寺 → Kyoto's 百万遍知恩寺, 80 km off, on a "15 min driving"
+/// leg). `None` when the leg carries no duration to check against.
+fn plausible_leg_km(mode: &str, duration_min: Option<i64>) -> Option<f64> {
+    let minutes = duration_min.filter(|m| *m > 0)? as f64;
+    let kmh = match mode {
+        "walking" => 8.0,
+        "driving" => 100.0,
+        _ => 300.0, // transit: allow shinkansen
+    };
+    Some(kmh * minutes / 60.0 + 3.0)
 }
 
 #[derive(Clone)]
@@ -138,12 +154,14 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     for day in &days {
         let mut points = Vec::new();
         let mut seen = HashSet::new();
+        let mut unresolved = HashSet::new();
         for seg in segments.iter().filter(|s| s.day == *day) {
-            for label in [&seg.from, &seg.to] {
+            let mut ends: [Option<(f64, f64)>; 2] = [None, None];
+            for (end, label) in [&seg.from, &seg.to].into_iter().enumerate() {
                 if label.trim().is_empty() {
                     continue;
                 }
-                if let Some((lat, lon, kind)) = resolve_segment_label(
+                let resolved = resolve_segment_label(
                     &read,
                     &write,
                     label,
@@ -152,8 +170,15 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                     &dest_pois,
                     &hotel_names,
                 )
-                .await?
-                {
+                .await?;
+                if resolved.is_none() && unresolved.insert(label.clone()) {
+                    eprintln!(
+                        "   ⚠ day {day}: \"{label}\" could not be geocoded — it is left off the map; \
+                         rename the stop or pin it with set-place-geocode"
+                    );
+                }
+                if let Some((lat, lon, kind)) = resolved {
+                    ends[end] = Some((lat, lon));
                     if seen.insert(coord_key(lat, lon)) {
                         points.push(Point {
                             lat,
@@ -163,6 +188,22 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                             label: display_label(label, &hotel_names),
                         });
                     }
+                }
+            }
+            if let ([Some(a), Some(b)], Some(max_km)) =
+                (ends, plausible_leg_km(&seg.mode, seg.duration_min))
+            {
+                let km = haversine_m(a, b) / 1000.0;
+                if km > max_km {
+                    eprintln!(
+                        "   ⚠ day {day}: \"{}\" → \"{}\" geocodes {km:.1} km apart, but the leg says {} min {} \
+                         — one end is probably pinned to the wrong place; check route_place_geocodes \
+                         and fix it with set-place-geocode",
+                        seg.from,
+                        seg.to,
+                        seg.duration_min.unwrap_or_default(),
+                        seg.mode
+                    );
                 }
             }
         }
@@ -1462,7 +1503,7 @@ async fn cached_routes(
 }
 
 async fn query_segments(c: &Connection, p: &str, d: &str) -> Result<Vec<Segment>, String> {
-    let mut r=c.query("SELECT day_number, from_place, to_place FROM day_route_segments WHERE plan_id=?1 AND destination=?2 ORDER BY day_number, sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("route segments query"))?;
+    let mut r=c.query("SELECT day_number, from_place, to_place, mode, duration_min FROM day_route_segments WHERE plan_id=?1 AND destination=?2 ORDER BY day_number, sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("route segments query"))?;
     let mut v = Vec::new();
     while let Some(x) = r.next().await.map_err(err("route segments read"))? {
         v.push(Segment {
@@ -1477,6 +1518,12 @@ async fn query_segments(c: &Connection, p: &str, d: &str) -> Result<Vec<Segment>
                 .ok()
                 .flatten()
                 .unwrap_or_default(),
+            mode: x
+                .get::<Option<String>>(3)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+            duration_min: x.get::<Option<i64>>(4).ok().flatten(),
         });
     }
     Ok(v)
@@ -2166,6 +2213,26 @@ fn err<T: std::fmt::Display>(ctx: &'static str) -> impl FnOnce(T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plausible_leg_flags_a_pin_80km_off_on_a_15min_drive() {
+        // 智恩寺 geocoded to 百万遍知恩寺 (Kyoto) vs 傘松公園 (Miyazu): ~80 km.
+        let km = haversine_m((35.0300, 135.7810), (35.5868, 135.1951)) / 1000.0;
+        let max = plausible_leg_km("driving", Some(15)).unwrap();
+        assert!(km > max, "km={km} max={max}");
+        // The corrected pin (天橋立 智恩寺) is ~3 km away — well within.
+        let ok = haversine_m((35.5578, 135.1846), (35.5868, 135.1951)) / 1000.0;
+        assert!(ok <= max, "ok={ok} max={max}");
+    }
+
+    #[test]
+    fn plausible_leg_needs_a_duration_and_scales_by_mode() {
+        assert_eq!(plausible_leg_km("walking", None), None);
+        assert_eq!(plausible_leg_km("walking", Some(0)), None);
+        assert!(plausible_leg_km("walking", Some(30)).unwrap() < 8.0);
+        // A 2h15 shinkansen leg (Tokyo→Kyoto ~370 km) must not be flagged.
+        assert!(plausible_leg_km("transit", Some(135)).unwrap() > 370.0);
+    }
 
     fn leg(key: &str, from: (f64, f64), to: (f64, f64)) -> LegRow {
         LegRow {

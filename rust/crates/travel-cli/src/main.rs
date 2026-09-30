@@ -96,6 +96,7 @@ mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
 mod set_plan_name;      // set-plan-name (rename plan_destinations.display_name)
 mod set_fit_note;       // set-fit-note (FIT comparison note, Recommended pick, room-size row)
 mod clear_offer;        // clear-offer (undo select-offer; no cascade)
+mod set_fit_offer;      // set-fit-offer (curate the dashboard FIT comparison list)
 mod set_active_destination; // set-active-destination (switch plan_metadata.active_destination)
 mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted plans)
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
@@ -418,6 +419,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_fit_note::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-fit-offer" => {
+            if wants_help(
+                rest,
+                "travel set-fit-offer <offer-id> [--order N] [--dest <slug>]\n  travel set-fit-offer <offer-id> --remove [--dest <slug>]\n  travel set-fit-offer --list [--dest <slug>]\n  Curate which package offers the dashboard FIT comparison lists (plan_fit_offers). The offer must be a package offer for the destination.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_fit_offer::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "share-token" => {

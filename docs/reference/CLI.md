@@ -117,6 +117,7 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 
 # Route diagrams (per-day PNGs + sightseeing-only overview + separate hotel/airport overview; ArcGIS static basemap background, Overpass road web as fallback, no OSM raster tile requests).
 ./bin/travel snapshot-maps [--dest <slug>]        # Renders route-diagram PNGs in Rust and uploads them to R2. Requires Wrangler auth.
+#   Geocode guard (stderr ⚠): a segment stop that cannot be geocoded is named (it would otherwise drop off the map silently), and a leg whose two pins are farther apart than its mode+duration allows (walking 8 km/h, driving 100 km/h, transit 300 km/h, +3 km) is flagged — the 智恩寺→百万遍知恩寺 mis-pin (80 km off on a 15-min drive). Fix either with set-place-geocode (coords from Nominatim/Overpass, never guessed).
 #   Stop coordinates: a route-segment label is matched (exact normalized poi_id / title / parenthetical)
 #   against destination_pois, then hotels.name, and only then geocoded via Nominatim — so name a stop
 #   after its POI to pin it exactly. Domestic stays: plan-logistics pins the booked stay from
@@ -197,6 +198,7 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel set-plan-name <name> [--dest <slug>] [--plan-id <id> | --travel-date ...]    # rename a plan's display label (plan_destinations.display_name); --dest disambiguates a multi-destination plan. Audited, no plan_events.
 ./bin/travel set-active-destination <slug> [--plan-id <id> | --travel-date ...]    # switch plan_metadata.active_destination to one of the plan's destinations (fail-loud if the slug isn't a destination of the plan). Audited.
 ./bin/travel set-fit-note [--source <id>] --zh "<text>" [--en "<text>"] [--room-zh "<size>"] [--room-en "<size>"] [--recommend | --clear-recommend] [--clear] [--dest <slug>] [--plan-id <id>]    # dashboard FIT comparison note. Omit --source (or `--source compare`) for the section paragraph; `--source <agency>` writes that agency's reason. `--room-zh` is the 面積 row on that card. `--recommend` is the single Recommended badge for the plan+destination (previous pick is cleared). `--clear` deletes that one note. Lowest-price and price-delta badges are computed on the page from the offers shown, not stored. Audited (plan_events + operation_runs + version).
+./bin/travel set-fit-offer <offer-id> [--order N] | <offer-id> --remove | --list [--dest <slug>] [--plan-id <id>]    # curate WHICH package offers the dashboard FIT comparison lists (plan_fit_offers); the worker no longer hardcodes agency/hotel filters. The offer must be a `package` offer for the plan's destination (fail-loud otherwise). --order sets card order (default: append); price sort still applies on the page. Writes are audited; --list is read-only. State the selection criteria in the section paragraph via set-fit-note.
 ./bin/travel mark-plan-deleted <plan_id> [--force]    # soft-delete a plan (sets deleted_at; data retained; `db cleanup-deleted` wipes). plan_id POSITIONAL.
 ./bin/travel set-dates 2026-02-13 2026-02-17
 ./bin/travel select-offer <offer-id> <date>
