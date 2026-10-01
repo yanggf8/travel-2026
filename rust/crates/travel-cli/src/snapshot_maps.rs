@@ -257,18 +257,16 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             }
         }
         // Keep each day's local map zoomed to its sightseeing area. A separate
-        // compact map shows the hotel, first stop, last stop, and both commute legs.
-        let hotels = all_pts.iter().filter(|p| p.kind == Kind::Hotel).cloned().collect::<Vec<_>>();
-        let sights = &local_pts;
-        if let (Some(hotel), Some(first), Some(last)) = (hotels.first(), sights.first(), sights.last()) {
-            let mut points = vec![hotel.clone()];
-            if !same_place(&points[0], first) { points.push(first.clone()); }
-            if !same_place(points.last().unwrap(), last) { points.push(last.clone()); }
-            let mut routes = cached_routes(&read, &write, &mut osrm_live, &[hotel.clone(), first.clone()]).await?;
-            if !same_place(first, last) {
-                routes.extend(cached_routes(&read, &write, &mut osrm_live, &[last.clone(), hotel.clone()]).await?);
+        // compact map draws the commute chain — the hotel round trip, with the
+        // airport terminal as gateway on arrival/departure days (a pure
+        // hotel↔airport transfer day renders as its single hop).
+        let (log_points, legs) = day_logistics_legs(&all_pts);
+        if !legs.is_empty() {
+            let mut routes = Vec::new();
+            for (a, b) in &legs {
+                routes.extend(cached_routes(&read, &write, &mut osrm_live, &[a.clone(), b.clone()]).await?);
             }
-            daily_logistics.insert(*day, (points, routes));
+            daily_logistics.insert(*day, (log_points, routes));
         }
         let pts = all_pts;
         let bucket = if excursion.contains(day) {
@@ -293,8 +291,8 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 required_ok = false;
             }
         } else {
-            record_artifact(&write, &plan_id, &key, 0, None, "skipped", Some("no geocoded hotel and sightseeing endpoints"), None, None).await?;
-            println!("   skipped {key} (no geocoded hotel and sightseeing endpoints)");
+            remove_stale_map(&write, &plan_id, &key, "no commute endpoints (no geocoded hotel/airport/sights)").await?;
+            println!("   skipped {key} (no commute endpoints (no geocoded hotel/airport/sights))");
         }
     }
 
@@ -769,8 +767,11 @@ fn render_png(
         raster.legend(12, 31, "HOTEL", [21, 101, 192]);
         raster.legend(105, 31, "AIRPORT", [239, 108, 0]);
     } else if matches!(kind, MapKind::DayLogistics) {
-        raster.legend(12, 31, "HOTEL", [21, 101, 192]);
-        raster.legend(105, 31, "DESTINATION", [230, 25, 75]);
+        let mut x = 12;
+        for (label, color) in day_logistics_legend_entries(points) {
+            raster.legend(x, 31, label, color);
+            x += 93;
+        }
     }
     let credit = if basemap.is_some() {
         "© ESRI + OPENSTREETMAP CONTRIBUTORS"
@@ -959,6 +960,102 @@ fn coord_key(lat: f64, lon: f64) -> String {
 }
 fn same_place(a: &Point, b: &Point) -> bool {
     coord_key(a.lat, a.lon) == coord_key(b.lat, b.lon)
+}
+
+/// The DayLogistics legend entries must match the pins actually on the map:
+/// HOTEL always; DESTINATION (in the day's DAY_COLORS color) when a sight pin
+/// exists; AIRPORT (orange) when the terminal is one of the pins.
+fn day_logistics_legend_entries(points: &[Point]) -> Vec<(&'static str, [u8; 3])> {
+    let mut out = vec![("HOTEL", [21, 101, 192])];
+    if let Some(sight) = points.iter().find(|p| p.kind == Kind::Sightseeing) {
+        out.push(("DESTINATION", sight.color));
+    }
+    if points.iter().any(|p| p.kind == Kind::Airport) {
+        out.push(("AIRPORT", [239, 108, 0]));
+    }
+    out
+}
+
+/// The compact day map's commute endpoints and legs. The hotel pin opens and
+/// closes the round trip; an airport terminal pin joins as a gateway — opening
+/// the morning chain when it precedes every sight (arrival day) and closing the
+/// evening chain when it follows every sight (departure) — so a pure
+/// hotel↔airport transfer day renders as its single hop. Returns the dedup'd
+/// points and legs; a day with no commute (e.g. a bare hotel pin) is empty.
+fn day_logistics_legs(all_pts: &[Point]) -> (Vec<Point>, Vec<(Point, Point)>) {
+    let hotel = all_pts.iter().find(|p| p.kind == Kind::Hotel);
+    let airport = all_pts.iter().find(|p| p.kind == Kind::Airport);
+    let first = all_pts.iter().find(|p| p.kind == Kind::Sightseeing);
+    let last = all_pts.iter().rfind(|p| p.kind == Kind::Sightseeing);
+    let airport_idx = |p: &Point| {
+        all_pts
+            .iter()
+            .position(|q| q.kind == Kind::Airport && same_place(q, p))
+    };
+    let sight_idx = |p: &Point| {
+        all_pts
+            .iter()
+            .position(|q| q.kind == Kind::Sightseeing && same_place(q, p))
+    };
+    let airport_before = airport
+        .zip(first)
+        .map_or(false, |(a, f)| {
+            airport_idx(a).zip(sight_idx(f)).map_or(false, |(x, y)| x < y)
+        });
+    let airport_after = airport
+        .zip(last)
+        .map_or(false, |(a, l)| {
+            airport_idx(a).zip(sight_idx(l)).map_or(false, |(x, y)| x > y)
+        });
+
+    let mut legs: Vec<(Point, Point)> = Vec::new();
+    // Morning chain: airport (when it precedes the sights) → hotel → first sight.
+    let mut chain: Vec<&Point> = Vec::new();
+    if airport_before {
+        if let Some(a) = airport {
+            chain.push(a);
+        }
+    }
+    if let Some(h) = hotel {
+        chain.push(h);
+    }
+    if let Some(f) = first {
+        // The first sight closes the chain only when something precedes it (a
+        // gateway or the hotel); a lone sight with no hotel pin has no commute.
+        if !chain.is_empty() {
+            chain.push(f);
+        }
+    }
+    for pair in chain.windows(2) {
+        legs.push((pair[0].clone(), pair[1].clone()));
+    }
+    // Evening: last sight → gateway.
+    if let Some(l) = last {
+        let end = if airport_after { airport } else { hotel };
+        if let Some(e) = end {
+            legs.push((l.clone(), e.clone()));
+        }
+    }
+    // Pure transfer day (no sights): the single hotel↔airport hop.
+    if legs.is_empty() {
+        if let (Some(h), Some(a)) = (hotel, airport) {
+            legs.push((h.clone(), a.clone()));
+        }
+    }
+
+    let mut points: Vec<Point> = Vec::new();
+    legs.retain(|(a, b)| {
+        if same_place(a, b) {
+            return false;
+        }
+        for p in [a, b] {
+            if !points.iter().any(|e| same_place(e, p)) {
+                points.push(p.clone());
+            }
+        }
+        true
+    });
+    (points, legs)
 }
 
 struct Raster {
@@ -2355,6 +2452,91 @@ mod tests {
         assert!(distant_excursion_stop(&far[1..], &multiple).is_none());
         let day_hotel = vec![point(36.0, Kind::Sightseeing), point(36.01, Kind::Hotel)];
         assert!(distant_excursion_stop(&day_hotel, &hotels).is_none());
+    }
+
+    #[test]
+    fn day_logistics_legs_cover_transfer_and_gateway_days() {
+        let point = |lat, kind| Point {
+            lat,
+            lon: 135.0,
+            kind,
+            label: "test".into(),
+            color: [0; 3],
+        };
+        let hotel = point(35.0, Kind::Hotel);
+        let air = point(34.6, Kind::Airport);
+        let s1 = point(35.1, Kind::Sightseeing);
+        let s2 = point(35.2, Kind::Sightseeing);
+
+        // Pure hotel↔airport transfer day (KIX→hotel): one hop — previously this
+        // day rendered no map at all.
+        let (points, legs) = day_logistics_legs(&[air.clone(), hotel.clone()]);
+        assert_eq!(legs.len(), 1, "{legs:?}");
+        assert_eq!(points.len(), 2);
+
+        // Arrival day with one sight: airport→hotel, hotel→sight, sight→hotel.
+        let (points, legs) = day_logistics_legs(&[air.clone(), hotel.clone(), s1.clone()]);
+        assert_eq!(legs.len(), 3, "{legs:?}");
+        assert!(same_place(&legs[0].0, &air) && same_place(&legs[0].1, &hotel));
+        assert!(same_place(&legs[1].0, &hotel) && same_place(&legs[1].1, &s1));
+        assert!(same_place(&legs[2].0, &s1) && same_place(&legs[2].1, &hotel));
+        assert_eq!(points.len(), 3);
+
+        // Normal sightseeing day: the hotel round trip, unchanged.
+        let (points, legs) = day_logistics_legs(&[hotel.clone(), s1.clone(), s2.clone()]);
+        assert_eq!(legs.len(), 2, "{legs:?}");
+        assert!(same_place(&legs[0].0, &hotel) && same_place(&legs[0].1, &s1));
+        assert!(same_place(&legs[1].0, &s2) && same_place(&legs[1].1, &hotel));
+        assert_eq!(points.len(), 3);
+
+        // Departure day: the evening leg ends at the terminal, not the hotel.
+        let (points, legs) = day_logistics_legs(&[hotel.clone(), s1.clone(), s2.clone(), air.clone()]);
+        assert_eq!(legs.len(), 2, "{legs:?}");
+        assert!(same_place(&legs[0].0, &hotel) && same_place(&legs[0].1, &s1));
+        assert!(same_place(&legs[1].0, &s2) && same_place(&legs[1].1, &air));
+        assert_eq!(points.len(), 4);
+
+        // Hotel-only day still maps nothing.
+        assert_eq!(day_logistics_legs(&[hotel.clone()]).1.len(), 0);
+    }
+
+    #[test]
+    fn day_logistics_legend_entries_match_the_pins_on_the_map() {
+        let point = |lat, kind| Point {
+            lat,
+            lon: 135.0,
+            kind,
+            label: "test".into(),
+            color: [0; 3],
+        };
+        let hotel = point(35.0, Kind::Hotel);
+        let air = point(34.6, Kind::Airport);
+        let sight = Point {
+            lat: 35.1,
+            lon: 135.0,
+            kind: Kind::Sightseeing,
+            label: "test".into(),
+            color: [60, 180, 75],
+        };
+        // Sightseeing day: HOTEL + DESTINATION in the day's color.
+        assert_eq!(
+            day_logistics_legend_entries(&[hotel.clone(), sight.clone()]),
+            vec![("HOTEL", [21, 101, 192]), ("DESTINATION", [60, 180, 75])]
+        );
+        // Pure transfer day: HOTEL + AIRPORT, no DESTINATION swatch.
+        assert_eq!(
+            day_logistics_legend_entries(&[hotel.clone(), air.clone()]),
+            vec![("HOTEL", [21, 101, 192]), ("AIRPORT", [239, 108, 0])]
+        );
+        // Mixed day: all three entries.
+        assert_eq!(
+            day_logistics_legend_entries(&[hotel.clone(), sight, air]),
+            vec![
+                ("HOTEL", [21, 101, 192]),
+                ("DESTINATION", [60, 180, 75]),
+                ("AIRPORT", [239, 108, 0])
+            ]
+        );
     }
 
     #[test]

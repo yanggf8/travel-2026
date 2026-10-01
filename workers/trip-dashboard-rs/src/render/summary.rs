@@ -651,11 +651,19 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     }
 
     // Once P4 is booked, show the chosen FIT offer as the booking result.
-    // The other comparison candidates remain stored for reference.
-    let fit_booked = plan.p4_status == "booked";
+    // A booking made without ever marking a --recommend pick falls back to
+    // showing every stored candidate, so the section can never silently vanish.
+    // Booked-FIT framing only when the selected offer IS one of the compared
+    // FIT packages — an Agoda/self-booked P4 must not claim an FIT was booked.
+    let fit_booked = plan.p4_status == "booked"
+        && plan
+            .offer
+            .as_ref()
+            .is_some_and(|o| plan.fit_offers.iter().any(|fit| fit.source_id == o.source_id));
+    let has_recommended = plan.fit_offers.iter().any(|fit| fit.recommended);
     let shown_fit_offers: Vec<_> = plan.fit_offers
         .iter()
-        .filter(|fit| !fit_booked || fit.recommended)
+        .filter(|fit| !fit_booked || !has_recommended || fit.recommended)
         .collect();
     if !shown_fit_offers.is_empty() {
         h.push_str(&format!(
@@ -1422,6 +1430,12 @@ mod tests {
     fn fit_comparison_reads_as_booked_once_p4_is_booked() {
         let plan = Plan {
             p4_status: "booked".into(),
+            // The booked framing additionally requires the selected offer to be
+            // one of the compared FIT packages (see the agoda test below).
+            offer: Some(Offer {
+                source_id: "liontravel".into(),
+                ..Default::default()
+            }),
             fit_compare_zh: "訂購前比價條件".into(),
             fit_compare_en: "Pre-booking criteria".into(),
             fit_offers: vec![
@@ -1449,6 +1463,74 @@ mod tests {
         assert!(!en.contains("Lowest"));
         assert!(!en.contains("+TWD"));
         assert!(en.contains("fit-badge-rec\">Booked</span>"));
+    }
+
+    #[test]
+    fn fit_booked_without_a_recommended_pick_still_shows_the_offers() {
+        // Booked with no selected offer row at all: we cannot claim an FIT was
+        // booked, so the comparison framing stays — but the section must never
+        // silently vanish.
+        let plan = Plan {
+            p4_status: "booked".into(),
+            fit_offers: vec![
+                sample_fit("liontravel", 21646, "TWD", false, ""),
+                sample_fit("lifetour", 18990, "TWD", false, ""),
+            ],
+            ..Default::default()
+        };
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("FIT 方案比較（優先評估，非已訂）"), "{zh}");
+        assert!(!zh.contains("已訂 FIT 方案"), "{zh}");
+        assert!(zh.contains("21,646"), "{zh}");
+        assert!(zh.contains("18,990"), "{zh}");
+    }
+
+    #[test]
+    fn fit_booked_via_fit_offer_without_a_recommend_still_shows_all() {
+        // The FIT genuinely was the booking, but no --recommend pick exists:
+        // booked framing, and every stored candidate stays visible for reference.
+        let plan = Plan {
+            p4_status: "booked".into(),
+            offer: Some(Offer {
+                source_id: "liontravel".into(),
+                ..Default::default()
+            }),
+            fit_offers: vec![
+                sample_fit("liontravel", 21646, "TWD", false, ""),
+                sample_fit("lifetour", 18990, "TWD", false, ""),
+            ],
+            ..Default::default()
+        };
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("<h2>已訂 FIT 方案</h2>"), "{zh}");
+        assert!(zh.contains("21,646"), "{zh}");
+        assert!(zh.contains("18,990"), "{zh}");
+    }
+
+    #[test]
+    fn fit_comparison_stays_unbooked_when_p4_was_booked_via_agoda() {
+        // P4 booked through a separate Agoda hotel is NOT a booked FIT package:
+        // the comparison framing must stay, with no 已訂 claim on any agency.
+        let plan = Plan {
+            p4_status: "booked".into(),
+            offer: Some(Offer {
+                source_id: "agoda".into(),
+                ..Default::default()
+            }),
+            fit_offers: vec![
+                sample_fit("liontravel", 21646, "TWD", true, ""),
+                sample_fit("lifetour", 18990, "TWD", false, ""),
+            ],
+            ..Default::default()
+        };
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("FIT 方案比較（優先評估，非已訂）"), "{zh}");
+        assert!(!zh.contains("已訂 FIT 方案"), "{zh}");
+        assert!(!zh.contains("fit-badge-rec\">已訂"), "{zh}");
+        assert!(zh.contains("fit-badge-rec\">推薦"), "{zh}");
+        // Both candidates remain visible with live price comparison.
+        assert!(zh.contains("21,646"), "{zh}");
+        assert!(zh.contains("18,990"), "{zh}");
     }
 
     #[test]
