@@ -236,18 +236,9 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         let all_pts = day_points.get(day).cloned().unwrap_or_default();
         let local_pts = all_pts.iter().filter(|p| p.kind == Kind::Sightseeing).cloned().collect::<Vec<_>>();
         if local_pts.is_empty() {
-            record_artifact(
-                &write,
-                &plan_id,
-                &format!("day-{day}.png"),
-                0,
-                None,
-                "skipped",
-                Some("no mappable stops"),
-                None,
-                None,
-            )
-            .await?;
+            // The worker renders any PNG it finds, so a day that lost its stops
+            // must have its earlier upload removed, not just marked skipped.
+            remove_stale_map(&write, &plan_id, &format!("day-{day}.png"), "no mappable stops").await?;
             println!("   skipped day-{day}.png (no mappable stops)");
         } else {
             let routes = cached_routes(&read, &write, &mut osrm_live, &local_pts).await?;
@@ -349,18 +340,9 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     }
 
     if plan_points.is_empty() {
-        record_artifact(
-            &write,
-            &plan_id,
-            "plan.png",
-            0,
-            None,
-            "skipped",
-            Some("no sightseeing points"),
-            None,
-            None,
-        )
-        .await?;
+        // Same lingering rule: when every sightseeing day left the overview,
+        // the old flattened plan.png must not keep rendering from R2.
+        remove_stale_map(&write, &plan_id, "plan.png", "no sightseeing points").await?;
         println!("   skipped plan.png (no sightseeing points)");
     } else {
         let mut routes = Vec::new();
@@ -423,31 +405,15 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     }
 
     if logistics.is_empty() {
-        record_artifact(
-            &write,
-            &plan_id,
-            "plan-logistics.png",
-            0,
-            None,
-            "skipped",
-            Some("no geocoded hotel/airport endpoints"),
-            None,
-            None,
-        )
-        .await?;
+        remove_stale_map(&write, &plan_id, "plan-logistics.png", "no geocoded hotel/airport endpoints").await?;
         println!("   skipped plan-logistics.png (no geocoded hotel/airport endpoints)");
     } else if !has_airport {
         // Domestic: the stay is already a pin on plan.png — no separate logistics map.
-        record_artifact(
+        remove_stale_map(
             &write,
             &plan_id,
             "plan-logistics.png",
-            0,
-            None,
-            "skipped",
-            Some("domestic trip: no airport endpoints; stay merged into plan.png"),
-            None,
-            None,
+            "domestic trip: no airport endpoints; stay merged into plan.png",
         )
         .await?;
         println!("   skipped plan-logistics.png (domestic: stay merged into plan.png, no airport endpoints)");
@@ -2255,7 +2221,10 @@ fn classify(s: &str) -> Kind {
 
 /// Record `key` as skipped and, when an earlier run uploaded it, delete the R2
 /// object — the worker renders any PNG it finds, so a stale one would linger.
-async fn remove_stale_map(c: &Connection, plan: &str, key: &str, reason: &str) -> Result<(), String> {
+async fn remove_stale_map(_c: &Connection, plan: &str, key: &str, reason: &str) -> Result<(), String> {
+    // Reconnect like record_artifact: this runs after Wrangler uploads, which can
+    // outlive Turso's idle timeout, so the caller's long-lived `write` may be dead.
+    let c = crate::db::connect_write().await?;
     let mut r = c
         .query(
             "SELECT status FROM map_artifacts WHERE plan_id = ?1 AND map_key = ?2",
@@ -2284,7 +2253,7 @@ async fn remove_stale_map(c: &Connection, plan: &str, key: &str, reason: &str) -
         }
         println!("   removed stale {key} ({reason})");
     }
-    record_artifact(c, plan, key, 0, None, "skipped", Some(reason), None, None).await?;
+    record_artifact(&c, plan, key, 0, None, "skipped", Some(reason), None, None).await?;
     Ok(())
 }
 
