@@ -1,11 +1,11 @@
-// `travel set-accommodation --hotel <name> --room-type <type> --price <twd> [--date YYYY-MM-DD] [--dest <slug>] [--plan-id <id>]`
+// `travel set-accommodation --hotel <name> --room-type <type> [--price <twd>] [--date YYYY-MM-DD] [--dest <slug>] [--plan-id <id>]`
 // — domestic Taiwan accommodation booking (independent of Japan `set-hotel` / `set-flight`).
 //
 // Steps:
-//   1. validate --hotel / --room-type / --price (+ --date shape)
+//   1. validate --hotel / --room-type / optional --price (+ --date shape)
 //   2. resolve dest via `cascade::common::resolve_active_destination` (fail loud)
-//   3. verify `domestic_accommodations` contains the hotel+room_type row (hint query-accommodation)
-//   4. INSERT/UPSERT `bookings_current` (category=accommodation, title="Hotel Room", status=booked, price_twd)
+//   3. verify `domestic_accommodations` contains the room, or at least the hotel when price is unknown
+//   4. INSERT/UPSERT `bookings_current` (category=accommodation, title="Hotel Room", status=booked, optional price_twd)
 //   5. advance `process_statuses` P4 (process_4_accommodation) to `booked` via shortest-legal hops
 //      (emit_status_changed per hop + record_operation once)
 //   6. plain-text output: ✅ Booked accommodation: <hotel> <room> TWD <price> for <dest> plan <plan_id>
@@ -20,7 +20,7 @@ use std::collections::{HashSet, VecDeque};
 struct Args {
     hotel: String,
     room_type: String,
-    price: i64,
+    price: Option<i64>,
     date: Option<String>,
     dest: Option<String>,
 }
@@ -39,9 +39,10 @@ pub async fn run(raw: &[String], plan_id: String) -> Result<(), String> {
         }
     };
 
-    // Verify domestic_accommodations has this hotel+room_type.
+    // Known-price bookings must match a researched room. A confirmed booking
+    // without a quoted price may use a different room at a known property.
     let matched = find_accommodation(&conn, &dest, &args.hotel, &args.room_type).await?;
-    if matched.is_none() {
+    if matched.is_none() && (args.price.is_some() || !hotel_exists(&conn, &dest, &args.hotel).await?) {
         let msg = format!(
             "No accommodation found for hotel '{}' room_type '{}' in destination '{dest}' — run `travel query-accommodation --dest {dest} --date {} --hotel \"{}\"` to list available options",
             args.hotel,
@@ -79,13 +80,12 @@ pub async fn run(raw: &[String], plan_id: String) -> Result<(), String> {
         source_id: None,
         offer_id: None,
         selected_date: args.date.clone(),
-        price_amount: Some(args.price),
+        price_amount: args.price,
         price_currency: "TWD".to_string(),
         origin_path: "set-accommodation".to_string(),
         payload_kv: vec![
             ("hotel".to_string(), args.hotel.clone()),
             ("room_type".to_string(), args.room_type.clone()),
-            ("price_twd".to_string(), args.price.to_string()),
         ],
     };
     travel_db::repo::bookings::upsert_current(&conn, &row).await?;
@@ -140,14 +140,14 @@ pub async fn run(raw: &[String], plan_id: String) -> Result<(), String> {
         &conn,
         &plan_id,
         "set-accommodation",
-        &format!("{dest} {} {} TWD {}", args.hotel, args.room_type, args.price),
+        &format!("{dest} {} {} TWD {}", args.hotel, args.room_type, args.price.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string())),
         version_before,
         version_after,
         &now_db,
     )
     .await?;
 
-    println!("✅ Booked accommodation: {} {} TWD {} for {dest} plan {plan_id}", args.hotel, args.room_type, args.price);
+    println!("✅ Booked accommodation: {} {} TWD {} for {dest} plan {plan_id}", args.hotel, args.room_type, args.price.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string()));
     Ok(())
 }
 
@@ -220,8 +220,6 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
 
     let hotel = hotel.ok_or_else(|| "--hotel <name> is required".to_string())?;
     let room_type = room_type.ok_or_else(|| "--room-type <type> is required".to_string())?;
-    let price = price.ok_or_else(|| "--price <twd> is required".to_string())?;
-
     Ok(Args { hotel, room_type, price, date, dest })
 }
 
@@ -235,7 +233,15 @@ fn is_iso_date(s: &str) -> bool {
 }
 
 fn print_usage() {
-    println!("Usage:\n  travel set-accommodation --hotel <name> --room-type <type> --price <twd> [--date YYYY-MM-DD] [--dest <slug>] [--plan-id <id>]");
+    println!("Usage:\n  travel set-accommodation --hotel <name> --room-type <type> [--price <twd>] [--date YYYY-MM-DD] [--dest <slug>] [--plan-id <id>]");
+}
+
+async fn hotel_exists(conn: &libsql::Connection, dest: &str, hotel: &str) -> Result<bool, String> {
+    let mut rows = conn.query(
+        "SELECT 1 FROM domestic_accommodations WHERE destination = ?1 AND hotel_name = ?2 LIMIT 1",
+        libsql::params![dest.to_string(), hotel.to_string()],
+    ).await.map_err(|e| format!("domestic_accommodations lookup failed: {e}"))?;
+    Ok(rows.next().await.map_err(|e| format!("domestic_accommodations row read failed: {e}"))?.is_some())
 }
 
 async fn find_accommodation(

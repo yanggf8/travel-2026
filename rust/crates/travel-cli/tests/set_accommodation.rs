@@ -182,15 +182,13 @@ fn set_accommodation_validates_required_flags() {
     // No DB needed — parse errors before connect
     let (ok, _out, err) = run(&[
         "set-accommodation",
-        "--hotel",
-        "任一飯店",
         "--room-type",
         "海景雙人房",
         "--plan-id",
         "any",
     ]);
-    assert!(!ok, "missing --price should fail");
-    assert!(err.contains("--price"), "err={err}");
+    assert!(!ok, "missing --hotel should fail");
+    assert!(err.contains("--hotel"), "err={err}");
 
     let (ok2, _out2, err2) = run(&[
         "set-accommodation",
