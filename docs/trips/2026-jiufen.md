@@ -31,8 +31,19 @@
 - 篩選也掃過 40 筆全集合：其餘命中者（禪The Zen 23m² 無海景、陽光味宿／水映藍天／十三層／隱山居包棟／小希臘／Yu Apartment／聽風的歌 浴缸房 10/12 未開放或無海景）皆淘汰；野柳／翡翠灣／基隆一帶溫泉飯店有浴缸＋海景（3,000–6,300）但非九份住宿。
 - 曾誤記「海論已訂房 NT$5,200」為假資料（為畫地圖寫入），已清除；P4 回 `selecting`。殘留的舊地圖（plan-logistics.png、含海論腳位的 plan.png/day-2.png）已於 2026-09-28 重產清除，Day2 路線起點改為中性的「九份住宿」。
 
+## 已訂住宿（2026-10-06，Booking 確認單）
+
+- **漫海聽風海景民宿（Manhai Tingfeng Seaview B&B）**，No. 155-9, Dongding Rd.（郵遞區號 224）
+- 房型：**Deluxe Double Room with Balcony and Sea View**（海景陽台豪華雙人房）；1 間 1 晚、2 位大人；主要住客 LIKO YANG
+- 入住 **2026-10-11（日）15:00 後**；退房 **2026-10-12（一）11:00 前**
+- 附加：停車位、咖啡／茶、免費 Wi-Fi、快速入住；由私人屋主經營，聯絡經 Booking 傳訊息
+- 確認單未顯示價格與取消條件
+
+### ⚠️ 與既有計畫不一致，待確認
+- **日期**：計畫是 10/12（一）～10/13（二），訂房是 **10/11（日）～10/12（一）**，早一天。若以訂房為準，plan 的 date anchors、Day1／Day2 日期與「非連假週一夜」前提都要改（10/11 仍在雙十連假內）。
+- **房型**：候選快照列的是漫海聽風「海景四人房 5,016（SPA 浴缸）」，實際訂的是**豪華雙人房**；此房型是否有浴缸、價格多少都還沒查證，不能沿用四人房的資料。
+
 ## 待辦
 
-- 挑定住宿 → `./bin/travel set-accommodation ...`（P4→booked）→ `./bin/travel snapshot-maps`（住宿端點併入 plan.png，國內行程不產生機場物流圖）。
-- Booking 候選免費取消期限 10/5，過期前可先佔房。
+- 確認日期以 10/11–10/12 為準後：Turso `set-accommodation`（P4→booked，填實際房型與價格）＋調整 plan 日期 → `./bin/travel snapshot-maps`（住宿端點併入 plan.png）。dashboard 直接讀 Turso，寫入後即生效。
 - `destination_areas` 種子缺失（validate 警告，非本次議題）。
