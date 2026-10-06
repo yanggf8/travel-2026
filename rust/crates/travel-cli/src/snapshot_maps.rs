@@ -328,10 +328,15 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let mut plan_points = all_sightseeing.clone();
     if !has_airport {
         for p in logistics.iter().filter(|p| p.kind == Kind::Hotel) {
-            if !plan_points
-                .iter()
-                .any(|existing: &Point| existing.lat == p.lat && existing.lon == p.lon)
+            if let Some(existing) = plan_points
+                .iter_mut()
+                .find(|existing| coord_key(existing.lat, existing.lon) == coord_key(p.lat, p.lon))
             {
+                // The route endpoint may already occupy this coordinate as a
+                // sightseeing point. Keep one marker, but display the booked
+                // stay's hotel pin and label in the overview.
+                *existing = p.clone();
+            } else {
                 plan_points.push(p.clone());
             }
         }
