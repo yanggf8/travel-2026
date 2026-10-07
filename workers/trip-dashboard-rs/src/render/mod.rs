@@ -113,7 +113,10 @@ pub fn render_plan(
 fn render_companion_options(plan: &Plan, lang: &str) -> String {
     let title = plan.days.iter().flat_map(|d| d.sessions.iter())
         .flat_map(|s| s.activities.iter())
-        .find(|a| a.title.starts_with("同行方案（可複選"))
+        .find(|a| {
+            let t = &a.title;
+            t.starts_with("同行方案（可複選") || t.starts_with("同行方案（可選擇")
+        })
         .map(|a| a.title.as_str());
     let Some(title) = title else { return String::new(); };
     // A card starts at any "A｜"-style line, NOT at a blank line: splitting on
@@ -136,7 +139,7 @@ fn render_companion_options(plan: &Plan, lang: &str) -> String {
     }
     if cards.is_empty() { return String::new(); }
     let heading = heading_lines.join("\n");
-    let label = if lang == "en" { "Companion options · select any" } else { "同行方案 · 可複選" };
+    let label = if lang == "en" { "Companion options · pick one" } else { "同行方案 · 可選擇" };
     let map = companion_map(plan, lang);
     let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p>{}<div class=\"companion-grid\">", esc(label), esc(&heading), map);
     for card in &cards {
@@ -536,7 +539,7 @@ mod tests {
             days: vec![Day {
                 sessions: vec![Session {
                     activities: vec![Activity {
-                        title: "同行方案（可複選，尚未確認）\n\nA｜北海岸\n路線：野柳 → 金山\n\nB｜坪林\n路線：茶博館 → 老街".into(),
+                        title: "同行方案（可選擇，尚未確認）\n\nA｜北海岸\n路線：野柳 → 金山\n\nB｜坪林\n路線：茶博館 → 老街".into(),
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -546,7 +549,7 @@ mod tests {
             ..Default::default()
         };
         let html = render_companion_options(&plan, "zh");
-        assert!(html.contains("同行方案 · 可複選"), "{html}");
+        assert!(html.contains("同行方案 · 可選擇"), "{html}");
         assert!(html.contains("<h3>A｜北海岸</h3>"), "{html}");
         assert!(html.contains("<h3>B｜坪林</h3>"), "{html}");
     }
@@ -560,7 +563,7 @@ mod tests {
             days: vec![Day {
                 sessions: vec![Session {
                     activities: vec![Activity {
-                        title: "同行方案（可複選，尚未確認）\nA｜北海岸\n路線：漫海聽風 → 野柳\nB｜坪林\n路線：茶博館 → 老街".into(),
+                        title: "同行方案（可選擇，尚未確認）\nA｜北海岸\n路線：漫海聽風 → 野柳\nB｜坪林\n路線：茶博館 → 老街".into(),
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -731,7 +734,7 @@ fn note_only_plan() -> crate::model::Plan {
         days: vec![Day {
             sessions: vec![Session {
                 activities: vec![Activity {
-                    title: "同行方案（可複選，尚未確認）\n\nA｜北海岸\n路線：野柳 → 金山\n\nB｜坪林\n路線：茶博館 → 老街".into(),
+                    title: "同行方案（可選擇，尚未確認）\n\nA｜北海岸\n路線：野柳 → 金山\n\nB｜坪林\n路線：茶博館 → 老街".into(),
                     ..Default::default()
                 }],
                 ..Default::default()
