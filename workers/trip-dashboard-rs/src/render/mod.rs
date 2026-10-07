@@ -116,16 +116,31 @@ fn render_companion_options(plan: &Plan, lang: &str) -> String {
         .find(|a| a.title.starts_with("同行方案（可複選"))
         .map(|a| a.title.as_str());
     let Some(title) = title else { return String::new(); };
-    let mut sections = title.split("\n\n");
-    let heading = sections.next().unwrap_or("同行方案");
-    let cards: Vec<&str> = sections.filter(|s| s.starts_with("A｜") || s.starts_with("B｜")).collect();
+    // A card starts at any "A｜"-style line, NOT at a blank line: splitting on
+    // "\n\n" depended on the note author's blank-line habits, and the missing
+    // blank line before B｜ once rendered B glued inside A's card.
+    let mut heading_lines: Vec<&str> = Vec::new();
+    let mut cards: Vec<Vec<&str>> = Vec::new();
+    for line in title.lines() {
+        let mut ch = line.chars();
+        let starts_card = matches!(ch.next(), Some(c) if c.is_ascii_uppercase())
+            && ch.next() == Some('｜');
+        if starts_card {
+            cards.push(vec![line]);
+        } else if !line.trim().is_empty() {
+            match cards.last_mut() {
+                Some(card) => card.push(line),
+                None => heading_lines.push(line),
+            }
+        }
+    }
     if cards.is_empty() { return String::new(); }
+    let heading = heading_lines.join("\n");
     let label = if lang == "en" { "Companion options · select any" } else { "同行方案 · 可複選" };
-    let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p><div class=\"companion-grid\">", esc(label), esc(heading));
-    for card in cards {
-        let mut lines = card.lines();
-        let name = lines.next().unwrap_or_default();
-        let details = lines.map(esc).collect::<Vec<_>>().join("<br>");
+    let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p><div class=\"companion-grid\">", esc(label), esc(&heading));
+    for card in &cards {
+        let name = card[0];
+        let details = card[1..].iter().map(|&l| esc(l)).collect::<Vec<_>>().join("<br>");
         out.push_str(&format!("<article class=\"companion-card\"><h3>{}</h3><p>{}</p></article>", esc(name), details));
     }
     out.push_str("</div></section>");
@@ -395,5 +410,32 @@ mod tests {
         assert!(html.contains("同行方案 · 可複選"), "{html}");
         assert!(html.contains("<h3>A｜北海岸</h3>"), "{html}");
         assert!(html.contains("<h3>B｜坪林</h3>"), "{html}");
+    }
+
+    /// The real jiufen-2026 note has NO blank line before B｜ — single \n
+    /// throughout. Cards must still split, or B renders glued inside A.
+    #[test]
+    fn companion_options_split_without_blank_lines() {
+        use crate::model::{Activity, Day, Plan, Session};
+        let plan = Plan {
+            days: vec![Day {
+                sessions: vec![Session {
+                    activities: vec![Activity {
+                        title: "同行方案（可複選，尚未確認）\nA｜北海岸\n路線：漫海聽風 → 野柳\nB｜坪林\n路線：茶博館 → 老街".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render_companion_options(&plan, "zh");
+        assert!(html.contains("<h3>A｜北海岸</h3>"), "{html}");
+        assert!(html.contains("<h3>B｜坪林</h3>"), "{html}");
+        // B's 路線 must land in B's card, not appended under A's heading.
+        let a_end = html.find("<h3>B｜坪林</h3>").unwrap();
+        assert!(html[..a_end].contains("野柳"), "{html}");
+        assert!(!html[..a_end].contains("茶博館"), "{html}");
     }
 }
