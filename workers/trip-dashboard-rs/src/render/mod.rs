@@ -145,9 +145,125 @@ fn render_companion_options(plan: &Plan, lang: &str) -> String {
     for card in &cards {
         let name = card[0];
         let details = card[1..].iter().map(|&l| esc(l)).collect::<Vec<_>>().join("<br>");
-        out.push_str(&format!("<article class=\"companion-card\"><h3>{}</h3><p>{}</p></article>", esc(name), details));
+        // The note section's leading letter ties it to its structured option.
+        let letter = name.split('｜').next().unwrap_or("").trim().to_string();
+        out.push_str(&format!("<article class=\"companion-card\"><h3>{}</h3><p>{}</p>", esc(name), details));
+        if let Some(o) = plan
+            .companion_options
+            .iter()
+            .find(|o| o.key == letter)
+        {
+            let chips: Vec<String> = o
+                .stops
+                .iter()
+                .map(|st| format!("<span class=\"stop-chip\">{}</span>", esc(&st.label)))
+                .collect();
+            out.push_str(&format!(
+                "<div class=\"companion-stops\">{}</div>",
+                chips.join("<span class=\"stop-arrow\">→</span>")
+            ));
+            out.push_str(&companion_card_frame(o, &letter, lang));
+        }
+        out.push_str("</article>");
     }
     out.push_str("</div></section>");
+    out
+}
+
+/// A 3:2 Web-Mercator frame around a point set (10% padding, aspect locked
+/// for a 600x400 export, floor keeps coincident stops readable). Shared by
+/// the companion overlay map and the per-option card frames.
+struct Frame {
+    la_min: f64,
+    la_max: f64,
+    lo_min: f64,
+    lo_max: f64,
+}
+
+impl Frame {
+    fn around(points: &[(f64, f64)]) -> Frame {
+        let (mut la_min, mut la_max) = (f64::MAX, f64::MIN);
+        let (mut lo_min, mut lo_max) = (f64::MAX, f64::MIN);
+        for (la, lo) in points {
+            la_min = la_min.min(*la);
+            la_max = la_max.max(*la);
+            lo_min = lo_min.min(*lo);
+            lo_max = lo_max.max(*lo);
+        }
+        let c_la = (la_min + la_max) / 2.0;
+        let aspect = 1.5 / c_la.to_radians().cos();
+        let span_la = ((la_max - la_min) * 1.2).max((lo_max - lo_min) * 1.2 / aspect).max(0.02);
+        let span_lo = span_la * aspect;
+        let c_lo = (lo_min + lo_max) / 2.0;
+        Frame {
+            la_min: c_la - span_la / 2.0,
+            la_max: c_la + span_la / 2.0,
+            lo_min: c_lo - span_lo / 2.0,
+            lo_max: c_lo + span_lo / 2.0,
+        }
+    }
+    fn pos(&self, la: f64, lo: f64) -> (f64, f64) {
+        let merc = |x: f64| (std::f64::consts::PI / 4.0 + x.to_radians() / 2.0).tan().ln();
+        let x = (lo - self.lo_min) / (self.lo_max - self.lo_min) * 100.0;
+        let y = (merc(self.la_max) - merc(la)) / (merc(self.la_max) - merc(self.la_min)) * 100.0;
+        (x.clamp(0.0, 100.0), y.clamp(0.0, 100.0))
+    }
+    fn bbox(&self) -> String {
+        format!(
+            "{:.6},{:.6},{:.6},{:.6}",
+            self.lo_min, self.la_min, self.lo_max, self.la_max
+        )
+    }
+}
+
+/// Per-option route frame inside a companion card: THIS option's Day-shape —
+/// the thing the shared overlay map cannot give each option on its own.
+/// Needs ≥2 geocoded stops; NULL-coord stops join the chips, never the frame.
+fn companion_card_frame(o: &crate::model::CompanionOption, tag: &str, lang: &str) -> String {
+    let pts: Vec<(f64, f64)> = o
+        .stops
+        .iter()
+        .filter_map(|s| Some((s.lat?, s.lon?)))
+        .collect();
+    if pts.len() < 2 { return String::new(); }
+    let frame = Frame::around(&pts);
+    let mut out = format!(
+        "<div class=\"companion-map-frame companion-card-map\"><img class=\"companion-map-img\" loading=\"lazy\" alt=\"\" \
+         src=\"https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox={}&bboxSR=4326&size=600,400&format=png&f=image\">\
+         <svg class=\"companion-map-routes\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">",
+        frame.bbox()
+    );
+    let pts_svg: Vec<String> = o
+        .stops
+        .iter()
+        .filter_map(|s| {
+            let (la, lo) = (s.lat?, s.lon?);
+            let (x, y) = frame.pos(la, lo);
+            Some(format!("{x:.2},{y:.2}"))
+        })
+        .collect();
+    if pts_svg.len() >= 2 {
+        out.push_str(&format!(
+            "<polyline class=\"route-{}\" points=\"{}\"/>",
+            tag.to_lowercase(),
+            pts_svg.join(" ")
+        ));
+    }
+    out.push_str("</svg>");
+    for s in &o.stops {
+        let (Some(sla), Some(slo)) = (s.lat, s.lon) else { continue };
+        let (x, y) = frame.pos(sla, slo);
+        let side = if x > 78.0 { " companion-map-stop--left" } else { "" };
+        let vert = if y > 82.0 { " companion-map-stop--above" } else { "" };
+        out.push_str(&format!(
+            "<span class=\"companion-map-stop stop-{}{side}{vert}\" style=\"left:{x:.2}%;top:{y:.2}%\">{}<em>{}</em></span>",
+            tag.to_lowercase(),
+            esc(tag),
+            esc(&s.label)
+        ));
+    }
+    let _ = lang;
+    out.push_str("</div>");
     out
 }
 
@@ -651,10 +767,11 @@ mod tests {
             ],
         }];
         let html = render_companion_options(&plan, "zh");
-        assert!(html.contains("route-b"), "{html}");
-        assert!(html.contains("stop-b"), "{html}");
-        assert!(!html.contains("route-a"), "{html}");
-        assert!(!html.contains("stop-a"), "{html}");
+        // Class-boundary match: "stop-arrow" must not read as stop-a.
+        assert!(html.contains("route-b\""), "{html}");
+        assert!(html.contains("stop-b\""), "{html}");
+        assert!(!html.contains("route-a\""), "{html}");
+        assert!(!html.contains("stop-a\""), "{html}");
     }
 
     /// Two options sharing ONE point (same coords) is a one-dot frame — the
@@ -722,6 +839,47 @@ mod tests {
         assert!(
             html.contains("companion-map-stop--left"),
             "eastmost stop's label must flip: {html}"
+        );
+    }
+
+    /// Each option card shows its OWN Day-shape: a scannable stop-chip
+    /// sequence plus a per-option route frame — B's day must be visible as a
+    /// day, not only as three place names in a prose line (user: B方案的
+    /// Day 2 完全看不見). NULL-coord stops join the chips, never the frame.
+    #[test]
+    fn companion_cards_show_stop_chips_and_own_route_frames() {
+        use crate::model::{CompanionOption, CompanionStop};
+        let mut plan = note_only_plan();
+        plan.companion_options = vec![
+            CompanionOption {
+                key: "A".into(),
+                title: "北海岸".into(),
+                stops: vec![
+                    CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                    CompanionStop { label: "台2線海岸".into(), lat: None, lon: None },
+                    CompanionStop { label: "淡水".into(), lat: Some(25.1727), lon: Some(121.4377) },
+                ],
+            },
+            CompanionOption {
+                key: "B".into(),
+                title: "坪林".into(),
+                stops: vec![
+                    CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                    CompanionStop { label: "坪林茶業博物館".into(), lat: Some(24.9341), lon: Some(121.7126) },
+                    CompanionStop { label: "淡水".into(), lat: Some(25.1727), lon: Some(121.4377) },
+                ],
+            },
+        ];
+        let html = render_companion_options(&plan, "zh");
+        // Chips: the full stop sequence is scannable per card — including the
+        // NULL-coord 台2線海岸, which must not vanish from the sequence.
+        assert!(html.contains("stop-chip"), "{html}");
+        assert!(html.contains("stop-chip\">台2線海岸</span>"), "{html}");
+        // Per-option route frames inside the cards: one each for A and B.
+        assert_eq!(
+            html.match_indices("companion-card-map").count(),
+            2,
+            "each option card carries its own route frame: {html}"
         );
     }
 }

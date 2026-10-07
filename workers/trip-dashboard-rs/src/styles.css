@@ -1300,3 +1300,9 @@ h1 {
 .cand-reference[open] summary { padding-bottom: 8px; }
 .booking-cand-detail { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .booking-cand-detail .candidate-gallery { flex-basis: 100%; }
+.companion-stops { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0; }
+.stop-chip { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg); }
+.stop-arrow { color: var(--text-dim); font-size: 11px; }
+.companion-card-map { margin: 4px 0 2px; }
+.companion-card-map .companion-map-stop em { font-size: 9px; }
