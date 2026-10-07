@@ -401,7 +401,7 @@ mod tests {
         let o = parse_args(&a(&["--hotel", "海論", "--room-type", "海景雙人房", "--price", "5200"])).unwrap();
         assert_eq!(o.hotel, "海論");
         assert_eq!(o.room_type, "海景雙人房");
-        assert_eq!(o.price, 5200);
+        assert_eq!(o.price, Some(5200));
     }
 
     #[test]
@@ -424,9 +424,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_price() {
-        let e = parse_args(&a(&["--hotel", "海論", "--room-type", "海景雙人房"])).unwrap_err();
-        assert!(e.contains("--price"));
+    fn accepts_missing_price_for_a_confirmed_booking() {
+        let o = parse_args(&a(&["--hotel", "海論", "--room-type", "海景雙人房"])).unwrap();
+        assert_eq!(o.price, None);
     }
 
     #[test]

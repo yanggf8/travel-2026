@@ -11,10 +11,10 @@
 // Timestamp-based staleness (user-chosen design):
 //   - plan_map_snapshots.snapshotted_at records the last snapshot time
 //     (stamped by `mark-maps-snapshotted`, written by travel snapshot-maps).
-//   - We take MAX(updated_at) across the four itinerary tables that carry an
-//     `updated_at` column — `days`, `timesofday`, `activities`, `session_meals` —
-//     for the plan. If the latest itinerary edit is newer than the snapshot,
-//     the maps are STALE.
+//   - We take MAX(updated_at) only across map-bearing itinerary inputs: `days`
+//     (including the excursion flag) and activities that are linked to a POI.
+//     Text-only sessions, meals, and free-text activities cannot change a PNG,
+//     so they must not force an expensive R2 re-snapshot.
 //
 // Completeness (manifest-based):
 //   - `map_artifacts` rows are written by travel snapshot-maps (one per expected key).
@@ -35,6 +35,13 @@
 use std::collections::HashMap;
 
 use libsql::Connection;
+
+const MAP_INPUT_UPDATED_AT_SQL: &str = "SELECT MAX(u) FROM (\
+        SELECT MAX(updated_at) AS u FROM days WHERE plan_id = ?1 \
+        UNION ALL \
+        SELECT MAX(updated_at) AS u FROM activities \
+          WHERE plan_id = ?1 AND COALESCE(poi_id, '') <> '' \
+    )";
 
 pub async fn run(args: &[String]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -433,23 +440,15 @@ async fn read_map_artifacts(
     Ok(out)
 }
 
-/// MAX(updated_at) across the four itinerary tables that carry an `updated_at`
-/// column. A single UNION ALL of per-table maxima, then the overall max.
+/// MAX(updated_at) across map-bearing inputs. A single UNION ALL of per-table
+/// maxima, then the overall max. An activity without a POI is presentation-only
+/// (for example a companion decision card) and does not affect the renderer.
 async fn max_itinerary_updated_at(
     conn: &Connection,
     plan_id: &str,
 ) -> Result<Option<String>, String> {
-    let sql = "SELECT MAX(u) FROM (\
-        SELECT MAX(updated_at) AS u FROM days          WHERE plan_id = ?1 \
-        UNION ALL \
-        SELECT MAX(updated_at) AS u FROM timesofday    WHERE plan_id = ?1 \
-        UNION ALL \
-        SELECT MAX(updated_at) AS u FROM activities     WHERE plan_id = ?1 \
-        UNION ALL \
-        SELECT MAX(updated_at) AS u FROM session_meals  WHERE plan_id = ?1 \
-    )";
     let mut rows = conn
-        .query(sql, libsql::params![plan_id.to_string()])
+        .query(MAP_INPUT_UPDATED_AT_SQL, libsql::params![plan_id.to_string()])
         .await
         .map_err(|e| format!("itinerary updated_at query failed: {e}"))?;
     if let Some(row) = rows
@@ -465,6 +464,14 @@ async fn max_itinerary_updated_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn freshness_query_ignores_text_only_itinerary_edits() {
+        assert!(MAP_INPUT_UPDATED_AT_SQL.contains("FROM days"));
+        assert!(MAP_INPUT_UPDATED_AT_SQL.contains("COALESCE(poi_id, '') <> ''"));
+        assert!(!MAP_INPUT_UPDATED_AT_SQL.contains("timesofday"));
+        assert!(!MAP_INPUT_UPDATED_AT_SQL.contains("session_meals"));
+    }
 
     #[test]
     fn excursion_map_is_required_and_failures_are_reported() {
