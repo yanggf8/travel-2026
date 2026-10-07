@@ -52,6 +52,7 @@ pub fn render_plan(
         lang,
         map_status.legend_for("plan.png"),
     ));
+    body.push_str(&render_companion_options(plan, lang));
     // The logistics map only exists where the trip has an airport segment
     // (flights). A DOMESTIC self-drive plan has none — rendering the slot
     // anyway just showed a 地圖尚未產生 placeholder that wasted vertical
@@ -104,6 +105,31 @@ pub fn render_plan(
     body.push_str(&alerts::render_pending_alerts(plan, lang, true));
     body.push_str(&alerts::render_transit_summary(plan, lang));
     page(&plan.display_name, &body, lang)
+}
+
+/// Render an explicit companion-options block from the temporary, unconfirmed
+/// itinerary note. This keeps alternatives visually separate from the official
+/// day schedule while the group is deciding.
+fn render_companion_options(plan: &Plan, lang: &str) -> String {
+    let title = plan.days.iter().flat_map(|d| d.sessions.iter())
+        .flat_map(|s| s.activities.iter())
+        .find(|a| a.title.starts_with("同行方案（可複選"))
+        .map(|a| a.title.as_str());
+    let Some(title) = title else { return String::new(); };
+    let mut sections = title.split("\n\n");
+    let heading = sections.next().unwrap_or("同行方案");
+    let cards: Vec<&str> = sections.filter(|s| s.starts_with("A｜") || s.starts_with("B｜")).collect();
+    if cards.is_empty() { return String::new(); }
+    let label = if lang == "en" { "Companion options · select any" } else { "同行方案 · 可複選" };
+    let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p><div class=\"companion-grid\">", esc(label), esc(heading));
+    for card in cards {
+        let mut lines = card.lines();
+        let name = lines.next().unwrap_or_default();
+        let details = lines.map(esc).collect::<Vec<_>>().join("<br>");
+        out.push_str(&format!("<article class=\"companion-card\"><h3>{}</h3><p>{}</p></article>", esc(name), details));
+    }
+    out.push_str("</div></section>");
+    out
 }
 
 /// AI-recommended provenance badge. Empty string for confirmed/any non-ai_recommended source, so
@@ -347,5 +373,27 @@ mod tests {
         let none = render_plan(&plan, "zh", None, &map::MapStatus { plan_logistics: Some("l".into()), ..Default::default() }, "");
         assert!(!none.contains("plan-excursion.png"));
         assert!(!none.contains("一日遊"), "{none}");
+    }
+
+    #[test]
+    fn companion_options_render_as_separate_cards() {
+        use crate::model::{Activity, Day, Plan, Session};
+        let plan = Plan {
+            days: vec![Day {
+                sessions: vec![Session {
+                    activities: vec![Activity {
+                        title: "同行方案（可複選，尚未確認）\n\nA｜北海岸\n路線：野柳 → 金山\n\nB｜坪林\n路線：茶博館 → 老街".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render_companion_options(&plan, "zh");
+        assert!(html.contains("同行方案 · 可複選"), "{html}");
+        assert!(html.contains("<h3>A｜北海岸</h3>"), "{html}");
+        assert!(html.contains("<h3>B｜坪林</h3>"), "{html}");
     }
 }

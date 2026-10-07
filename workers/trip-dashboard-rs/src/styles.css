@@ -45,6 +45,22 @@ h1 {
   padding: 16px 4px 4px;
 }
 
+/* ---- Companion decision options ---- */
+.companion-options {
+  background: var(--card);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-top: 16px;
+}
+.companion-options h2 { font-size: 18px; margin-bottom: 3px; }
+.companion-hint { color: var(--text-dim); font-size: 13px; margin-bottom: 12px; }
+.companion-grid { display: grid; gap: 10px; }
+.companion-card { border: 1px solid var(--border); border-radius: 9px; padding: 12px; background: #fbfdff; }
+.companion-card h3 { font-size: 16px; margin-bottom: 6px; color: var(--accent); }
+.companion-card p { font-size: 14px; line-height: 1.65; }
+
 /* ---- Booking summary ---- */
 .booking-summary {
   background: var(--card);
