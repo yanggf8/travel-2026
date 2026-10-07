@@ -143,7 +143,7 @@ pub fn render(
             ));
         }
         h.push_str("</div>");
-        h.push_str(&grant_manager(
+        h.push_str(&share::grant_manager(
             &plan_id,
             grants
                 .plan_to_history
@@ -151,76 +151,12 @@ pub fn render(
                 .map(Vec::as_slice)
                 .unwrap_or(&[]),
             public_origin,
-            csrf,
+            &csrf.deactivate_batch(&plan_id),
             lang,
         ));
         h.push_str("</li>");
     }
     h.push_str("</ul>");
-    h
-}
-
-fn grant_manager(
-    plan_id: &str,
-    history: &[share::GrantToken],
-    public_origin: &str,
-    csrf: &crate::router::GrantCsrf,
-    lang: &str,
-) -> String {
-    let mut h = String::new();
-    h.push_str(&format!(
-        r#"<details class="grant-manager"><summary>{}</summary>"#,
-        esc(t("grantTokens", lang)),
-    ));
-    if history.is_empty() {
-        h.push_str(&format!(
-            r#"<div class="grant-empty">{}</div>"#,
-            esc(t("noActiveGrantToken", lang)),
-        ));
-    } else {
-        h.push_str(r#"<div class="grant-history">"#);
-        for grant in history {
-            let active = grant.status == share::GrantStatus::Active;
-            h.push_str(&format!(
-                r#"<div class="grant-row grant-row-{}"><div class="grant-row-main"><span class="grant-fingerprint">{}</span><span class="grant-meta">{} {}</span></div>"#,
-                if active { "active" } else { "inactive" },
-                esc(&share::token_fingerprint(&grant.token)),
-                esc(t("created", lang)),
-                esc(&grant.created_at),
-            ));
-            if active {
-                h.push_str(r#"<div class="grant-row-actions">"#);
-                h.push_str(&share::copy_button(
-                    &share::share_url(public_origin, plan_id, &grant.token),
-                    lang,
-                ));
-                h.push_str(&format!(
-                    r#"<form class="grant-form" method="post" action="/grants/deactivate"><input type="hidden" name="plan" value="{}"><input type="hidden" name="token" value="{}"><input type="hidden" name="csrf" value="{}"><button type="submit" class="grant-deactivate-btn">{}</button></form>"#,
-                    esc(plan_id),
-                    esc(&grant.token),
-                    esc(&csrf.deactivate(plan_id, &grant.token)),
-                    esc(t("makeInactive", lang)),
-                ));
-                h.push_str("</div>");
-            } else {
-                h.push_str(&format!(
-                    r#"<div class="grant-row-actions"><span class="grant-status">{}</span>"#,
-                    esc(t("inactive", lang)),
-                ));
-                if let Some(at) = &grant.deactivated_at {
-                    h.push_str(&format!(
-                        r#"<span class="grant-meta">{} {}</span>"#,
-                        esc(t("inactivated", lang)),
-                        esc(at),
-                    ));
-                }
-                h.push_str("</div>");
-            }
-            h.push_str("</div>");
-        }
-        h.push_str("</div>");
-    }
-    h.push_str("</details>");
     h
 }
 

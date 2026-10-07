@@ -161,7 +161,7 @@ pub fn owner_plan_chrome(
 /// batch deactivation, deactivated links folded into a nested <details> —
 /// folded by default, same judgment as the 其他海景參考 section. Pure HTML
 /// form (checkbox + submit); no client JS beyond the existing copy button.
-fn grant_manager(
+pub fn grant_manager(
     plan_slug: &str,
     history: &[GrantToken],
     public_origin: &str,
@@ -187,7 +187,7 @@ fn grant_manager(
         )
     } else {
         (
-            "分享連結管理",
+            "授權連結",
             "目前沒有現用連結。",
             "現用",
             "已停用",
