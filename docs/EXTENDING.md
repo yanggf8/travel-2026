@@ -1,8 +1,8 @@
 # Extending the Travel Skill Pack
 
-> ⚠️ **Legacy — partial accuracy.** This guide was written when destinations and OTAs lived in `data/destinations.json` / `data/ota-sources.json`. Those files no longer exist — both live in Turso tables (`destination_config`, `ota_sources`). The reference-file/scraper-class/validator/CLI sections still apply, but the "Step 1: Register in destinations.json" / "Register in ota-sources.json" steps do not.
+> ⚠️ **Legacy — partial accuracy.** Destinations and OTA sources live in Turso tables (`destination_config`, `ota_sources`) — the `data/*.json` steps below do not apply. The scraper-class sections are obsolete: Python scrapers and the in-CLI parser are RETIRED; scraping goes through gwebcdb (`~/b/gwebcdb`) and the agent persists offers via `./bin/travel ota write-offers`.
 >
-> For new destinations, use the `/new-destination` skill (`src/skills/new-destination/SKILL.md`). For new OTA sources, insert a row into the `ota_sources` table — the table lives in Turso and is described in **`docs/reference/architecture.md`** (search for `ota_sources`). The rest of this guide (reference files, scraper subclassing, validators, CLI command structure) is still current.
+> For new destinations, use the `/new-destination` flow or add to `DESTINATIONS` in `rust/crates/travel-cli/src/db_migrate.rs` + `./bin/travel db migrate`; seed reference data with `./bin/travel db seed destination-refs`. The validator / CLI-command sections are the ones still broadly current.
 
 This guide explains how to extend the skill pack for new destinations, OTAs, and custom validation rules.
 
@@ -17,36 +17,26 @@ This guide explains how to extend the skill pack for new destinations, OTAs, and
 
 ## Adding New Destinations
 
-### Step 1: Register in destinations.json
+### Step 1: Register in destination_config
 
-Add an entry to `data/destinations.json`:
+Add the destination to the `DESTINATIONS` constant in
+`rust/crates/travel-cli/src/db_migrate.rs` (or use the `/new-destination` flow), then:
 
-```json
-{
-  "kyoto_2026": {
-    "slug": "kyoto_2026",
-    "display_name": "Kyoto",
-    "ref_id": "kyoto",
-    "ref_path": "",
-    "timezone": "Asia/Tokyo",
-    "currency": "JPY",
-    "markets": ["TW", "JP"],
-    "primary_airports": ["KIX", "ITM"],
-    "language": "ja"
-  }
-}
+```bash
+./bin/travel db migrate
 ```
+
+Normalized columns only — no `*_json` columns; markets and primary airports go to the
+`destination_markets` / `destination_airports` child tables (the migrator backfills them).
 
 ### Step 2: Seed Reference Data into Turso
 
 Reference data lives in normalized Turso tables (`destination_areas`,
-`destination_pois`, `destination_clusters`, `destination_transit`, and
-`destination_config.tips_json`) — **never a local JSON file**. Add the new
-destination to the inline `DATA` constant in `scripts/seed-destination-refs.ts`
-(keyed by slug), then run:
+`destination_pois`, `destination_clusters`, `destination_transit`) — **never a local
+JSON file**. Seed with the Rust CLI:
 
 ```bash
-# (seed-destination-refs.ts retired; see archive/ts-cli-retired/)
+./bin/travel db seed destination-refs
 ./bin/travel query-destination-ref --slug kyoto_2026   # verify
 ```
 

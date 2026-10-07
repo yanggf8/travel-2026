@@ -451,46 +451,31 @@ if (isOk(result)) {
 
 ### Adding a New Destination
 
-1. Add an `INSERT OR IGNORE` row to the destinations backfill in `scripts/turso-migrate.ts`
-   (`ref_path` stays empty — reference data is in normalized tables, not a file), then
-   `./bin/travel db migrate`:
-```typescript
-{
-  slug: 'kyoto_2026', display_name: 'Kyoto', ref_id: 'kyoto', ref_path: '',
-  timezone: 'Asia/Tokyo', currency: 'JPY',
-  markets_json: '["TW","JP"]', primary_airports_json: '["KIX","ITM"]',
-  language: 'ja', origin: 'taiwan', lat: 35.0116, lon: 135.7681,
-}
+1. Register the destination in `destination_config` — via the `/new-destination` flow, or by
+   adding a row to the `DESTINATIONS` constant in
+   `rust/crates/travel-cli/src/db_migrate.rs` (backfill is `INSERT OR IGNORE`, `ref_path`
+   stays empty), then `./bin/travel db migrate`. Columns are normalized — no `*_json`
+   columns; markets and airports go to the `destination_markets` / `destination_airports`
+   child tables:
+```text
+slug, display_name, ref_id, ref_path='', timezone, currency, language, origin, lat, lon
 ```
 
 2. Seed POIs / areas / clusters / transit into Turso (no JSON file):
 ```bash
-# add the slug's data to the DATA constant in scripts/seed-destination-refs.ts, then:
-# (seed-destination-refs.ts retired; see archive/ts-cli-retired/)
+./bin/travel db seed destination-refs
 ./bin/travel query-destination-ref --slug kyoto_2026   # verify
 ```
 
 ### Adding a New OTA
 
-1. Add entry to `data/ota-sources.json`:
-```json
-{
-  "klook": {
-    "source_id": "klook",
-    "display_name": "Klook",
-    "types": ["package", "activity"],
-    "base_url": "https://www.klook.com",
-    "markets": ["TW", "HK", "SG"],
-    "currency": "TWD",
-    "supported": true,
-    "scraper_script": "scripts/scrape_klook.py"
-  }
-}
-```
+No per-source scraper code exists — Python scrapers and the in-CLI parser are retired.
 
-2. Create scraper class extending `BaseScraper`.
-
-3. Register with `globalRegistry`.
+1. The source catalog is the `ota_sources` Turso table (view with `./bin/travel ota-status`).
+2. Scraping runs through **gwebcdb** (`~/b/gwebcdb`, WSLg CDP) — see that repo's `CLAUDE.md`
+   → "OTA scraping" for the capture recipe.
+3. Extraction is agent-first: the agent reads `captures.raw_text` and persists normalized
+   offers with `./bin/travel ota write-offers` (TSV). There is no in-CLI text parser.
 
 ---
 

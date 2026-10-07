@@ -159,10 +159,11 @@ Checks for:
 ./bin/travel validate-itinerary
 ./bin/travel set-activity-booking <day> <session> "<activity>" <status>
 
-# OTA capture (chromeport CDP driver — attaches to real Chrome :9222; Python scrapers are decommissioned)
-./rust/target/debug/chromeport fetch interact "<url>" --source <id> --step ...
-./rust/target/debug/chromeport verify <source-id> <capture-id>
-./rust/target/debug/chromeport parse capture <capture-id> --source <id>   # imports to Turso
+# OTA scraping — gwebcdb only (~/b/gwebcdb, WSLg CDP; Python scrapers and chromeport's
+# OTA capture/parse path are RETIRED). Recipe: gwebcdb CLAUDE.md → "OTA scraping".
+# Extraction is agent-first (the agent is the parser); persistence via the Rust CLI:
+./bin/travel ota write-offers <offers.tsv>   # persist parsed offers (TSV)
+./bin/travel ota-status                      # provider coverage / source catalog
 ```
 
 ## Tests
@@ -181,7 +182,7 @@ See `CLAUDE.md` for detailed schema documentation.
 
 ## Storage (Turso DB-first)
 
-**Turso cloud is the sole source of truth.** All plan state lives in 28+ normalized tables. There are no local JSON state files — `StateManager` throws if a file path is passed.
+**Turso cloud is the sole source of truth.** All plan state lives in 130+ normalized tables. There are no local JSON state files — `StateManager` throws if a file path is passed.
 
 - Reads: single batch HTTP round-trip (38 queries → 1 request via `TursoRepository`)
 - Writes: `syncNormalizedTables()` inside a transaction — no JSON blobs
