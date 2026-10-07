@@ -95,6 +95,7 @@ mod create_plan;        // create-plan (fast-path plan seed)
 mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
 mod set_plan_name;      // set-plan-name (rename plan_destinations.display_name)
 mod set_fit_note;       // set-fit-note (FIT comparison note, Recommended pick, room-size row)
+mod set_companion_route; // set-companion-route (同行方案 structured stops → dashboard companion map)
 mod clear_offer;        // clear-offer (undo select-offer; no cascade)
 mod set_fit_offer;      // set-fit-offer (curate the dashboard FIT comparison list)
 mod set_day_excursion;  // set-day-excursion (far-off day trip → own inset map)
@@ -369,6 +370,17 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             clear_offer::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-companion-route" => {
+            if wants_help(
+                rest,
+                "travel set-companion-route <A|B> --title <title> --stops \"s1, s2, ...\" [--dest <slug>] [--plan-id <id>]\n  travel set-companion-route <A|B> --clear\n  Structured stops for one 同行方案 option (unconfirmed alternative). Coords resolve from literal lat,lon / map_legend_stops / geocode cache / Nominatim (--dest); unresolvable stops store NULL and render chip-only. The dashboard draws both options' routes on one ArcGIS frame.",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_companion_route::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "set-day-excursion" => {

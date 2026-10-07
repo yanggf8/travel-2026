@@ -143,7 +143,7 @@ fn parse_latlon(tok: &str) -> Option<(f64, f64)> {
 /// Returns the resolved coords plus whatever is known about the match, so the
 /// caller can surface "what did this actually resolve to" and warn on area
 /// centroids (a via on a district centroid pulls the route inland).
-async fn resolve_token(
+pub(crate) async fn resolve_token(
     tok: &str,
     read: &Connection,
     write: &Connection,

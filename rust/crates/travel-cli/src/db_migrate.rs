@@ -792,6 +792,35 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 )"#,
     )
     .await;
+    // Companion options (同行方案) — UNCONFIRMED day-trip alternatives for the
+    // dashboard companion map. Deliberately NOT day_route_segments/day_landmarks:
+    // those are the confirmed itinerary, and an unconfirmed option must never
+    // write itinerary data. Stops with NULL coords render as chips only.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS companion_options (
+  plan_id TEXT NOT NULL,
+  option_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (plan_id, option_key)
+)"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS companion_option_stops (
+  plan_id TEXT NOT NULL,
+  option_key TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  lat REAL,
+  lon REAL,
+  PRIMARY KEY (plan_id, option_key, seq)
+)"#,
+    )
+    .await;
+
     exec_create(
         &conn,
         r#"CREATE TABLE IF NOT EXISTS origin_config (

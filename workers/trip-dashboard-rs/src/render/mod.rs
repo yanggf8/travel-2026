@@ -137,13 +137,122 @@ fn render_companion_options(plan: &Plan, lang: &str) -> String {
     if cards.is_empty() { return String::new(); }
     let heading = heading_lines.join("\n");
     let label = if lang == "en" { "Companion options · select any" } else { "同行方案 · 可複選" };
-    let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p><div class=\"companion-grid\">", esc(label), esc(&heading));
+    let map = companion_map(plan);
+    let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p>{}<div class=\"companion-grid\">", esc(label), esc(&heading), map);
     for card in &cards {
         let name = card[0];
         let details = card[1..].iter().map(|&l| esc(l)).collect::<Vec<_>>().join("<br>");
         out.push_str(&format!("<article class=\"companion-card\"><h3>{}</h3><p>{}</p></article>", esc(name), details));
     }
     out.push_str("</div></section>");
+    out
+}
+
+/// Static companion map: ONE ArcGIS frame with both options' routes overlaid
+/// in option colors (A = accent blue, B = amber). Needs ≥2 geocoded stops
+/// across options or it renders nothing — a frame with one dot is a
+/// placeholder, not information (same judgment as the candidate minimap's
+/// no-coords-no-render). NULL-coord stops stay chip-only in the cards. Stops
+/// shared by both options merge into one combined A·B pin. Percent coords
+/// ride Web Mercator — the same math as the candidate minimap; no client JS.
+/// Options beyond the first two render text-only (A/B is the real case).
+fn companion_map(plan: &Plan) -> String {
+    let opts: Vec<&crate::model::CompanionOption> =
+        plan.companion_options.iter().take(2).collect();
+    if opts.is_empty() { return String::new(); }
+    let letters = ["a", "b"];
+    let mut geocoded: Vec<(f64, f64)> = Vec::new();
+    for o in &opts {
+        for s in &o.stops {
+            if let (Some(la), Some(lo)) = (s.lat, s.lon) {
+                geocoded.push((la, lo));
+            }
+        }
+    }
+    if geocoded.len() < 2 { return String::new(); }
+
+    let (mut la_min, mut la_max) = (f64::MAX, f64::MIN);
+    let (mut lo_min, mut lo_max) = (f64::MAX, f64::MIN);
+    for (la, lo) in &geocoded {
+        la_min = la_min.min(*la); la_max = la_max.max(*la);
+        lo_min = lo_min.min(*lo); lo_max = lo_max.max(*lo);
+    }
+    let c_lat = (la_min + la_max) / 2.0;
+    let aspect = 1.5 / c_lat.to_radians().cos();
+    // 10% padding each side, then enforce the 3:2 frame aspect.
+    let span_la = ((la_max - la_min) * 1.2).max((lo_max - lo_min) * 1.2 / aspect).max(0.02);
+    let span_lo = span_la * aspect;
+    let c_lo = (lo_min + lo_max) / 2.0;
+    let (la_min, la_max) = (c_lat - span_la / 2.0, c_lat + span_la / 2.0);
+    let (lo_min, lo_max) = (c_lo - span_lo / 2.0, c_lo + span_lo / 2.0);
+
+    // ArcGIS renders Web Mercator, so y is not linear in latitude.
+    let merc = |x: f64| (std::f64::consts::PI / 4.0 + x.to_radians() / 2.0).tan().ln();
+    let pos = |p_la: f64, p_lo: f64| -> (f64, f64) {
+        let x = (p_lo - lo_min) / span_lo * 100.0;
+        let y = (merc(la_max) - merc(p_la)) / (merc(la_max) - merc(la_min)) * 100.0;
+        (x.clamp(0.0, 100.0), y.clamp(0.0, 100.0))
+    };
+    let bbox = format!("{:.6},{:.6},{:.6},{:.6}", lo_min, la_min, lo_max, la_max);
+    let mut out = format!(
+        "<div class=\"companion-map-frame\"><img class=\"companion-map-img\" loading=\"lazy\" \
+         alt=\"同行方案路線圖\" \
+         src=\"https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox={bbox}&bboxSR=4326&size=600,400&format=png&f=image\">\
+         <svg class=\"companion-map-routes\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">"
+    );
+    for (i, o) in opts.iter().enumerate() {
+        let pts: Vec<String> = o
+            .stops
+            .iter()
+            .filter_map(|s| {
+                let (la, lo) = (s.lat?, s.lon?);
+                let (x, y) = pos(la, lo);
+                Some(format!("{x:.2},{y:.2}"))
+            })
+            .collect();
+        if pts.len() >= 2 {
+            out.push_str(&format!(
+                "<polyline class=\"route-{}\" points=\"{}\"/>",
+                letters[i],
+                pts.join(" ")
+            ));
+        }
+    }
+    out.push_str("</svg>");
+    // Combined pins: stops round-shared across options label A·B, not stacked.
+    let mut pins: Vec<(i64, i64, String, String)> = Vec::new(); // (la*1e3, lo*1e3, tag, label)
+    for (i, o) in opts.iter().enumerate() {
+        for s in &o.stops {
+            let (Some(sla), Some(slo)) = (s.lat, s.lon) else { continue };
+            let key = ((sla * 1000.0).round() as i64, (slo * 1000.0).round() as i64);
+            let tag = letters[i].to_uppercase();
+            if let Some(e) = pins.iter_mut().find(|(a, b, _, _)| *a == key.0 && *b == key.1) {
+                e.2.push_str(&format!("·{tag}"));
+                e.3.push_str(&format!("／{}", s.label));
+            } else {
+                pins.push((key.0, key.1, tag, s.label.clone()));
+            }
+        }
+    }
+    for (pla, plo, tag, label) in &pins {
+        let (x, y) = pos(*pla as f64 / 1000.0, *plo as f64 / 1000.0);
+        let class = if tag.contains('·') { "ab".to_string() } else { tag.to_lowercase() };
+        out.push_str(&format!(
+            "<span class=\"companion-map-stop stop-{class}\" style=\"left:{x:.2}%;top:{y:.2}%\">{}<em>{}</em></span>",
+            esc(tag),
+            esc(label)
+        ));
+    }
+    out.push_str("</div>");
+    out.push_str("<p class=\"companion-map-caption\">");
+    for (i, o) in opts.iter().enumerate() {
+        out.push_str(&format!(
+            "<span class=\"swatch swatch-{}\"></span>「{}」",
+            letters[i],
+            esc(&o.title)
+        ));
+    }
+    out.push_str(" · 尚未確認，僅供討論 · © Esri</p>");
     out
 }
 
@@ -437,5 +546,79 @@ mod tests {
         let a_end = html.find("<h3>B｜坪林</h3>").unwrap();
         assert!(html[..a_end].contains("野柳"), "{html}");
         assert!(!html[..a_end].contains("茶博館"), "{html}");
+    }
+
+    /// Structured stops (set-companion-route) turn on the overlay map: one
+    /// ArcGIS frame, both routes in option colors, shared stops merged into
+    /// one A·B pin, © Esri in the caption.
+    #[test]
+    fn companion_map_overlays_both_routes_when_structured() {
+        use crate::model::{CompanionOption, CompanionStop};
+        let mut plan = note_only_plan();
+        plan.companion_options = vec![
+            CompanionOption {
+                key: "A".into(),
+                title: "北海岸".into(),
+                stops: vec![
+                    CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                    CompanionStop { label: "野柳海洋世界".into(), lat: Some(25.2051), lon: Some(121.6914) },
+                    CompanionStop { label: "台2線海岸".into(), lat: None, lon: None },
+                ],
+            },
+            CompanionOption {
+                key: "B".into(),
+                title: "坪林".into(),
+                stops: vec![
+                    CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                    CompanionStop { label: "坪林老街".into(), lat: Some(24.9368), lon: Some(121.7096) },
+                ],
+            },
+        ];
+        let html = render_companion_options(&plan, "zh");
+        assert!(html.contains("companion-map-frame"), "{html}");
+        assert!(html.contains("route-a"), "{html}");
+        assert!(html.contains("route-b"), "{html}");
+        // 漫海聽風 appears in BOTH options → one combined A·B pin, never stacked.
+        assert!(html.contains("stop-ab"), "{html}");
+        assert!(html.contains("A·B"), "{html}");
+        assert!(html.contains("© Esri"), "{html}");
+    }
+
+    /// Below two geocoded stops across ALL options a frame would be a
+    /// placeholder, not information — the section still renders, map doesn't.
+    #[test]
+    fn companion_map_skipped_below_two_geocoded_stops() {
+        use crate::model::{CompanionOption, CompanionStop};
+        let mut plan = note_only_plan();
+        plan.companion_options = vec![CompanionOption {
+            key: "A".into(),
+            title: "北海岸".into(),
+            stops: vec![
+                CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                CompanionStop { label: "台2線海岸".into(), lat: None, lon: None },
+            ],
+        }];
+        let html = render_companion_options(&plan, "zh");
+        assert!(!html.contains("companion-map-frame"), "{html}");
+        assert!(html.contains("companion-options"), "{html}");
+    }
+}
+
+/// The real jiufen note fixture shared by the companion tests.
+#[cfg(test)]
+fn note_only_plan() -> crate::model::Plan {
+    use crate::model::{Activity, Day, Plan, Session};
+    Plan {
+        days: vec![Day {
+            sessions: vec![Session {
+                activities: vec![Activity {
+                    title: "同行方案（可複選，尚未確認）\n\nA｜北海岸\n路線：野柳 → 金山\n\nB｜坪林\n路線：茶博館 → 老街".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
     }
 }

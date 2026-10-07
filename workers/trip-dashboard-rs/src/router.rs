@@ -709,7 +709,7 @@ fn owner_login_href_for_plan(slug: &str, lang: &str) -> String {
     format!("/auth/login?next={}", render::urlencode(&next))
 }
 
-/// Load the full plan via a 21-statement Turso pipeline. Query order matches
+/// Load the full plan via a 23-statement Turso pipeline. Query order matches
 /// model::assemble()'s argument order exactly.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
@@ -864,16 +864,25 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              WHERE a.destination = {dest_expr} \
              ORDER BY t.accommodation_id, t.source"
         ),
+        // [21] 同行方案 options (unconfirmed alternatives) — companion map data.
+        format!(
+            "SELECT option_key, title FROM companion_options WHERE plan_id = '{slug}' ORDER BY option_key"
+        ),
+        // [22] their ordered stops; NULL lat/lon renders chip-only.
+        format!(
+            "SELECT option_key, seq, label, lat, lon FROM companion_option_stops \
+             WHERE plan_id = '{slug}' ORDER BY option_key, seq"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 21 {
+    if r.len() < 23 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 21 results".into(),
+            "Turso pipeline returned fewer than 23 results".into(),
         ));
     }
     Ok(model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
-        &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18], &r[19], &r[20],
+        &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18], &r[19], &r[20], &r[21], &r[22],
     ))
 }
 

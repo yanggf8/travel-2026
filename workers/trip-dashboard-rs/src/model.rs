@@ -210,6 +210,23 @@ pub struct PoiStop {
     pub lon: f64,
 }
 
+/// One stop of a 同行方案 option. NULL lat/lon renders chip-only — never plotted.
+#[derive(Debug, Default, Clone)]
+pub struct CompanionStop {
+    pub label: String,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+}
+
+/// One 同行方案 alternative (unconfirmed day-trip option), companion_options +
+/// companion_option_stops. Deliberately separate from the confirmed day tables.
+#[derive(Debug, Default, Clone)]
+pub struct CompanionOption {
+    pub key: String,
+    pub title: String,
+    pub stops: Vec<CompanionStop>,
+}
+
 #[derive(Debug, Default)]
 pub struct Plan {
     pub plan_id: String,
@@ -252,6 +269,9 @@ pub struct Plan {
     pub candidates: Vec<DomesticCandidate>,
     /// P4 accommodation process status (pending|selecting|booked) from process_statuses.
     pub p4_status: String,
+    /// 同行方案 alternatives (unconfirmed), keyed stops for the companion map.
+    /// Empty → the companion section renders from the note fallback only.
+    pub companion_options: Vec<CompanionOption>,
 }
 
 /// The chosen package offer, for the booking-summary package row.
@@ -314,6 +334,8 @@ pub fn assemble(
     p4_status_rows: &[Row],
     candidate_image_rows: &[Row],
     candidate_rating_rows: &[Row],
+    companion_option_rows: &[Row],
+    companion_stop_rows: &[Row],
 ) -> Plan {
     let mut plan = Plan::default();
     if let Some(p) = plan_rows.first() {
@@ -397,6 +419,24 @@ pub fn assemble(
     }
     if let Some(r) = p4_status_rows.first() {
         plan.p4_status = s(r, "status");
+    }
+    // ---- 同行方案 (unconfirmed companion options) ----
+    for r in companion_option_rows {
+        plan.companion_options.push(CompanionOption {
+            key: s(r, "option_key"),
+            title: s(r, "title"),
+            stops: Vec::new(),
+        });
+    }
+    for r in companion_stop_rows {
+        let key = s(r, "option_key");
+        if let Some(opt) = plan.companion_options.iter_mut().find(|o| o.key == key) {
+            opt.stops.push(CompanionStop {
+                label: s(r, "label"),
+                lat: f(r, "lat"),
+                lon: f(r, "lon"),
+            });
+        }
     }
     // ---- domestic stays (category=accommodation, status=booked) ----
     plan.domestic_stays = domestic_rows
@@ -1085,6 +1125,8 @@ mod tests {
             &[],
             &[],
             &[],
+                    &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.route_segments.len(), 1);
@@ -1135,6 +1177,8 @@ mod tests {
             &[],
             &[],
             &[],
+                    &[],
+            &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
         assert_eq!(day.temp_low_c, Some(26.4));
@@ -1177,6 +1221,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+                    &[],
             &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 1).unwrap();
@@ -1396,6 +1442,8 @@ mod tests {
             &[],
             &[],
             &[],
+                    &[],
+            &[],
         );
         assert_eq!(plan.transit_hotel_station, "Asato Station");
         assert_eq!(plan.transit_hotel_station_zh, "安里站");
@@ -1441,6 +1489,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+                    &[],
             &[],
         );
         assert_eq!(plan.transit_hotel_station, "");
@@ -1532,6 +1582,8 @@ mod tests {
             &candidate_rows,
             &[],
             &gallery_rows,
+            &[],
+                    &[],
             &[],
         );
         assert_eq!(plan.candidates.len(), 2);

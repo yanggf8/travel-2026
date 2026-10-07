@@ -1273,3 +1273,23 @@ h1 {
   .day { break-inside: avoid; }
   .daymap, .planmap { break-inside: avoid; }
 }
+
+/* ---- companion options map (同行方案 · unconfirmed alternatives) ---- */
+.companion-map-frame { position: relative; border-radius: 9px; overflow: hidden; margin: 6px 0 10px; }
+.companion-map-img { width: 100%; aspect-ratio: 3/2; display: block; background: var(--bg); }
+.companion-map-routes { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.companion-map-routes polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke;
+  stroke-linecap: round; stroke-linejoin: round; opacity: .9; }
+.route-a { stroke: var(--accent); }
+.route-b { stroke: var(--amber); }
+.companion-map-stop { position: absolute; transform: translate(-50%,-50%);
+  font-size: 9px; font-weight: 700; color: #fff; border-radius: 8px; padding: 0 4px; }
+.stop-a { background: var(--accent); } .stop-b { background: var(--amber); }
+.stop-ab { background: #555; }
+.companion-map-stop em { position: absolute; top: 110%; left: 50%; transform: translateX(-50%);
+  font-style: normal; font-size: 10px; white-space: nowrap; color: #fff;
+  text-shadow: 0 0 2px rgba(0,0,0,.9); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+  vertical-align: -1px; margin: 0 4px; }
+.swatch-a { background: var(--accent); } .swatch-b { background: var(--amber); }
+.companion-map-caption { font-size: 11px; color: var(--text-dim); padding: 5px 2px 0; }
