@@ -147,7 +147,10 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         return Ok(Response::ok(report)?.with_headers(h));
     }
 
-    if path == "/grants/create" || path == "/grants/deactivate" {
+    if path == "/grants/create"
+        || path == "/grants/deactivate"
+        || path == "/grants/deactivate-batch"
+    {
         // Owner-session (403) and method (405) gate. These two checks need a live
         // `Method`/session, so they're covered by the deploy smoke + `curl` spot-checks,
         // not unit tests. The slug/CSRF/token/dispatch outcomes ARE unit-tested via
@@ -303,9 +306,11 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
             render::share::owner_plan_chrome(
                 slug,
                 grants.plan_to_current.get(slug),
+                grants.plan_to_history.get(slug).map(Vec::as_slice).unwrap_or(&[]),
                 &public_origin,
                 login,
                 &csrf.create(slug),
+                &csrf.deactivate_batch(slug),
                 lang,
             )
         } else {
@@ -333,6 +338,10 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
 /// covered by the deploy smoke test, not unit tests.
 #[derive(Debug, PartialEq, Eq)]
 enum GrantDecision {
+    /// Batch deactivate: checkboxes posted several tokens at once.
+    DeactivateBatch { plan: String, tokens: Vec<String> },
+    /// Batch form submitted with nothing checked.
+    NoTokens,
     InvalidSlug,
     InvalidToken,
     BadCsrf,
@@ -349,6 +358,7 @@ fn decide_grant_post(
     plan: &str,
     posted_csrf: &str,
     token: &str,
+    tokens: &[String],
     csrf: &GrantCsrf,
 ) -> GrantDecision {
     if !is_safe_slug(plan) {
@@ -375,6 +385,21 @@ fn decide_grant_post(
                 token: token.to_string(),
             }
         }
+        "/grants/deactivate-batch" => {
+            if tokens.is_empty() {
+                return GrantDecision::NoTokens;
+            }
+            if tokens.iter().any(|t| !is_grant_token(t)) {
+                return GrantDecision::InvalidToken;
+            }
+            if !csrf.verify_deactivate_batch(plan, posted_csrf) {
+                return GrantDecision::BadCsrf;
+            }
+            GrantDecision::DeactivateBatch {
+                plan: plan.to_string(),
+                tokens: tokens.to_vec(),
+            }
+        }
         _ => GrantDecision::NotFound,
     }
 }
@@ -391,10 +416,20 @@ async fn handle_grant_post(
     let plan = form.get_field("plan").unwrap_or_default();
     let posted_csrf = form.get_field("csrf").unwrap_or_default();
     let token = form.get_field("token").unwrap_or_default();
-    match decide_grant_post(path, &plan, &posted_csrf, &token, csrf) {
+    let tokens: Vec<String> = form
+        .get_all("token")
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|f| match f {
+            worker::FormEntry::Field(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect();
+    match decide_grant_post(path, &plan, &posted_csrf, &token, &tokens, csrf) {
         GrantDecision::InvalidSlug => Response::error("invalid plan", 400),
         GrantDecision::InvalidToken => Response::error("invalid token", 400),
         GrantDecision::BadCsrf => Response::error("invalid csrf", 403),
+        GrantDecision::NoTokens => Response::error("no tokens selected", 400),
         GrantDecision::NotFound => Response::error("not found", 404),
         GrantDecision::PlanCheckThenCreate { plan } => {
             if !grant_plan_exists(turso_url, write_token, &plan).await? {
@@ -405,6 +440,14 @@ async fn handle_grant_post(
         }
         GrantDecision::Deactivate { plan, token } => {
             deactivate_grant(turso_url, write_token, &plan, &token, owner_login).await?;
+            redirect_after_grant("inactive", &plan)
+        }
+        GrantDecision::DeactivateBatch { plan, tokens } => {
+            if tokens.is_empty() {
+                return Response::error("no tokens selected", 400);
+            }
+            let sql = build_deactivate_batch_sql(&plan, &tokens, owner_login);
+            turso::pipeline(turso_url, write_token, &[sql]).await?;
             redirect_after_grant("inactive", &plan)
         }
     }
@@ -463,6 +506,20 @@ async fn create_grant(
     let sql = build_create_grant_sql(plan, &token, owner_login);
     turso::pipeline(turso_url, write_token, &[sql]).await?;
     Ok(())
+}
+
+fn build_deactivate_batch_sql(plan: &str, tokens: &[String], owner_login: &str) -> String {
+    let owner_sql = sql_quote(owner_login);
+    let list = tokens
+        .iter()
+        .map(|t| format!("'{}'", sql_quote(t)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "UPDATE plan_share_tokens \
+         SET status='inactive', deactivated_at=datetime('now'), deactivated_by='{owner_sql}' \
+         WHERE plan_id = '{plan}' AND token IN ({list}) AND status = 'active'"
+    )
 }
 
 async fn deactivate_grant(
@@ -543,11 +600,25 @@ impl GrantCsrf {
         self.sign(&format!("grant:create:{plan}:{}", self.session_cookie))
     }
 
+    pub fn deactivate_batch(&self, plan: &str) -> String {
+        self.sign(&format!(
+            "grant:deactivate-batch:{plan}:{}",
+            self.session_cookie
+        ))
+    }
+
     pub fn deactivate(&self, plan: &str, token: &str) -> String {
         self.sign(&format!(
             "grant:deactivate:{plan}:{token}:{}",
             self.session_cookie
         ))
+    }
+
+    fn verify_deactivate_batch(&self, plan: &str, provided: &str) -> bool {
+        self.verify(
+            &format!("grant:deactivate-batch:{plan}:{}", self.session_cookie),
+            provided,
+        )
     }
 
     fn verify_create(&self, plan: &str, provided: &str) -> bool {
@@ -891,6 +962,80 @@ mod tests {
     use super::*;
 
     #[test]
+    fn batch_deactivate_decision_paths() {
+        let csrf = GrantCsrf::test();
+        let csrf_val = csrf.deactivate_batch("jiufen-2026");
+        let tokens = vec!["0123456789abcdef0123456789abcdef".to_string()];
+        assert!(matches!(
+            decide_grant_post(
+                "/grants/deactivate-batch",
+                "jiufen-2026",
+                &csrf_val,
+                "",
+                &tokens,
+                &csrf
+            ),
+            GrantDecision::DeactivateBatch { .. }
+        ));
+        // Nothing checked → its own 400-shaped decision, not a silent ok.
+        assert!(matches!(
+            decide_grant_post(
+                "/grants/deactivate-batch",
+                "jiufen-2026",
+                &csrf_val,
+                "",
+                &[],
+                &csrf
+            ),
+            GrantDecision::NoTokens
+        ));
+        // Bad csrf.
+        assert!(matches!(
+            decide_grant_post(
+                "/grants/deactivate-batch",
+                "jiufen-2026",
+                "forged",
+                "",
+                &tokens,
+                &csrf
+            ),
+            GrantDecision::BadCsrf
+        ));
+        // One malformed token invalidates the batch.
+        let bad = vec![
+            "0123456789abcdef0123456789abcdef".to_string(),
+            "NOT-A-TOKEN".to_string(),
+        ];
+        assert!(matches!(
+            decide_grant_post(
+                "/grants/deactivate-batch",
+                "jiufen-2026",
+                &csrf_val,
+                "",
+                &bad,
+                &csrf
+            ),
+            GrantDecision::InvalidToken
+        ));
+    }
+
+    #[test]
+    fn batch_deactivate_sql_guards_status_and_escapes_owner() {
+        let sql = build_deactivate_batch_sql(
+            "jiufen-2026",
+            &[
+                "0123456789abcdef0123456789abcdef".to_string(),
+                "fedcba9876543210fedcba9876543210".to_string(),
+            ],
+            "o'brien",
+        );
+        assert!(sql.contains("token IN ('0123456789abcdef0123456789abcdef', 'fedcba9876543210fedcba9876543210')"), "{sql}");
+        assert!(sql.contains("status = 'active'"), "{sql}");
+        assert!(sql.contains("deactivated_by='o''brien'"), "{sql}");
+        assert!(sql.contains("plan_id = 'jiufen-2026'"), "{sql}");
+    }
+
+    #[test]
     fn decode_legend_row_accepts_turso_string_scalars() {
         // Turso's pipeline returns INTEGER/REAL as strings; the legend rows must
         // decode from that shape (and from plain JSON numbers), NULL coords drop.
@@ -1060,11 +1205,11 @@ mod tests {
     fn decide_rejects_unsafe_slug() {
         let csrf = GrantCsrf::test();
         assert_eq!(
-            decide_grant_post("/grants/create", "bad slug", "", "", &csrf),
+            decide_grant_post("/grants/create", "bad slug", "", "", &[], &csrf),
             GrantDecision::InvalidSlug
         );
         assert_eq!(
-            decide_grant_post("/grants/deactivate", "bad slug", "", TEST_TOKEN, &csrf),
+            decide_grant_post("/grants/deactivate", "bad slug", "", TEST_TOKEN, &[], &csrf),
             GrantDecision::InvalidSlug
         );
     }
@@ -1073,12 +1218,12 @@ mod tests {
     fn decide_rejects_bad_csrf_on_create() {
         let csrf = GrantCsrf::test();
         assert_eq!(
-            decide_grant_post("/grants/create", "okinawa-2026", "wrong", "", &csrf),
+            decide_grant_post("/grants/create", "okinawa-2026", "wrong", "", &[], &csrf),
             GrantDecision::BadCsrf
         );
         let good = csrf.create("okinawa-2026");
         assert_eq!(
-            decide_grant_post("/grants/create", "okinawa-2026", &good, "", &csrf),
+            decide_grant_post("/grants/create", "okinawa-2026", &good, "", &[], &csrf),
             GrantDecision::PlanCheckThenCreate {
                 plan: "okinawa-2026".to_string()
             }
@@ -1090,7 +1235,7 @@ mod tests {
         let csrf = GrantCsrf::test();
         // Token format is checked before CSRF (matches source order).
         assert_eq!(
-            decide_grant_post("/grants/deactivate", "okinawa-2026", "", "short", &csrf),
+            decide_grant_post("/grants/deactivate", "okinawa-2026", "", "short", &[], &csrf),
             GrantDecision::InvalidToken
         );
     }
@@ -1104,6 +1249,7 @@ mod tests {
                 "okinawa-2026",
                 "wrong",
                 TEST_TOKEN,
+                &[],
                 &csrf
             ),
             GrantDecision::BadCsrf
@@ -1115,6 +1261,7 @@ mod tests {
                 "okinawa-2026",
                 &good,
                 TEST_TOKEN,
+                &[],
                 &csrf
             ),
             GrantDecision::Deactivate {
@@ -1128,7 +1275,7 @@ mod tests {
     fn decide_unknown_path_is_not_found() {
         let csrf = GrantCsrf::test();
         assert_eq!(
-            decide_grant_post("/grants/wat", "okinawa-2026", "", "", &csrf),
+            decide_grant_post("/grants/wat", "okinawa-2026", "", "", &[], &csrf),
             GrantDecision::NotFound
         );
     }

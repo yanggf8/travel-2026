@@ -1306,3 +1306,14 @@ h1 {
 .stop-arrow { color: var(--text-dim); font-size: 11px; }
 .companion-card-map { margin: 4px 0 2px; }
 .companion-card-map .companion-map-stop em { font-size: 9px; }
+/* ---- grant manager panel (owner share-link management) ---- */
+.grant-manager { margin: 6px 0; font-size: 13px; }
+.grant-manager summary { cursor: pointer; color: var(--text-dim); }
+.grant-manager form { margin: 6px 0; }
+.grant-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.grant-row code { font-size: 12px; }
+.grant-created { color: var(--text-dim); font-size: 12px; }
+.grant-row--inactive { opacity: .65; }
+.grant-inactive { margin: 6px 0 2px; }
+.grant-inactive summary { cursor: pointer; color: var(--text-dim); }
+.grant-deactivate-btn { margin-top: 6px; }

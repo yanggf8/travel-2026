@@ -48,22 +48,31 @@ struct TokenRecord {
     deactivated_at: Option<String>,
 }
 
+impl TokenRecord {
+    fn is_active(&self) -> bool {
+        self.status == "active"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Action {
     Mint,
-    List { full: bool },
-    Deactivate { token: String },
+    List { full: bool, all: bool },
+    /// One or more tokens (full 32-hex, or a unique prefix of one).
+    Deactivate { tokens: Vec<String> },
 }
 
 /// CLI entry: `travel share-token`. The plan is resolved by the dispatcher with
 /// the same ladder as other commands. Default action MINTS a fresh token;
-/// `--show` / `--list` lists fingerprints + status; `--show-full` prints the
-/// sensitive full URLs; `deactivate <token>` inactivates one active token.
+/// `--show` / `--list` lists fingerprints + status (ACTIVE only by default —
+/// `--all` unfolds the deactivated block); `--show-full` prints the sensitive
+/// full URLs; `deactivate <t1> <t2> ...` inactivates one or more tokens, each
+/// given in full or as a unique prefix (what `--show` prints).
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let action = parse_action(args)?;
 
     match action {
-        Action::List { full } => {
+        Action::List { full, all } => {
             // Read-only path: list existing tokens (no mint). Read tier suffices.
             let conn = match crate::db::connect_read().await {
                 Ok(c) => c,
@@ -80,7 +89,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                     std::process::exit(1);
                 }
                 Ok(tokens) => {
-                    print_tokens(&plan_id, &tokens, full);
+                    print!("{}", render_tokens(&plan_id, &tokens, full, all));
                     Ok(())
                 }
                 Err(e) => {
@@ -89,7 +98,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 }
             }
         }
-        Action::Deactivate { token } => {
+        Action::Deactivate { tokens } => {
             let conn = match crate::db::connect_write().await {
                 Ok(c) => c,
                 Err(e) => {
@@ -97,25 +106,40 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                     std::process::exit(1);
                 }
             };
-            match deactivate_token(&conn, &plan_id, &token).await {
-                Ok(true) => {
-                    println!(
-                        "deactivated: {}  plan_id={plan_id}",
+            let records = list_tokens(&conn, &plan_id).await?;
+            let mut deactivated = 0usize;
+            let mut failures: Vec<String> = Vec::new();
+            for arg in &tokens {
+                let token = match resolve_token_arg(arg, &records) {
+                    Ok(t) => t.to_string(),
+                    Err(reason) => {
+                        failures.push(format!("{arg}: {reason}"));
+                        continue;
+                    }
+                };
+                match deactivate_token(&conn, &plan_id, &token).await {
+                    Ok(true) => {
+                        deactivated += 1;
+                        println!(
+                            "deactivated: {}  plan_id={plan_id}",
+                            token_fingerprint(&token)
+                        );
+                    }
+                    Ok(false) => failures.push(format!(
+                        "{arg}: no active token {}",
                         token_fingerprint(&token)
-                    );
-                    Ok(())
+                    )),
+                    Err(e) => failures.push(format!("{arg}: {e}")),
                 }
-                Ok(false) => {
-                    eprintln!(
-                        "Error: no active token {} for plan_id={plan_id}",
-                        token_fingerprint(&token)
-                    );
-                    std::process::exit(1);
+            }
+            println!("{deactivated} deactivated, {} skipped", tokens.len() - deactivated);
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                for f in &failures {
+                    eprintln!("Error: {f}");
                 }
-                Err(e) => {
-                    eprintln!("Error: share-token deactivate failed: {e}");
-                    std::process::exit(1);
-                }
+                std::process::exit(1);
             }
         }
         Action::Mint => {
@@ -142,41 +166,42 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
 }
 
 fn parse_action(args: &[String]) -> Result<Action, String> {
-    let mut action = Action::Mint;
+    let mut mint = true;
+    let mut full = false;
+    let mut all = false;
+    let mut deactivate: Option<Vec<String>> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--show" | "--list" => {
-                action = Action::List { full: false };
+                mint = false;
                 i += 1;
             }
             "--show-full" | "--full" => {
-                action = Action::List { full: true };
+                mint = false;
+                full = true;
                 i += 1;
             }
-            "deactivate" | "revoke" => {
-                let Some(token) = args.get(i + 1) else {
-                    return Err("share-token deactivate requires a token".to_string());
-                };
-                if !is_grant_token(token) {
-                    return Err(format!("invalid token format: {token}"));
-                }
-                action = Action::Deactivate {
-                    token: token.clone(),
-                };
-                i += 2;
+            "--all" => {
+                all = true;
+                i += 1;
             }
-            "--deactivate" | "--revoke" => {
-                let Some(token) = args.get(i + 1) else {
-                    return Err(format!("{} requires a token", args[i]));
-                };
-                if !is_grant_token(token) {
-                    return Err(format!("invalid token format: {token}"));
+            "deactivate" | "revoke" | "--deactivate" | "--revoke" => {
+                mint = false;
+                let mut toks: Vec<String> = Vec::new();
+                i += 1;
+                while i < args.len() && !args[i].starts_with("--") {
+                    let t = &args[i];
+                    if !is_tokenish(t) {
+                        return Err(format!("invalid token format: {t}"));
+                    }
+                    toks.push(t.clone());
+                    i += 1;
                 }
-                action = Action::Deactivate {
-                    token: token.clone(),
-                };
-                i += 2;
+                if toks.is_empty() {
+                    return Err("share-token deactivate requires at least one token (full 32-hex, or a unique prefix of what --show prints)".to_string());
+                }
+                deactivate = Some(toks);
             }
             "--plan-id" | "--dest" | "--travel-date" | "--travel-start" | "--travel-end" => {
                 i += 2; // resolver-owned flag + value
@@ -187,7 +212,13 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
             _ => i += 1, // ignore resolver positionals / stray text
         }
     }
-    Ok(action)
+    if let Some(tokens) = deactivate {
+        return Ok(Action::Deactivate { tokens });
+    }
+    if mint {
+        return Ok(Action::Mint);
+    }
+    Ok(Action::List { full, all })
 }
 
 /// List existing share tokens for a plan, newest first.
@@ -223,28 +254,55 @@ async fn list_tokens(conn: &Connection, plan_id: &str) -> Result<Vec<TokenRecord
     Ok(out)
 }
 
-fn print_tokens(plan_id: &str, tokens: &[TokenRecord], full: bool) {
+/// Render the listing. DEFAULT collapses deactivated tokens (they are history;
+/// the active set is what a manager scans) — `all` unfolds them into a labelled
+/// block after the actives, and a hint says how many are hidden.
+fn render_tokens(plan_id: &str, tokens: &[TokenRecord], full: bool, all: bool) -> String {
+    let mut out = String::new();
+    let mut hidden = 0usize;
+    let mut inactive_block: Vec<&TokenRecord> = Vec::new();
     for t in tokens {
-        let suffix = t
-            .deactivated_at
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|at| format!("  deactivated {at}"))
-            .unwrap_or_default();
-        println!(
-            "token: {}  status={}  created {}{}",
-            token_fingerprint(&t.token),
-            t.status,
-            t.created_at,
-            suffix
-        );
-        if full {
-            println!("url:   {}", share_url(plan_id, &t.token));
+        if t.is_active() {
+            out.push_str(&token_line(plan_id, t, full));
+        } else {
+            inactive_block.push(t);
+            if !all {
+                hidden += 1;
+            }
         }
     }
-    if !full {
-        println!("hint:  use --show-full to print full bearer URLs");
+    if all && !inactive_block.is_empty() {
+        out.push_str(&format!("\n停用 ({}):\n", inactive_block.len()));
+        for t in &inactive_block {
+            out.push_str(&token_line(plan_id, t, full));
+        }
     }
+    if hidden > 0 {
+        out.push_str(&format!(
+            "hint:  {hidden} deactivated hidden — --all to unfold\n"
+        ));
+    }
+    if !full {
+        out.push_str("hint:  use --show-full to print full bearer URLs\n");
+    }
+    out
+}
+
+fn token_line(plan_id: &str, t: &TokenRecord, full: bool) -> String {
+    let mut line = format!(
+        "token: {}  status={}  created {}",
+        token_fingerprint(&t.token),
+        t.status,
+        t.created_at
+    );
+    if let Some(at) = t.deactivated_at.as_deref().filter(|s| !s.is_empty()) {
+        line.push_str(&format!("  deactivated {at}"));
+    }
+    line.push('\n');
+    if full {
+        line.push_str(&format!("url:   {}\n", share_url(plan_id, &t.token)));
+    }
+    line
 }
 
 async fn execute(conn: &Connection, plan_id: &str) -> Result<String, String> {
@@ -290,7 +348,7 @@ async fn plan_exists(conn: &Connection, plan_id: &str) -> Result<bool, String> {
     Ok(rows
         .next()
         .await
-        .map_err(|e| format!("plans existence row read failed: {e}"))?
+        .map_err(|e| e.to_string())?
         .is_some())
 }
 
@@ -308,10 +366,38 @@ fn mint_token() -> String {
     s
 }
 
-fn is_grant_token(s: &str) -> bool {
-    s.len() == 32
-        && s.bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+/// Accepts a full 32-hex token or a prefix of one (≥6 chars) — the fingerprint
+/// head that `--show` prints is the intended copy source.
+fn is_tokenish(s: &str) -> bool {
+    s.len() >= 6 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// Resolve one deactivate argument against the plan's tokens: exact token, or
+/// a unique prefix. Error strings name the failure (not found / ambiguous /
+/// already inactive) so the multi-token summary can report per argument.
+fn resolve_token_arg<'a>(
+    arg: &str,
+    records: &'a [TokenRecord],
+) -> Result<&'a str, String> {
+    if let Some(t) = records.iter().map(|r| r.token.as_str()).find(|t| *t == arg) {
+        return Ok(t);
+    }
+    if arg.len() < 6 {
+        return Err("prefix too short (min 6 chars — copy the fingerprint head from --show)".into());
+    }
+    let matches: Vec<&str> = records
+        .iter()
+        .map(|r| r.token.as_str())
+        .filter(|t| t.starts_with(arg))
+        .collect();
+    match matches.len() {
+        1 => Ok(matches[0]),
+        0 => Err("no token matches".into()),
+        _ => Err(format!(
+            "ambiguous prefix — {} tokens match; copy more characters",
+            matches.len()
+        )),
+    }
 }
 
 fn token_fingerprint(token: &str) -> String {
@@ -359,32 +445,119 @@ mod tests {
     fn parse_show_and_deactivate_actions() {
         assert_eq!(
             parse_action(&["--show".to_string()]),
-            Ok(Action::List { full: false })
+            Ok(Action::List { full: false, all: false })
         );
         assert_eq!(
             parse_action(&["--show-full".to_string()]),
-            Ok(Action::List { full: true })
+            Ok(Action::List { full: true, all: false })
         );
+        // --all unfolds the deactivated block in either listing form.
+        assert_eq!(
+            parse_action(&["--show".to_string(), "--all".to_string()]),
+            Ok(Action::List { full: false, all: true })
+        );
+        // Multi-select deactivate: one subcommand, several tokens.
         assert_eq!(
             parse_action(&[
                 "deactivate".to_string(),
-                "0123456789abcdef0123456789abcdef".to_string()
+                "0123456789abcdef0123456789abcdef".to_string(),
+                "0123456789abcdef".to_string(),
             ]),
             Ok(Action::Deactivate {
-                token: "0123456789abcdef0123456789abcdef".to_string()
+                tokens: vec![
+                    "0123456789abcdef0123456789abcdef".to_string(),
+                    "0123456789abcdef".to_string(),
+                ]
+            })
+        );
+        // Resolver flags after the token list are tolerated (the dispatcher
+        // already consumed --plan-id; the variadic scan stops at any flag).
+        assert_eq!(
+            parse_action(&[
+                "--deactivate".to_string(),
+                "0123456789abcdef".to_string(),
+                "--plan-id".to_string(),
+                "x".to_string(),
+            ]),
+            Ok(Action::Deactivate {
+                tokens: vec!["0123456789abcdef".to_string()]
             })
         );
     }
 
     #[test]
     fn grant_token_validator_accepts_lower_hex_only() {
-        assert!(is_grant_token("0123456789abcdef0123456789abcdef"));
-        assert!(!is_grant_token("0123456789ABCDEF0123456789ABCDEF"));
-        assert!(!is_grant_token("short"));
+        assert!(is_tokenish("0123456789abcdef0123456789abcdef"));
+        assert!(is_tokenish("0123456789abcdef")); // prefix
+        assert!(!is_tokenish("ABCDEF")); // uppercase
+        assert!(!is_tokenish("abcde")); // < 6
     }
 
     #[test]
     fn token_fingerprint_hides_middle() {
         assert_eq!(token_fingerprint("0123456789abcdef"), "012345...abcdef");
+    }
+
+    fn rec(token: &str, status: &str) -> TokenRecord {
+        TokenRecord {
+            token: token.to_string(),
+            status: status.to_string(),
+            created_at: "2026-10-07".into(),
+            deactivated_at: None,
+        }
+    }
+
+    #[test]
+    fn resolve_accepts_exact_and_unique_prefix() {
+        let records = vec![
+            rec("0123456789abcdef0123456789abcdef", "active"),
+            rec("fedcba9876543210fedcba9876543210", "active"),
+        ];
+        assert_eq!(
+            resolve_token_arg("0123456789abcdef0123456789abcdef", &records).unwrap(),
+            "0123456789abcdef0123456789abcdef"
+        );
+        // Unique prefix — the fingerprint head --show prints.
+        assert_eq!(resolve_token_arg("fedcba", &records).unwrap(), "fedcba9876543210fedcba9876543210");
+        assert!(resolve_token_arg("ffff", &records).is_err(), "<6 chars rejected");
+        assert!(
+            resolve_token_arg("999999", &records)
+                .err()
+                .unwrap()
+                .contains("no token matches")
+        );
+    }
+
+    #[test]
+    fn resolve_names_ambiguity_instead_of_guessing() {
+        let records = vec![
+            rec("0123456789abcdef0123456789abcdef", "active"),
+            rec("0123456789ffffffffffffffffffff", "active"),
+        ];
+        let err = resolve_token_arg("012345", &records).err().unwrap();
+        assert!(err.contains("ambiguous"), "{err}");
+        // Longer prefix disambiguates.
+        assert_eq!(
+            resolve_token_arg("0123456789abcdef", &records).unwrap(),
+            "0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn render_collapses_deactivated_by_default_and_all_unfolds() {
+        let plan = "p";
+        let tokens = vec![
+            rec("0123456789abcdef0123456789abcdef", "active"),
+            rec("fedcba9876543210fedcba9876543210", "inactive"),
+        ];
+        // Default: actives only; the deactivated one is a hidden count.
+        let folded = render_tokens(plan, &tokens, false, false);
+        assert!(folded.contains("status=active"), "{folded}");
+        assert!(!folded.contains("status=inactive"), "{folded}");
+        assert!(folded.contains("1 deactivated hidden — --all to unfold"), "{folded}");
+        // --all unfolds them into a labelled block.
+        let unfolded = render_tokens(plan, &tokens, false, true);
+        assert!(unfolded.contains("停用 (1):"), "{unfolded}");
+        assert!(unfolded.contains("status=inactive"), "{unfolded}");
     }
 }

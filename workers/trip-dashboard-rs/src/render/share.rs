@@ -128,9 +128,11 @@ pub fn create_grant_form(plan_slug: &str, csrf: &str, lang: &str) -> String {
 pub fn owner_plan_chrome(
     plan_slug: &str,
     grant_token: Option<&GrantToken>,
+    history: &[GrantToken],
     public_origin: &str,
     owner_login: &str,
     create_csrf: &str,
+    batch_csrf: &str,
     lang: &str,
 ) -> String {
     let mut h = String::from(r#"<div class="owner-chrome">"#);
@@ -151,6 +153,97 @@ pub fn owner_plan_chrome(
         esc(t("logout", lang)),
     ));
     h.push_str("</div>");
+    h.push_str(&grant_manager(plan_slug, history, public_origin, batch_csrf, lang));
+    h
+}
+
+/// Share-link management panel (owner only): active links with checkboxes for
+/// batch deactivation, deactivated links folded into a nested <details> —
+/// folded by default, same judgment as the 其他海景參考 section. Pure HTML
+/// form (checkbox + submit); no client JS beyond the existing copy button.
+fn grant_manager(
+    plan_slug: &str,
+    history: &[GrantToken],
+    public_origin: &str,
+    batch_csrf: &str,
+    lang: &str,
+) -> String {
+    let actives: Vec<&GrantToken> = history
+        .iter()
+        .filter(|g| g.status == GrantStatus::Active)
+        .collect();
+    let inactives: Vec<&GrantToken> = history
+        .iter()
+        .filter(|g| g.status == GrantStatus::Inactive)
+        .collect();
+    let (title, none_txt, active_txt, deact_txt, deact_on, btn) = if lang == "en" {
+        (
+            "Share links",
+            "No active share links.",
+            "active",
+            "deactivated",
+            "deactivated at",
+            "Deactivate selected",
+        )
+    } else {
+        (
+            "分享連結管理",
+            "目前沒有現用連結。",
+            "現用",
+            "已停用",
+            "停用於",
+            "停用所選",
+        )
+    };
+    let mut h = format!(
+        "<details class=\"grant-manager\"><summary>{} · {} {}</summary>",
+        esc(title),
+        actives.len(),
+        active_txt
+    );
+    if actives.is_empty() {
+        h.push_str(&format!("<p class=\"grant-none\">{}</p>", esc(none_txt)));
+    } else {
+        h.push_str(&format!(
+            "<form method=\"post\" action=\"/grants/deactivate-batch\">\
+             <input type=\"hidden\" name=\"plan\" value=\"{}\">\
+             <input type=\"hidden\" name=\"csrf\" value=\"{}\">",
+            esc(plan_slug),
+            esc(batch_csrf)
+        ));
+        for g in &actives {
+            h.push_str(&format!(
+                "<label class=\"grant-row\"><input type=\"checkbox\" name=\"token\" value=\"{}\"> \
+                 <code>{}</code> <span class=\"grant-created\">{}</span> {}</label>",
+                esc(&g.token),
+                esc(&token_fingerprint(&g.token)),
+                esc(&g.created_at),
+                copy_button(&share_url(public_origin, plan_slug, &g.token), lang)
+            ));
+        }
+        h.push_str(&format!(
+            "<button type=\"submit\" class=\"grant-deactivate-btn\">{}</button></form>",
+            esc(btn)
+        ));
+    }
+    if !inactives.is_empty() {
+        h.push_str(&format!(
+            "<details class=\"grant-inactive\"><summary>{} ({})</summary>",
+            deact_txt,
+            inactives.len()
+        ));
+        for g in &inactives {
+            h.push_str(&format!(
+                "<div class=\"grant-row grant-row--inactive\"><code>{}</code>                  <span class=\"grant-created\">{} · {} {}</span></div>",
+                esc(&token_fingerprint(&g.token)),
+                esc(&g.created_at),
+                deact_on,
+                esc(g.deactivated_at.as_deref().unwrap_or(""))
+            ));
+        }
+        h.push_str("</details>");
+    }
+    h.push_str("</details>");
     h
 }
 
@@ -166,6 +259,46 @@ pub fn token_fingerprint(token: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grant_manager_folds_inactive_and_checks_actives() {
+        use super::{grant_manager, GrantStatus, GrantToken};
+        let history = vec![
+            GrantToken {
+                token: "0123456789abcdef0123456789abcdef".into(),
+                plan_slug: "jiufen-2026".into(),
+                status: GrantStatus::Active,
+                created_at: "2026-10-07".into(),
+                created_by: None,
+                deactivated_at: None,
+                deactivated_by: None,
+            },
+            GrantToken {
+                token: "fedcba9876543210fedcba9876543210".into(),
+                plan_slug: "jiufen-2026".into(),
+                status: GrantStatus::Inactive,
+                created_at: "2026-10-01".into(),
+                created_by: None,
+                deactivated_at: Some("2026-10-05".into()),
+                deactivated_by: None,
+            },
+        ];
+        let html = grant_manager("jiufen-2026", &history, "https://x", "csrf-val", "zh");
+        // Folded by default: <details> without open.
+        assert!(html.contains("<details class=\"grant-manager\">"), "{html}");
+        assert!(!html.contains("<details class=\"grant-manager\" open"), "{html}");
+        // Active row: checkbox for batch deactivate + copy affordance.
+        assert!(html.contains("type=\"checkbox\" name=\"token\""), "{html}");
+        assert!(html.contains("012345...abcdef"), "{html}");
+        // Inactive block folds INSIDE, labelled, not checkboxed.
+        assert!(html.contains("grant-inactive"), "{html}");
+        assert!(html.contains("停用 (1)"), "{html}");
+        assert!(html.contains("fedcba...543210"), "{html}");
+        // Batch form wiring: action + csrf hidden field + submit.
+        assert!(html.contains("/grants/deactivate-batch"), "{html}");
+        assert!(html.contains("csrf-val"), "{html}");
+        assert!(html.contains("停用所選"), "{html}");
+    }
+
     use super::*;
     use crate::turso::Row;
 
@@ -209,9 +342,11 @@ mod tests {
         let html = owner_plan_chrome(
             "okinawa-2026",
             Some(&grant),
+            &[],
             "https://example.dev",
             "yanggf8",
             "csrf",
+            "batch-csrf",
             "zh",
         );
         assert!(html.contains("copy-share-btn"));
@@ -225,9 +360,11 @@ mod tests {
         let html = owner_plan_chrome(
             "okinawa-2026",
             None,
+            &[],
             "https://example.dev",
             "yanggf8",
             "csrf",
+            "batch-csrf",
             "en",
         );
         assert!(html.contains("Create grant token"));
