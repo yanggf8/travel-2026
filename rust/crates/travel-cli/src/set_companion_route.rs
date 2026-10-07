@@ -34,6 +34,35 @@ struct Parsed {
     dest: Option<String>,
 }
 
+/// `--stops` splits on commas, but a literal `lat,lon` token IS a comma pair.
+/// After splitting, two consecutive numeric fields merge back into one
+/// `lat,lon` stop ("野柳, 25.1, 121.8, 淡水" → 3 stops). A label that is
+/// just a number followed by another number is the collateral: place labels
+/// that are bare integers must use set-place-geocode + label form instead.
+fn merge_latlon_tokens(stops: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < stops.len() {
+        let cur = stops[i].trim();
+        match (
+            cur.parse::<f64>().ok(),
+            stops.get(i + 1).and_then(|n| n.trim().parse::<f64>().ok()),
+        ) {
+            (Some(la), Some(lo)) if (-90.0..=90.0).contains(&la) && (-180.0..=180.0).contains(&lo) => {
+                out.push(format!("{la},{lo}"));
+                i += 2;
+            }
+            _ => {
+                if !cur.is_empty() {
+                    out.push(cur.to_string());
+                }
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut p = Parsed {
         option_key: '\0',
@@ -52,11 +81,12 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "--stops" => {
                 i += 1;
                 let raw = args.get(i).ok_or("--stops needs a value")?;
-                let stops: Vec<String> = raw
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                let stops = merge_latlon_tokens(
+                    raw.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                );
                 if stops.is_empty() {
                     return Err("set-companion-route: --stops is empty".into());
                 }
@@ -99,11 +129,37 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let parsed = parse(args)?;
     let conn = crate::db::connect_write().await?;
 
+    // Unknown --dest must fail loud, not silently degrade every stop to NULL.
+    if let Some(d) = &parsed.dest {
+        let mut q = conn
+            .query(
+                "SELECT 1 FROM destination_config WHERE slug = ?1",
+                libsql::params![d.as_str()],
+            )
+            .await
+            .map_err(|e| format!("--dest check failed: {e}"))?;
+        if q.next().await.map_err(|e| e.to_string())?.is_none() {
+            return Err(format!(
+                "set-companion-route: unknown --dest '{d}' (not in destination_config)"
+            ));
+        }
+    }
+
+    // Resolution phase OUTSIDE any transaction: Nominatim sleeps ~1.1s per
+    // cache miss, and each geocode writeback commits independently (the
+    // road-leg precedent). Holding the remote tx open across the network
+    // would roll the cache rows back with any late COMMIT failure.
+    let resolved = if parsed.clear {
+        None
+    } else {
+        Some(resolve_stops(&conn, &plan_id, &parsed).await?)
+    };
+
     conn.execute("BEGIN", libsql::params![])
         .await
         .map_err(|e| format!("set-companion-route BEGIN failed: {e}"))?;
 
-    let outcome = write_route(&conn, &plan_id, &parsed).await;
+    let outcome = write_route(&conn, &plan_id, &parsed, resolved).await;
     match outcome {
         Ok(lines) => {
             conn.execute("COMMIT", libsql::params![])
@@ -125,6 +181,7 @@ async fn write_route(
     conn: &libsql::Connection,
     plan_id: &str,
     p: &Parsed,
+    resolved: Option<(Vec<(i64, String, Option<f64>, Option<f64>)>, Vec<String>)>,
 ) -> Result<Vec<String>, String> {
     let now_db = now_db_datetime();
     let now_iso = now_rfc3339();
@@ -133,18 +190,25 @@ async fn write_route(
     let option = p.option_key.to_string();
 
     if p.clear {
-        conn.execute(
-            "DELETE FROM companion_option_stops WHERE plan_id = ?1 AND option_key = ?2",
-            libsql::params![plan_id, option.as_str()],
-        )
-        .await
-        .map_err(|e| format!("clear stops failed: {e}"))?;
-        conn.execute(
-            "DELETE FROM companion_options WHERE plan_id = ?1 AND option_key = ?2",
-            libsql::params![plan_id, option.as_str()],
-        )
-        .await
-        .map_err(|e| format!("clear option failed: {e}"))?;
+        let a1: u64 = conn
+            .execute(
+                "DELETE FROM companion_option_stops WHERE plan_id = ?1 AND option_key = ?2",
+                libsql::params![plan_id, option.as_str()],
+            )
+            .await
+            .map_err(|e| format!("clear stops failed: {e}"))?;
+        let a2: u64 = conn
+            .execute(
+                "DELETE FROM companion_options WHERE plan_id = ?1 AND option_key = ?2",
+                libsql::params![plan_id, option.as_str()],
+            )
+            .await
+            .map_err(|e| format!("clear option failed: {e}"))?;
+        if a1 + a2 == 0 {
+            return Err(format!(
+                "set-companion-route: nothing to clear for option {option} {plan_id}"
+            ));
+        }
         emit_audit(
             conn,
             plan_id,
@@ -161,21 +225,7 @@ async fn write_route(
     }
 
     let title = p.title.clone().unwrap_or_default();
-    let stops = p.stops.clone().unwrap_or_default();
-    let dest = p.dest.clone();
-
-    // Resolve coords per stop. Order: legend → cache → Nominatim (resolve_token).
-    // A legend hit is snapshot-verified for THIS plan, so it outranks the cache.
-    let mut geocodes = crate::snapshot_maps::load_geocodes(conn).await?;
-    let mut rows: Vec<(i64, String, Option<f64>, Option<f64>)> = Vec::new();
-    let mut lines = Vec::new();
-    for (idx, label) in stops.iter().enumerate() {
-        let (lat, lon, note) = resolve_stop(conn, plan_id, label, &dest, &mut geocodes).await?;
-        if let Some(n) = &note {
-            lines.push(format!("⚠ {label}: {n}"));
-        }
-        rows.push((idx as i64, label.clone(), lat, lon));
-    }
+    let (rows, mut lines) = resolved.expect("non-clear path always carries resolved stops");
 
     conn.execute(
         "DELETE FROM companion_option_stops WHERE plan_id = ?1 AND option_key = ?2",
@@ -242,6 +292,27 @@ async fn write_route(
     Ok(lines)
 }
 
+/// Resolution phase (no transaction): legend → cache → Nominatim per stop.
+async fn resolve_stops(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    p: &Parsed,
+) -> Result<(Vec<(i64, String, Option<f64>, Option<f64>)>, Vec<String>), String> {
+    let stops = p.stops.clone().unwrap_or_default();
+    let dest = p.dest.clone();
+    let mut geocodes = crate::snapshot_maps::load_geocodes(conn).await?;
+    let mut rows: Vec<(i64, String, Option<f64>, Option<f64>)> = Vec::new();
+    let mut lines = Vec::new();
+    for (idx, label) in stops.iter().enumerate() {
+        let (lat, lon, note) = resolve_stop(conn, plan_id, label, &dest, &mut geocodes).await?;
+        if let Some(n) = &note {
+            lines.push(format!("⚠ {label}: {n}"));
+        }
+        rows.push((idx as i64, label.clone(), lat, lon));
+    }
+    Ok((rows, lines))
+}
+
 /// Legend first (snapshot-verified for this plan), then road_leg's chain
 /// (cache → Nominatim with country context). Returns (lat, lon, warning).
 async fn resolve_stop(
@@ -257,7 +328,8 @@ async fn resolve_stop(
     }
     let mut legend = conn
         .query(
-            "SELECT lat, lon FROM map_legend_stops WHERE plan_id = ?1 AND label = ?2 LIMIT 1",
+            "SELECT lat, lon FROM map_legend_stops WHERE plan_id = ?1 AND label = ?2 \
+             ORDER BY (map_key = 'plan.png') DESC, seq LIMIT 1",
             libsql::params![plan_id.to_string(), label.to_string()],
         )
         .await

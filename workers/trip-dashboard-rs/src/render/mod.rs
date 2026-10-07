@@ -137,7 +137,7 @@ fn render_companion_options(plan: &Plan, lang: &str) -> String {
     if cards.is_empty() { return String::new(); }
     let heading = heading_lines.join("\n");
     let label = if lang == "en" { "Companion options · select any" } else { "同行方案 · 可複選" };
-    let map = companion_map(plan);
+    let map = companion_map(plan, lang);
     let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p>{}<div class=\"companion-grid\">", esc(label), esc(&heading), map);
     for card in &cards {
         let name = card[0];
@@ -156,11 +156,24 @@ fn render_companion_options(plan: &Plan, lang: &str) -> String {
 /// shared by both options merge into one combined A·B pin. Percent coords
 /// ride Web Mercator — the same math as the candidate minimap; no client JS.
 /// Options beyond the first two render text-only (A/B is the real case).
-fn companion_map(plan: &Plan) -> String {
+fn companion_map(plan: &Plan, lang: &str) -> String {
     let opts: Vec<&crate::model::CompanionOption> =
         plan.companion_options.iter().take(2).collect();
     if opts.is_empty() { return String::new(); }
-    let letters = ["a", "b"];
+    // Tag from the option's OWN key (set-companion-route accepts A-Z): option
+    // B alone must render as B, not as A because of its position.
+    let tags: Vec<String> = opts
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let k = o.key.trim();
+            if k.len() == 1 && k.chars().all(|c| c.is_ascii_uppercase()) {
+                k.to_string()
+            } else {
+                ["A", "B"][i].to_string()
+            }
+        })
+        .collect();
     let mut geocoded: Vec<(f64, f64)> = Vec::new();
     for o in &opts {
         for s in &o.stops {
@@ -169,7 +182,11 @@ fn companion_map(plan: &Plan) -> String {
             }
         }
     }
-    if geocoded.len() < 2 { return String::new(); }
+    let distinct: std::collections::HashSet<(i64, i64)> = geocoded
+        .iter()
+        .map(|(la, lo)| ((la * 1e4).round() as i64, (lo * 1e4).round() as i64))
+        .collect();
+    if distinct.len() < 2 { return String::new(); }
 
     let (mut la_min, mut la_max) = (f64::MAX, f64::MIN);
     let (mut lo_min, mut lo_max) = (f64::MAX, f64::MIN);
@@ -194,9 +211,10 @@ fn companion_map(plan: &Plan) -> String {
         (x.clamp(0.0, 100.0), y.clamp(0.0, 100.0))
     };
     let bbox = format!("{:.6},{:.6},{:.6},{:.6}", lo_min, la_min, lo_max, la_max);
+    let alt = if lang == "en" { "Companion options route map" } else { "同行方案路線圖" };
     let mut out = format!(
         "<div class=\"companion-map-frame\"><img class=\"companion-map-img\" loading=\"lazy\" \
-         alt=\"同行方案路線圖\" \
+         alt=\"{alt}\" \
          src=\"https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox={bbox}&bboxSR=4326&size=600,400&format=png&f=image\">\
          <svg class=\"companion-map-routes\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\">"
     );
@@ -213,32 +231,39 @@ fn companion_map(plan: &Plan) -> String {
         if pts.len() >= 2 {
             out.push_str(&format!(
                 "<polyline class=\"route-{}\" points=\"{}\"/>",
-                letters[i],
+                tags[i].to_lowercase(),
                 pts.join(" ")
             ));
         }
     }
     out.push_str("</svg>");
     // Combined pins: stops round-shared across options label A·B, not stacked.
-    let mut pins: Vec<(i64, i64, String, String)> = Vec::new(); // (la*1e3, lo*1e3, tag, label)
+    // Grid ~11m (1e4) — fine enough that distinct stops don't collide, coarse
+    // enough that the same stop geocoded twice still merges.
+    let mut pins: Vec<(i64, i64, String, String)> = Vec::new(); // (la*1e4, lo*1e4, tags, label)
     for (i, o) in opts.iter().enumerate() {
         for s in &o.stops {
             let (Some(sla), Some(slo)) = (s.lat, s.lon) else { continue };
-            let key = ((sla * 1000.0).round() as i64, (slo * 1000.0).round() as i64);
-            let tag = letters[i].to_uppercase();
+            let key = ((sla * 1e4).round() as i64, (slo * 1e4).round() as i64);
+            let tag = &tags[i];
             if let Some(e) = pins.iter_mut().find(|(a, b, _, _)| *a == key.0 && *b == key.1) {
-                e.2.push_str(&format!("·{tag}"));
-                e.3.push_str(&format!("／{}", s.label));
+                if !e.2.contains(tag) {
+                    e.2.push_str(&format!("·{tag}"));
+                    e.3.push_str(&format!("／{}", s.label));
+                }
             } else {
-                pins.push((key.0, key.1, tag, s.label.clone()));
+                pins.push((key.0, key.1, tag.clone(), s.label.clone()));
             }
         }
     }
     for (pla, plo, tag, label) in &pins {
-        let (x, y) = pos(*pla as f64 / 1000.0, *plo as f64 / 1000.0);
+        let (x, y) = pos(*pla as f64 / 1e4, *plo as f64 / 1e4);
         let class = if tag.contains('·') { "ab".to_string() } else { tag.to_lowercase() };
+        // Edge flips: the <em> label must not clip against the frame.
+        let side = if x > 78.0 { " companion-map-stop--left" } else { "" };
+        let vert = if y > 82.0 { " companion-map-stop--above" } else { "" };
         out.push_str(&format!(
-            "<span class=\"companion-map-stop stop-{class}\" style=\"left:{x:.2}%;top:{y:.2}%\">{}<em>{}</em></span>",
+            "<span class=\"companion-map-stop stop-{class}{side}{vert}\" style=\"left:{x:.2}%;top:{y:.2}%\">{}<em>{}</em></span>",
             esc(tag),
             esc(label)
         ));
@@ -248,11 +273,16 @@ fn companion_map(plan: &Plan) -> String {
     for (i, o) in opts.iter().enumerate() {
         out.push_str(&format!(
             "<span class=\"swatch swatch-{}\"></span>「{}」",
-            letters[i],
+            tags[i].to_lowercase(),
             esc(&o.title)
         ));
     }
-    out.push_str(" · 尚未確認，僅供討論 · © Esri</p>");
+    let note = if lang == "en" {
+        " · unconfirmed, for discussion · © Esri</p>"
+    } else {
+        " · 尚未確認，僅供討論 · © Esri</p>"
+    };
+    out.push_str(note);
     out
 }
 
@@ -601,6 +631,95 @@ mod tests {
         let html = render_companion_options(&plan, "zh");
         assert!(!html.contains("companion-map-frame"), "{html}");
         assert!(html.contains("companion-options"), "{html}");
+    }
+
+    /// Pins/lines/swatches follow the option's OWN key: option B alone must
+    /// render as B, not as A because of its list position (kimi P3-5).
+    #[test]
+    fn companion_map_tags_follow_option_keys() {
+        use crate::model::{CompanionOption, CompanionStop};
+        let mut plan = note_only_plan();
+        plan.companion_options = vec![CompanionOption {
+            key: "B".into(),
+            title: "坪林".into(),
+            stops: vec![
+                CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                CompanionStop { label: "坪林老街".into(), lat: Some(24.937), lon: Some(121.7117) },
+            ],
+        }];
+        let html = render_companion_options(&plan, "zh");
+        assert!(html.contains("route-b"), "{html}");
+        assert!(html.contains("stop-b"), "{html}");
+        assert!(!html.contains("route-a"), "{html}");
+        assert!(!html.contains("stop-a"), "{html}");
+    }
+
+    /// Two options sharing ONE point (same coords) is a one-dot frame — the
+    /// gate counts DISTINCT points, not stops (kimi P3-6).
+    #[test]
+    fn companion_map_gate_counts_distinct_points() {
+        use crate::model::{CompanionOption, CompanionStop};
+        let mut plan = note_only_plan();
+        let stop = CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) };
+        plan.companion_options = vec![
+            CompanionOption { key: "A".into(), title: "甲".into(), stops: vec![stop.clone()] },
+            CompanionOption { key: "B".into(), title: "乙".into(), stops: vec![stop] },
+        ];
+        let html = render_companion_options(&plan, "zh");
+        assert!(!html.contains("companion-map-frame"), "{html}");
+    }
+
+    /// ?lang=en localizes the caption (kimi P3-8).
+    #[test]
+    fn companion_map_caption_localizes_to_english() {
+        use crate::model::{CompanionOption, CompanionStop};
+        let mut plan = note_only_plan();
+        plan.companion_options = vec![
+            CompanionOption {
+                key: "A".into(),
+                title: "北海岸".into(),
+                stops: vec![
+                    CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                    CompanionStop { label: "野柳".into(), lat: Some(25.2051), lon: Some(121.6914) },
+                ],
+            },
+            CompanionOption {
+                key: "B".into(),
+                title: "坪林".into(),
+                stops: vec![
+                    CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+                    CompanionStop { label: "坪林老街".into(), lat: Some(24.937), lon: Some(121.7117) },
+                ],
+            },
+        ];
+        let zh = render_companion_options(&plan, "zh");
+        assert!(zh.contains("尚未確認，僅供討論 · © Esri"), "{zh}");
+        let en = render_companion_options(&plan, "en");
+        assert!(en.contains("unconfirmed, for discussion · © Esri"), "{en}");
+        assert!(!en.contains("尚未確認，僅供討論"), "{en}");
+    }
+
+    /// A stop pinned at the frame's right edge flips its label leftward so it
+    /// doesn't clip (kimi P3-9; same judgment as cand-minimap-poi--left).
+    #[test]
+    fn companion_map_flips_edge_labels_inward() {
+        use crate::model::{CompanionOption, CompanionStop};
+        let mut plan = note_only_plan();
+        plan.companion_options = vec![CompanionOption {
+            key: "A".into(),
+            title: "北海岸".into(),
+            stops: vec![
+                // Westmost → left side of frame.
+                CompanionStop { label: "淡水".into(), lat: Some(25.1727), lon: Some(121.4377) },
+                // Eastmost → right edge → x=100 → label must flip left.
+                CompanionStop { label: "漫海聽風".into(), lat: Some(25.1219), lon: Some(121.8614) },
+            ],
+        }];
+        let html = render_companion_options(&plan, "zh");
+        assert!(
+            html.contains("companion-map-stop--left"),
+            "eastmost stop's label must flip: {html}"
+        );
     }
 }
 

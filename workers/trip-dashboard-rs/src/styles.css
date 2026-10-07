@@ -1293,3 +1293,5 @@ h1 {
   vertical-align: -1px; margin: 0 4px; }
 .swatch-a { background: var(--accent); } .swatch-b { background: var(--amber); }
 .companion-map-caption { font-size: 11px; color: var(--text-dim); padding: 5px 2px 0; }
+.companion-map-stop--left em { left: auto; right: 0; transform: none; }
+.companion-map-stop--above em { top: auto; bottom: 110%; }
