@@ -1295,3 +1295,8 @@ h1 {
 .companion-map-caption { font-size: 11px; color: var(--text-dim); padding: 5px 2px 0; }
 .companion-map-stop--left em { left: auto; right: 0; transform: none; }
 .companion-map-stop--above em { top: auto; bottom: 110%; }
+.cand-reference { margin: 4px 0 10px; }
+.cand-reference summary { cursor: pointer; font-size: 13px; color: var(--text-dim); padding: 2px 0 6px; }
+.cand-reference[open] summary { padding-bottom: 8px; }
+.booking-cand-detail { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.booking-cand-detail .candidate-gallery { flex-basis: 100%; }

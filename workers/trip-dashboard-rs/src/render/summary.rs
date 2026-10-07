@@ -995,6 +995,104 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     esc(&stay.status)
                 ));
             }
+            // Booked card inherits the matched candidate's detail — the
+            // pre-selection cards knew gallery/tags/size/ratings; the booked
+            // summary must not know less than they did. Matched by
+            // hotel_name + room_type (the booking_key halves).
+            if is_booked {
+                // Two-tier match: same room type → room facts travel; only
+                // the hotel matches → hotel-level facts only (ratings,
+                // location). A booked 海景四人房's bathtub tag must never
+                // dress up a booked 陽台雙人房.
+                let exact = plan.candidates.iter().find(|c| {
+                    c.hotel_name == stay.hotel_name
+                        && (stay.room_type.is_empty() || c.room_type == stay.room_type)
+                });
+                let cand = exact.or_else(|| {
+                    plan.candidates
+                        .iter()
+                        .find(|c| c.hotel_name == stay.hotel_name)
+                });
+                if let Some(c) = cand {
+                    let room_exact = exact.is_some();
+                    h.push_str("<div class=\"booking-cand-detail\">");
+                    let mut tags: Vec<String> = Vec::new();
+                    // sea_view has a hotel-facing fallback? NO — it is the
+                    // candidate room's flag; only exact room matches wear tags.
+                    if room_exact {
+                        if c.sea_view == 1 {
+                            tags.push(format!(
+                                "<span class=\"candidate-tag candidate-tag--sea\">{}</span>",
+                                esc(t("seaView", lang))
+                            ));
+                        }
+                        match c.has_bathtub {
+                            Some(1) => tags.push(format!(
+                                "<span class=\"candidate-tag candidate-tag--tub\">{}</span>",
+                                esc(t("bathtub", lang))
+                            )),
+                            Some(_) => tags.push(format!(
+                                "<span class=\"candidate-tag candidate-tag--notub\">{}</span>",
+                                esc(t("noBathtub", lang))
+                            )),
+                            None => {}
+                        }
+                        if c.breakfast_included == 1 {
+                            tags.push(format!(
+                                "<span class=\"candidate-tag candidate-tag--bf\">{}</span>",
+                                esc(t("breakfast", lang))
+                            ));
+                        } else {
+                            tags.push(format!(
+                                "<span class=\"candidate-tag candidate-tag--nobf\">{}</span>",
+                                esc(t("noBreakfast", lang))
+                            ));
+                        }
+                    }
+                    for tag in &tags {
+                        h.push_str(tag);
+                    }
+                    if room_exact && c.room_size_sqm > 0 {
+                        h.push_str(&format!(
+                            "<span class=\"candidate-size\">{} m\u{b2}</span>",
+                            c.room_size_sqm
+                        ));
+                    }
+                    if room_exact {
+                        h.push_str(&price_note(c, lang));
+                    }
+                    h.push_str(&ratings_row(&c.ratings, lang));
+                    let has_gallery = room_exact
+                        && (!c.image_url.is_empty() || !c.images.is_empty());
+                    if has_gallery {
+                        h.push_str("<div class=\"candidate-gallery\">");
+                    }
+                    if room_exact && !c.image_url.is_empty() {
+                        h.push_str("<figure class=\"candidate-gallery-item\">");
+                        h.push_str(&format!(
+                            "<img src=\"{}\" alt=\"\" loading=\"lazy\">",
+                            esc_url_attr(&c.image_url)
+                        ));
+                        h.push_str("</figure>");
+                    }
+                    for img in c.images.iter().filter(|_| room_exact) {
+                        h.push_str("<figure class=\"candidate-gallery-item\">");
+                        h.push_str(&format!(
+                            "<img src=\"{}\" alt=\"{}\" loading=\"lazy\">",
+                            esc_url_attr(&img.image_url),
+                            esc(&img.label)
+                        ));
+                        h.push_str("</figure>");
+                    }
+                    if has_gallery {
+                        h.push_str("</div>");
+                    }
+                    if let (Some(la), Some(lo)) = (c.latitude, c.longitude) {
+                        h.push_str(&candidate_minimap(c, la, lo, &plan.poi_stops, lang));
+                    }
+                    h.push_str("</div>");
+                }
+            }
             h.push_str("</div></div>");
         }
         h.push_str("</div>");
@@ -1051,10 +1149,20 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         let sub_text = cand_sub.map(str::to_string).unwrap_or_else(|| {
             t("notBookedYet", lang).replace("{n}", &show.len().to_string())
         });
-        h.push_str(&format!(
-            "<div class=\"candidate-sub\">{}</div>",
-            esc(&sub_text)
-        ));
+        if is_booked {
+            // Post-booking the section is reference material, not a decision
+            // in progress — collapse it (SSR <details>, folded by default).
+            h.push_str(&format!(
+                "<details class=\"cand-reference\"><summary>{} · {} 間</summary>",
+                esc(&sub_text),
+                show.len()
+            ));
+        } else {
+            h.push_str(&format!(
+                "<div class=\"candidate-sub\">{}</div>",
+                esc(&sub_text)
+            ));
+        }
         // 搜尋條件 line — what the cards were filtered against, so 「N 間比較中」
         // has its denominator visible (user request 2026-09-28). The date part
         // comes from the plan's anchors; the requirement enumeration is section
@@ -1293,6 +1401,9 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             h.push_str("</div>");
         }
         h.push_str("</div>");
+        if is_booked {
+            h.push_str("</details>");
+        }
     }
 
     // Transfers (the old "—" bug lived here)
@@ -1972,6 +2083,108 @@ mod tests {
         assert!(html.contains("其他海景參考"));
         assert!(html.contains("僅供參考"));
         assert!(!html.contains("candidate-card--selecting"));
+    }
+
+    /// Booked state: the reference section collapses by default (SSR
+    /// <details>, no open attr), and the 🏠已訂住宿 card inherits the matched
+    /// candidate's detail — gallery, tags, room size, ratings — instead of
+    /// the 4-line thin card that knew less than the pre-selection cards did.
+    #[test]
+    fn booked_reference_collapses_and_booked_card_inherits_candidate_detail() {
+        use crate::model::{CandidateImage, CandidateRating, DomesticCandidate, DomesticStay};
+        let plan = Plan {
+            p4_status: "booked".into(),
+            domestic_stays: vec![DomesticStay {
+                hotel_name: "漫海聽風".into(),
+                room_type: "海景四人房".into(),
+                price_twd: 12800,
+                currency: "TWD".into(),
+                ..Default::default()
+            }],
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "漫海聽風".into(),
+                room_type: "海景四人房".into(),
+                sea_view: 1,
+                has_bathtub: Some(1),
+                room_size_sqm: 20,
+                image_url: "https://example.com/a.webp".into(),
+                images: vec![CandidateImage {
+                    image_url: "https://example.com/b.webp".into(),
+                    label: "衛浴".into(),
+                }],
+                ratings: vec![CandidateRating {
+                    source: "Google".into(),
+                    score: 4.6,
+                    scale: 5.0,
+                    review_count: 128,
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        // Collapse: <details> without open = folded by default, works with no JS.
+        assert!(html.contains("<details class=\"cand-reference\">"), "{html}");
+        assert!(
+            !html.contains("<details class=\"cand-reference\" open"),
+            "{html}"
+        );
+        assert!(html.contains("<summary"), "{html}");
+        // Booked card enrichment: matched by hotel_name + room_type.
+        assert!(html.contains("booking-cand-detail"), "{html}");
+        assert!(html.contains("<span class=\"candidate-size\">20 m"), "{html}");
+        assert!(html.contains("4.6"), "{html}");
+        assert!(html.contains("candidate-tag--sea"), "{html}");
+    }
+
+    /// The booked room type may have NO candidate row of its own (jiufen:
+    /// booked 海景陽台豪華雙人房, candidate rows only had 海景四人房). A
+    /// hotel-level match still contributes hotel-level facts — ratings and
+    /// the location minimap — but ROOM facts (bathtub tag, size, rate note)
+    /// must NOT cross room types.
+    #[test]
+    fn booked_card_hotel_level_match_without_room_facts() {
+        use crate::model::{CandidateRating, DomesticCandidate, DomesticStay};
+        let plan = Plan {
+            p4_status: "booked".into(),
+            domestic_stays: vec![DomesticStay {
+                hotel_name: "漫海聽風".into(),
+                room_type: "海景陽台豪華雙人房".into(),
+                price_twd: 0,
+                currency: "TWD".into(),
+                ..Default::default()
+            }],
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "漫海聽風".into(),
+                room_type: "海景四人房".into(),
+                sea_view: 1,
+                has_bathtub: Some(1),
+                room_size_sqm: 20,
+                ratings: vec![CandidateRating {
+                    source: "Google".into(),
+                    score: 4.6,
+                    scale: 5.0,
+                    review_count: 128,
+                }],
+                latitude: Some(25.1219),
+                longitude: Some(121.8614),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        // Scope to the booked summary region: the reference section may still
+        // show the 四人房 card's own tub tag — that's its row, not ours.
+        let booked_end = html.find("<h2>其他海景參考").unwrap_or(html.len());
+        let booked = &html[..booked_end];
+        assert!(booked.contains("booking-cand-detail"), "{html}");
+        assert!(booked.contains("4.6"), "{html}");
+        assert!(booked.contains("cand-minimap"), "{html}");
+        // Room facts must not travel across room types.
+        assert!(!booked.contains("candidate-size"), "{html}");
+        assert!(!booked.contains("candidate-tag--tub"), "{html}");
     }
 
     #[test]
