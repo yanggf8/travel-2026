@@ -141,9 +141,14 @@ fn mark_booked_locks_full_write_surface() {
         return;
     }
     assert!(ok, "mark-booked should succeed; stdout={stdout} stderr={stderr}");
+    // Header names BOTH the destination and the resolved plan — a dest can be
+    // shared by several plans, and the resolved plan was invisible before
+    // (self-review 2026-10-29).
     assert!(
-        stdout.contains(&format!("Marking booking as confirmed for {dest}:")),
-        "stdout should include the header; stdout={stdout}"
+        stdout.contains(&format!(
+            "Marking booking as confirmed for {dest} (plan {plan}):"
+        )),
+        "stdout should include the header with dest + plan; stdout={stdout}"
     );
     assert!(
         stdout.contains("P3+4 Packages: selected → booking → booked"),

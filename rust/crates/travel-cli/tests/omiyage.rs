@@ -3,6 +3,13 @@ use common::{bin, db_exec, is_credless, nanos, db_exec_teardown, Guard, seed_pla
 
 use std::process::Command;
 
+use std::sync::Mutex;
+
+/// Serialized access to the shared Turso DB — every other real-Turso test file
+/// carries a per-file mutex; without it the 16 parallel tests here race into
+/// SQLITE_BUSY "database is locked" (observed 2026-10-29).
+static OMIYAGE_LOCK: Mutex<()> = Mutex::new(());
+
 fn run(args: &[&str]) -> (bool, String, String) {
     let out = Command::new(bin())
         .args(args)
@@ -50,6 +57,7 @@ fn seed_dest_and_poi(slug: &str, poi: &str) -> bool {
 
 #[test]
 fn omiyage_tables_exist_after_migrate() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -76,6 +84,7 @@ fn omiyage_tables_exist_after_migrate() {
 
 #[test]
 fn add_omiyage_creates_item_and_location() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -133,6 +142,7 @@ fn add_omiyage_creates_item_and_location() {
 
 #[test]
 fn add_omiyage_second_seller_keeps_item_unchanged() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -232,6 +242,7 @@ fn add_omiyage_second_seller_keeps_item_unchanged() {
 
 #[test]
 fn add_omiyage_same_seller_re_add_refreshes_fetched_at() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     // Spec L147 / L71: same (slug,item_id,poi_id) re-add → still 1 location row, fetched_at refreshed.
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
@@ -308,6 +319,7 @@ fn add_omiyage_same_seller_re_add_refreshes_fetched_at() {
 /// on all validation failures below + the matrix.)
 #[test]
 fn add_omiyage_fail_loud_matrix() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -545,6 +557,7 @@ fn add_omiyage_fail_loud_matrix() {
 
 #[test]
 fn add_omiyage_no_audit_even_with_travel_plan_id() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -641,6 +654,7 @@ fn add_omiyage_no_audit_even_with_travel_plan_id() {
 
 #[test]
 fn query_omiyage_round_trip_grouped_with_dual_provenance() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -709,6 +723,7 @@ fn query_omiyage_round_trip_grouped_with_dual_provenance() {
 
 #[test]
 fn query_omiyage_unknown_vs_empty() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -756,6 +771,7 @@ fn query_omiyage_unknown_vs_empty() {
 
 #[test]
 fn query_omiyage_corrupt_orphan_fails() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -789,6 +805,7 @@ fn query_omiyage_corrupt_orphan_fails() {
 
 #[test]
 fn query_omiyage_rejects_plan_id_help_and_typo() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     // --help: no Turso needed if parse is pre-connect; still fine if connect later
     let (ok_h, out_h, err_h) = run(&["query-omiyage", "--help"]);
     assert!(ok_h, "help should succeed");
@@ -811,6 +828,7 @@ fn query_omiyage_rejects_plan_id_help_and_typo() {
 
 #[test]
 fn validate_data_catches_omiyage_orphans_and_missing_provenance() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -921,6 +939,7 @@ fn validate_data_catches_omiyage_orphans_and_missing_provenance() {
 
 #[test]
 fn validate_data_empty_omiyage_stays_valid_for_slug() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     // Empty omiyage tables must NOT produce an empty-table Error (spec L81).
     // Do NOT add omiyage to validate.rs:1005 checklist.
     let Some(_) = db_exec("SELECT 1") else {
@@ -969,6 +988,7 @@ fn seed_omiyage_tagged_poi(slug: &str, poi: &str, notes: &str) -> bool {
 
 #[test]
 fn worklist_prints_tagged_poi_notes_and_template_writes_nothing() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -1026,6 +1046,7 @@ fn worklist_prints_tagged_poi_notes_and_template_writes_nothing() {
 
 #[test]
 fn worklist_already_sourced_count_reflects_existing() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -1074,6 +1095,7 @@ fn worklist_already_sourced_count_reflects_existing() {
 
 #[test]
 fn worklist_no_tagged_poi_fails_loud() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless");
         return;
@@ -1105,6 +1127,7 @@ fn worklist_no_tagged_poi_fails_loud() {
 
 #[test]
 fn worklist_unknown_dest_and_plan_id_and_help() {
+    let _g = OMIYAGE_LOCK.lock().unwrap();
     let (ok_u, _o, e_u) = run(&["omiyage-worklist", "--slug", "no_such_dest_wl_zzz"]);
     assert!(!ok_u, "unknown dest fails");
     assert!(

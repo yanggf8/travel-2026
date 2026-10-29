@@ -131,15 +131,18 @@ fn share_token_multi_deactivate_and_all_listing() {
     assert_eq!(token_status(&toks[1]).as_deref(), Some("inactive"));
     assert_eq!(token_status(&toks[2]).as_deref(), Some("active"));
 
-    // `--all` alone lists (active + unfolded deactivated) and must NOT mint.
-    let (ok, stdout, stderr) = run_cmd(&plan_id, &["share-token", "--all"]);
-    assert!(ok, "--all should list; stdout={stdout} stderr={stderr}");
+    // `--all` alone is rejected — it must never fall through to mint.
+    let (ok, stdout, _) = run_cmd(&plan_id, &["share-token", "--all"]);
+    assert!(!ok, "--all alone must be rejected; stdout={stdout}");
+    // `--show --all` lists actives plus the unfolded deactivated block.
+    let (ok, stdout, stderr) = run_cmd(&plan_id, &["share-token", "--show", "--all"]);
+    assert!(ok, "--show --all should list; stdout={stdout} stderr={stderr}");
     assert_eq!(
         count(&format!(
             "SELECT COUNT(*) AS n FROM plan_share_tokens WHERE plan_id = '{plan_id}'"
         )),
         Some(3),
-        "--all must never mint a fresh token"
+        "neither --all nor --show --all may mint a fresh token"
     );
     assert!(stdout.contains("停用 (2):"), "deactivated block unfolded; stdout={stdout}");
     assert!(stdout.contains(&toks[0][..6]), "stdout={stdout}");

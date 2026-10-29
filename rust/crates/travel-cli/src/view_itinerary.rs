@@ -46,12 +46,35 @@ const SESSIONS_IN_ORDER: &[&str] = &["morning", "noon", "afternoon", "evening"];
 pub async fn run(args: &[String]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "Usage:\n  travel itinerary [--dest slug]   (--dest is validation-only: must match the \
-             plan's active destination, else errors)\n  \
-             (plan resolution: TRAVEL_PLAN_ID env var only for now)"
+            "Usage:\n  travel itinerary [--day N] [--dest slug] [--plan-id <id>]   (--dest is \
+             validation-only: must match the plan's active destination, else errors)\n  \
+             --day N renders only that day (header kept, PENDING BOOKINGS scoped to the day)\n  \
+             (plan resolution: --plan-id > TRAVEL_PLAN_ID env > --travel-date/--travel-start/\
+             --travel-end > active-today > upcoming > most-recent)"
         );
         return Ok(());
     }
+    // Fail loud on unknown flags BEFORE any DB access — `--day` used to be
+    // silently ignored, printing every day while the caller believed it had a
+    // filtered view (self-review 2026-10-29).
+    crate::plan_resolver::reject_unknown_flags(
+        args,
+        &[
+            "--dest",
+            "--day",
+            "--plan-id",
+            "--plan-path",
+            "--travel-date",
+            "--travel-start",
+            "--travel-end",
+        ],
+        &[],
+    )?;
+    // reject_unknown_flags classifies flags but neither requires values to
+    // exist nor rejects positionals — validate that surface too, before any
+    // DB access (`--dest --wat` used to swallow the unknown flag as a value;
+    // stray positionals were silently ignored) (codex review 2026-10-29).
+    validate_flag_surface(args)?;
     // `--dest` is VALIDATION-ONLY by design (resolved-by-design 2026-07-02). Every plan is
     // single-destination, so this view always renders the active destination; a `--dest` that
     // matches is a no-op and a mismatching one fails loud (assert_dest_matches below). It does NOT
@@ -60,10 +83,20 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // exists (recipe: thread a dest override through plan::load + the ~15 dest-keyed repo reads +
     // plan_resolver::ResolveInput). See CLAUDE.md "Next Steps" → --dest item.
     let dest_opt: Option<String> = parse_dest(args);
+    let day_opt: Option<i64> = parse_day(args)?;
     let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
     let view = plan::load(&plan_id).await?;
     plan::assert_dest_matches(dest_opt.as_deref(), &view.active_destination)?;
-    print!("{}", render(&view));
+    if let Some(n) = day_opt
+        && !view.days.iter().any(|d| d.day_number == n)
+    {
+        let days: Vec<String> = view.days.iter().map(|d| d.day_number.to_string()).collect();
+        return Err(format!(
+            "day {n} does not exist in plan {plan_id} (days: {})",
+            if days.is_empty() { "none".to_string() } else { days.join(", ") }
+        ));
+    }
+    print!("{}", render(&view, day_opt));
     Ok(())
 }
 
@@ -78,7 +111,68 @@ fn parse_dest(args: &[String]) -> Option<String> {
     None
 }
 
-fn render(view: &PlanView) -> String {
+/// Beyond reject_unknown_flags: every value flag must carry a concrete value
+/// (not another flag), and stray positionals are rejected — itinerary takes
+/// flags only. Runs before any DB access (codex review 2026-10-29).
+fn validate_flag_surface(args: &[String]) -> Result<(), String> {
+    const VALUE_FLAGS: &[&str] = &[
+        "--dest",
+        "--day",
+        "--plan-id",
+        "--plan-path",
+        "--travel-date",
+        "--travel-start",
+        "--travel-end",
+    ];
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            let missing = args.get(i + 1).map(|v| v.starts_with("--")).unwrap_or(true);
+            if missing {
+                return Err(format!("{a} requires a value"));
+            }
+            i += 2;
+        } else if !a.starts_with("--") {
+            return Err(format!(
+                "unexpected argument: {a} (itinerary takes flags only, no positionals)"
+            ));
+        } else {
+            i += 1; // a known flag already vetted by reject_unknown_flags
+        }
+    }
+    Ok(())
+}
+
+/// Parse `--day N` exactly once: a positive integer. Missing/malformed/zero/
+/// duplicate values all fail loud (never a plausible-but-wrong filtered view).
+fn parse_day(args: &[String]) -> Result<Option<i64>, String> {
+    let mut seen: Option<i64> = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--day" {
+            let v = args
+                .get(i + 1)
+                .ok_or_else(|| "--day requires a value (e.g. --day 2)".to_string())?;
+            let n: i64 = v
+                .parse()
+                .map_err(|_| format!("invalid --day value {v:?}: expected a day number"))?;
+            if n < 1 {
+                return Err(format!("invalid --day value {n}: days are numbered from 1"));
+            }
+            if seen.is_some() {
+                return Err("--day may only be given once".to_string());
+            }
+            seen = Some(n);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(seen)
+}
+
+fn render(view: &PlanView, day_filter: Option<i64>) -> String {
     let mut out = String::new();
 
     // Header (box + blank line). The TS does
@@ -132,13 +226,21 @@ fn render(view: &PlanView) -> String {
     // Blank line before the day loop. TS does `console.log('')` at line 87.
     out.push('\n');
 
-    // Day loop.
+    // Day loop (filtered to --day N when given; the trip header above stays
+    // full-trip so the day count remains readable).
     for d in &view.days {
+        if day_filter.is_some_and(|n| d.day_number != n) {
+            continue;
+        }
         render_day(&mut out, d, view);
     }
 
-    // Pending bookings section.
-    let pending = collect_pending(view);
+    // Pending bookings section (scoped to the filtered day, so a day view
+    // cannot present another day's deadlines as its own).
+    let pending: Vec<_> = collect_pending(view)
+        .into_iter()
+        .filter(|pb| day_filter.is_none_or(|n| pb.day == n))
+        .collect();
     if !pending.is_empty() {
         // TS: console.log('─'.repeat(60))
         out.push_str(&"─".repeat(60));

@@ -40,7 +40,12 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let trip_id =
         option_value(args, "--trip-id").unwrap_or_else(|| to_dest_slug(&effective_plan_id));
 
-    println!("Syncing bookings from plan \"{effective_plan_id}\"...");
+    // Print the effective trip_id too — it is the DELETE-and-rewrite scope of
+    // this sync (custom --trip-id widens it beyond the plan's own rows), and
+    // it was invisible before (self-review 2026-10-29).
+    println!(
+        "Syncing bookings from plan \"{effective_plan_id}\" (trip_id \"{trip_id}\")..."
+    );
 
     // Write tier — we upsert bookings_current + events.
     let conn = db::connect_write().await?;

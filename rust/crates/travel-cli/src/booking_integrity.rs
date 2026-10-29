@@ -386,8 +386,14 @@ async fn extract_activity(
     // so ordinary untracked noon meals never appear. (TS originally skipped noon.)
     let mut rows = conn
         .query(
+            // cost_estimate rides with its typeof(): libsql's
+            // get::<Option<i64>> PANICS on a non-integer cell (found live: an
+            // empty-string TEXT row on okinawa-2026), and silently reading a
+            // non-empty invalid value as NULL would let a later sync-bookings
+            // erase the stored price — so the type is read FIRST and decides
+            // how the value is consumed (codex review 2026-10-29).
             "SELECT day_number, session_type, id, title, booking_status, booking_required, \
-                    booking_ref, book_by, cost_estimate, area, booking_url \
+                    booking_ref, book_by, cost_estimate, typeof(cost_estimate), area, booking_url \
              FROM activities \
              WHERE plan_id = ?1 AND destination = ?2 \
                AND session_type IN ('morning','noon','afternoon','evening') \
@@ -413,9 +419,34 @@ async fn extract_activity(
         let booking_required: i64 = r.get(5).unwrap_or(0);
         let booking_ref: Option<String> = r.get(6).ok().flatten();
         let book_by: Option<String> = r.get(7).ok().flatten();
-        let cost_estimate: Option<i64> = r.get(8).ok().flatten();
-        let area: Option<String> = r.get(9).ok().flatten();
-        let booking_url: Option<String> = r.get(10).ok().flatten();
+        // Type-first read of cost_estimate (see the query comment): the
+        // legacy empty-string TEXT reads as NULL; any OTHER non-integer value
+        // is a loud error, never a silent NULL and never a panic.
+        let cost_type: String = r.get(9).unwrap_or_default();
+        let cost_estimate: Option<i64> = match cost_type.as_str() {
+            "integer" => r.get(8).ok().flatten(),
+            "null" => None,
+            "text" => {
+                let raw: String = r.get(8).unwrap_or_default();
+                if raw.is_empty() {
+                    None // legacy empty string (okinawa-2026) — equivalent to NULL
+                } else {
+                    return Err(format!(
+                        "activity day{day_number}/{session} in plan {plan_id} has a TEXT \
+                         cost_estimate {raw:?}: not readable as a price — fix the cell \
+                         (INTEGER or NULL) explicitly"
+                    ));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "activity day{day_number}/{session} in plan {plan_id} has a cost_estimate \
+                     of unsupported type {other} — fix the cell (INTEGER or NULL)"
+                ));
+            }
+        };
+        let area: Option<String> = r.get(10).ok().flatten();
+        let booking_url: Option<String> = r.get(11).ok().flatten();
 
         // Skip activities that don't need booking tracking.
         let has_status = booking_status.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
@@ -476,38 +507,63 @@ async fn extract_activity(
 
 // ── check-booking-integrity command ──────────────────────────────────
 
-pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!(
-            "Usage:\n  travel check-booking-integrity [--plan-id <id>] [--trip-id <id>]"
-        );
-        return Ok(());
-    }
-    let effective_plan_id = option_value(args, "--plan-id").unwrap_or(plan_id);
-    let trip_id =
-        option_value(args, "--trip-id").unwrap_or_else(|| effective_plan_id.replace('-', "_"));
+/// One finding against a single booking row (typed so the validator can route
+/// severities without parsing the command's printed output — design review
+/// 2026-10-29: "extract a reusable comparison function… do not invoke the
+/// printing command from the validator").
+pub struct BookingFinding {
+    pub booking_key: String,
+    pub category: String,
+    pub title: String,
+    /// Field-level diff, e.g. `status: plan=booked db=pending`. Empty for
+    /// presence findings (plan-only / db-only).
+    pub detail: String,
+}
 
-    let conn = db::connect_read().await?;
+/// Result of comparing plan-derived bookings against `bookings_current`.
+pub struct IntegrityReport {
+    pub matches: usize,
+    pub mismatches: Vec<BookingFinding>,
+    /// Plan-derived rows with no `bookings_current` counterpart (run
+    /// `travel sync-bookings` to materialize them).
+    pub plan_only: Vec<BookingFinding>,
+    /// `bookings_current` rows the plan cannot derive. EXCLUDES `accommodation`
+    /// rows — set-accommodation writes those directly (not plan-derived), so
+    /// their presence is not drift.
+    pub db_only: Vec<BookingFinding>,
+    /// Non-fatal extraction notes (e.g. "No destinations found in plan").
+    pub extractor_warnings: Vec<String>,
+}
 
-    println!(
-        "Checking booking integrity (plan \"{effective_plan_id}\" vs Turso DB)..."
-    );
+/// Compare plan-derived bookings against `bookings_current` for one plan.
+/// The caller supplies the trip_id (the standalone command honors a custom
+/// `--trip-id`; the all-plan validator passes the DEFAULT mapping,
+/// `plan_id.replace('-', "_")` — custom trip ids cannot be attributed to a
+/// plan by the validator and are out of its scope).
+pub async fn compare_bookings(
+    conn: &Connection,
+    plan_id: &str,
+    trip_id: &str,
+) -> Result<IntegrityReport, String> {
+    let (plan_bookings, extractor_warnings) = extract_bookings(conn, plan_id, trip_id).await?;
+    let db_bookings = query_db_bookings(conn, trip_id).await?;
 
-    // Plan-derived bookings.
-    let (plan_bookings, warnings) =
-        extract_bookings(&conn, &effective_plan_id, &trip_id).await?;
-
-    // DB rows for this trip.
-    let db_bookings = query_db_bookings(&conn, &trip_id).await?;
-
-    let mut matches = 0i64;
-    let mut mismatches: Vec<String> = Vec::new();
-    let mut plan_only: Vec<String> = Vec::new();
-    let mut db_only: Vec<String> = Vec::new();
+    let mut report = IntegrityReport {
+        matches: 0,
+        mismatches: Vec::new(),
+        plan_only: Vec::new(),
+        db_only: Vec::new(),
+        extractor_warnings,
+    };
 
     for pb in &plan_bookings {
         match db_bookings.iter().find(|d| d.booking_key == pb.booking_key) {
-            None => plan_only.push(format!("{} ({}: {})", pb.booking_key, pb.category, pb.title)),
+            None => report.plan_only.push(BookingFinding {
+                booking_key: pb.booking_key.clone(),
+                category: pb.category.clone(),
+                title: pb.title.clone(),
+                detail: String::new(),
+            }),
             Some(d) => {
                 let mut diffs: Vec<String> = Vec::new();
                 if d.status.as_deref() != Some(pb.status.as_str()) {
@@ -546,28 +602,77 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                     ));
                 }
                 if diffs.is_empty() {
-                    matches += 1;
+                    report.matches += 1;
                 } else {
-                    mismatches.push(format!("{}: {}", pb.booking_key, diffs.join(", ")));
+                    report.mismatches.push(BookingFinding {
+                        booking_key: pb.booking_key.clone(),
+                        category: pb.category.clone(),
+                        title: pb.title.clone(),
+                        detail: diffs.join(", "),
+                    });
                 }
             }
         }
     }
 
     for d in &db_bookings {
-        if !plan_bookings.iter().any(|p| p.booking_key == d.booking_key) {
-            db_only.push(format!(
-                "{} ({}: {})",
-                d.booking_key,
-                d.category.clone().unwrap_or_default(),
-                d.title.clone().unwrap_or_default()
-            ));
+        if plan_bookings.iter().any(|p| p.booking_key == d.booking_key) {
+            continue;
         }
+        if d.category.as_deref() == Some("accommodation") {
+            continue; // written directly by set-accommodation, not plan-derived
+        }
+        report.db_only.push(BookingFinding {
+            booking_key: d.booking_key.clone(),
+            category: d.category.clone().unwrap_or_default(),
+            title: d.title.clone().unwrap_or_default(),
+            detail: String::new(),
+        });
     }
 
-    for w in &warnings {
+    Ok(report)
+}
+
+pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "Usage:\n  travel check-booking-integrity [--plan-id <id>] [--trip-id <id>]"
+        );
+        return Ok(());
+    }
+    let effective_plan_id = option_value(args, "--plan-id").unwrap_or(plan_id);
+    let trip_id =
+        option_value(args, "--trip-id").unwrap_or_else(|| effective_plan_id.replace('-', "_"));
+
+    let conn = db::connect_read().await?;
+
+    println!(
+        "Checking booking integrity (plan \"{effective_plan_id}\" vs Turso DB)..."
+    );
+
+    let report = compare_bookings(&conn, &effective_plan_id, &trip_id).await?;
+
+    // Same printed shape as before the typed-report refactor: extractor
+    // warnings appear under Mismatches with their label.
+    let mut mismatches: Vec<String> = report
+        .mismatches
+        .iter()
+        .map(|f| format!("{}: {}", f.booking_key, f.detail))
+        .collect();
+    for w in &report.extractor_warnings {
         mismatches.push(format!("extractor warning: {w}"));
     }
+    let plan_only: Vec<String> = report
+        .plan_only
+        .iter()
+        .map(|f| format!("{} ({}: {})", f.booking_key, f.category, f.title))
+        .collect();
+    let db_only: Vec<String> = report
+        .db_only
+        .iter()
+        .map(|f| format!("{} ({}: {})", f.booking_key, f.category, f.title))
+        .collect();
+    let matches = report.matches;
 
     println!("\nResults:");
     println!("  Matches:    {matches}");

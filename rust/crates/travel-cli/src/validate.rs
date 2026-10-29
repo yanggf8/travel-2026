@@ -67,6 +67,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_omiyage(&mut issues).await;
     validate_domestic_accommodations(&mut issues).await;
     validate_reference_tables(&mut issues).await;
+    validate_booking_integrity(&mut issues).await;
 
     // Always-run: documentation ↔ code drift checks
     validate_completed_items(&mut issues);
@@ -91,6 +92,160 @@ pub async fn run(mode: Mode) -> Result<(), String> {
 
     emit_report(&issues);
     Ok(())
+}
+
+/// [bookings] drift between the plans' normalized tables and `bookings_current`
+/// — closes the blind spot where an activity sat at booking_status='booked'
+/// while its bookings_current row said 'pending' for a month with every
+/// validator green (self-review 2026-10-29). Runs for BOTH `validate data` and
+/// `doctor` (always-run data-consistency block).
+///
+/// NOT best-effort, unlike the map helpers below: a check that cannot run
+/// (connect/plan-list/compare failure) is an ERROR issue — a silent skip would
+/// recreate the blind spot this exists to close. Drift and missing derived
+/// rows are WARNINGS so historical unsynced plans don't block the pre-commit
+/// hook; promote to error only after measuring real data. Only the DEFAULT
+/// trip_id mapping (plan_id hyphens→underscores) is checked — custom
+/// `--trip-id` syncs can't be attributed to a plan. Accommodation db-only
+/// rows are excluded by `compare_bookings` (set-accommodation writes them
+/// directly; they are not plan-derived).
+async fn validate_booking_integrity(issues: &mut Vec<Issue>) {
+    let conn = match db::connect_read().await {
+        Ok(c) => c,
+        Err(e) => {
+            issues.push(Issue {
+                category: "bookings".to_string(),
+                severity: Severity::Error,
+                message: format!("booking integrity check could not connect: {e}"),
+                file: Some("turso:bookings_current".to_string()),
+                line: None,
+            });
+            return;
+        }
+    };
+    let mut rows = match conn
+        .query(
+            "SELECT plan_id FROM plans WHERE deleted_at IS NULL ORDER BY plan_id",
+            (),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            issues.push(Issue {
+                category: "bookings".to_string(),
+                severity: Severity::Error,
+                message: format!("booking integrity check could not list plans: {e}"),
+                file: Some("turso:plans".to_string()),
+                line: None,
+            });
+            return;
+        }
+    };
+    let mut plan_ids: Vec<String> = Vec::new();
+    // NOT best-effort iteration: a row-read error is the END-of-loop arm of
+    // `while let Ok(Some(..))`, which would silently skip every remaining
+    // plan and still report success (codex review 2026-10-29). Handle both
+    // failure modes explicitly as errors.
+    loop {
+        match rows.next().await {
+            Ok(Some(row)) => match row.get::<String>(0) {
+                Ok(id) => plan_ids.push(id),
+                Err(e) => {
+                    issues.push(Issue {
+                        category: "bookings".to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "booking integrity check could not read plan id: {e}"
+                        ),
+                        file: Some("turso:plans".to_string()),
+                        line: None,
+                    });
+                    return;
+                }
+            },
+            Ok(None) => break,
+            Err(e) => {
+                issues.push(Issue {
+                    category: "bookings".to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "booking integrity check failed while listing plans: {e}"
+                    ),
+                    file: Some("turso:plans".to_string()),
+                    line: None,
+                });
+                return;
+            }
+        }
+    }
+
+    for plan_id in plan_ids {
+        let trip_id = plan_id.replace('-', "_");
+        let report = match crate::booking_integrity::compare_bookings(&conn, &plan_id, &trip_id)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                issues.push(Issue {
+                    category: "bookings".to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "booking integrity check failed for plan {plan_id}: {e}"
+                    ),
+                    file: Some(format!("plan:{plan_id}")),
+                    line: None,
+                });
+                continue;
+            }
+        };
+        for f in &report.mismatches {
+            issues.push(Issue {
+                category: "bookings".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "{plan_id}: {}: {} ({}) [{}]",
+                    f.booking_key, f.detail, f.title, f.category
+                ),
+                file: Some("turso:bookings_current".to_string()),
+                line: None,
+            });
+        }
+        for f in &report.plan_only {
+            issues.push(Issue {
+                category: "bookings".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "{plan_id}: plan-only booking not in bookings_current: {} ({}: {})",
+                    f.booking_key, f.category, f.title
+                ),
+                file: Some("turso:bookings_current".to_string()),
+                line: None,
+            });
+        }
+        for f in &report.db_only {
+            issues.push(Issue {
+                category: "bookings".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "{plan_id}: db-only booking not derivable from plan tables: {} ({}: {}) — \
+                     stale row from an old itinerary?",
+                    f.booking_key, f.category, f.title
+                ),
+                file: Some("turso:bookings_current".to_string()),
+                line: None,
+            });
+        }
+        for w in &report.extractor_warnings {
+            issues.push(Issue {
+                category: "bookings".to_string(),
+                severity: Severity::Warning,
+                message: format!("{plan_id}: extractor warning: {w}"),
+                file: Some(format!("plan:{plan_id}")),
+                line: None,
+            });
+        }
+    }
 }
 
 /// Doctor-only: run the map-link lint across every plan and add cross-country
