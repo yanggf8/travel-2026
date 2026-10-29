@@ -69,6 +69,11 @@ struct Point {
     lon: f64,
     color: [u8; 3],
     kind: Kind,
+    /// Itinerary day a sightseeing pin belongs to (its DAY_COLORS color is
+    /// derived from it); None for logistics endpoints. Drives the overview's
+    /// DAY legend — the color cycle repeats after 7 days, so the color alone
+    /// cannot name the day.
+    day: Option<u32>,
     /// Legend name for this pin. Rendered by the dashboard worker from
     /// `map_legend_stops` (the PNG bitmap font has no CJK glyphs, so the
     /// number→name mapping cannot be drawn into the image itself).
@@ -190,6 +195,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                             lon,
                             color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
                             kind,
+                            day: Some(*day as u32),
                             label: display_label(label, &hotel_names),
                         });
                     }
@@ -220,6 +226,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                         lon: p.3,
                         color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
                         kind: Kind::Sightseeing,
+                        day: Some(*day as u32),
                         label: p.1.clone(),
                     });
                 }
@@ -636,6 +643,7 @@ fn map_input_sha256(
         hasher.update((s.len() as u64).to_le_bytes());
         hasher.update(s.as_bytes());
     }
+    put_str(&mut hasher, RENDER_REV);
     put_str(&mut hasher, title);
     put_str(&mut hasher, map_kind_tag(kind));
     hasher.update((points.len() as u64).to_le_bytes());
@@ -644,6 +652,8 @@ fn map_input_sha256(
         hasher.update(p.lon.to_le_bytes());
         put_str(&mut hasher, kind_tag(p.kind));
         hasher.update(&p.color);
+        // The DAY legend names the day; colors cycle after 7 days.
+        hasher.update(p.day.unwrap_or(0).to_le_bytes());
     }
     hasher.update((routes.len() as u64).to_le_bytes());
     for r in routes {
@@ -752,14 +762,48 @@ fn render_png(
             raster.line(a, b, [80, 110, 140], 4, true);
         }
     }
+    // Pins at their true positions collide in dense clusters (嵐山's five
+    // stops at all-Kyoto scale stacked into one blob): declutter them, then
+    // draw every leader (true-position dot + line) BEFORE any pin so no leader
+    // crosses a number.
+    let anchors: Vec<(i32, i32)> = points
+        .iter()
+        .map(|p| projection.point(mercator(p.lat, p.lon)))
+        .collect();
+    // A displaced pin must not land under the title, legend, or credit strips
+    // (drawn after the pins, they would bury its number).
+    let (legend_w, legend_rows) = match kind {
+        MapKind::Day => (0, 0),
+        MapKind::Logistics => (157, 1),
+        MapKind::DayLogistics => (day_logistics_legend_entries(points).len() as i32 * 93, 1),
+        MapKind::Plan => {
+            let (cols, rows) = plan_legend_grid(plan_day_legend_entries(points).len());
+            (cols * PLAN_LEGEND_STEP, rows)
+        }
+    };
+    let mut reserved = vec![
+        (8, 8, 16 + title.len() as i32 * 12, 28),
+        (366, HEIGHT as i32 - 18, 584, HEIGHT as i32 - 4),
+    ];
+    if legend_w > 0 {
+        reserved.push((8, 30, 12 + legend_w, 30 + legend_rows * PLAN_LEGEND_ROW));
+    }
+    let placed = declutter_pins(&anchors, &reserved);
+    let pin_color = |p: &Point| match p.kind {
+        Kind::Sightseeing => p.color,
+        Kind::Hotel => [21, 101, 192],
+        Kind::Airport => [239, 108, 0],
+    };
     for (i, p) in points.iter().enumerate() {
-        let (x, y) = projection.point(mercator(p.lat, p.lon));
-        let color = match p.kind {
-            Kind::Sightseeing => p.color,
-            Kind::Hotel => [21, 101, 192],
-            Kind::Airport => [239, 108, 0],
-        };
-        raster.pin(x, y, color, i + 1);
+        if placed[i] != anchors[i] {
+            raster.line(anchors[i], placed[i], [255, 255, 255], 3, false);
+            raster.line(anchors[i], placed[i], [70, 82, 94], 1, false);
+            raster.dot(anchors[i].0, anchors[i].1, 5, [255, 255, 255]);
+            raster.dot(anchors[i].0, anchors[i].1, 3, pin_color(p));
+        }
+    }
+    for (i, p) in points.iter().enumerate() {
+        raster.pin(placed[i].0, placed[i].1, pin_color(p), i + 1);
     }
     let title = title.to_ascii_uppercase();
     if basemap.is_some() {
@@ -776,6 +820,22 @@ fn render_png(
         for (label, color) in day_logistics_legend_entries(points) {
             raster.legend(x, 31, label, color);
             x += 93;
+        }
+    } else if matches!(kind, MapKind::Plan) {
+        // The overview colors pins by DAY; without a key the colors say
+        // nothing. One entry per day that has a pin here (excursion days
+        // render on their own map, so their entries leave with them).
+        // Long trips wrap onto further rows rather than run off the canvas.
+        let entries = plan_day_legend_entries(points);
+        if !entries.is_empty() {
+            let (cols, rows) = plan_legend_grid(entries.len());
+            if basemap.is_some() {
+                raster.fill_rect(8, 30, cols * PLAN_LEGEND_STEP + 4, rows * PLAN_LEGEND_ROW, [255, 255, 255]);
+            }
+            for (i, (label, color)) in entries.into_iter().enumerate() {
+                let (col, row) = (i as i32 % cols, i as i32 / cols);
+                raster.legend(12 + col * PLAN_LEGEND_STEP, 31 + row * PLAN_LEGEND_ROW, &label, color);
+            }
         }
     }
     let credit = if basemap.is_some() {
@@ -965,6 +1025,95 @@ fn coord_key(lat: f64, lon: f64) -> String {
 }
 fn same_place(a: &Point, b: &Point) -> bool {
     coord_key(a.lat, a.lon) == coord_key(b.lat, b.lon)
+}
+
+/// Bumped whenever the renderer draws the SAME inputs differently, so the
+/// no-background reuse path cannot keep a PNG drawn by an older renderer.
+const RENDER_REV: &str = "pins-declutter+day-legend/1";
+/// Horizontal step per overview DAY legend entry: dot + "DAY NN" + gap.
+const PLAN_LEGEND_STEP: i32 = 62;
+/// Vertical step between wrapped overview legend rows.
+const PLAN_LEGEND_ROW: i32 = 14;
+
+/// (columns, rows) for `n` overview DAY legend entries: as many per row as fit
+/// between the 12px left inset and a matching right margin, then wrap.
+fn plan_legend_grid(n: usize) -> (i32, i32) {
+    let per_row = ((WIDTH as i32 - 24) / PLAN_LEGEND_STEP).max(1);
+    let n = n as i32;
+    let cols = n.min(per_row);
+    let rows = if n == 0 { 0 } else { (n + per_row - 1) / per_row };
+    (cols, rows)
+}
+/// Pin radius drawn by `Raster::pin` (white halo included).
+const PIN_RADIUS: i32 = 15;
+
+/// Overview DAY legend: one (label, color) per itinerary day with at least one
+/// sightseeing pin, in day order. Built from each pin's own `day`, never from
+/// its color — DAY_COLORS cycles after 7 days.
+fn plan_day_legend_entries(points: &[Point]) -> Vec<(String, [u8; 3])> {
+    let mut days: Vec<(u32, [u8; 3])> = points
+        .iter()
+        .filter(|p| p.kind == Kind::Sightseeing)
+        .filter_map(|p| p.day.map(|d| (d, p.color)))
+        .collect();
+    days.sort_by_key(|(d, _)| *d);
+    days.dedup_by_key(|(d, _)| *d);
+    days.into_iter()
+        .map(|(d, c)| (format!("DAY {d}"), c))
+        .collect()
+}
+
+/// Place each pin at its true position when it does not overlap an earlier
+/// pin; otherwise walk outward rings (8·k candidates on ring k, starting at the
+/// top) and take the first free spot fully inside the canvas and clear of every
+/// `reserved` rect (x0, y0, x1, y1). Order is preserved so pin N keeps number N.
+/// A pin with no free spot within 4 rings stays at its anchor (overlapping)
+/// rather than wandering far from the place it marks.
+fn declutter_pins(anchors: &[(i32, i32)], reserved: &[(i32, i32, i32, i32)]) -> Vec<(i32, i32)> {
+    let min = 2 * PIN_RADIUS - 2;
+    let clear = |c: (i32, i32)| {
+        reserved.iter().all(|&(x0, y0, x1, y1)| {
+            let (dx, dy) = (c.0 - c.0.clamp(x0, x1), c.1 - c.1.clamp(y0, y1));
+            dx * dx + dy * dy >= PIN_RADIUS * PIN_RADIUS
+        })
+    };
+    let fits = |c: (i32, i32), placed: &[(i32, i32)]| {
+        placed.iter().all(|p| {
+            let (dx, dy) = (p.0 - c.0, p.1 - c.1);
+            dx * dx + dy * dy >= min * min
+        })
+    };
+    // Centers whose whole halo stays on pixels 0..=W-1 / 0..=H-1.
+    let inside = |c: (i32, i32)| {
+        c.0 >= PIN_RADIUS
+            && c.0 <= WIDTH as i32 - 1 - PIN_RADIUS
+            && c.1 >= PIN_RADIUS
+            && c.1 <= HEIGHT as i32 - 1 - PIN_RADIUS
+    };
+    let mut placed: Vec<(i32, i32)> = Vec::with_capacity(anchors.len());
+    for &a in anchors {
+        let mut spot = a;
+        if !fits(a, &placed) {
+            'rings: for ring in 1..=4 {
+                let r = f64::from(ring * min);
+                let steps = 8 * ring;
+                for s in 0..steps {
+                    let ang = f64::from(s) * std::f64::consts::TAU / f64::from(steps)
+                        - std::f64::consts::FRAC_PI_2;
+                    let c = (
+                        a.0 + (r * ang.cos()).round() as i32,
+                        a.1 + (r * ang.sin()).round() as i32,
+                    );
+                    if inside(c) && clear(c) && fits(c, &placed) {
+                        spot = c;
+                        break 'rings;
+                    }
+                }
+            }
+        }
+        placed.push(spot);
+    }
+    placed
 }
 
 /// The DayLogistics legend entries must match the pins actually on the map:
@@ -1158,8 +1307,8 @@ impl Raster {
         }
     }
     fn pin(&mut self, x: i32, y: i32, c: [u8; 3], n: usize) {
-        self.dot(x, y, 15, [255, 255, 255]);
-        self.dot(x, y, 12, c);
+        self.dot(x, y, PIN_RADIUS, [255, 255, 255]);
+        self.dot(x, y, PIN_RADIUS - 3, c);
         let label = n.to_string();
         let width = label.len() as i32 * 4 - 1;
         self.text(x - width / 2, y - 2, &label, [255, 255, 255], 1);
@@ -2256,6 +2405,7 @@ async fn await_logistics(
                         lon: poi.lon,
                         color: [21, 101, 192],
                         kind: Kind::Hotel,
+                        day: None,
                         label: hotel,
                     });
                 }
@@ -2287,6 +2437,7 @@ async fn await_logistics(
                         [239, 108, 0]
                     },
                     kind,
+                    day: None,
                     label: display_label(&label, hotel_names),
                 });
             }
@@ -2442,6 +2593,7 @@ mod tests {
             lat,
             lon: 135.0,
             kind,
+            day: None,
             label: "test".into(),
             color: [0; 3],
         };
@@ -2465,6 +2617,7 @@ mod tests {
             lat,
             lon: 135.0,
             kind,
+            day: None,
             label: "test".into(),
             color: [0; 3],
         };
@@ -2511,6 +2664,7 @@ mod tests {
             lat,
             lon: 135.0,
             kind,
+            day: None,
             label: "test".into(),
             color: [0; 3],
         };
@@ -2520,6 +2674,7 @@ mod tests {
             lat: 35.1,
             lon: 135.0,
             kind: Kind::Sightseeing,
+            day: None,
             label: "test".into(),
             color: [60, 180, 75],
         };
@@ -2715,8 +2870,8 @@ mod tests {
     #[test]
     fn padded_bounds_pads_by_span_fraction() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
-            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
         ];
         let (s, w, n, e) = padded_bounds(&points, &[]);
         assert!((s - 34.98).abs() < 1e-9, "south pad = 0.02 (20% of 0.1°): {s}");
@@ -2755,8 +2910,8 @@ mod tests {
     #[test]
     fn render_png_with_road_web_changes_output() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
-            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
         ];
         let roads = vec![RoadWay {
             points: vec![(35.0, 135.0), (35.005, 135.008), (35.01, 135.01)],
@@ -2771,8 +2926,8 @@ mod tests {
     #[test]
     fn render_png_with_basemap_replaces_grid_background() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
-            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
         ];
         let mut base = vec![255u8; (WIDTH * HEIGHT * 4) as usize];
         for i in 0..(WIDTH * HEIGHT) as usize {
@@ -2790,8 +2945,8 @@ mod tests {
     #[test]
     fn basemap_bbox_covers_full_canvas_in_mercator_meters() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
-            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
         ];
         let p = map_projection(&points, &[]);
         let (min_x, min_y, max_x, max_y) = basemap_bbox(&p);
@@ -2910,6 +3065,116 @@ mod tests {
     }
 
     #[test]
+    fn declutter_keeps_free_pins_and_separates_colliding_ones() {
+        let min = 2 * PIN_RADIUS - 2;
+        // Five pins stacked within a few pixels (the 嵐山 cluster) plus one
+        // far-away pin that must stay exactly where it is.
+        let anchors = vec![(300, 200), (302, 201), (299, 203), (301, 198), (304, 202), (100, 100)];
+        let placed = declutter_pins(&anchors, &[]);
+        assert_eq!(placed.len(), anchors.len());
+        assert_eq!(placed[0], anchors[0], "the first pin of a cluster keeps its spot");
+        assert_eq!(placed[5], anchors[5], "a non-colliding pin never moves");
+        for i in 0..placed.len() {
+            for j in (i + 1)..placed.len() {
+                let (dx, dy) = (placed[i].0 - placed[j].0, placed[i].1 - placed[j].1);
+                assert!(dx * dx + dy * dy >= min * min, "pins {i} and {j} still overlap: {placed:?}");
+            }
+            // Displaced pins stay near the place they mark (≤ 4 rings).
+            let (dx, dy) = (placed[i].0 - anchors[i].0, placed[i].1 - anchors[i].1);
+            assert!(dx * dx + dy * dy <= (4 * min + 1) * (4 * min + 1), "{placed:?}");
+        }
+    }
+
+    #[test]
+    fn declutter_never_pushes_a_pin_off_canvas() {
+        let (w, h) = (WIDTH as i32, HEIGHT as i32);
+        let on_canvas = |c: (i32, i32)| {
+            c.0 >= PIN_RADIUS && c.1 >= PIN_RADIUS && c.0 <= w - 1 - PIN_RADIUS && c.1 <= h - 1 - PIN_RADIUS
+        };
+        for corner in [
+            (PIN_RADIUS, PIN_RADIUS),
+            (w - 1 - PIN_RADIUS, PIN_RADIUS),
+            (PIN_RADIUS, h - 1 - PIN_RADIUS),
+            (w - 1 - PIN_RADIUS, h - 1 - PIN_RADIUS),
+        ] {
+            let placed = declutter_pins(&[corner, (corner.0, corner.1)], &[]);
+            assert_ne!(placed[1], corner);
+            assert!(on_canvas(placed[1]), "corner {corner:?} → {placed:?}");
+        }
+    }
+
+    #[test]
+    fn declutter_keeps_displaced_pins_off_reserved_strips() {
+        // Two pins colliding right under the title strip: the second must not
+        // be moved up INTO the strip (its first ring candidate is straight up).
+        let strip = (8, 8, 300, 44);
+        let placed = declutter_pins(&[(100, 58), (100, 58)], &[strip]);
+        let c = placed[1];
+        let (dx, dy) = (c.0 - c.0.clamp(strip.0, strip.2), c.1 - c.1.clamp(strip.1, strip.3));
+        assert!(dx * dx + dy * dy >= PIN_RADIUS * PIN_RADIUS, "{placed:?}");
+        assert_ne!(c, (100, 58));
+    }
+
+    #[test]
+    fn plan_legend_wraps_instead_of_running_off_canvas() {
+        // Every entry of a long trip — dot plus "DAY NN" text — stays on the
+        // canvas; 11+ days used to start entry 11 past x=640.
+        for n in [1usize, 7, 9, 10, 11, 14, 21] {
+            let (cols, rows) = plan_legend_grid(n);
+            assert!(cols * rows >= n as i32, "n={n} {cols}x{rows}");
+            let last_col_x = 12 + (cols - 1) * PLAN_LEGEND_STEP;
+            let text_end = last_col_x + 14 + "DAY 21".len() as i32 * 6;
+            assert!(text_end <= WIDTH as i32, "n={n} cols={cols} ends at {text_end}");
+        }
+        assert_eq!(plan_legend_grid(0), (0, 0));
+        assert_eq!(plan_legend_grid(3), (3, 1));
+        let (cols, rows) = plan_legend_grid(11);
+        assert!(rows >= 2 && cols < 11, "11 days must wrap: {cols}x{rows}");
+    }
+
+    #[test]
+    fn input_sha_tracks_day_even_when_colors_cycle() {
+        let at = |day| Point {
+            lat: 35.0,
+            lon: 135.0,
+            color: DAY_COLORS[0],
+            kind: Kind::Sightseeing,
+            day: Some(day),
+            label: String::new(),
+        };
+        // Day 1 and day 8 share DAY_COLORS[0]; the legend differs, so must the hash.
+        assert_ne!(
+            map_input_sha256("Sightseeing overview", MapKind::Plan, &[at(1)], &[]),
+            map_input_sha256("Sightseeing overview", MapKind::Plan, &[at(8)], &[])
+        );
+    }
+
+    #[test]
+    fn plan_day_legend_comes_from_days_not_colors() {
+        let p = |day: Option<u32>, kind: Kind| Point {
+            lat: 35.0,
+            lon: 135.0,
+            color: day
+                .map(|d| DAY_COLORS[(d as usize - 1) % DAY_COLORS.len()])
+                .unwrap_or([21, 101, 192]),
+            kind,
+            day,
+            label: String::new(),
+        };
+        // Day 8 shares day 1's color; the legend must still name both, in
+        // day order, once each, and skip the hotel pin.
+        let pts = vec![
+            p(Some(8), Kind::Sightseeing),
+            p(Some(1), Kind::Sightseeing),
+            p(Some(1), Kind::Sightseeing),
+            p(Some(3), Kind::Sightseeing),
+            p(None, Kind::Hotel),
+        ];
+        let labels: Vec<String> = plan_day_legend_entries(&pts).into_iter().map(|(l, _)| l).collect();
+        assert_eq!(labels, vec!["DAY 1", "DAY 3", "DAY 8"]);
+    }
+
+    #[test]
     fn input_sha_ignores_labels_so_a_rename_needs_no_rerender() {
         // The PNG carries no labels; only the legend table does. A label-only edit
         // must not change the reuse hash (it refreshes legend rows on the keep path).
@@ -2918,6 +3183,7 @@ mod tests {
             lon: 135.0,
             color: [1, 2, 3],
             kind: Kind::Sightseeing,
+            day: None,
             label: "金閣寺".into(),
         };
         let renamed = Point { label: "Kinkaku-ji".into(), ..base.clone() };
@@ -2935,6 +3201,7 @@ mod tests {
                 lon: 135.0,
                 color: [1, 2, 3],
                 kind: Kind::Sightseeing,
+                day: None,
                 label: String::new(),
             },
             Point {
@@ -2942,6 +3209,7 @@ mod tests {
                 lon: 135.2,
                 color: [4, 5, 6],
                 kind: Kind::Hotel,
+                day: None,
                 label: String::new(),
             },
         ];
