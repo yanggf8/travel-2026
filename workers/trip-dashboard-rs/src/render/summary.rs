@@ -1004,15 +1004,9 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 // the hotel matches → hotel-level facts only (ratings,
                 // location). A booked 海景四人房's bathtub tag must never
                 // dress up a booked 陽台雙人房.
-                let exact = plan.candidates.iter().find(|c| {
-                    c.hotel_name == stay.hotel_name
-                        && (stay.room_type.is_empty() || c.room_type == stay.room_type)
-                });
-                let cand = exact.or_else(|| {
-                    plan.candidates
-                        .iter()
-                        .find(|c| c.hotel_name == stay.hotel_name)
-                });
+                let cand_match = booked_candidate(&plan.candidates, stay);
+                let exact = cand_match.filter(|(_, room)| *room).map(|(c, _)| c);
+                let cand = cand_match.map(|(c, _)| c);
                 if let Some(c) = cand {
                     let room_exact = exact.is_some();
                     h.push_str("<div class=\"booking-cand-detail\">");
@@ -1153,9 +1147,10 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             // Post-booking the section is reference material, not a decision
             // in progress — collapse it (SSR <details>, folded by default).
             h.push_str(&format!(
-                "<details class=\"cand-reference\"><summary>{} · {} 間</summary>",
+                "<details class=\"cand-reference\"><summary>{} · {}{}</summary>",
                 esc(&sub_text),
-                show.len()
+                show.len(),
+                if lang == "en" { "" } else { " 間" }
             ));
         } else {
             h.push_str(&format!(
@@ -1481,9 +1476,114 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     h
 }
 
+/// Match a booked stay to its candidate row. The bool says whether the ROOM
+/// matched: only then may room facts (tags, size, price, photos) travel; a
+/// hotel-only match carries ratings/location.
+///
+/// With the booking's payload halves (every set-accommodation booking) the
+/// match is exact on hotel_name, then room_type. A legacy row without them has
+/// only the title "<hotel_name> <room_type>": the room match is that exact
+/// string, the hotel match the LONGEST candidate hotel_name the title equals or
+/// starts with followed by a space ("Grand" never claims "Grand Hotel …").
+/// Several rows with the same hotel+room resolve to the first in render order
+/// (ranking, then price) — the one the comparison put on top.
+fn booked_candidate<'a>(
+    candidates: &'a [crate::model::DomesticCandidate],
+    stay: &crate::model::DomesticStay,
+) -> Option<(&'a crate::model::DomesticCandidate, bool)> {
+    if stay.from_payload {
+        let room = candidates.iter().find(|c| {
+            !stay.room_type.is_empty()
+                && c.hotel_name == stay.hotel_name
+                && c.room_type == stay.room_type
+        });
+        return room.map(|c| (c, true)).or_else(|| {
+            candidates
+                .iter()
+                .find(|c| c.hotel_name == stay.hotel_name)
+                .map(|c| (c, false))
+        });
+    }
+    let title = stay.title.as_str();
+    if let Some(c) = candidates.iter().find(|c| {
+        !c.room_type.is_empty() && title == format!("{} {}", c.hotel_name, c.room_type)
+    }) {
+        return Some((c, true));
+    }
+    candidates
+        .iter()
+        .filter(|c| {
+            !c.hotel_name.is_empty()
+                && (title == c.hotel_name
+                    || title
+                        .strip_prefix(c.hotel_name.as_str())
+                        .is_some_and(|rest| rest.starts_with(' ')))
+        })
+        .max_by_key(|c| c.hotel_name.len())
+        .map(|c| (c, false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cand(hotel: &str, room: &str) -> crate::model::DomesticCandidate {
+        crate::model::DomesticCandidate {
+            hotel_name: hotel.into(),
+            room_type: room.into(),
+            ..Default::default()
+        }
+    }
+
+    fn legacy(title: &str) -> crate::model::DomesticStay {
+        crate::model::DomesticStay { title: title.into(), ..Default::default() }
+    }
+
+    fn booked(hotel: &str, room: &str) -> crate::model::DomesticStay {
+        crate::model::DomesticStay {
+            title: format!("{hotel} {room}"),
+            hotel_name: hotel.into(),
+            room_type: room.into(),
+            from_payload: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn booked_candidate_uses_payload_halves_when_present() {
+        // The concatenated titles collide ("Grand"+"Hotel Family" vs
+        // "Grand Hotel"+"Family"); the payload halves do not.
+        let cands = vec![cand("Grand", "Hotel Family"), cand("Grand Hotel", "Family")];
+        let (c, room) = booked_candidate(&cands, &booked("Grand Hotel", "Family")).unwrap();
+        assert_eq!((c.hotel_name.as_str(), c.room_type.as_str(), room), ("Grand Hotel", "Family", true));
+        // Unknown room at a known hotel → hotel-level only.
+        let (c, room) = booked_candidate(&cands, &booked("Grand Hotel", "Suite")).unwrap();
+        assert_eq!((c.hotel_name.as_str(), room), ("Grand Hotel", false));
+        // An empty booked room never wears a candidate room's facts.
+        let (_, room) = booked_candidate(&cands, &booked("Grand Hotel", "")).unwrap();
+        assert!(!room);
+    }
+
+    #[test]
+    fn booked_candidate_matches_whole_title_not_first_space() {
+        let cands = vec![
+            cand("Grand", "Twin"),
+            cand("Grand Hotel", "Deluxe"),
+            cand("Grand Hotel", "Suite"),
+        ];
+        // A hotel name with a space: the room match is the full title.
+        let (c, room) = booked_candidate(&cands, &legacy("Grand Hotel Deluxe")).unwrap();
+        assert_eq!((c.hotel_name.as_str(), c.room_type.as_str(), room), ("Grand Hotel", "Deluxe", true));
+        // Unknown room at a known hotel: hotel-level only, and the LONGEST
+        // hotel name wins ("Grand" must not claim a "Grand Hotel" booking).
+        let (c, room) = booked_candidate(&cands, &legacy("Grand Hotel Family")).unwrap();
+        assert_eq!((c.hotel_name.as_str(), room), ("Grand Hotel", false));
+        // A title with no room part never wears a candidate room's facts.
+        let (c, room) = booked_candidate(&cands, &legacy("Grand Hotel")).unwrap();
+        assert_eq!((c.hotel_name.as_str(), room), ("Grand Hotel", false));
+        // A bare prefix without a word boundary is not a match.
+        assert!(booked_candidate(&cands, &legacy("Grandview Inn")).is_none());
+    }
     use crate::model::{FitOffer, Offer, Plan};
     use crate::turso::Row;
 
@@ -2095,6 +2195,7 @@ mod tests {
         let plan = Plan {
             p4_status: "booked".into(),
             domestic_stays: vec![DomesticStay {
+                title: "漫海聽風 海景四人房".into(),
                 hotel_name: "漫海聽風".into(),
                 room_type: "海景四人房".into(),
                 price_twd: 12800,
@@ -2136,6 +2237,17 @@ mod tests {
         assert!(html.contains("<span class=\"candidate-size\">20 m"), "{html}");
         assert!(html.contains("4.6"), "{html}");
         assert!(html.contains("candidate-tag--sea"), "{html}");
+        // Booked gallery images wear the constrained thumbnail class.
+        let detail = html.split("booking-cand-detail").nth(1).unwrap_or_default();
+        assert!(detail.contains("<img class=\"candidate-gallery-img\""), "{html}");
+        // The ZH unit 間 never leaks into the English page.
+        let en = render(&plan, "en", None);
+        let summary = en
+            .split("<details class=\"cand-reference\"><summary>")
+            .nth(1)
+            .and_then(|r| r.split("</summary>").next())
+            .unwrap_or_default();
+        assert!(!summary.is_empty() && !summary.contains('間'), "{summary}");
     }
 
     /// The booked room type may have NO candidate row of its own (jiufen:
@@ -2149,6 +2261,7 @@ mod tests {
         let plan = Plan {
             p4_status: "booked".into(),
             domestic_stays: vec![DomesticStay {
+                title: "漫海聽風 海景陽台豪華雙人房".into(),
                 hotel_name: "漫海聽風".into(),
                 room_type: "海景陽台豪華雙人房".into(),
                 price_twd: 0,

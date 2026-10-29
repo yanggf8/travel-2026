@@ -263,7 +263,7 @@ fn companion_card_frame(o: &crate::model::CompanionOption, tag: &str, lang: &str
         ));
     }
     let _ = lang;
-    out.push_str("</div>");
+    out.push_str("</div><p class=\"companion-card-credit\">© Esri</p>");
     out
 }
 
@@ -881,6 +881,8 @@ mod tests {
             2,
             "each option card carries its own route frame: {html}"
         );
+        // Each frame composites the ArcGIS basemap itself → its own © Esri.
+        assert_eq!(html.match_indices("companion-card-credit\">© Esri").count(), 2, "{html}");
     }
 }
 

@@ -108,7 +108,9 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             };
             let records = list_tokens(&conn, &plan_id).await?;
             let mut deactivated = 0usize;
+            let mut duplicates = 0usize;
             let mut failures: Vec<String> = Vec::new();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             for arg in &tokens {
                 let token = match resolve_token_arg(arg, &records) {
                     Ok(t) => t.to_string(),
@@ -117,6 +119,12 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                         continue;
                     }
                 };
+                // The same token named twice (full + prefix, or repeated) is
+                // one request: the second must not read as a failure.
+                if !seen.insert(token.clone()) {
+                    duplicates += 1;
+                    continue;
+                }
                 match deactivate_token(&conn, &plan_id, &token).await {
                     Ok(true) => {
                         deactivated += 1;
@@ -132,7 +140,12 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                     Err(e) => failures.push(format!("{arg}: {e}")),
                 }
             }
-            println!("{deactivated} deactivated, {} skipped", tokens.len() - deactivated);
+            let dup_note = if duplicates > 0 {
+                format!(", {duplicates} duplicate")
+            } else {
+                String::new()
+            };
+            println!("{deactivated} deactivated, {} skipped{dup_note}", failures.len());
             if failures.is_empty() {
                 Ok(())
             } else {
@@ -428,13 +441,18 @@ fn resolve_token_arg<'a>(
     if arg.len() < 6 {
         return Err("prefix too short (min 6 chars — copy the fingerprint head from --show)".into());
     }
-    let matches: Vec<&str> = records
+    let matches: Vec<&TokenRecord> = records
         .iter()
-        .map(|r| r.token.as_str())
-        .filter(|t| t.starts_with(arg))
+        .filter(|r| r.token.starts_with(arg))
         .collect();
+    // Only an ACTIVE token can be deactivated: when a prefix also hits
+    // deactivated history, the single active match is the one meant.
+    let active: Vec<&TokenRecord> = matches.iter().copied().filter(|r| r.is_active()).collect();
+    if matches.len() > 1 && active.len() == 1 {
+        return Ok(active[0].token.as_str());
+    }
     match matches.len() {
-        1 => Ok(matches[0]),
+        1 => Ok(matches[0].token.as_str()),
         0 => Err("no token matches".into()),
         _ => Err(format!(
             "ambiguous prefix — {} tokens match; copy more characters",
@@ -611,6 +629,25 @@ mod tests {
             resolve_token_arg("0123456789abcdef", &records).unwrap(),
             "0123456789abcdef0123456789abcdef"
         );
+    }
+
+    #[test]
+    fn resolve_prefers_the_single_active_match_over_history() {
+        let records = vec![
+            rec("0123456789abcdef0123456789abcdef", "inactive"),
+            rec("0123456789ffffffffffffffffffff", "active"),
+        ];
+        assert_eq!(
+            resolve_token_arg("012345", &records).unwrap(),
+            "0123456789ffffffffffffffffffff"
+        );
+        // Two ACTIVE matches stay ambiguous even with history around.
+        let records = vec![
+            rec("0123456789abcdef0123456789abcdef", "active"),
+            rec("0123456789ffffffffffffffffffff", "active"),
+            rec("0123450000000000000000000000000", "inactive"),
+        ];
+        assert!(resolve_token_arg("012345", &records).err().unwrap().contains("ambiguous"));
     }
 
     #[test]

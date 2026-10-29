@@ -213,8 +213,8 @@ pub fn grant_manager(
         ));
         for g in &actives {
             h.push_str(&format!(
-                "<label class=\"grant-row\"><input type=\"checkbox\" name=\"token\" value=\"{}\"> \
-                 <code>{}</code> <span class=\"grant-created\">{}</span> {}</label>",
+                "<div class=\"grant-row\"><label class=\"grant-pick\"><input type=\"checkbox\" name=\"token\" value=\"{}\"> \
+                 <code>{}</code> <span class=\"grant-created\">{}</span></label> {}</div>",
                 esc(&g.token),
                 esc(&token_fingerprint(&g.token)),
                 esc(&g.created_at),
@@ -234,7 +234,7 @@ pub fn grant_manager(
         ));
         for g in &inactives {
             h.push_str(&format!(
-                "<div class=\"grant-row grant-row--inactive\"><code>{}</code>                  <span class=\"grant-created\">{} · {} {}</span></div>",
+                "<div class=\"grant-row grant-row--inactive\"><code>{}</code> <span class=\"grant-created\">{} · {} {}</span></div>",
                 esc(&token_fingerprint(&g.token)),
                 esc(&g.created_at),
                 deact_on,
@@ -297,6 +297,16 @@ mod tests {
         assert!(html.contains("/grants/deactivate-batch"), "{html}");
         assert!(html.contains("csrf-val"), "{html}");
         assert!(html.contains("停用所選"), "{html}");
+        // The copy button sits OUTSIDE the checkbox label (no interactive
+        // content nested in a <label>).
+        let label = html
+            .split("<label class=\"grant-pick\">")
+            .nth(1)
+            .and_then(|rest| rest.split("</label>").next())
+            .unwrap_or_default();
+        assert!(label.contains("type=\"checkbox\""), "{html}");
+        assert!(!label.contains("<button"), "copy button nested in label: {html}");
+        assert!(html.contains("copy-share-btn"), "{html}");
     }
 
     use super::*;

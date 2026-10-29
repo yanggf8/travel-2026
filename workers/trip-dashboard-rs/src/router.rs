@@ -916,7 +916,10 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         // [16] domestic accommodation stays (booked) for Booking Summary — jiufen et al.
         // Filter by authoritative dest when available; fallback to any dest for legacy plans.
         format!(
-            "SELECT trip_id, destination, title, price_amount, price_currency, status, selected_date FROM bookings_current WHERE trip_id = '{slug}' AND category = 'accommodation' AND status = 'booked' AND destination = {dest_expr_own}"
+            "SELECT trip_id, destination, title, price_amount, price_currency, status, selected_date, \
+             (SELECT value FROM bookings_current_payload p WHERE p.booking_key = bookings_current.booking_key AND p.key = 'hotel') AS payload_hotel, \
+             (SELECT value FROM bookings_current_payload p WHERE p.booking_key = bookings_current.booking_key AND p.key = 'room_type') AS payload_room \
+             FROM bookings_current WHERE trip_id = '{slug}' AND category = 'accommodation' AND status = 'booked' AND destination = {dest_expr_own}"
         ),
         // [17] domestic accommodation candidates (sea-view shortlist) — ranked
         // candidates first (ranking 1 = 首選), then price order for the unranked.

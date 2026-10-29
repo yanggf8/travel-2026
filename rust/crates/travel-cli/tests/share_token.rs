@@ -147,10 +147,20 @@ fn share_token_multi_deactivate_and_all_listing() {
     assert!(stdout.contains("停用 (2):"), "deactivated block unfolded; stdout={stdout}");
     assert!(stdout.contains(&toks[0][..6]), "stdout={stdout}");
 
+    // The same token named twice (full + its own prefix) is ONE request:
+    // success, reported as a duplicate, never a partial failure.
+    let c_prefix = &toks[2][..8];
+    let (ok, stdout, stderr) = run_cmd(
+        &plan_id,
+        &["share-token", "deactivate", &toks[2], c_prefix],
+    );
+    assert!(ok, "duplicate naming must not fail; stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("1 deactivated, 0 skipped, 1 duplicate"), "stdout={stdout}");
+    assert_eq!(token_status(&toks[2]).as_deref(), Some("inactive"));
+
     // Re-deactivating an already-inactive token fails loud, changes nothing.
     let (ok, stdout, stderr) =
         run_cmd(&plan_id, &["share-token", "deactivate", &toks[0]]);
     assert!(!ok, "inactive token must not report success; stdout={stdout}");
     assert!(stderr.contains("no active token"), "stderr={stderr}");
-    assert_eq!(token_status(&toks[2]).as_deref(), Some("active"));
 }

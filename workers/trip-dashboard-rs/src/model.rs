@@ -139,6 +139,10 @@ pub struct DomesticStay {
     pub selected_date: String,
     pub status: String,
     pub destination: String,
+    /// True when hotel_name/room_type came from the booking's own payload
+    /// (exact halves); false when they were re-derived from the title (legacy
+    /// rows), which can only be matched heuristically.
+    pub from_payload: bool,
 }
 
 /// One gallery image for a domestic accommodation candidate (child table
@@ -309,6 +313,49 @@ pub struct FitOffer {
     pub room_en: String,
 }
 
+/// One booked domestic stay row (bookings_current + its payload halves).
+fn domestic_stay(r: &Row) -> DomesticStay {
+    let title = s(r, "title");
+    let payload_hotel = s(r, "payload_hotel");
+    // The booking's own payload halves are authoritative. Only a legacy
+    // row without them falls back to splitting the title on its first
+    // space — a display heuristic, never used to match (see
+    // render::summary::booked_candidate).
+    let from_payload = !payload_hotel.is_empty();
+    let (hotel_name, room_type) = if from_payload {
+        (payload_hotel, s(r, "payload_room"))
+    } else if let Some(idx) = title.find(' ') {
+        (
+            title[..idx].trim().to_string(),
+            title[idx..].trim().to_string(),
+        )
+    } else {
+        (title.clone(), String::new())
+    };
+    DomesticStay {
+        title: title.clone(),
+        hotel_name: if hotel_name.is_empty() {
+            title.clone()
+        } else {
+            hotel_name
+        },
+        room_type,
+        from_payload,
+        price_twd: i(r, "price_amount"),
+        currency: {
+            let c = s(r, "price_currency");
+            if c.is_empty() {
+                "TWD".to_string()
+            } else {
+                c
+            }
+        },
+        selected_date: s(r, "selected_date"),
+        status: s(r, "status"),
+        destination: s(r, "destination"),
+    }
+}
+
 /// Assemble a Plan from the pipeline result vectors (query order defined in the router/loader).
 /// Row slices MUST be pre-sorted by their sort_order in the SQL query — this
 /// function preserves input order and does not re-sort.
@@ -439,43 +486,7 @@ pub fn assemble(
         }
     }
     // ---- domestic stays (category=accommodation, status=booked) ----
-    plan.domestic_stays = domestic_rows
-        .iter()
-        .map(|r| {
-            let title = s(r, "title");
-            // hotel_name / room_type derived from title when separate columns absent.
-            // title is "海論 海景雙人房" — split on first space as heuristic, else full title.
-            let (hotel_name, room_type) = if let Some(idx) = title.find(' ') {
-                (
-                    title[..idx].trim().to_string(),
-                    title[idx..].trim().to_string(),
-                )
-            } else {
-                (title.clone(), String::new())
-            };
-            DomesticStay {
-                title: title.clone(),
-                hotel_name: if hotel_name.is_empty() {
-                    title.clone()
-                } else {
-                    hotel_name
-                },
-                room_type,
-                price_twd: i(r, "price_amount"),
-                currency: {
-                    let c = s(r, "price_currency");
-                    if c.is_empty() {
-                        "TWD".to_string()
-                    } else {
-                        c
-                    }
-                },
-                selected_date: s(r, "selected_date"),
-                status: s(r, "status"),
-                destination: s(r, "destination"),
-            }
-        })
-        .collect();
+    plan.domestic_stays = domestic_rows.iter().map(domestic_stay).collect();
     // ---- domestic candidates (sea-view shortlist) from domestic_accommodations ----
     plan.candidates = candidate_rows
         .iter()
@@ -1523,6 +1534,20 @@ mod tests {
             m.cost_estimate, 0,
             "an unmatched poi_id must not borrow the title-match price"
         );
+    }
+
+    #[test]
+    fn domestic_stay_prefers_payload_halves_over_title_split() {
+        // A hotel name with a space: the payload says where it ends.
+        let st = domestic_stay(&row(&[
+            ("title", json!("Grand Hotel Family")),
+            ("payload_hotel", json!("Grand Hotel")),
+            ("payload_room", json!("Family")),
+        ]));
+        assert_eq!((st.hotel_name.as_str(), st.room_type.as_str(), st.from_payload), ("Grand Hotel", "Family", true));
+        // Legacy row without payload: first-space split, flagged as such.
+        let st = domestic_stay(&row(&[("title", json!("海論 海景雙人房"))]));
+        assert_eq!((st.hotel_name.as_str(), st.room_type.as_str(), st.from_payload), ("海論", "海景雙人房", false));
     }
 
     // Candidate gallery child rows join by accommodation_id (not hotel name) and
