@@ -458,7 +458,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "share-token" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel share-token                         mint a new per-plan view-scope token + print its dashboard URL\n  travel share-token --show                  list token fingerprints/status (read-only)\n  travel share-token --show-full             list full token URLs (sensitive)\n  travel share-token deactivate <token>      deactivate an active token\n  (plan resolved by --plan-id / $TRAVEL_PLAN_ID / --dest/date fallbacks; URL host overridable via TRAVEL_DASHBOARD_HOST)");
+                println!("Usage:\n  travel share-token                         mint a new per-plan view-scope token + print its dashboard URL\n  travel share-token --show                  list ACTIVE token fingerprints (read-only; deactivated ones folded)\n  travel share-token --show --all            also list the deactivated tokens (--all alone = --show --all)\n  travel share-token --show-full             list full token URLs (sensitive)\n  travel share-token deactivate <t1> [t2..]  deactivate one or more tokens, each full 32-hex or a unique >=6-char prefix (the --show fingerprint head)\n  (plan resolved by --plan-id / $TRAVEL_PLAN_ID / --dest/date fallbacks; URL host overridable via TRAVEL_DASHBOARD_HOST)");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;

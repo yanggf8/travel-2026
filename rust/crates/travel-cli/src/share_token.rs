@@ -183,6 +183,9 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                 i += 1;
             }
             "--all" => {
+                // --all only modifies a listing; alone it means `--show --all`,
+                // never the default mint (a fresh bearer URL nobody asked for).
+                mint = false;
                 all = true;
                 i += 1;
             }
@@ -201,7 +204,9 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                 if toks.is_empty() {
                     return Err("share-token deactivate requires at least one token (full 32-hex, or a unique prefix of what --show prints)".to_string());
                 }
-                deactivate = Some(toks);
+                // A repeated deactivate flag ACCUMULATES — replacing would leave
+                // the earlier tokens active while the summary reported success.
+                deactivate.get_or_insert_with(Vec::new).extend(toks);
             }
             "--plan-id" | "--dest" | "--travel-date" | "--travel-start" | "--travel-end" => {
                 i += 2; // resolver-owned flag + value
@@ -481,6 +486,34 @@ mod tests {
             ]),
             Ok(Action::Deactivate {
                 tokens: vec!["0123456789abcdef".to_string()]
+            })
+        );
+    }
+
+    #[test]
+    fn all_alone_lists_and_never_mints() {
+        assert_eq!(
+            parse_action(&["--all".to_string()]),
+            Ok(Action::List { full: false, all: true })
+        );
+        assert_eq!(
+            parse_action(&["--all".to_string(), "--show-full".to_string()]),
+            Ok(Action::List { full: true, all: true })
+        );
+    }
+
+    #[test]
+    fn repeated_deactivate_flags_accumulate() {
+        assert_eq!(
+            parse_action(&[
+                "--deactivate".to_string(),
+                "aaaaaa".to_string(),
+                "--deactivate".to_string(),
+                "bbbbbb".to_string(),
+                "cccccc".to_string(),
+            ]),
+            Ok(Action::Deactivate {
+                tokens: vec!["aaaaaa".into(), "bbbbbb".into(), "cccccc".into()]
             })
         );
     }

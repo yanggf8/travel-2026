@@ -1070,7 +1070,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     if room_exact && !c.image_url.is_empty() {
                         h.push_str("<figure class=\"candidate-gallery-item\">");
                         h.push_str(&format!(
-                            "<img src=\"{}\" alt=\"\" loading=\"lazy\">",
+                            "<img class=\"candidate-gallery-img\" src=\"{}\" alt=\"\" loading=\"lazy\">",
                             esc_url_attr(&c.image_url)
                         ));
                         h.push_str("</figure>");
@@ -1078,7 +1078,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     for img in c.images.iter().filter(|_| room_exact) {
                         h.push_str("<figure class=\"candidate-gallery-item\">");
                         h.push_str(&format!(
-                            "<img src=\"{}\" alt=\"{}\" loading=\"lazy\">",
+                            "<img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\">",
                             esc_url_attr(&img.image_url),
                             esc(&img.label)
                         ));

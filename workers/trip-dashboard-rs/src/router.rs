@@ -439,15 +439,17 @@ async fn handle_grant_post(
             redirect_after_grant("created", &plan)
         }
         GrantDecision::Deactivate { plan, token } => {
-            deactivate_grant(turso_url, write_token, &plan, &token, owner_login).await?;
+            let sql = build_deactivate_grant_sql(&plan, &token, owner_login);
+            if deactivated_rows(turso_url, write_token, sql).await? == 0 {
+                return no_active_token_matched();
+            }
             redirect_after_grant("inactive", &plan)
         }
         GrantDecision::DeactivateBatch { plan, tokens } => {
-            if tokens.is_empty() {
-                return Response::error("no tokens selected", 400);
-            }
             let sql = build_deactivate_batch_sql(&plan, &tokens, owner_login);
-            turso::pipeline(turso_url, write_token, &[sql]).await?;
+            if deactivated_rows(turso_url, write_token, sql).await? == 0 {
+                return no_active_token_matched();
+            }
             redirect_after_grant("inactive", &plan)
         }
     }
@@ -492,7 +494,8 @@ fn build_deactivate_grant_sql(plan: &str, token: &str, owner_login: &str) -> Str
     format!(
         "UPDATE plan_share_tokens \
          SET status='inactive', deactivated_at=datetime('now'), deactivated_by='{owner_sql}' \
-         WHERE plan_id = '{plan}' AND token = '{token}' AND status = 'active'"
+         WHERE plan_id = '{plan}' AND token = '{token}' AND status = 'active' \
+         RETURNING token"
     )
 }
 
@@ -518,20 +521,25 @@ fn build_deactivate_batch_sql(plan: &str, tokens: &[String], owner_login: &str) 
     format!(
         "UPDATE plan_share_tokens \
          SET status='inactive', deactivated_at=datetime('now'), deactivated_by='{owner_sql}' \
-         WHERE plan_id = '{plan}' AND token IN ({list}) AND status = 'active'"
+         WHERE plan_id = '{plan}' AND token IN ({list}) AND status = 'active' \
+         RETURNING token"
     )
 }
 
-async fn deactivate_grant(
-    turso_url: &str,
-    write_token: &str,
-    plan: &str,
-    token: &str,
-    owner_login: &str,
-) -> Result<()> {
-    let sql = build_deactivate_grant_sql(plan, token, owner_login);
-    turso::pipeline(turso_url, write_token, &[sql]).await?;
-    Ok(())
+/// Run a deactivate UPDATE (its `RETURNING token` makes the pipeline hand back
+/// one row per grant actually flipped) and count them. Zero means every posted
+/// token was already inactive, unknown, or another plan's — the caller must not
+/// redirect as if access had been revoked.
+async fn deactivated_rows(turso_url: &str, write_token: &str, sql: String) -> Result<usize> {
+    let results = turso::pipeline(turso_url, write_token, &[sql]).await?;
+    Ok(results.first().map(Vec::len).unwrap_or(0))
+}
+
+fn no_active_token_matched() -> Result<Response> {
+    Response::error(
+        "no active token matched (already inactive, or not this plan's)",
+        409,
+    )
 }
 
 fn redirect_after_grant(status: &str, plan: &str) -> Result<Response> {
@@ -1033,6 +1041,15 @@ mod tests {
         assert!(sql.contains("status = 'active'"), "{sql}");
         assert!(sql.contains("deactivated_by='o''brien'"), "{sql}");
         assert!(sql.contains("plan_id = 'jiufen-2026'"), "{sql}");
+        // RETURNING is how the route counts the grants actually flipped.
+        assert!(sql.ends_with("RETURNING token"), "{sql}");
+    }
+
+    #[test]
+    fn single_deactivate_sql_returns_flipped_token() {
+        let sql = build_deactivate_grant_sql("jiufen-2026", TEST_TOKEN, "owner");
+        assert!(sql.contains("status = 'active'"), "{sql}");
+        assert!(sql.ends_with("RETURNING token"), "{sql}");
     }
 
     #[test]

@@ -82,3 +82,72 @@ fn share_token_mints_and_persists_a_view_scope_token() {
         "stdout must echo the minted token; stdout={stdout} db_token={db_token}"
     );
 }
+/// Status of one seeded token, or None on a credless skip.
+fn token_status(token: &str) -> Option<String> {
+    db_exec(&format!(
+        "SELECT status FROM plan_share_tokens WHERE token = '{token}'"
+    ))?
+    .scalar()
+}
+
+#[test]
+fn share_token_multi_deactivate_and_all_listing() {
+    let tag = nanos();
+    let plan_id = format!("test-sharemulti-{tag}");
+    let dest = format!("sharemulti_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown_plan(&plan_id, &dest)
+    });
+    if db_exec("SELECT 1").is_none() {
+        eprintln!("skipping share-token multi-deactivate Turso test (no Turso creds)");
+        return;
+    }
+    seed_plan(&plan_id, &dest, 0);
+
+    // Per-run unique 32-hex tokens (token is the GLOBAL primary key) with
+    // distinct 6-char heads, so a fingerprint-head prefix resolves uniquely.
+    let head = (tag % 0xff_fff0) as u32;
+    let toks: Vec<String> = (0..3u32)
+        .map(|i| format!("{:06x}{:026x}", head + i, tag))
+        .collect();
+    for t in &toks {
+        db_exec(&format!(
+            "INSERT INTO plan_share_tokens (plan_id, token, created_at, status) \
+             VALUES ('{plan_id}', '{t}', datetime('now'), 'active')"
+        ));
+    }
+
+    // One subcommand list + a repeated flag: full token A, then B by prefix.
+    // Both must flip — a repeated flag used to REPLACE the earlier list.
+    let b_prefix = &toks[1][..8];
+    let (ok, stdout, stderr) = run_cmd(
+        &plan_id,
+        &["share-token", "deactivate", &toks[0], "--deactivate", b_prefix],
+    );
+    assert!(ok, "multi deactivate should succeed; stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("2 deactivated, 0 skipped"), "stdout={stdout}");
+    assert_eq!(token_status(&toks[0]).as_deref(), Some("inactive"));
+    assert_eq!(token_status(&toks[1]).as_deref(), Some("inactive"));
+    assert_eq!(token_status(&toks[2]).as_deref(), Some("active"));
+
+    // `--all` alone lists (active + unfolded deactivated) and must NOT mint.
+    let (ok, stdout, stderr) = run_cmd(&plan_id, &["share-token", "--all"]);
+    assert!(ok, "--all should list; stdout={stdout} stderr={stderr}");
+    assert_eq!(
+        count(&format!(
+            "SELECT COUNT(*) AS n FROM plan_share_tokens WHERE plan_id = '{plan_id}'"
+        )),
+        Some(3),
+        "--all must never mint a fresh token"
+    );
+    assert!(stdout.contains("停用 (2):"), "deactivated block unfolded; stdout={stdout}");
+    assert!(stdout.contains(&toks[0][..6]), "stdout={stdout}");
+
+    // Re-deactivating an already-inactive token fails loud, changes nothing.
+    let (ok, stdout, stderr) =
+        run_cmd(&plan_id, &["share-token", "deactivate", &toks[0]]);
+    assert!(!ok, "inactive token must not report success; stdout={stdout}");
+    assert!(stderr.contains("no active token"), "stderr={stderr}");
+    assert_eq!(token_status(&toks[2]).as_deref(), Some("active"));
+}
