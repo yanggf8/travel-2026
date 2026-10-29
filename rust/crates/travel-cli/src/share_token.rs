@@ -169,17 +169,20 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
     let mut mint = true;
     let mut full = false;
     let mut all = false;
+    let mut listed = false; // a listing flag (--show / --show-full) was given
     let mut deactivate: Option<Vec<String>> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--show" | "--list" => {
                 mint = false;
+                listed = true;
                 i += 1;
             }
             "--show-full" | "--full" => {
                 mint = false;
                 full = true;
+                listed = true;
                 i += 1;
             }
             "--all" => {
@@ -204,18 +207,52 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                 deactivate = Some(toks);
             }
             "--plan-id" | "--dest" | "--travel-date" | "--travel-start" | "--travel-end" => {
+                // A value flag MUST carry a concrete value: `--dest --show`
+                // used to swallow the listing flag as the value and silently
+                // leave MINT as the action (codex review 2026-10-29).
+                let missing = args
+                    .get(i + 1)
+                    .map(|v| v.starts_with("--"))
+                    .unwrap_or(true);
+                if missing {
+                    return Err(format!("{} requires a value", args[i]));
+                }
                 i += 2; // resolver-owned flag + value
             }
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
-            _ => i += 1, // ignore resolver positionals / stray text
+            other => {
+                return Err(format!(
+                    "unexpected argument: {other} (share-token takes flags only; tokens go \
+                     after `deactivate`)"
+                ));
+            }
         }
+    }
+    // A listing flag combined with deactivation is a contradictory request —
+    // reject instead of silently letting deactivation win.
+    if deactivate.is_some() && listed {
+        return Err(
+            "conflicting actions: a listing flag (--show / --show-full) cannot be combined \
+             with deactivate"
+                .to_string(),
+        );
     }
     if let Some(tokens) = deactivate {
         return Ok(Action::Deactivate { tokens });
     }
     if mint {
+        // `--all` alone must NOT fall through to the mint default — it used to
+        // create a fresh token when the user only wanted a listing modifier
+        // (found in self-review 2026-10-29).
+        if all {
+            return Err(
+                "--all only modifies --show / --show-full (e.g. `travel share-token --show --all`); \
+                 it does not mint or list by itself"
+                    .to_string(),
+            );
+        }
         return Ok(Action::Mint);
     }
     Ok(Action::List { full, all })
@@ -289,8 +326,12 @@ fn render_tokens(plan_id: &str, tokens: &[TokenRecord], full: bool, all: bool) -
 }
 
 fn token_line(plan_id: &str, t: &TokenRecord, full: bool) -> String {
+    // Plan ownership on every line (mapping token→plan used to require a
+    // separate SQL query — self-review 2026-10-29). The `token:` PREFIX is
+    // preserved for backward compatibility (codex review 2026-10-29); plan is
+    // appended after it.
     let mut line = format!(
-        "token: {}  status={}  created {}",
+        "token: {}  plan: {plan_id}  status={}  created {}",
         token_fingerprint(&t.token),
         t.status,
         t.created_at

@@ -15,6 +15,7 @@ Each view is a separate subcommand — pick one:
 ./bin/travel plans                               # list DB plans and date anchors
 ./bin/travel status --full                       # booking overview
 ./bin/travel itinerary                           # daily plan
+./bin/travel itinerary --day 2                   # render ONLY that day (trip header kept at full-trip day count; PENDING BOOKINGS scoped to the day). Fail-loud: missing/malformed/zero/duplicate --day values, a nonexistent day number, and any unknown flag (no silent ignores)
 ./bin/travel transport                           # transport summary
 ./bin/travel bookings                            # booking ledger
 ./bin/travel query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]    # READ-ONLY: list AI-recommended (source='ai_recommended') meals/routes/activities awaiting confirmation, grouped by kind with a "Day N session" scope hint. Same filters as confirm-recommendations (this previews what it would confirm). No --json.
@@ -84,7 +85,7 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-24-ota-migration-ch
 
 ## Bookings
 ```bash
-./bin/travel sync-bookings [--dry-run]
+./bin/travel sync-bookings [--dry-run]               # prints the effective trip_id — the DELETE-and-rewrite scope (custom --trip-id widens it beyond the plan's own rows)
 ./bin/travel query-bookings --dest tokyo_2026 [--category activity --status pending]
 ./bin/travel check-booking-integrity
 ./bin/travel validate-itinerary --dest tokyo_2026 [--severity error|warning|info]  # also a MAP-LINK lint: cross-country legs (error), &-truncating URLs / walking-mode rail (warning), ambiguous bare stops + meals with no map pin (info). Plus a RESERVATION lint (info): sit-down lunch/dinner restaurants not yet tracked in the booking ledger — walk-ins (ramen, 公設市場/食堂, 屋台村, supermarket, casual そば) are never flagged; self-clears once the session has a booked/pending activity. historical days skip booking-deadline failures
@@ -97,7 +98,7 @@ See `src/skills/scrape-ota/SKILL.md` and `docs/plans/2026-06-24-ota-migration-ch
 make test                                        # full Rust test suite (or: cd rust && cargo test -p travel-cli)
 ./bin/travel leave calc 2026-02-24 2026-02-28
 ./bin/travel normalize flights scrapes/trip-feb24-out.json --top 5
-./bin/travel validate data                       # data integrity check
+./bin/travel validate data                       # data integrity check. Includes the [bookings] integrity pass (validate data + doctor): plan-derived bookings (default trip_id = plan_id hyphens→underscores only; custom --trip-id syncs are out of scope) vs `bookings_current` per non-deleted plan — drift/plan-only/db-only are WARNINGS (historical unsynced plans don't block the pre-commit hook); accommodation db-only rows are excluded (set-accommodation writes them directly); a check that CANNOT run (connect/list/compare/read failure) is an ERROR (no best-effort silent skip). NOTE: sync-bookings is NOT offered as the automatic repair — it DELETEs every bookings_current row under the trip_id before rewriting, which can drop independently-managed rows; scope it consciously
 ./bin/travel validate publish --plan-id <id> [--dest slug]    # publish-readiness gate (Stage 4). BLOCKS on: no P5 days, itinerary errors, missing ZH (theme_zh/focus_zh on non-empty sessions), no map path. WARNS on: stale/never-snapshotted maps, missing weather within the 16-day window (upcoming trips). INFO (never blocks): count of AI-recommended items awaiting confirmation; weather-pending for a trip beyond the 16-day forecast window. Exit 1 only when blockers>0. Past-trip + empty-session guards.
 ./bin/travel doctor                              # full system health check (also runs the map-link lint across all plans; cross-country/ocean-route legs fail as errors). Emits a per-plan [reservations] info line for sit-down restaurants not yet tracked in the booking ledger (advisory — never fails the check)
 ```
@@ -108,7 +109,7 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 # Grant/share tokens (gate per-plan dashboard viewing). Plan uses normal resolver:
 # --plan-id > $TRAVEL_PLAN_ID > date/destination fallbacks.
 ./bin/travel share-token                          # mint a NEW per-plan view token + print its ready-to-open dashboard URL
-./bin/travel share-token --show                   # list token fingerprints + active/inactive status (read-only)
+./bin/travel share-token --show                   # list token fingerprints + active/inactive status (read-only); every line leads with `plan: <plan_id>` so a fingerprint alone says which plan it opens. `--all` is a MODIFIER of --show/--show-full only — `share-token --all` alone is rejected (it used to fall through to mint and create a token)
 ./bin/travel share-token --show-full              # print full bearer URLs (sensitive; use only when you need to re-copy one)
 ./bin/travel share-token deactivate <token>       # mark one active token inactive
 #   URL host defaults to trip-dashboard-rs.yanggf.workers.dev; override with TRAVEL_DASHBOARD_HOST (e.g. after the primary-URL cutover)

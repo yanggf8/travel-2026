@@ -47,7 +47,10 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let conn = db::connect_write().await?;
     let destination = read_destination(&conn, &plan_id, dest_opt.as_deref()).await?;
 
-    println!("\n🎫 Marking booking as confirmed for {destination}:");
+    // Print the resolved plan too — a destination can be shared by several
+    // plans (osaka_kyoto_2026: osaka-aug + osaka-nov), and the internally
+    // resolved plan was invisible before (self-review 2026-10-29).
+    println!("\n🎫 Marking booking as confirmed for {destination} (plan {plan_id}):");
 
     struct Plan {
         process_id: &'static str,
