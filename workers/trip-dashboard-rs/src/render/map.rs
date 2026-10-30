@@ -32,6 +32,10 @@ pub struct MapStatus {
     pub days: HashMap<i64, Option<String>>,
     /// Daily hotel-to-destination return maps (`day-{n}-logistics.png`).
     pub day_logistics: HashMap<i64, Option<String>>,
+    /// Daily beyond-the-area maps (`day-{n}-away.png`): the day's stops more
+    /// than 500 km from the destination hub (e.g. the home-side leg to the
+    /// departure airport), which snapshot-maps keeps off the area maps.
+    pub day_away: HashMap<i64, Option<String>>,
     /// Numbered-pin legends per map key (`plan.png`, `day-3.png`, …), loaded from
     /// the `map_legend_stops` rows the CLI's snapshot-maps writes in lockstep with
     /// the PNG it uploads. Empty for snapshots taken before the table existed —
@@ -222,14 +226,47 @@ pub fn day_logistics_map_slot(
     } else {
         format!("第 {day_number} 天・旅社來回")
     };
+    compact_day_map_slot(plan_id, day_number, "logistics", "", &caption, version, legend)
+}
+
+/// Compact map for the day's stops beyond the destination area
+/// (`day-{n}-away.png`); most days have none, and then nothing renders.
+pub fn day_away_map_slot(
+    plan_id: &str,
+    day_number: i64,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+) -> String {
+    let caption = if lang == "en" {
+        format!("Day {day_number} beyond the area")
+    } else {
+        format!("第 {day_number} 天・本區以外的行程")
+    };
+    compact_day_map_slot(plan_id, day_number, "away", " map-frame--day-away", &caption, version, legend)
+}
+
+/// The compact per-day map frame shared by `day-{n}-{suffix}.png` maps: only
+/// an uploaded PNG renders (no missing-map placeholder slot).
+fn compact_day_map_slot(
+    plan_id: &str,
+    day_number: i64,
+    suffix: &str,
+    extra_class: &str,
+    caption: &str,
+    version: Option<&str>,
+    legend: &[LegendStop],
+) -> String {
     if let Some(v) = version {
         format!(
-            "<figure class=\"map-frame map-frame--day-logistics\"><img class=\"planmap planmap--inset\" alt=\"{}\" src=\"/map/{}/day-{}-logistics.png{}\"><figcaption>{}</figcaption>{}</figure>",
-            esc(&caption),
+            "<figure class=\"map-frame map-frame--day-logistics{}\"><img class=\"planmap planmap--inset\" alt=\"{}\" src=\"/map/{}/day-{}-{}.png{}\"><figcaption>{}</figcaption>{}</figure>",
+            extra_class,
+            esc(caption),
             esc_url_attr(plan_id),
             day_number,
+            suffix,
             cache_bust(v),
-            map_caption(&caption),
+            map_caption(caption),
             map_legend_html(legend),
         )
     } else {
@@ -496,6 +533,43 @@ mod tests {
         let m = plan_logistics_map_slot("kyoto-2026", None, "zh", &[]);
         assert!(m.contains("map-frame--inset"), "{m}");
         assert!(m.contains("map-missing"));
+    }
+
+    #[test]
+    fn day_logistics_map_slot_renders_only_an_uploaded_map() {
+        let legend = [LegendStop { seq: 1, label: "旅社".into(), lat: 26.2, lon: 127.7 }];
+        let h = day_logistics_map_slot("okinawa-2026", 1, Some("etag-1"), "zh", &legend);
+        // The whole figure, spelled exactly as before compact_day_map_slot existed.
+        assert_eq!(
+            h,
+            format!(
+                "<figure class=\"map-frame map-frame--day-logistics\"><img class=\"planmap planmap--inset\" alt=\"第 1 天・旅社來回\" src=\"/map/okinawa-2026/day-1-logistics.png?v=etag1\"><figcaption>{}</figcaption>{}</figure>",
+                map_caption("第 1 天・旅社來回"),
+                map_legend_html(&legend),
+            )
+        );
+        assert!(day_logistics_map_slot("okinawa-2026", 1, Some("e"), "en", &[]).contains("Day 1 hotel round trip"));
+        assert_eq!(day_logistics_map_slot("okinawa-2026", 1, None, "zh", &[]), "");
+    }
+
+    #[test]
+    fn day_away_map_slot_renders_only_an_uploaded_map() {
+        let legend = [LegendStop { seq: 1, label: "紅樹林 淡水".into(), lat: 25.1677, lon: 121.4456 }];
+        let h = day_away_map_slot("okinawa-2026", 1, Some("etag-2"), "zh", &legend);
+        assert!(
+            h.starts_with(
+                "<figure class=\"map-frame map-frame--day-logistics map-frame--day-away\"><img class=\"planmap planmap--inset\""
+            ),
+            "{h}"
+        );
+        assert!(h.contains("src=\"/map/okinawa-2026/day-1-away.png?v=etag2\""), "{h}");
+        assert!(h.contains("alt=\"第 1 天・本區以外的行程\""), "{h}");
+        assert!(h.contains("<figcaption>第 1 天・本區以外的行程 "), "{h}");
+        assert!(h.contains("紅樹林 淡水"), "legend under the map: {h}");
+        let en = day_away_map_slot("okinawa-2026", 1, Some("e"), "en", &[]);
+        assert!(en.contains("<figcaption>Day 1 beyond the area "), "{en}");
+        // No away map uploaded: no slot and no missing-map placeholder.
+        assert_eq!(day_away_map_slot("okinawa-2026", 1, None, "zh", &legend), "");
     }
 
     #[test]

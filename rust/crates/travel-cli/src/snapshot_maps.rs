@@ -222,6 +222,9 @@ pub(crate) struct MapSource {
     route_endpoints: Vec<String>,
     /// Domestic (Taiwan) booked stay's hotel name, if any.
     domestic_stay: Option<String>,
+    /// The destination hub (`destination_config.lat/lon`); None when either is
+    /// NULL, which turns the MAX_HUB_DISTANCE_KM gate off.
+    hub: Option<(f64, f64)>,
 }
 
 /// One `flight_legs` row as the logistics map reads it.
@@ -256,6 +259,7 @@ impl MapSource {
             domestic_stay: query_domestic_stay(read, plan_id, dest)
                 .await?
                 .map(|(_title, hotel)| hotel),
+            hub: query_destination_hub(read, dest).await?,
         })
     }
 }
@@ -355,6 +359,9 @@ pub(crate) struct PlannedMap {
     /// Geocode cache misses among this map's inputs (cache-only mode): its input
     /// hash cannot be reproduced without the network.
     pub(crate) geocode_misses: Vec<String>,
+    /// Resolved stops among this map's inputs kept off it by the hub gate
+    /// (beyond MAX_HUB_DISTANCE_KM); a day's own go to its `day-{n}-away.png`.
+    off_area: Vec<OffAreaStop>,
 }
 
 enum MapPlan {
@@ -372,7 +379,14 @@ enum MapPlan {
 }
 
 impl PlannedMap {
-    fn render(key: &str, kind: MapKind, points: Vec<Point>, routes: Vec<RouteLine>, misses: Vec<String>) -> Self {
+    fn render(
+        key: &str,
+        kind: MapKind,
+        points: Vec<Point>,
+        routes: Vec<RouteLine>,
+        misses: Vec<String>,
+        off_area: Vec<OffAreaStop>,
+    ) -> Self {
         Self {
             key: key.to_string(),
             plan: MapPlan::Render {
@@ -382,14 +396,22 @@ impl PlannedMap {
                 routes,
             },
             geocode_misses: misses,
+            off_area,
         }
     }
 
-    fn skip(key: &str, reason: &'static str, note: Option<String>, misses: Vec<String>) -> Self {
+    fn skip(
+        key: &str,
+        reason: &'static str,
+        note: Option<String>,
+        misses: Vec<String>,
+        off_area: Vec<OffAreaStop>,
+    ) -> Self {
         Self {
             key: key.to_string(),
             plan: MapPlan::Skip { reason, note },
             geocode_misses: misses,
+            off_area,
         }
     }
 
@@ -420,6 +442,8 @@ pub(crate) fn map_title(key: &str) -> Option<String> {
             let rest = key.strip_prefix("day-")?;
             if let Some(n) = rest.strip_suffix("-logistics.png") {
                 Some(format!("Day {} hotel round trip", n.parse::<i64>().ok()?))
+            } else if let Some(n) = rest.strip_suffix("-away.png") {
+                Some(format!("Day {} beyond the area", n.parse::<i64>().ok()?))
             } else {
                 Some(format!("Day {} route", rest.strip_suffix(".png")?.parse::<i64>().ok()?))
             }
@@ -427,21 +451,95 @@ pub(crate) fn map_title(key: &str) -> Option<String> {
     }
 }
 
-fn merged_misses(lists: impl IntoIterator<Item = Vec<String>>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for label in lists.into_iter().flatten() {
-        if !out.contains(&label) {
-            out.push(label);
+fn merged_distinct<T: PartialEq>(lists: impl IntoIterator<Item = Vec<T>>) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    for item in lists.into_iter().flatten() {
+        if !out.contains(&item) {
+            out.push(item);
         }
     }
     out
 }
 
+/// How far (great-circle) a resolved stop may sit from the destination hub and
+/// still be drawn on the destination's maps. Okinawa day 1 starts at home in
+/// Taiwan (紅樹林 淡水 → 桃園機場T2), ~630 km from the Naha hub and 1,700+ km
+/// from the Honshu hubs: drawn there it stretches every bbox across the sea,
+/// crushing the destination's own stops and timing out the Overpass road web.
+/// In-destination outliers (Ishigaki, ~410 km from Naha) and ordinary day-trip
+/// excursions (≤ ~370 km) stay well inside.
+const MAX_HUB_DISTANCE_KM: f64 = 500.0;
+
+/// A resolved stop the hub gate kept off the area maps; `km` is its rounded
+/// great-circle distance from the hub.
+#[derive(Clone, Debug, PartialEq)]
+struct OffAreaStop {
+    label: String,
+    km: u32,
+}
+
+/// The single place an assembled stop becomes a `Point`: every pin on every
+/// map (segment endpoints, itinerary POIs, logistics endpoints) passes through
+/// `point`, so no map path can draw an off-area stop. An off-area stop is
+/// recorded and its pin set aside for the day's `day-{n}-away.png` instead.
+struct HubGate {
+    hub: Option<(f64, f64)>,
+    off_area: Vec<OffAreaStop>,
+    /// Off-area pins in arrival order, one per coordinate.
+    away: Vec<Point>,
+}
+
+impl HubGate {
+    fn new(hub: Option<(f64, f64)>) -> Self {
+        Self {
+            hub,
+            off_area: Vec::new(),
+            away: Vec::new(),
+        }
+    }
+
+    /// The pin for a resolved stop, or None when it lies beyond
+    /// MAX_HUB_DISTANCE_KM of the hub (then recorded and set aside).
+    fn point(&mut self, label: String, (lat, lon): (f64, f64), color: [u8; 3], kind: Kind, day: Option<u32>) -> Option<Point> {
+        let point = Point {
+            lat,
+            lon,
+            color,
+            kind,
+            day,
+            label,
+        };
+        let Some(hub) = self.hub else {
+            return Some(point);
+        };
+        let km = haversine_m(hub, (lat, lon)) / 1000.0;
+        if km <= MAX_HUB_DISTANCE_KM {
+            return Some(point);
+        }
+        let stop = OffAreaStop {
+            label: point.label.clone(),
+            km: km.round() as u32,
+        };
+        if !self.off_area.contains(&stop) {
+            self.off_area.push(stop);
+        }
+        if !self.away.iter().any(|p| same_place(p, &point)) {
+            self.away.push(point);
+        }
+        None
+    }
+
+    /// Off-area stops and pins gated since the last call.
+    fn take(&mut self) -> (Vec<OffAreaStop>, Vec<Point>) {
+        (std::mem::take(&mut self.off_area), std::mem::take(&mut self.away))
+    }
+}
+
 /// Assemble every map's inputs (title, kind, pins, road lines) for one plan, in
 /// the order snapshot-maps emits them: each day's local map, each day's hotel
-/// round trip, then the sightseeing overview, the excursion inset and the
-/// hotel/airport map. Shared by snapshot-maps (renders + uploads) and
-/// verify-site (recomputes the input hash read-only).
+/// round trip, each day's beyond-the-area map, then the sightseeing overview,
+/// the excursion inset and the hotel/airport map. Shared by snapshot-maps
+/// (renders + uploads) and verify-site (recomputes the input hash read-only).
 pub(crate) async fn assemble_maps<R: MapResolver>(
     src: &MapSource,
     net: &mut R,
@@ -450,10 +548,14 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
 ) -> Result<Vec<PlannedMap>, String> {
     let days = &src.days;
     let excursion = &src.excursion;
+    let mut gate = HubGate::new(src.hub);
     let mut day_points = HashMap::<i64, Vec<Point>>::new();
     let mut day_misses = HashMap::<i64, Vec<String>>::new();
+    let mut day_off_area = HashMap::<i64, Vec<OffAreaStop>>::new();
+    let mut day_away = HashMap::<i64, Vec<Point>>::new();
 
     for day in days {
+        let color = DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()];
         let mut points = Vec::new();
         let mut seen = HashSet::new();
         let mut unresolved = HashSet::new();
@@ -471,17 +573,18 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                          rename the stop or pin it with set-place-geocode"
                     );
                 }
-                if let Some((lat, lon, kind)) = resolved {
+                if let Some((lat, lon, kind)) = resolved
+                    && let Some(point) = gate.point(
+                        display_label(label, &src.hotel_names),
+                        (lat, lon),
+                        color,
+                        kind,
+                        Some(*day as u32),
+                    )
+                {
                     ends[end] = Some((lat, lon));
                     if seen.insert(coord_key(lat, lon)) {
-                        points.push(Point {
-                            lat,
-                            lon,
-                            color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
-                            kind,
-                            day: Some(*day as u32),
-                            label: display_label(label, &src.hotel_names),
-                        });
+                        points.push(point);
                     }
                 }
             }
@@ -505,23 +608,22 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         }
         if points.is_empty() {
             for p in src.pois.iter().filter(|p| p.0 == *day) {
-                if seen.insert(coord_key(p.2, p.3)) {
-                    points.push(Point {
-                        lat: p.2,
-                        lon: p.3,
-                        color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
-                        kind: Kind::Sightseeing,
-                        day: Some(*day as u32),
-                        label: p.1.clone(),
-                    });
+                if let Some(point) = gate.point(p.1.clone(), (p.2, p.3), color, Kind::Sightseeing, Some(*day as u32))
+                    && seen.insert(coord_key(p.2, p.3))
+                {
+                    points.push(point);
                 }
             }
         }
         day_points.insert(*day, points);
         day_misses.insert(*day, net.take_misses());
+        let (off_area, away) = gate.take();
+        day_off_area.insert(*day, off_area);
+        day_away.insert(*day, away);
     }
 
     let misses_of = |day: &i64| day_misses.get(day).cloned().unwrap_or_default();
+    let off_area_of = |day: &i64| day_off_area.get(day).cloned().unwrap_or_default();
     let mut maps = Vec::new();
     let mut all_sightseeing = Vec::new();
     let mut excursion_points: Vec<Point> = Vec::new();
@@ -536,10 +638,11 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 "no mappable stops",
                 Some(format!("   skipped {key} (no mappable stops)")),
                 misses_of(day),
+                off_area_of(day),
             ));
         } else {
             let routes = net.routes(&local_pts).await?;
-            maps.push(PlannedMap::render(&key, MapKind::Day, local_pts, routes, misses_of(day)));
+            maps.push(PlannedMap::render(&key, MapKind::Day, local_pts, routes, misses_of(day), off_area_of(day)));
         }
         // Keep each day's local map zoomed to its sightseeing area. A separate
         // compact map draws the commute chain — the hotel round trip, with the
@@ -571,7 +674,14 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     for day in days {
         let key = format!("day-{day}-logistics.png");
         if let Some((points, routes)) = daily_logistics.remove(day) {
-            maps.push(PlannedMap::render(&key, MapKind::DayLogistics, points, routes, misses_of(day)));
+            maps.push(PlannedMap::render(
+                &key,
+                MapKind::DayLogistics,
+                points,
+                routes,
+                misses_of(day),
+                off_area_of(day),
+            ));
         } else {
             maps.push(PlannedMap::skip(
                 &key,
@@ -580,7 +690,23 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                     "   skipped {key} (no commute endpoints (no geocoded hotel/airport/sights))"
                 )),
                 misses_of(day),
+                off_area_of(day),
             ));
+        }
+    }
+
+    // The stops the hub gate kept off the day's maps (e.g. the home-side leg to
+    // the departure airport) get their own compact map, in segment order, so
+    // they are shown without stretching the area maps across the sea. Its skip
+    // is silent: most days of most plans have none.
+    for day in days {
+        let key = format!("day-{day}-away.png");
+        let points = day_away.get(day).cloned().unwrap_or_default();
+        if points.is_empty() {
+            maps.push(PlannedMap::skip(&key, "no off-area stops", None, misses_of(day), Vec::new()));
+        } else {
+            let routes = net.routes(&points).await?;
+            maps.push(PlannedMap::render(&key, MapKind::Day, points, routes, misses_of(day), Vec::new()));
         }
     }
 
@@ -591,8 +717,11 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     // map slot only wasted vertical space (user request 2026-09-28). Plans WITH
     // airport endpoints (Japan) keep the split — distant endpoints must not
     // flatten the sightseeing overview's zoom level.
-    let logistics = assemble_logistics(src, net).await?;
+    let logistics = assemble_logistics(src, net, &mut gate).await?;
     let logistics_misses = net.take_misses();
+    // Off-area logistics endpoints draw nowhere: a flight label is tied to no
+    // day, and a segment airport already sits on its day's away map.
+    let (logistics_off_area, _) = gate.take();
     for day in days.iter().filter(|d| !excursion.contains(d)) {
         if net.diagnostics()
             && let Some(points) = day_points.get(day)
@@ -625,11 +754,17 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     // The overview's pins come from every non-excursion day plus (domestic) the
     // stay, and has_airport decides the domestic merge — so any logistics miss
     // makes plan.png unverifiable too.
-    let overview_misses = merged_misses(
+    let overview_misses = merged_distinct(
         days.iter()
             .filter(|d| !excursion.contains(d))
             .map(misses_of)
             .chain(std::iter::once(logistics_misses.clone())),
+    );
+    let overview_off_area = merged_distinct(
+        days.iter()
+            .filter(|d| !excursion.contains(d))
+            .map(off_area_of)
+            .chain(std::iter::once(logistics_off_area.clone())),
     );
     if plan_points.is_empty() {
         // Same lingering rule: when every sightseeing day left the overview,
@@ -639,6 +774,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             "no sightseeing points",
             Some("   skipped plan.png (no sightseeing points)".to_string()),
             overview_misses,
+            overview_off_area,
         ));
     } else {
         let mut routes = Vec::new();
@@ -654,12 +790,26 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 routes.extend(net.routes(&points).await?);
             }
         }
-        maps.push(PlannedMap::render("plan.png", MapKind::Plan, plan_points, routes, overview_misses));
+        maps.push(PlannedMap::render(
+            "plan.png",
+            MapKind::Plan,
+            plan_points,
+            routes,
+            overview_misses,
+            overview_off_area,
+        ));
     }
 
-    let excursion_misses = merged_misses(days.iter().filter(|d| excursion.contains(d)).map(misses_of));
+    let excursion_misses = merged_distinct(days.iter().filter(|d| excursion.contains(d)).map(misses_of));
+    let excursion_off_area = merged_distinct(days.iter().filter(|d| excursion.contains(d)).map(off_area_of));
     if excursion_points.is_empty() {
-        maps.push(PlannedMap::skip("plan-excursion.png", "no excursion day", None, excursion_misses));
+        maps.push(PlannedMap::skip(
+            "plan-excursion.png",
+            "no excursion day",
+            None,
+            excursion_misses,
+            excursion_off_area,
+        ));
     } else {
         let mut routes = Vec::new();
         for day in days.iter().filter(|d| excursion.contains(d)) {
@@ -680,6 +830,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             excursion_points,
             routes,
             excursion_misses,
+            excursion_off_area,
         ));
     }
 
@@ -689,6 +840,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             "no geocoded hotel/airport endpoints",
             Some("   skipped plan-logistics.png (no geocoded hotel/airport endpoints)".to_string()),
             logistics_misses,
+            logistics_off_area,
         ));
     } else if !has_airport {
         // Domestic: the stay is already a pin on plan.png — no separate logistics map.
@@ -700,6 +852,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                     .to_string(),
             ),
             logistics_misses,
+            logistics_off_area,
         ));
     } else {
         maps.push(PlannedMap::render(
@@ -708,9 +861,55 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             logistics,
             Vec::new(),
             logistics_misses,
+            logistics_off_area,
         ));
     }
+    if net.diagnostics()
+        && let Some(note) = off_area_note(&maps, dest)
+    {
+        eprintln!("{note}");
+    }
     Ok(maps)
+}
+
+/// The one per-run line naming every stop the hub gate kept off the area maps
+/// and where it went. Not a ⚠ line: those are geocoding defects, and an
+/// off-area stop is a correctly geocoded place drawn where it belongs.
+fn off_area_note(maps: &[PlannedMap], dest: &str) -> Option<String> {
+    let stops = merged_distinct(maps.iter().map(|m| m.off_area.clone()));
+    if stops.is_empty() {
+        return None;
+    }
+    // Every away map a stop is drawn on (a home-side stop can recur on several days).
+    let away_keys = |stop: &OffAreaStop| {
+        maps.iter()
+            .filter(|m| m.key.ends_with("-away.png"))
+            .filter(|m| matches!(&m.plan, MapPlan::Render { points, .. } if points.iter().any(|p| p.label == stop.label)))
+            .map(|m| m.key.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut moved = Vec::new();
+    let mut nowhere = Vec::new();
+    for stop in &stops {
+        let keys = away_keys(stop);
+        if keys.is_empty() {
+            nowhere.push(format!("{} ({} km)", stop.label, stop.km));
+        } else {
+            moved.push(format!("{} ({} km, {})", stop.label, stop.km, keys.join(" + ")));
+        }
+    }
+    let mut parts = Vec::new();
+    if !moved.is_empty() {
+        parts.push(format!("moved to their own day-N-away map: {}", moved.join(", ")));
+    }
+    if !nowhere.is_empty() {
+        parts.push(format!("not drawn on any map (tied to no day, e.g. a flight label): {}", nowhere.join(", ")));
+    }
+    Some(format!(
+        "   note: {} stop(s) more than {MAX_HUB_DISTANCE_KM:.0} km from the {dest} hub are kept off the area maps — {}",
+        stops.len(),
+        parts.join("; ")
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -2241,6 +2440,23 @@ pub(crate) async fn geocode_context(c: &Connection, d: &str) -> Result<String, S
         Ok(country_for(&currency).to_string())
     }
 }
+/// The destination's hub coordinates (`destination_config.lat/lon`); None when
+/// the row is missing or either column is NULL.
+async fn query_destination_hub(c: &Connection, d: &str) -> Result<Option<(f64, f64)>, String> {
+    let mut r = c
+        .query(
+            "SELECT lat, lon FROM destination_config WHERE slug=?1 LIMIT 1",
+            params![d.to_string()],
+        )
+        .await
+        .map_err(err("destination hub query"))?;
+    let Some(x) = r.next().await.map_err(err("destination hub read"))? else {
+        return Ok(None);
+    };
+    let lat = x.get::<Option<f64>>(0).map_err(err("destination hub lat"))?;
+    let lon = x.get::<Option<f64>>(1).map_err(err("destination hub lon"))?;
+    Ok(lat.zip(lon))
+}
 pub(crate) async fn load_geocodes(c: &Connection) -> Result<HashMap<String, (f64, f64)>, String> {
     let mut r=c.query("SELECT raw_place, lat, lon FROM route_place_geocodes WHERE lat IS NOT NULL AND lon IS NOT NULL",params![]).await.map_err(err("geocode cache query"))?;
     let mut m = HashMap::new();
@@ -2648,7 +2864,11 @@ async fn query_route_endpoints(c: &Connection, p: &str, d: &str) -> Result<Vec<S
     Ok(out)
 }
 
-async fn assemble_logistics<R: MapResolver>(src: &MapSource, net: &mut R) -> Result<Vec<Point>, String> {
+async fn assemble_logistics<R: MapResolver>(
+    src: &MapSource,
+    net: &mut R,
+    gate: &mut HubGate,
+) -> Result<Vec<Point>, String> {
     let hotel_names = &src.hotel_names;
     let dest_pois = &src.dest_pois;
     let mut labels = Vec::<(String, Kind, bool)>::new();
@@ -2703,15 +2923,10 @@ async fn assemble_logistics<R: MapResolver>(src: &MapSource, net: &mut R) -> Res
             .find(|poi| norm(&poi.title).contains(&norm(&hotel)))
         {
             Some(poi) => {
-                if seen.insert((coord_key(poi.lat, poi.lon), Kind::Hotel as u8)) {
-                    out.push(Point {
-                        lat: poi.lat,
-                        lon: poi.lon,
-                        color: [21, 101, 192],
-                        kind: Kind::Hotel,
-                        day: None,
-                        label: hotel,
-                    });
+                if let Some(point) = gate.point(hotel, (poi.lat, poi.lon), [21, 101, 192], Kind::Hotel, None)
+                    && seen.insert((coord_key(poi.lat, poi.lon), Kind::Hotel as u8))
+                {
+                    out.push(point);
                 }
             }
             None => labels.push((hotel, Kind::Hotel, false)),
@@ -2730,20 +2945,15 @@ async fn assemble_logistics<R: MapResolver>(src: &MapSource, net: &mut R) -> Res
                 .map(|(lat, lon)| (lat, lon, kind))
         };
         if let Some((lat, lon, kind)) = resolved {
-            let key = coord_key(lat, lon);
-            if seen.insert((key, kind as u8)) {
-                out.push(Point {
-                    lat,
-                    lon,
-                    color: if kind == Kind::Hotel {
-                        [21, 101, 192]
-                    } else {
-                        [239, 108, 0]
-                    },
-                    kind,
-                    day: None,
-                    label: display_label(&label, hotel_names),
-                });
+            let color = if kind == Kind::Hotel {
+                [21, 101, 192]
+            } else {
+                [239, 108, 0]
+            };
+            if let Some(point) = gate.point(display_label(&label, hotel_names), (lat, lon), color, kind, None)
+                && seen.insert((coord_key(lat, lon), kind as u8))
+            {
+                out.push(point);
             }
         }
     }
@@ -2900,6 +3110,12 @@ pub(crate) mod test_render {
     }
 
     pub(crate) fn day_map(bg: Bg) -> Vec<u8> {
+        day_style_map("day-1.png", bg)
+    }
+
+    /// A day-style map (MapKind::Day: day maps and `day-{n}-away.png`) titled
+    /// for `key`.
+    pub(crate) fn day_style_map(key: &str, bg: Bg) -> Vec<u8> {
         let color = DAY_COLORS[0];
         let stop = |lat, lon| Point {
             lat,
@@ -2927,7 +3143,7 @@ pub(crate) mod test_render {
             Bg::Basemap(b) => Some(b),
             _ => None,
         };
-        render_png(&map_title("day-1.png").unwrap(), &points, &routes, &roads, basemap, MapKind::Day).unwrap()
+        render_png(&map_title(key).unwrap(), &points, &routes, &roads, basemap, MapKind::Day).unwrap()
     }
 
     /// ArcGIS-like basemap: land-use blocks of similar luminance on a soft
@@ -3022,6 +3238,13 @@ mod tests {
     const KIYOMIZU: (f64, f64) = (34.9949, 135.7850);
     const INARI: (f64, f64) = (34.9671, 135.7727);
     const KIX: (f64, f64) = (34.4320, 135.2304);
+    /// kyoto_2026's destination_config hub.
+    const KYOTO_HUB: (f64, f64) = (35.0116, 135.7681);
+    /// ~609 / ~622 km from KYOTO_HUB: beyond MAX_HUB_DISTANCE_KM.
+    const BUSAN: (f64, f64) = (35.1796, 129.0756);
+    const GIMHAE: (f64, f64) = (35.1795, 128.9382);
+    /// ~404 km from KYOTO_HUB: an in-destination outlier that stays.
+    const YAMAGUCHI: (f64, f64) = (34.1859, 131.4714);
 
     fn fake_net() -> FakeNet {
         FakeNet {
@@ -3066,6 +3289,7 @@ mod tests {
                 .map(String::from)
                 .collect(),
             domestic_stay: None,
+            hub: Some(KYOTO_HUB),
         }
     }
 
@@ -3111,6 +3335,8 @@ mod tests {
                 "day-2.png",
                 "day-1-logistics.png",
                 "day-2-logistics.png",
+                "day-1-away.png",
+                "day-2-away.png",
                 "plan.png",
                 "plan-excursion.png",
                 "plan-logistics.png"
@@ -3166,6 +3392,7 @@ mod tests {
         );
         assert_eq!(maps["plan-excursion.png"].input_sha256(), None, "no excursion day → skip");
         assert!(maps.values().all(|m| m.geocode_misses.is_empty()));
+        assert!(maps.values().all(|m| m.off_area.is_empty()));
     }
 
     #[tokio::test]
@@ -3199,6 +3426,164 @@ mod tests {
         assert!(misses("plan-logistics.png").is_empty());
     }
 
+    /// `fixture_source("Kiyomizu")` whose day 1 starts abroad: Busan →
+    /// Gimhae Airport → hotel (both ~610-620 km from the Kyoto hub), plus an
+    /// off-area flight label.
+    fn fixture_with_home_leg() -> (MapSource, FakeNet) {
+        let mut src = fixture_source("Kiyomizu");
+        src.segments.splice(0..0, [seg(1, "Busan", "Gimhae Airport"), seg(1, "Gimhae Airport", "hotel")]);
+        src.route_endpoints
+            .splice(0..0, ["Busan", "Gimhae Airport", "Gimhae Airport", "hotel"].map(String::from));
+        src.flights[0].labels.insert(0, "Gimhae International".into());
+        let mut net = fake_net();
+        net.coords.extend([("Busan", BUSAN), ("Gimhae Airport", GIMHAE), ("Gimhae International", GIMHAE)]);
+        (src, net)
+    }
+
+    fn drawn(m: &PlannedMap) -> Vec<(f64, f64)> {
+        match &m.plan {
+            MapPlan::Render { points, .. } => points.iter().map(|p| (p.lat, p.lon)).collect(),
+            MapPlan::Skip { .. } => Vec::new(),
+        }
+    }
+
+    fn off_area_labels(m: &PlannedMap) -> Vec<&str> {
+        m.off_area.iter().map(|s| s.label.as_str()).collect()
+    }
+
+    fn km_from_hub(c: (f64, f64)) -> u32 {
+        (haversine_m(KYOTO_HUB, c) / 1000.0).round() as u32
+    }
+
+    #[tokio::test]
+    async fn off_area_stops_leave_the_area_maps_and_their_hashes_untouched() {
+        let (src, mut net) = fixture_with_home_leg();
+        let with = assembled(&src, &mut net).await;
+        let without = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        for key in [
+            "day-1.png",
+            "day-2.png",
+            "day-1-logistics.png",
+            "day-2-logistics.png",
+            "day-2-away.png",
+            "plan.png",
+            "plan-excursion.png",
+            "plan-logistics.png",
+        ] {
+            assert_eq!(with[key].input_sha256(), without[key].input_sha256(), "{key}");
+            assert!(
+                !drawn(&with[key]).iter().any(|c| *c == BUSAN || *c == GIMHAE),
+                "{key} draws an off-area stop: {:?}",
+                drawn(&with[key])
+            );
+        }
+        // A gated stop resolved: it is not a geocode miss on any map.
+        assert!(with.values().all(|m| m.geocode_misses.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn off_area_stops_get_their_own_day_away_map() {
+        let (src, mut net) = fixture_with_home_leg();
+        let maps = assembled(&src, &mut net).await;
+        let busan = pt(BUSAN, Kind::Sightseeing, Some(1));
+        let gimhae = pt(GIMHAE, Kind::Airport, Some(1));
+        // Segment order, with the road line between consecutive off-area stops.
+        assert_eq!(
+            maps["day-1-away.png"].input_sha256(),
+            Some(map_input_sha256(
+                "Day 1 beyond the area",
+                MapKind::Day,
+                &[busan.clone(), gimhae.clone()],
+                &[straight(&busan, &gimhae)],
+            ))
+        );
+        assert_eq!(drawn(&maps["day-1-away.png"]), [BUSAN, GIMHAE]);
+        // A day with no off-area stop: a silent skip (snapshot-maps still records
+        // it, so a stale away map is removed).
+        assert!(matches!(
+            maps["day-2-away.png"].plan,
+            MapPlan::Skip { reason: "no off-area stops", note: None }
+        ));
+        let plain = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        assert_eq!(plain["day-1-away.png"].input_sha256(), None);
+    }
+
+    #[tokio::test]
+    async fn off_area_stops_are_recorded_on_the_maps_they_would_have_fed() {
+        let (src, mut net) = fixture_with_home_leg();
+        let maps = assembled(&src, &mut net).await;
+        let day1 = ["Busan", "Gimhae Airport"];
+        assert_eq!(off_area_labels(&maps["day-1.png"]), day1);
+        assert_eq!(off_area_labels(&maps["day-1-logistics.png"]), day1);
+        assert_eq!(
+            off_area_labels(&maps["plan.png"]),
+            ["Busan", "Gimhae Airport", "Gimhae International"]
+        );
+        assert_eq!(
+            off_area_labels(&maps["plan-logistics.png"]),
+            ["Gimhae International", "Gimhae Airport"]
+        );
+        for key in ["day-2.png", "day-2-logistics.png", "plan-excursion.png", "day-1-away.png"] {
+            assert!(maps[key].off_area.is_empty(), "{key}: {:?}", maps[key].off_area);
+        }
+        assert_eq!(maps["day-1.png"].off_area[0].km, km_from_hub(BUSAN));
+
+        let all: Vec<PlannedMap> = maps.into_values().collect();
+        let note = off_area_note(&all, "kyoto_2026").expect("a note when stops were gated");
+        assert!(note.starts_with("   note: 3 stop(s) more than 500 km from the kyoto_2026 hub"), "{note}");
+        assert!(!note.contains('⚠'), "{note}");
+        assert!(note.contains(&format!("Busan ({} km, day-1-away.png)", km_from_hub(BUSAN))), "{note}");
+        assert!(note.contains(&format!("Gimhae Airport ({} km, day-1-away.png)", km_from_hub(GIMHAE))), "{note}");
+        assert!(
+            note.contains(&format!("not drawn on any map (tied to no day, e.g. a flight label): Gimhae International ({} km)", km_from_hub(GIMHAE))),
+            "{note}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_note_names_every_away_map_a_recurring_stop_is_on() {
+        let (mut src, mut net) = fixture_with_home_leg();
+        // Busan again on day 2: it is drawn on both days' away maps.
+        src.segments.push(seg(2, "Fushimi Inari", "Busan"));
+        // The Vec in emission order, as snapshot-maps passes it to off_area_note.
+        let all = assemble_maps(&src, &mut net, "p", "kyoto_2026").await.unwrap();
+        let day2_away = all.iter().find(|m| m.key == "day-2-away.png").unwrap();
+        assert_eq!(drawn(day2_away), [BUSAN]);
+        let note = off_area_note(&all, "kyoto_2026").unwrap();
+        assert!(
+            note.contains(&format!("Busan ({} km, day-1-away.png + day-2-away.png)", km_from_hub(BUSAN))),
+            "{note}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_inside_the_hub_radius_stays_on_the_area_maps() {
+        let mut src = fixture_source("Kiyomizu");
+        src.segments.push(seg(2, "Fushimi Inari", "Yamaguchi"));
+        let mut net = fake_net();
+        net.coords.insert("Yamaguchi", YAMAGUCHI);
+        assert!(km_from_hub(YAMAGUCHI) > 400 && (km_from_hub(YAMAGUCHI) as f64) < MAX_HUB_DISTANCE_KM);
+        let maps = assembled(&src, &mut net).await;
+        assert_eq!(drawn(&maps["day-2.png"]), [INARI, YAMAGUCHI]);
+        assert!(drawn(&maps["plan.png"]).contains(&YAMAGUCHI));
+        assert_eq!(maps["day-2-away.png"].input_sha256(), None);
+        assert!(maps.values().all(|m| m.off_area.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn without_a_hub_nothing_is_gated() {
+        let (mut src, mut net) = fixture_with_home_leg();
+        src.hub = None;
+        let maps = assembled(&src, &mut net).await;
+        assert_eq!(drawn(&maps["day-1.png"])[0], BUSAN);
+        assert!(drawn(&maps["plan-logistics.png"]).contains(&GIMHAE));
+        assert!(maps.values().all(|m| m.off_area.is_empty()));
+        for key in maps.keys().filter(|k| k.ends_with("-away.png")) {
+            assert_eq!(maps[key].input_sha256(), None, "{key}");
+        }
+        assert_eq!(off_area_note(&maps.into_values().collect::<Vec<_>>(), "kyoto_2026"), None);
+    }
+
     #[test]
     fn map_title_names_every_key_the_assembly_emits() {
         assert_eq!(map_title("day-3.png").as_deref(), Some("Day 3 route"));
@@ -3206,6 +3591,8 @@ mod tests {
         assert_eq!(map_title("plan.png").as_deref(), Some("Sightseeing overview"));
         assert_eq!(map_title("plan-excursion.png").as_deref(), Some("Day trip"));
         assert_eq!(map_title("plan-logistics.png").as_deref(), Some("Hotels and airports"));
+        assert_eq!(map_title("day-4-away.png").as_deref(), Some("Day 4 beyond the area"));
+        assert_eq!(map_title("day-x-away.png"), None);
         assert_eq!(map_title("day-x.png"), None);
         assert_eq!(map_title("other.png"), None);
     }

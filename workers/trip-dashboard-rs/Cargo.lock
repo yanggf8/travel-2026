@@ -629,6 +629,7 @@ name = "trip-dashboard-rs"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "futures-util",
  "getrandom",
  "hmac",
  "serde",

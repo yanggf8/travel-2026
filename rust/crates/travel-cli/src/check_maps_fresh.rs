@@ -20,6 +20,8 @@
 //   - `map_artifacts` rows are written by travel snapshot-maps (one per expected key).
 //   - Expected keys: the overview maps + `day-{n}.png` and
 //     `day-{n}-logistics.png` for each day, plus `plan-excursion.png` when flagged.
+//     `day-{n}-away.png` (stops beyond 500 km of the destination hub) is
+//     conditional and never expected; verify-site checks it as an extra key.
 //   - Each key is MISSING (no row), EMPTY (status != uploaded or byte_size <= 64),
 //     or OK.
 //

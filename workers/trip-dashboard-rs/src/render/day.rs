@@ -210,9 +210,12 @@ pub fn render(
     map_version: Option<&str>,
     legend: &[super::map::LegendStop],
 ) -> String {
-    render_with_logistics(day, plan_id, lang, map_version, None, legend, &[])
+    render_with_logistics(day, plan_id, lang, map_version, None, legend, &[], None, &[])
 }
 
+/// One day card with its map stack: the day map, then the compact hotel
+/// round-trip map and the beyond-the-area map (each only when uploaded).
+#[allow(clippy::too_many_arguments)]
 pub fn render_with_logistics(
     day: &Day,
     plan_id: &str,
@@ -221,6 +224,8 @@ pub fn render_with_logistics(
     logistics_version: Option<&str>,
     legend: &[super::map::LegendStop],
     logistics_legend: &[super::map::LegendStop],
+    away_version: Option<&str>,
+    away_legend: &[super::map::LegendStop],
 ) -> String {
     let theme = if lang == "zh" && !day.theme_zh.is_empty() {
         &day.theme_zh
@@ -253,6 +258,13 @@ pub fn render_with_logistics(
         logistics_version,
         lang,
         logistics_legend,
+    ));
+    h.push_str(&super::map::day_away_map_slot(
+        plan_id,
+        day.day_number,
+        away_version,
+        lang,
+        away_legend,
     ));
     h.push_str("</div>");
     if !day.landmarks.is_empty() {

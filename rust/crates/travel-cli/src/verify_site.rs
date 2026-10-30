@@ -1000,6 +1000,22 @@ mod tests {
     }
 
     #[test]
+    fn day_away_map_passes_content_checks_and_needs_its_own_title() {
+        // `day-{n}-away.png` is not an expected key; verify-site reaches it as an
+        // extra manifest key, and sizes its title strip from map_title.
+        let textured = test_render::textured_basemap();
+        let png = test_render::day_style_map("day-1-away.png", Bg::Basemap(&textured));
+        let report = content_checks(&png, "day-1-away.png");
+        assert!(report.findings.is_empty(), "{:?}", levels(&report));
+        assert_eq!(report.background, Some(Background::Basemap));
+
+        let title = maps::title_rect(maps::map_title("day-1-away.png").unwrap().len());
+        let found = levels(&content_checks(&erase(&png, title), "day-1-away.png"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].0 == Level::Fail && found[0].1.contains("title text missing"), "{found:?}");
+    }
+
+    #[test]
     fn flat_basemap_is_only_a_warning() {
         let flat = test_render::flat_basemap([170, 211, 223]);
         let report = content_checks(&test_render::day_map(Bg::Basemap(&flat)), "day-1.png");

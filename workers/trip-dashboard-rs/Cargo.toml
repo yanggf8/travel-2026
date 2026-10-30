@@ -19,6 +19,8 @@ base64 = "0.22"
 getrandom = { version = "0.2", features = ["js"] }
 hmac = "0.12"
 sha2 = "0.10"
+# join_all for the concurrent R2 map HEADs (already in the tree via `worker`).
+futures-util = "0.3"
 
 [profile.release]
 opt-level = "s"

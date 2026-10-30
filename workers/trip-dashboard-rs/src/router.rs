@@ -676,19 +676,33 @@ async fn check_map_status(
     days: &[model::Day],
 ) -> Result<render::map::MapStatus> {
     let bucket = env.bucket("MAPS")?;
-    let plan_key = format!("{plan_id}/plan.png");
-    let plan = r2_map_version(&bucket, &plan_key).await?;
-    let logistics_key = format!("{plan_id}/plan-logistics.png");
-    let plan_logistics = r2_map_version(&bucket, &logistics_key).await?;
-    let excursion_key = format!("{plan_id}/plan-excursion.png");
-    let plan_excursion = r2_map_version(&bucket, &excursion_key).await?;
+    // Every HEAD is independent: issue them together so a long plan's page waits
+    // for one R2 round trip, not 3 + 3 × days of them. Keys: the three overview
+    // maps, then (day, logistics, away) per day, in that order.
+    let mut keys = vec![
+        format!("{plan_id}/plan.png"),
+        format!("{plan_id}/plan-logistics.png"),
+        format!("{plan_id}/plan-excursion.png"),
+    ];
+    for d in days {
+        for suffix in ["", "-logistics", "-away"] {
+            keys.push(format!("{plan_id}/day-{}{suffix}.png", d.day_number));
+        }
+    }
+    let mut versions = futures_util::future::join_all(keys.iter().map(|k| r2_map_version(&bucket, k)))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+    let mut next = || versions.next().flatten();
+    let (plan, plan_logistics, plan_excursion) = (next(), next(), next());
     let mut day_status = HashMap::new();
     let mut day_logistics_status = HashMap::new();
+    let mut day_away_status = HashMap::new();
     for d in days {
-        let key = format!("{plan_id}/day-{}.png", d.day_number);
-        day_status.insert(d.day_number, r2_map_version(&bucket, &key).await?);
-        let logistics_key = format!("{plan_id}/day-{}-logistics.png", d.day_number);
-        day_logistics_status.insert(d.day_number, r2_map_version(&bucket, &logistics_key).await?);
+        day_status.insert(d.day_number, next());
+        day_logistics_status.insert(d.day_number, next());
+        day_away_status.insert(d.day_number, next());
     }
     let legends = load_map_legends(turso_url, turso_token, plan_id).await?;
     Ok(render::map::MapStatus {
@@ -697,6 +711,7 @@ async fn check_map_status(
         plan_excursion,
         days: day_status,
         day_logistics: day_logistics_status,
+        day_away: day_away_status,
         legends,
     })
 }

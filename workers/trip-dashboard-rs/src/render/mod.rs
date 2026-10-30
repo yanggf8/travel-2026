@@ -98,6 +98,11 @@ pub fn render_plan(
                 .and_then(|v| v.as_deref()),
             map_status.legend_for(&format!("day-{}.png", d.day_number)),
             map_status.legend_for(&format!("day-{}-logistics.png", d.day_number)),
+            map_status
+                .day_away
+                .get(&d.day_number)
+                .and_then(|v| v.as_deref()),
+            map_status.legend_for(&format!("day-{}-away.png", d.day_number)),
         ));
     }
     // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),
@@ -521,6 +526,7 @@ mod tests {
             plan_excursion: None,
             days: [(1i64, Some("etag2".into()))].into_iter().collect(),
             day_logistics: std::collections::HashMap::new(),
+            day_away: std::collections::HashMap::new(),
             legends: [
                 (
                     "plan.png".to_string(),
@@ -646,6 +652,58 @@ mod tests {
         let none = render_plan(&plan, "zh", None, &map::MapStatus { plan_logistics: Some("l".into()), ..Default::default() }, "");
         assert!(!none.contains("plan-excursion.png"));
         assert!(!none.contains("一日遊"), "{none}");
+    }
+
+    #[test]
+    fn render_plan_puts_day_away_map_right_after_the_day_logistics_map() {
+        use crate::model::{Day, Plan};
+        let day = |n| Day {
+            day_number: n,
+            date: format!("2026-06-2{n}"),
+            ..Default::default()
+        };
+        let plan = Plan {
+            plan_id: "okinawa-2026".into(),
+            display_name: "Okinawa".into(),
+            days: vec![day(1), day(2)],
+            ..Default::default()
+        };
+        let both = |v: &str| [(1i64, Some(v.to_string())), (2i64, Some(v.to_string()))].into_iter().collect();
+        let map_status = map::MapStatus {
+            days: both("d"),
+            day_logistics: both("l"),
+            day_away: [(1i64, Some("a1".to_string())), (2i64, None)].into_iter().collect(),
+            legends: [(
+                "day-1-away.png".to_string(),
+                vec![map::LegendStop { seq: 1, label: "紅樹林 淡水".into(), lat: 25.15, lon: 121.46 }],
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map_status, "");
+        let day1 = html.split("<section class=\"day").nth(1).expect("day 1 card");
+        let stack = day1.split("<div class=\"day-map-stack\">").nth(1).expect("day 1 map stack");
+        let stack = stack.split("</figure></div>").next().unwrap_or("");
+        let log = stack.find("/map/okinawa-2026/day-1-logistics.png?v=l").expect("logistics map in the stack");
+        let away = stack.find("/map/okinawa-2026/day-1-away.png?v=a1").expect("away map in the stack");
+        assert!(log < away, "away map directly after the hotel round trip: {stack}");
+        // Nothing between the two figures: the away figure opens right where the
+        // logistics one closes.
+        let between = &stack[log..away];
+        assert_eq!(between.matches("<figure").count(), 1, "only the away figure opens in between: {between}");
+        assert!(between.contains("</figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\""), "{between}");
+        // The day-1-away.png legend rows land under the away map, not elsewhere.
+        assert!(stack[away..].contains("紅樹林 淡水"), "{stack}");
+        assert_eq!(html.matches("紅樹林 淡水").count(), 1, "{html}");
+        assert!(stack.contains("第 1 天・本區以外的行程"), "{stack}");
+
+        // Day 2 has no away map: no slot, no placeholder.
+        assert!(!html.contains("day-2-away.png"), "{html}");
+        assert_eq!(html.matches("本區以外的行程").count(), 2, "alt + caption of day 1 only");
+
+        let en = render_plan(&plan, "en", None, &map_status, "");
+        assert!(en.contains("Day 1 beyond the area"), "{en}");
     }
 
     #[test]
