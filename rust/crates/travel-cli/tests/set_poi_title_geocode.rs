@@ -44,10 +44,16 @@ fn set_poi_title_renames_segments_and_set_place_geocode_keys_match() {
     let n = nanos();
     let plan = format!("zztest-poititle-{n}");
     let dest = format!("zz_poititle_{n}");
+    let geo_key = format!("zz測試點{n}|Kyoto, Japan");
 
     let _g = Guard::new({
-        let (plan, dest) = (plan.clone(), dest.clone());
+        let (plan, dest, geo_key) = (plan.clone(), dest.clone(), geo_key.clone());
         move || {
+            // The geocode row is not plan-keyed, so teardown_plan never reaches it.
+            let _ = db_exec_teardown(&format!(
+                "DELETE FROM route_place_geocodes WHERE query_key = {};",
+                sql_lit(&geo_key)
+            ));
             teardown_plan(&plan, &dest);
             let d = sql_lit(&dest);
             let _ = db_exec_teardown(&format!(
@@ -61,7 +67,6 @@ fn set_poi_title_renames_segments_and_set_place_geocode_keys_match() {
 
     let d = sql_lit(&dest);
     let p = sql_lit(&plan);
-    let geo_key = format!("zz測試點{n}|Kyoto, Japan");
     if db_exec(&format!(
         "INSERT INTO destination_config (slug, display_name, timezone, currency, origin) \
            VALUES ({d}, 'ZZ Poititle Test', 'Asia/Tokyo', 'JPY', 'taiwan'); \
@@ -77,12 +82,6 @@ fn set_poi_title_renames_segments_and_set_place_geocode_keys_match() {
         eprintln!("skipping (credless on seed)");
         return;
     }
-    // Belt-and-braces: the geocode row is not plan-keyed, so it must not rely on
-    // teardown_plan; drop any prior-run leftover before seeding it below.
-    let _ = db_exec_teardown(&format!(
-        "DELETE FROM route_place_geocodes WHERE query_key = '{}';",
-        geo_key.replace('\'', "''")
-    ));
 
     // 1. Rename via the CLI with --segments.
     let Some(out) = run_cmd(&["set-poi-title", &dest, "poi_x", "天龍寺", "--segments"]) else {
