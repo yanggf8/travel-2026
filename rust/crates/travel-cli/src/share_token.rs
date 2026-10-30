@@ -24,7 +24,7 @@ use libsql::Connection;
 /// `trip-dashboard.yanggf.workers.dev` name.
 const DEFAULT_DASHBOARD_HOST: &str = "trip-dashboard-rs.yanggf.workers.dev";
 
-fn dashboard_host() -> String {
+pub(crate) fn dashboard_host() -> String {
     std::env::var("TRAVEL_DASHBOARD_HOST")
         .ok()
         .filter(|h| !h.trim().is_empty())

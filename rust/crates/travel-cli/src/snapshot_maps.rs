@@ -24,10 +24,29 @@ use libsql::{params, Connection};
 use png::{BitDepth, ColorType, Encoder};
 use sha2::{Digest, Sha256};
 
-const WIDTH: u32 = 640;
-const HEIGHT: u32 = 440;
+pub(crate) const WIDTH: u32 = 640;
+pub(crate) const HEIGHT: u32 = 440;
 const MIN_PNG_BYTES: usize = 200;
-const BUCKET: &str = "trip-dashboard-maps";
+pub(crate) const BUCKET: &str = "trip-dashboard-maps";
+/// The no-basemap canvas: a flat light fill crossed by a 32 px grid. verify-site
+/// reads "only these colors" as "no geographic background".
+pub(crate) const GRID_BG: [u8; 3] = [247, 249, 251];
+pub(crate) const GRID_LINE: [u8; 3] = [229, 234, 238];
+/// Overpass road-web colors (major = motorway/trunk/primary, minor =
+/// secondary/tertiary), drawn under everything when ArcGIS is unavailable.
+pub(crate) const ROAD_MAJOR: [u8; 3] = [186, 196, 208];
+pub(crate) const ROAD_MINOR: [u8; 3] = [222, 228, 234];
+/// Title ink and scale; the title strip is `title_rect`.
+const TITLE_INK: [u8; 3] = [45, 61, 75];
+pub(crate) const TITLE_SCALE: i32 = 2;
+/// Credit ink; the credit strip is `CREDIT_RECT` (scale 1).
+const CREDIT_INK: [u8; 3] = [70, 82, 94];
+/// Reserved bottom-right credit strip (x0, y0, x1, y1): kept clear of displaced
+/// pins and backed white over a basemap.
+pub(crate) const CREDIT_RECT: (i32, i32, i32, i32) = (366, HEIGHT as i32 - 18, 584, HEIGHT as i32 - 4);
+/// The two credit lines `render_png` draws: with and without an Esri basemap.
+pub(crate) const CREDIT_WITH_BASEMAP: &str = "© ESRI + OPENSTREETMAP CONTRIBUTORS";
+pub(crate) const CREDIT_NO_BASEMAP: &str = "© OPENSTREETMAP CONTRIBUTORS";
 /// Overpass vector endpoints (vector data, NOT raster tiles — the OSM tile-policy
 /// ban is on automated tile fetching/composites; the Overpass API is the sanctioned
 /// vector path, same family as the OSRM/Nominatim calls this module already makes).
@@ -64,7 +83,7 @@ const DAY_COLORS: [[u8; 3]; 7] = [
 ];
 
 #[derive(Clone, Debug)]
-struct Point {
+pub(crate) struct Point {
     lat: f64,
     lon: f64,
     color: [u8; 3],
@@ -81,7 +100,7 @@ struct Point {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Sightseeing,
     Hotel,
     Airport,
@@ -111,7 +130,7 @@ fn plausible_leg_km(mode: &str, duration_min: Option<i64>) -> Option<f64> {
 }
 
 #[derive(Clone)]
-struct RouteLine {
+pub(crate) struct RouteLine {
     points: Vec<(f64, f64)>,
     routed: bool,
     color: [u8; 3],
@@ -139,49 +158,314 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     )
     .await?;
     let write = crate::db::connect_write().await?;
-    let context = geocode_context(&read, &dest).await?;
-    let days = query_days(&read, &plan_id).await?;
-    if days.is_empty() {
-        return Err(format!("no itinerary days for plan {plan_id}"));
+    // The SAME assembly verify-site recomputes read-only (NetMode::CacheOnly), so the
+    // input_sha256 recorded here and the one verify-site compares against cannot drift.
+    // Every map is assembled before any upload: an assembly error aborts the run
+    // with the live set untouched (all old), never half re-uploaded.
+    let source = MapSource::load(&read, &plan_id, &dest).await?;
+    let mut net = DbResolver::new(&read, NetMode::Fetch(&write), &dest).await?;
+    let maps = assemble_maps(&source, &mut net, &plan_id, &dest).await?;
+
+    let mut required_ok = true;
+    for map in &maps {
+        match &map.plan {
+            MapPlan::Skip { reason, note } => {
+                // The worker renders any PNG it finds, so a map that is no longer
+                // produced must have its earlier upload removed, not just marked skipped.
+                remove_stale_map(&write, &plan_id, &map.key, reason).await?;
+                if let Some(note) = note {
+                    println!("{note}");
+                }
+            }
+            MapPlan::Render {
+                title,
+                kind,
+                points,
+                routes,
+            } => {
+                if !upload_map(&write, &plan_id, &map.key, title, points, routes, *kind).await? {
+                    required_ok = false;
+                }
+            }
+        }
     }
 
-    // Far-off day trips (set-day-excursion) stay off the sightseeing overview and
-    // get their own inset map — a 100 km coach tour otherwise flattens the city.
-    let excursion: HashSet<i64> = travel_db::repo::itinerary::excursion_days(&read, &plan_id, &dest)
-        .await?
-        .into_iter()
-        .collect();
-    let mut cache = load_geocodes(&read).await?;
-    let segments = query_segments(&read, &plan_id, &dest).await?;
-    let pois = query_pois(&read, &plan_id, &dest).await?;
-    let dest_pois = query_destination_pois(&read, &dest).await?;
-    let hotel_names = query_hotel_names(&read, &plan_id, &dest).await?;
-    let mut day_points = HashMap::<i64, Vec<Point>>::new();
-    // OSRM legs fetched this run, shared by the per-day and overview renders so
-    // the same pair is fetched (and persisted) at most once per snapshot run.
-    let mut osrm_live = HashMap::<String, Vec<(f64, f64)>>::new();
+    let next = format!("next: travel verify-site --plan-id {plan_id}");
+    if required_ok {
+        crate::db::connect_write().await?.execute(
+            "INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) VALUES (?1, datetime('now')) ON CONFLICT(plan_id) DO UPDATE SET snapshotted_at=datetime('now')",
+            params![plan_id.clone()],
+        ).await.map_err(|e| format!("map freshness stamp failed: {e}"))?;
+        println!("snapshot-maps: completed {plan_id} ({dest}); no OSM raster tiles requested");
+        println!("{next}");
+        Ok(())
+    } else {
+        println!("{next}");
+        Err(format!(
+            "one or more map uploads failed for {plan_id}; freshness was not stamped"
+        ))
+    }
+}
 
-    for day in &days {
+/// Everything the map assembly reads from Turso for one plan + destination,
+/// loaded up front so `assemble_maps` itself only resolves places and roads.
+pub(crate) struct MapSource {
+    days: Vec<i64>,
+    excursion: HashSet<i64>,
+    segments: Vec<Segment>,
+    pois: Vec<(i64, String, f64, f64)>,
+    dest_pois: Vec<PoiRow>,
+    hotel_names: Vec<String>,
+    flights: Vec<FlightRow>,
+    /// `day_route_segments` endpoints in the logistics query's own row order
+    /// (that query has no ORDER BY; its order decides the logistics pin order).
+    route_endpoints: Vec<String>,
+    /// Domestic (Taiwan) booked stay's hotel name, if any.
+    domestic_stay: Option<String>,
+}
+
+/// One `flight_legs` row as the logistics map reads it.
+struct FlightRow {
+    /// Non-empty departure/arrival code + airport columns, in column order.
+    labels: Vec<String>,
+    /// `XXX-YYY` code pairs parsed from `flight_number`, in order.
+    codes: Vec<String>,
+}
+
+impl MapSource {
+    pub(crate) async fn load(read: &Connection, plan_id: &str, dest: &str) -> Result<Self, String> {
+        let days = query_days(read, plan_id).await?;
+        if days.is_empty() {
+            return Err(format!("no itinerary days for plan {plan_id}"));
+        }
+        // Far-off day trips (set-day-excursion) stay off the sightseeing overview and
+        // get their own inset map — a 100 km coach tour otherwise flattens the city.
+        let excursion = travel_db::repo::itinerary::excursion_days(read, plan_id, dest)
+            .await?
+            .into_iter()
+            .collect();
+        Ok(Self {
+            days,
+            excursion,
+            segments: query_segments(read, plan_id, dest).await?,
+            pois: query_pois(read, plan_id, dest).await?,
+            dest_pois: query_destination_pois(read, dest).await?,
+            hotel_names: query_hotel_names(read, plan_id, dest).await?,
+            flights: query_flight_rows(read, plan_id, dest).await?,
+            route_endpoints: query_route_endpoints(read, plan_id, dest).await?,
+            domestic_stay: query_domestic_stay(read, plan_id, dest)
+                .await?
+                .map(|(_title, hotel)| hotel),
+        })
+    }
+}
+
+/// The network side of the map assembly: place geocoding and road geometry.
+/// snapshot-maps resolves through Turso caches with network write-through
+/// (`NetMode::Fetch`); verify-site resolves through the same caches only.
+pub(crate) trait MapResolver {
+    /// Coordinates for a place label; None when it does not resolve.
+    async fn geocode(&mut self, place: &str) -> Result<Option<(f64, f64)>, String>;
+    /// Road-following lines for consecutive stop pairs.
+    async fn routes(&mut self, points: &[Point]) -> Result<Vec<RouteLine>, String>;
+    /// Print snapshot-maps' stderr diagnostics (unresolved stops, implausible
+    /// legs, excursion hints).
+    fn diagnostics(&self) -> bool;
+    /// Labels with no geocode cache row recorded since the last call (cache-only
+    /// mode; always empty when misses are fetched).
+    fn take_misses(&mut self) -> Vec<String>;
+}
+
+/// How `DbResolver` handles a cache miss.
+#[derive(Clone, Copy)]
+pub(crate) enum NetMode<'a> {
+    /// snapshot-maps: fetch the miss (Nominatim / OSRM) and write it through.
+    Fetch(&'a Connection),
+    /// verify-site: read-only. A geocode miss is recorded and left unresolved; a
+    /// road-leg miss draws the straight connector — exactly what snapshot-maps
+    /// draws (and hashes) when its own OSRM fetch fails, and a leg it fetched
+    /// successfully is in the cache, so the recomputed hash is the recorded one.
+    CacheOnly,
+}
+
+pub(crate) struct DbResolver<'a> {
+    read: &'a Connection,
+    mode: NetMode<'a>,
+    context: String,
+    cache: HashMap<String, (f64, f64)>,
+    /// OSRM legs fetched this run, shared by the per-day and overview renders so
+    /// the same pair is fetched (and persisted) at most once per snapshot run.
+    osrm_live: HashMap<String, Vec<(f64, f64)>>,
+    misses: Vec<String>,
+}
+
+impl<'a> DbResolver<'a> {
+    pub(crate) async fn new(read: &'a Connection, mode: NetMode<'a>, dest: &str) -> Result<Self, String> {
+        Ok(Self {
+            read,
+            mode,
+            context: geocode_context(read, dest).await?,
+            cache: load_geocodes(read).await?,
+            osrm_live: HashMap::new(),
+            misses: Vec::new(),
+        })
+    }
+}
+
+impl MapResolver for DbResolver<'_> {
+    async fn geocode(&mut self, place: &str) -> Result<Option<(f64, f64)>, String> {
+        match lookup_place_cache(self.read, place, &self.context, &mut self.cache).await? {
+            CacheLookup::Hit(p) => Ok(Some(p.coords)),
+            CacheLookup::Unresolvable => Ok(None),
+            CacheLookup::Miss => match self.mode {
+                NetMode::Fetch(write) => Ok(fetch_nominatim(write, place, &self.context, &mut self.cache)
+                    .await?
+                    .map(|p| p.coords)),
+                NetMode::CacheOnly => {
+                    if !self.misses.iter().any(|m| m == place) {
+                        self.misses.push(place.to_string());
+                    }
+                    Ok(None)
+                }
+            },
+        }
+    }
+
+    async fn routes(&mut self, points: &[Point]) -> Result<Vec<RouteLine>, String> {
+        let write = match self.mode {
+            NetMode::Fetch(w) => Some(w),
+            NetMode::CacheOnly => None,
+        };
+        cached_routes(self.read, write, &mut self.osrm_live, points).await
+    }
+
+    fn diagnostics(&self) -> bool {
+        matches!(self.mode, NetMode::Fetch(_))
+    }
+
+    fn take_misses(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.misses)
+    }
+}
+
+/// One map key's planned outcome for the current itinerary.
+pub(crate) struct PlannedMap {
+    pub(crate) key: String,
+    plan: MapPlan,
+    /// Geocode cache misses among this map's inputs (cache-only mode): its input
+    /// hash cannot be reproduced without the network.
+    pub(crate) geocode_misses: Vec<String>,
+}
+
+enum MapPlan {
+    Render {
+        title: String,
+        kind: MapKind,
+        points: Vec<Point>,
+        routes: Vec<RouteLine>,
+    },
+    /// `note` is the stdout line snapshot-maps prints for the skip (None = silent).
+    Skip {
+        reason: &'static str,
+        note: Option<String>,
+    },
+}
+
+impl PlannedMap {
+    fn render(key: &str, kind: MapKind, points: Vec<Point>, routes: Vec<RouteLine>, misses: Vec<String>) -> Self {
+        Self {
+            key: key.to_string(),
+            plan: MapPlan::Render {
+                title: map_title(key).expect("assembled map keys always have a title"),
+                kind,
+                points,
+                routes,
+            },
+            geocode_misses: misses,
+        }
+    }
+
+    fn skip(key: &str, reason: &'static str, note: Option<String>, misses: Vec<String>) -> Self {
+        Self {
+            key: key.to_string(),
+            plan: MapPlan::Skip { reason, note },
+            geocode_misses: misses,
+        }
+    }
+
+    /// The `map_artifacts.input_sha256` snapshot-maps records for this map; None
+    /// when the current inputs produce no map (snapshot-maps records a skip).
+    pub(crate) fn input_sha256(&self) -> Option<String> {
+        match &self.plan {
+            MapPlan::Render {
+                title,
+                kind,
+                points,
+                routes,
+            } => Some(map_input_sha256(title, *kind, points, routes)),
+            MapPlan::Skip { .. } => None,
+        }
+    }
+}
+
+/// Map title drawn into the PNG for a map key. The single source of the titles:
+/// the assembly titles each map through it and verify-site sizes the reserved
+/// title strip from it.
+pub(crate) fn map_title(key: &str) -> Option<String> {
+    match key {
+        "plan.png" => Some("Sightseeing overview".to_string()),
+        "plan-excursion.png" => Some("Day trip".to_string()),
+        "plan-logistics.png" => Some("Hotels and airports".to_string()),
+        _ => {
+            let rest = key.strip_prefix("day-")?;
+            if let Some(n) = rest.strip_suffix("-logistics.png") {
+                Some(format!("Day {} hotel round trip", n.parse::<i64>().ok()?))
+            } else {
+                Some(format!("Day {} route", rest.strip_suffix(".png")?.parse::<i64>().ok()?))
+            }
+        }
+    }
+}
+
+fn merged_misses(lists: impl IntoIterator<Item = Vec<String>>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for label in lists.into_iter().flatten() {
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
+}
+
+/// Assemble every map's inputs (title, kind, pins, road lines) for one plan, in
+/// the order snapshot-maps emits them: each day's local map, each day's hotel
+/// round trip, then the sightseeing overview, the excursion inset and the
+/// hotel/airport map. Shared by snapshot-maps (renders + uploads) and
+/// verify-site (recomputes the input hash read-only).
+pub(crate) async fn assemble_maps<R: MapResolver>(
+    src: &MapSource,
+    net: &mut R,
+    plan_id: &str,
+    dest: &str,
+) -> Result<Vec<PlannedMap>, String> {
+    let days = &src.days;
+    let excursion = &src.excursion;
+    let mut day_points = HashMap::<i64, Vec<Point>>::new();
+    let mut day_misses = HashMap::<i64, Vec<String>>::new();
+
+    for day in days {
         let mut points = Vec::new();
         let mut seen = HashSet::new();
         let mut unresolved = HashSet::new();
-        for seg in segments.iter().filter(|s| s.day == *day) {
+        for seg in src.segments.iter().filter(|s| s.day == *day) {
             let mut ends: [Option<(f64, f64)>; 2] = [None, None];
             for (end, label) in [&seg.from, &seg.to].into_iter().enumerate() {
                 if label.trim().is_empty() {
                     continue;
                 }
-                let resolved = resolve_segment_label(
-                    &read,
-                    &write,
-                    label,
-                    &context,
-                    &mut cache,
-                    &dest_pois,
-                    &hotel_names,
-                )
-                .await?;
-                if resolved.is_none() && unresolved.insert(label.clone()) {
+                let resolved =
+                    resolve_segment_label(net, label, &src.dest_pois, &src.hotel_names).await?;
+                if resolved.is_none() && unresolved.insert(label.clone()) && net.diagnostics() {
                     eprintln!(
                         "   ⚠ day {day}: \"{label}\" could not be geocoded — it is left off the map; \
                          rename the stop or pin it with set-place-geocode"
@@ -196,13 +480,14 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                             color: DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()],
                             kind,
                             day: Some(*day as u32),
-                            label: display_label(label, &hotel_names),
+                            label: display_label(label, &src.hotel_names),
                         });
                     }
                 }
             }
-            if let ([Some(a), Some(b)], Some(max_km)) =
-                (ends, plausible_leg_km(&seg.mode, seg.duration_min))
+            if net.diagnostics()
+                && let ([Some(a), Some(b)], Some(max_km)) =
+                    (ends, plausible_leg_km(&seg.mode, seg.duration_min))
             {
                 let km = haversine_m(a, b) / 1000.0;
                 if km > max_km {
@@ -219,7 +504,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             }
         }
         if points.is_empty() {
-            for p in pois.iter().filter(|p| p.0 == *day) {
+            for p in src.pois.iter().filter(|p| p.0 == *day) {
                 if seen.insert(coord_key(p.2, p.3)) {
                     points.push(Point {
                         lat: p.2,
@@ -233,35 +518,28 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             }
         }
         day_points.insert(*day, points);
+        day_misses.insert(*day, net.take_misses());
     }
 
-    let mut required_ok = true;
+    let misses_of = |day: &i64| day_misses.get(day).cloned().unwrap_or_default();
+    let mut maps = Vec::new();
     let mut all_sightseeing = Vec::new();
     let mut excursion_points: Vec<Point> = Vec::new();
     let mut daily_logistics = HashMap::<i64, (Vec<Point>, Vec<RouteLine>)>::new();
-    for day in &days {
+    for day in days {
         let all_pts = day_points.get(day).cloned().unwrap_or_default();
         let local_pts = all_pts.iter().filter(|p| p.kind == Kind::Sightseeing).cloned().collect::<Vec<_>>();
+        let key = format!("day-{day}.png");
         if local_pts.is_empty() {
-            // The worker renders any PNG it finds, so a day that lost its stops
-            // must have its earlier upload removed, not just marked skipped.
-            remove_stale_map(&write, &plan_id, &format!("day-{day}.png"), "no mappable stops").await?;
-            println!("   skipped day-{day}.png (no mappable stops)");
+            maps.push(PlannedMap::skip(
+                &key,
+                "no mappable stops",
+                Some(format!("   skipped {key} (no mappable stops)")),
+                misses_of(day),
+            ));
         } else {
-            let routes = cached_routes(&read, &write, &mut osrm_live, &local_pts).await?;
-            if !upload_map(
-                &write,
-                &plan_id,
-                &format!("day-{day}.png"),
-                &format!("Day {day} route"),
-                &local_pts,
-                &routes,
-                MapKind::Day,
-            )
-            .await?
-            {
-                required_ok = false;
-            }
+            let routes = net.routes(&local_pts).await?;
+            maps.push(PlannedMap::render(&key, MapKind::Day, local_pts, routes, misses_of(day)));
         }
         // Keep each day's local map zoomed to its sightseeing area. A separate
         // compact map draws the commute chain — the hotel round trip, with the
@@ -271,17 +549,16 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         if !legs.is_empty() {
             let mut routes = Vec::new();
             for (a, b) in &legs {
-                routes.extend(cached_routes(&read, &write, &mut osrm_live, &[a.clone(), b.clone()]).await?);
+                routes.extend(net.routes(&[a.clone(), b.clone()]).await?);
             }
             daily_logistics.insert(*day, (log_points, routes));
         }
-        let pts = all_pts;
         let bucket = if excursion.contains(day) {
             &mut excursion_points
         } else {
             &mut all_sightseeing
         };
-        for p in pts.into_iter().filter(|p| p.kind == Kind::Sightseeing) {
+        for p in all_pts.into_iter().filter(|p| p.kind == Kind::Sightseeing) {
             if !bucket
                 .iter()
                 .any(|existing: &Point| existing.lat == p.lat && existing.lon == p.lon)
@@ -291,15 +568,19 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
     }
 
-    for day in &days {
+    for day in days {
         let key = format!("day-{day}-logistics.png");
-        if let Some((points, routes)) = daily_logistics.get(day) {
-            if !upload_map(&write, &plan_id, &key, &format!("Day {day} hotel round trip"), points, routes, MapKind::DayLogistics).await? {
-                required_ok = false;
-            }
+        if let Some((points, routes)) = daily_logistics.remove(day) {
+            maps.push(PlannedMap::render(&key, MapKind::DayLogistics, points, routes, misses_of(day)));
         } else {
-            remove_stale_map(&write, &plan_id, &key, "no commute endpoints (no geocoded hotel/airport/sights)").await?;
-            println!("   skipped {key} (no commute endpoints (no geocoded hotel/airport/sights))");
+            maps.push(PlannedMap::skip(
+                &key,
+                "no commute endpoints (no geocoded hotel/airport/sights)",
+                Some(format!(
+                    "   skipped {key} (no commute endpoints (no geocoded hotel/airport/sights))"
+                )),
+                misses_of(day),
+            ));
         }
     }
 
@@ -310,19 +591,11 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     // map slot only wasted vertical space (user request 2026-09-28). Plans WITH
     // airport endpoints (Japan) keep the split — distant endpoints must not
     // flatten the sightseeing overview's zoom level.
-    let logistics = await_logistics(
-        &read,
-        &write,
-        &plan_id,
-        &dest,
-        &context,
-        &mut cache,
-        &dest_pois,
-        &hotel_names,
-    )
-    .await?;
+    let logistics = assemble_logistics(src, net).await?;
+    let logistics_misses = net.take_misses();
     for day in days.iter().filter(|d| !excursion.contains(d)) {
-        if let Some(points) = day_points.get(day)
+        if net.diagnostics()
+            && let Some(points) = day_points.get(day)
             && let Some((stop, km)) = distant_excursion_stop(points, &logistics)
         {
             eprintln!(
@@ -349,11 +622,24 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         }
     }
 
+    // The overview's pins come from every non-excursion day plus (domestic) the
+    // stay, and has_airport decides the domestic merge — so any logistics miss
+    // makes plan.png unverifiable too.
+    let overview_misses = merged_misses(
+        days.iter()
+            .filter(|d| !excursion.contains(d))
+            .map(misses_of)
+            .chain(std::iter::once(logistics_misses.clone())),
+    );
     if plan_points.is_empty() {
         // Same lingering rule: when every sightseeing day left the overview,
         // the old flattened plan.png must not keep rendering from R2.
-        remove_stale_map(&write, &plan_id, "plan.png", "no sightseeing points").await?;
-        println!("   skipped plan.png (no sightseeing points)");
+        maps.push(PlannedMap::skip(
+            "plan.png",
+            "no sightseeing points",
+            Some("   skipped plan.png (no sightseeing points)".to_string()),
+            overview_misses,
+        ));
     } else {
         let mut routes = Vec::new();
         for day in days.iter().filter(|d| !excursion.contains(d)) {
@@ -365,26 +651,15 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 .cloned()
                 .collect::<Vec<_>>();
             if points.len() > 1 {
-                routes.extend(cached_routes(&read, &write, &mut osrm_live, &points).await?);
+                routes.extend(net.routes(&points).await?);
             }
         }
-        if !upload_map(
-            &write,
-            &plan_id,
-            "plan.png",
-            "Sightseeing overview",
-            &plan_points,
-            &routes,
-            MapKind::Plan,
-        )
-        .await?
-        {
-            required_ok = false;
-        }
+        maps.push(PlannedMap::render("plan.png", MapKind::Plan, plan_points, routes, overview_misses));
     }
 
+    let excursion_misses = merged_misses(days.iter().filter(|d| excursion.contains(d)).map(misses_of));
     if excursion_points.is_empty() {
-        remove_stale_map(&write, &plan_id, "plan-excursion.png", "no excursion day").await?;
+        maps.push(PlannedMap::skip("plan-excursion.png", "no excursion day", None, excursion_misses));
     } else {
         let mut routes = Vec::new();
         for day in days.iter().filter(|d| excursion.contains(d)) {
@@ -396,67 +671,50 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 .cloned()
                 .collect::<Vec<_>>();
             if points.len() > 1 {
-                routes.extend(cached_routes(&read, &write, &mut osrm_live, &points).await?);
+                routes.extend(net.routes(&points).await?);
             }
         }
-        if !upload_map(
-            &write,
-            &plan_id,
+        maps.push(PlannedMap::render(
             "plan-excursion.png",
-            "Day trip",
-            &excursion_points,
-            &routes,
             MapKind::Plan,
-        )
-        .await?
-        {
-            required_ok = false;
-        }
+            excursion_points,
+            routes,
+            excursion_misses,
+        ));
     }
 
     if logistics.is_empty() {
-        remove_stale_map(&write, &plan_id, "plan-logistics.png", "no geocoded hotel/airport endpoints").await?;
-        println!("   skipped plan-logistics.png (no geocoded hotel/airport endpoints)");
+        maps.push(PlannedMap::skip(
+            "plan-logistics.png",
+            "no geocoded hotel/airport endpoints",
+            Some("   skipped plan-logistics.png (no geocoded hotel/airport endpoints)".to_string()),
+            logistics_misses,
+        ));
     } else if !has_airport {
         // Domestic: the stay is already a pin on plan.png — no separate logistics map.
-        remove_stale_map(
-            &write,
-            &plan_id,
+        maps.push(PlannedMap::skip(
             "plan-logistics.png",
             "domestic trip: no airport endpoints; stay merged into plan.png",
-        )
-        .await?;
-        println!("   skipped plan-logistics.png (domestic: stay merged into plan.png, no airport endpoints)");
-    } else if !upload_map(
-        &write,
-        &plan_id,
-        "plan-logistics.png",
-        "Hotels and airports",
-        &logistics,
-        &[],
-        MapKind::Logistics,
-    )
-    .await?
-    {
-        required_ok = false;
-    }
-
-    if required_ok {
-        crate::db::connect_write().await?.execute(
-            "INSERT INTO plan_map_snapshots (plan_id, snapshotted_at) VALUES (?1, datetime('now')) ON CONFLICT(plan_id) DO UPDATE SET snapshotted_at=datetime('now')",
-            params![plan_id.clone()],
-        ).await.map_err(|e| format!("map freshness stamp failed: {e}"))?;
-        println!("snapshot-maps: completed {plan_id} ({dest}); no OSM raster tiles requested");
-        Ok(())
+            Some(
+                "   skipped plan-logistics.png (domestic: stay merged into plan.png, no airport endpoints)"
+                    .to_string(),
+            ),
+            logistics_misses,
+        ));
     } else {
-        Err(format!(
-            "one or more map uploads failed for {plan_id}; freshness was not stamped"
-        ))
+        maps.push(PlannedMap::render(
+            "plan-logistics.png",
+            MapKind::Logistics,
+            logistics,
+            Vec::new(),
+            logistics_misses,
+        ));
     }
+    Ok(maps)
 }
 
 #[derive(Clone, Copy)]
-enum MapKind {
+pub(crate) enum MapKind {
     Day,
     Plan,
     Logistics,
@@ -730,11 +988,7 @@ fn render_png(
     // from vector geometry so the corridor line no longer floats on a bare grid.
     // Off-canvas points are clipped by Raster::put.
     for road in roads {
-        let color = if road.major {
-            [186, 196, 208]
-        } else {
-            [222, 228, 234]
-        };
+        let color = if road.major { ROAD_MAJOR } else { ROAD_MINOR };
         let width = if road.major { 2 } else { 1 };
         let pts: Vec<_> = road
             .points
@@ -781,10 +1035,7 @@ fn render_png(
             (cols * PLAN_LEGEND_STEP, rows)
         }
     };
-    let mut reserved = vec![
-        (8, 8, 16 + title.len() as i32 * 12, 28),
-        (366, HEIGHT as i32 - 18, 584, HEIGHT as i32 - 4),
-    ];
+    let mut reserved = vec![title_rect(title.len()), CREDIT_RECT];
     if legend_w > 0 {
         reserved.push((8, 30, 12 + legend_w, 30 + legend_rows * PLAN_LEGEND_ROW));
     }
@@ -808,10 +1059,11 @@ fn render_png(
     let title = title.to_ascii_uppercase();
     if basemap.is_some() {
         // Solid backing strips keep title and credits readable over the basemap.
-        raster.fill_rect(8, 8, title.len() as i32 * 12 + 8, 20, [255, 255, 255]);
-        raster.fill_rect(366, HEIGHT as i32 - 18, 218, 14, [255, 255, 255]);
+        for (x0, y0, x1, y1) in [title_rect(title.len()), CREDIT_RECT] {
+            raster.fill_rect(x0, y0, x1 - x0, y1 - y0, [255, 255, 255]);
+        }
     }
-    raster.text(12, 10, &title, [45, 61, 75], 2);
+    raster.text(12, 10, &title, TITLE_INK, TITLE_SCALE);
     if matches!(kind, MapKind::Logistics) {
         raster.legend(12, 31, "HOTEL", [21, 101, 192]);
         raster.legend(105, 31, "AIRPORT", [239, 108, 0]);
@@ -839,11 +1091,11 @@ fn render_png(
         }
     }
     let credit = if basemap.is_some() {
-        "© ESRI + OPENSTREETMAP CONTRIBUTORS"
+        CREDIT_WITH_BASEMAP
     } else {
-        "© OPENSTREETMAP CONTRIBUTORS"
+        CREDIT_NO_BASEMAP
     };
-    raster.text(370, HEIGHT as i32 - 14, credit, [70, 82, 94], 1);
+    raster.text(CREDIT_RECT.0 + 4, CREDIT_RECT.1 + 4, credit, CREDIT_INK, 1);
     encode_rgba_png(&raster.pixels, WIDTH, HEIGHT)
 }
 
@@ -926,7 +1178,7 @@ async fn fetch_basemap(p: &Projection) -> Option<Vec<u8>> {
 }
 
 /// Decode a PNG body into RGBA8 pixels of exactly WIDTH×HEIGHT. Pure — unit-tested.
-fn decode_rgba_png(bytes: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn decode_rgba_png(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut decoder = png::Decoder::new(Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
@@ -1044,6 +1296,22 @@ fn plan_legend_grid(n: usize) -> (i32, i32) {
     let rows = if n == 0 { 0 } else { (n + per_row - 1) / per_row };
     (cols, rows)
 }
+/// Reserved title strip (x0, y0, x1, y1) for a title of `chars` characters,
+/// drawn at (12, 10) in TITLE_SCALE glyphs: kept clear of displaced pins and
+/// backed white over a basemap.
+pub(crate) fn title_rect(chars: usize) -> (i32, i32, i32, i32) {
+    (8, 8, 16 + chars as i32 * 12, 28)
+}
+
+/// Pixels of ink `Raster::text` lays down for `s` at `scale` (the bitmap font's
+/// lit cells × scale²) — what verify-site expects to find in a text strip.
+pub(crate) fn text_ink(s: &str, scale: i32) -> usize {
+    s.chars()
+        .map(|c| glyph(c).iter().map(|row| row.count_ones() as usize).sum::<usize>())
+        .sum::<usize>()
+        * (scale * scale) as usize
+}
+
 /// Pin radius drawn by `Raster::pin` (white halo included).
 const PIN_RADIUS: i32 = 15;
 
@@ -1247,14 +1515,14 @@ impl Raster {
     fn grid(&mut self) {
         for y in 0..self.h {
             for x in 0..self.w {
-                self.put(x as i32, y as i32, [247, 249, 251]);
+                self.put(x as i32, y as i32, GRID_BG);
             }
         }
         for x in (0..self.w).step_by(32) {
             self.line(
                 (x as i32, 0),
                 (x as i32, self.h as i32),
-                [229, 234, 238],
+                GRID_LINE,
                 1,
                 false,
             );
@@ -1263,7 +1531,7 @@ impl Raster {
             self.line(
                 (0, y as i32),
                 (self.w as i32, y as i32),
-                [229, 234, 238],
+                GRID_LINE,
                 1,
                 false,
             );
@@ -1721,10 +1989,12 @@ pub(crate) async fn fetch_osrm_leg(
 /// Road-following lines for consecutive stop pairs. Reads the route_road_legs
 /// cache first; a leg with no cached geometry is fetched from OSRM right here
 /// (persisted via `w`, deduped across the day/plan renders of one run through
-/// `live`) so a fresh trip follows roads on its FIRST render.
+/// `live`) so a fresh trip follows roads on its FIRST render. With `w = None`
+/// (cache-only) a miss is not fetched and draws the same straight connector a
+/// failed fetch draws.
 async fn cached_routes(
     c: &Connection,
-    w: &Connection,
+    w: Option<&Connection>,
     live: &mut HashMap<String, Vec<(f64, f64)>>,
     points: &[Point],
 ) -> Result<Vec<RouteLine>, String> {
@@ -1799,7 +2069,7 @@ async fn cached_routes(
             let live_key = format!("{:.5},{:.5}>{:.5},{:.5}", f.0, f.1, t.0, t.1);
             if let Some(pts) = live.get(&live_key) {
                 road = pts.clone();
-            } else {
+            } else if let Some(w) = w {
                 match fetch_osrm_leg(w, f, t, vec![]).await {
                     Ok(pts) => {
                         live.insert(live_key, pts.clone());
@@ -1987,12 +2257,9 @@ pub(crate) async fn load_geocodes(c: &Connection) -> Result<HashMap<String, (f64
     Ok(m)
 }
 
-async fn resolve_segment_label(
-    read: &Connection,
-    write: &Connection,
+async fn resolve_segment_label<R: MapResolver>(
+    net: &mut R,
     label: &str,
-    context: &str,
-    cache: &mut HashMap<String, (f64, f64)>,
     dest_pois: &[PoiRow],
     hotel_names: &[String],
 ) -> Result<Option<(f64, f64, Kind)>, String> {
@@ -2003,7 +2270,8 @@ async fn resolve_segment_label(
         Some(name) => name,
         None => label.to_string(),
     };
-    Ok(resolve_place(read, write, &place, context, cache)
+    Ok(net
+        .geocode(&place)
         .await?
         .map(|(lat, lon)| (lat, lon, classify(label))))
 }
@@ -2133,31 +2401,27 @@ pub(crate) fn nominatim_is_area(category: &str, ntype: &str) -> bool {
         )
 }
 
-pub(crate) async fn resolve_place(
-    read: &Connection,
-    write: &Connection,
-    place: &str,
-    context: &str,
-    cache: &mut HashMap<String, (f64, f64)>,
-) -> Result<Option<(f64, f64)>, String> {
-    Ok(
-        resolve_place_meta(read, write, place, context, cache)
-            .await?
-            .map(|p| p.coords),
-    )
+/// What the geocode caches say about a place, without touching the network.
+enum CacheLookup {
+    Hit(ResolvedPlace),
+    /// A cache row exists without coordinates: a recorded non-result.
+    Unresolvable,
+    /// No cache row at all: only a Nominatim fetch can answer.
+    Miss,
 }
 
-pub(crate) async fn resolve_place_meta(
+/// In-memory cache first (raw_place keys from `load_geocodes`), then the exact
+/// `route_place_geocodes.query_key` row. Read-only.
+async fn lookup_place_cache(
     read: &Connection,
-    write: &Connection,
     place: &str,
     context: &str,
     cache: &mut HashMap<String, (f64, f64)>,
-) -> Result<Option<ResolvedPlace>, String> {
+) -> Result<CacheLookup, String> {
     let key = place.trim().to_ascii_lowercase();
     if let Some(p) = cache.get(&key) {
         // In-memory hit: coords only (metadata is advisory, best-effort).
-        return Ok(Some(ResolvedPlace {
+        return Ok(CacheLookup::Hit(ResolvedPlace {
             coords: *p,
             display_name: String::new(),
             area_centroid: false,
@@ -2168,7 +2432,7 @@ pub(crate) async fn resolve_place_meta(
     let mut r = read
         .query(
             "SELECT lat, lon, display_name FROM route_place_geocodes WHERE query_key=?1",
-            params![query_key.clone()],
+            params![query_key],
         )
         .await
         .map_err(err("geocode cache lookup"))?;
@@ -2179,14 +2443,42 @@ pub(crate) async fn resolve_place_meta(
             row.get::<Option<String>>(2),
         ) {
             cache.insert(key, (lat, lon));
-            return Ok(Some(ResolvedPlace {
+            return Ok(CacheLookup::Hit(ResolvedPlace {
                 coords: (lat, lon),
                 display_name: display.unwrap_or_default(),
                 area_centroid: false, // category is not persisted; unknown here
             }));
         }
-        return Ok(None);
+        return Ok(CacheLookup::Unresolvable);
     }
+    Ok(CacheLookup::Miss)
+}
+
+pub(crate) async fn resolve_place_meta(
+    read: &Connection,
+    write: &Connection,
+    place: &str,
+    context: &str,
+    cache: &mut HashMap<String, (f64, f64)>,
+) -> Result<Option<ResolvedPlace>, String> {
+    match lookup_place_cache(read, place, context, cache).await? {
+        CacheLookup::Hit(p) => Ok(Some(p)),
+        CacheLookup::Unresolvable => Ok(None),
+        CacheLookup::Miss => fetch_nominatim(write, place, context, cache).await,
+    }
+}
+
+/// Cache miss: ask Nominatim once and write the answer through to
+/// `route_place_geocodes` (and the in-memory cache).
+async fn fetch_nominatim(
+    write: &Connection,
+    place: &str,
+    context: &str,
+    cache: &mut HashMap<String, (f64, f64)>,
+) -> Result<Option<ResolvedPlace>, String> {
+    let key = place.trim().to_ascii_lowercase();
+    let (search, ctx) = normalize_place(place, context);
+    let query_key = format!("{}|{}", search.trim().to_ascii_lowercase(), ctx);
     thread::sleep(Duration::from_millis(1100));
     let output = Command::new("curl")
         .args([
@@ -2309,36 +2601,19 @@ fn is_searchable_ascii(s: &str) -> bool {
         })
 }
 
-async fn await_logistics(
-    read: &Connection,
-    write: &Connection,
-    p: &str,
-    d: &str,
-    ctx: &str,
-    cache: &mut HashMap<String, (f64, f64)>,
-    dest_pois: &[PoiRow],
-    hotel_names: &[String],
-) -> Result<Vec<Point>, String> {
-    let mut labels = Vec::<(String, Kind, bool)>::new();
-    for name in hotel_names {
-        labels.push((name.clone(), Kind::Hotel, false));
-    }
-    let mut f=read.query("SELECT departure_code, arrival_code, departure_airport, arrival_airport, flight_number, direction FROM flight_legs WHERE plan_id=?1 AND destination=?2 ORDER BY direction,leg_order",params![p.to_string(),d.to_string()]).await.map_err(err("flight map query"))?;
-    // Home-airport codes to EXCLUDE from the logistics map: the first code of the
-    // first outbound flight and the last code of the last return flight. Including
-    // the home airport stretches the bbox across countries (e.g. TPE↔KIX, ~1000 km),
-    // which flattens the map to empty and times the road-web query out.
-    let mut home_codes = Vec::new();
-    let mut rows: Vec<(Vec<String>, String)> = Vec::new();
+/// `flight_legs` rows ordered (direction, leg_order) — outbound legs first.
+async fn query_flight_rows(c: &Connection, p: &str, d: &str) -> Result<Vec<FlightRow>, String> {
+    let mut f=c.query("SELECT departure_code, arrival_code, departure_airport, arrival_airport, flight_number, direction FROM flight_legs WHERE plan_id=?1 AND destination=?2 ORDER BY direction,leg_order",params![p.to_string(),d.to_string()]).await.map_err(err("flight map query"))?;
+    let mut rows = Vec::new();
     while let Some(x) = f.next().await.map_err(err("flight map read"))? {
+        let mut labels = Vec::new();
         for i in 0..4 {
             if let Ok(Some(s)) = x.get::<Option<String>>(i) {
                 if !s.trim().is_empty() {
-                    labels.push((s, Kind::Airport, false));
+                    labels.push(s);
                 }
             }
         }
-        let direction = x.get::<String>(5).unwrap_or_default();
         let mut codes = Vec::new();
         if let Ok(flight) = x.get::<String>(4) {
             for pair in flight.split_whitespace() {
@@ -2354,37 +2629,66 @@ async fn await_logistics(
                 }
             }
         }
-        rows.push((codes, direction));
+        rows.push(FlightRow { labels, codes });
     }
-    // rows are ordered (direction, leg_order): outbound legs first. First row =
-    // first outbound leg → its first code is home; last row = last return leg →
-    // its last code is home.
-    if let Some((codes, _)) = rows.first() {
-        if let Some(first) = codes.first() {
-            home_codes.push(first.clone());
-        }
-    }
-    if let Some((codes, _)) = rows.last() {
-        if let Some(last) = codes.last() {
-            home_codes.push(last.clone());
-        }
-    }
-    for (codes, _) in rows {
-        for code in codes {
-            if !home_codes.contains(&code) {
-                labels.push((code, Kind::Airport, false));
-            }
-        }
-    }
-    let mut r=read.query("SELECT from_place,to_place FROM day_route_segments WHERE plan_id=?1 AND destination=?2",params![p.to_string(),d.to_string()]).await.map_err(err("logistics route query"))?;
+    Ok(rows)
+}
+
+/// Every non-NULL `day_route_segments` endpoint, in the query's own row order.
+async fn query_route_endpoints(c: &Connection, p: &str, d: &str) -> Result<Vec<String>, String> {
+    let mut r=c.query("SELECT from_place,to_place FROM day_route_segments WHERE plan_id=?1 AND destination=?2",params![p.to_string(),d.to_string()]).await.map_err(err("logistics route query"))?;
+    let mut out = Vec::new();
     while let Some(x) = r.next().await.map_err(err("logistics route read"))? {
         for i in 0..2 {
             if let Ok(s) = x.get::<String>(i) {
-                let k = classify(&s);
-                if k != Kind::Sightseeing {
-                    labels.push((s, k, true));
-                }
+                out.push(s);
             }
+        }
+    }
+    Ok(out)
+}
+
+async fn assemble_logistics<R: MapResolver>(src: &MapSource, net: &mut R) -> Result<Vec<Point>, String> {
+    let hotel_names = &src.hotel_names;
+    let dest_pois = &src.dest_pois;
+    let mut labels = Vec::<(String, Kind, bool)>::new();
+    for name in hotel_names {
+        labels.push((name.clone(), Kind::Hotel, false));
+    }
+    for row in &src.flights {
+        for s in &row.labels {
+            labels.push((s.clone(), Kind::Airport, false));
+        }
+    }
+    // Home-airport codes to EXCLUDE from the logistics map: the first code of the
+    // first outbound flight and the last code of the last return flight. Including
+    // the home airport stretches the bbox across countries (e.g. TPE↔KIX, ~1000 km),
+    // which flattens the map to empty and times the road-web query out.
+    let mut home_codes = Vec::new();
+    // rows are ordered (direction, leg_order): outbound legs first. First row =
+    // first outbound leg → its first code is home; last row = last return leg →
+    // its last code is home.
+    if let Some(row) = src.flights.first() {
+        if let Some(first) = row.codes.first() {
+            home_codes.push(first.clone());
+        }
+    }
+    if let Some(row) = src.flights.last() {
+        if let Some(last) = row.codes.last() {
+            home_codes.push(last.clone());
+        }
+    }
+    for row in &src.flights {
+        for code in &row.codes {
+            if !home_codes.contains(code) {
+                labels.push((code.clone(), Kind::Airport, false));
+            }
+        }
+    }
+    for s in &src.route_endpoints {
+        let k = classify(s);
+        if k != Kind::Sightseeing {
+            labels.push((s.clone(), k, true));
         }
     }
     let mut out = Vec::new();
@@ -2393,7 +2697,7 @@ async fn await_logistics(
     // arrives here instead. Prefer its geocoded destination_pois row (title
     // contains the hotel name, e.g. 海論 → 海論海景民宿); only if no POI matches
     // does the label fall through to the shared geocode chain below.
-    if let Some((_title, hotel)) = query_domestic_stay(read, p, d).await? {
+    if let Some(hotel) = src.domestic_stay.clone() {
         match dest_pois
             .iter()
             .find(|poi| norm(&poi.title).contains(&norm(&hotel)))
@@ -2417,11 +2721,11 @@ async fn await_logistics(
         // Keep the label's hotel/airport kind: this map only draws logistics endpoints,
         // so a label that happens to share a POI key must not turn into a sightseeing pin.
         let resolved = if from_segment {
-            resolve_segment_label(read, write, &label, ctx, cache, dest_pois, hotel_names)
+            resolve_segment_label(net, &label, dest_pois, hotel_names)
                 .await?
                 .map(|(lat, lon, _)| (lat, lon, kind))
         } else {
-            resolve_place(read, write, &label, ctx, cache)
+            net.geocode(&label)
                 .await?
                 .map(|(lat, lon)| (lat, lon, kind))
         };
@@ -2583,9 +2887,336 @@ fn err<T: std::fmt::Display>(ctx: &'static str) -> impl FnOnce(T) -> String {
     move |e| format!("{ctx}: {e}")
 }
 
+/// Known-good renders for verify-site's content-check tests, drawn by the real
+/// renderer so the checks are exercised against exactly what snapshot-maps uploads.
+#[cfg(test)]
+pub(crate) mod test_render {
+    use super::*;
+
+    pub(crate) enum Bg<'a> {
+        Grid,
+        Roads,
+        Basemap(&'a [u8]),
+    }
+
+    pub(crate) fn day_map(bg: Bg) -> Vec<u8> {
+        let color = DAY_COLORS[0];
+        let stop = |lat, lon| Point {
+            lat,
+            lon,
+            color,
+            kind: Kind::Sightseeing,
+            day: Some(1),
+            label: String::new(),
+        };
+        let points = vec![stop(35.0, 135.0), stop(35.01, 135.012), stop(35.004, 135.02)];
+        let routes = vec![RouteLine {
+            points: vec![(35.0, 135.0), (35.005, 135.006), (35.01, 135.012)],
+            routed: true,
+            color,
+        }];
+        let roads = match bg {
+            Bg::Roads => vec![
+                RoadWay { points: vec![(34.99, 135.005), (35.02, 135.005)], major: true },
+                RoadWay { points: vec![(35.003, 134.99), (35.003, 135.03)], major: false },
+                RoadWay { points: vec![(34.995, 134.995), (35.015, 135.025)], major: false },
+            ],
+            _ => Vec::new(),
+        };
+        let basemap = match bg {
+            Bg::Basemap(b) => Some(b),
+            _ => None,
+        };
+        render_png(&map_title("day-1.png").unwrap(), &points, &routes, &roads, basemap, MapKind::Day).unwrap()
+    }
+
+    /// ArcGIS-like basemap: land-use blocks of similar luminance on a soft
+    /// gradient — varied colors, no sharp tile-periodic edges.
+    pub(crate) fn textured_basemap() -> Vec<u8> {
+        const PAL: [[u8; 3]; 5] = [
+            [232, 226, 214],
+            [205, 224, 190],
+            [170, 211, 223],
+            [240, 236, 228],
+            [220, 214, 230],
+        ];
+        let (w, h) = (WIDTH as usize, HEIGHT as usize);
+        let mut out = vec![255u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let c = PAL[(x / 53 + (y / 47) * 3) % PAL.len()];
+                let (dx, dy) = ((x / 40) as u8, (y / 40) as u8);
+                let i = (y * w + x) * 4;
+                out[i..i + 3].copy_from_slice(&[c[0] - dx, c[1] - dy, c[2].saturating_sub(dx / 2 + dy / 2)]);
+            }
+        }
+        out
+    }
+
+    pub(crate) fn flat_basemap(c: [u8; 3]) -> Vec<u8> {
+        let mut out = vec![255u8; (WIDTH * HEIGHT * 4) as usize];
+        for px in out.chunks_mut(4) {
+            px[..3].copy_from_slice(&c);
+        }
+        out
+    }
+
+    /// Draw text into a full-canvas RGBA buffer with the renderer's own font.
+    pub(crate) fn stamp_text(rgba: &mut Vec<u8>, x: i32, y: i32, s: &str, color: [u8; 3], scale: i32) {
+        let mut raster = Raster {
+            w: WIDTH as usize,
+            h: HEIGHT as usize,
+            pixels: std::mem::take(rgba),
+        };
+        raster.text(x, y, s, color, scale);
+        *rgba = raster.pixels;
+    }
+
+    pub(crate) fn encode(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+        encode_rgba_png(rgba, w, h).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fixture resolver: geocodes from a fixed table (recording misses like
+    /// NetMode::CacheOnly), road lines as the straight fallback connector.
+    struct FakeNet {
+        coords: HashMap<&'static str, (f64, f64)>,
+        misses: Vec<String>,
+    }
+
+    impl MapResolver for FakeNet {
+        async fn geocode(&mut self, place: &str) -> Result<Option<(f64, f64)>, String> {
+            match self.coords.get(place) {
+                Some(c) => Ok(Some(*c)),
+                None => {
+                    self.misses.push(place.to_string());
+                    Ok(None)
+                }
+            }
+        }
+        async fn routes(&mut self, points: &[Point]) -> Result<Vec<RouteLine>, String> {
+            Ok(points.windows(2).map(|p| straight(&p[0], &p[1])).collect())
+        }
+        fn diagnostics(&self) -> bool {
+            false
+        }
+        fn take_misses(&mut self) -> Vec<String> {
+            std::mem::take(&mut self.misses)
+        }
+    }
+
+    fn straight(a: &Point, b: &Point) -> RouteLine {
+        RouteLine {
+            points: vec![(a.lat, a.lon), (b.lat, b.lon)],
+            routed: false,
+            color: a.color,
+        }
+    }
+
+    const HOTEL: (f64, f64) = (34.9858, 135.7588);
+    const KINKAKU: (f64, f64) = (35.0394, 135.7292);
+    const KIYOMIZU: (f64, f64) = (34.9949, 135.7850);
+    const INARI: (f64, f64) = (34.9671, 135.7727);
+    const KIX: (f64, f64) = (34.4320, 135.2304);
+
+    fn fake_net() -> FakeNet {
+        FakeNet {
+            coords: HashMap::from([("APA Hotel", HOTEL), ("Fushimi Inari", INARI), ("KIX", KIX)]),
+            misses: Vec::new(),
+        }
+    }
+
+    fn seg(day: i64, from: &str, to: &str) -> Segment {
+        Segment {
+            day,
+            from: from.into(),
+            to: to.into(),
+            mode: "transit".into(),
+            duration_min: None,
+        }
+    }
+
+    /// Two Kyoto days: day 1 hotel → 金閣寺 → 清水寺 (POIs), day 2 hotel →
+    /// 伏見稲荷 (geocoded); TPE⇄KIX flights.
+    fn fixture_source(day1_last: &str) -> MapSource {
+        MapSource {
+            days: vec![1, 2],
+            excursion: HashSet::new(),
+            segments: vec![
+                seg(1, "hotel", "Kinkakuji"),
+                seg(1, "Kinkakuji", day1_last),
+                seg(2, "hotel", "Fushimi Inari"),
+            ],
+            pois: Vec::new(),
+            dest_pois: vec![
+                poi("kinkakuji", "Kinkakuji", KINKAKU.0, KINKAKU.1),
+                poi("kiyomizu", "Kiyomizu", KIYOMIZU.0, KIYOMIZU.1),
+            ],
+            hotel_names: vec!["APA Hotel".into()],
+            flights: vec![
+                FlightRow { labels: vec!["KIX".into()], codes: vec!["TPE".into(), "KIX".into()] },
+                FlightRow { labels: Vec::new(), codes: vec!["KIX".into(), "TPE".into()] },
+            ],
+            route_endpoints: ["hotel", "Kinkakuji", "Kinkakuji", day1_last, "hotel", "Fushimi Inari"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            domestic_stay: None,
+        }
+    }
+
+    async fn assembled(src: &MapSource, net: &mut FakeNet) -> HashMap<String, PlannedMap> {
+        assemble_maps(src, net, "p", "kyoto_2026")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.key.clone(), m))
+            .collect()
+    }
+
+    fn pt(c: (f64, f64), kind: Kind, day: Option<u32>) -> Point {
+        Point {
+            lat: c.0,
+            lon: c.1,
+            color: match (kind, day) {
+                (Kind::Hotel, None) => [21, 101, 192],
+                (Kind::Airport, None) => [239, 108, 0],
+                (_, Some(d)) => DAY_COLORS[(d as usize - 1) % DAY_COLORS.len()],
+                (Kind::Sightseeing, None) => unreachable!(),
+            },
+            kind,
+            day,
+            label: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_assembly_hashes_what_the_snapshot_loop_rendered() {
+        // Expected inputs derived by hand from the pre-extraction run() loop.
+        let maps = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        let keys: Vec<String> = assemble_maps(&fixture_source("Kiyomizu"), &mut fake_net(), "p", "kyoto_2026")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.key)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "day-1.png",
+                "day-2.png",
+                "day-1-logistics.png",
+                "day-2-logistics.png",
+                "plan.png",
+                "plan-excursion.png",
+                "plan-logistics.png"
+            ],
+            "snapshot-maps emission order"
+        );
+
+        let (k, kz, inari) = (
+            pt(KINKAKU, Kind::Sightseeing, Some(1)),
+            pt(KIYOMIZU, Kind::Sightseeing, Some(1)),
+            pt(INARI, Kind::Sightseeing, Some(2)),
+        );
+        let hotel_d1 = pt(HOTEL, Kind::Hotel, Some(1));
+        let expect = |title: &str, kind, points: &[Point], routes: &[RouteLine]| {
+            Some(map_input_sha256(title, kind, points, routes))
+        };
+
+        assert_eq!(
+            maps["day-1.png"].input_sha256(),
+            expect("Day 1 route", MapKind::Day, &[k.clone(), kz.clone()], &[straight(&k, &kz)])
+        );
+        assert_eq!(
+            maps["day-2.png"].input_sha256(),
+            expect("Day 2 route", MapKind::Day, &[inari.clone()], &[])
+        );
+        assert_eq!(
+            maps["day-1-logistics.png"].input_sha256(),
+            expect(
+                "Day 1 hotel round trip",
+                MapKind::DayLogistics,
+                &[hotel_d1.clone(), k.clone(), kz.clone()],
+                &[straight(&hotel_d1, &k), straight(&kz, &hotel_d1)],
+            )
+        );
+        assert_eq!(
+            maps["plan.png"].input_sha256(),
+            expect(
+                "Sightseeing overview",
+                MapKind::Plan,
+                &[k.clone(), kz.clone(), inari.clone()],
+                &[straight(&k, &kz)],
+            )
+        );
+        // TPE is the home airport (first outbound / last return code): excluded.
+        assert_eq!(
+            maps["plan-logistics.png"].input_sha256(),
+            expect(
+                "Hotels and airports",
+                MapKind::Logistics,
+                &[pt(HOTEL, Kind::Hotel, None), pt(KIX, Kind::Airport, None)],
+                &[],
+            )
+        );
+        assert_eq!(maps["plan-excursion.png"].input_sha256(), None, "no excursion day → skip");
+        assert!(maps.values().all(|m| m.geocode_misses.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn a_route_only_edit_changes_exactly_the_affected_hashes() {
+        let before = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        // Same days and activities; only day 1's second day_route_segments row changed.
+        let after = assembled(&fixture_source("Fushimi Inari"), &mut fake_net()).await;
+        for key in ["day-1.png", "day-1-logistics.png", "plan.png"] {
+            assert_ne!(before[key].input_sha256(), after[key].input_sha256(), "{key}");
+        }
+        for key in ["day-2.png", "day-2-logistics.png", "plan-logistics.png"] {
+            assert_eq!(before[key].input_sha256(), after[key].input_sha256(), "{key}");
+        }
+        // And the assembly is deterministic.
+        let again = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        for (key, m) in &before {
+            assert_eq!(m.input_sha256(), again[key].input_sha256(), "{key}");
+        }
+    }
+
+    #[tokio::test]
+    async fn geocode_misses_are_scoped_to_the_maps_they_feed() {
+        let mut net = fake_net();
+        net.coords.remove("Fushimi Inari");
+        let maps = assembled(&fixture_source("Kiyomizu"), &mut net).await;
+        let misses = |k: &str| maps[k].geocode_misses.clone();
+        assert_eq!(misses("day-2.png"), ["Fushimi Inari"]);
+        assert_eq!(misses("day-2-logistics.png"), ["Fushimi Inari"]);
+        assert_eq!(misses("plan.png"), ["Fushimi Inari"]);
+        assert!(misses("day-1.png").is_empty());
+        assert!(misses("plan-logistics.png").is_empty());
+    }
+
+    #[test]
+    fn map_title_names_every_key_the_assembly_emits() {
+        assert_eq!(map_title("day-3.png").as_deref(), Some("Day 3 route"));
+        assert_eq!(map_title("day-12-logistics.png").as_deref(), Some("Day 12 hotel round trip"));
+        assert_eq!(map_title("plan.png").as_deref(), Some("Sightseeing overview"));
+        assert_eq!(map_title("plan-excursion.png").as_deref(), Some("Day trip"));
+        assert_eq!(map_title("plan-logistics.png").as_deref(), Some("Hotels and airports"));
+        assert_eq!(map_title("day-x.png"), None);
+        assert_eq!(map_title("other.png"), None);
+    }
+
+    #[test]
+    fn text_ink_counts_the_font_cells() {
+        // '1' = [4, 12, 4, 4, 4, 4, 14]: 1+2+1+1+1+1+3 = 10 lit cells.
+        assert_eq!(text_ink("1", 1), 10);
+        assert_eq!(text_ink("1", 2), 40);
+        assert_eq!(text_ink("1 1", 1), 20);
+    }
 
     #[test]
     fn excursion_suggestion_uses_sights_and_nearest_hotel() {

@@ -294,9 +294,7 @@ pub async fn evaluate_completeness(
     conn: &Connection,
     plan_id: &str,
 ) -> Result<CompletenessVerdict, String> {
-    let day_numbers = read_day_numbers(conn, plan_id).await?;
-    let has_excursion = travel_db::repo::itinerary::has_plan_excursion(conn, plan_id).await?;
-    let expected = expected_map_keys_with_excursion(&day_numbers, has_excursion);
+    let expected = expected_keys_for_plan(conn, plan_id).await?;
     let manifest = read_map_artifacts(conn, plan_id).await?;
 
     if manifest.is_empty() {
@@ -321,6 +319,18 @@ pub async fn evaluate_completeness(
     }
 }
 
+/// Every map key snapshot-maps is expected to have recorded for a plan: the
+/// overview maps, each day's local + hotel round-trip map, and the excursion
+/// inset when any day is flagged. Shared with verify-site (one key list).
+pub(crate) async fn expected_keys_for_plan(
+    conn: &Connection,
+    plan_id: &str,
+) -> Result<Vec<String>, String> {
+    let day_numbers = read_day_numbers(conn, plan_id).await?;
+    let has_excursion = travel_db::repo::itinerary::has_plan_excursion(conn, plan_id).await?;
+    Ok(expected_map_keys_with_excursion(&day_numbers, has_excursion))
+}
+
 /// True if the caller named a specific plan (a plan-selecting flag, or any bare
 /// positional argument). When false, `run` checks every live plan.
 fn has_plan_selector(args: &[String]) -> bool {
@@ -338,7 +348,7 @@ fn has_plan_selector(args: &[String]) -> bool {
     false
 }
 
-async fn all_live_plans(conn: &Connection) -> Result<Vec<String>, String> {
+pub(crate) async fn all_live_plans(conn: &Connection) -> Result<Vec<String>, String> {
     let mut rows = conn
         .query(
             "SELECT plan_id FROM plans WHERE deleted_at IS NULL ORDER BY plan_id",

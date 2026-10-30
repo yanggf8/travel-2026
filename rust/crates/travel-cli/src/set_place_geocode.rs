@@ -3,7 +3,7 @@
 // (typically a localized name after a `set-poi-title` pass: 京都國際會館 has no
 // Nominatim hit in Japan, so the stop silently drops off the map). The row is
 // written into `route_place_geocodes` under the EXACT query key
-// `snapshot_maps::resolve_place` reads (same `normalize_place` formula), so
+// `snapshot_maps::lookup_place_cache` reads (same `normalize_place` formula), so
 // the next `snapshot-maps` run is a guaranteed cache hit. Reference/cache data
 // — NO audit triad. Plain-text output only.
 
@@ -18,7 +18,7 @@ struct ParsedArgs {
     context: Option<String>,
 }
 
-/// The cache key `resolve_place` reads with — shared verbatim so a manual row
+/// The cache key `snapshot_maps::lookup_place_cache` reads with — shared verbatim so a manual row
 /// can never miss by construction.
 pub(crate) fn cache_key(place: &str, context: &str) -> String {
     let (search, ctx) = crate::snapshot_maps::normalize_place(place, context);
