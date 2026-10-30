@@ -133,6 +133,8 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("planLogisticsMap", true) => "住宿與機場",
         ("planExcursionMap", false) => "Day trip",
         ("planExcursionMap", true) => "一日遊",
+        ("planAirportMap", false) => "Airport days",
+        ("planAirportMap", true) => "機場來回",
         ("mapNotAvailable", false) => "Map not available yet",
         ("mapNotAvailable", true) => "地圖尚未產生",
         // owner share-link copy (logged-in owner; recipients open ?token= link, no login)

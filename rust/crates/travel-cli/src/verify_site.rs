@@ -1016,6 +1016,23 @@ mod tests {
     }
 
     #[test]
+    fn plan_airport_map_passes_content_checks_and_needs_its_own_title() {
+        // `plan-airport.png` is conditional (only plans with an airport day), so
+        // it is not an expected key either; verify-site reaches it as an extra
+        // manifest key, and sizes its title strip from map_title.
+        let textured = test_render::textured_basemap();
+        let png = test_render::plan_style_map("plan-airport.png", &textured);
+        let report = content_checks(&png, "plan-airport.png");
+        assert!(report.findings.is_empty(), "{:?}", levels(&report));
+        assert_eq!(report.background, Some(Background::Basemap));
+
+        let title = maps::title_rect(maps::map_title("plan-airport.png").unwrap().len());
+        let found = levels(&content_checks(&erase(&png, title), "plan-airport.png"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].0 == Level::Fail && found[0].1.contains("title text missing"), "{found:?}");
+    }
+
+    #[test]
     fn flat_basemap_is_only_a_warning() {
         let flat = test_render::flat_basemap([170, 211, 223]);
         let report = content_checks(&test_render::day_map(Bg::Basemap(&flat)), "day-1.png");

@@ -677,25 +677,15 @@ async fn check_map_status(
 ) -> Result<render::map::MapStatus> {
     let bucket = env.bucket("MAPS")?;
     // Every HEAD is independent: issue them together so a long plan's page waits
-    // for one R2 round trip, not 3 + 3 × days of them. Keys: the three overview
-    // maps, then (day, logistics, away) per day, in that order.
-    let mut keys = vec![
-        format!("{plan_id}/plan.png"),
-        format!("{plan_id}/plan-logistics.png"),
-        format!("{plan_id}/plan-excursion.png"),
-    ];
-    for d in days {
-        for suffix in ["", "-logistics", "-away"] {
-            keys.push(format!("{plan_id}/day-{}{suffix}.png", d.day_number));
-        }
-    }
+    // for one R2 round trip, not 4 + 3 × days of them.
+    let keys = map_status_keys(plan_id, days);
     let mut versions = futures_util::future::join_all(keys.iter().map(|k| r2_map_version(&bucket, k)))
         .await
         .into_iter()
         .collect::<Result<Vec<_>>>()?
         .into_iter();
     let mut next = || versions.next().flatten();
-    let (plan, plan_logistics, plan_excursion) = (next(), next(), next());
+    let (plan, plan_logistics, plan_excursion, plan_airport) = (next(), next(), next(), next());
     let mut day_status = HashMap::new();
     let mut day_logistics_status = HashMap::new();
     let mut day_away_status = HashMap::new();
@@ -709,11 +699,30 @@ async fn check_map_status(
         plan,
         plan_logistics,
         plan_excursion,
+        plan_airport,
         days: day_status,
         day_logistics: day_logistics_status,
         day_away: day_away_status,
         legends,
     })
+}
+
+/// The R2 keys `check_map_status` HEADs, in the order it reads the results back:
+/// the four overview maps (plan, logistics, excursion, airport), then (day,
+/// logistics, away) per day.
+fn map_status_keys(plan_id: &str, days: &[model::Day]) -> Vec<String> {
+    let mut keys = vec![
+        format!("{plan_id}/plan.png"),
+        format!("{plan_id}/plan-logistics.png"),
+        format!("{plan_id}/plan-excursion.png"),
+        format!("{plan_id}/plan-airport.png"),
+    ];
+    for d in days {
+        for suffix in ["", "-logistics", "-away"] {
+            keys.push(format!("{plan_id}/day-{}{suffix}.png", d.day_number));
+        }
+    }
+    keys
 }
 
 /// Load the numbered-pin legend rows snapshot-maps wrote for this plan, grouped by
@@ -725,7 +734,7 @@ async fn load_map_legends(
     plan_id: &str,
 ) -> Result<HashMap<String, Vec<render::map::LegendStop>>> {
     let sql = format!(
-        "SELECT map_key, seq, label, lat, lon FROM map_legend_stops \
+        "SELECT map_key, seq, label, lat, lon, day_number, pin_no, color FROM map_legend_stops \
          WHERE plan_id = '{plan_id}' ORDER BY map_key, seq"
     );
     let rows = turso::pipeline(turso_url, turso_token, &[sql]).await?;
@@ -739,13 +748,14 @@ async fn load_map_legends(
 }
 
 /// Decode one map_legend_stops row into (map_key, LegendStop). Returns None on
-/// missing/NULL columns — a pin without coordinates has no link target.
+/// missing/NULL required columns — a pin without coordinates has no link target.
+/// `day_number` / `pin_no` / `color` are optional: NULL on rows written before
+/// those columns existed (the legend then renders flat, numbered by seq).
 fn decode_legend_row(row: &turso::Row) -> Option<(String, render::map::LegendStop)> {
+    let int = |v: &serde_json::Value| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()));
     let map_key = row.get("map_key")?.as_str()?.to_string();
     let label = row.get("label")?.as_str()?.to_string();
-    let seq = row
-        .get("seq")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))?;
+    let seq = row.get("seq").and_then(int)?;
     let lat = row.get("lat").and_then(model::json_f64)?;
     let lon = row.get("lon").and_then(model::json_f64)?;
     Some((
@@ -755,6 +765,9 @@ fn decode_legend_row(row: &turso::Row) -> Option<(String, render::map::LegendSto
             label,
             lat,
             lon,
+            day_number: row.get("day_number").and_then(int),
+            pin_no: row.get("pin_no").and_then(int),
+            color: row.get("color").and_then(|v| v.as_str()).map(str::to_string),
         },
     ))
 }
@@ -1118,6 +1131,66 @@ mod tests {
         .map(|(k, v)| (k.to_string(), v))
         .collect();
         assert!(decode_legend_row(&nulled).is_none());
+    }
+
+    #[test]
+    fn decode_legend_row_reads_the_day_columns_and_tolerates_null() {
+        use serde_json::json;
+        use turso::Row;
+        let row = |extra: [(&str, serde_json::Value); 3]| -> Row {
+            [
+                ("map_key", json!("plan-airport.png")),
+                ("seq", json!("4")),
+                ("label", json!("関西空港")),
+                ("lat", json!("34.432")),
+                ("lon", json!("135.2304")),
+            ]
+            .into_iter()
+            .chain(extra)
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+        };
+        // Turso's string scalars, as the pipeline returns them.
+        let got = decode_legend_row(&row([
+            ("day_number", json!("3")),
+            ("pin_no", json!("1")),
+            ("color", json!("#4363d8")),
+        ]))
+        .expect("decodes")
+        .1;
+        assert_eq!((got.seq, got.day_number, got.pin_no), (4, Some(3), Some(1)));
+        assert_eq!(got.color.as_deref(), Some("#4363d8"));
+        // A row written before the columns existed: NULLs, still a legend row.
+        let old = decode_legend_row(&row([
+            ("day_number", serde_json::Value::Null),
+            ("pin_no", serde_json::Value::Null),
+            ("color", serde_json::Value::Null),
+        ]))
+        .expect("NULL day columns must not drop the row")
+        .1;
+        assert_eq!((old.seq, old.day_number, old.pin_no, old.color), (4, None, None, None));
+    }
+
+    #[test]
+    fn map_status_heads_the_airport_inset_with_the_overview_maps() {
+        let day = |n| model::Day { day_number: n, ..Default::default() };
+        let keys = map_status_keys("kyoto-2026", &[day(1), day(2)]);
+        // check_map_status reads the results back in exactly this order.
+        assert_eq!(
+            keys,
+            [
+                "kyoto-2026/plan.png",
+                "kyoto-2026/plan-logistics.png",
+                "kyoto-2026/plan-excursion.png",
+                "kyoto-2026/plan-airport.png",
+                "kyoto-2026/day-1.png",
+                "kyoto-2026/day-1-logistics.png",
+                "kyoto-2026/day-1-away.png",
+                "kyoto-2026/day-2.png",
+                "kyoto-2026/day-2-logistics.png",
+                "kyoto-2026/day-2-away.png",
+            ]
+        );
     }
 
     #[test]

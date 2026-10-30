@@ -59,9 +59,10 @@ pub fn render_plan(
     // space (user request 2026-09-28). With flights it renders as a compact
     // inset (崁入小圖) instead of a second full-size map.
     // Supplementary insets sit side by side under the overview: the far-off
-    // day-trip map (only when one exists) and the hotel/airport map.
+    // day-trip map and the arrival/departure-day map (each only when one
+    // exists), then the hotel/airport map.
     let show_logistics = map_status.plan_logistics.is_some() || !plan.flights.is_empty();
-    if map_status.plan_excursion.is_some() || show_logistics {
+    if map_status.plan_excursion.is_some() || map_status.plan_airport.is_some() || show_logistics {
         body.push_str("<div class=\"map-insets\">");
         if let Some(v) = map_status.plan_excursion.as_deref() {
             body.push_str(&map::plan_excursion_map_slot(
@@ -69,6 +70,14 @@ pub fn render_plan(
                 v,
                 lang,
                 map_status.legend_for("plan-excursion.png"),
+            ));
+        }
+        if let Some(v) = map_status.plan_airport.as_deref() {
+            body.push_str(&map::plan_airport_map_slot(
+                &plan.plan_id,
+                v,
+                lang,
+                map_status.legend_for("plan-airport.png"),
             ));
         }
         if show_logistics {
@@ -524,6 +533,7 @@ mod tests {
             plan: Some("etag1".into()),
             plan_logistics: Some("etag3".into()),
             plan_excursion: None,
+            plan_airport: None,
             days: [(1i64, Some("etag2".into()))].into_iter().collect(),
             day_logistics: std::collections::HashMap::new(),
             day_away: std::collections::HashMap::new(),
@@ -535,6 +545,7 @@ mod tests {
                         label: "首里城".into(),
                         lat: 26.2186,
                         lon: 127.7196,
+                        ..Default::default()
                     }],
                 ),
                 (
@@ -544,6 +555,7 @@ mod tests {
                         label: "国際通り".into(),
                         lat: 26.2125,
                         lon: 127.6809,
+                        ..Default::default()
                     }],
                 ),
             ]
@@ -655,6 +667,61 @@ mod tests {
     }
 
     #[test]
+    fn render_plan_puts_airport_inset_right_after_the_excursion_inset() {
+        use crate::model::Plan;
+        let plan = Plan {
+            plan_id: "osaka-nov-2026".into(),
+            display_name: "Kyoto".into(),
+            ..Default::default()
+        };
+        let map_status = map::MapStatus {
+            plan: Some("p".into()),
+            plan_logistics: Some("l".into()),
+            plan_excursion: Some("e".into()),
+            plan_airport: Some("a".into()),
+            legends: [(
+                "plan-airport.png".to_string(),
+                vec![map::LegendStop {
+                    seq: 1,
+                    label: "関西空港".into(),
+                    lat: 34.43,
+                    lon: 135.23,
+                    day_number: Some(1),
+                    pin_no: Some(1),
+                    color: Some("#e6194b".into()),
+                }],
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map_status, "");
+        let row = html.split("<div class=\"map-insets\">").nth(1).expect("insets row");
+        let row = row.split("</figure></div>").next().unwrap_or("");
+        let exc = row.find("/map/osaka-nov-2026/plan-excursion.png?v=e").expect("excursion inset");
+        let air = row.find("/map/osaka-nov-2026/plan-airport.png?v=a").expect("airport inset");
+        let log = row.find("/map/osaka-nov-2026/plan-logistics.png?v=l").expect("logistics inset");
+        assert!(exc < air && air < log, "day trip, airport days, then hotels/airports: {row}");
+        // Its grouped legend lands under the airport inset, before the logistics one.
+        let leg = row.find(">関西空港</a>").expect("airport legend");
+        assert!(air < leg && leg < log, "{row}");
+        assert!(row[air..log].contains("第 1 天"), "{row}");
+
+        // An airport inset alone still opens the insets row (no flights, no
+        // logistics map, no excursion).
+        let alone = map::MapStatus { plan_airport: Some("a".into()), ..Default::default() };
+        let html = render_plan(&plan, "en", None, &alone, "");
+        let row = html.split("<div class=\"map-insets\">").nth(1).expect("insets row");
+        assert!(row.contains("plan-airport.png?v=a") && row.contains("Airport days"), "{row}");
+        assert!(!html.contains("plan-logistics.png") && !html.contains("plan-excursion.png"), "{html}");
+
+        // No airport PNG → no slot and no placeholder.
+        let none = render_plan(&plan, "zh", None, &map::MapStatus { plan_logistics: Some("l".into()), ..Default::default() }, "");
+        assert!(!none.contains("plan-airport.png"), "{none}");
+        assert!(!none.contains("機場來回"), "{none}");
+    }
+
+    #[test]
     fn render_plan_puts_day_away_map_right_after_the_day_logistics_map() {
         use crate::model::{Day, Plan};
         let day = |n| Day {
@@ -675,7 +742,7 @@ mod tests {
             day_away: [(1i64, Some("a1".to_string())), (2i64, None)].into_iter().collect(),
             legends: [(
                 "day-1-away.png".to_string(),
-                vec![map::LegendStop { seq: 1, label: "紅樹林 淡水".into(), lat: 25.15, lon: 121.46 }],
+                vec![map::LegendStop { seq: 1, label: "紅樹林 淡水".into(), lat: 25.15, lon: 121.46, ..Default::default() }],
             )]
             .into_iter()
             .collect(),

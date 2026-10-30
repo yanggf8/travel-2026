@@ -654,6 +654,34 @@ h1 {
   line-height: 16px;
   text-align: center;
 }
+/* Multi-day maps (overview, day-trip / airport-day insets): the legend groups
+   pins by day under a heading whose swatch is the day's pin color (from the
+   DB row, never hardcoded here); each day's pins are numbered from 1. */
+.map-legend-days {
+  padding: 6px 10px 2px;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+}
+.map-legend-days .map-legend {
+  padding: 2px 0 6px;
+  border-top: 0;
+  background: none;
+}
+.map-legend-day .leg-day {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.leg-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px #fff, 0 0 0 2.5px rgba(0,0,0,0.15);
+}
 .map-missing {
   border: 2px dashed var(--border);
   box-shadow: none;
@@ -687,6 +715,9 @@ h1 {
 .map-frame--inset figcaption { font-size: 11px; padding: 4px 8px; }
 .map-frame--inset .map-legend { padding: 5px 8px; gap: 3px 5px; }
 .map-frame--inset .map-legend li { font-size: 11px; }
+.map-frame--inset .map-legend-days { padding: 4px 8px 1px; }
+.map-frame--inset .map-legend-days .map-legend { padding: 2px 0 4px; }
+.map-frame--inset .leg-day { font-size: 11px; }
 .map-frame--inset .map-missing-box { min-height: 72px; font-size: 12px; padding: 10px; }
 .map-frame--day-logistics {
   max-width: 240px;

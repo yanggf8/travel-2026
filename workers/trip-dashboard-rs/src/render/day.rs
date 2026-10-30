@@ -492,6 +492,7 @@ mod tests {
             label: "残波岬".into(),
             lat: 26.1286,
             lon: 127.7303,
+            ..Default::default()
         }];
         let html = render(&day, "okinawa-2026", "zh", Some("v1"), &legend);
         assert!(html.contains("<ol class=\"map-legend\">"), "got: {html}");

@@ -437,6 +437,7 @@ pub(crate) fn map_title(key: &str) -> Option<String> {
     match key {
         "plan.png" => Some("Sightseeing overview".to_string()),
         "plan-excursion.png" => Some("Day trip".to_string()),
+        "plan-airport.png" => Some("Airport days".to_string()),
         "plan-logistics.png" => Some("Hotels and airports".to_string()),
         _ => {
             let rest = key.strip_prefix("day-")?;
@@ -538,8 +539,9 @@ impl HubGate {
 /// Assemble every map's inputs (title, kind, pins, road lines) for one plan, in
 /// the order snapshot-maps emits them: each day's local map, each day's hotel
 /// round trip, each day's beyond-the-area map, then the sightseeing overview,
-/// the excursion inset and the hotel/airport map. Shared by snapshot-maps
-/// (renders + uploads) and verify-site (recomputes the input hash read-only).
+/// the excursion inset, the airport-day inset and the hotel/airport map. Shared
+/// by snapshot-maps (renders + uploads) and verify-site (recomputes the input
+/// hash read-only).
 pub(crate) async fn assemble_maps<R: MapResolver>(
     src: &MapSource,
     net: &mut R,
@@ -622,11 +624,35 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         day_away.insert(*day, away);
     }
 
+    // An airport day is one whose own drawn stops (past the hub gate) include an
+    // airport terminal — the arrival/departure days, found from the data, not
+    // from the day's position. Its far-off terminal would stretch the overview,
+    // so the day moves to the airport inset. An excursion flag wins: that day
+    // stays on the day-trip inset.
+    let airport_days: HashSet<i64> = days
+        .iter()
+        .filter(|d| !excursion.contains(d))
+        .filter(|d| day_points.get(d).is_some_and(|pts| pts.iter().any(|p| p.kind == Kind::Airport)))
+        .copied()
+        .collect();
+    let on_overview = |day: &i64| !excursion.contains(day) && !airport_days.contains(day);
+    // The airport inset draws a day's sights and its terminal, in segment order.
+    let airport_day_points = |day: &i64| {
+        day_points
+            .get(day)
+            .into_iter()
+            .flatten()
+            .filter(|p| matches!(p.kind, Kind::Sightseeing | Kind::Airport))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
     let misses_of = |day: &i64| day_misses.get(day).cloned().unwrap_or_default();
     let off_area_of = |day: &i64| day_off_area.get(day).cloned().unwrap_or_default();
     let mut maps = Vec::new();
     let mut all_sightseeing = Vec::new();
     let mut excursion_points: Vec<Point> = Vec::new();
+    let mut airport_points: Vec<Point> = Vec::new();
     let mut daily_logistics = HashMap::<i64, (Vec<Point>, Vec<RouteLine>)>::new();
     for day in days {
         let all_pts = day_points.get(day).cloned().unwrap_or_default();
@@ -655,6 +681,13 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 routes.extend(net.routes(&[a.clone(), b.clone()]).await?);
             }
             daily_logistics.insert(*day, (log_points, routes));
+        }
+        if airport_days.contains(day) {
+            // Each airport day keeps its own pins (deduplicated within the day
+            // only): the arrival and departure days usually share a terminal,
+            // and each day's terminal pin wears that day's color and number.
+            airport_points.extend(airport_day_points(day));
+            continue;
         }
         let bucket = if excursion.contains(day) {
             &mut excursion_points
@@ -751,18 +784,18 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         }
     }
 
-    // The overview's pins come from every non-excursion day plus (domestic) the
-    // stay, and has_airport decides the domestic merge — so any logistics miss
-    // makes plan.png unverifiable too.
+    // The overview's pins come from every day that is neither an excursion nor
+    // an airport day, plus (domestic) the stay, and has_airport decides the
+    // domestic merge — so any logistics miss makes plan.png unverifiable too.
     let overview_misses = merged_distinct(
         days.iter()
-            .filter(|d| !excursion.contains(d))
+            .filter(|d| on_overview(d))
             .map(misses_of)
             .chain(std::iter::once(logistics_misses.clone())),
     );
     let overview_off_area = merged_distinct(
         days.iter()
-            .filter(|d| !excursion.contains(d))
+            .filter(|d| on_overview(d))
             .map(off_area_of)
             .chain(std::iter::once(logistics_off_area.clone())),
     );
@@ -778,7 +811,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         ));
     } else {
         let mut routes = Vec::new();
-        for day in days.iter().filter(|d| !excursion.contains(d)) {
+        for day in days.iter().filter(|d| on_overview(d)) {
             let points = day_points
                 .get(day)
                 .into_iter()
@@ -831,6 +864,37 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             routes,
             excursion_misses,
             excursion_off_area,
+        ));
+    }
+
+    // Every airport day on one inset, each day in its own color with its own
+    // road line. Its skip is silent (a plan without flights has none), and
+    // snapshot-maps still records it so a stale inset is removed.
+    let airport_misses = merged_distinct(days.iter().filter(|d| airport_days.contains(d)).map(misses_of));
+    let airport_off_area = merged_distinct(days.iter().filter(|d| airport_days.contains(d)).map(off_area_of));
+    if airport_points.is_empty() {
+        maps.push(PlannedMap::skip(
+            "plan-airport.png",
+            "no airport day",
+            None,
+            airport_misses,
+            airport_off_area,
+        ));
+    } else {
+        let mut routes = Vec::new();
+        for day in days.iter().filter(|d| airport_days.contains(d)) {
+            let points = airport_day_points(day);
+            if points.len() > 1 {
+                routes.extend(net.routes(&points).await?);
+            }
+        }
+        maps.push(PlannedMap::render(
+            "plan-airport.png",
+            MapKind::Plan,
+            airport_points,
+            routes,
+            airport_misses,
+            airport_off_area,
         ));
     }
 
@@ -915,6 +979,8 @@ fn off_area_note(maps: &[PlannedMap], dest: &str) -> Option<String> {
 #[derive(Clone, Copy)]
 pub(crate) enum MapKind {
     Day,
+    /// A multi-day map (plan.png and the excursion / airport-day insets): pins
+    /// colored and numbered per day.
     Plan,
     Logistics,
     DayLogistics,
@@ -947,7 +1013,7 @@ async fn upload_map(
         );
         // Same PNG re-served, but labels may have changed (input_sha deliberately
         // excludes them) — refresh the legend to the current point names.
-        write_legend_stops(conn, plan, key, points).await?;
+        write_legend_stops(conn, plan, key, points, kind).await?;
         return Ok(true);
     }
     // A grid with pins is not a map.  It is especially misleading for the
@@ -1028,14 +1094,14 @@ async fn upload_map(
         Some(has_roads),
     )
     .await?;
-    write_legend_stops(conn, plan, key, points).await?;
+    write_legend_stops(conn, plan, key, points, kind).await?;
     println!("   uploaded {key} ({} bytes)", png.len());
     Ok(true)
 }
 
-/// Rewrite the numbered-pin legend rows for one map key. `seq` mirrors the pin
-/// numbers `render_png` draws (`points.iter().enumerate()` + 1); the PNG and
-/// this table are written from the same `points` slice, so they cannot drift.
+/// Rewrite the numbered-pin legend rows for one map key, from `legend_rows` —
+/// the same `points` slice, pin numbers and pin colors `render_png` draws, so
+/// the PNG and this table cannot drift.
 /// Called ONLY on paths that (re)serve the current PNG (upload success and the
 /// reusable-keep path): skip/fail paths leave the previous rows in place because
 /// the dashboard still serves the previous PNG from R2, and its legend must keep
@@ -1045,6 +1111,7 @@ async fn write_legend_stops(
     plan: &str,
     key: &str,
     points: &[Point],
+    kind: MapKind,
 ) -> Result<(), String> {
     // Reconnect after each Wrangler upload, which can outlive Turso's idle timeout.
     let conn = crate::db::connect_write().await?;
@@ -1054,22 +1121,98 @@ async fn write_legend_stops(
     )
     .await
     .map_err(err("map legend delete"))?;
-    for (i, p) in points.iter().enumerate() {
+    for row in legend_rows(kind, points) {
         conn.execute(
-            "INSERT INTO map_legend_stops (plan_id, map_key, seq, label, lat, lon) VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO map_legend_stops (plan_id, map_key, seq, label, lat, lon, day_number, pin_no, color) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 plan.to_string(),
                 key.to_string(),
-                (i + 1) as i64,
-                p.label.clone(),
-                p.lat,
-                p.lon
+                row.seq,
+                row.label,
+                row.lat,
+                row.lon,
+                row.day_number,
+                row.pin_no,
+                row.color
             ],
         )
         .await
         .map_err(err("map legend insert"))?;
     }
     Ok(())
+}
+
+/// One `map_legend_stops` row: `seq` is the unique row order (pin order on the
+/// map), `pin_no` the number drawn on the pin, `color` the pin's fill as
+/// `#rrggbb`, `day_number` the itinerary day the worker groups the legend by
+/// (None on the logistics maps, whose pin colors mean hotel/airport, not a day).
+#[derive(Debug, PartialEq)]
+struct LegendRow {
+    seq: i64,
+    label: String,
+    lat: f64,
+    lon: f64,
+    day_number: Option<i64>,
+    pin_no: i64,
+    color: String,
+}
+
+fn legend_rows(kind: MapKind, points: &[Point]) -> Vec<LegendRow> {
+    let by_day = matches!(kind, MapKind::Day | MapKind::Plan);
+    points
+        .iter()
+        .zip(pin_numbers(kind, points))
+        .enumerate()
+        .map(|(i, (p, n))| LegendRow {
+            seq: (i + 1) as i64,
+            label: p.label.clone(),
+            lat: p.lat,
+            lon: p.lon,
+            day_number: p.day.filter(|_| by_day).map(i64::from),
+            pin_no: n as i64,
+            color: hex_color(pin_color(kind, p)),
+        })
+        .collect()
+}
+
+fn hex_color(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
+const HOTEL_INK: [u8; 3] = [21, 101, 192];
+const AIRPORT_INK: [u8; 3] = [239, 108, 0];
+
+/// The fill `render_png` gives a pin. On a multi-day map (MapKind::Plan) a
+/// day's airport terminal wears its day's color like the day's sights — the
+/// day color is what ties a pin to its day's numbers; everywhere else hotels
+/// and airports keep their own colors.
+fn pin_color(kind: MapKind, p: &Point) -> [u8; 3] {
+    match p.kind {
+        Kind::Sightseeing => p.color,
+        Kind::Airport if matches!(kind, MapKind::Plan) && p.day.is_some() => p.color,
+        Kind::Hotel => HOTEL_INK,
+        Kind::Airport => AIRPORT_INK,
+    }
+}
+
+/// The number drawn on each pin. A multi-day map (MapKind::Plan) numbers each
+/// day's pins from 1 — the day color tells the days apart — with day-less pins
+/// (a domestic stay) numbered as one more group; every other map numbers its
+/// pins 1..N in order.
+fn pin_numbers(kind: MapKind, points: &[Point]) -> Vec<usize> {
+    if !matches!(kind, MapKind::Plan) {
+        return (1..=points.len()).collect();
+    }
+    let mut next = HashMap::<Option<u32>, usize>::new();
+    points
+        .iter()
+        .map(|p| {
+            let n = next.entry(p.day).or_insert(0);
+            *n += 1;
+            *n
+        })
+        .collect()
 }
 
 fn map_kind_tag(kind: MapKind) -> &'static str {
@@ -1111,6 +1254,15 @@ fn map_input_sha256(
         hasher.update(&p.color);
         // The DAY legend names the day; colors cycle after 7 days.
         hasher.update(p.day.unwrap_or(0).to_le_bytes());
+    }
+    // A multi-day map numbers its pins per day, so the drawn numbers are part of
+    // its image. Every other map draws 1..N in the point order hashed above —
+    // hashing nothing more keeps those hashes (and their PNG reuse) unchanged.
+    if matches!(kind, MapKind::Plan) {
+        put_str(&mut hasher, "per-day-pins");
+        for n in pin_numbers(kind, points) {
+            hasher.update((n as u64).to_le_bytes());
+        }
     }
     hasher.update((routes.len() as u64).to_le_bytes());
     for r in routes {
@@ -1239,21 +1391,16 @@ fn render_png(
         reserved.push((8, 30, 12 + legend_w, 30 + legend_rows * PLAN_LEGEND_ROW));
     }
     let placed = declutter_pins(&anchors, &reserved);
-    let pin_color = |p: &Point| match p.kind {
-        Kind::Sightseeing => p.color,
-        Kind::Hotel => [21, 101, 192],
-        Kind::Airport => [239, 108, 0],
-    };
     for (i, p) in points.iter().enumerate() {
         if placed[i] != anchors[i] {
             raster.line(anchors[i], placed[i], [255, 255, 255], 3, false);
             raster.line(anchors[i], placed[i], [70, 82, 94], 1, false);
             raster.dot(anchors[i].0, anchors[i].1, 5, [255, 255, 255]);
-            raster.dot(anchors[i].0, anchors[i].1, 3, pin_color(p));
+            raster.dot(anchors[i].0, anchors[i].1, 3, pin_color(kind, p));
         }
     }
-    for (i, p) in points.iter().enumerate() {
-        raster.pin(placed[i].0, placed[i].1, pin_color(p), i + 1);
+    for ((i, p), n) in points.iter().enumerate().zip(pin_numbers(kind, points)) {
+        raster.pin(placed[i].0, placed[i].1, pin_color(kind, p), n);
     }
     let title = title.to_ascii_uppercase();
     if basemap.is_some() {
@@ -1264,8 +1411,8 @@ fn render_png(
     }
     raster.text(12, 10, &title, TITLE_INK, TITLE_SCALE);
     if matches!(kind, MapKind::Logistics) {
-        raster.legend(12, 31, "HOTEL", [21, 101, 192]);
-        raster.legend(105, 31, "AIRPORT", [239, 108, 0]);
+        raster.legend(12, 31, "HOTEL", HOTEL_INK);
+        raster.legend(105, 31, "AIRPORT", AIRPORT_INK);
     } else if matches!(kind, MapKind::DayLogistics) {
         let mut x = 12;
         for (label, color) in day_logistics_legend_entries(points) {
@@ -1274,8 +1421,9 @@ fn render_png(
         }
     } else if matches!(kind, MapKind::Plan) {
         // The overview colors pins by DAY; without a key the colors say
-        // nothing. One entry per day that has a pin here (excursion days
-        // render on their own map, so their entries leave with them).
+        // nothing. One entry per day that has a pin here (excursion and
+        // airport days render on their own maps, so their entries leave with
+        // them).
         // Long trips wrap onto further rows rather than run off the canvas.
         let entries = plan_day_legend_entries(points);
         if !entries.is_empty() {
@@ -1515,13 +1663,13 @@ pub(crate) fn text_ink(s: &str, scale: i32) -> usize {
 const PIN_RADIUS: i32 = 15;
 
 /// Overview DAY legend: one (label, color) per itinerary day with at least one
-/// sightseeing pin, in day order. Built from each pin's own `day`, never from
-/// its color — DAY_COLORS cycles after 7 days.
+/// pin (a sight, or an airport-day inset's terminal), in day order. Built from
+/// each pin's own `day`, never from its color — DAY_COLORS cycles after 7 days.
+/// Day-less pins (a domestic stay) have no entry.
 fn plan_day_legend_entries(points: &[Point]) -> Vec<(String, [u8; 3])> {
     let mut days: Vec<(u32, [u8; 3])> = points
         .iter()
-        .filter(|p| p.kind == Kind::Sightseeing)
-        .filter_map(|p| p.day.map(|d| (d, p.color)))
+        .filter_map(|p| p.day.map(|d| (d, pin_color(MapKind::Plan, p))))
         .collect();
     days.sort_by_key(|(d, _)| *d);
     days.dedup_by_key(|(d, _)| *d);
@@ -1587,12 +1735,12 @@ fn declutter_pins(anchors: &[(i32, i32)], reserved: &[(i32, i32, i32, i32)]) -> 
 /// HOTEL always; DESTINATION (in the day's DAY_COLORS color) when a sight pin
 /// exists; AIRPORT (orange) when the terminal is one of the pins.
 fn day_logistics_legend_entries(points: &[Point]) -> Vec<(&'static str, [u8; 3])> {
-    let mut out = vec![("HOTEL", [21, 101, 192])];
+    let mut out = vec![("HOTEL", HOTEL_INK)];
     if let Some(sight) = points.iter().find(|p| p.kind == Kind::Sightseeing) {
         out.push(("DESTINATION", sight.color));
     }
     if points.iter().any(|p| p.kind == Kind::Airport) {
-        out.push(("AIRPORT", [239, 108, 0]));
+        out.push(("AIRPORT", AIRPORT_INK));
     }
     out
 }
@@ -2923,7 +3071,7 @@ async fn assemble_logistics<R: MapResolver>(
             .find(|poi| norm(&poi.title).contains(&norm(&hotel)))
         {
             Some(poi) => {
-                if let Some(point) = gate.point(hotel, (poi.lat, poi.lon), [21, 101, 192], Kind::Hotel, None)
+                if let Some(point) = gate.point(hotel, (poi.lat, poi.lon), HOTEL_INK, Kind::Hotel, None)
                     && seen.insert((coord_key(poi.lat, poi.lon), Kind::Hotel as u8))
                 {
                     out.push(point);
@@ -2946,9 +3094,9 @@ async fn assemble_logistics<R: MapResolver>(
         };
         if let Some((lat, lon, kind)) = resolved {
             let color = if kind == Kind::Hotel {
-                [21, 101, 192]
+                HOTEL_INK
             } else {
-                [239, 108, 0]
+                AIRPORT_INK
             };
             if let Some(point) = gate.point(display_label(&label, hotel_names), (lat, lon), color, kind, None)
                 && seen.insert((coord_key(lat, lon), kind as u8))
@@ -3146,6 +3294,31 @@ pub(crate) mod test_render {
         render_png(&map_title(key).unwrap(), &points, &routes, &roads, basemap, MapKind::Day).unwrap()
     }
 
+    /// A multi-day map (MapKind::Plan: plan.png and its insets) titled for
+    /// `key`: two days, each in its own color with per-day pin numbers and the
+    /// DAY legend, day 1 ending at an airport terminal, over a basemap.
+    pub(crate) fn plan_style_map(key: &str, basemap: &[u8]) -> Vec<u8> {
+        let stop = |lat, lon, kind, day: u32| Point {
+            lat,
+            lon,
+            color: DAY_COLORS[day as usize - 1],
+            kind,
+            day: Some(day),
+            label: String::new(),
+        };
+        let points = vec![
+            stop(35.0, 135.0, Kind::Sightseeing, 1),
+            stop(35.01, 135.012, Kind::Airport, 1),
+            stop(35.004, 135.02, Kind::Sightseeing, 2),
+            stop(34.995, 135.03, Kind::Sightseeing, 2),
+        ];
+        let routes = vec![
+            RouteLine { points: vec![(35.0, 135.0), (35.01, 135.012)], routed: true, color: DAY_COLORS[0] },
+            RouteLine { points: vec![(35.004, 135.02), (34.995, 135.03)], routed: true, color: DAY_COLORS[1] },
+        ];
+        render_png(&map_title(key).unwrap(), &points, &routes, &[], Some(basemap), MapKind::Plan).unwrap()
+    }
+
     /// ArcGIS-like basemap: land-use blocks of similar luminance on a soft
     /// gradient — varied colors, no sharp tile-periodic edges.
     pub(crate) fn textured_basemap() -> Vec<u8> {
@@ -3339,6 +3512,7 @@ mod tests {
                 "day-2-away.png",
                 "plan.png",
                 "plan-excursion.png",
+                "plan-airport.png",
                 "plan-logistics.png"
             ],
             "snapshot-maps emission order"
@@ -3391,6 +3565,7 @@ mod tests {
             )
         );
         assert_eq!(maps["plan-excursion.png"].input_sha256(), None, "no excursion day → skip");
+        assert_eq!(maps["plan-airport.png"].input_sha256(), None, "no airport day → skip");
         assert!(maps.values().all(|m| m.geocode_misses.is_empty()));
         assert!(maps.values().all(|m| m.off_area.is_empty()));
     }
@@ -3468,6 +3643,8 @@ mod tests {
             "day-2-away.png",
             "plan.png",
             "plan-excursion.png",
+            // The gated Gimhae Airport is not drawn, so day 1 is no airport day.
+            "plan-airport.png",
             "plan-logistics.png",
         ] {
             assert_eq!(with[key].input_sha256(), without[key].input_sha256(), "{key}");
@@ -3584,12 +3761,177 @@ mod tests {
         assert_eq!(off_area_note(&maps.into_values().collect::<Vec<_>>(), "kyoto_2026"), None);
     }
 
+    /// `fixture_source("Kiyomizu")` grown to three days: day 1 lands at KIX
+    /// (KIX → hotel → 金閣寺 → 清水寺), day 2 stays in town (hotel → 伏見稲荷),
+    /// day 3 flies home (hotel → 清水寺 → KIX).
+    fn fixture_with_airport_days() -> MapSource {
+        let mut src = fixture_source("Kiyomizu");
+        src.days.push(3);
+        src.segments.insert(0, seg(1, "KIX", "hotel"));
+        src.segments.extend([seg(3, "hotel", "Kiyomizu"), seg(3, "Kiyomizu", "KIX")]);
+        src.route_endpoints.splice(0..0, ["KIX", "hotel"].map(String::from));
+        src.route_endpoints.extend(["hotel", "Kiyomizu", "Kiyomizu", "KIX"].map(String::from));
+        src
+    }
+
+    #[tokio::test]
+    async fn airport_days_leave_the_overview_for_the_airport_inset() {
+        let maps = assembled(&fixture_with_airport_days(), &mut fake_net()).await;
+        // Day 2 has no airport stop: it alone stays on the overview.
+        let inari = pt(INARI, Kind::Sightseeing, Some(2));
+        assert_eq!(drawn(&maps["plan.png"]), [INARI]);
+        assert_eq!(
+            maps["plan.png"].input_sha256(),
+            Some(map_input_sha256("Sightseeing overview", MapKind::Plan, &[inari], &[]))
+        );
+        // Days 1 and 3 each bring their sights and their terminal, in segment
+        // order and in their own color; the shared KIX pin appears once per day.
+        let day1 = [
+            pt(KIX, Kind::Airport, Some(1)),
+            pt(KINKAKU, Kind::Sightseeing, Some(1)),
+            pt(KIYOMIZU, Kind::Sightseeing, Some(1)),
+        ];
+        let day3 = [pt(KIYOMIZU, Kind::Sightseeing, Some(3)), pt(KIX, Kind::Airport, Some(3))];
+        let routes = [
+            straight(&day1[0], &day1[1]),
+            straight(&day1[1], &day1[2]),
+            straight(&day3[0], &day3[1]),
+        ];
+        assert_eq!(drawn(&maps["plan-airport.png"]), [KIX, KINKAKU, KIYOMIZU, KIYOMIZU, KIX]);
+        assert_eq!(
+            maps["plan-airport.png"].input_sha256(),
+            Some(map_input_sha256("Airport days", MapKind::Plan, &[day1.as_slice(), &day3].concat(), &routes))
+        );
+        // The per-day maps do not move: day 1 still has its local map.
+        assert_eq!(drawn(&maps["day-1.png"]), [KINKAKU, KIYOMIZU]);
+        assert_eq!(drawn(&maps["day-3.png"]), [KIYOMIZU]);
+    }
+
+    #[tokio::test]
+    async fn an_excursion_flag_wins_over_an_airport_stop() {
+        let mut src = fixture_with_airport_days();
+        src.excursion.insert(1);
+        let maps = assembled(&src, &mut fake_net()).await;
+        // Day 1 is drawn as the day trip it is flagged as (sights only)…
+        assert_eq!(drawn(&maps["plan-excursion.png"]), [KINKAKU, KIYOMIZU]);
+        // …and only day 3 is left on the airport inset.
+        assert_eq!(drawn(&maps["plan-airport.png"]), [KIYOMIZU, KIX]);
+        assert_eq!(drawn(&maps["plan.png"]), [INARI]);
+    }
+
+    #[tokio::test]
+    async fn no_airport_day_is_a_silent_skip() {
+        let maps = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        assert!(matches!(
+            maps["plan-airport.png"].plan,
+            MapPlan::Skip { reason: "no airport day", note: None }
+        ));
+        // Both days stay on the overview.
+        assert_eq!(drawn(&maps["plan.png"]), [KINKAKU, KIYOMIZU, INARI]);
+    }
+
+    fn legend_of(m: &PlannedMap) -> Vec<LegendRow> {
+        match &m.plan {
+            MapPlan::Render { kind, points, .. } => legend_rows(*kind, points),
+            MapPlan::Skip { .. } => Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_day_maps_number_pins_per_day() {
+        let maps = assembled(&fixture_with_airport_days(), &mut fake_net()).await;
+        let numbered = |key: &str| {
+            legend_of(&maps[key])
+                .into_iter()
+                .map(|r| (r.seq, r.day_number, r.pin_no))
+                .collect::<Vec<_>>()
+        };
+        // seq stays the unique row order; pin_no restarts at 1 on each day.
+        assert_eq!(
+            numbered("plan-airport.png"),
+            [(1, Some(1), 1), (2, Some(1), 2), (3, Some(1), 3), (4, Some(3), 1), (5, Some(3), 2)]
+        );
+        let plain = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        assert_eq!(
+            legend_of(&plain["plan.png"]).iter().map(|r| (r.day_number, r.pin_no)).collect::<Vec<_>>(),
+            [(Some(1), 1), (Some(1), 2), (Some(2), 1)]
+        );
+        // A day map is per-day already: 1..N, grouped under its day.
+        assert_eq!(numbered("day-1.png"), [(1, Some(1), 1), (2, Some(1), 2)]);
+        // Logistics maps carry no day: their colors mean hotel/airport.
+        assert!(legend_of(&maps["day-1-logistics.png"]).iter().all(|r| r.day_number.is_none()));
+        assert_eq!(numbered("plan-logistics.png"), [(1, None, 1), (2, None, 2)]);
+    }
+
+    #[test]
+    fn legend_rows_carry_the_numbers_and_colors_the_png_draws() {
+        let at = |lat, lon, kind, day: u32| Point {
+            lat,
+            lon,
+            color: DAY_COLORS[(day as usize - 1) % DAY_COLORS.len()],
+            kind,
+            day: Some(day),
+            label: format!("{lat},{lon}"),
+        };
+        // Far enough apart that no pin is decluttered off its anchor.
+        let points = vec![
+            at(35.0, 135.0, Kind::Sightseeing, 1),
+            at(35.1, 135.25, Kind::Airport, 1),
+            at(35.2, 135.05, Kind::Sightseeing, 2),
+        ];
+        let rows = legend_rows(MapKind::Plan, &points);
+        assert_eq!(
+            rows.iter().map(|r| (r.seq, r.day_number, r.pin_no)).collect::<Vec<_>>(),
+            [(1, Some(1), 1), (2, Some(1), 2), (3, Some(2), 1)]
+        );
+        assert_eq!(rows[0].label, "35,135");
+        // On a multi-day map the airport pin wears its day's color.
+        assert_eq!(rows[1].color, "#e6194b");
+        assert_eq!(rows[2].color, "#3cb44b");
+
+        // Each recorded color is the fill actually drawn inside that pin.
+        let png = render_png("Airport days", &points, &[], &[], None, MapKind::Plan).unwrap();
+        let rgba = decode_rgba_png(&png).unwrap();
+        let projection = map_projection(&points, &[]);
+        for (p, row) in points.iter().zip(&rows) {
+            let (x, y) = projection.point(mercator(p.lat, p.lon));
+            // Inside the pin's fill, above its white number.
+            let i = (((y - 8) * WIDTH as i32 + x) * 4) as usize;
+            assert_eq!(hex_color([rgba[i], rgba[i + 1], rgba[i + 2]]), row.color, "{row:?}");
+        }
+
+        // A logistics map keeps the hotel/airport inks and records no day, even
+        // for pins that came from a day.
+        let log = legend_rows(
+            MapKind::DayLogistics,
+            &[pt(HOTEL, Kind::Hotel, Some(1)), pt(KIX, Kind::Airport, Some(1))],
+        );
+        assert_eq!(
+            log.iter().map(|r| (r.day_number, r.pin_no, r.color.as_str())).collect::<Vec<_>>(),
+            [(None, 1, "#1565c0"), (None, 2, "#ef6c00")]
+        );
+    }
+
+    #[test]
+    fn pin_numbers_count_day_less_pins_as_their_own_group() {
+        // Domestic overview: the merged stay has no day.
+        let pts = [
+            pt(KINKAKU, Kind::Sightseeing, Some(1)),
+            pt(HOTEL, Kind::Hotel, None),
+            pt(INARI, Kind::Sightseeing, Some(2)),
+            pt(KIYOMIZU, Kind::Sightseeing, Some(1)),
+        ];
+        assert_eq!(pin_numbers(MapKind::Plan, &pts), [1, 1, 1, 2]);
+        assert_eq!(pin_numbers(MapKind::Day, &pts), [1, 2, 3, 4]);
+    }
+
     #[test]
     fn map_title_names_every_key_the_assembly_emits() {
         assert_eq!(map_title("day-3.png").as_deref(), Some("Day 3 route"));
         assert_eq!(map_title("day-12-logistics.png").as_deref(), Some("Day 12 hotel round trip"));
         assert_eq!(map_title("plan.png").as_deref(), Some("Sightseeing overview"));
         assert_eq!(map_title("plan-excursion.png").as_deref(), Some("Day trip"));
+        assert_eq!(map_title("plan-airport.png").as_deref(), Some("Airport days"));
         assert_eq!(map_title("plan-logistics.png").as_deref(), Some("Hotels and airports"));
         assert_eq!(map_title("day-4-away.png").as_deref(), Some("Day 4 beyond the area"));
         assert_eq!(map_title("day-x-away.png"), None);
@@ -4180,16 +4522,20 @@ mod tests {
             label: String::new(),
         };
         // Day 8 shares day 1's color; the legend must still name both, in
-        // day order, once each, and skip the hotel pin.
+        // day order, once each, and skip the day-less hotel pin. An airport
+        // day's terminal (the airport inset) names its day like a sight.
         let pts = vec![
             p(Some(8), Kind::Sightseeing),
             p(Some(1), Kind::Sightseeing),
             p(Some(1), Kind::Sightseeing),
             p(Some(3), Kind::Sightseeing),
             p(None, Kind::Hotel),
+            p(Some(5), Kind::Airport),
         ];
-        let labels: Vec<String> = plan_day_legend_entries(&pts).into_iter().map(|(l, _)| l).collect();
-        assert_eq!(labels, vec!["DAY 1", "DAY 3", "DAY 8"]);
+        let entries = plan_day_legend_entries(&pts);
+        let labels: Vec<&str> = entries.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["DAY 1", "DAY 3", "DAY 5", "DAY 8"]);
+        assert_eq!(entries[2].1, DAY_COLORS[4], "the airport pin's day color, not airport orange");
     }
 
     #[test]

@@ -604,6 +604,14 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
+    // The web legend groups a multi-day map's pins by day: `day_number` (NULL on
+    // the logistics maps), `pin_no` the number drawn on the pin (snapshot-maps
+    // numbers each day's pins from 1; NULL on older rows, which fall back to
+    // seq), `color` the pin's fill as #rrggbb, so the worker never hardcodes
+    // the day colors. `seq` stays the unique row order.
+    add_column(&conn, "ALTER TABLE map_legend_stops ADD COLUMN day_number INTEGER;").await;
+    add_column(&conn, "ALTER TABLE map_legend_stops ADD COLUMN pin_no INTEGER;").await;
+    add_column(&conn, "ALTER TABLE map_legend_stops ADD COLUMN color TEXT;").await;
 
     // 13. Rename plans_current → plans.
     if table_exists(&conn, "plans_current").await {

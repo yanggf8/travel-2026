@@ -599,7 +599,7 @@ CREATE TABLE map_legend_stops (
   seq INTEGER NOT NULL,
   label TEXT NOT NULL,
   lat REAL NOT NULL,
-  lon REAL NOT NULL,
+  lon REAL NOT NULL, day_number INTEGER, pin_no INTEGER, color TEXT,
   PRIMARY KEY (plan_id, map_key, seq)
 );
 
