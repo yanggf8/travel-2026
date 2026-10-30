@@ -23,18 +23,23 @@ fn request_origin(url: &url::Url) -> String {
 }
 
 /// 1×1 transparent PNG — returned when an R2 map image is missing, so the
-/// browser never shows a broken-image icon. Generated offline (standard
-/// zlib-flate empty IDAT + standard PNG header/chunks).
+/// browser never shows a broken-image icon. The IDAT is a zlib STORED block
+/// (no compression), so `placeholder_png_decodes` can check every byte —
+/// chunk CRCs, block lengths, adler32 — without a PNG/zlib dependency.
 const PLACEHOLDER_PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
     0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk len=13
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1×1
-    0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, // 8-bit RGBA, filter=0
-    0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, // CRC IHDR; IDAT len=10
-    0x54, 0x78, 0x9c, 0x62, 0x00, 0x00, 0x00, 0x02, // compressed data (1×1 RGBA transparent)
-    0x00, 0x01, 0xe5, 0x27, 0xde, 0xfc, 0x00, 0x00, // CRC IDAT; IEND len=0
-    0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, // IEND
-    0x60, 0x82, // CRC IEND
+    0x08, 0x06, 0x00, 0x00, 0x00, // 8-bit RGBA, deflate, filter 0, no interlace
+    0x1f, 0x15, 0xc4, 0x89, // CRC IHDR
+    0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41, 0x54, // IDAT chunk len=16
+    0x78, 0x01, // zlib header
+    0x01, 0x05, 0x00, 0xfa, 0xff, // final stored block, LEN=5, NLEN=!5
+    0x00, 0x00, 0x00, 0x00, 0x00, // filter byte 0 + one transparent RGBA pixel
+    0x00, 0x05, 0x00, 0x01, // adler32 of the 5 raw bytes
+    0x64, 0x78, 0x95, 0x38, // CRC IDAT
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, // IEND len=0
+    0xae, 0x42, 0x60, 0x82, // CRC IEND
 ];
 
 pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
@@ -1301,12 +1306,57 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_png_is_valid_header() {
-        // first 8 bytes must be the PNG signature
-        assert_eq!(
-            &PLACEHOLDER_PNG[..8],
-            &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-        );
+    fn placeholder_png_decodes() {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for &b in bytes {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+                }
+            }
+            !crc
+        }
+        fn adler32(bytes: &[u8]) -> u32 {
+            let (mut a, mut b) = (1u32, 0u32);
+            for &x in bytes {
+                a = (a + u32::from(x)) % 65521;
+                b = (b + a) % 65521;
+            }
+            (b << 16) | a
+        }
+        let be = |s: &[u8]| u32::from_be_bytes([s[0], s[1], s[2], s[3]]);
+
+        let png = PLACEHOLDER_PNG;
+        assert_eq!(&png[..8], &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        // Walk the chunks: every CRC must match its type + data.
+        let mut chunks = Vec::new();
+        let mut at = 8;
+        while at < png.len() {
+            let len = be(&png[at..]) as usize;
+            let body = &png[at + 4..at + 8 + len];
+            assert_eq!(be(&png[at + 8 + len..]), crc32(body), "CRC of {:?}", &body[..4]);
+            chunks.push((&body[..4], &body[4..]));
+            at += 12 + len;
+        }
+        assert_eq!(at, png.len(), "trailing bytes after IEND");
+        let types: Vec<&[u8]> = chunks.iter().map(|(t, _)| *t).collect();
+        assert_eq!(types, [&b"IHDR"[..], b"IDAT", b"IEND"]);
+
+        // IHDR: 1×1, 8-bit RGBA, no interlace.
+        assert_eq!(chunks[0].1, &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+        // IDAT: zlib header, ONE final stored block holding exactly the 1×1
+        // RGBA scanline (filter byte + 4 bytes), then its adler32.
+        let z = chunks[1].1;
+        assert_eq!(&z[..2], &[0x78, 0x01]);
+        assert_eq!(u16::from_be_bytes([z[0], z[1]]) % 31, 0, "zlib FCHECK");
+        assert_eq!(z[2], 0x01, "BFINAL=1, BTYPE=00 (stored)");
+        let len = u16::from_le_bytes([z[3], z[4]]);
+        assert_eq!(u16::from_le_bytes([z[5], z[6]]), !len);
+        let raw = &z[7..7 + len as usize];
+        assert_eq!(raw, &[0, 0, 0, 0, 0], "filter 0 + transparent pixel");
+        assert_eq!(be(&z[7 + len as usize..]), adler32(raw));
+        assert_eq!(z.len(), 7 + len as usize + 4);
     }
 
     #[test]
