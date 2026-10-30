@@ -555,14 +555,28 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     let mut day_misses = HashMap::<i64, Vec<String>>::new();
     let mut day_off_area = HashMap::<i64, Vec<OffAreaStop>>::new();
     let mut day_away = HashMap::<i64, Vec<Point>>::new();
+    // Per day, by coord_key: the stops that are an end of an airport leg (a
+    // segment with an airport terminal at either drawn end), and the stops that
+    // are an end of any other leg. Only ends that resolved AND passed the hub
+    // gate count — a gated home airport (TPE) does not make its leg an airport
+    // leg. POI-fallback pins (no segments) are on no leg.
+    let mut day_airport_leg_stops = HashMap::<i64, HashSet<String>>::new();
+    let mut day_other_leg_stops = HashMap::<i64, HashSet<String>>::new();
+    // Per day, the airport legs whose two ends are both inset pins (sights or
+    // terminals), in segment order: the inset draws each as its own road line,
+    // so a city leg between two airport legs is never drawn as if it were one.
+    let mut day_airport_legs = HashMap::<i64, Vec<(Point, Point)>>::new();
 
     for day in days {
         let color = DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()];
         let mut points = Vec::new();
         let mut seen = HashSet::new();
         let mut unresolved = HashSet::new();
+        let mut airport_leg_stops = HashSet::new();
+        let mut other_leg_stops = HashSet::new();
+        let mut airport_legs: Vec<(Point, Point)> = Vec::new();
         for seg in src.segments.iter().filter(|s| s.day == *day) {
-            let mut ends: [Option<(f64, f64)>; 2] = [None, None];
+            let mut ends: [Option<Point>; 2] = [None, None];
             for (end, label) in [&seg.from, &seg.to].into_iter().enumerate() {
                 if label.trim().is_empty() {
                     continue;
@@ -584,16 +598,33 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                         Some(*day as u32),
                     )
                 {
-                    ends[end] = Some((lat, lon));
                     if seen.insert(coord_key(lat, lon)) {
-                        points.push(point);
+                        points.push(point.clone());
                     }
+                    ends[end] = Some(point);
                 }
+            }
+            let is_airport_leg = ends.iter().flatten().any(|e| e.kind == Kind::Airport);
+            let leg_stops = if is_airport_leg { &mut airport_leg_stops } else { &mut other_leg_stops };
+            for e in ends.iter().flatten() {
+                leg_stops.insert(coord_key(e.lat, e.lon));
+            }
+            if is_airport_leg
+                && let [Some(a), Some(b)] = &ends
+                && [a, b].iter().all(|p| matches!(p.kind, Kind::Sightseeing | Kind::Airport))
+                && coord_key(a.lat, a.lon) != coord_key(b.lat, b.lon)
+                && !airport_legs.iter().any(|(x, y)| {
+                    coord_key(x.lat, x.lon) == coord_key(a.lat, a.lon)
+                        && coord_key(y.lat, y.lon) == coord_key(b.lat, b.lon)
+                })
+            {
+                airport_legs.push((a.clone(), b.clone()));
             }
             if net.diagnostics()
                 && let ([Some(a), Some(b)], Some(max_km)) =
-                    (ends, plausible_leg_km(&seg.mode, seg.duration_min))
+                    (&ends, plausible_leg_km(&seg.mode, seg.duration_min))
             {
+                let (a, b) = ((a.lat, a.lon), (b.lat, b.lon));
                 let km = haversine_m(a, b) / 1000.0;
                 if km > max_km {
                     eprintln!(
@@ -618,6 +649,9 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             }
         }
         day_points.insert(*day, points);
+        day_airport_leg_stops.insert(*day, airport_leg_stops);
+        day_other_leg_stops.insert(*day, other_leg_stops);
+        day_airport_legs.insert(*day, airport_legs);
         day_misses.insert(*day, net.take_misses());
         let (off_area, away) = gate.take();
         day_off_area.insert(*day, off_area);
@@ -626,23 +660,49 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
 
     // An airport day is one whose own drawn stops (past the hub gate) include an
     // airport terminal — the arrival/departure days, found from the data, not
-    // from the day's position. Its far-off terminal would stretch the overview,
-    // so the day moves to the airport inset. An excursion flag wins: that day
-    // stays on the day-trip inset.
+    // from the day's position. An excursion flag wins: that day stays on the
+    // day-trip inset. An airport day is split by route segment, not moved
+    // whole: its airport legs (a terminal at either drawn end) go to the
+    // airport inset, so the far-off terminal does not stretch the overview,
+    // while its city sights stay on plan.png. A stop on both kinds of leg (the
+    // station the airport train reaches) is on both maps.
     let airport_days: HashSet<i64> = days
         .iter()
         .filter(|d| !excursion.contains(d))
         .filter(|d| day_points.get(d).is_some_and(|pts| pts.iter().any(|p| p.kind == Kind::Airport)))
         .copied()
         .collect();
-    let on_overview = |day: &i64| !excursion.contains(day) && !airport_days.contains(day);
-    // The airport inset draws a day's sights and its terminal, in segment order.
+    let on_overview = |day: &i64| !excursion.contains(day);
+    let on_airport_leg = |day: &i64, p: &Point| {
+        day_airport_leg_stops
+            .get(day)
+            .is_some_and(|s| s.contains(&coord_key(p.lat, p.lon)))
+    };
+    let on_other_leg = |day: &i64, p: &Point| {
+        day_other_leg_stops
+            .get(day)
+            .is_some_and(|s| s.contains(&coord_key(p.lat, p.lon)))
+    };
+    // The airport inset draws an airport day's airport-leg ends (sights and
+    // terminals), in segment order.
     let airport_day_points = |day: &i64| {
         day_points
             .get(day)
             .into_iter()
             .flatten()
-            .filter(|p| matches!(p.kind, Kind::Sightseeing | Kind::Airport))
+            .filter(|p| matches!(p.kind, Kind::Sightseeing | Kind::Airport) && on_airport_leg(day, p))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    // The overview draws a non-excursion day's sights, less (on an airport
+    // day) the stops reached only by airport legs.
+    let overview_day_points = |day: &i64| {
+        day_points
+            .get(day)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.kind == Kind::Sightseeing)
+            .filter(|p| !airport_days.contains(day) || !on_airport_leg(day, p) || on_other_leg(day, p))
             .cloned()
             .collect::<Vec<_>>()
     };
@@ -683,18 +743,19 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             daily_logistics.insert(*day, (log_points, routes));
         }
         if airport_days.contains(day) {
-            // Each airport day keeps its own pins (deduplicated within the day
-            // only): the arrival and departure days usually share a terminal,
-            // and each day's terminal pin wears that day's color and number.
+            // Each airport day keeps its own inset pins (deduplicated within
+            // the day only): the arrival and departure days usually share a
+            // terminal, and each day's terminal pin wears that day's color and
+            // number. The day's other sights still feed the overview below.
             airport_points.extend(airport_day_points(day));
-            continue;
         }
-        let bucket = if excursion.contains(day) {
-            &mut excursion_points
+        let (bucket, pts) = if excursion.contains(day) {
+            let sights = all_pts.into_iter().filter(|p| p.kind == Kind::Sightseeing).collect::<Vec<_>>();
+            (&mut excursion_points, sights)
         } else {
-            &mut all_sightseeing
+            (&mut all_sightseeing, overview_day_points(day))
         };
-        for p in all_pts.into_iter().filter(|p| p.kind == Kind::Sightseeing) {
+        for p in pts {
             if !bucket
                 .iter()
                 .any(|existing: &Point| existing.lat == p.lat && existing.lon == p.lon)
@@ -784,9 +845,11 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         }
     }
 
-    // The overview's pins come from every day that is neither an excursion nor
-    // an airport day, plus (domestic) the stay, and has_airport decides the
-    // domestic merge — so any logistics miss makes plan.png unverifiable too.
+    // The overview's pins come from every non-excursion day (an airport day's
+    // airport-leg-only stops excepted), plus (domestic) the stay, and
+    // has_airport decides the domestic merge — so any logistics miss makes
+    // plan.png unverifiable too. An airport day feeds both plan.png and the
+    // airport inset, so its misses and off-area stops are recorded on both.
     let overview_misses = merged_distinct(
         days.iter()
             .filter(|d| on_overview(d))
@@ -812,13 +875,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     } else {
         let mut routes = Vec::new();
         for day in days.iter().filter(|d| on_overview(d)) {
-            let points = day_points
-                .get(day)
-                .into_iter()
-                .flatten()
-                .filter(|p| p.kind == Kind::Sightseeing)
-                .cloned()
-                .collect::<Vec<_>>();
+            let points = overview_day_points(day);
             if points.len() > 1 {
                 routes.extend(net.routes(&points).await?);
             }
@@ -867,8 +924,10 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         ));
     }
 
-    // Every airport day on one inset, each day in its own color with its own
-    // road line. Its skip is silent (a plan without flights has none), and
+    // Every airport day's airport legs on one inset, each day in its own color,
+    // each leg its own road line (drawn per segment, never by chaining the
+    // pins, so a city leg between two airport legs stays off the inset). Its
+    // skip is silent (a plan without flights has none), and
     // snapshot-maps still records it so a stale inset is removed.
     let airport_misses = merged_distinct(days.iter().filter(|d| airport_days.contains(d)).map(misses_of));
     let airport_off_area = merged_distinct(days.iter().filter(|d| airport_days.contains(d)).map(off_area_of));
@@ -883,9 +942,8 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     } else {
         let mut routes = Vec::new();
         for day in days.iter().filter(|d| airport_days.contains(d)) {
-            let points = airport_day_points(day);
-            if points.len() > 1 {
-                routes.extend(net.routes(&points).await?);
+            for (a, b) in day_airport_legs.get(day).into_iter().flatten() {
+                routes.extend(net.routes(&[a.clone(), b.clone()]).await?);
             }
         }
         maps.push(PlannedMap::render(
@@ -1361,7 +1419,11 @@ fn render_png(
             raster.line(a, b, color, 4, !routes[idx].routed);
         }
     }
-    if routes.is_empty() && !matches!(kind, MapKind::Logistics | MapKind::DayLogistics) {
+    // Only a single-day map chains its pins when no road line came back: a
+    // multi-day map draws each day's own lines, so chaining its pins in order
+    // would join different days (or an inset's separate airport legs, e.g.
+    // KIX → hotel and hotel → ITM) with a line nobody travels.
+    if routes.is_empty() && matches!(kind, MapKind::Day) {
         for pair in xy.windows(2) {
             let a = projection.point(pair[0]);
             let b = projection.point(pair[1]);
@@ -1423,8 +1485,8 @@ fn render_png(
         }
     } else if matches!(kind, MapKind::Plan) {
         // The overview colors pins by DAY; without a key the colors say
-        // nothing. One entry per day that has a pin here (excursion and
-        // airport days render on their own maps, so their entries leave with
+        // nothing. One entry per day that has a pin here (excursion days and
+        // airport legs render on their own maps, so their entries leave with
         // them).
         // Long trips wrap onto further rows rather than run off the canvas.
         let entries = plan_day_legend_entries(points);
@@ -3413,6 +3475,11 @@ mod tests {
     const KIYOMIZU: (f64, f64) = (34.9949, 135.7850);
     const INARI: (f64, f64) = (34.9671, 135.7727);
     const KIX: (f64, f64) = (34.4320, 135.2304);
+    const KIX_T2: (f64, f64) = (34.4364, 135.2468);
+    /// A stop beside KIX, reached only by airport legs.
+    const RINKU: (f64, f64) = (34.4056, 135.2956);
+    /// Where the airport train arrives: on airport and city legs alike.
+    const KYOTO_STN: (f64, f64) = (34.9852, 135.7577);
     /// kyoto_2026's destination_config hub.
     const KYOTO_HUB: (f64, f64) = (35.0116, 135.7681);
     /// ~609 / ~622 km from KYOTO_HUB: beyond MAX_HUB_DISTANCE_KM.
@@ -3423,7 +3490,14 @@ mod tests {
 
     fn fake_net() -> FakeNet {
         FakeNet {
-            coords: HashMap::from([("APA Hotel", HOTEL), ("Fushimi Inari", INARI), ("KIX", KIX)]),
+            coords: HashMap::from([
+                ("APA Hotel", HOTEL),
+                ("Fushimi Inari", INARI),
+                ("KIX", KIX),
+                ("KIX T2", KIX_T2),
+                ("Rinku Town", RINKU),
+                ("Kyoto Station", KYOTO_STN),
+            ]),
             misses: Vec::new(),
         }
     }
@@ -3763,50 +3837,134 @@ mod tests {
         assert_eq!(off_area_note(&maps.into_values().collect::<Vec<_>>(), "kyoto_2026"), None);
     }
 
-    /// `fixture_source("Kiyomizu")` grown to three days: day 1 lands at KIX
-    /// (KIX → hotel → 金閣寺 → 清水寺), day 2 stays in town (hotel → 伏見稲荷),
-    /// day 3 flies home (hotel → 清水寺 → KIX).
+    /// `fixture_source("Kiyomizu")` grown to three days. Day 1 lands at KIX T2
+    /// and reaches the hotel by airport legs (KIX T2 → Rinku Town → KIX →
+    /// Kyoto Station), then sightsees (Kyoto Station → hotel → 金閣寺 → 清水寺);
+    /// day 2 stays in town (hotel → 伏見稲荷); day 3 flies home (hotel → 清水寺
+    /// → Kyoto Station → KIX).
     fn fixture_with_airport_days() -> MapSource {
         let mut src = fixture_source("Kiyomizu");
         src.days.push(3);
-        src.segments.insert(0, seg(1, "KIX", "hotel"));
-        src.segments.extend([seg(3, "hotel", "Kiyomizu"), seg(3, "Kiyomizu", "KIX")]);
-        src.route_endpoints.splice(0..0, ["KIX", "hotel"].map(String::from));
-        src.route_endpoints.extend(["hotel", "Kiyomizu", "Kiyomizu", "KIX"].map(String::from));
+        let arrival = [
+            ("KIX T2", "Rinku Town"),
+            ("Rinku Town", "KIX"),
+            ("KIX", "Kyoto Station"),
+            ("Kyoto Station", "hotel"),
+        ];
+        let departure = [("hotel", "Kiyomizu"), ("Kiyomizu", "Kyoto Station"), ("Kyoto Station", "KIX")];
+        src.segments.splice(0..0, arrival.map(|(a, b)| seg(1, a, b)));
+        src.segments.extend(departure.map(|(a, b)| seg(3, a, b)));
+        src.route_endpoints
+            .splice(0..0, arrival.iter().flat_map(|(a, b)| [a.to_string(), b.to_string()]));
+        src.route_endpoints
+            .extend(departure.iter().flat_map(|(a, b)| [a.to_string(), b.to_string()]));
         src
     }
 
     #[tokio::test]
-    async fn airport_days_leave_the_overview_for_the_airport_inset() {
+    async fn an_airport_day_splits_its_airport_legs_onto_the_inset() {
         let maps = assembled(&fixture_with_airport_days(), &mut fake_net()).await;
-        // Day 2 has no airport stop: it alone stays on the overview.
-        let inari = pt(INARI, Kind::Sightseeing, Some(2));
-        assert_eq!(drawn(&maps["plan.png"]), [INARI]);
-        assert_eq!(
-            maps["plan.png"].input_sha256(),
-            Some(map_input_sha256("Sightseeing overview", MapKind::Plan, &[inari], &[]))
-        );
-        // Days 1 and 3 each bring their sights and their terminal, in segment
-        // order and in their own color; the shared KIX pin appears once per day.
-        let day1 = [
-            pt(KIX, Kind::Airport, Some(1)),
+        // Overview: every non-excursion day's sights, less the stops reached
+        // only by airport legs. Day 1's city sights stay, in day 1's color;
+        // Kyoto Station is on a city leg too, so it stays; Rinku Town (airport
+        // legs only) and the terminals leave. Day 3's sights repeat day 1's
+        // pins (deduplicated across days) but still draw day 3's road line.
+        let ov1 = [
+            pt(KYOTO_STN, Kind::Sightseeing, Some(1)),
             pt(KINKAKU, Kind::Sightseeing, Some(1)),
             pt(KIYOMIZU, Kind::Sightseeing, Some(1)),
         ];
-        let day3 = [pt(KIYOMIZU, Kind::Sightseeing, Some(3)), pt(KIX, Kind::Airport, Some(3))];
+        let inari = pt(INARI, Kind::Sightseeing, Some(2));
+        let ov3 = [pt(KIYOMIZU, Kind::Sightseeing, Some(3)), pt(KYOTO_STN, Kind::Sightseeing, Some(3))];
+        assert_eq!(drawn(&maps["plan.png"]), [KYOTO_STN, KINKAKU, KIYOMIZU, INARI]);
+        assert_eq!(
+            maps["plan.png"].input_sha256(),
+            Some(map_input_sha256(
+                "Sightseeing overview",
+                MapKind::Plan,
+                &[ov1[0].clone(), ov1[1].clone(), ov1[2].clone(), inari],
+                &[straight(&ov1[0], &ov1[1]), straight(&ov1[1], &ov1[2]), straight(&ov3[0], &ov3[1])],
+            ))
+        );
+        for c in [KIX, KIX_T2, RINKU] {
+            assert!(!drawn(&maps["plan.png"]).contains(&c), "{c:?} on plan.png");
+        }
+        // Inset: each airport day's airport-leg ends, in segment order and in
+        // its own color; the shared KIX pin appears once per day, and so does
+        // Kyoto Station (on both maps).
+        let day1 = [
+            pt(KIX_T2, Kind::Airport, Some(1)),
+            pt(RINKU, Kind::Sightseeing, Some(1)),
+            pt(KIX, Kind::Airport, Some(1)),
+            pt(KYOTO_STN, Kind::Sightseeing, Some(1)),
+        ];
+        let day3 = [pt(KYOTO_STN, Kind::Sightseeing, Some(3)), pt(KIX, Kind::Airport, Some(3))];
         let routes = [
             straight(&day1[0], &day1[1]),
             straight(&day1[1], &day1[2]),
+            straight(&day1[2], &day1[3]),
             straight(&day3[0], &day3[1]),
         ];
-        assert_eq!(drawn(&maps["plan-airport.png"]), [KIX, KINKAKU, KIYOMIZU, KIYOMIZU, KIX]);
+        assert_eq!(drawn(&maps["plan-airport.png"]), [KIX_T2, RINKU, KIX, KYOTO_STN, KYOTO_STN, KIX]);
         assert_eq!(
             maps["plan-airport.png"].input_sha256(),
             Some(map_input_sha256("Airport days", MapKind::Plan, &[day1.as_slice(), &day3].concat(), &routes))
         );
-        // The per-day maps do not move: day 1 still has its local map.
-        assert_eq!(drawn(&maps["day-1.png"]), [KINKAKU, KIYOMIZU]);
-        assert_eq!(drawn(&maps["day-3.png"]), [KIYOMIZU]);
+        // The per-day maps do not move: each day keeps all its sights.
+        assert_eq!(drawn(&maps["day-1.png"]), [RINKU, KYOTO_STN, KINKAKU, KIYOMIZU]);
+        assert_eq!(drawn(&maps["day-3.png"]), [KIYOMIZU, KYOTO_STN]);
+    }
+
+    #[tokio::test]
+    async fn inset_roads_follow_the_airport_legs_not_the_pin_order() {
+        // Day 3 leaves KIX for a city stop and comes back later: two airport
+        // legs with a city leg between them.
+        let mut src = fixture_source("Kiyomizu");
+        src.days.push(3);
+        src.segments.extend(
+            [("KIX", "Kyoto Station"), ("Kyoto Station", "Kiyomizu"), ("Kiyomizu", "Fushimi Inari"), ("Fushimi Inari", "KIX")]
+                .map(|(a, b)| seg(3, a, b)),
+        );
+        let maps = assembled(&src, &mut fake_net()).await;
+        let kix = pt(KIX, Kind::Airport, Some(3));
+        let stn = pt(KYOTO_STN, Kind::Sightseeing, Some(3));
+        let inari = pt(INARI, Kind::Sightseeing, Some(3));
+        // Pins in segment order; Kiyomizu (city legs only) is not on the inset.
+        assert_eq!(drawn(&maps["plan-airport.png"]), [KIX, KYOTO_STN, INARI]);
+        // Two road lines, one per airport leg — no Kyoto Station → 伏見稲荷 line.
+        assert_eq!(
+            maps["plan-airport.png"].input_sha256(),
+            Some(map_input_sha256(
+                "Airport days",
+                MapKind::Plan,
+                &[kix.clone(), stn.clone(), inari.clone()],
+                &[straight(&kix, &stn), straight(&inari, &kix)],
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn an_off_area_airport_makes_no_airport_leg() {
+        // Day 3 also flies out of Gimhae (beyond the hub radius) from Yamaguchi.
+        let mut src = fixture_with_airport_days();
+        src.segments.push(seg(3, "Yamaguchi", "Gimhae Airport"));
+        let mut net = fake_net();
+        net.coords.extend([("Yamaguchi", YAMAGUCHI), ("Gimhae Airport", GIMHAE)]);
+        let maps = assembled(&src, &mut net).await;
+        // The gated terminal is not drawn, so its leg is no airport leg:
+        // Yamaguchi stays on the overview and off the inset.
+        assert!(drawn(&maps["plan.png"]).contains(&YAMAGUCHI));
+        assert!(!drawn(&maps["plan-airport.png"]).contains(&YAMAGUCHI));
+        assert!(!drawn(&maps["plan-airport.png"]).contains(&GIMHAE));
+        assert_eq!(off_area_labels(&maps["plan-airport.png"]), ["Gimhae Airport"]);
+
+        // Ungated, the same leg is an airport leg: Yamaguchi is inset-only.
+        src.hub = None;
+        let mut net = fake_net();
+        net.coords.extend([("Yamaguchi", YAMAGUCHI), ("Gimhae Airport", GIMHAE)]);
+        let maps = assembled(&src, &mut net).await;
+        assert!(!drawn(&maps["plan.png"]).contains(&YAMAGUCHI));
+        assert!(drawn(&maps["plan-airport.png"]).ends_with(&[YAMAGUCHI, GIMHAE]));
     }
 
     #[tokio::test]
@@ -3814,11 +3972,12 @@ mod tests {
         let mut src = fixture_with_airport_days();
         src.excursion.insert(1);
         let maps = assembled(&src, &mut fake_net()).await;
-        // Day 1 is drawn as the day trip it is flagged as (sights only)…
-        assert_eq!(drawn(&maps["plan-excursion.png"]), [KINKAKU, KIYOMIZU]);
-        // …and only day 3 is left on the airport inset.
-        assert_eq!(drawn(&maps["plan-airport.png"]), [KIYOMIZU, KIX]);
-        assert_eq!(drawn(&maps["plan.png"]), [INARI]);
+        // Day 1 is drawn whole as the day trip it is flagged as (sights only,
+        // its airport legs included)…
+        assert_eq!(drawn(&maps["plan-excursion.png"]), [RINKU, KYOTO_STN, KINKAKU, KIYOMIZU]);
+        // …and only day 3 is left on the airport inset and the overview.
+        assert_eq!(drawn(&maps["plan-airport.png"]), [KYOTO_STN, KIX]);
+        assert_eq!(drawn(&maps["plan.png"]), [INARI, KIYOMIZU, KYOTO_STN]);
     }
 
     #[tokio::test]
@@ -3851,7 +4010,19 @@ mod tests {
         // seq stays the unique row order; pin_no restarts at 1 on each day.
         assert_eq!(
             numbered("plan-airport.png"),
-            [(1, Some(1), 1), (2, Some(1), 2), (3, Some(1), 3), (4, Some(3), 1), (5, Some(3), 2)]
+            [
+                (1, Some(1), 1),
+                (2, Some(1), 2),
+                (3, Some(1), 3),
+                (4, Some(1), 4),
+                (5, Some(3), 1),
+                (6, Some(3), 2)
+            ]
+        );
+        // An airport day's city sights keep their day's numbers on the overview.
+        assert_eq!(
+            numbered("plan.png"),
+            [(1, Some(1), 1), (2, Some(1), 2), (3, Some(1), 3), (4, Some(2), 1)]
         );
         let plain = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
         assert_eq!(
@@ -3860,10 +4031,11 @@ mod tests {
         );
         // A day map is per-day already: 1..N, and no day heading — it sits in
         // its day's section (the away map likewise).
-        assert_eq!(numbered("day-1.png"), [(1, None, 1), (2, None, 2)]);
+        assert_eq!(numbered("day-1.png"), [(1, None, 1), (2, None, 2), (3, None, 3), (4, None, 4)]);
         // Logistics maps carry no day: their colors mean hotel/airport.
         assert!(legend_of(&maps["day-1-logistics.png"]).iter().all(|r| r.day_number.is_none()));
-        assert_eq!(numbered("plan-logistics.png"), [(1, None, 1), (2, None, 2)]);
+        // Hotel, KIX and KIX T2 (the fixture's arrival terminal).
+        assert_eq!(numbered("plan-logistics.png"), [(1, None, 1), (2, None, 2), (3, None, 3)]);
     }
 
     #[test]
@@ -4268,6 +4440,22 @@ mod tests {
         // clean empty bbox which is Some(empty).
         let body = br#"{"elements":[],"remark":"runtime error: query timed out"}"#;
         assert!(parse_overpass_ways(body).is_none());
+    }
+
+    #[test]
+    fn only_a_day_map_chains_its_pins_without_road_lines() {
+        // Two pins, no routes: e.g. an airport inset whose legs both end at the
+        // hotel (KIX → hotel, hotel → ITM) keeps the two terminals unjoined.
+        let points = vec![
+            Point { lat: 34.43, lon: 135.23, color: [230, 25, 75], kind: Kind::Airport, day: Some(1), label: String::new() },
+            Point { lat: 34.79, lon: 135.44, color: [230, 25, 75], kind: Kind::Airport, day: Some(1), label: String::new() },
+        ];
+        let connector = |kind| {
+            let rgba = decode_rgba_png(&render_png("T", &points, &[], &[], None, kind).unwrap()).unwrap();
+            rgba.chunks(4).filter(|px| px[..3] == [80, 110, 140]).count()
+        };
+        assert!(connector(MapKind::Day) > 0, "a day map still chains its pins");
+        assert_eq!(connector(MapKind::Plan), 0, "a multi-day map must not invent a line");
     }
 
     #[test]
