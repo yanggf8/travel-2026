@@ -562,8 +562,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     // leg. POI-fallback pins (no segments) are on no leg.
     let mut day_airport_leg_stops = HashMap::<i64, HashSet<String>>::new();
     let mut day_other_leg_stops = HashMap::<i64, HashSet<String>>::new();
-    // Per day, the airport legs whose two ends are both inset pins (sights or
-    // terminals), in segment order: the inset draws each as its own road line,
+    // Per day, the airport legs with both ends drawn, in segment order: the inset draws each as its own road line,
     // so a city leg between two airport legs is never drawn as if it were one.
     let mut day_airport_legs = HashMap::<i64, Vec<(Point, Point)>>::new();
 
@@ -611,7 +610,6 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             }
             if is_airport_leg
                 && let [Some(a), Some(b)] = &ends
-                && [a, b].iter().all(|p| matches!(p.kind, Kind::Sightseeing | Kind::Airport))
                 && coord_key(a.lat, a.lon) != coord_key(b.lat, b.lon)
                 && !airport_legs.iter().any(|(x, y)| {
                     coord_key(x.lat, x.lon) == coord_key(a.lat, a.lon)
@@ -685,14 +683,15 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             .get(day)
             .is_some_and(|s| s.contains(&coord_key(p.lat, p.lon)))
     };
-    // The airport inset draws an airport day's airport-leg ends (sights and
-    // terminals), in segment order.
+    // The airport inset draws an airport day's airport-leg ends in segment
+    // order — sights, terminals, and the hotel a transfer runs to (那覇空港 →
+    // HOTEL AZAT NAHA would otherwise leave a lone terminal pin, no line).
     let airport_day_points = |day: &i64| {
         day_points
             .get(day)
             .into_iter()
             .flatten()
-            .filter(|p| matches!(p.kind, Kind::Sightseeing | Kind::Airport) && on_airport_leg(day, p))
+            .filter(|p| on_airport_leg(day, p))
             .cloned()
             .collect::<Vec<_>>()
     };
@@ -1246,13 +1245,15 @@ const HOTEL_INK: [u8; 3] = [21, 101, 192];
 const AIRPORT_INK: [u8; 3] = [239, 108, 0];
 
 /// The fill `render_png` gives a pin. On a multi-day map (MapKind::Plan) a
-/// day's airport terminal wears its day's color like the day's sights — the
-/// day color is what ties a pin to its day's numbers; everywhere else hotels
-/// and airports keep their own colors.
+/// day's airport terminal or hotel (the airport inset's transfer ends) wears
+/// its day's color like the day's sights — the day color is what ties a pin
+/// to its day's numbers and the dashboard's day swatch; everywhere else
+/// (including the domestic overview's day-less stay pin) hotels and airports
+/// keep their own colors.
 fn pin_color(kind: MapKind, p: &Point) -> [u8; 3] {
     match p.kind {
         Kind::Sightseeing => p.color,
-        Kind::Airport if matches!(kind, MapKind::Plan) && p.day.is_some() => p.color,
+        Kind::Airport | Kind::Hotel if matches!(kind, MapKind::Plan) && p.day.is_some() => p.color,
         Kind::Hotel => HOTEL_INK,
         Kind::Airport => AIRPORT_INK,
     }
@@ -3943,6 +3944,29 @@ mod tests {
                 &[straight(&kix, &stn), straight(&inari, &kix)],
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn an_airport_to_hotel_transfer_draws_the_hotel_on_the_inset() {
+        // Day 3 lands at KIX and rides straight to the hotel (okinawa's
+        // 那覇空港 → HOTEL AZAT NAHA shape), then sightsees from it.
+        let mut src = fixture_source("Kiyomizu");
+        src.days.push(3);
+        src.segments.extend([seg(3, "KIX", "hotel"), seg(3, "hotel", "Fushimi Inari")]);
+        let maps = assembled(&src, &mut fake_net()).await;
+        let kix = pt(KIX, Kind::Airport, Some(3));
+        let hotel = pt(HOTEL, Kind::Hotel, Some(3));
+        // Terminal and hotel, joined by the transfer's road line — not a lone pin.
+        assert_eq!(drawn(&maps["plan-airport.png"]), [KIX, HOTEL]);
+        assert_eq!(
+            maps["plan-airport.png"].input_sha256(),
+            Some(map_input_sha256("Airport days", MapKind::Plan, &[kix.clone(), hotel.clone()], &[straight(&kix, &hotel)]))
+        );
+        // The hotel wears day 3's color there, like the terminal.
+        let rows = legend_of(&maps["plan-airport.png"]);
+        assert_eq!(rows.iter().map(|r| r.color.as_str()).collect::<Vec<_>>(), [hex_color(kix.color), hex_color(kix.color)]);
+        // The overview still draws no hotel and no terminal.
+        assert!(!drawn(&maps["plan.png"]).contains(&HOTEL) && !drawn(&maps["plan.png"]).contains(&KIX));
     }
 
     #[tokio::test]
