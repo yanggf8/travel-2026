@@ -1145,8 +1145,10 @@ async fn write_legend_stops(
 
 /// One `map_legend_stops` row: `seq` is the unique row order (pin order on the
 /// map), `pin_no` the number drawn on the pin, `color` the pin's fill as
-/// `#rrggbb`, `day_number` the itinerary day the worker groups the legend by
-/// (None on the logistics maps, whose pin colors mean hotel/airport, not a day).
+/// `#rrggbb`, `day_number` the itinerary day the worker groups the legend by —
+/// set only on the multi-day maps (MapKind::Plan). A day map already sits in
+/// its day's section, so a day heading there would only repeat it; the
+/// logistics maps' pin colors mean hotel/airport, not a day.
 #[derive(Debug, PartialEq)]
 struct LegendRow {
     seq: i64,
@@ -1159,7 +1161,7 @@ struct LegendRow {
 }
 
 fn legend_rows(kind: MapKind, points: &[Point]) -> Vec<LegendRow> {
-    let by_day = matches!(kind, MapKind::Day | MapKind::Plan);
+    let by_day = matches!(kind, MapKind::Plan);
     points
         .iter()
         .zip(pin_numbers(kind, points))
@@ -3856,8 +3858,9 @@ mod tests {
             legend_of(&plain["plan.png"]).iter().map(|r| (r.day_number, r.pin_no)).collect::<Vec<_>>(),
             [(Some(1), 1), (Some(1), 2), (Some(2), 1)]
         );
-        // A day map is per-day already: 1..N, grouped under its day.
-        assert_eq!(numbered("day-1.png"), [(1, Some(1), 1), (2, Some(1), 2)]);
+        // A day map is per-day already: 1..N, and no day heading — it sits in
+        // its day's section (the away map likewise).
+        assert_eq!(numbered("day-1.png"), [(1, None, 1), (2, None, 2)]);
         // Logistics maps carry no day: their colors mean hotel/airport.
         assert!(legend_of(&maps["day-1-logistics.png"]).iter().all(|r| r.day_number.is_none()));
         assert_eq!(numbered("plan-logistics.png"), [(1, None, 1), (2, None, 2)]);

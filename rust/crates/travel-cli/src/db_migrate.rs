@@ -604,8 +604,8 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
-    // The web legend groups a multi-day map's pins by day: `day_number` (NULL on
-    // the logistics maps), `pin_no` the number drawn on the pin (snapshot-maps
+    // The web legend groups a multi-day map's pins by day: `day_number` (set on
+    // the multi-day maps only; NULL on day and logistics maps), `pin_no` the number drawn on the pin (snapshot-maps
     // numbers each day's pins from 1; NULL on older rows, which fall back to
     // seq), `color` the pin's fill as #rrggbb, so the worker never hardcodes
     // the day colors. `seq` stays the unique row order.
