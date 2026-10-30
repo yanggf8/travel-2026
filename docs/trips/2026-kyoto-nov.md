@@ -1,8 +1,8 @@
-# 京都賞楓五日（osaka-nov-2026）
+# 京都賞楓五日（kyoto-nov-2026）
 
-- Plan: `osaka-nov-2026`（destination slug `osaka_kyoto_2026`）
+- Plan: `kyoto-nov-2026`（destination slug `osaka_kyoto_2026`）
 - 日期：**2026-11-12（四）～ 11-16（一）**，4 晚，2 大人。
-- 行程、班機、住宿、接駁的事實**一律以 Turso 為準**：`./bin/travel status --full --plan-id osaka-nov-2026`、`./bin/travel itinerary --plan-id osaka-nov-2026`；本文僅是決策紀錄與快照。
+- 行程、班機、住宿、接駁的事實**一律以 Turso 為準**：`./bin/travel status --full --plan-id kyoto-nov-2026`、`./bin/travel itinerary --plan-id kyoto-nov-2026`；本文僅是決策紀錄與快照。
 
 ## 訂購（2026-09-30，雄獅自由行）
 

@@ -7,7 +7,8 @@
 // delete. `--dry-run` is also accepted as an explicit no-op flag for symmetry.
 //
 // Plan-scoped tables are DISCOVERED at runtime: every table carrying a `plan_id`
-// column (via PRAGMA table_info) is wiped for each flagged plan. `plans` itself
+// column (travel_db::repo::plan_schema::plan_scoped_tables, shared with
+// copy-plan) is wiped for each flagged plan. `plans` itself
 // is deleted LAST (it holds the deleted_at flag we keyed on). This avoids a
 // hardcoded ~55-table list drifting out of sync with the schema.
 //
@@ -48,7 +49,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     }
 
     // 2. Which tables are plan-scoped? (discovered at runtime)
-    let mut tables = plan_scoped_tables(&conn).await?;
+    let mut tables = travel_db::repo::plan_schema::plan_scoped_tables(&conn).await?;
     // Delete child rows first; `plans` (the flag holder) last.
     tables.retain(|t| t != "plans");
     tables.sort();
@@ -122,60 +123,6 @@ async fn flagged_plans(conn: &Connection) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
-}
-
-/// Every table carrying a `plan_id` column. Discovered via sqlite_master +
-/// PRAGMA table_info so the wipe set tracks the live schema.
-async fn plan_scoped_tables(conn: &Connection) -> Result<Vec<String>, String> {
-    let mut names = Vec::new();
-    let mut rows = conn
-        .query(
-            "SELECT name FROM sqlite_master WHERE type='table' \
-             AND name NOT LIKE 'sqlite_%' ORDER BY name",
-            (),
-        )
-        .await
-        .map_err(|e| format!("table list query failed: {e}"))?;
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("table list row read failed: {e}"))?
-    {
-        let name: String = row.get(0).unwrap_or_default();
-        if !name.is_empty() {
-            names.push(name);
-        }
-    }
-
-    let mut scoped = Vec::new();
-    for name in names {
-        if table_has_plan_id(conn, &name).await? {
-            scoped.push(name);
-        }
-    }
-    Ok(scoped)
-}
-
-async fn table_has_plan_id(conn: &Connection, table: &str) -> Result<bool, String> {
-    // table names come from sqlite_master (trusted); inline is acceptable for PRAGMA.
-    let sql = format!("PRAGMA table_info({table});");
-    let mut rows = conn
-        .query(&sql, ())
-        .await
-        .map_err(|e| format!("PRAGMA table_info({table}) failed: {e}"))?;
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("PRAGMA row read failed: {e}"))?
-    {
-        // table_info cols: cid, name, type, notnull, dflt_value, pk.
-        if let Ok(libsql::Value::Text(col)) = row.get_value(1) {
-            if col == "plan_id" {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
 
 async fn count_rows(conn: &Connection, table: &str, plan_id: &str) -> Result<i64, String> {

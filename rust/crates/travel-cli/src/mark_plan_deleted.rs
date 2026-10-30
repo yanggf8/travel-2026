@@ -182,7 +182,7 @@ async fn read_plan(conn: &Connection, plan_id: &str) -> Result<Option<(i64, bool
 
 /// If the plan has any date_anchor with end_date >= today, return that end_date
 /// (the safety guard). Otherwise None.
-async fn upcoming_anchor_end(
+pub(crate) async fn upcoming_anchor_end(
     conn: &Connection,
     plan_id: &str,
 ) -> Result<Option<String>, String> {

@@ -93,6 +93,7 @@ mod db_sync_events;     // db sync events (scripts/turso-sync-events.ts)
 mod db_fetch_holidays;  // db fetch holidays (scripts/fetch-taiwan-holidays.ts)
 mod create_plan;        // create-plan (fast-path plan seed)
 mod mark_plan_deleted;  // mark-plan-deleted (soft-delete a plan)
+mod copy_plan;          // copy-plan (atomic copy of a plan to a new plan id)
 mod set_plan_name;      // set-plan-name (rename plan_destinations.display_name)
 mod set_fit_note;       // set-fit-note (FIT comparison note, Recommended pick, room-size row)
 mod set_companion_route; // set-companion-route (同行方案 structured stops → dashboard companion map)
@@ -181,6 +182,16 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             // the resolver ladder (which would pick a default plan if omitted).
             // The command parses/validates the explicit target itself.
             mark_plan_deleted::run(rest, String::new()).await
+        }
+        [cmd, rest @ ..] if cmd == "copy-plan" => {
+            // Both plan ids are REQUIRED positionals — never routed through the
+            // resolver. Unknown flags are rejected before Turso is opened, so a
+            // typo'd --dry-run can't fall through to a real copy.
+            if wants_help(rest, copy_plan::USAGE) {
+                return Ok(());
+            }
+            plan_resolver::reject_unknown_flags(rest, &[], &["--dry-run"])?;
+            copy_plan::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "resolve-plan" => plan_resolver::run_cli(rest).await,
         [cmd, rest @ ..] if cmd == "query-offers" => {
@@ -1056,6 +1067,7 @@ COMPARE / UTIL\n\
   compare trips --trip '<k=v;...>' [--detailed] | compare dates | compare true-cost\n\
   normalize flights --text '<...>' --url '<...>' | leave calc <start> <end> [country]\n\
   fetch-weather [--dest slug] | share-token | mark-plan-deleted <plan>\n\
+  copy-plan <src_plan> <dst_plan> [--dry-run]  atomic copy of a plan to a new id (rename = copy + mark-plan-deleted)\n\
   set-plan-name <name> [--dest <slug>] | set-active-destination <slug>\n\
   set-fit-note [--source <id>] --zh \"<text>\" [--en \"<text>\"] [--room-zh \"<size>\"] [--recommend] [--clear]  FIT comparison note (audited)\n\
 \n\
