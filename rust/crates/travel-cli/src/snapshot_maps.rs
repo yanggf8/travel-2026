@@ -658,9 +658,11 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         day_away.insert(*day, away);
     }
 
-    // An airport day is one whose own drawn stops (past the hub gate) include an
-    // airport terminal — the arrival/departure days, found from the data, not
-    // from the day's position. An excursion flag wins: that day stays on the
+    // An airport day is one with an airport leg — a segment whose drawn end
+    // (past the hub gate) is an airport terminal: the arrival/departure days,
+    // found from the data, not from the day's position. It is read from the
+    // legs, not from day_points, whose coordinate dedup keeps only the first
+    // label at a spot (a sight pinned on the terminal would hide it). An excursion flag wins: that day stays on the
     // day-trip inset. An airport day is split by route segment, not moved
     // whole: its airport legs (a terminal at either drawn end) go to the
     // airport inset, so the far-off terminal does not stretch the overview,
@@ -669,7 +671,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     let airport_days: HashSet<i64> = days
         .iter()
         .filter(|d| !excursion.contains(d))
-        .filter(|d| day_points.get(d).is_some_and(|pts| pts.iter().any(|p| p.kind == Kind::Airport)))
+        .filter(|d| day_airport_leg_stops.get(d).is_some_and(|stops| !stops.is_empty()))
         .copied()
         .collect();
     let on_overview = |day: &i64| !excursion.contains(day);
@@ -1692,7 +1694,7 @@ fn same_place(a: &Point, b: &Point) -> bool {
 
 /// Bumped whenever the renderer draws the SAME inputs differently, so the
 /// no-background reuse path cannot keep a PNG drawn by an older renderer.
-const RENDER_REV: &str = "pins-declutter+day-legend/1";
+const RENDER_REV: &str = "pins-declutter+day-legend/2-no-plan-chain";
 /// Horizontal step per overview DAY legend entry: dot + "DAY NN" + gap.
 const PLAN_LEGEND_STEP: i32 = 62;
 /// Vertical step between wrapped overview legend rows.
@@ -3941,6 +3943,21 @@ mod tests {
                 &[straight(&kix, &stn), straight(&inari, &kix)],
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn a_sight_pinned_on_the_terminal_does_not_hide_the_airport_day() {
+        // Day 3's last sight geocodes onto the KIX terminal itself: the dedup
+        // keeps the sight's pin, but the day still flies out of KIX.
+        let mut src = fixture_source("Kiyomizu");
+        src.days.push(3);
+        src.segments.extend([seg(3, "hotel", "Rinku Gate"), seg(3, "Rinku Gate", "KIX")]);
+        let mut net = fake_net();
+        net.coords.insert("Rinku Gate", KIX);
+        let maps = assembled(&src, &mut net).await;
+        assert_eq!(drawn(&maps["plan-airport.png"]), [KIX]);
+        // On a city leg (from the hotel) too, so it also stays on the overview.
+        assert!(drawn(&maps["plan.png"]).contains(&KIX));
     }
 
     #[tokio::test]
