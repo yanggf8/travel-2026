@@ -46,6 +46,26 @@ fn is_placeholder_image(url: &str) -> bool {
     t.is_empty() || t.contains("via.placeholder.com")
 }
 
+/// One photo in a stay's gallery (candidate card and booked card alike): it
+/// opens the original, falls back to the hotel name for alt text, shows its
+/// label as a caption, and sends no referrer — Booking's CDN 403s on some
+/// external Referers, and Google's signed URLs are equally picky. Callers drop
+/// placeholder urls first (`is_placeholder_image`).
+fn gallery_photo(url: &str, label: &str, hotel_name: &str) -> String {
+    let mut h = format!(
+        "<figure class=\"candidate-gallery-item\"><a href=\"{}\" target=\"_blank\" rel=\"noopener\">\
+         <img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" referrerpolicy=\"no-referrer\" /></a>",
+        esc_url_attr(url),
+        esc_url_attr(url),
+        esc(if label.is_empty() { hotel_name } else { label }),
+    );
+    if !label.is_empty() {
+        h.push_str(&format!("<figcaption class=\"candidate-gallery-label\">{}</figcaption>", esc(label)));
+    }
+    h.push_str("</figure>");
+    h
+}
+
 /// Join non-empty parts with a single space (skips blanks so we don't emit "  ").
 fn join_parts(parts: &[String]) -> String {
     parts
@@ -1056,29 +1076,18 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                         h.push_str(&price_note(c, lang));
                     }
                     h.push_str(&ratings_row(&c.ratings, lang));
-                    let has_gallery = room_exact
-                        && (!c.image_url.is_empty() || !c.images.is_empty());
-                    if has_gallery {
+                    // Same photos as the candidate card shows (gallery_photo):
+                    // placeholder / empty urls are dropped (a broken 0x0 image
+                    // otherwise) — the booked card must not know less.
+                    let photos: Vec<(&str, &str)> = std::iter::once((c.image_url.as_str(), ""))
+                        .chain(c.images.iter().map(|g| (g.image_url.as_str(), g.label.as_str())))
+                        .filter(|(url, _)| room_exact && !is_placeholder_image(url))
+                        .collect();
+                    if !photos.is_empty() {
                         h.push_str("<div class=\"candidate-gallery\">");
-                    }
-                    if room_exact && !c.image_url.is_empty() {
-                        h.push_str("<figure class=\"candidate-gallery-item\">");
-                        h.push_str(&format!(
-                            "<img class=\"candidate-gallery-img\" src=\"{}\" alt=\"\" loading=\"lazy\">",
-                            esc_url_attr(&c.image_url)
-                        ));
-                        h.push_str("</figure>");
-                    }
-                    for img in c.images.iter().filter(|_| room_exact) {
-                        h.push_str("<figure class=\"candidate-gallery-item\">");
-                        h.push_str(&format!(
-                            "<img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\">",
-                            esc_url_attr(&img.image_url),
-                            esc(&img.label)
-                        ));
-                        h.push_str("</figure>");
-                    }
-                    if has_gallery {
+                        for (url, label) in photos {
+                            h.push_str(&gallery_photo(url, label, &c.hotel_name));
+                        }
                         h.push_str("</div>");
                     }
                     if let (Some(la), Some(lo)) = (c.latitude, c.longitude) {
@@ -1366,21 +1375,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     ));
                 }
                 for g in gallery {
-                    h.push_str("<figure class=\"candidate-gallery-item\">");
-                    h.push_str(&format!(
-                        "<a href=\"{}\" target=\"_blank\" rel=\"noopener\">\
-                         <img class=\"candidate-gallery-img\" src=\"{}\" alt=\"{}\" loading=\"lazy\" referrerpolicy=\"no-referrer\" /></a>",
-                        esc_url_attr(&g.image_url),
-                        esc_url_attr(&g.image_url),
-                        esc(if g.label.is_empty() { &c.hotel_name } else { &g.label }),
-                    ));
-                    if !g.label.is_empty() {
-                        h.push_str(&format!(
-                            "<figcaption class=\"candidate-gallery-label\">{}</figcaption>",
-                            esc(&g.label)
-                        ));
-                    }
-                    h.push_str("</figure>");
+                    h.push_str(&gallery_photo(&g.image_url, &g.label, &c.hotel_name));
                 }
                 h.push_str("</div>");
             }
@@ -2248,6 +2243,46 @@ mod tests {
             .and_then(|r| r.split("</summary>").next())
             .unwrap_or_default();
         assert!(!summary.is_empty() && !summary.contains('間'), "{summary}");
+    }
+
+    #[test]
+    fn booked_gallery_drops_placeholder_photos_and_sends_no_referrer() {
+        use crate::model::{CandidateImage, DomesticCandidate};
+        let plan = Plan {
+            p4_status: "booked".into(),
+            domestic_stays: vec![booked("漫海聽風", "海景四人房")],
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "漫海聽風".into(),
+                room_type: "海景四人房".into(),
+                image_url: "https://via.placeholder.com/600x400".into(),
+                images: vec![
+                    CandidateImage { image_url: "https://example.com/b.webp".into(), label: "衛浴".into() },
+                    CandidateImage { image_url: "https://via.placeholder.com/300".into(), label: "假圖".into() },
+                    CandidateImage { image_url: "".into(), label: "空網址".into() },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        let detail = html.split("booking-cand-detail").nth(1).unwrap_or_default();
+        let detail = detail.split("cand-reference").next().unwrap_or_default();
+        // Only the real photo renders on the booked card, without a referrer.
+        assert_eq!(detail.matches("<img class=\"candidate-gallery-img\"").count(), 1, "{detail}");
+        assert!(detail.contains("src=\"https://example.com/b.webp\"") && detail.contains("referrerpolicy=\"no-referrer\""), "{detail}");
+        // Like a candidate photo: it opens the original and keeps its caption.
+        assert!(detail.contains("<a href=\"https://example.com/b.webp\" target=\"_blank\""), "{detail}");
+        assert!(detail.contains("<figcaption class=\"candidate-gallery-label\">衛浴</figcaption>"), "{detail}");
+        assert!(!detail.contains("via.placeholder.com") && !detail.contains("假圖") && !detail.contains("空網址"), "{detail}");
+
+        // Nothing real left → no empty gallery wrapper at all.
+        let mut plan = plan;
+        plan.candidates[0].images.remove(0);
+        let html = render(&plan, "zh", None);
+        let detail = html.split("booking-cand-detail").nth(1).unwrap_or_default();
+        let detail = detail.split("cand-reference").next().unwrap_or_default();
+        assert!(!detail.contains("candidate-gallery"), "{detail}");
     }
 
     /// The booked room type may have NO candidate row of its own (jiufen:
