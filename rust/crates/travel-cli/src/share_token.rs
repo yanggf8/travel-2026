@@ -60,6 +60,11 @@ enum Action {
     List { full: bool, all: bool },
     /// One or more tokens (full 32-hex, or a unique prefix of one).
     Deactivate { tokens: Vec<String> },
+    /// Remove every token row — active AND deactivated — of the resolved plan,
+    /// or of every plan with `--all-plans`. A deactivated row is worth nothing
+    /// (Yang, 2026-11-02), so "stop sharing" is one step, not list + deactivate
+    /// + a hand-written DELETE.
+    Clear { all_plans: bool },
 }
 
 /// CLI entry: `travel share-token`. The plan is resolved by the dispatcher with
@@ -67,7 +72,8 @@ enum Action {
 /// `--show` / `--list` lists fingerprints + status (ACTIVE only by default —
 /// `--all` unfolds the deactivated block); `--show-full` prints the sensitive
 /// full URLs; `deactivate <t1> <t2> ...` inactivates one or more tokens, each
-/// given in full or as a unique prefix (what `--show` prints).
+/// given in full or as a unique prefix (what `--show` prints); `clear
+/// [--all-plans]` removes every token row of the plan (or of all plans).
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let action = parse_action(args)?;
 
@@ -155,6 +161,24 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 std::process::exit(1);
             }
         }
+        Action::Clear { all_plans } => {
+            let conn = crate::db::connect_write()
+                .await
+                .map_err(|e| format!("failed to connect to Turso (write tier): {e}"))?;
+            let scope = if all_plans { None } else { Some(plan_id.as_str()) };
+            let counts = token_counts(&conn, scope).await?;
+            let removed = clear_tokens(&conn, scope).await?;
+            for (plan, active, inactive) in &counts {
+                println!("cleared: plan_id={plan}  active={active}  deactivated={inactive}");
+            }
+            let what = scope.map_or("any plan".to_string(), |p| format!("plan_id={p}"));
+            if removed == 0 {
+                println!("nothing to clear: no share token rows for {what}");
+            } else {
+                println!("{removed} token row(s) removed — no share link opens {what} now");
+            }
+            Ok(())
+        }
         Action::Mint => {
             let conn = match crate::db::connect_write().await {
                 Ok(c) => c,
@@ -184,6 +208,8 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
     let mut all = false;
     let mut listed = false; // a listing flag (--show / --show-full) was given
     let mut deactivate: Option<Vec<String>> = None;
+    let mut clear = false;
+    let mut all_plans = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -202,6 +228,15 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                 all = true;
                 i += 1;
             }
+            "clear" | "--clear" => {
+                mint = false;
+                clear = true;
+                i += 1;
+            }
+            "--all-plans" => {
+                all_plans = true;
+                i += 1;
+            }
             "deactivate" | "revoke" | "--deactivate" | "--revoke" => {
                 mint = false;
                 let mut toks: Vec<String> = Vec::new();
@@ -213,9 +248,6 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                     }
                     toks.push(t.clone());
                     i += 1;
-                }
-                if toks.is_empty() {
-                    return Err("share-token deactivate requires at least one token (full 32-hex, or a unique prefix of what --show prints)".to_string());
                 }
                 // A repeated deactivate flag ACCUMULATES — replacing would leave
                 // the earlier tokens active while the summary reported success.
@@ -237,16 +269,44 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument: {other}"));
             }
-            other => {
-                return Err(format!(
-                    "unexpected argument: {other} (share-token takes flags only; tokens go \
-                     after `deactivate`)"
-                ));
-            }
+            // Once `deactivate` is given, a token anywhere later counts — flags may
+            // sit between them (`deactivate --plan-id p t1 t2` used to fail with
+            // "requires at least one token" although two were given).
+            other => match deactivate.as_mut() {
+                Some(toks) => {
+                    if !is_tokenish(other) {
+                        return Err(format!("invalid token format: {other}"));
+                    }
+                    toks.push(other.to_string());
+                    i += 1;
+                }
+                None => {
+                    return Err(format!(
+                        "unexpected argument: {other} (share-token takes flags only; tokens go \
+                         after `deactivate`)"
+                    ))
+                }
+            },
         }
+    }
+    if deactivate.as_ref().is_some_and(Vec::is_empty) {
+        return Err("share-token deactivate requires at least one token (full 32-hex, or a unique prefix of what --show prints)".to_string());
     }
     // A listing flag combined with deactivation is a contradictory request —
     // reject instead of silently letting deactivation win.
+    if all_plans && !clear {
+        return Err("--all-plans only modifies `clear` (travel share-token clear --all-plans)".to_string());
+    }
+    if clear {
+        if deactivate.is_some() || listed || all {
+            return Err(
+                "conflicting actions: `clear` removes every token; it cannot be combined with \
+                 deactivate / --show / --show-full / --all"
+                    .to_string(),
+            );
+        }
+        return Ok(Action::Clear { all_plans });
+    }
     if deactivate.is_some() && listed {
         return Err(
             "conflicting actions: a listing flag (--show / --show-full) cannot be combined \
@@ -271,6 +331,42 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
         return Ok(Action::Mint);
     }
     Ok(Action::List { full, all })
+}
+
+/// (plan_id, active, deactivated) token counts for one plan or all plans.
+async fn token_counts(conn: &Connection, plan_id: Option<&str>) -> Result<Vec<(String, i64, i64)>, String> {
+    let sql = "SELECT plan_id, \
+               SUM(CASE WHEN COALESCE(status, 'active') = 'active' THEN 1 ELSE 0 END), \
+               SUM(CASE WHEN COALESCE(status, 'active') = 'active' THEN 0 ELSE 1 END) \
+               FROM plan_share_tokens WHERE ?1 IS NULL OR plan_id = ?1 \
+               GROUP BY plan_id ORDER BY plan_id";
+    let mut rows = conn
+        .query(sql, libsql::params![plan_id.map(str::to_string)])
+        .await
+        .map_err(|e| format!("plan_share_tokens count failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("plan_share_tokens count read failed: {e}"))?
+    {
+        out.push((
+            row.get::<String>(0).map_err(|e| format!("plan_id read: {e}"))?,
+            row.get::<i64>(1).map_err(|e| format!("active count read: {e}"))?,
+            row.get::<i64>(2).map_err(|e| format!("deactivated count read: {e}"))?,
+        ));
+    }
+    Ok(out)
+}
+
+/// DELETE every token row of one plan (or of all plans). Returns rows removed.
+async fn clear_tokens(conn: &Connection, plan_id: Option<&str>) -> Result<u64, String> {
+    conn.execute(
+        "DELETE FROM plan_share_tokens WHERE ?1 IS NULL OR plan_id = ?1",
+        libsql::params![plan_id.map(str::to_string)],
+    )
+    .await
+    .map_err(|e| format!("plan_share_tokens clear failed: {e}"))
 }
 
 /// List existing share tokens for a plan, newest first.
@@ -558,6 +654,43 @@ mod tests {
                 tokens: vec!["0123456789abcdef".to_string()]
             })
         );
+    }
+
+    #[test]
+    fn deactivate_tokens_may_follow_resolver_flags() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // `deactivate --plan-id p t1 t2`: the tokens after the flag still count.
+        assert_eq!(
+            parse_action(&a(&["deactivate", "--plan-id", "p", "aaaaaa", "bbbbbb"])),
+            Ok(Action::Deactivate { tokens: vec!["aaaaaa".into(), "bbbbbb".into()] })
+        );
+        assert_eq!(
+            parse_action(&a(&["deactivate", "aaaaaa", "--plan-id", "p", "bbbbbb"])),
+            Ok(Action::Deactivate { tokens: vec!["aaaaaa".into(), "bbbbbb".into()] })
+        );
+        // Still: no token at all, a bad token, or a token before `deactivate` fail loud.
+        assert!(parse_action(&a(&["deactivate", "--plan-id", "p"]))
+            .unwrap_err()
+            .contains("requires at least one token"));
+        assert!(parse_action(&a(&["deactivate", "--plan-id", "p", "XYZ"]))
+            .unwrap_err()
+            .contains("invalid token format"));
+        assert!(parse_action(&a(&["aaaaaa", "deactivate", "bbbbbb"]))
+            .unwrap_err()
+            .contains("unexpected argument: aaaaaa"));
+    }
+
+    #[test]
+    fn clear_takes_one_plan_or_all_plans_and_nothing_else() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_action(&a(&["clear", "--plan-id", "p"])), Ok(Action::Clear { all_plans: false }));
+        assert_eq!(parse_action(&a(&["clear", "--all-plans"])), Ok(Action::Clear { all_plans: true }));
+        assert_eq!(parse_action(&a(&["--all-plans", "--clear"])), Ok(Action::Clear { all_plans: true }));
+        // --all-plans never widens anything but clear; clear never mixes with other actions.
+        assert!(parse_action(&a(&["--all-plans"])).unwrap_err().contains("only modifies `clear`"));
+        assert!(parse_action(&a(&["--show", "--all-plans"])).is_err());
+        assert!(parse_action(&a(&["clear", "--show"])).unwrap_err().contains("conflicting"));
+        assert!(parse_action(&a(&["clear", "deactivate", "aaaaaa"])).unwrap_err().contains("conflicting"));
     }
 
     #[test]

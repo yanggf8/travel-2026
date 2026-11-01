@@ -476,8 +476,22 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "share-token" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel share-token                         mint a new per-plan view-scope token + print its dashboard URL\n  travel share-token --show                  list ACTIVE token fingerprints (read-only; deactivated ones folded)\n  travel share-token --show --all            also list the deactivated tokens (--all only modifies --show/--show-full; alone it is rejected)\n  travel share-token --show-full             list full token URLs (sensitive)\n  travel share-token deactivate <t1> [t2..]  deactivate one or more tokens, each full 32-hex or a unique >=6-char prefix (the --show fingerprint head)\n  (plan resolved by --plan-id / $TRAVEL_PLAN_ID / --dest/date fallbacks; URL host overridable via TRAVEL_DASHBOARD_HOST)");
+                println!("Usage:\n  travel share-token                         mint a new per-plan view-scope token + print its dashboard URL\n  travel share-token --show                  list ACTIVE token fingerprints (read-only; deactivated ones folded)\n  travel share-token --show --all            also list the deactivated tokens (--all only modifies --show/--show-full; alone it is rejected)\n  travel share-token --show-full             list full token URLs (sensitive)\n  travel share-token deactivate <t1> [t2..]  deactivate one or more tokens, each full 32-hex or a unique >=6-char prefix (the --show fingerprint head); flags may sit between the tokens\n  travel share-token clear --plan-id <id>    remove EVERY token row of the plan (active and deactivated) — every link stops working\n  travel share-token clear --all-plans       the same for every plan\n  (plan resolved by --plan-id / $TRAVEL_PLAN_ID / --dest/date fallbacks; URL host overridable via TRAVEL_DASHBOARD_HOST)");
                 return Ok(());
+            }
+            // `clear` deletes rows: its scope must be explicit, never the
+            // resolver's active/upcoming/most-recent fallback.
+            if rest.iter().any(|a| a == "clear" || a == "--clear") {
+                if rest.iter().any(|a| a == "--all-plans") {
+                    if rest.iter().any(|a| a == "--plan-id") {
+                        return Err("share-token clear: give --plan-id <id> OR --all-plans, not both".into());
+                    }
+                    return share_token::run(rest, String::new()).await;
+                }
+                let env_plan = std::env::var("TRAVEL_PLAN_ID").is_ok_and(|v| !v.trim().is_empty());
+                if !env_plan && !rest.iter().any(|a| a == "--plan-id") {
+                    return Err("share-token clear needs an explicit scope: --plan-id <id> (or $TRAVEL_PLAN_ID) or --all-plans".into());
+                }
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             share_token::run(rest, plan_id).await?;

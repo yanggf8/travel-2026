@@ -112,7 +112,9 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 ./bin/travel share-token --show                   # list ACTIVE token fingerprints (read-only; deactivated ones folded, count hinted); every line leads with `plan: <plan_id>` so a fingerprint alone says which plan it opens
 ./bin/travel share-token --show --all             # also unfold the deactivated tokens. `--all` is a MODIFIER of --show/--show-full only — `share-token --all` alone is rejected (it used to fall through to mint and create a token)
 ./bin/travel share-token --show-full              # print full bearer URLs (sensitive; use only when you need to re-copy one)
-./bin/travel share-token deactivate <t1> [t2 ...] # deactivate one or more tokens: full 32-hex or a unique >=6-char prefix (the --show fingerprint head)
+./bin/travel share-token deactivate <t1> [t2 ...] # deactivate one or more tokens: full 32-hex or a unique >=6-char prefix (the --show fingerprint head); flags such as --plan-id may sit before or between the tokens
+./bin/travel share-token clear --plan-id <id>     # remove EVERY token row of the plan (active and deactivated): every share link and verify token of it stops working; prints per-plan active/deactivated counts. Idempotent ("nothing to clear"). Scope must be explicit — no resolver fallback
+./bin/travel share-token clear --all-plans        # the same for every plan (stop sharing everything in one step)
 #   URL host defaults to trip-dashboard-rs.yanggf.workers.dev; override with TRAVEL_DASHBOARD_HOST (e.g. after the primary-URL cutover)
 #   After minting: logged-in owner can also copy the viewer URL from the dashboard/plan page UI (Copy share link button).
 #   Recipients open the copied link logged-out — no GitHub login. Plan: docs/plans/2026-06-25-dashboard-share-link-copy.md

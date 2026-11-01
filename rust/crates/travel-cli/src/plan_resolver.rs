@@ -619,11 +619,16 @@ fn parse_args_inner(args: &[String], strict: bool) -> Result<ResolveInput, Strin
         let a = &args[i];
         match a.as_str() {
             "--plan-id" => {
-                input.explicit_plan_id = Some(
-                    args.get(i + 1)
-                        .ok_or_else(|| "missing value for --plan-id".to_string())?
-                        .clone(),
-                );
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --plan-id".to_string())?;
+                // An empty value (`--plan-id "$UNSET"`) must fail loud: the ladder
+                // treats "" as absent and would silently fall back to the
+                // active/upcoming/most-recent plan — the wrong plan for a write.
+                if v.trim().is_empty() {
+                    return Err("empty value for --plan-id (an unset variable?) — refusing to fall back to another plan".to_string());
+                }
+                input.explicit_plan_id = Some(v.clone());
                 i += 2;
             }
             "--plan-path" => {
@@ -1137,5 +1142,18 @@ mod tests {
         assert_eq!(id.len(), 5 + 12); // "path:" + 12 hex chars
         // Deterministic for the same input.
         assert_eq!(derive_plan_id("tokyo_2026.md"), id);
+    }
+
+    #[test]
+    fn empty_plan_id_value_fails_loud_never_falls_back() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for empty in ["", "  "] {
+            let e = parse_args_inner(&a(&["--plan-id", empty]), false).unwrap_err();
+            assert!(e.contains("empty value for --plan-id"), "{e}");
+        }
+        assert_eq!(
+            parse_args_inner(&a(&["--plan-id", "p-1"]), false).unwrap().explicit_plan_id.as_deref(),
+            Some("p-1")
+        );
     }
 }

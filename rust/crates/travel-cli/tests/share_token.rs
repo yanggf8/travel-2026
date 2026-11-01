@@ -164,3 +164,68 @@ fn share_token_multi_deactivate_and_all_listing() {
     assert!(!ok, "inactive token must not report success; stdout={stdout}");
     assert!(stderr.contains("no active token"), "stderr={stderr}");
 }
+
+#[test]
+fn share_token_clear_removes_every_row_of_the_plan_only() {
+    let tag = nanos();
+    let plan_id = format!("test-shareclear-{tag}");
+    let other = format!("test-shareclear2-{tag}");
+    let dest = format!("shareclear_{tag}");
+    let dest2 = format!("shareclear2_{tag}");
+    let _g = Guard::new({
+        let (plan_id, other, dest, dest2) = (plan_id.clone(), other.clone(), dest.clone(), dest2.clone());
+        move || {
+            teardown_plan(&plan_id, &dest);
+            teardown_plan(&other, &dest2);
+        }
+    });
+    if db_exec("SELECT 1").is_none() {
+        eprintln!("skipping share-token clear Turso test (no Turso creds)");
+        return;
+    }
+    seed_plan(&plan_id, &dest, 0);
+    seed_plan(&other, &dest2, 0);
+    let head = (tag % 0xff_fff0) as u32;
+    let rows = [
+        (plan_id.as_str(), format!("{:06x}{:026x}", head, tag), "active"),
+        (plan_id.as_str(), format!("{:06x}{:026x}", head + 1, tag), "inactive"),
+        (other.as_str(), format!("{:06x}{:026x}", head + 2, tag), "active"),
+    ];
+    for (p, t, st) in &rows {
+        db_exec(&format!(
+            "INSERT INTO plan_share_tokens (plan_id, token, created_at, status) \
+             VALUES ('{p}', '{t}', datetime('now'), '{st}')"
+        ));
+    }
+    let n = |p: &str| count(&format!("SELECT COUNT(*) AS n FROM plan_share_tokens WHERE plan_id = '{p}'"));
+
+    // No explicit scope → refused before any write (never the resolver fallback).
+    let out = Command::new(bin())
+        .args(["share-token", "clear"])
+        .env_remove("TRAVEL_PLAN_ID")
+        .output()
+        .expect("run travel");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("explicit scope"));
+    assert_eq!(n(&plan_id), Some(2));
+
+    // clear --plan-id: both rows (active + deactivated) of THIS plan go; the other plan keeps its token.
+    let (ok, stdout, stderr) = run_cmd(&plan_id, &["share-token", "clear", "--plan-id", &plan_id]);
+    assert!(ok, "clear: stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains(&format!("cleared: plan_id={plan_id}  active=1  deactivated=1")), "{stdout}");
+    assert!(stdout.contains("2 token row(s) removed"), "{stdout}");
+    for (_, t, _) in &rows {
+        assert!(!stdout.contains(t.as_str()) && !stderr.contains(t.as_str()), "a full token was printed");
+    }
+    assert_eq!(n(&plan_id), Some(0));
+    assert_eq!(n(&other), Some(1), "another plan's token must survive a per-plan clear");
+
+    // Idempotent.
+    let (ok, stdout, _) = run_cmd(&plan_id, &["share-token", "clear", "--plan-id", &plan_id]);
+    assert!(ok && stdout.contains("nothing to clear"), "{stdout}");
+
+    // Tokens after the resolver flag now count for deactivate (they used to be ignored).
+    let (ok, stdout, stderr) =
+        run_cmd(&other, &["share-token", "deactivate", "--plan-id", &other, &rows[2].1[..8]]);
+    assert!(ok && stdout.contains("1 deactivated, 0 skipped"), "stdout={stdout} stderr={stderr}");
+}
