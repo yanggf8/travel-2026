@@ -1,6 +1,8 @@
-//! Minimal bilingual UI strings for the dashboard chrome (section headings, etc.).
-//! Keep this small — DB-sourced content (themes, focus, activities) is NOT translated
-//! here; only the fixed UI labels the render layer emits live in this table.
+//! Bilingual UI strings for the dashboard chrome: headings, captions, labels,
+//! session names, units. EVERY interface string the render layer emits lives here
+//! as a ZH/EN pair — never a CJK literal in render code. Trip/world CONTENT
+//! (places, notes, advice texts, agency names) lives in Turso, not here; keyword
+//! lists the worker matches data against stay in the code that matches them.
 
 /// Look up a UI string by key. `lang == "en"` → English, anything else → Traditional Chinese.
 pub fn t(key: &str, lang: &str) -> &'static str {
@@ -156,8 +158,174 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("created", true) => "建立",
         ("inactivated", false) => "Inactivated",
         ("inactivated", true) => "停用",
+        // ---- day card chrome (render/day.rs) ----
+        ("feelsLike", false) => "Feels",
+        ("feelsLike", true) => "體感",
+        ("todaysRoute", false) => "Today's route",
+        ("todaysRoute", true) => "今日路線",
+        // session names (render/session.rs)
+        ("sessionMorning", false) => "Morning",
+        ("sessionMorning", true) => "上午",
+        ("sessionNoon", false) => "Noon",
+        ("sessionNoon", true) => "中午",
+        ("sessionAfternoon", false) => "Afternoon",
+        ("sessionAfternoon", true) => "下午",
+        ("sessionEvening", false) => "Evening",
+        ("sessionEvening", true) => "晚上",
+        // ---- map captions (render/map.rs) — {day} = day number ----
+        ("dayRouteCaption", false) => "Day {day} route",
+        ("dayRouteCaption", true) => "第 {day} 天路線",
+        ("dayLabel", false) => "Day {day}",
+        ("dayLabel", true) => "第 {day} 天",
+        ("dayHotelRoundTrip", false) => "Day {day} hotel round trip",
+        ("dayHotelRoundTrip", true) => "第 {day} 天・旅社來回",
+        ("dayAway", false) => "Day {day} beyond the area",
+        ("dayAway", true) => "第 {day} 天・本區以外的行程",
+        // ---- companion options + AI badge (render/mod.rs) ----
+        ("companionOptions", false) => "Companion options · pick one",
+        ("companionOptions", true) => "同行方案 · 可選擇",
+        ("companionMapAlt", false) => "Companion options route map",
+        ("companionMapAlt", true) => "同行方案路線圖",
+        ("companionUnconfirmed", false) => "unconfirmed, for discussion",
+        ("companionUnconfirmed", true) => "尚未確認，僅供討論",
+        ("aiRecBadge", false) => "\u{1F916} AI-recommended (unconfirmed)",
+        ("aiRecBadge", true) => "\u{1F916} 建議（未確認）",
+        // ---- owner share-link manager (render/share.rs) ----
+        ("shareLinks", false) => "Share links",
+        ("shareLinks", true) => "授權連結",
+        ("noActiveShareLinks", false) => "No active share links.",
+        ("noActiveShareLinks", true) => "目前沒有現用連結。",
+        ("activeCount", false) => "active",
+        ("activeCount", true) => "現用",
+        ("deactivated", false) => "deactivated",
+        ("deactivated", true) => "已停用",
+        ("deactivatedAt", false) => "deactivated at",
+        ("deactivatedAt", true) => "停用於",
+        ("deactivateSelected", false) => "Deactivate selected",
+        ("deactivateSelected", true) => "停用所選",
+        // copy-button flash text (inline owner JS, filled into share::copy_script)
+        ("copied", false) => "Copied!",
+        ("copied", true) => "已複製！",
+        ("copyFailed", false) => "Copy failed",
+        ("copyFailed", true) => "複製失敗",
+        // ---- booking summary (render/summary.rs) ----
+        ("fitRecommended", false) => "Recommended",
+        ("fitRecommended", true) => "推薦",
+        ("fitLowest", false) => "Lowest",
+        ("fitLowest", true) => "最低價",
+        ("fitPriceDelta", false) => "+{currency} {amount} / person",
+        ("fitPriceDelta", true) => "貴 {currency} {amount}／人",
+        ("fitBookedHeading", false) => "Booked FIT package",
+        ("fitBookedHeading", true) => "已訂 FIT 方案",
+        ("fitCompareHeading", false) => "FIT options (preferred comparison)",
+        ("fitCompareHeading", true) => "FIT 方案比較（優先評估，非已訂）",
+        ("offersUnit", false) => "offers",
+        ("offersUnit", true) => "個方案",
+        // FIT offer card
+        ("fitPricePerPerson", false) => "{currency} {amount} / person",
+        ("fitPricePerPerson", true) => "{currency} {amount}／人",
+        ("priceUnconfirmed", false) => "Price unconfirmed",
+        ("priceUnconfirmed", true) => "價格未確認",
+        ("dateUnconfirmed", false) => "Dates unconfirmed",
+        ("dateUnconfirmed", true) => "日期未確認",
+        ("departNoReturn", false) => "From {date} (return unconfirmed)",
+        ("departNoReturn", true) => "{date} 起（回程未確認）",
+        ("fitOneNight", false) => "{n} night",
+        ("fitOneNight", true) => "{n} 晚",
+        ("fitNights", false) => "{n} nights",
+        ("fitNights", true) => "{n} 晚",
+        ("fitAgency", false) => "Agency",
+        ("fitAgency", true) => "旅行社",
+        ("fitFlights", false) => "Flights",
+        ("fitFlights", true) => "班機",
+        ("fitHotel", false) => "Hotel",
+        ("fitHotel", true) => "酒店",
+        ("fitSize", false) => "Size",
+        ("fitSize", true) => "面積",
+        ("fitPrice", false) => "Price",
+        ("fitPrice", true) => "價格",
+        ("customFlightHotel", false) => "Custom flight + hotel",
+        ("customFlightHotel", true) => "自訂機酒",
+        ("bookedAccommodation", false) => "🏠 Booked Accommodation",
+        ("bookedAccommodation", true) => "🏠 已訂住宿",
+        ("otherSeaViewRefs", false) => "Other Sea-View References",
+        ("otherSeaViewRefs", true) => "其他海景參考",
+        ("referenceOnlyBooked", false) => "For reference · accommodation booked",
+        ("referenceOnlyBooked", true) => "僅供參考 · 已選定住宿",
+        ("candidatesSelecting", false) => "🏨 Sea-View Candidates · Selecting",
+        ("candidatesSelecting", true) => "🏨 海景候選 · 正在選",
+        // count unit after the folded reference summary ("· 3 間"); EN has none
+        ("roomsUnit", false) => "",
+        ("roomsUnit", true) => " 間",
+        // guest ratings / price note (domestic candidate cards)
+        ("reviewCount", false) => "{n} reviews",
+        ("reviewCount", true) => "{n} 則",
+        ("priceSourceRate", false) => "{source} rate",
+        ("priceSourceRate", true) => "{source} 房價",
+        ("stockThen", false) => " ({n} left then)",
+        ("stockThen", true) => "（當時剩 {n} 間）",
+        ("priceChecked", false) => "checked {date}{stock}",
+        ("priceChecked", true) => "{date} 查價{stock}",
+        ("stockDateUnknown", false) => "{n} left (date unknown)",
+        ("stockDateUnknown", true) => "剩 {n} 間（查價日不明）",
+        ("freeCancelUntil", false) => "free cancellation until {date}",
+        ("freeCancelUntil", true) => "{date} 前免費取消",
+        // candidate location minimap
+        ("distToHub", false) => "~{km} km from {hub}",
+        ("distToHub", true) => "距{hub} 約 {km} km",
+        ("locationMapAlt", false) => "{name} location map",
+        ("locationMapAlt", true) => "{name} 位置圖",
+        // criteria-line date part: weekday names (0 = Sunday) + the stay span
+        ("weekday0", false) => "Sun",
+        ("weekday0", true) => "日",
+        ("weekday1", false) => "Mon",
+        ("weekday1", true) => "一",
+        ("weekday2", false) => "Tue",
+        ("weekday2", true) => "二",
+        ("weekday3", false) => "Wed",
+        ("weekday3", true) => "三",
+        ("weekday4", false) => "Thu",
+        ("weekday4", true) => "四",
+        ("weekday5", false) => "Fri",
+        ("weekday5", true) => "五",
+        ("weekday6", false) => "Sat",
+        ("weekday6", true) => "六",
+        ("stayDate", false) => "{wd} {m}/{d}",
+        ("stayDate", true) => "{m}/{d}（{wd}）",
+        ("stayDateOneNight", false) => "{wd} {m}/{d} · {n} night",
+        ("stayDateOneNight", true) => "{m}/{d}（{wd}）{n} 晚",
+        ("stayDateNights", false) => "{wd} {m}/{d} · {n} nights",
+        ("stayDateNights", true) => "{m}/{d}（{wd}）{n} 晚",
         _ => "",
     }
+}
+
+/// `t` plus `{name}` placeholder filling — see [`fill`].
+pub fn tf(key: &str, lang: &str, args: &[(&str, &str)]) -> String {
+    fill(t(key, lang), args)
+}
+
+/// Fill `{name}` placeholders in ONE pass: an inserted value is never re-scanned
+/// (a hotel name containing "{date}" stays literal), and a `{…}` with no matching
+/// arg is kept verbatim.
+pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        if let Some(close) = after.find('}') {
+            if let Some((_, v)) = args.iter().find(|(k, _)| *k == &after[..close]) {
+                out.push_str(v);
+                rest = &after[close + 1..];
+                continue;
+            }
+        }
+        out.push('{');
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -169,6 +337,14 @@ mod tests {
         assert_eq!(t("flights", "zh"), "航班");
         assert_eq!(t("transfers", "zh"), "交通");
         assert_eq!(t("plans", "en"), "Plans");
+    }
+    #[test]
+    fn fill_is_single_pass_and_keeps_unknown_placeholders() {
+        assert_eq!(fill("{a}-{b}", &[("a", "{b}"), ("b", "2")]), "{b}-2");
+        assert_eq!(fill("x {nope} {a}", &[("a", "1")]), "x {nope} 1");
+        assert_eq!(fill("{ unclosed", &[]), "{ unclosed");
+        assert_eq!(tf("dayLabel", "zh", &[("day", "3")]), "第 3 天");
+        assert_eq!(tf("dayLabel", "en", &[("day", "3")]), "Day 3");
     }
     #[test]
     fn unknown_key_is_empty() {

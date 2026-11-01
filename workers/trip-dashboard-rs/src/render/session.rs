@@ -1,4 +1,5 @@
 use super::{esc, esc_url_attr, render_activity_text, urlencode};
+use crate::i18n::t;
 use crate::model::{Meal, Session};
 
 /// Render one meal line. Meals carry a map-pin convention
@@ -105,15 +106,13 @@ fn matches_map_kw(c: &[char], i: usize) -> bool {
 
 /// Render one session block. Empty sessions are caller-skipped (see day.rs).
 pub fn render(sess: &Session, lang: &str) -> String {
-    let label = match (sess.session_type.as_str(), lang) {
-        ("morning", "zh") => "上午",
-        ("noon", "zh") => "中午",
-        ("afternoon", "zh") => "下午",
-        ("evening", "zh") => "晚上",
-        ("morning", _) => "Morning",
-        ("noon", _) => "Noon",
-        ("afternoon", _) => "Afternoon",
-        _ => "Evening",
+    let label = match sess.session_type.as_str() {
+        "morning" => t("sessionMorning", lang),
+        "noon" => t("sessionNoon", lang),
+        "afternoon" => t("sessionAfternoon", lang),
+        "evening" => t("sessionEvening", lang),
+        // An unknown session type keeps the old untranslated fallback label.
+        _ => t("sessionEvening", "en"),
     };
     let mut h = String::new();
     h.push_str(&format!(

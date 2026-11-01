@@ -1676,6 +1676,26 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
+    // Clothing-advice bands for the dashboard's per-day weather line — GLOBAL
+    // reference data (not plan-keyed, no audit triad), written ONLY by
+    // `travel set-clothing-tip`. Schema only: the band texts are content and
+    // never get seeded here. Worker evaluation: temperature group
+    // (temp_low_max | temp_high_max | temp_else) first match in sort_order,
+    // then swing_min, then rain_min. Texts may use {lo} / {hi}.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS clothing_tips (
+  tip_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('temp_low_max','temp_high_max','temp_else','swing_min','rain_min')),
+  threshold REAL,
+  sort_order INTEGER NOT NULL,
+  text_zh TEXT NOT NULL,
+  text_en TEXT NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+  CHECK ((kind = 'temp_else') = (threshold IS NULL))
+);"#,
+    )
+    .await;
     // `jiufen` must exist in destination_config so resolve_active_destination (and
     // the slug-keyed accommodation commands) can validate against it — a destination
     // REGISTRATION, not trip content.

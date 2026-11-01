@@ -30,6 +30,7 @@ mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-param catalo
 mod set_poi_coords; // set-poi-coords — geocode a destination_pois row (slug-keyed, no audit triad)
 mod set_poi_title; // set-poi-title — rename a destination_pois title (+ --segments labels; slug-keyed, no audit triad)
 mod set_place_geocode; // set-place-geocode — manually pin a segment place label Nominatim can't resolve (cache row, no audit triad)
+mod set_clothing_tip; // set-clothing-tip — clothing_tips band for the dashboard weather line (global, no audit triad)
 mod add_transit; // add-transit — add a destination_transit station pair (slug-keyed, no audit; feeds derive-routes)
 mod add_omiyage; // add-omiyage — omiyage item + purchase location (slug-keyed, no audit triad)
 mod query_omiyage; // query-omiyage — read-only grouped omiyage view (slug-keyed reference data)
@@ -268,6 +269,9 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "add-transit" => {
             add_transit::run(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "set-clothing-tip" => {
+            set_clothing_tip::run(rest).await
         }
         [cmd, rest @ ..] if cmd == "add-omiyage" => {
             add_omiyage::run(rest).await
@@ -1067,6 +1071,7 @@ VALIDATE / CHECKS\n\
   set-place-geocode \"<place>\" --lat N --lon N (--dest slug|--context ctx)  (manually pin a label Nominatim can't resolve)\n\
   road-leg {{list|refetch --from <p|lat,lon> --to <p|lat,lon> [--via a;b] [--dest slug]}}  (OSRM road cache; --via forces a specific road)\n\
   add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
+  set-clothing-tip <tip_id> --kind <k> [--threshold N] --sort N --zh <t> --en <t>  (dashboard clothing-advice band; global, no --plan-id)\n\
   add-accommodation | update-accommodation --id <id> [--image-url u] [--booking-url u] | delete-accommodation --id <id>  (domestic stay reference data; no --plan-id)\n\
   add-accommodation-image --id <id> --url <u> [--label t] | delete-accommodation-image --id <id> (--url u | --all)  (candidate gallery; no --plan-id)\n\
   set-accommodation-rating --id <id> --source <s> --score <n> [--reviews N] [--clear]  (per-source guest rating; no --plan-id)\n\

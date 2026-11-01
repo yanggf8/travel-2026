@@ -4,13 +4,26 @@
 use std::collections::HashMap;
 
 use super::esc;
-use crate::i18n::t;
+use crate::i18n::{self, t};
 use crate::turso::Row;
 
-/// One-shot clipboard handler for every `.copy-share-btn` on the page.
-pub const COPY_SCRIPT: &str = r#"<script>
+/// One-shot clipboard handler for every `.copy-share-btn` on the page. Carries
+/// BOTH languages' flash text (the script picks by `<html lang>`), filled from i18n.
+pub fn copy_script() -> String {
+    i18n::fill(
+        COPY_SCRIPT_TEMPLATE,
+        &[
+            ("okZh", t("copied", "zh")),
+            ("failZh", t("copyFailed", "zh")),
+            ("okEn", t("copied", "en")),
+            ("failEn", t("copyFailed", "en")),
+        ],
+    )
+}
+
+const COPY_SCRIPT_TEMPLATE: &str = r#"<script>
 (function(){
-  function label(key,zh){return zh?(key==='ok'?'已複製！':'複製失敗'):(key==='ok'?'Copied!':'Copy failed');}
+  function label(key,zh){return zh?(key==='ok'?'{okZh}':'{failZh}'):(key==='ok'?'{okEn}':'{failEn}');}
   document.addEventListener('click',function(e){
     var btn=e.target.closest('.copy-share-btn');
     if(!btn) return;
@@ -176,25 +189,14 @@ pub fn grant_manager(
         .iter()
         .filter(|g| g.status == GrantStatus::Inactive)
         .collect();
-    let (title, none_txt, active_txt, deact_txt, deact_on, btn) = if lang == "en" {
-        (
-            "Share links",
-            "No active share links.",
-            "active",
-            "deactivated",
-            "deactivated at",
-            "Deactivate selected",
-        )
-    } else {
-        (
-            "授權連結",
-            "目前沒有現用連結。",
-            "現用",
-            "已停用",
-            "停用於",
-            "停用所選",
-        )
-    };
+    let (title, none_txt, active_txt, deact_txt, deact_on, btn) = (
+        t("shareLinks", lang),
+        t("noActiveShareLinks", lang),
+        t("activeCount", lang),
+        t("deactivated", lang),
+        t("deactivatedAt", lang),
+        t("deactivateSelected", lang),
+    );
     let mut h = format!(
         "<details class=\"grant-manager\"><summary>{} · {} {}</summary>",
         esc(title),

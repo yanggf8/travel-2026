@@ -13,7 +13,7 @@
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
 -- Generated: 2026-10-01
--- Tables: 138 | Indexes: 27
+-- Tables: 139 | Indexes: 27
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -210,6 +210,17 @@ CREATE TABLE catalog_runs (
   command_summary TEXT,
   status TEXT NOT NULL,
   changed_at TEXT NOT NULL
+);
+
+CREATE TABLE clothing_tips (
+  tip_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('temp_low_max','temp_high_max','temp_else','swing_min','rain_min')),
+  threshold REAL,
+  sort_order INTEGER NOT NULL,
+  text_zh TEXT NOT NULL,
+  text_en TEXT NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+  CHECK ((kind = 'temp_else') = (threshold IS NULL))
 );
 
 CREATE TABLE comparison_rules (

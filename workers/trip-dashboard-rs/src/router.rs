@@ -273,7 +273,7 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
             "{}{}{}",
             render::auth::signed_in_banner(owner_login, lang),
             render::index::render(&rows, &grants, &public_origin, &csrf, lang, tab, &today),
-            render::share::COPY_SCRIPT,
+            render::share::copy_script(),
         );
         return html_no_store(render::page("Plans", &body, lang));
     }
@@ -903,7 +903,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              sel.selected_date, dp.price AS date_price, '1' AS is_selected, '0' AS is_fit, \
              '0' AS fit_recommended, '' AS fit_note_zh, '' AS fit_note_en, \
              '' AS fit_compare_zh, '' AS fit_compare_en, \
-             '' AS fit_room_zh, '' AS fit_room_en \
+             '' AS fit_room_zh, '' AS fit_room_en, '' AS source_name \
              FROM plan_offer_selection sel \
              JOIN plan_offers o ON o.plan_id = sel.plan_id AND o.destination = sel.destination \
                AND o.id = sel.selected_offer_id \
@@ -922,9 +922,11 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              COALESCE(c.body_zh, '') AS fit_compare_zh, \
              COALESCE(c.body_en, '') AS fit_compare_en, \
              COALESCE(n.room_zh, '') AS fit_room_zh, \
-             COALESCE(n.room_en, '') AS fit_room_en \
+             COALESCE(n.room_en, '') AS fit_room_en, \
+             COALESCE(os.name, '') AS source_name \
              FROM plan_fit_offers f \
              JOIN offers o ON o.id = f.offer_id \
+             LEFT JOIN ota_sources os ON os.source_id = o.source_id \
              LEFT JOIN plan_fit_notes n ON n.plan_id = '{slug}' AND n.destination = {dest_expr} \
                AND n.source_id = o.source_id \
              LEFT JOIN plan_fit_notes c ON c.plan_id = '{slug}' AND c.destination = {dest_expr} \
@@ -988,17 +990,24 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             "SELECT option_key, seq, label, lat, lon FROM companion_option_stops \
              WHERE plan_id = '{slug}' ORDER BY option_key, seq"
         ),
+        // [23] clothing-advice bands — GLOBAL reference data (set-clothing-tip),
+        // evaluated per day card by render::day::clothing_tip.
+        "SELECT kind, threshold, text_zh, text_en FROM clothing_tips \
+         ORDER BY sort_order, tip_id"
+            .to_string(),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 23 {
+    if r.len() < 24 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 23 results".into(),
+            "Turso pipeline returned fewer than 24 results".into(),
         ));
     }
-    Ok(model::assemble(
+    let mut plan = model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
         &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18], &r[19], &r[20], &r[21], &r[22],
-    ))
+    );
+    plan.clothing_tips = model::clothing_tips(&r[23]);
+    Ok(plan)
 }
 
 #[cfg(test)]

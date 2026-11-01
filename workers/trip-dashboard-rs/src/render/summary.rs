@@ -6,7 +6,7 @@
 //! wrong/absent columns). Here transfers MUST render selected_route + price.
 
 use super::{esc, esc_url_attr, urlencode};
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::model::Plan;
 use crate::turso::Row;
 
@@ -76,18 +76,6 @@ fn join_parts(parts: &[String]) -> String {
         .join(" ")
 }
 
-fn fit_source_label(source: &str) -> &str {
-    match source {
-        "liontravel" => "雄獅",
-        "travel4u" => "山富",
-        "besttour" => "喜鴻",
-        "lifetour" => "五福",
-        "settour" => "東南",
-        "liangyou" => "良友",
-        other => other,
-    }
-}
-
 /// Prefer the page language, then the other, so a ZH-only note still shows on `?lang=en`.
 fn fit_text(lang: &str, zh: &str, en: &str) -> String {
     if lang == "en" {
@@ -153,12 +141,7 @@ fn fit_badge_html(
 ) -> String {
     let mut badges = String::new();
     if recommended {
-        let label = match (booked, lang == "en") {
-            (true, true) => "Booked",
-            (true, false) => "已訂",
-            (false, true) => "Recommended",
-            (false, false) => "推薦",
-        };
+        let label = t(if booked { "bookedBadge" } else { "fitRecommended" }, lang);
         badges.push_str(&format!(
             "<span class=\"fit-badge fit-badge-rec\">{}</span>",
             esc(label)
@@ -166,18 +149,18 @@ fn fit_badge_html(
     }
     match price {
         Some(FitPriceBadge::Lowest) => {
-            let label = if lang == "en" { "Lowest" } else { "最低價" };
+            let label = t("fitLowest", lang);
             badges.push_str(&format!(
                 "<span class=\"fit-badge fit-badge-low\">{}</span>",
                 esc(label)
             ));
         }
         Some(FitPriceBadge::Delta { amount, currency }) => {
-            let label = if lang == "en" {
-                format!("+{currency} {} / person", group_thousands(amount))
-            } else {
-                format!("貴 {currency} {}／人", group_thousands(amount))
-            };
+            let label = tf(
+                "fitPriceDelta",
+                lang,
+                &[("currency", &currency), ("amount", &group_thousands(amount))],
+            );
             badges.push_str(&format!(
                 "<span class=\"fit-badge fit-badge-delta\">{}</span>",
                 esc(&label)
@@ -279,11 +262,7 @@ fn ratings_row(ratings: &[crate::model::CandidateRating], lang: &str) -> String 
         }
         let count = if r.review_count > 0 {
             let n = group_thousands(r.review_count);
-            if lang == "en" {
-                format!(" · {n} reviews")
-            } else {
-                format!(" · {n} 則")
-            }
+            format!(" · {}", tf("reviewCount", lang, &[("n", &n)]))
         } else {
             String::new()
         };
@@ -302,48 +281,27 @@ fn ratings_row(ratings: &[crate::model::CandidateRating], lang: &str) -> String 
 /// "Booking.com 房價 · 2026-09-04 查 · 剩 1 間 · 9/28 前免費取消".
 /// Every part is optional; an empty result renders nothing.
 fn price_note(c: &crate::model::DomesticCandidate, lang: &str) -> String {
-    let en = lang == "en";
     let mut parts: Vec<String> = Vec::new();
     if !c.price_source.is_empty() {
-        parts.push(if en {
-            format!("{} rate", c.price_source)
-        } else {
-            format!("{} 房價", c.price_source)
-        });
+        parts.push(tf("priceSourceRate", lang, &[("source", &c.price_source)]));
     }
     // Stock is a SNAPSHOT, so it hangs off the check date instead of standing on its
     // own — "1 left" on its own reads as a live OTA counter.
     if !c.price_checked_at.is_empty() {
         let d = date_only(&c.price_checked_at);
         let stock = if c.rooms_left > 0 {
-            if en {
-                format!(" ({} left then)", c.rooms_left)
-            } else {
-                format!("（當時剩 {} 間）", c.rooms_left)
-            }
+            tf("stockThen", lang, &[("n", &c.rooms_left.to_string())])
         } else {
             String::new()
         };
-        parts.push(if en {
-            format!("checked {d}{stock}")
-        } else {
-            format!("{d} 查價{stock}")
-        });
+        parts.push(tf("priceChecked", lang, &[("date", &d), ("stock", &stock)]));
     } else if c.rooms_left > 0 {
         // No read date: say so rather than implying the count is current.
-        parts.push(if en {
-            format!("{} left (date unknown)", c.rooms_left)
-        } else {
-            format!("剩 {} 間（查價日不明）", c.rooms_left)
-        });
+        parts.push(tf("stockDateUnknown", lang, &[("n", &c.rooms_left.to_string())]));
     }
     if !c.free_cancel_until.is_empty() {
         let d = date_only(&c.free_cancel_until);
-        parts.push(if en {
-            format!("free cancellation until {d}")
-        } else {
-            format!("{d} 前免費取消")
-        });
+        parts.push(tf("freeCancelUntil", lang, &[("date", &d)]));
     } else if !c.price_source.is_empty() {
         // We looked up a rate but recorded no cancellation deadline. Saying nothing
         // let a reader assume this stay cancels as freely as the ones beside it —
@@ -499,22 +457,18 @@ fn candidate_minimap(
     // connector draws to, so the number and the line tell ONE story. (With no
     // stops there is no hub and no distance note at all.)
     let dist_txt = match hub {
-        Some(h) if lang == "en" => {
-            format!("~{:.1} km from {}", distance_km(lat, lon, h.lat, h.lon), h.label)
-        }
-        Some(h) => format!(
-            "距{} 約 {:.1} km",
-            h.label,
-            distance_km(lat, lon, h.lat, h.lon)
+        Some(h) => tf(
+            "distToHub",
+            lang,
+            &[
+                ("km", &format!("{:.1}", distance_km(lat, lon, h.lat, h.lon))),
+                ("hub", &h.label),
+            ],
         ),
         None => String::new(),
     };
     let maps = format!("https://www.google.com/maps?q={:.6},{:.6}", lat, lon);
-    let alt = if lang == "en" {
-        format!("{} location map", c.hotel_name)
-    } else {
-        format!("{} 位置圖", c.hotel_name)
-    };
+    let alt = tf("locationMapAlt", lang, &[("name", &c.hotel_name)]);
     let caption = if dist_txt.is_empty() {
         format!("{} · \u{00A9} Esri", t("locationMap", lang))
     } else {
@@ -552,30 +506,26 @@ fn criteria_dates(plan: &crate::model::Plan, lang: &str) -> String {
     // days since the Unix epoch (Hinnant's civil_from_days inverse) → weekday;
     // 1970-01-01 was a Thursday, so (days + 4) mod 7 indexes 0=Sunday.
     let days = civil_days(y, m, day);
-    let wd_idx = (days + 4).rem_euclid(7) as usize;
-    let (wd_zh, wd_en) = [
-        ("日", "Sun"),
-        ("一", "Mon"),
-        ("二", "Tue"),
-        ("三", "Wed"),
-        ("四", "Thu"),
-        ("五", "Fri"),
-        ("六", "Sat"),
-    ][wd_idx];
+    let wd_idx = (days + 4).rem_euclid(7);
+    let wd = t(&format!("weekday{wd_idx}"), lang);
     let nights = parse(&plan.end_date)
         .map(|(ey, em, ed)| civil_days(ey, em, ed) - days)
         .filter(|n| *n > 0);
-    if lang == "en" {
-        match nights {
-            Some(n) => format!("{wd_en} {m}/{day} · {n} night{}", if n > 1 { "s" } else { "" }),
-            None => format!("{wd_en} {m}/{day}"),
-        }
-    } else {
-        match nights {
-            Some(n) => format!("{m}/{day}（{wd_zh}）{n} 晚"),
-            None => format!("{m}/{day}（{wd_zh}）"),
-        }
-    }
+    let key = match nights {
+        Some(1) => "stayDateOneNight",
+        Some(_) => "stayDateNights",
+        None => "stayDate",
+    };
+    tf(
+        key,
+        lang,
+        &[
+            ("wd", wd),
+            ("m", &m.to_string()),
+            ("d", &day.to_string()),
+            ("n", &nights.unwrap_or(0).to_string()),
+        ],
+    )
 }
 
 /// Days since 1970-01-01 for a civil (proleptic Gregorian) date.
@@ -688,12 +638,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     if !shown_fit_offers.is_empty() {
         h.push_str(&format!(
             "<h2>{}</h2>",
-            esc(match (fit_booked, lang == "en") {
-                (true, true) => "Booked FIT package",
-                (true, false) => "已訂 FIT 方案",
-                (false, true) => "FIT options (preferred comparison)",
-                (false, false) => "FIT 方案比較（優先評估，非已訂）",
-            })
+            esc(t(if fit_booked { "fitBookedHeading" } else { "fitCompareHeading" }, lang))
         ));
         let compare = fit_text(lang, &plan.fit_compare_zh, &plan.fit_compare_en);
         if !fit_booked && !compare.is_empty() {
@@ -704,6 +649,8 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         }
         // Group by travel agency. Each agency is one collapsed disclosure so the
         // reader sees agency → flights → hotel in a stable, repeatable order.
+        // The agency name is CONTENT: ota_sources.name, joined in by the router;
+        // a source with no ota_sources row shows its raw source_id.
         let mut groups: Vec<(String, Vec<&crate::model::FitOffer>)> = Vec::new();
         for fit in shown_fit_offers {
             if let Some((_, offers)) = groups
@@ -721,19 +668,18 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             let source = if source_id.is_empty() {
                 "—"
             } else {
-                fit_source_label(source_id)
+                offers
+                    .iter()
+                    .map(|fit| fit.source_name.as_str())
+                    .find(|name| !name.is_empty())
+                    .unwrap_or(source_id)
             };
             let recommended = offers.iter().any(|fit| fit.recommended);
             let rec_class = if recommended { " is-recommended" } else { "" };
             let header_badge = if recommended {
                 format!(
                     "<span class=\"fit-badge fit-badge-rec\">{}</span>",
-                    esc(match (fit_booked, lang == "en") {
-                        (true, true) => "Booked",
-                        (true, false) => "已訂",
-                        (false, true) => "Recommended",
-                        (false, false) => "推薦",
-                    })
+                    esc(t(if fit_booked { "bookedBadge" } else { "fitRecommended" }, lang))
                 )
             } else {
                 String::new()
@@ -743,7 +689,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 "<summary><span class=\"fit-agency-heading\"><span class=\"fit-agency-chevron\" aria-hidden=\"true\">▶</span><span class=\"fit-agency-name\">{}</span>{header_badge}</span><span class=\"fit-agency-count\">{} {}</span></summary>",
                 esc(source),
                 offers.len(),
-                esc(if lang == "en" { "offers" } else { "個方案" })
+                esc(t("offersUnit", lang))
             ));
             h.push_str("<div class=\"fit-agency-body\">");
             for fit in offers {
@@ -755,34 +701,47 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     "—"
                 };
                 let price = if fit.price > 0 {
-                    format!(
-                        "{} {}／人",
-                        if fit.currency.is_empty() {
-                            "TWD"
-                        } else {
-                            &fit.currency
-                        },
-                        group_thousands(fit.price)
+                    tf(
+                        "fitPricePerPerson",
+                        lang,
+                        &[
+                            (
+                                "currency",
+                                if fit.currency.is_empty() {
+                                    "TWD"
+                                } else {
+                                    &fit.currency
+                                },
+                            ),
+                            ("amount", &group_thousands(fit.price)),
+                        ],
                     )
                 } else {
-                    "價格未確認".to_string()
+                    t("priceUnconfirmed", lang).to_string()
                 };
                 let mut date_text = if fit.departure_date.is_empty() {
-                    "日期未確認".to_string()
+                    t("dateUnconfirmed", lang).to_string()
                 } else if fit.return_date.is_empty() {
-                    format!("{} 起（回程未確認）", fit.departure_date)
+                    tf("departNoReturn", lang, &[("date", &fit.departure_date)])
                 } else {
                     format!("{}–{}", fit.departure_date, fit.return_date)
                 };
                 if fit.nights > 0 {
-                    date_text.push_str(&format!(" · {} 晚", fit.nights));
+                    date_text.push_str(&format!(
+                        " · {}",
+                        tf(
+                            if fit.nights == 1 { "fitOneNight" } else { "fitNights" },
+                            lang,
+                            &[("n", &fit.nights.to_string())],
+                        )
+                    ));
                 }
                 if !fit.availability.is_empty() {
                     date_text.push_str(&format!(" · {}", fit.availability));
                 }
 
                 h.push_str("<div class=\"fit-agency-offer\">");
-                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Agency" } else { "旅行社" }), esc(source)));
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(t("fitAgency", lang)), esc(source)));
                 let flights = [
                     fit.airline.as_str(),
                     fit.flight_outbound.as_str(),
@@ -792,17 +751,17 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join(" · ");
-                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Flights" } else { "班機" }), esc(if flights.is_empty() { "—" } else { &flights })));
-                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(if lang == "en" { "Hotel" } else { "酒店" }), esc(hotel)));
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(t("fitFlights", lang)), esc(if flights.is_empty() { "—" } else { &flights })));
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(t("fitHotel", lang)), esc(hotel)));
                 let room = fit_text(lang, &fit.room_zh, &fit.room_en);
                 if !room.is_empty() {
                     h.push_str(&format!(
                         "<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>",
-                        esc(if lang == "en" { "Size" } else { "面積" }),
+                        esc(t("fitSize", lang)),
                         esc(&room)
                     ));
                 }
-                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span class=\"fit-detail-price\">{}</span></div>", esc(if lang == "en" { "Price" } else { "價格" }), esc(&price)));
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span class=\"fit-detail-price\">{}</span></div>", esc(t("fitPrice", lang)), esc(&price)));
                 h.push_str(&fit_badge_html(
                     lang,
                     fit.recommended,
@@ -832,11 +791,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     if plan.offer.as_ref().map(|o| o.source_id.as_str()) == Some("agoda") {
         h.push_str(&format!(
             "<h2>{}</h2>",
-            esc(if lang == "en" {
-                "Custom flight + hotel"
-            } else {
-                "自訂機酒"
-            })
+            esc(t("customFlightHotel", lang))
         ));
     }
 
@@ -950,11 +905,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let is_booked = plan.p4_status == "booked";
     if !plan.domestic_stays.is_empty() {
         let domestic_title = if is_booked {
-            if lang == "zh" {
-                "🏠 已訂住宿"
-            } else {
-                "🏠 Booked Accommodation"
-            }
+            t("bookedAccommodation", lang)
         } else {
             t("domesticStay", lang)
         };
@@ -1123,26 +1074,11 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     if !show.is_empty() {
         let (cand_title, cand_sub): (&str, Option<&str>) = if is_booked {
             (
-                if lang == "zh" {
-                    "其他海景參考"
-                } else {
-                    "Other Sea-View References"
-                },
-                Some(if lang == "zh" {
-                    "僅供參考 · 已選定住宿"
-                } else {
-                    "For reference · accommodation booked"
-                }),
+                t("otherSeaViewRefs", lang),
+                Some(t("referenceOnlyBooked", lang)),
             )
         } else {
-            (
-                if lang == "zh" {
-                    "🏨 海景候選 · 正在選"
-                } else {
-                    "🏨 Sea-View Candidates · Selecting"
-                },
-                None,
-            )
+            (t("candidatesSelecting", lang), None)
         };
         h.push_str(&format!("<h2>{}</h2>", esc(cand_title)));
         // Say it in words, not only through a dashed border a reader may not decode.
@@ -1159,7 +1095,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 "<details class=\"cand-reference\"><summary>{} · {}{}</summary>",
                 esc(&sub_text),
                 show.len(),
-                if lang == "en" { "" } else { " 間" }
+                t("roomsUnit", lang)
             ));
         } else {
             h.push_str(&format!(
@@ -1806,6 +1742,56 @@ mod tests {
         assert!(html.contains("不同幣別。"));
         assert!(!html.contains("最低價"));
         assert!(!html.contains("fit-badge-delta"));
+    }
+
+    #[test]
+    fn fit_card_chrome_is_english_on_the_en_page() {
+        let mut one = sample_fit("liontravel", 21646, "TWD", false, "");
+        one.departure_date = "2026-11-20".into();
+        one.nights = 1;
+        let mut three = sample_fit("settour", 0, "TWD", false, "");
+        three.nights = 3;
+        let plan = Plan {
+            fit_offers: vec![one, three],
+            ..Default::default()
+        };
+        let en = render(&plan, "en", None);
+        assert!(en.contains("TWD 21,646 / person"), "{en}");
+        assert!(en.contains("From 2026-11-20 (return unconfirmed) · 1 night<"), "{en}");
+        assert!(en.contains("Dates unconfirmed · 3 nights"), "{en}");
+        assert!(en.contains("Price unconfirmed"), "{en}");
+        for zh_only in ["／人", "價格未確認", "日期未確認", "回程未確認", " 晚"] {
+            assert!(!en.contains(zh_only), "{zh_only} on the EN page: {en}");
+        }
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("TWD 21,646／人"), "{zh}");
+        assert!(zh.contains("2026-11-20 起（回程未確認） · 1 晚"), "{zh}");
+        assert!(zh.contains("日期未確認 · 3 晚"), "{zh}");
+    }
+
+    #[test]
+    fn fit_agency_name_comes_from_ota_sources_else_raw_source_id() {
+        let mut named = sample_fit("liontravel", 21646, "TWD", false, "");
+        named.source_name = "雄獅旅遊".into();
+        let plan = Plan {
+            fit_offers: vec![named, sample_fit("zzagency", 18990, "TWD", false, "")],
+            ..Default::default()
+        };
+        for lang in ["zh", "en"] {
+            let html = render(&plan, lang, None);
+            assert!(
+                html.contains("<span class=\"fit-agency-name\">雄獅旅遊</span>"),
+                "{html}"
+            );
+            // The agency row inside the card carries the same name.
+            assert!(html.contains("</span><span>雄獅旅遊</span></div>"), "{html}");
+            // No ota_sources row → the raw source_id, never a hardcoded label.
+            assert!(
+                html.contains("<span class=\"fit-agency-name\">zzagency</span>"),
+                "{html}"
+            );
+            assert!(!html.contains("fit-agency-name\">liontravel<"), "{html}");
+        }
     }
 
     #[test]

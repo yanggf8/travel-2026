@@ -276,6 +276,34 @@ pub struct Plan {
     /// 同行方案 alternatives (unconfirmed), keyed stops for the companion map.
     /// Empty → the companion section renders from the note fallback only.
     pub companion_options: Vec<CompanionOption>,
+    /// Clothing-advice bands from the GLOBAL `clothing_tips` reference table, in
+    /// sort_order. Filled by the router; empty → the day cards show no tips.
+    pub clothing_tips: Vec<ClothingTip>,
+}
+
+/// One clothing-advice band (`clothing_tips` row, written by
+/// `travel set-clothing-tip`). Evaluated by `render::day::clothing_tip`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ClothingTip {
+    /// temp_low_max | temp_high_max | temp_else | swing_min | rain_min
+    pub kind: String,
+    /// NULL only for `temp_else`.
+    pub threshold: Option<f64>,
+    /// Templates; `{lo}` / `{hi}` are the rounded low/high temps.
+    pub text_zh: String,
+    pub text_en: String,
+}
+
+/// `clothing_tips` rows (already in sort_order) → bands.
+pub fn clothing_tips(rows: &[Row]) -> Vec<ClothingTip> {
+    rows.iter()
+        .map(|r| ClothingTip {
+            kind: s(r, "kind"),
+            threshold: f(r, "threshold"),
+            text_zh: s(r, "text_zh"),
+            text_en: s(r, "text_en"),
+        })
+        .collect()
 }
 
 /// The chosen package offer, for the booking-summary package row.
@@ -292,6 +320,9 @@ pub struct Offer {
 #[derive(Debug, Default, PartialEq)]
 pub struct FitOffer {
     pub source_id: String,
+    /// Agency display name from `ota_sources.name`; empty when the source has no
+    /// ota_sources row (the card then shows the raw source_id).
+    pub source_name: String,
     pub title: String,
     pub price: i64,
     pub currency: String,
@@ -428,6 +459,7 @@ pub fn assemble(
         .filter(|o| s(o, "is_fit") == "1")
         .map(|o| FitOffer {
             source_id: s(o, "source_id"),
+            source_name: s(o, "source_name"),
             title: s(o, "title"),
             price: {
                 let date_price = i(o, "date_price");

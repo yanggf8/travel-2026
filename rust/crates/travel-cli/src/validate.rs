@@ -66,6 +66,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_holiday_calendars(&mut issues).await;
     validate_omiyage(&mut issues).await;
     validate_domestic_accommodations(&mut issues).await;
+    validate_clothing_tips(&mut issues).await;
     validate_reference_tables(&mut issues).await;
     validate_booking_integrity(&mut issues).await;
 
@@ -1541,6 +1542,47 @@ async fn validate_omiyage(issues: &mut Vec<Issue>) {
     }
 
     // 8. EMPTY tables → NO error (intentionally no COUNT(*)==0 check).
+}
+
+// --- DB check: clothing_tips (dashboard clothing-advice bands) ---
+
+/// The dashboard has NO hardcoded clothing advice: an empty `clothing_tips`
+/// table means every day card silently drops its "what to wear" line. WARN so
+/// that gap is visible; fill via `travel set-clothing-tip`.
+async fn validate_clothing_tips(issues: &mut Vec<Issue>) {
+    let warn = |issues: &mut Vec<Issue>, message: String| {
+        issues.push(Issue {
+            category: "clothing-tips".to_string(),
+            severity: Severity::Warning,
+            message,
+            file: Some("turso:clothing_tips".to_string()),
+            line: None,
+        });
+    };
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    match travel_db::repo::clothing_tips::count(&conn).await {
+        Ok(0) => warn(
+            issues,
+            "clothing_tips is empty — the dashboard shows no clothing advice under the weather; \
+             add bands via travel set-clothing-tip"
+                .to_string(),
+        ),
+        Ok(_) => {}
+        Err(e) if e.contains("no such table") => warn(
+            issues,
+            "clothing_tips table missing — run ./bin/travel db migrate, then add bands via travel set-clothing-tip"
+                .to_string(),
+        ),
+        Err(e) => issues.push(Issue {
+            category: "clothing-tips".to_string(),
+            severity: Severity::Error,
+            message: format!("failed to query clothing_tips: {e}"),
+            file: Some("turso:clothing_tips".to_string()),
+            line: None,
+        }),
+    }
 }
 
 // --- DB check: domestic_accommodations (Taiwan domestic stay reference data) ---

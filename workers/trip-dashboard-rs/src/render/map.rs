@@ -82,11 +82,7 @@ pub fn is_valid_map_png(bytes: &[u8]) -> bool {
 }
 
 fn day_route_caption(day_number: i64, lang: &str) -> String {
-    if lang == "en" {
-        format!("Day {day_number} route")
-    } else {
-        format!("第 {day_number} 天路線")
-    }
+    i18n::tf("dayRouteCaption", lang, &[("day", &day_number.to_string())])
 }
 
 /// Numbered-pin legend under a map: one item per pin, "N name", each linking to a
@@ -118,7 +114,7 @@ fn map_legend_html(legend: &[LegendStop], lang: &str) -> String {
             .find_map(|s| s.color.as_deref().filter(|c| is_hex_color(c)))
             .map(|c| format!("<span class=\"leg-swatch\" style=\"background:{c}\"></span>"))
             .unwrap_or_default();
-        let label = if lang == "en" { format!("Day {d}") } else { format!("第 {d} 天") };
+        let label = i18n::tf("dayLabel", lang, &[("day", &d.to_string())]);
         h.push_str(&format!(
             "<div class=\"map-legend-day\"><div class=\"leg-day\">{swatch}{}</div>{}</div>",
             esc(&label),
@@ -298,11 +294,7 @@ pub fn day_logistics_map_slot(
     lang: &str,
     legend: &[LegendStop],
 ) -> String {
-    let caption = if lang == "en" {
-        format!("Day {day_number} hotel round trip")
-    } else {
-        format!("第 {day_number} 天・旅社來回")
-    };
+    let caption = i18n::tf("dayHotelRoundTrip", lang, &[("day", &day_number.to_string())]);
     compact_day_map_slot(plan_id, day_number, "logistics", "", &caption, version, lang, legend)
 }
 
@@ -315,11 +307,7 @@ pub fn day_away_map_slot(
     lang: &str,
     legend: &[LegendStop],
 ) -> String {
-    let caption = if lang == "en" {
-        format!("Day {day_number} beyond the area")
-    } else {
-        format!("第 {day_number} 天・本區以外的行程")
-    };
+    let caption = i18n::tf("dayAway", lang, &[("day", &day_number.to_string())]);
     compact_day_map_slot(plan_id, day_number, "away", " map-frame--day-away", &caption, version, lang, legend)
 }
 

@@ -7,6 +7,7 @@ pub mod map;
 pub mod session;
 pub mod share;
 pub mod summary;
+use crate::i18n::t;
 use crate::model::Plan;
 pub use activity_text::render_activity_text;
 
@@ -40,7 +41,7 @@ pub fn render_plan(
     let mut body = String::new();
     if !owner_chrome.is_empty() {
         body.push_str(owner_chrome);
-        body.push_str(share::COPY_SCRIPT);
+        body.push_str(&share::copy_script());
     }
     // Non-meal pending-booking alerts BEFORE the summary (mirror render.ts:1388).
     body.push_str(&alerts::render_pending_alerts(plan, lang, false));
@@ -112,6 +113,7 @@ pub fn render_plan(
                 .get(&d.day_number)
                 .and_then(|v| v.as_deref()),
             map_status.legend_for(&format!("day-{}-away.png", d.day_number)),
+            &plan.clothing_tips,
         ));
     }
     // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),
@@ -153,7 +155,7 @@ fn render_companion_options(plan: &Plan, lang: &str) -> String {
     }
     if cards.is_empty() { return String::new(); }
     let heading = heading_lines.join("\n");
-    let label = if lang == "en" { "Companion options · pick one" } else { "同行方案 · 可選擇" };
+    let label = t("companionOptions", lang);
     let map = companion_map(plan, lang);
     let mut out = format!("<section class=\"companion-options\"><h2>{}</h2><p class=\"companion-hint\">{}</p>{}<div class=\"companion-grid\">", esc(label), esc(&heading), map);
     for card in &cards {
@@ -344,7 +346,7 @@ fn companion_map(plan: &Plan, lang: &str) -> String {
         (x.clamp(0.0, 100.0), y.clamp(0.0, 100.0))
     };
     let bbox = format!("{:.6},{:.6},{:.6},{:.6}", lo_min, la_min, lo_max, la_max);
-    let alt = if lang == "en" { "Companion options route map" } else { "同行方案路線圖" };
+    let alt = t("companionMapAlt", lang);
     let mut out = format!(
         "<div class=\"companion-map-frame\"><img class=\"companion-map-img\" loading=\"lazy\" \
          alt=\"{alt}\" \
@@ -410,12 +412,7 @@ fn companion_map(plan: &Plan, lang: &str) -> String {
             esc(&o.title)
         ));
     }
-    let note = if lang == "en" {
-        " · unconfirmed, for discussion · © Esri</p>"
-    } else {
-        " · 尚未確認，僅供討論 · © Esri</p>"
-    };
-    out.push_str(note);
+    out.push_str(&format!(" · {} · © Esri</p>", t("companionUnconfirmed", lang)));
     out
 }
 
@@ -425,12 +422,7 @@ pub fn ai_rec_badge(source: &str, lang: &str) -> String {
     if source != "ai_recommended" {
         return String::new();
     }
-    let label = if lang == "en" {
-        "\u{1F916} AI-recommended (unconfirmed)"
-    } else {
-        "\u{1F916} 建議（未確認）"
-    };
-    format!("<span class=\"ai-rec-badge\">{}</span>", esc(label))
+    format!("<span class=\"ai-rec-badge\">{}</span>", esc(t("aiRecBadge", lang)))
 }
 
 /// Escape text for HTML TEXT content and DOUBLE-QUOTED attribute values only.
