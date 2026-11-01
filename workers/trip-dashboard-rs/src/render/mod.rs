@@ -384,7 +384,8 @@ fn companion_map(plan: &Plan, lang: &str) -> String {
             if let Some(e) = pins.iter_mut().find(|(a, b, _, _)| *a == key.0 && *b == key.1) {
                 if !e.2.contains(tag) {
                     e.2.push_str(&format!("·{tag}"));
-                    e.3.push_str(&format!("／{}", s.label));
+                    e.3.push_str(t("labelJoin", lang));
+                    e.3.push_str(&s.label);
                 }
             } else {
                 pins.push((key.0, key.1, tag.clone(), s.label.clone()));
@@ -407,9 +408,9 @@ fn companion_map(plan: &Plan, lang: &str) -> String {
     out.push_str("<p class=\"companion-map-caption\">");
     for (i, o) in opts.iter().enumerate() {
         out.push_str(&format!(
-            "<span class=\"swatch swatch-{}\"></span>「{}」",
+            "<span class=\"swatch swatch-{}\"></span>{}",
             tags[i].to_lowercase(),
-            esc(&o.title)
+            crate::i18n::tf("quotedTitle", lang, &[("title", &esc(&o.title))])
         ));
     }
     out.push_str(&format!(" · {} · © Esri</p>", t("companionUnconfirmed", lang)));

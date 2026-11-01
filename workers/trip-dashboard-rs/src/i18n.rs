@@ -163,6 +163,19 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("feelsLike", true) => "體感",
         ("todaysRoute", false) => "Today's route",
         ("todaysRoute", true) => "今日路線",
+        ("dayHeading", false) => "Day {day} · {date}",
+        ("dayHeading", true) => "第 {day} 天 · {date}",
+        // approximate leg / transfer duration
+        ("aboutMinutes", false) => "~{n} min",
+        ("aboutMinutes", true) => "約 {n} 分鐘",
+        // punctuation that differs by language: label colon, quoted title,
+        // joiner between two labels merged onto one pin
+        ("labelColon", false) => ": ",
+        ("labelColon", true) => "：",
+        ("quotedTitle", false) => "\u{201C}{title}\u{201D}",
+        ("quotedTitle", true) => "「{title}」",
+        ("labelJoin", false) => " / ",
+        ("labelJoin", true) => "／",
         // session names (render/session.rs)
         ("sessionMorning", false) => "Morning",
         ("sessionMorning", true) => "上午",

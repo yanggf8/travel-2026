@@ -1,5 +1,5 @@
 use super::{esc, render_activity_text, session};
-use crate::i18n::{fill, t};
+use crate::i18n::{fill, t, tf};
 use crate::model::{ClothingTip, Day, RouteSegment};
 
 /// Render the day's map landmarks (waypoints listed under the day map). Ported from
@@ -150,7 +150,10 @@ fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
         }
         // NULL duration arrives as 0 — omit it rather than publish "~0 min".
         if seg.duration_min > 0 {
-            h.push_str(&format!(" · ~{} min", seg.duration_min));
+            h.push_str(&format!(
+                " · {}",
+                tf("aboutMinutes", lang, &[("n", &seg.duration_min.to_string())])
+            ));
         }
         if !seg.notes.is_empty() {
             h.push_str(&format!(" · {}", render_activity_text(&seg.notes)));
@@ -199,9 +202,12 @@ pub fn render_with_logistics(
         esc(&day.day_type)
     ));
     h.push_str(&format!(
-        "<h2>Day {} · {}</h2>",
-        day.day_number,
-        esc(&day.date)
+        "<h2>{}</h2>",
+        esc(&tf(
+            "dayHeading",
+            lang,
+            &[("day", &day.day_number.to_string()), ("date", &day.date)],
+        ))
     ));
     h.push_str(&format!("<div class=\"theme\">{}</div>", esc(theme)));
     h.push_str(&weather_strip(day, clothing_tips, lang));
@@ -279,7 +285,23 @@ mod tests {
         assert!(html.contains("HOTEL AZAT NAHA"));
         assert!(html.contains("波上宮"));
         assert!(html.contains("🚗"));
-        assert!(html.contains("~12 min"));
+        assert!(html.contains("約 12 分鐘"), "{html}");
+        let en = render(&day, "okinawa-2026", "en", None, &[]);
+        assert!(en.contains("~12 min"), "{en}");
+    }
+
+    #[test]
+    fn day_heading_follows_the_page_language() {
+        let day = Day {
+            day_number: 3,
+            date: "2026-11-14".into(),
+            day_type: "full".into(),
+            ..Default::default()
+        };
+        let zh = render(&day, "kyoto-nov-2026", "zh", None, &[]);
+        assert!(zh.contains("<h2>第 3 天 · 2026-11-14</h2>"), "{zh}");
+        let en = render(&day, "kyoto-nov-2026", "en", None, &[]);
+        assert!(en.contains("<h2>Day 3 · 2026-11-14</h2>"), "{en}");
     }
 
     #[test]
@@ -299,7 +321,7 @@ mod tests {
         };
         let html = render(&day, "osaka-nov-2026", "zh", None, &[]);
         assert!(html.contains("京都國際會館"));
-        assert!(!html.contains("~0 min"), "{html}");
+        assert!(!html.contains("0 分鐘"), "{html}");
     }
 
     #[test]

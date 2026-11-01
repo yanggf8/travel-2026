@@ -1282,8 +1282,9 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             // can decide without cross-referencing the ranking list.
             if !c.notes.is_empty() {
                 h.push_str(&format!(
-                    "<div class=\"candidate-notes\"><b>{}：</b>{}</div>",
+                    "<div class=\"candidate-notes\"><b>{}{}</b>{}</div>",
                     esc(t("prosConsLabel", lang)),
+                    t("labelColon", lang),
                     esc(&c.notes)
                 ));
             }
@@ -1355,7 +1356,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             }
             let mut meta: Vec<String> = Vec::new();
             if !dur.is_empty() {
-                meta.push(format!("~{} min", dur));
+                meta.push(tf("aboutMinutes", lang, &[("n", &dur)]));
             }
             if !price.is_empty() {
                 meta.push(format!("¥{}", price));
@@ -2701,6 +2702,9 @@ mod tests {
         assert!(!html.contains("candidate-rank-badge"), "{html}");
         // Notes stay — they describe the property, useful as reference.
         assert!(html.contains("candidate-notes"), "{html}");
+        assert!(html.contains("<b>優劣比較：</b>"), "{html}");
+        let en = render(&plan, "en", None);
+        assert!(en.contains("<b>Pros &amp; cons: </b>"), "{en}");
     }
 
     #[test]
