@@ -15,16 +15,32 @@ pub use activity_text::render_activity_text;
 /// `notranslate` (the ZH content must not be browser-auto-translated), and the
 /// inlined stylesheet.
 pub fn page(title: &str, body: &str, lang: &str) -> String {
+    page_with_body_attrs(title, body, lang, "")
+}
+
+/// `page` with extra attributes on `<body>` (each with its leading space,
+/// values already escaped). The plan page uses it for the `data-plan-id` /
+/// `data-view` markers `travel verify-site` reads; every other page passes "".
+fn page_with_body_attrs(title: &str, body: &str, lang: &str, body_attrs: &str) -> String {
     let lang_attr = if lang == "en" { "en" } else { "zh-TW" };
     format!(
         "<!doctype html><html lang=\"{lang_attr}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"google\" content=\"notranslate\">\
-         <title>{}</title><style>{}</style></head><body>{}</body></html>",
+         <title>{}</title><style>{}</style></head><body{body_attrs}>{}</body></html>",
         esc(title),
         crate::styles::CSS,
         body,
     )
+}
+
+/// The plan page's outer-wrapper markers: which plan this page is, and whether
+/// it rendered the owner view (owner chrome present — only an owner session
+/// gets it) or the token viewer view. Read by `travel verify-site` to confirm
+/// it is looking at the right plan through the viewer's eyes.
+fn plan_body_attrs(plan_id: &str, owner_chrome: &str) -> String {
+    let view = if owner_chrome.is_empty() { "viewer" } else { "owner" };
+    format!(" data-plan-id=\"{}\" data-view=\"{view}\"", esc(plan_id))
 }
 
 /// Render a full plan page: plan overview map, booking summary, then each day card.
@@ -120,7 +136,7 @@ pub fn render_plan(
     // then the transit cheat-sheet (mirror render.ts:1394).
     body.push_str(&alerts::render_pending_alerts(plan, lang, true));
     body.push_str(&alerts::render_transit_summary(plan, lang));
-    page(&plan.display_name, &body, lang)
+    page_with_body_attrs(&plan.display_name, &body, lang, &plan_body_attrs(&plan.plan_id, owner_chrome))
 }
 
 /// Render an explicit companion-options block from the temporary, unconfirmed
@@ -578,6 +594,24 @@ mod tests {
         let day_map = html.find("day-1.png").expect("day map img");
         assert!(plan_leg > plan_map, "plan legend sits under its map");
         assert!(day_leg > day_map, "day legend sits under its map");
+    }
+
+    #[test]
+    fn render_plan_marks_its_plan_and_view_on_body() {
+        use crate::model::Plan;
+        let plan = Plan {
+            plan_id: "jiufen-2026".into(),
+            display_name: "九份".into(),
+            ..Default::default()
+        };
+        let status = map::MapStatus::default();
+        let viewer = render_plan(&plan, "zh", Some("tok"), &status, "");
+        assert!(viewer.contains("<body data-plan-id=\"jiufen-2026\" data-view=\"viewer\">"), "{viewer}");
+        let owner = render_plan(&plan, "zh", None, &status, "<div class=\"owner-chrome\"></div>");
+        assert!(owner.contains("<body data-plan-id=\"jiufen-2026\" data-view=\"owner\">"), "{owner}");
+        // The value is escaped like any attribute; other pages keep a bare <body>.
+        assert_eq!(plan_body_attrs("a\"b", ""), " data-plan-id=\"a&quot;b\" data-view=\"viewer\"");
+        assert!(page("t", "x", "zh").contains("</head><body>x</body>"));
     }
 
     #[test]

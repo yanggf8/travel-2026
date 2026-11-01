@@ -32,7 +32,7 @@ pub(crate) fn dashboard_host() -> String {
 }
 
 /// Build the shareable dashboard URL. The Worker addresses plans by hyphenated slug.
-fn share_url(plan_id: &str, token: &str) -> String {
+pub(crate) fn share_url(plan_id: &str, token: &str) -> String {
     let plan_slug = plan_id.replace('_', "-");
     format!(
         "https://{}/?plan={plan_slug}&token={token}",
@@ -125,7 +125,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                     duplicates += 1;
                     continue;
                 }
-                match deactivate_token(&conn, &plan_id, &token).await {
+                match deactivate_token(&conn, &plan_id, &token, CREATED_BY_CLI).await {
                     Ok(true) => {
                         deactivated += 1;
                         println!(
@@ -163,7 +163,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                     std::process::exit(1);
                 }
             };
-            match execute(&conn, &plan_id).await {
+            match mint_for_plan(&conn, &plan_id, CREATED_BY_CLI).await {
                 Ok(token) => {
                     println!("token: {token}");
                     println!("url:   {}", share_url(&plan_id, &token));
@@ -361,7 +361,14 @@ fn token_line(plan_id: &str, t: &TokenRecord, full: bool) -> String {
     line
 }
 
-async fn execute(conn: &Connection, plan_id: &str) -> Result<String, String> {
+/// `created_by` of tokens minted by `travel share-token` itself.
+const CREATED_BY_CLI: &str = "cli";
+
+/// Mint and store one active view-scope token for `plan_id`, recorded as
+/// `created_by` (`'cli'` for share-token, `'verify-site'` for the verify token).
+/// Shared by share-token and `verify-site --provision-token`; neither writes the
+/// plan audit triad (see the module header).
+pub(crate) async fn mint_for_plan(conn: &Connection, plan_id: &str, created_by: &str) -> Result<String, String> {
     // Fail loud if the plan does not exist — never mint a token for a phantom plan.
     if !plan_exists(conn, plan_id).await? {
         return Err(format!("plans row missing for plan_id={plan_id}"));
@@ -371,8 +378,8 @@ async fn execute(conn: &Connection, plan_id: &str) -> Result<String, String> {
 
     conn.execute(
         "INSERT INTO plan_share_tokens (plan_id, token, created_at, status, created_by) \
-         VALUES (?1, ?2, datetime('now'), 'active', 'cli')",
-        libsql::params![plan_id.to_string(), token.clone()],
+         VALUES (?1, ?2, datetime('now'), 'active', ?3)",
+        libsql::params![plan_id.to_string(), token.clone(), created_by.to_string()],
     )
     .await
     .map_err(|e| format!("plan_share_tokens INSERT failed: {e}"))?;
@@ -380,13 +387,20 @@ async fn execute(conn: &Connection, plan_id: &str) -> Result<String, String> {
     Ok(token)
 }
 
-async fn deactivate_token(conn: &Connection, plan_id: &str, token: &str) -> Result<bool, String> {
+/// Deactivate one active token of `plan_id`, recording `deactivated_by`.
+/// Ok(false) when no such active token exists.
+pub(crate) async fn deactivate_token(
+    conn: &Connection,
+    plan_id: &str,
+    token: &str,
+    deactivated_by: &str,
+) -> Result<bool, String> {
     let changed = conn
         .execute(
             "UPDATE plan_share_tokens \
-             SET status = 'inactive', deactivated_at = datetime('now'), deactivated_by = 'cli' \
+             SET status = 'inactive', deactivated_at = datetime('now'), deactivated_by = ?3 \
              WHERE plan_id = ?1 AND token = ?2 AND status = 'active'",
-            libsql::params![plan_id.to_string(), token.to_string()],
+            libsql::params![plan_id.to_string(), token.to_string(), deactivated_by.to_string()],
         )
         .await
         .map_err(|e| format!("plan_share_tokens deactivate failed: {e}"))?;
@@ -461,7 +475,7 @@ fn resolve_token_arg<'a>(
     }
 }
 
-fn token_fingerprint(token: &str) -> String {
+pub(crate) fn token_fingerprint(token: &str) -> String {
     let chars: Vec<char> = token.chars().collect();
     if chars.len() <= 12 {
         return token.to_string();

@@ -153,14 +153,23 @@ fn is_hex_color(c: &str) -> bool {
     c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// ` data-map-key="<key>"` on every map figure — the uploaded `<img>` frame and
+/// the missing-map placeholder alike — so `travel verify-site` can pin each
+/// slot on the live page to its `map_artifacts` key without guessing from the
+/// caption or the img src. Escaped like any other attribute value.
+fn map_key_attr(key: &str) -> String {
+    format!(" data-map-key=\"{}\"", esc(key))
+}
+
 /// Framed plan-overview map slot. Emits a real `<img>` only when `has_map` is true;
 /// otherwise a styled missing placeholder (never a blind broken-image `<img>`).
 pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str, legend: &[LegendStop]) -> String {
     let caption = i18n::t("tripOverview", lang);
     if let Some(v) = version {
         format!(
-            "<figure class=\"map-frame\"><img class=\"planmap\" alt=\"{}\" \
+            "<figure class=\"map-frame\"{}><img class=\"planmap\" alt=\"{}\" \
              src=\"/map/{}/plan.png{}\"><figcaption>{}</figcaption>{}</figure>",
+            map_key_attr("plan.png"),
             esc(caption),
             esc_url_attr(plan_id),
             cache_bust(v),
@@ -170,8 +179,9 @@ pub fn plan_map_slot(plan_id: &str, version: Option<&str>, lang: &str, legend: &
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
         format!(
-            "<figure class=\"map-frame map-missing\"><div class=\"map-missing-box\">{}</div>\
+            "<figure class=\"map-frame map-missing\"{}><div class=\"map-missing-box\">{}</div>\
              <figcaption>{}</figcaption></figure>",
+            map_key_attr("plan.png"),
             esc(not_avail),
             esc(caption),
         )
@@ -192,8 +202,9 @@ pub fn plan_logistics_map_slot(
     let caption = i18n::t("planLogisticsMap", lang);
     if let Some(v) = version {
         format!(
-            "<figure class=\"map-frame map-frame--inset\"><img class=\"planmap planmap--inset\" alt=\"{}\" \
+            "<figure class=\"map-frame map-frame--inset\"{}><img class=\"planmap planmap--inset\" alt=\"{}\" \
              src=\"/map/{}/plan-logistics.png{}\"><figcaption>{}</figcaption>{}</figure>",
+            map_key_attr("plan-logistics.png"),
             esc(caption),
             esc_url_attr(plan_id),
             cache_bust(v),
@@ -203,8 +214,9 @@ pub fn plan_logistics_map_slot(
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
         format!(
-            "<figure class=\"map-frame map-frame--inset map-missing\"><div class=\"map-missing-box\">{}</div>\
+            "<figure class=\"map-frame map-frame--inset map-missing\"{}><div class=\"map-missing-box\">{}</div>\
              <figcaption>{}</figcaption></figure>",
+            map_key_attr("plan-logistics.png"),
             esc(not_avail),
             esc(caption),
         )
@@ -223,8 +235,9 @@ pub fn plan_excursion_map_slot(
 ) -> String {
     let caption = i18n::t("planExcursionMap", lang);
     format!(
-        "<figure class=\"map-frame map-frame--inset\"><img class=\"planmap planmap--inset\" alt=\"{}\" \
+        "<figure class=\"map-frame map-frame--inset\"{}><img class=\"planmap planmap--inset\" alt=\"{}\" \
          src=\"/map/{}/plan-excursion.png{}\"><figcaption>{}</figcaption>{}</figure>",
+        map_key_attr("plan-excursion.png"),
         esc(caption),
         esc_url_attr(plan_id),
         cache_bust(version),
@@ -245,8 +258,9 @@ pub fn plan_airport_map_slot(
 ) -> String {
     let caption = i18n::t("planAirportMap", lang);
     format!(
-        "<figure class=\"map-frame map-frame--inset\"><img class=\"planmap planmap--inset\" alt=\"{}\" \
+        "<figure class=\"map-frame map-frame--inset\"{}><img class=\"planmap planmap--inset\" alt=\"{}\" \
          src=\"/map/{}/plan-airport.png{}\"><figcaption>{}</figcaption>{}</figure>",
+        map_key_attr("plan-airport.png"),
         esc(caption),
         esc_url_attr(plan_id),
         cache_bust(version),
@@ -266,8 +280,9 @@ pub fn day_map_slot(
     let caption = day_route_caption(day_number, lang);
     if let Some(v) = version {
         format!(
-            "<figure class=\"map-frame\"><img class=\"daymap\" alt=\"{}\" \
+            "<figure class=\"map-frame\"{}><img class=\"daymap\" alt=\"{}\" \
              src=\"/map/{}/day-{}.png{}\"><figcaption>{}</figcaption>{}</figure>",
+            map_key_attr(&format!("day-{day_number}.png")),
             esc(&caption),
             esc_url_attr(plan_id),
             day_number,
@@ -278,8 +293,9 @@ pub fn day_map_slot(
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
         format!(
-            "<figure class=\"map-frame map-missing\"><div class=\"map-missing-box\">{}</div>\
+            "<figure class=\"map-frame map-missing\"{}><div class=\"map-missing-box\">{}</div>\
              <figcaption>{}</figcaption></figure>",
+            map_key_attr(&format!("day-{day_number}.png")),
             esc(not_avail),
             esc(&caption),
         )
@@ -325,8 +341,9 @@ fn compact_day_map_slot(
 ) -> String {
     if let Some(v) = version {
         format!(
-            "<figure class=\"map-frame map-frame--day-logistics{}\"><img class=\"planmap planmap--inset\" alt=\"{}\" src=\"/map/{}/day-{}-{}.png{}\"><figcaption>{}</figcaption>{}</figure>",
+            "<figure class=\"map-frame map-frame--day-logistics{}\"{}><img class=\"planmap planmap--inset\" alt=\"{}\" src=\"/map/{}/day-{}-{}.png{}\"><figcaption>{}</figcaption>{}</figure>",
             extra_class,
+            map_key_attr(&format!("day-{day_number}-{suffix}.png")),
             esc(caption),
             esc_url_attr(plan_id),
             day_number,
@@ -704,11 +721,12 @@ mod tests {
     fn day_logistics_map_slot_renders_only_an_uploaded_map() {
         let legend = [leg(1, "旅社", 26.2, 127.7)];
         let h = day_logistics_map_slot("okinawa-2026", 1, Some("etag-1"), "zh", &legend);
-        // The whole figure, spelled exactly as before compact_day_map_slot existed.
+        // The whole figure, spelled exactly as before compact_day_map_slot existed
+        // plus the data-map-key verify-site reads.
         assert_eq!(
             h,
             format!(
-                "<figure class=\"map-frame map-frame--day-logistics\"><img class=\"planmap planmap--inset\" alt=\"第 1 天・旅社來回\" src=\"/map/okinawa-2026/day-1-logistics.png?v=etag1\"><figcaption>{}</figcaption>{}</figure>",
+                "<figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-1-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 1 天・旅社來回\" src=\"/map/okinawa-2026/day-1-logistics.png?v=etag1\"><figcaption>{}</figcaption>{}</figure>",
                 map_caption("第 1 天・旅社來回"),
                 map_legend_html(&legend, "zh"),
             )
@@ -723,7 +741,7 @@ mod tests {
         let h = day_away_map_slot("okinawa-2026", 1, Some("etag-2"), "zh", &legend);
         assert!(
             h.starts_with(
-                "<figure class=\"map-frame map-frame--day-logistics map-frame--day-away\"><img class=\"planmap planmap--inset\""
+                "<figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-1-away.png\"><img class=\"planmap planmap--inset\""
             ),
             "{h}"
         );
@@ -741,7 +759,7 @@ mod tests {
     fn plan_airport_map_slot_is_an_inset_with_a_day_legend() {
         let legend = [day_leg(1, 1, 1, "#e6194b", "関西空港"), day_leg(2, 5, 1, "#4363d8", "清水寺")];
         let h = plan_airport_map_slot("osaka-nov-2026", "\"etag-7\"", "zh", &legend);
-        assert!(h.starts_with("<figure class=\"map-frame map-frame--inset\"><img class=\"planmap planmap--inset\""), "{h}");
+        assert!(h.starts_with("<figure class=\"map-frame map-frame--inset\" data-map-key=\"plan-airport.png\"><img class=\"planmap planmap--inset\""), "{h}");
         assert!(h.contains("src=\"/map/osaka-nov-2026/plan-airport.png?v=etag7\""), "{h}");
         assert!(h.contains("alt=\"機場來回\""), "{h}");
         assert!(h.contains("<figcaption>機場來回 "), "{h}");
@@ -777,6 +795,36 @@ mod tests {
         assert!(h.contains("地圖尚未產生"));
         assert!(h.contains("第 3 天路線"));
         assert!(!h.contains("src=\"/map"));
+    }
+
+    #[test]
+    fn every_map_figure_carries_its_map_key_with_or_without_a_map() {
+        // verify-site pins each slot on the live page to its map_artifacts key,
+        // the missing-map placeholder frame included.
+        let cases = [
+            (plan_map_slot("p-1", Some("v"), "zh", &[]), "plan.png"),
+            (plan_map_slot("p-1", None, "zh", &[]), "plan.png"),
+            (plan_logistics_map_slot("p-1", Some("v"), "zh", &[]), "plan-logistics.png"),
+            (plan_logistics_map_slot("p-1", None, "en", &[]), "plan-logistics.png"),
+            (plan_excursion_map_slot("p-1", "v", "zh", &[]), "plan-excursion.png"),
+            (plan_airport_map_slot("p-1", "v", "zh", &[]), "plan-airport.png"),
+            (day_map_slot("p-1", 3, Some("v"), "zh", &[]), "day-3.png"),
+            (day_map_slot("p-1", 3, None, "en", &[]), "day-3.png"),
+            (day_logistics_map_slot("p-1", 4, Some("v"), "zh", &[]), "day-4-logistics.png"),
+            (day_away_map_slot("p-1", 5, Some("v"), "zh", &[]), "day-5-away.png"),
+        ];
+        for (h, key) in cases {
+            assert!(h.starts_with("<figure class=\"map-frame"), "{h}");
+            let open = &h[..h.find('>').unwrap()];
+            assert!(open.ends_with(&format!("\" data-map-key=\"{key}\"")), "{key}: {open}");
+            assert_eq!(h.matches("data-map-key=").count(), 1, "{h}");
+        }
+    }
+
+    #[test]
+    fn map_key_attr_escapes_its_value() {
+        assert_eq!(map_key_attr("day-1.png"), " data-map-key=\"day-1.png\"");
+        assert_eq!(map_key_attr("a\"><b&"), " data-map-key=\"a&quot;&gt;&lt;b&amp;\"");
     }
 
     #[test]

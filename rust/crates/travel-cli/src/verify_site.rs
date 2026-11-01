@@ -1,6 +1,8 @@
-//! `travel verify-site [--plan-id <id>]` — read-only check of what the LIVE
-//! dashboard actually serves for each plan's maps
-//! (docs/plans/2026-10-30-verify-site.md, phase 1: layers 2 and 3).
+//! `travel verify-site [--plan-id <id>] [--contact-sheet <dir>]` — read-only
+//! check of what the LIVE dashboard actually serves for each plan
+//! (docs/plans/2026-10-30-verify-site.md, phases 1-3: layers 1-4).
+//! `travel verify-site --plan-id <id> --provision-token [--rotate]` manages the
+//! plan's verify token (the one write this command makes).
 //!
 //! Layer 2 (asset / fresh): every expected map key (check-maps-fresh's own key
 //! list) and every other `map_artifacts` key is fetched from
@@ -19,28 +21,53 @@
 //! background (not the bare grid), title and © credit ink in their reserved
 //! strips (FAIL); flatness and CARTO-style repeated text stamps (WARN only).
 //!
-//! Read-only: no Turso writes, no Nominatim/OSRM/ArcGIS/Overpass calls, no
-//! cookies. Plain-text verdict lines; exits non-zero iff any FAIL.
+//! Layer 1 (page / lang / owner / ident / slot / legend / cached / extra):
+//! with the plan's verify token (`plan_share_tokens.created_by='verify-site'`)
+//! the viewer page is fetched in zh and en, parsed, and judged by the pure
+//! functions in `verify_site_page`. Without a verify token: one WARN, layer 1
+//! skipped. Every token-bearing URL reaches curl through `-K -` (stdin), never
+//! argv; only token fingerprints are ever printed.
+//!
+//! Layer 4 (`--contact-sheet <dir>`): one thumbnail-grid PNG per plan
+//! (`verify_site_sheet`); advisory, never a verdict.
+//!
+//! Read-only (except `--provision-token`): no Turso writes, no
+//! Nominatim/OSRM/Overpass calls, no cookies. Plain-text verdict lines; exits
+//! non-zero iff any FAIL.
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
-    io::Cursor,
-    path::Path,
-    process::Command,
+    io::{Cursor, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
 };
 
 use libsql::Connection;
 use sha2::{Digest, Sha256};
+use url::Url;
 
 use crate::snapshot_maps as maps;
+use crate::verify_site_page::{self as page, Lang, LegendRow, SlotFacts};
+use crate::verify_site_sheet::{self as sheet, SheetCell};
 
-pub const USAGE: &str = "travel verify-site [--plan-id <id>]\n  \
-Read-only check of the LIVE dashboard maps: each map key's live bytes vs map_artifacts \
+pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>]\n  \
+travel verify-site --plan-id <id> --provision-token [--rotate]\n  \
+Read-only check of the LIVE dashboard: each map key's live bytes vs map_artifacts \
 (sha256 + size; skipped keys must serve the worker placeholder), input-hash freshness \
-(recomputed from cached geocodes/road legs only), and image content (size, geographic \
-background, title + credit). All live plans by default. One verdict line per check, \
-then a summary; exits 1 on any FAIL. Host: TRAVEL_DASHBOARD_HOST (as share-token).";
+(recomputed from cached geocodes/road legs only), image content (size, geographic \
+background, title + credit), and - with the plan's verify token - the viewer page in zh \
+and en (page, language, no owner chrome, data-plan-id/data-view, map slots vs \
+map_artifacts via data-map-key, the ?v= map URL bytes, legends vs map_legend_stops, \
+companion/stay images, voucher PDF). All live plans by default. One verdict line per \
+check, then a summary; exits 1 on any FAIL. --contact-sheet <dir> also writes \
+<dir>/<plan>.png, a labelled thumbnail grid of the plan's live maps (advisory).\n  \
+--provision-token: ensure the plan has exactly one active verify token \
+(created_by=verify-site; reused when present, --rotate deactivates it and mints a new \
+one); prints fingerprints only. Host: TRAVEL_DASHBOARD_HOST (as share-token).";
+
+/// `plan_share_tokens.created_by` of the verify token.
+const VERIFY_CREATED_BY: &str = "verify-site";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Level {
@@ -56,6 +83,12 @@ pub(crate) enum Next {
     Snapshot,
     /// Delete a lingering R2 object the manifest says must not exist.
     DeleteStale,
+    /// Deploy the dashboard worker (the live page predates a markup change).
+    Deploy,
+    /// Give the plan a verify token.
+    ProvisionToken,
+    /// Replace the plan's verify token(s) with one fresh token.
+    RotateToken,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,13 +99,13 @@ pub(crate) struct Check {
 }
 
 impl Check {
-    fn pass(detail: impl Into<String>) -> Self {
+    pub(crate) fn pass(detail: impl Into<String>) -> Self {
         Self { level: Level::Pass, detail: detail.into(), next: None }
     }
-    fn warn(detail: impl Into<String>, next: Option<Next>) -> Self {
+    pub(crate) fn warn(detail: impl Into<String>, next: Option<Next>) -> Self {
         Self { level: Level::Warn, detail: detail.into(), next }
     }
-    fn fail(detail: impl Into<String>, next: Option<Next>) -> Self {
+    pub(crate) fn fail(detail: impl Into<String>, next: Option<Next>) -> Self {
         Self { level: Level::Fail, detail: detail.into(), next }
     }
 }
@@ -113,7 +146,12 @@ pub(crate) struct PlannedKey {
 }
 
 pub async fn run(args: &[String]) -> Result<(), String> {
-    let plan_arg = parse_args(args)?;
+    let args = parse_args(args)?;
+    if args.provision {
+        let plan = args.plan.as_deref().ok_or("--provision-token requires --plan-id <id>")?;
+        return provision_token(plan, args.rotate).await;
+    }
+    let plan_arg = args.plan;
     let conn = crate::db::connect_read()
         .await
         .map_err(|e| format!("failed to connect to Turso (read tier): {e}"))?;
@@ -136,7 +174,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let host = crate::share_token::dashboard_host();
     let nonce = nonce()?;
     let tmp = std::env::temp_dir().join(format!("travel-verify-site-{nonce}.body"));
-    let result = verify_plans(&conn, &plan_ids, &first_plan, &host, &nonce, &tmp).await;
+    let result = verify_plans(&conn, &plan_ids, &first_plan, &host, &nonce, &tmp, args.contact_sheet.as_deref()).await;
     let _ = fs::remove_file(&tmp);
     let tally = result?;
 
@@ -181,9 +219,20 @@ fn format_line(plan: &str, layer: &str, key: &str, check: &Check) -> String {
     match check.next {
         Some(Next::Snapshot) => line.push_str(&format!(" → travel snapshot-maps --plan-id {plan}")),
         Some(Next::DeleteStale) => line.push_str(&format!(
-            " → unset CLOUDFLARE_API_TOKEN && npx wrangler r2 object delete {}/{plan}/{key} --remote",
-            maps::BUCKET
+            " → unset CLOUDFLARE_API_TOKEN && npx wrangler r2 object delete {}/{plan}/{} --remote",
+            maps::BUCKET,
+            // Layer-1 keys carry their page language ("zh:day-3.png").
+            key.split_once(':').map_or(key, |(_, k)| k)
         )),
+        Some(Next::Deploy) => line.push_str(
+            " → cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy",
+        ),
+        Some(Next::ProvisionToken) => {
+            line.push_str(&format!(" → travel verify-site --plan-id {plan} --provision-token"))
+        }
+        Some(Next::RotateToken) => {
+            line.push_str(&format!(" → travel verify-site --plan-id {plan} --provision-token --rotate"))
+        }
         None => {}
     }
     line
@@ -196,6 +245,7 @@ async fn verify_plans(
     host: &str,
     nonce: &str,
     tmp: &Path,
+    sheet_dir: Option<&Path>,
 ) -> Result<Tally, String> {
     // The worker answers every unusable /map/* request with one placeholder PNG
     // (HTTP 200). Learn its bytes from a key that cannot exist.
@@ -224,6 +274,7 @@ async fn verify_plans(
             }
         };
 
+        let mut cells: Vec<SheetCell> = Vec::new();
         for key in &keys {
             let Some(row) = manifest.get(key) else {
                 tally.emit(
@@ -232,6 +283,7 @@ async fn verify_plans(
                     key,
                     &Check::fail("MISSING: expected map has no map_artifacts row", Some(Next::Snapshot)),
                 );
+                cells.push(SheetCell { key: key.clone(), note: "missing".into(), png: None });
                 continue;
             };
             let url = format!("https://{host}/map/{plan}/{key}?verify={nonce}");
@@ -247,34 +299,440 @@ async fn verify_plans(
                             tally.emit(plan, "content", key, finding);
                         }
                     }
+                    let (note, shown) = sheet_note(row, &live, &placeholder);
+                    cells.push(SheetCell { key: key.clone(), note, png: shown.then_some(live.body) });
                 }
-                Err(e) => tally.emit(plan, "asset", key, &Check::fail(format!("live fetch failed: {e}"), None)),
+                Err(e) => {
+                    tally.emit(plan, "asset", key, &Check::fail(format!("live fetch failed: {e}"), None));
+                    cells.push(SheetCell { key: key.clone(), note: "fetch error".into(), png: None });
+                }
             }
             if let Some(planned) = &planned {
                 tally.emit(plan, "fresh", key, &fresh_verdict(row, planned.get(key)));
             }
         }
+
+        verify_viewer_page(conn, plan, host, tmp, &manifest, &placeholder, &mut tally).await?;
+
+        if let Some(dir) = sheet_dir {
+            let path = write_contact_sheet(dir, plan, &cells)?;
+            println!("contact-sheet {plan} {} ({} map(s); advisory, not a verdict)", path.display(), cells.len());
+        }
     }
     Ok(tally)
 }
 
-fn parse_args(args: &[String]) -> Result<Option<String>, String> {
-    let mut plan = None;
+/// What a contact-sheet cell shows for a key: (label note, draw the live
+/// bytes). A real served map gets an empty note.
+fn sheet_note(row: &ArtifactRow, live: &Live, placeholder: &[u8]) -> (String, bool) {
+    let real = live.http == 200 && live.body != placeholder;
+    match row.status.as_str() {
+        "uploaded" if real => (String::new(), true),
+        "uploaded" if live.http == 200 => ("placeholder".into(), false),
+        "uploaded" => (format!("http {}", live.http), false),
+        "skipped" if real => ("skipped but served".into(), true),
+        other => (other.to_string(), false),
+    }
+}
+
+fn write_contact_sheet(dir: &Path, plan: &str, cells: &[SheetCell]) -> Result<PathBuf, String> {
+    fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let path = dir.join(format!("{plan}.png"));
+    let png = sheet::render(plan, cells)?;
+    fs::write(&path, png).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+// ---------------------------------------------------------------------------
+// Layer 1: the token viewer page
+// ---------------------------------------------------------------------------
+
+/// One active verify token of a plan.
+struct VerifyToken {
+    token: String,
+    created_at: String,
+}
+
+/// The plan's ACTIVE verify tokens, newest first.
+async fn verify_tokens(conn: &Connection, plan_id: &str) -> Result<Vec<VerifyToken>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT token, created_at FROM plan_share_tokens \
+             WHERE plan_id = ?1 AND created_by = ?2 AND status = 'active' \
+             ORDER BY created_at DESC, token DESC",
+            libsql::params![plan_id.to_string(), VERIFY_CREATED_BY],
+        )
+        .await
+        .map_err(|e| format!("plan_share_tokens query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("plan_share_tokens row read failed: {e}"))?
+    {
+        out.push(VerifyToken {
+            token: row.get::<String>(0).map_err(|e| format!("token read failed: {e}"))?,
+            created_at: row.get::<Option<String>>(1).ok().flatten().unwrap_or_default(),
+        });
+    }
+    Ok(out)
+}
+
+/// What `--provision-token` does with a plan's active verify tokens (indices
+/// into the newest-first list). Pure.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ProvisionSteps {
+    pub(crate) deactivate: Vec<usize>,
+    pub(crate) reuse: Option<usize>,
+    pub(crate) mint: bool,
+}
+
+pub(crate) fn provision_steps(active: usize, rotate: bool) -> ProvisionSteps {
+    if rotate || active == 0 {
+        ProvisionSteps { deactivate: (0..active).collect(), reuse: None, mint: true }
+    } else {
+        // At most one active verify token per plan: keep the newest.
+        ProvisionSteps { deactivate: (1..active).collect(), reuse: Some(0), mint: false }
+    }
+}
+
+/// `--provision-token [--rotate]`: a side-table write like share-token — no
+/// plan audit triad. Prints fingerprints, never a token or a tokened URL.
+async fn provision_token(plan: &str, rotate: bool) -> Result<(), String> {
+    let conn = crate::db::connect_write()
+        .await
+        .map_err(|e| format!("failed to connect to Turso (write tier): {e}"))?;
+    if !crate::check_maps_fresh::all_live_plans(&conn).await?.iter().any(|p| p == plan) {
+        return Err(format!("plan '{plan}' not found or soft-deleted (verify tokens are for live plans only)"));
+    }
+    let active = verify_tokens(&conn, plan).await?;
+    let steps = provision_steps(active.len(), rotate);
+    for &i in &steps.deactivate {
+        let t = &active[i];
+        if crate::share_token::deactivate_token(&conn, plan, &t.token, VERIFY_CREATED_BY).await? {
+            let why = if rotate { "rotated out" } else { "extra: at most one active verify token per plan" };
+            println!(
+                "deactivated: {}  plan_id={plan}  created {}  ({why})",
+                crate::share_token::token_fingerprint(&t.token),
+                t.created_at
+            );
+        }
+    }
+    if let Some(i) = steps.reuse {
+        let t = &active[i];
+        println!(
+            "reused:      {}  plan_id={plan}  created {}  created_by={VERIFY_CREATED_BY}",
+            crate::share_token::token_fingerprint(&t.token),
+            t.created_at
+        );
+    }
+    if steps.mint {
+        let token = crate::share_token::mint_for_plan(&conn, plan, VERIFY_CREATED_BY).await?;
+        println!(
+            "minted:      {}  plan_id={plan}  created_by={VERIFY_CREATED_BY}",
+            crate::share_token::token_fingerprint(&token)
+        );
+    }
+    println!("next: travel verify-site --plan-id {plan}");
+    Ok(())
+}
+
+/// Replace every occurrence of the secret with its fingerprint.
+fn redact(text: &str, secret: &str) -> String {
+    if secret.is_empty() {
+        return text.to_string();
+    }
+    text.replace(secret, &crate::share_token::token_fingerprint(secret))
+}
+
+async fn read_legend_rows(conn: &Connection, plan_id: &str) -> Result<HashMap<String, Vec<LegendRow>>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT map_key, seq, label, lat, lon, day_number, pin_no FROM map_legend_stops \
+             WHERE plan_id = ?1 ORDER BY map_key, seq",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("map_legend_stops query failed: {e}"))?;
+    let mut out: HashMap<String, Vec<LegendRow>> = HashMap::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("map_legend_stops row read failed: {e}"))?
+    {
+        let v = |i: i32| row.get_value(i).ok();
+        let key = row.get::<String>(0).map_err(|e| format!("map_key read failed: {e}"))?;
+        out.entry(key).or_default().push(LegendRow {
+            seq: v(1).and_then(value_i64).unwrap_or_default(),
+            label: v(2).and_then(|x| match x {
+                libsql::Value::Text(s) => Some(s),
+                _ => None,
+            }),
+            lat: v(3).and_then(value_f64),
+            lon: v(4).and_then(value_f64),
+            day_number: v(5).and_then(value_i64),
+            pin_no: v(6).and_then(value_i64),
+        });
+    }
+    Ok(out)
+}
+
+fn value_f64(v: libsql::Value) -> Option<f64> {
+    match v {
+        libsql::Value::Real(f) => Some(f),
+        libsql::Value::Integer(i) => Some(i as f64),
+        libsql::Value::Text(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn value_i64(v: libsql::Value) -> Option<i64> {
+    match v {
+        libsql::Value::Integer(i) => Some(i),
+        libsql::Value::Text(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+async fn has_flights(conn: &Connection, plan_id: &str) -> Result<bool, String> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM flight_legs WHERE plan_id = ?1 LIMIT 1",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("flight_legs query failed: {e}"))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| format!("flight_legs row read failed: {e}"))?
+        .is_some())
+}
+
+/// Layer 1 for one plan: the viewer page (zh + en) through its verify token.
+async fn verify_viewer_page(
+    conn: &Connection,
+    plan: &str,
+    host: &str,
+    tmp: &Path,
+    manifest: &HashMap<String, ArtifactRow>,
+    placeholder: &[u8],
+    tally: &mut Tally,
+) -> Result<(), String> {
+    let tokens = verify_tokens(conn, plan).await?;
+    let Some(newest) = tokens.first() else {
+        tally.emit(
+            plan,
+            "token",
+            "*",
+            &Check::warn(
+                "no active verify token (created_by=verify-site): layer 1 (viewer page) skipped",
+                Some(Next::ProvisionToken),
+            ),
+        );
+        return Ok(());
+    };
+    let token = newest.token.as_str();
+    if tokens.len() > 1 {
+        tally.emit(
+            plan,
+            "token",
+            "*",
+            &Check::warn(
+                format!(
+                    "{} active verify tokens (expected at most one); using the newest {}",
+                    tokens.len(),
+                    crate::share_token::token_fingerprint(token)
+                ),
+                Some(Next::RotateToken),
+            ),
+        );
+    }
+
+    let day_numbers = crate::check_maps_fresh::read_day_numbers(conn, plan).await?;
+    let statuses: HashMap<String, String> = manifest.iter().map(|(k, r)| (k.clone(), r.status.clone())).collect();
+    let facts = SlotFacts { day_numbers: &day_numbers, has_flights: has_flights(conn, plan).await?, statuses: &statuses };
+    let legends = read_legend_rows(conn, plan).await?;
+    let base = Url::parse(&format!("https://{host}/")).map_err(|e| format!("dashboard host {host:?}: {e}"))?;
+    let plan_url = crate::share_token::share_url(plan, token);
+
+    let mut versioned: Vec<(String, Url)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut zh_doc = None;
+    for lang in [Lang::Zh, Lang::En] {
+        let code = lang.code();
+        let url = match lang {
+            Lang::Zh => plan_url.clone(),
+            Lang::En => format!("{plan_url}&lang=en"),
+        };
+        let live = match http_get(&url, tmp) {
+            Ok(live) => live,
+            Err(e) => {
+                tally.emit(plan, "page", code, &Check::fail(format!("page fetch failed: {}", redact(&e, token)), None));
+                continue;
+            }
+        };
+        let doc = page::parse_page(&String::from_utf8_lossy(&live.body));
+        for (layer, check) in page::page_checks(live.http, &doc, lang, plan) {
+            tally.emit(plan, layer, code, &check);
+        }
+        if !page::page_usable(live.http, &doc) {
+            continue;
+        }
+        for (key, check) in page::slot_checks(&doc.figures, &facts) {
+            tally.emit(plan, "slot", &format!("{code}:{key}"), &check);
+        }
+        for fig in &doc.figures {
+            let Some(key) = fig.key.as_deref() else { continue };
+            let rows = legends.get(key).map(Vec::as_slice).unwrap_or(&[]);
+            tally.emit(plan, "legend", &format!("{code}:{key}"), &page::legend_check(fig, rows));
+            let Some(src) = fig.img_src.as_deref() else { continue };
+            match page::img_src_check(&base, plan, key, src) {
+                Ok(Some(u)) => {
+                    if seen.insert(u.to_string()) {
+                        versioned.push((key.to_string(), u));
+                    }
+                }
+                Ok(None) => tally.emit(
+                    plan,
+                    "slot",
+                    &format!("{code}:{key}"),
+                    &Check::warn("<img> has no ?v= cache-buster: viewers may get a CDN copy up to a day old", None),
+                ),
+                Err(c) => tally.emit(plan, "slot", &format!("{code}:{key}"), &c),
+            }
+        }
+        if lang == Lang::Zh {
+            zh_doc = Some(doc);
+        }
+    }
+
+    // The exact ?v=<etag> URL viewers load, fetched once: same bytes as the manifest?
+    for (key, url) in versioned {
+        let check = match (manifest.get(&key), http_get(url.as_str(), tmp)) {
+            (_, Err(e)) => Check::fail(format!("?v= URL fetch failed: {e}"), None),
+            // snapshot-maps never touches a key it has no row for: delete the object.
+            (None, Ok(_)) => Check::fail("the page loads a map with no map_artifacts row", Some(Next::DeleteStale)),
+            (Some(row), Ok(live)) => {
+                let c = asset_verdict(row, &live, placeholder);
+                Check { detail: format!("?v= URL viewers load: {}", c.detail), ..c }
+            }
+        };
+        tally.emit(plan, "cached", &key, &check);
+    }
+
+    // Extended checks: the language does not change these, so the zh page only.
+    if let Some(doc) = zh_doc {
+        extended_checks(&doc, plan, &base, token, tmp, tally);
+    }
+    Ok(())
+}
+
+/// Companion option maps, booked-stay photos and location minimaps, voucher PDFs.
+fn extended_checks(doc: &page::PageDoc, plan: &str, base: &Url, token: &str, tmp: &Path, tally: &mut Tally) {
+    let external = |key: String, src: &str, tally: &mut Tally| {
+        let check = match base.join(src) {
+            Err(e) => Check::fail(format!("image src does not parse as a URL ({e})"), None),
+            Ok(url) => match http_fetch(url.as_str(), tmp, true) {
+                Ok(live) => {
+                    let c = page::external_image_verdict(live.http, &live.content_type, live.body.len());
+                    Check { detail: format!("{}: {}", url.host_str().unwrap_or("?"), c.detail), ..c }
+                }
+                Err(e) => Check::warn(format!("{}: fetch failed: {e}", url.host_str().unwrap_or("?")), None),
+            },
+        };
+        tally.emit(plan, "extra", &key, &check);
+    };
+    if let Some(c) = &doc.companion {
+        if c.cards == 0 {
+            tally.emit(plan, "extra", "companion", &Check::fail("companion section with no option cards", None));
+        }
+        if c.stopless_options > 0 {
+            tally.emit(
+                plan,
+                "extra",
+                "companion",
+                &Check::warn(
+                    format!("{} companion option(s) render an empty stop list (companion_option_stops)", c.stopless_options),
+                    None,
+                ),
+            );
+        }
+        for (i, src) in dedup(&c.img_srcs).into_iter().enumerate() {
+            external(format!("companion-map-{}", i + 1), src, tally);
+        }
+    }
+    for (i, src) in dedup(&doc.stay_photos).into_iter().enumerate() {
+        external(format!("stay-photo-{}", i + 1), src, tally);
+    }
+    for (i, src) in dedup(&doc.stay_minimaps).into_iter().enumerate() {
+        external(format!("stay-minimap-{}", i + 1), src, tally);
+    }
+    for (i, href) in dedup(&doc.voucher_hrefs).into_iter().enumerate() {
+        let check = match page::voucher_target(base, href, token) {
+            Err(c) => c,
+            Ok(url) => match http_get(url.as_str(), tmp) {
+                Ok(live) => page::voucher_verdict(live.http, &live.body),
+                Err(e) => Check::fail(format!("voucher fetch failed: {}", redact(&e, token)), None),
+            },
+        };
+        tally.emit(plan, "extra", &format!("voucher-{}", i + 1), &check);
+    }
+}
+
+fn dedup(items: &[String]) -> Vec<&str> {
+    let mut seen = HashSet::new();
+    items.iter().map(String::as_str).filter(|s| seen.insert(*s)).collect()
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Args {
+    pub(crate) plan: Option<String>,
+    pub(crate) provision: bool,
+    pub(crate) rotate: bool,
+    pub(crate) contact_sheet: Option<PathBuf>,
+}
+
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let mut out = Args::default();
     let mut i = 0;
+    let value = |i: usize, flag: &str| {
+        args.get(i + 1)
+            .filter(|v| !v.trim().is_empty() && !v.starts_with("--"))
+            .cloned()
+            .ok_or(format!("{flag} requires a value"))
+    };
     while i < args.len() {
         match args[i].as_str() {
             "--plan-id" => {
-                let v = args
-                    .get(i + 1)
-                    .filter(|v| !v.trim().is_empty() && !v.starts_with("--"))
-                    .ok_or("--plan-id requires a value")?;
-                plan = Some(v.clone());
+                out.plan = Some(value(i, "--plan-id")?);
                 i += 2;
+            }
+            "--contact-sheet" => {
+                out.contact_sheet = Some(PathBuf::from(value(i, "--contact-sheet")?));
+                i += 2;
+            }
+            "--provision-token" => {
+                out.provision = true;
+                i += 1;
+            }
+            "--rotate" => {
+                out.rotate = true;
+                i += 1;
             }
             other => return Err(format!("unexpected argument: {other}\nUsage:\n  {USAGE}")),
         }
     }
-    Ok(plan)
+    if out.provision && out.plan.is_none() {
+        return Err("--provision-token requires --plan-id <id> (one plan's verify token at a time)".into());
+    }
+    if out.rotate && !out.provision {
+        return Err("--rotate only modifies --provision-token".into());
+    }
+    if out.provision && out.contact_sheet.is_some() {
+        return Err("--contact-sheet belongs to a verify run, not to --provision-token".into());
+    }
+    Ok(out)
 }
 
 /// Per-run cache-buster: the worker resolves R2 objects by path only, so a
@@ -285,15 +743,50 @@ fn nonce() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// GET one URL with curl, no redirects (the dashboard worker answers directly).
+fn http_get(url: &str, body_path: &Path) -> Result<Live, String> {
+    http_fetch(url, body_path, false)
+}
+
+/// The curl config line that hands `url` to curl on stdin (`-K -`), so a
+/// token-bearing URL never appears in the process arguments. Quoted per
+/// curl's config syntax; a URL with a line break is refused.
+pub(crate) fn curl_config_url(url: &str) -> Result<String, String> {
+    if url.contains(['\n', '\r']) {
+        return Err("refusing a URL with a line break".into());
+    }
+    Ok(format!("url = \"{}\"\n", url.replace('\\', "\\\\").replace('"', "\\\"")))
+}
+
 /// GET one URL with curl. `-q` (first) ignores ~/.curlrc and no cookie options
 /// are passed, so no session cookie can ever turn this into an owner request.
-fn http_get(url: &str, body_path: &Path) -> Result<Live, String> {
-    let out = Command::new("curl")
-        .args(["-q", "-sS", "--max-time", "30", "--proto", "=https", "-o"])
+/// The URL travels on stdin (`-K -`). `follow` allows https-only redirects
+/// (external images, as a browser would follow them).
+fn http_fetch(url: &str, body_path: &Path, follow: bool) -> Result<Live, String> {
+    // A response with no body leaves no file: never read a previous fetch's bytes.
+    let _ = fs::remove_file(body_path);
+    let mut cmd = Command::new("curl");
+    cmd.args(["-q", "-sS", "--max-time", "30", "--proto", "=https", "-K", "-", "-o"])
         .arg(body_path)
-        .args(["-w", "%{http_code}\t%{content_type}"])
-        .arg(url)
-        .output()
+        .args(["-w", "%{http_code}\t%{content_type}"]);
+    if follow {
+        cmd.args(["-L", "--max-redirs", "5", "--proto-redir", "=https"]);
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to run curl: {e}"))?;
+    let config = curl_config_url(url)?;
+    child
+        .stdin
+        .take()
+        .ok_or("curl stdin unavailable")?
+        .write_all(config.as_bytes())
+        .map_err(|e| format!("failed to pass the URL to curl: {e}"))?;
+    let out = child
+        .wait_with_output()
         .map_err(|e| format!("failed to run curl: {e}"))?;
     if !out.status.success() {
         return Err(format!(
@@ -308,7 +801,11 @@ fn http_get(url: &str, body_path: &Path) -> Result<Live, String> {
         .trim()
         .parse::<u16>()
         .map_err(|_| format!("curl reported no HTTP status ({meta:?})"))?;
-    let body = fs::read(body_path).map_err(|e| format!("cannot read {}: {e}", body_path.display()))?;
+    let body = match fs::read(body_path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(format!("cannot read {}: {e}", body_path.display())),
+    };
     Ok(Live { http, content_type: content_type.trim().to_string(), body })
 }
 
@@ -1127,11 +1624,87 @@ mod tests {
     }
 
     #[test]
-    fn args_accept_only_plan_id() {
+    fn args_parse_plan_contact_sheet_and_token_flags() {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(parse_args(&s(&[])).unwrap(), None);
-        assert_eq!(parse_args(&s(&["--plan-id", "p"])).unwrap().as_deref(), Some("p"));
+        assert_eq!(parse_args(&s(&[])).unwrap(), Args::default());
+        assert_eq!(parse_args(&s(&["--plan-id", "p"])).unwrap().plan.as_deref(), Some("p"));
         assert!(parse_args(&s(&["--plan-id"])).is_err());
         assert!(parse_args(&s(&["stray"])).is_err());
+        let a = parse_args(&s(&["--contact-sheet", "/tmp/cs", "--plan-id", "p"])).unwrap();
+        assert_eq!(a.contact_sheet.as_deref(), Some(Path::new("/tmp/cs")));
+        assert!(parse_args(&s(&["--contact-sheet"])).is_err());
+        let a = parse_args(&s(&["--plan-id", "p", "--provision-token", "--rotate"])).unwrap();
+        assert!(a.provision && a.rotate);
+        // --provision-token needs one plan; --rotate only modifies it.
+        assert!(parse_args(&s(&["--provision-token"])).unwrap_err().contains("requires --plan-id"));
+        assert!(parse_args(&s(&["--plan-id", "p", "--rotate"])).is_err());
+        assert!(parse_args(&s(&["--plan-id", "p", "--provision-token", "--contact-sheet", "d"])).is_err());
+    }
+
+    #[test]
+    fn provision_reuses_one_token_and_rotate_replaces_all() {
+        let steps = |active, rotate| provision_steps(active, rotate);
+        assert_eq!(steps(0, false), ProvisionSteps { deactivate: vec![], reuse: None, mint: true });
+        assert_eq!(steps(1, false), ProvisionSteps { deactivate: vec![], reuse: Some(0), mint: false });
+        // More than one active (should not happen): keep the newest only.
+        assert_eq!(steps(3, false), ProvisionSteps { deactivate: vec![1, 2], reuse: Some(0), mint: false });
+        assert_eq!(steps(0, true), ProvisionSteps { deactivate: vec![], reuse: None, mint: true });
+        assert_eq!(steps(2, true), ProvisionSteps { deactivate: vec![0, 1], reuse: None, mint: true });
+    }
+
+    #[test]
+    fn urls_reach_curl_on_stdin_quoted_and_tokens_are_redacted() {
+        assert_eq!(
+            curl_config_url("https://h/?plan=p&token=abc").unwrap(),
+            "url = \"https://h/?plan=p&token=abc\"\n"
+        );
+        assert_eq!(curl_config_url("https://h/a\"b\\c").unwrap(), "url = \"https://h/a\\\"b\\\\c\"\n");
+        assert!(curl_config_url("https://h/\nurl = \"x\"").is_err());
+        let token = "0123456789abcdef0123456789abcdef";
+        let msg = format!("curl exited 7: https://h/?token={token}");
+        let red = redact(&msg, token);
+        assert!(!red.contains(token) && red.contains("012345...abcdef"), "{red}");
+    }
+
+    #[test]
+    fn layer1_next_steps_name_the_command_and_the_bare_key() {
+        let line = format_line("p-1", "slot", "zh:day-3.png", &Check::fail("x", Some(Next::DeleteStale)));
+        assert!(line.contains("r2 object delete trip-dashboard-maps/p-1/day-3.png --remote"), "{line}");
+        let line = format_line("p-1", "token", "*", &Check::warn("x", Some(Next::RotateToken)));
+        assert!(line.ends_with("→ travel verify-site --plan-id p-1 --provision-token --rotate"), "{line}");
+        let line = format_line("p-1", "ident", "zh", &Check::fail("x", Some(Next::Deploy)));
+        assert!(line.contains("npx wrangler deploy"), "{line}");
+    }
+
+    #[test]
+    fn sheet_notes_say_what_a_cell_holds() {
+        let ph = placeholder();
+        let map = test_render::day_map(Bg::Grid);
+        assert_eq!(sheet_note(&row("uploaded", &map), &live(200, &map), &ph), (String::new(), true));
+        assert_eq!(sheet_note(&row("uploaded", &map), &live(200, &ph), &ph), ("placeholder".into(), false));
+        assert_eq!(sheet_note(&row("skipped", b""), &live(200, &ph), &ph), ("skipped".into(), false));
+        assert_eq!(sheet_note(&row("skipped", b""), &live(200, &map), &ph), ("skipped but served".into(), true));
+        assert_eq!(sheet_note(&row("failed", b""), &live(200, &ph), &ph), ("failed".into(), false));
+    }
+
+    /// Live smoke (TRAVEL_VERIFY_SITE_LIVE=1 only): the real worker's
+    /// placeholder probe is recognised, and its token-less plan page is an auth
+    /// page the layer-1 parser sees as such — no cookies, URL on stdin.
+    #[test]
+    fn live_smoke_against_the_dashboard() {
+        if std::env::var("TRAVEL_VERIFY_SITE_LIVE").as_deref() != Ok("1") {
+            eprintln!("skipping live verify-site smoke (set TRAVEL_VERIFY_SITE_LIVE=1)");
+            return;
+        }
+        let host = crate::share_token::dashboard_host();
+        let n = nonce().unwrap();
+        let tmp = std::env::temp_dir().join(format!("travel-verify-site-smoke-{n}.body"));
+        let probe = http_get(&format!("https://{host}/map/__smoke__/__absent__{n}.png?verify={n}"), &tmp).unwrap();
+        assert_eq!(check_placeholder(&probe), Ok(None));
+        let page_live = http_get(&format!("https://{host}/?plan=__smoke__&token=00000000000000000000000000000000"), &tmp).unwrap();
+        let _ = fs::remove_file(&tmp);
+        let doc = page::parse_page(&String::from_utf8_lossy(&page_live.body));
+        assert!(doc.auth_page, "a bad token must land on an auth page (HTTP {})", page_live.http);
+        assert!(!page::page_usable(page_live.http, &doc));
     }
 }

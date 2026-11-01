@@ -107,6 +107,8 @@ mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapsho
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 mod snapshot_maps;      // snapshot-maps (Turso → Rust PNG renderer → R2)
 mod verify_site;        // verify-site (read-only check of the LIVE dashboard maps vs Turso)
+mod verify_site_page;   // verify-site layer 1: viewer-page HTML judgements (pure)
+mod verify_site_sheet;  // verify-site layer 4: --contact-sheet thumbnail grid
 mod road_leg;           // road-leg list|refetch — OSRM road-geometry cache management
 mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
 mod clear_accommodation; // clear-accommodation — cancel domestic accommodation (P4 -> selecting)
@@ -766,7 +768,11 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             if wants_help(rest, verify_site::USAGE) {
                 return Ok(());
             }
-            plan_resolver::reject_unknown_flags(rest, &["--plan-id"], &[])?;
+            plan_resolver::reject_unknown_flags(
+                rest,
+                &["--plan-id", "--contact-sheet"],
+                &["--provision-token", "--rotate"],
+            )?;
             verify_site::run(rest).await
         }
         // OSRM road-geometry cache management (global, no --plan-id).
@@ -1065,7 +1071,8 @@ SHOP / OFFERS\n\
 VALIDATE / CHECKS\n\
   validate data | validate publish | doctor | validate-itinerary | check-hours\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
-  verify-site [--plan-id <id>]  read-only check of the LIVE dashboard maps vs map_artifacts (bytes, input-hash freshness, image content); exits 1 on any FAIL\n\
+  verify-site [--plan-id <id>] [--contact-sheet <dir>]  read-only check of the LIVE dashboard vs Turso (map bytes, input-hash freshness, image content, viewer page via the verify token); exits 1 on any FAIL\n\
+  verify-site --plan-id <id> --provision-token [--rotate]  ensure one active verify token for the plan (fingerprint only)\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
   set-poi-title <slug> <poi_id> <title> [--segments]  (rename a POI title, optionally matching segment labels too)\n\
   set-place-geocode \"<place>\" --lat N --lon N (--dest slug|--context ctx)  (manually pin a label Nominatim can't resolve)\n\

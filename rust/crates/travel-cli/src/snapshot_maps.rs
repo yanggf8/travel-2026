@@ -37,7 +37,7 @@ pub(crate) const GRID_LINE: [u8; 3] = [229, 234, 238];
 pub(crate) const ROAD_MAJOR: [u8; 3] = [186, 196, 208];
 pub(crate) const ROAD_MINOR: [u8; 3] = [222, 228, 234];
 /// Title ink and scale; the title strip is `title_rect`.
-const TITLE_INK: [u8; 3] = [45, 61, 75];
+pub(crate) const TITLE_INK: [u8; 3] = [45, 61, 75];
 pub(crate) const TITLE_SCALE: i32 = 2;
 /// Credit ink; the credit strip is `CREDIT_RECT` (scale 1).
 const CREDIT_INK: [u8; 3] = [70, 82, 94];
@@ -1513,7 +1513,7 @@ fn render_png(
     encode_rgba_png(&raster.pixels, WIDTH, HEIGHT)
 }
 
-fn encode_rgba_png(pixels: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_rgba_png(pixels: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     let mut out = Cursor::new(Vec::new());
     let mut encoder = Encoder::new(&mut out, w, h);
     encoder.set_color(ColorType::Rgba);
@@ -1894,20 +1894,22 @@ fn day_logistics_legs(all_pts: &[Point]) -> (Vec<Point>, Vec<(Point, Point)>) {
     (points, legs)
 }
 
-struct Raster {
-    w: usize,
-    h: usize,
-    pixels: Vec<u8>,
+/// RGBA canvas with the renderer's drawing primitives and bitmap font. Also
+/// drawn on by verify-site's contact sheet (one font, one ink, no copies).
+pub(crate) struct Raster {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) pixels: Vec<u8>,
 }
 impl Raster {
-    fn new(w: usize, h: usize) -> Self {
+    pub(crate) fn new(w: usize, h: usize) -> Self {
         Self {
             w,
             h,
             pixels: vec![0; w * h * 4],
         }
     }
-    fn put(&mut self, x: i32, y: i32, c: [u8; 3]) {
+    pub(crate) fn put(&mut self, x: i32, y: i32, c: [u8; 3]) {
         if x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32 {
             return;
         }
@@ -1919,7 +1921,7 @@ impl Raster {
             self.pixels.copy_from_slice(rgba);
         }
     }
-    fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: [u8; 3]) {
+    pub(crate) fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: [u8; 3]) {
         for yy in y..y + h {
             for xx in x..x + w {
                 self.put(xx, yy, c);
@@ -1999,7 +2001,7 @@ impl Raster {
         self.dot(x + 5, y + 5, 5, c);
         self.text(x + 14, y + 2, label, [50, 63, 76], 1);
     }
-    fn text(&mut self, x: i32, y: i32, s: &str, c: [u8; 3], scale: i32) {
+    pub(crate) fn text(&mut self, x: i32, y: i32, s: &str, c: [u8; 3], scale: i32) {
         let mut cx = x;
         for ch in s.chars() {
             let glyph = glyph(ch);
@@ -2014,10 +2016,15 @@ impl Raster {
                     }
                 }
             }
-            cx += 6 * scale;
+            cx += GLYPH_ADVANCE * scale;
         }
     }
 }
+/// Horizontal advance per character of the bitmap font at scale 1 (5 lit
+/// columns + 1 gap) and its height in rows.
+pub(crate) const GLYPH_ADVANCE: i32 = 6;
+pub(crate) const GLYPH_HEIGHT: i32 = 7;
+
 fn glyph(c: char) -> [u8; 7] {
     match c {
         '0' => [14, 17, 19, 21, 25, 17, 14],

@@ -3,6 +3,11 @@
 Date: 2026-10-30. Status: **approved by Yang (2026-10-30), rev 2** — 已吸收 Codex（前端）與 K3.1 Pro（後端）
 的設計審查；兩份審查的每一條說法都已逐條對照原始碼核對，全部屬實（見文末「審查紀錄」）。
 
+**實作進度（2026-11-02）：** 第一、二、三階段都已實作（`verify_site.rs`、`verify_site_page.rs`、
+`verify_site_sheet.rs`，worker `render/map.rs`、`render/mod.rs`）。worker 的 `data-map-key` /
+`data-plan-id` / `data-view` 標記**尚未部署**；部署前，線上頁面的 `ident` 與 `slot` 檢查會照設計判 FAIL
+（指向 `wrangler deploy`），這是預期中的結果。實作與設計的差異見文末「實作備註」。
+
 ## 問題
 
 目前沒有任何測試讀取「線上網站實際送出的東西」。現有測試分三類，都碰不到線上結果：
@@ -170,9 +175,9 @@ PNG 解碼沿用 `decode_rgba_png`。所有常數和 renderer 共用，不另外
 
 ## 分階段
 
-1. **第一階段：** 第 2 層和第 3 層，不需要 token。涵蓋上表的 placeholder、上傳失敗、CDN 舊圖、skipped 但仍在線上、只改路線、CARTO 蓋字（WARN）。**不涵蓋**頁面和圖例的問題，那是第二階段的事。
-2. **第二階段：** 第 1 層、worker 的 `data-map-key` 和 `data-plan-id` 改動、token 冪等與輪換，以及延伸檢查。
-3. **第三階段：** 第 4 層的縮圖總表。
+1. **第一階段（已完成）：** 第 2 層和第 3 層，不需要 token。涵蓋上表的 placeholder、上傳失敗、CDN 舊圖、skipped 但仍在線上、只改路線、CARTO 蓋字（WARN）。**不涵蓋**頁面和圖例的問題，那是第二階段的事。
+2. **第二階段（已完成，worker 待部署）：** 第 1 層、worker 的 `data-map-key` 和 `data-plan-id` 改動、token 冪等與輪換，以及延伸檢查。
+3. **第三階段（已完成）：** 第 4 層的縮圖總表（`--contact-sheet <dir>`）。
 
 ## 決定（Yang，2026-10-30）
 
@@ -191,3 +196,18 @@ PNG 解碼沿用 `decode_rgba_png`。所有常數和 renderer 共用，不另外
 - **K3.1 Pro（後端）：** 7 條逐條核對，全部屬實。
   - 已採納：取消像素數 pin、加 nonce 避開快取、檢查 MISSING 和 skipped 但仍在線上、Overpass 背景不能誤判、改用輸入 hash 判斷過期、token 冪等與輪換、placeholder 用 bytes 辨識。
   - 同時更正原設計的一個錯誤：產生 token **不寫**稽核紀錄。
+
+## 實作備註（第二、三階段，2026-11-02）
+
+- **`data-plan-id` / `data-view` 放在 `<body>` 上**，不另外包一層 div：方案頁的最外層就是 `<body>`，這樣除了這兩個屬性，頁面其餘 bytes 完全不變。`data-view` 依 owner chrome 是否存在判定（只有擁有者 session 才有 owner chrome）。
+- **輸出行的 layer：** `token`、`page`、`lang`、`owner`、`ident`、`slot`、`legend`、`cached`（`?v=` 網址）、`extra`（延伸檢查）。第 1 層的 key 前面帶語言，例如 `zh:day-1.png`。
+- **`plan-airport.png`、`day-N-away.png`** 和 `plan-excursion.png` 一樣，只有有圖時才有格子，沒有缺圖框。
+- **沒有 `data-map-key` 的頁面**（worker 尚未部署）：每頁一行 FAIL，指向 deploy，並略過該頁的格子與圖例比對。設計沒有允許降成 WARN，所以維持 FAIL。
+- **圖例**依 worker `map_legend_html` 的實際順序比對：沒有 day 的列照 seq；有 day 時先依 day 首次出現的順序分組，再接無 day 的列；day 區塊數也要相符。座標連結把 `q=` 解析成數字比對。
+- **外部圖片**（同行方案地圖、已訂住宿相簿與位置小圖）：只有對所有觀看者都壞掉的回應才判 FAIL（404、410、200 但空內容）；401/403/429/5xx 或連線錯誤只給 WARN，因為可能只是拒絕非瀏覽器的抓取。外部圖片允許 https-only 轉址。
+- **延伸檢查只看 zh 頁**：語言不影響這些網址。
+- **同行方案的站點**：每個選項的 `div.companion-stops` 裡至少要有一個 `span.stop-chip`；站點清單是空的給 WARN（`companion_option_stops` 缺資料），不判 FAIL。
+- **修復提示**：頁面上出現 `map_artifacts` 沒有紀錄（或 `skipped`）的 `<img>` 時，提示刪除 R2 物件，而不是重跑 snapshot-maps——snapshot-maps 不會再處理它不認得的 key。
+- **token：** `--provision-token` 只接受未軟刪的方案；若意外出現多個有效 verify token，保留最新的，其餘停用（`deactivated_by='verify-site'`）。檢查時遇到多個有效 token 會給 WARN 並建議 `--rotate`。
+- **所有網址**（不只帶 token 的）都經 `curl -K -` 從 stdin 傳入；錯誤訊息中的 token 一律換成 fingerprint。每次抓取前先刪掉暫存檔，避免沒有 body 的回應讀到上一次的內容。
+- **縮圖總表**：每格是線上地圖縮小一半，下方標 key；非正常狀態另標 `SKIPPED`、`PLACEHOLDER`、`MISSING`、`SKIPPED BUT SERVED` 等。使用 snapshot-maps 的 `Raster`、點陣字、`TITLE_INK` 和 PNG 編碼器。

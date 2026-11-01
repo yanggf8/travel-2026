@@ -393,7 +393,7 @@ async fn read_snapshotted_at(
     Ok(None)
 }
 
-async fn read_day_numbers(conn: &Connection, plan_id: &str) -> Result<Vec<i64>, String> {
+pub(crate) async fn read_day_numbers(conn: &Connection, plan_id: &str) -> Result<Vec<i64>, String> {
     let mut rows = conn
         .query(
             "SELECT day_number FROM days WHERE plan_id = ?1 ORDER BY day_number",
