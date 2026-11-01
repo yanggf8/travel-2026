@@ -103,6 +103,7 @@ Provider coverage is DB data — run `travel ota-status` (catalog edited via `tr
 - **`snapshot-maps` ⚠ 建議 lines are optional planning hints** — an unflagged day's sightseeing stop more than 40 km straight-line from the nearest hotel suggests `set-day-excursion`; the hint never changes itinerary data. These differ from the geocoding defects above.
 - Map PNGs are served `max-age=86400` — verify a re-snapshot with `curl`, not a browser holding the old image.
 - Sharing: per-plan share tokens (`./bin/travel share-token`) → `?token=` viewer-only; owner access is OAuth-session-only.
+- **No lasting share tokens until Yang finalizes a plan** — a viewer token also opens the voucher PDFs (booking codes, names). Mint only when Yang says a plan is ready to share; stop sharing with `share-token clear --plan-id <id>` / `--all-plans` (deletes active AND deactivated rows). `verify-site` needs no token: each run mints one per plan and deletes it right after — never provision one for it.
 
 ## Docs
 - `docs/API.md` — complete API reference
