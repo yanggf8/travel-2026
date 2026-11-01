@@ -230,7 +230,7 @@ pub(crate) fn page_checks(http: u16, doc: &PageDoc, lang: Lang, plan_id: &str) -
                     "HTTP {http}: an auth page (sign-in / no access / bad link) instead of the plan — the verify token \
                      cannot view this plan"
                 ),
-                Some(Next::RotateToken),
+                None,
             ),
         ));
         return out;
@@ -635,7 +635,7 @@ pub(crate) fn voucher_verdict(http: u16, body: &[u8]) -> Check {
     match http {
         200 if body.starts_with(b"%PDF") => Check::pass(format!("PDF, {} bytes", body.len())),
         200 => Check::fail(format!("HTTP 200 but the {}-byte body is not a PDF", body.len()), None),
-        403 => Check::fail("HTTP 403: the token has no permission for this plan's voucher", Some(Next::RotateToken)),
+        403 => Check::fail("HTTP 403: the token has no permission for this plan's voucher", None),
         404 => Check::fail("HTTP 404: the voucher PDF is missing in R2 (VOUCHERS bucket)", None),
         other => Check::fail(format!("HTTP {other} (expected 200 application/pdf)"), None),
     }
@@ -709,7 +709,7 @@ mod tests {
         assert!(!page_usable(403, &doc));
         let checks = page_checks(403, &doc, Lang::Zh, "p-1");
         assert_eq!(checks.len(), 1);
-        assert_eq!((checks[0].1.level, checks[0].1.next), (Level::Fail, Some(Next::RotateToken)));
+        assert_eq!((checks[0].1.level, checks[0].1.next), (Level::Fail, None));
         assert!(checks[0].1.detail.contains("auth page"), "{checks:?}");
 
         let doc = parse_page(&viewer_page(""));

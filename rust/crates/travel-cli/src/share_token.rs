@@ -462,7 +462,7 @@ const CREATED_BY_CLI: &str = "cli";
 
 /// Mint and store one active view-scope token for `plan_id`, recorded as
 /// `created_by` (`'cli'` for share-token, `'verify-site'` for the verify token).
-/// Shared by share-token and `verify-site --provision-token`; neither writes the
+/// Shared by share-token and verify-site (its per-run token); neither writes the
 /// plan audit triad (see the module header).
 pub(crate) async fn mint_for_plan(conn: &Connection, plan_id: &str, created_by: &str) -> Result<String, String> {
     // Fail loud if the plan does not exist — never mint a token for a phantom plan.

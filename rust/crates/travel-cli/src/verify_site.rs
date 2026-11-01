@@ -1,8 +1,6 @@
 //! `travel verify-site [--plan-id <id>] [--contact-sheet <dir>]` — read-only
 //! check of what the LIVE dashboard actually serves for each plan
 //! (docs/plans/2026-10-30-verify-site.md, phases 1-3: layers 1-4).
-//! `travel verify-site --plan-id <id> --provision-token [--rotate]` manages the
-//! plan's verify token (the one write this command makes).
 //!
 //! Layer 2 (asset / fresh): every expected map key (check-maps-fresh's own key
 //! list) and every other `map_artifacts` key is fetched from
@@ -22,16 +20,21 @@
 //! strips (FAIL); flatness and CARTO-style repeated text stamps (WARN only).
 //!
 //! Layer 1 (page / lang / owner / ident / slot / legend / cached / extra):
-//! with the plan's verify token (`plan_share_tokens.created_by='verify-site'`)
-//! the viewer page is fetched in zh and en, parsed, and judged by the pure
-//! functions in `verify_site_page`. Without a verify token: one WARN, layer 1
-//! skipped. Every token-bearing URL reaches curl through `-K -` (stdin), never
-//! argv; only token fingerprints are ever printed.
+//! each plan gets a verify token for this run only
+//! (`plan_share_tokens.created_by='verify-site'`, minted before its viewer page
+//! is fetched and DELETED right after, error or not; leftovers of an
+//! interrupted run are removed when the next run starts — so two verify-site
+//! runs must not overlap: the second's sweep would delete the first's token
+//! mid-check). No lasting token is
+//! needed — nothing stays shared. The viewer page is fetched in zh and en,
+//! parsed, and judged by the pure functions in `verify_site_page`. Every
+//! token-bearing URL reaches curl through `-K -` (stdin), never argv; only
+//! token fingerprints are ever printed.
 //!
 //! Layer 4 (`--contact-sheet <dir>`): one thumbnail-grid PNG per plan
 //! (`verify_site_sheet`); advisory, never a verdict.
 //!
-//! Read-only (except `--provision-token`): no Turso writes, no
+//! Read-only apart from the run's own verify token rows: no other Turso writes, no
 //! Nominatim/OSRM/Overpass calls, no cookies. Plain-text verdict lines; exits
 //! non-zero iff any FAIL.
 
@@ -52,19 +55,17 @@ use crate::verify_site_page::{self as page, Lang, LegendRow, SlotFacts};
 use crate::verify_site_sheet::{self as sheet, SheetCell};
 
 pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>]\n  \
-travel verify-site --plan-id <id> --provision-token [--rotate]\n  \
 Read-only check of the LIVE dashboard: each map key's live bytes vs map_artifacts \
 (sha256 + size; skipped keys must serve the worker placeholder), input-hash freshness \
 (recomputed from cached geocodes/road legs only), image content (size, geographic \
-background, title + credit), and - with the plan's verify token - the viewer page in zh \
+background, title + credit), and the viewer page in zh \
 and en (page, language, no owner chrome, data-plan-id/data-view, map slots vs \
 map_artifacts via data-map-key, the ?v= map URL bytes, legends vs map_legend_stops, \
 companion/stay images, voucher PDF). All live plans by default. One verdict line per \
 check, then a summary; exits 1 on any FAIL. --contact-sheet <dir> also writes \
-<dir>/<plan>.png, a labelled thumbnail grid of the plan's live maps (advisory).\n  \
---provision-token: ensure the plan has exactly one active verify token \
-(created_by=verify-site; reused when present, --rotate deactivates it and mints a new \
-one); prints fingerprints only. Host: TRAVEL_DASHBOARD_HOST (as share-token).";
+<dir>/<plan>.png, a labelled thumbnail grid of the plan's live maps (advisory). The \
+viewer page is opened with a verify token minted for this run and deleted right after \
+(fingerprints only). Host: TRAVEL_DASHBOARD_HOST (as share-token).";
 
 /// `plan_share_tokens.created_by` of the verify token.
 const VERIFY_CREATED_BY: &str = "verify-site";
@@ -85,10 +86,6 @@ pub(crate) enum Next {
     DeleteStale,
     /// Deploy the dashboard worker (the live page predates a markup change).
     Deploy,
-    /// Give the plan a verify token.
-    ProvisionToken,
-    /// Replace the plan's verify token(s) with one fresh token.
-    RotateToken,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,14 +144,11 @@ pub(crate) struct PlannedKey {
 
 pub async fn run(args: &[String]) -> Result<(), String> {
     let args = parse_args(args)?;
-    if args.provision {
-        let plan = args.plan.as_deref().ok_or("--provision-token requires --plan-id <id>")?;
-        return provision_token(plan, args.rotate).await;
-    }
     let plan_arg = args.plan;
-    let conn = crate::db::connect_read()
+    // Write tier: the run mints (and deletes) its own verify token per plan.
+    let conn = crate::db::connect_write()
         .await
-        .map_err(|e| format!("failed to connect to Turso (read tier): {e}"))?;
+        .map_err(|e| format!("failed to connect to Turso (write tier): {e}"))?;
     let live_plans = crate::check_maps_fresh::all_live_plans(&conn).await?;
     let plan_ids = match plan_arg {
         Some(id) => {
@@ -170,6 +164,13 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         println!("summary: 0 plan(s) · 0 PASS · 0 WARN · 0 FAIL");
         return Ok(());
     };
+
+    // A run killed between mint and delete leaves its verify token behind:
+    // nothing may stay shared, so the next run removes every such row first.
+    let leftover = remove_verify_tokens(&conn, None).await?;
+    if leftover > 0 {
+        println!("note: removed {leftover} leftover verify token(s) of an interrupted run");
+    }
 
     let host = crate::share_token::dashboard_host();
     let nonce = nonce()?;
@@ -227,12 +228,6 @@ fn format_line(plan: &str, layer: &str, key: &str, check: &Check) -> String {
         Some(Next::Deploy) => line.push_str(
             " → cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy",
         ),
-        Some(Next::ProvisionToken) => {
-            line.push_str(&format!(" → travel verify-site --plan-id {plan} --provision-token"))
-        }
-        Some(Next::RotateToken) => {
-            line.push_str(&format!(" → travel verify-site --plan-id {plan} --provision-token --rotate"))
-        }
         None => {}
     }
     line
@@ -347,94 +342,15 @@ fn write_contact_sheet(dir: &Path, plan: &str, cells: &[SheetCell]) -> Result<Pa
 // Layer 1: the token viewer page
 // ---------------------------------------------------------------------------
 
-/// One active verify token of a plan.
-struct VerifyToken {
-    token: String,
-    created_at: String,
-}
-
-/// The plan's ACTIVE verify tokens, newest first.
-async fn verify_tokens(conn: &Connection, plan_id: &str) -> Result<Vec<VerifyToken>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT token, created_at FROM plan_share_tokens \
-             WHERE plan_id = ?1 AND created_by = ?2 AND status = 'active' \
-             ORDER BY created_at DESC, token DESC",
-            libsql::params![plan_id.to_string(), VERIFY_CREATED_BY],
-        )
-        .await
-        .map_err(|e| format!("plan_share_tokens query failed: {e}"))?;
-    let mut out = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_share_tokens row read failed: {e}"))?
-    {
-        out.push(VerifyToken {
-            token: row.get::<String>(0).map_err(|e| format!("token read failed: {e}"))?,
-            created_at: row.get::<Option<String>>(1).ok().flatten().unwrap_or_default(),
-        });
-    }
-    Ok(out)
-}
-
-/// What `--provision-token` does with a plan's active verify tokens (indices
-/// into the newest-first list). Pure.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ProvisionSteps {
-    pub(crate) deactivate: Vec<usize>,
-    pub(crate) reuse: Option<usize>,
-    pub(crate) mint: bool,
-}
-
-pub(crate) fn provision_steps(active: usize, rotate: bool) -> ProvisionSteps {
-    if rotate || active == 0 {
-        ProvisionSteps { deactivate: (0..active).collect(), reuse: None, mint: true }
-    } else {
-        // At most one active verify token per plan: keep the newest.
-        ProvisionSteps { deactivate: (1..active).collect(), reuse: Some(0), mint: false }
-    }
-}
-
-/// `--provision-token [--rotate]`: a side-table write like share-token — no
-/// plan audit triad. Prints fingerprints, never a token or a tokened URL.
-async fn provision_token(plan: &str, rotate: bool) -> Result<(), String> {
-    let conn = crate::db::connect_write()
-        .await
-        .map_err(|e| format!("failed to connect to Turso (write tier): {e}"))?;
-    if !crate::check_maps_fresh::all_live_plans(&conn).await?.iter().any(|p| p == plan) {
-        return Err(format!("plan '{plan}' not found or soft-deleted (verify tokens are for live plans only)"));
-    }
-    let active = verify_tokens(&conn, plan).await?;
-    let steps = provision_steps(active.len(), rotate);
-    for &i in &steps.deactivate {
-        let t = &active[i];
-        if crate::share_token::deactivate_token(&conn, plan, &t.token, VERIFY_CREATED_BY).await? {
-            let why = if rotate { "rotated out" } else { "extra: at most one active verify token per plan" };
-            println!(
-                "deactivated: {}  plan_id={plan}  created {}  ({why})",
-                crate::share_token::token_fingerprint(&t.token),
-                t.created_at
-            );
-        }
-    }
-    if let Some(i) = steps.reuse {
-        let t = &active[i];
-        println!(
-            "reused:      {}  plan_id={plan}  created {}  created_by={VERIFY_CREATED_BY}",
-            crate::share_token::token_fingerprint(&t.token),
-            t.created_at
-        );
-    }
-    if steps.mint {
-        let token = crate::share_token::mint_for_plan(&conn, plan, VERIFY_CREATED_BY).await?;
-        println!(
-            "minted:      {}  plan_id={plan}  created_by={VERIFY_CREATED_BY}",
-            crate::share_token::token_fingerprint(&token)
-        );
-    }
-    println!("next: travel verify-site --plan-id {plan}");
-    Ok(())
+/// DELETE verify-site token rows: one token (`token`), or every leftover one
+/// (`None`). Returns rows removed. Share-token ('cli') rows are never touched.
+async fn remove_verify_tokens(conn: &Connection, token: Option<&str>) -> Result<u64, String> {
+    conn.execute(
+        "DELETE FROM plan_share_tokens WHERE created_by = ?1 AND (?2 IS NULL OR token = ?2)",
+        libsql::params![VERIFY_CREATED_BY, token.map(str::to_string)],
+    )
+    .await
+    .map_err(|e| format!("plan_share_tokens verify-token delete failed: {e}"))
 }
 
 /// Replace every occurrence of the secret with its fingerprint.
@@ -509,7 +425,8 @@ async fn has_flights(conn: &Connection, plan_id: &str) -> Result<bool, String> {
         .is_some())
 }
 
-/// Layer 1 for one plan: the viewer page (zh + en) through its verify token.
+/// Layer 1 for one plan: mint this run's verify token, check the viewer page
+/// through it, and delete it again — whether the checks succeeded or not.
 async fn verify_viewer_page(
     conn: &Connection,
     plan: &str,
@@ -519,36 +436,42 @@ async fn verify_viewer_page(
     placeholder: &[u8],
     tally: &mut Tally,
 ) -> Result<(), String> {
-    let tokens = verify_tokens(conn, plan).await?;
-    let Some(newest) = tokens.first() else {
-        tally.emit(
-            plan,
-            "token",
-            "*",
-            &Check::warn(
-                "no active verify token (created_by=verify-site): layer 1 (viewer page) skipped",
-                Some(Next::ProvisionToken),
-            ),
-        );
-        return Ok(());
+    let token = crate::share_token::mint_for_plan(conn, plan, VERIFY_CREATED_BY)
+        .await
+        .map_err(|e| format!("cannot mint this run's verify token for {plan}: {e}"))?;
+    let checked = viewer_page_checks(conn, plan, &token, host, tmp, manifest, placeholder, tally).await;
+    let fp = crate::share_token::token_fingerprint(&token);
+    // The delete outcome is reported even when the checks failed too: a token
+    // that survived is the security-relevant half.
+    let delete_err = match remove_verify_tokens(conn, Some(&token)).await {
+        Ok(1) => None,
+        Ok(n) => Some(format!(
+            "verify token {fp} of {plan}: delete removed {n} row(s), expected 1 (another verify-site run swept it?)"
+        )),
+        Err(e) => Some(format!(
+            "verify token {fp} of {plan} could not be deleted ({e}); run `travel share-token clear --plan-id {plan}`"
+        )),
     };
-    let token = newest.token.as_str();
-    if tokens.len() > 1 {
-        tally.emit(
-            plan,
-            "token",
-            "*",
-            &Check::warn(
-                format!(
-                    "{} active verify tokens (expected at most one); using the newest {}",
-                    tokens.len(),
-                    crate::share_token::token_fingerprint(token)
-                ),
-                Some(Next::RotateToken),
-            ),
-        );
+    match (checked.map_err(|e| redact(&e, &token)), delete_err) {
+        (Ok(()), None) => Ok(()),
+        (Err(e), None) => Err(e),
+        (Ok(()), Some(d)) => Err(d),
+        (Err(e), Some(d)) => Err(format!("{e}; {d}")),
     }
+}
 
+/// The viewer page (zh + en) through `token`.
+#[allow(clippy::too_many_arguments)]
+async fn viewer_page_checks(
+    conn: &Connection,
+    plan: &str,
+    token: &str,
+    host: &str,
+    tmp: &Path,
+    manifest: &HashMap<String, ArtifactRow>,
+    placeholder: &[u8],
+    tally: &mut Tally,
+) -> Result<(), String> {
     let day_numbers = crate::check_maps_fresh::read_day_numbers(conn, plan).await?;
     let statuses: HashMap<String, String> = manifest.iter().map(|(k, r)| (k.clone(), r.status.clone())).collect();
     let facts = SlotFacts { day_numbers: &day_numbers, has_flights: has_flights(conn, plan).await?, statuses: &statuses };
@@ -688,8 +611,6 @@ fn dedup(items: &[String]) -> Vec<&str> {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Args {
     pub(crate) plan: Option<String>,
-    pub(crate) provision: bool,
-    pub(crate) rotate: bool,
     pub(crate) contact_sheet: Option<PathBuf>,
 }
 
@@ -712,25 +633,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 out.contact_sheet = Some(PathBuf::from(value(i, "--contact-sheet")?));
                 i += 2;
             }
-            "--provision-token" => {
-                out.provision = true;
-                i += 1;
-            }
-            "--rotate" => {
-                out.rotate = true;
-                i += 1;
-            }
             other => return Err(format!("unexpected argument: {other}\nUsage:\n  {USAGE}")),
         }
-    }
-    if out.provision && out.plan.is_none() {
-        return Err("--provision-token requires --plan-id <id> (one plan's verify token at a time)".into());
-    }
-    if out.rotate && !out.provision {
-        return Err("--rotate only modifies --provision-token".into());
-    }
-    if out.provision && out.contact_sheet.is_some() {
-        return Err("--contact-sheet belongs to a verify run, not to --provision-token".into());
     }
     Ok(out)
 }
@@ -1633,23 +1537,8 @@ mod tests {
         let a = parse_args(&s(&["--contact-sheet", "/tmp/cs", "--plan-id", "p"])).unwrap();
         assert_eq!(a.contact_sheet.as_deref(), Some(Path::new("/tmp/cs")));
         assert!(parse_args(&s(&["--contact-sheet"])).is_err());
-        let a = parse_args(&s(&["--plan-id", "p", "--provision-token", "--rotate"])).unwrap();
-        assert!(a.provision && a.rotate);
-        // --provision-token needs one plan; --rotate only modifies it.
-        assert!(parse_args(&s(&["--provision-token"])).unwrap_err().contains("requires --plan-id"));
-        assert!(parse_args(&s(&["--plan-id", "p", "--rotate"])).is_err());
-        assert!(parse_args(&s(&["--plan-id", "p", "--provision-token", "--contact-sheet", "d"])).is_err());
-    }
-
-    #[test]
-    fn provision_reuses_one_token_and_rotate_replaces_all() {
-        let steps = |active, rotate| provision_steps(active, rotate);
-        assert_eq!(steps(0, false), ProvisionSteps { deactivate: vec![], reuse: None, mint: true });
-        assert_eq!(steps(1, false), ProvisionSteps { deactivate: vec![], reuse: Some(0), mint: false });
-        // More than one active (should not happen): keep the newest only.
-        assert_eq!(steps(3, false), ProvisionSteps { deactivate: vec![1, 2], reuse: Some(0), mint: false });
-        assert_eq!(steps(0, true), ProvisionSteps { deactivate: vec![], reuse: None, mint: true });
-        assert_eq!(steps(2, true), ProvisionSteps { deactivate: vec![0, 1], reuse: None, mint: true });
+        // The token is per run now: the old provisioning flags are gone.
+        assert!(parse_args(&s(&["--plan-id", "p", "--provision-token"])).is_err());
     }
 
     #[test]
@@ -1670,8 +1559,6 @@ mod tests {
     fn layer1_next_steps_name_the_command_and_the_bare_key() {
         let line = format_line("p-1", "slot", "zh:day-3.png", &Check::fail("x", Some(Next::DeleteStale)));
         assert!(line.contains("r2 object delete trip-dashboard-maps/p-1/day-3.png --remote"), "{line}");
-        let line = format_line("p-1", "token", "*", &Check::warn("x", Some(Next::RotateToken)));
-        assert!(line.ends_with("→ travel verify-site --plan-id p-1 --provision-token --rotate"), "{line}");
         let line = format_line("p-1", "ident", "zh", &Check::fail("x", Some(Next::Deploy)));
         assert!(line.contains("npx wrangler deploy"), "{line}");
     }

@@ -782,11 +782,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             if wants_help(rest, verify_site::USAGE) {
                 return Ok(());
             }
-            plan_resolver::reject_unknown_flags(
-                rest,
-                &["--plan-id", "--contact-sheet"],
-                &["--provision-token", "--rotate"],
-            )?;
+            plan_resolver::reject_unknown_flags(rest, &["--plan-id", "--contact-sheet"], &[])?;
             verify_site::run(rest).await
         }
         // OSRM road-geometry cache management (global, no --plan-id).
@@ -1085,8 +1081,7 @@ SHOP / OFFERS\n\
 VALIDATE / CHECKS\n\
   validate data | validate publish | doctor | validate-itinerary | check-hours\n\
   check-booking-integrity | check-maps-fresh | mark-maps-snapshotted | snapshot-maps\n\
-  verify-site [--plan-id <id>] [--contact-sheet <dir>]  read-only check of the LIVE dashboard vs Turso (map bytes, input-hash freshness, image content, viewer page via the verify token); exits 1 on any FAIL\n\
-  verify-site --plan-id <id> --provision-token [--rotate]  ensure one active verify token for the plan (fingerprint only)\n\
+  verify-site [--plan-id <id>] [--contact-sheet <dir>]  read-only check of the LIVE dashboard vs Turso (map bytes, input-hash freshness, image content, viewer page via a per-run verify token, deleted after); exits 1 on any FAIL\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
   set-poi-title <slug> <poi_id> <title> [--segments]  (rename a POI title, optionally matching segment labels too)\n\
   set-place-geocode \"<place>\" --lat N --lon N (--dest slug|--context ctx)  (manually pin a label Nominatim can't resolve)\n\

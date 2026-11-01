@@ -43,8 +43,7 @@ Date: 2026-10-30. Status: **approved by Yang (2026-10-30), rev 2** — 已吸收
 ## 指令
 
 ```
-travel verify-site [--plan-id <id>]
-travel verify-site --plan-id <id> --provision-token [--rotate]
+travel verify-site [--plan-id <id>] [--contact-sheet <dir>]
 ```
 
 - **預設範圍：** 所有未軟刪的方案，含已結束的行程。
@@ -104,17 +103,17 @@ PNG 解碼沿用 `decode_rgba_png`。所有常數和 renderer 共用，不另外
 
 **取消的項目：**「每天的顏色像素數」和「每日圖的 pin 數下限」。原因見非目標。pin 有沒有畫對，改由第 1 層的圖例比對和第 4 層的 agent 看圖負責。
 
-### 第 1 層：檢視頁（第二階段，需要 verify token）
+### 第 1 層：檢視頁（第二階段，每次執行自帶臨時 token）
 
-**token：**
-- 每個方案**最多一個**有效的 verify token，`created_by='verify-site'`。
-- `--provision-token` 一定要配 `--plan-id`，而且是冪等的：已經有就沿用。
-- `--rotate` 會先停用舊的，再發新的。
-- 共用 `share-token` 的 mint helper，但 `created_by` 要改成參數，目前寫死成 `'cli'`（`share_token.rs:373`）。
+**token（2026-11-02 改為每次執行臨時發放）：**
+- 每次檢查一個方案時，才發一個 `created_by='verify-site'` 的 token，看完檢視頁**立刻刪除**，檢查出錯也一樣刪。不留任何長期 token：方案在 Yang 滿意之前不分享，長期 verify token 只會讓第 1 層永遠被略過。
+- 每次執行開始時，先刪掉被中斷的執行留下的 verify token，並印出刪了幾個。因此**不能同時跑兩個 verify-site**：後開始的那個會把前一個正在用的 token 刪掉，造成假的 FAIL。
+- worker 每個請求都即時讀 `plan_share_tokens`（`router.rs:186`），剛發的 token 馬上生效。
+- 共用 `share-token` 的 mint helper（`created_by` 是參數）。
 - 和 `share-token` 一樣是附屬表操作，**不寫**方案的稽核紀錄（`share_token.rs:8-13`）。
 - token 全文永遠不印出，只印 fingerprint。
-- **風險：** 檢視 token 也能打開憑證 PDF，裡面有訂位代號和姓名（`router.rs:200-225`）。所以 token 一定要能輪換；行程結束、舊方案徹底清除時，一起停用。
-- 某方案沒有 verify token 時，給 WARN 並略過第 1 層。
+- **風險：** 檢視 token 也能打開憑證 PDF，裡面有訂位代號和姓名（`router.rs:200-225`）。所以 token 只存在檢查的那幾秒；刪除失敗時錯誤訊息指向 `travel share-token clear --plan-id <id>`。
+- 原本的 `--provision-token [--rotate]` 已移除。
 
 **頁面判定**（用 HTML parser，只看 `<body>` 裡的元素。每頁都嵌了整份 CSS，`mod.rs:22`，直接搜字串會誤中）：
 
@@ -181,7 +180,7 @@ PNG 解碼沿用 `decode_rgba_png`。所有常數和 renderer 共用，不另外
 
 ## 決定（Yang，2026-10-30）
 
-1. **verify token：** 每個方案一個專用的檢視 token，規則見第 1 層。
+1. **verify token：** 每個方案一個專用的檢視 token，規則見第 1 層。（2026-11-02 改為每次執行臨時發放、用完即刪。）
 2. **檢查範圍：** 預設檢查所有未軟刪的方案，含已結束的行程。
 3. **異常大片文字：** 只給 WARN，不判 FAIL。
 
@@ -208,6 +207,6 @@ PNG 解碼沿用 `decode_rgba_png`。所有常數和 renderer 共用，不另外
 - **延伸檢查只看 zh 頁**：語言不影響這些網址。
 - **同行方案的站點**：每個選項的 `div.companion-stops` 裡至少要有一個 `span.stop-chip`；站點清單是空的給 WARN（`companion_option_stops` 缺資料），不判 FAIL。
 - **修復提示**：頁面上出現 `map_artifacts` 沒有紀錄（或 `skipped`）的 `<img>` 時，提示刪除 R2 物件，而不是重跑 snapshot-maps——snapshot-maps 不會再處理它不認得的 key。
-- **token：** `--provision-token` 只接受未軟刪的方案；若意外出現多個有效 verify token，保留最新的，其餘停用（`deactivated_by='verify-site'`）。檢查時遇到多個有效 token 會給 WARN 並建議 `--rotate`。
+- **token：** 改為每次執行臨時發放、用完即刪（見第 1 層），`--provision-token`／`--rotate` 和「沒有 token 就 WARN 略過」都已移除。
 - **所有網址**（不只帶 token 的）都經 `curl -K -` 從 stdin 傳入；錯誤訊息中的 token 一律換成 fingerprint。每次抓取前先刪掉暫存檔，避免沒有 body 的回應讀到上一次的內容。
 - **縮圖總表**：每格是線上地圖縮小一半，下方標 key；非正常狀態另標 `SKIPPED`、`PLACEHOLDER`、`MISSING`、`SKIPPED BUT SERVED` 等。使用 snapshot-maps 的 `Raster`、點陣字、`TITLE_INK` 和 PNG 編碼器。
