@@ -61,7 +61,7 @@ Read-only check of the LIVE dashboard: each map key's live bytes vs map_artifact
 background, title + credit), and the viewer page in zh \
 and en (page, language, no owner chrome, data-plan-id/data-view, map slots vs \
 map_artifacts via data-map-key, the ?v= map URL bytes, legends vs map_legend_stops, \
-companion/stay images, voucher PDF). All live plans by default. One verdict line per \
+companion/stay images, voucher PDFs, and plan-document PDFs (day/summary placement + sha256)). All live plans by default. One verdict line per \
 check, then a summary; exits 1 on any FAIL. --contact-sheet <dir> also writes \
 <dir>/<plan>.png, a labelled thumbnail grid of the plan's live maps (advisory). The \
 viewer page is opened with a verify token minted for this run and deleted right after \
@@ -496,6 +496,7 @@ async fn viewer_page_checks(
     let mut versioned: Vec<(String, Url)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut zh_doc = None;
+    let mut en_doc = None;
     for lang in [Lang::Zh, Lang::En] {
         let code = lang.code();
         let url = match lang {
@@ -542,8 +543,9 @@ async fn viewer_page_checks(
                 Err(c) => tally.emit(plan, "slot", &format!("{code}:{key}"), &c),
             }
         }
-        if lang == Lang::Zh {
-            zh_doc = Some(doc);
+        match lang {
+            Lang::Zh => zh_doc = Some(doc),
+            Lang::En => en_doc = Some(doc),
         }
     }
 
@@ -561,15 +563,30 @@ async fn viewer_page_checks(
         tally.emit(plan, "cached", &key, &check);
     }
 
-    // Extended checks: the language does not change these, so the zh page only.
+    let documents = travel_db::repo::plan_documents::list(conn, plan).await?;
+    for (code, doc) in [("zh", zh_doc.as_ref()), ("en", en_doc.as_ref())] {
+        if let Some(doc) = doc {
+            for (key, check) in page::document_placement_checks(doc, &documents) {
+                tally.emit(plan, "document", &format!("{code}:{key}"), &check);
+            }
+        }
+    }
     if let Some(doc) = zh_doc {
-        extended_checks(&doc, plan, &base, token, tmp, tally);
+        extended_checks(&doc, plan, &base, token, tmp, tally, &documents);
     }
     Ok(())
 }
 
-/// Companion option maps, booked-stay photos and location minimaps, voucher PDFs.
-fn extended_checks(doc: &page::PageDoc, plan: &str, base: &Url, token: &str, tmp: &Path, tally: &mut Tally) {
+/// Companion option maps, booked-stay photos and location minimaps, voucher PDFs and plan documents.
+fn extended_checks(
+    doc: &page::PageDoc,
+    plan: &str,
+    base: &Url,
+    token: &str,
+    tmp: &Path,
+    tally: &mut Tally,
+    documents: &[travel_db::repo::plan_documents::PlanDocument],
+) {
     let external = |key: String, src: &str, tally: &mut Tally| {
         let check = match base.join(src) {
             Err(e) => Check::fail(format!("image src does not parse as a URL ({e})"), None),
@@ -617,6 +634,26 @@ fn extended_checks(doc: &page::PageDoc, plan: &str, base: &Url, token: &str, tmp
             },
         };
         tally.emit(plan, "extra", &format!("voucher-{}", i + 1), &check);
+    }
+    let valid_hrefs = page::valid_document_hrefs(doc, documents);
+    for document in documents {
+        let Some(href) = valid_hrefs.get(&document.doc_key) else {
+            tally.emit(
+                plan,
+                "document",
+                &format!("pdf:{}", document.doc_key),
+                &Check::fail(format!("{} has no identity-valid link on the zh page", document.doc_key), None),
+            );
+            continue;
+        };
+        let check = match page::voucher_target(base, href, token) {
+            Err(c) => Check::fail(c.detail, c.next),
+            Ok(url) => match http_get(url.as_str(), tmp) {
+                Ok(live) => page::document_verdict(live.http, &live.body, &document.sha256),
+                Err(e) => Check::fail(format!("document fetch failed: {}", redact(&e, token)), None),
+            },
+        };
+        tally.emit(plan, "document", &format!("pdf:{}", document.doc_key), &check);
     }
 }
 

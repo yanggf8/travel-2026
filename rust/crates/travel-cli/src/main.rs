@@ -24,6 +24,7 @@ mod ota_status; // ota-status DB-native provider coverage view
 mod plan;
 mod promote_offers;
 mod plan_resolver;
+mod plan_documents;
 mod plans;
 mod scrape_parser;
 mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-param catalog mutations
@@ -673,6 +674,24 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             set_activity::run_reorder(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "add-document" => {
+            if wants_help(rest, plan_documents::ADD_USAGE) { return Ok(()); }
+            plan_resolver::reject_unknown_flags(rest, &["--kind", "--label", "--label-zh", "--file", "--day", "--sort", "--dest", "--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"], &[])?;
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            plan_documents::run_add(rest, plan_id).await
+        }
+        [cmd, rest @ ..] if cmd == "remove-document" => {
+            if wants_help(rest, plan_documents::REMOVE_USAGE) { return Ok(()); }
+            plan_resolver::reject_unknown_flags(rest, &["--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"], &[])?;
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            plan_documents::run_remove(rest, plan_id).await
+        }
+        [cmd, rest @ ..] if cmd == "documents" => {
+            if wants_help(rest, plan_documents::LIST_USAGE) { return Ok(()); }
+            plan_resolver::reject_unknown_flags(rest, &["--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"], &[])?;
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            plan_documents::run_list(rest, plan_id).await
+        }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
         [cmd, rest @ ..] if cmd == "itinerary" => view_itinerary::run(rest).await,
         [cmd, rest @ ..] if cmd == "transport" => view_transport::run(rest).await,
@@ -1067,6 +1086,7 @@ VIEWS\n\
   itinerary [--dest slug]       daily plan\n\
   transport [--dest slug]       transport summary\n\
   bookings [--dest slug]        booking ledger\n\
+  documents [--plan-id P]       ticket / voucher PDF documents\n\
   query-bookings [--dest slug] [--category c] [--status s] [--max N]\n\
   query-offers [--source a,b] [--dest d] [--max-price N] [--start D] [--end D] [--limit N] [--capture-id|--job-id|--attempt-id]\n\
   query-recommendations [--day N] [--session s] [--kind activity|meal|route] [--dest slug]  List AI-recommended items awaiting confirmation\n\
@@ -1081,6 +1101,7 @@ VIEWS\n\
 ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   create-plan <plan_id> --dest <slug> --start <d> --end <d> --airport <IATA> [--region ..] [--nights N]  Create a fast-path plan\n\
   set-dates <start> <end> [reason]\n\
+  add-document <doc_key> --kind K --label EN --label-zh ZH --file PATH [--day N]... | remove-document <doc_key>\n\
   set-day-theme <day> [theme] [--zh \"<zh>\"]\n\
   scaffold-itinerary | populate-itinerary | swap-days <dayA> <dayB> | add-day-variant | set-day-variant-label | remove-day-variant\n\
   add-activity <day> <session> <title> [--after <id|title>] [--zh \"<zh>\"] [...]\n\

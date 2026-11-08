@@ -295,19 +295,25 @@ pub fn render_with_logistics(
     map_status: &super::map::MapStatus,
     clothing_tips: &[ClothingTip],
 ) -> String {
+    render_with_documents(day, plan_id, lang, map_status, clothing_tips, &[], None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn render_with_documents(
+    day: &Day,
+    plan_id: &str,
+    lang: &str,
+    map_status: &super::map::MapStatus,
+    clothing_tips: &[ClothingTip],
+    documents: &[crate::model::PlanDocument],
+    token: Option<&str>,
+) -> String {
     let mut h = String::new();
-    if day.variants.is_empty() {
-        h.push_str(&format!(
-            "<section class=\"day day-{}\">",
-            esc(&day.day_type)
-        ));
-    } else {
-        h.push_str(&format!(
-            "<section class=\"day day-{}\" data-day=\"{}\">",
-            esc(&day.day_type),
-            day.day_number
-        ));
-    }
+    h.push_str(&format!(
+        "<section class=\"day day-{}\" data-day=\"{}\">",
+        esc(&day.day_type),
+        day.day_number
+    ));
     h.push_str(&format!(
         "<h2>{}</h2>",
         esc(&tf(
@@ -322,6 +328,12 @@ pub fn render_with_logistics(
             esc(super::day_option_name(day, lang))
         ));
     }
+    h.push_str(&super::summary::day_documents(
+        documents,
+        day.day_number,
+        lang,
+        token,
+    ));
     h.push_str(&render_content(
         day,
         plan_id,
@@ -368,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn no_variant_plan_html_unchanged() {
+    fn no_variant_plan_html() {
         let day = Day {
             day_number: 2,
             date: "2026-11-14".into(),
@@ -424,8 +436,76 @@ mod tests {
         );
         assert_eq!(
             html,
-            "<section class=\"day day-full\"><h2>第 2 天 · 2026-11-14</h2><div class=\"theme\">京都巡禮</div><div class=\"weather\">🌧️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></section>"
+            "<section class=\"day day-full\" data-day=\"2\"><h2>第 2 天 · 2026-11-14</h2><div class=\"theme\">京都巡禮</div><div class=\"weather\">🌧️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></section>"
         );
+    }
+
+    #[test]
+    fn documents_render_in_main_day_card_but_never_in_variant_blocks() {
+        let day = Day {
+            day_number: 1,
+            day_type: "arrival".into(),
+            theme: "Main".into(),
+            variants: vec![Day {
+                day_number: 3,
+                day_type: "arrival".into(),
+                theme: "Variant".into(),
+                variant_of: Some(1),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let documents = vec![
+            crate::model::PlanDocument {
+                doc_key: "flight".into(),
+                kind: "flight_eticket".into(),
+                label: "Flight".into(),
+                label_zh: "機票".into(),
+                r2_key: "p-1/doc-flight.pdf".into(),
+                days: vec![1],
+                ..Default::default()
+            },
+            crate::model::PlanDocument {
+                doc_key: "hotel".into(),
+                kind: "hotel_voucher".into(),
+                label: "Hotel".into(),
+                label_zh: "住宿券".into(),
+                r2_key: "p-1/doc-hotel.pdf".into(),
+                days: vec![2],
+                ..Default::default()
+            },
+        ];
+        let html = render_with_documents(
+            &day,
+            "p-1",
+            "en",
+            &super::super::map::MapStatus::default(),
+            &[],
+            &documents,
+            Some("t0k"),
+        );
+        let main = html.split("<details class=\"day-variant\"").next().unwrap();
+        let variant = html.split("<details class=\"day-variant\"").nth(1).unwrap();
+        assert!(main.contains("data-doc=\"flight\""), "{main}");
+        assert!(main.contains("href=\"/voucher/p-1/doc-flight.pdf?token=t0k\""));
+        assert!(!main.contains("data-doc=\"hotel\""));
+        assert!(!variant.contains("doc-link"), "{variant}");
+        assert!(html.find("day-documents").unwrap() < html.find("<div class=\"theme\">Main</div>").unwrap());
+    }
+
+    #[test]
+    fn no_mapped_documents_renders_no_day_document_block() {
+        let day = Day { day_number: 1, ..Default::default() };
+        let html = render_with_documents(
+            &day,
+            "p-1",
+            "en",
+            &super::super::map::MapStatus::default(),
+            &[],
+            &[],
+            None,
+        );
+        assert!(!html.contains("day-documents"));
     }
 
     #[test]

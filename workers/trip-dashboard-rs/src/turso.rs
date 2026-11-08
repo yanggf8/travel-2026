@@ -78,19 +78,34 @@ pub async fn pipeline(turso_url: &str, token: &str, sqls: &[String]) -> Result<V
         )));
     }
     let json: Value = res.json().await?;
-    let mut out = Vec::with_capacity(sqls.len());
-    for (i, _) in sqls.iter().enumerate() {
-        let entry = json.get("results").and_then(|r| r.get(i));
+    decode_pipeline(&json, sqls.len()).map_err(Error::RustError)
+}
+
+/// Decode a /v2/pipeline response into one Vec<Row> per statement. Fails loud
+/// when a statement failed (Hrana puts it at `results[i] = {type:"error",
+/// error:{..}}`) or its result is missing — a failed query must never render
+/// as an empty section.
+pub fn decode_pipeline(json: &Value, n: usize) -> std::result::Result<Vec<Vec<Row>>, String> {
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let entry = json
+            .get("results")
+            .and_then(|r| r.get(i))
+            .ok_or_else(|| format!("Turso query {i}: no result in the pipeline response"))?;
         if let Some(err) = entry
-            .and_then(|e| e.get("response"))
-            .and_then(|r| r.get("error"))
+            .get("error")
+            .or_else(|| entry.get("response").and_then(|r| r.get("error")))
         {
-            return Err(Error::RustError(format!("Turso query {i} error: {err}")));
+            return Err(format!("Turso query {i} error: {err}"));
+        }
+        if entry.get("type").and_then(|t| t.as_str()) == Some("error") {
+            return Err(format!("Turso query {i} error: {entry}"));
         }
         let result = entry
-            .and_then(|e| e.get("response"))
-            .and_then(|r| r.get("result"));
-        out.push(result.map(decode_result).unwrap_or_default());
+            .get("response")
+            .and_then(|r| r.get("result"))
+            .ok_or_else(|| format!("Turso query {i}: response has no result"))?;
+        out.push(decode_result(result));
     }
     Ok(out)
 }
@@ -99,6 +114,35 @@ pub async fn pipeline(turso_url: &str, token: &str, sqls: &[String]) -> Result<V
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pipeline_ok_entries_decode_per_statement() {
+        let ok = json!({"type": "ok", "response": {"type": "execute", "result": {
+            "cols": [{"name": "n"}], "rows": [[{"type": "integer", "value": "1"}]]}}});
+        let resp = json!({"results": [ok.clone(), ok, {"type": "ok", "response": {"type": "close"}}]});
+        let out = decode_pipeline(&resp, 2).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1][0]["n"], json!("1"));
+    }
+
+    #[test]
+    fn pipeline_statement_error_fails_loud() {
+        let resp = json!({"results": [
+            {"type": "ok", "response": {"type": "execute", "result": {"cols": [], "rows": []}}},
+            {"type": "error", "error": {"message": "SQLite error: no such table: plan_documents", "code": "SQLITE_UNKNOWN"}}
+        ]});
+        let err = decode_pipeline(&resp, 2).unwrap_err();
+        assert!(err.contains("Turso query 1 error"), "{err}");
+        assert!(err.contains("no such table: plan_documents"), "{err}");
+    }
+
+    #[test]
+    fn pipeline_missing_or_resultless_entry_fails_loud() {
+        let ok = json!({"type": "ok", "response": {"type": "execute", "result": {"cols": [], "rows": []}}});
+        assert!(decode_pipeline(&json!({"results": [ok.clone()]}), 2).unwrap_err().contains("query 1: no result"));
+        let bare = json!({"results": [ok, {"type": "ok", "response": {"type": "execute"}}]});
+        assert!(decode_pipeline(&bare, 2).unwrap_err().contains("query 1: response has no result"));
+    }
 
     #[test]
     fn decodes_cols_and_rows() {

@@ -77,6 +77,8 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("details", true) => "訂位明細",
         ("voucher", false) => "Hotel voucher (PDF)",
         ("voucher", true) => "住宿券 PDF",
+        ("ticketsVouchers", false) => "🎫 Tickets & vouchers",
+        ("ticketsVouchers", true) => "🎫 票券與憑證",
         // package offer (booking-summary package row) — ported from render.ts:1081,1086
         ("package", false) => "Package",
         ("package", true) => "套裝",

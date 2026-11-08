@@ -128,12 +128,14 @@ pub fn render_plan(
     }
     body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
-        body.push_str(&day::render_with_logistics(
+        body.push_str(&day::render_with_documents(
             d,
             &plan.plan_id,
             lang,
             map_status,
             &plan.clothing_tips,
+            &plan.documents,
+            token,
         ));
     }
     // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),

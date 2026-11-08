@@ -18,6 +18,7 @@ pub mod plan_fit_offers;
 pub mod plan_lifecycle;
 pub mod plan_offers;
 pub mod plan_copy;
+pub mod plan_documents;
 pub mod plan_schema;
 pub mod origin;
 pub mod ota_attempts;

@@ -577,8 +577,85 @@ fn trim_num(v: f64) -> String {
     }
 }
 
+pub(crate) fn document_link(
+    document: &crate::model::PlanDocument,
+    lang: &str,
+    token: Option<&str>,
+) -> String {
+    let mut href = format!("/voucher/{}", document.r2_key);
+    if let Some(token) = token.filter(|token| !token.is_empty()) {
+        href.push_str("?token=");
+        href.push_str(token);
+    }
+    let label = if lang == "en" { &document.label } else { &document.label_zh };
+    format!(
+        "<a class=\"doc-link\" data-doc=\"{}\" href=\"{}\" target=\"_blank\" rel=\"noopener\">📄 {}</a>",
+        esc(&document.doc_key),
+        esc_url_attr(&href),
+        esc(label)
+    )
+}
+
+pub(crate) fn day_documents(
+    documents: &[crate::model::PlanDocument],
+    day: i64,
+    lang: &str,
+    token: Option<&str>,
+) -> String {
+    let links = documents
+        .iter()
+        .filter(|document| document.days.contains(&day))
+        .map(|document| document_link(document, lang, token))
+        .collect::<String>();
+    if links.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"day-documents\">{links}</div>")
+    }
+}
+
+fn plan_documents(plan: &Plan, lang: &str, token: Option<&str>) -> String {
+    if plan.documents.is_empty() {
+        return String::new();
+    }
+    let mut h = format!(
+        "<section class=\"plan-documents summary-box\"><h2>{}</h2><div class=\"document-list\">",
+        esc(t("ticketsVouchers", lang))
+    );
+    let rank = |document: &crate::model::PlanDocument| match document.kind.as_str() {
+        "flight_eticket" => 0,
+        "hotel_voucher" => 1,
+        "rail_ticket" => 2,
+        "tour_voucher" => 3,
+        _ => 4,
+    };
+    let mut documents = plan.documents.iter().collect::<Vec<_>>();
+    documents.sort_by(|a, b| {
+        (rank(a), a.sort_order)
+            .cmp(&(rank(b), b.sort_order))
+            .then_with(|| a.doc_key.cmp(&b.doc_key))
+    });
+    for document in documents {
+        h.push_str("<div class=\"document-item\">");
+        h.push_str(&document_link(document, lang, token));
+        if !document.days.is_empty() {
+            h.push_str("<span class=\"document-days\">");
+            for day in &document.days {
+                h.push_str(&format!(
+                    "<span class=\"document-day\">{}</span>",
+                    esc(&tf("dayLabel", lang, &[("day", &day.to_string())]))
+                ));
+            }
+            h.push_str("</span>");
+        }
+        h.push_str("</div>");
+    }
+    h.push_str("</div></section>");
+    h
+}
+
 pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
-    let mut h = String::new();
+    let mut h = plan_documents(plan, lang, token);
     // `summary-box` adds the dashed frame (user visibility request); the plan map
     // slot is rendered ABOVE this section (render_plan), never inside the frame.
     h.push_str("<section class=\"booking-summary summary-box\">");
@@ -2077,6 +2154,65 @@ mod tests {
         };
         let html = render(&plan, "en", None);
         assert!(!html.contains("voucher-link"));
+    }
+
+    fn document(key: &str, kind: &str, sort_order: i64) -> crate::model::PlanDocument {
+        crate::model::PlanDocument {
+            doc_key: key.into(),
+            kind: kind.into(),
+            label: "Flight <\"&".into(),
+            label_zh: "電子機票".into(),
+            sort_order,
+            r2_key: format!("p-1/doc-{key}.pdf"),
+            days: vec![1, 5],
+        }
+    }
+
+    #[test]
+    fn no_plan_documents_renders_no_document_section() {
+        let html = render(&Plan::default(), "zh", None);
+        assert!(!html.contains("plan-documents"));
+        assert!(!html.contains("doc-link"));
+    }
+
+    #[test]
+    fn plan_documents_sort_by_kind_sort_order_and_key_before_booking_summary() {
+        let plan = Plan {
+            documents: vec![
+                document("tour", "tour_voucher", -10),
+                document("rail", "rail_ticket", 0),
+                document("hotel", "hotel_voucher", 0),
+                document("flight-b", "flight_eticket", 0),
+                document("flight-a", "flight_eticket", 0),
+            ],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", Some("t0k"));
+        let section = html.find("plan-documents").unwrap();
+        assert!(section < html.find("booking-summary").unwrap());
+        let keys = ["flight-a", "flight-b", "hotel", "rail", "tour"];
+        let positions = keys.map(|key| html.find(&format!("data-doc=\"{key}\"")).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{positions:?}");
+        assert!(html.contains("href=\"/voucher/p-1/doc-flight-a.pdf?token=t0k\""));
+        assert!(html.contains("第 1 天"));
+        assert!(html.contains("第 5 天"));
+    }
+
+    #[test]
+    fn plan_document_labels_switch_language_and_escape_data() {
+        let plan = Plan {
+            documents: vec![document("flight", "flight_eticket", 0)],
+            ..Default::default()
+        };
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("🎫 票券與憑證"));
+        assert!(zh.contains("📄 電子機票"));
+        assert!(!zh.contains("Flight <\"&"));
+        let en = render(&plan, "en", None);
+        assert!(en.contains("🎫 Tickets &amp; vouchers"));
+        assert!(en.contains("📄 Flight &lt;&quot;&amp;</a>"));
+        assert!(en.contains("Day 1"));
+        assert!(!en.contains("Flight <\"&"));
     }
 
     #[test]

@@ -826,8 +826,8 @@ fn owner_login_href_for_plan(slug: &str, lang: &str) -> String {
     format!("/auth/login?next={}", render::urlencode(&next))
 }
 
-/// Load the full plan via a 23-statement Turso pipeline. Query order matches
-/// model::assemble()'s argument order exactly.
+/// Load the full plan via a 26-statement Turso pipeline. Query order matches
+/// model::assemble()'s argument order, followed by clothing tips and plan documents.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
         return Err(Error::RustError(format!("invalid plan slug: {slug}")));
@@ -1001,11 +1001,22 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         "SELECT kind, threshold, text_zh, text_en FROM clothing_tips \
          ORDER BY sort_order, tip_id"
             .to_string(),
+        format!(
+            "SELECT doc_key, kind, label, label_zh, sort_order, r2_key FROM plan_documents \
+             WHERE plan_id = '{slug}' \
+             ORDER BY CASE kind WHEN 'flight_eticket' THEN 0 WHEN 'hotel_voucher' THEN 1 \
+                                WHEN 'rail_ticket' THEN 2 WHEN 'tour_voucher' THEN 3 ELSE 4 END, \
+                      sort_order, doc_key"
+        ),
+        format!(
+            "SELECT doc_key, day_number FROM plan_document_days \
+             WHERE plan_id = '{slug}' ORDER BY doc_key, day_number"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 24 {
+    if r.len() < 26 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 24 results".into(),
+            "Turso pipeline returned fewer than 26 results".into(),
         ));
     }
     let mut plan = model::assemble(
@@ -1013,6 +1024,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18], &r[19], &r[20], &r[21], &r[22],
     );
     plan.clothing_tips = model::clothing_tips(&r[23]);
+    plan.documents = model::plan_documents(&r[24], &r[25]);
     Ok(plan)
 }
 

@@ -70,6 +70,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_reference_tables(&mut issues).await;
     validate_booking_integrity(&mut issues).await;
     validate_day_variants(&mut issues).await;
+    validate_plan_documents(&mut issues).await;
 
     // Always-run: documentation ↔ code drift checks
     validate_completed_items(&mut issues);
@@ -2410,6 +2411,93 @@ fn variant_label_problems(at: &str, who: &str, en: Option<&str>, zh: Option<&str
         }
     }
     out
+}
+
+async fn validate_plan_documents(issues: &mut Vec<Issue>) {
+    let conn = match db::connect_read().await {
+        Ok(c) => c,
+        Err(e) => {
+            issues.push(Issue {
+                category: "plan-documents".to_string(),
+                severity: Severity::Error,
+                message: format!("cannot check plan documents: {e}"),
+                file: Some("turso:plan_documents".to_string()),
+                line: None,
+            });
+            return;
+        }
+    };
+    let result = async {
+        let mut rows = conn.query(
+            "SELECT pd.plan_id, pd.doc_key, pd.day_number, p.plan_id, \
+                    EXISTS(SELECT 1 FROM days d WHERE d.plan_id = pd.plan_id AND d.day_number = pd.day_number), \
+                    EXISTS(SELECT 1 FROM days d WHERE d.plan_id = pd.plan_id AND d.day_number = pd.day_number AND d.variant_of IS NULL) \
+             FROM plan_document_days pd \
+             LEFT JOIN plan_documents p ON p.plan_id = pd.plan_id AND p.doc_key = pd.doc_key \
+             ORDER BY pd.plan_id, pd.doc_key, pd.day_number",
+            (),
+        ).await.map_err(|e| format!("plan document day query failed: {e}"))?;
+        while let Some(row) = rows.next().await.map_err(|e| format!("plan document day row failed: {e}"))? {
+            let plan: String = row.get(0).map_err(|e| e.to_string())?;
+            let key: String = row.get(1).map_err(|e| e.to_string())?;
+            let day: i64 = row.get(2).map_err(|e| e.to_string())?;
+            let parent: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+            let day_exists: i64 = row.get(4).map_err(|e| e.to_string())?;
+            let trip_day_exists: i64 = row.get(5).map_err(|e| e.to_string())?;
+            let at = format!("{plan} document {key} day {day}");
+            if parent.is_none() {
+                issues.push(Issue {
+                    category: "plan-documents".to_string(),
+                    severity: Severity::Error,
+                    message: format!("{at}: day row has no parent plan_documents row"),
+                    file: Some("turso:plan_document_days".to_string()),
+                    line: None,
+                });
+            }
+            if day_exists == 0 || trip_day_exists == 0 {
+                issues.push(Issue {
+                    category: "plan-documents".to_string(),
+                    severity: Severity::Error,
+                    message: if day_exists == 0 {
+                        format!("{at}: referenced day does not exist")
+                    } else {
+                        format!("{at}: referenced day is a variant, not a trip day")
+                    },
+                    file: Some("turso:plan_document_days".to_string()),
+                    line: None,
+                });
+            }
+        }
+        let mut rows = conn.query(
+            "SELECT plan_id, doc_key, r2_key FROM plan_documents ORDER BY plan_id, doc_key",
+            (),
+        ).await.map_err(|e| format!("plan document r2_key query failed: {e}"))?;
+        while let Some(row) = rows.next().await.map_err(|e| format!("plan document r2_key row failed: {e}"))? {
+            let plan: String = row.get(0).map_err(|e| e.to_string())?;
+            let key: String = row.get(1).map_err(|e| e.to_string())?;
+            let actual: String = row.get(2).map_err(|e| e.to_string())?;
+            let expected = format!("{plan}/doc-{key}.pdf");
+            if actual != expected {
+                issues.push(Issue {
+                    category: "plan-documents".to_string(),
+                    severity: Severity::Error,
+                    message: format!("{plan} document {key}: r2_key {actual:?} must be {expected:?}"),
+                    file: Some("turso:plan_documents".to_string()),
+                    line: None,
+                });
+            }
+        }
+        Ok::<(), String>(())
+    }.await;
+    if let Err(message) = result {
+        issues.push(Issue {
+            category: "plan-documents".to_string(),
+            severity: Severity::Error,
+            message,
+            file: Some("turso:plan_documents".to_string()),
+            line: None,
+        });
+    }
 }
 
 /// `validate data`: day-variant invariants across every plan (Error).

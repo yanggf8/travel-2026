@@ -12,8 +12,8 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-10-01
--- Tables: 139 | Indexes: 27
+-- Generated: 2026-11-08
+-- Tables: 143 | Indexes: 27
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -221,6 +221,24 @@ CREATE TABLE clothing_tips (
   text_en TEXT NOT NULL,
   updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
   CHECK ((kind = 'temp_else') = (threshold IS NULL))
+);
+
+CREATE TABLE companion_option_stops (
+  plan_id TEXT NOT NULL,
+  option_key TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  lat REAL,
+  lon REAL,
+  PRIMARY KEY (plan_id, option_key, seq)
+);
+
+CREATE TABLE companion_options (
+  plan_id TEXT NOT NULL,
+  option_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (plan_id, option_key)
 );
 
 CREATE TABLE comparison_rules (
@@ -815,6 +833,28 @@ CREATE TABLE plan_destinations (
   status TEXT NOT NULL DEFAULT 'draft',
   created_at DATETIME, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, home_address TEXT,
   PRIMARY KEY (plan_id, slug)
+);
+
+CREATE TABLE plan_document_days (
+  plan_id TEXT NOT NULL,
+  doc_key TEXT NOT NULL,
+  day_number INTEGER NOT NULL,
+  PRIMARY KEY (plan_id, doc_key, day_number)
+);
+
+CREATE TABLE plan_documents (
+  plan_id TEXT NOT NULL,
+  doc_key TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('flight_eticket','hotel_voucher','tour_voucher','rail_ticket')),
+  label TEXT NOT NULL,
+  label_zh TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  r2_key TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, doc_key)
 );
 
 CREATE TABLE plan_event_data (

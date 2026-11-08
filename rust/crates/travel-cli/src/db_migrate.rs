@@ -482,6 +482,35 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS plan_documents (
+  plan_id TEXT NOT NULL,
+  doc_key TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('flight_eticket','hotel_voucher','tour_voucher','rail_ticket')),
+  label TEXT NOT NULL,
+  label_zh TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  r2_key TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (plan_id, doc_key)
+);"#,
+    )
+    .await;
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS plan_document_days (
+  plan_id TEXT NOT NULL,
+  doc_key TEXT NOT NULL,
+  day_number INTEGER NOT NULL,
+  PRIMARY KEY (plan_id, doc_key, day_number)
+);"#,
+    )
+    .await;
+
     // 12b. plan_map_snapshots — records when the dashboard's static map PNGs
     //      were last snapshotted (by Rust `travel snapshot-maps` via PNG renderer→R2)
     //      so the `check-maps-fresh` lint can flag maps that have gone stale

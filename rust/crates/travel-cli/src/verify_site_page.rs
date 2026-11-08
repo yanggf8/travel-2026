@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use scraper::{ElementRef, Html, Selector};
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::verify_site::{Check, Next};
@@ -77,6 +78,15 @@ pub(crate) struct VariantBlock {
     pub(crate) summary: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DocumentLink {
+    pub(crate) key: String,
+    pub(crate) href: String,
+    pub(crate) summary: bool,
+    pub(crate) day: Option<i64>,
+    pub(crate) variant: bool,
+}
+
 /// Everything layer 1 reads from one page.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PageDoc {
@@ -101,6 +111,7 @@ pub(crate) struct PageDoc {
     pub(crate) stay_photos: Vec<String>,
     pub(crate) stay_minimaps: Vec<String>,
     pub(crate) voucher_hrefs: Vec<String>,
+    pub(crate) document_links: Vec<DocumentLink>,
 }
 
 pub(crate) fn parse_page(html: &str) -> PageDoc {
@@ -223,6 +234,24 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
         .select(&sel("a.voucher-link"))
         .filter_map(|a| a.value().attr("href").map(str::to_string))
         .collect();
+    for a in body.select(&sel("a.doc-link")) {
+        let ancestors = a.ancestors().filter_map(ElementRef::wrap).collect::<Vec<_>>();
+        out.document_links.push(DocumentLink {
+            key: a.value().attr("data-doc").unwrap_or("").to_string(),
+            href: a.value().attr("href").unwrap_or("").to_string(),
+            summary: ancestors.iter().any(|el| {
+                el.value().name() == "section" && has_class(*el, "plan-documents")
+            }),
+            day: ancestors
+                .iter()
+                .find(|el| el.value().name() == "section" && has_class(**el, "day"))
+                .and_then(|el| el.value().attr("data-day"))
+                .and_then(|value| value.parse().ok()),
+            variant: ancestors.iter().any(|el| {
+                el.value().name() == "details" && has_class(*el, "day-variant")
+            }),
+        });
+    }
     out
 }
 
@@ -750,6 +779,156 @@ pub(crate) fn external_image_verdict(http: u16, content_type: &str, len: usize) 
     }
 }
 
+fn document_identity_error(
+    link: &DocumentLink,
+    expected: &[travel_db::repo::plan_documents::PlanDocument],
+) -> Option<String> {
+    let Some(document) = expected.iter().find(|document| document.doc_key == link.key) else {
+        return Some(format!("unknown data-doc {:?}", link.key));
+    };
+    let base = Url::parse("https://dashboard.invalid/").expect("static base url");
+    let path = match base.join(&link.href) {
+        Ok(url) => url.path().to_string(),
+        Err(error) => return Some(format!("data-doc {} has an invalid href: {error}", link.key)),
+    };
+    let expected_path = format!("/voucher/{}", document.r2_key);
+    if path != expected_path {
+        return Some(format!(
+            "data-doc {} has href path {path}, expected {expected_path}",
+            link.key
+        ));
+    }
+    None
+}
+
+pub(crate) fn valid_document_hrefs(
+    doc: &PageDoc,
+    expected: &[travel_db::repo::plan_documents::PlanDocument],
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for link in &doc.document_links {
+        if document_identity_error(link, expected).is_none() {
+            out.entry(link.key.clone()).or_insert_with(|| link.href.clone());
+        }
+    }
+    out
+}
+
+pub(crate) fn document_placement_checks(
+    doc: &PageDoc,
+    expected: &[travel_db::repo::plan_documents::PlanDocument],
+) -> Vec<(String, Check)> {
+    let mut out = Vec::new();
+    if expected.is_empty() && doc.document_links.is_empty() {
+        return vec![("summary".to_string(), Check::pass("no plan documents"))];
+    }
+
+    let mut summary_counts: HashMap<String, usize> = HashMap::new();
+    for link in doc.document_links.iter().filter(|link| link.summary) {
+        *summary_counts.entry(link.key.clone()).or_default() += 1;
+    }
+    let mut summary_problems = Vec::new();
+    for document in expected {
+        match summary_counts.get(&document.doc_key).copied().unwrap_or(0) {
+            0 => summary_problems.push(format!("missing {}", document.doc_key)),
+            1 => {}
+            count => summary_problems.push(format!("duplicate {} ({count} links)", document.doc_key)),
+        }
+    }
+    for (key, count) in &summary_counts {
+        if !expected.iter().any(|document| &document.doc_key == key) {
+            summary_problems.push(format!("unexpected {key} ({count} links)"));
+        }
+    }
+    out.push((
+        "summary".to_string(),
+        if summary_problems.is_empty() {
+            Check::pass(format!("{} summary document link(s)", expected.len()))
+        } else {
+            Check::fail(
+                format!("summary document keys differ: {}", summary_problems.join(", ")),
+                Some(Next::Deploy),
+            )
+        },
+    ));
+
+    for (index, link) in doc.document_links.iter().enumerate() {
+        if let Some(error) = document_identity_error(link, expected) {
+            out.push((
+                format!("identity-{}", index + 1),
+                Check::fail(error, Some(Next::Deploy)),
+            ));
+        }
+    }
+    if doc.document_links.iter().any(|link| link.variant) {
+        out.push((
+            "variants".to_string(),
+            Check::fail("a document link rendered inside a day-variant block", Some(Next::Deploy)),
+        ));
+    }
+    for (index, link) in doc.document_links.iter().enumerate().filter(|(_, link)| !link.variant) {
+        match link.day {
+            Some(day) => {
+                if let Some(document) = expected.iter().find(|document| document.doc_key == link.key)
+                    && !document.days.contains(&day)
+                {
+                    out.push((
+                        format!("unexpected-day-{}", index + 1),
+                        Check::fail(
+                            format!("unexpected day placement: {} is not mapped to day {day}", link.key),
+                            Some(Next::Deploy),
+                        ),
+                    ));
+                }
+            }
+            None if !link.summary => out.push((
+                format!("placement-{}", index + 1),
+                Check::fail(
+                    format!("{} is outside the summary and main day cards", link.key),
+                    Some(Next::Deploy),
+                ),
+            )),
+            None => {}
+        }
+    }
+    for document in expected {
+        for day in &document.days {
+            let found = doc.document_links.iter().any(|link| {
+                link.key == document.doc_key
+                    && link.day == Some(*day)
+                    && !link.variant
+                    && document_identity_error(link, expected).is_none()
+            });
+            out.push((
+                format!("{}:day-{day}", document.doc_key),
+                if found {
+                    Check::pass(format!("{} linked in day {day}", document.doc_key))
+                } else {
+                    Check::fail(
+                        format!("{} has no valid doc-link in the main day {day} card", document.doc_key),
+                        Some(Next::Deploy),
+                    )
+                },
+            ));
+        }
+    }
+    out
+}
+
+pub(crate) fn document_verdict(http: u16, body: &[u8], expected_sha256: &str) -> Check {
+    if http != 200 {
+        return Check::fail(format!("HTTP {http}: document PDF could not be fetched"), None);
+    }
+    if !body.starts_with(b"%PDF-") {
+        return Check::fail(format!("HTTP 200 but the {}-byte body is not a PDF", body.len()), None);
+    }
+    let actual = format!("{:x}", Sha256::digest(body));
+    if actual != expected_sha256 {
+        return Check::fail("document PDF sha256 differs from plan_documents.sha256", None);
+    }
+    Check::pass(format!("PDF, {} bytes, sha256 matches", body.len()))
+}
+
 /// Resolve a voucher link: Ok(url) for a `/voucher/*` link that carries the
 /// page's own token; Err(check) otherwise. Never puts the URL or token in the
 /// check text.
@@ -1229,7 +1408,10 @@ mod tests {
             <div class=\"booking-cand-detail\"><div class=\"candidate-gallery\"><figure class=\"candidate-gallery-item\"><a href=\"u\"><img class=\"candidate-gallery-img\" src=\"https://img.example/1.jpg\" alt=\"h\"></a></figure></div>\
             <div class=\"cand-minimap\"><a class=\"cand-minimap-link\" href=\"m\"><img class=\"cand-minimap-img\" src=\"https://server.arcgisonline.com/mm\" alt=\"\"></a></div></div>\
             <div class=\"candidate-gallery\"><img class=\"candidate-gallery-img\" src=\"https://img.example/candidate-only.jpg\"></div>\
-            <a class=\"voucher-link\" href=\"/voucher/p-1/v.pdf?token=abc\" target=\"_blank\">📄</a>";
+            <a class=\"voucher-link\" href=\"/voucher/p-1/v.pdf?token=abc\" target=\"_blank\">📄</a>\
+            <section class=\"plan-documents\"><a class=\"doc-link\" data-doc=\"flight\" href=\"/voucher/p-1/doc-flight.pdf?token=abc\">機票</a></section>\
+            <section class=\"day\" data-day=\"1\"><a class=\"doc-link\" data-doc=\"flight\" href=\"/voucher/p-1/doc-flight.pdf?token=abc\">機票</a>\
+            <details class=\"day-variant\"><a class=\"doc-link\" data-doc=\"wrong\" href=\"/voucher/p-1/doc-wrong.pdf?token=abc\">錯</a></details></section>";
         let doc = parse_page(&viewer_page(extra));
         let c = doc.companion.as_ref().unwrap();
         assert_eq!(c.cards, 2);
@@ -1238,6 +1420,119 @@ mod tests {
         assert_eq!(doc.stay_photos, ["https://img.example/1.jpg"]);
         assert_eq!(doc.stay_minimaps, ["https://server.arcgisonline.com/mm"]);
         assert_eq!(doc.voucher_hrefs, ["/voucher/p-1/v.pdf?token=abc"]);
+        assert_eq!(doc.document_links.len(), 3);
+        assert!(doc.document_links[0].summary);
+        assert_eq!(doc.document_links[1].day, Some(1));
+        assert!(!doc.document_links[1].variant);
+        assert!(doc.document_links[2].variant);
+    }
+
+    fn expected_documents() -> Vec<travel_db::repo::plan_documents::PlanDocument> {
+        vec![
+            travel_db::repo::plan_documents::PlanDocument {
+                doc_key: "A".into(),
+                r2_key: "p-1/doc-a.pdf".into(),
+                days: vec![1],
+                ..Default::default()
+            },
+            travel_db::repo::plan_documents::PlanDocument {
+                doc_key: "B".into(),
+                r2_key: "p-1/doc-b.pdf".into(),
+                days: vec![2],
+                ..Default::default()
+            },
+        ]
+    }
+
+    #[test]
+    fn no_plan_documents_is_one_quiet_pass() {
+        let checks = document_placement_checks(&parse_page(&viewer_page("")), &[]);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].1.level, Level::Pass);
+        assert_eq!(checks[0].1.detail, "no plan documents");
+    }
+
+    #[test]
+    fn document_placement_correct_page_passes() {
+        let html = viewer_page(
+            "<section class=\"plan-documents\">\
+             <a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a>\
+             <a class=\"doc-link\" data-doc=\"B\" href=\"/voucher/p-1/doc-b.pdf?token=abc\"></a></section>\
+             <section class=\"day\" data-day=\"1\"><a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></section>\
+             <section class=\"day\" data-day=\"2\"><a class=\"doc-link\" data-doc=\"B\" href=\"/voucher/p-1/doc-b.pdf?token=abc\"></a></section>",
+        );
+        let doc = parse_page(&html);
+        let expected = expected_documents();
+        let checks = document_placement_checks(&doc, &expected);
+        assert!(checks.iter().all(|(_, check)| check.level == Level::Pass), "{checks:?}");
+        assert_eq!(valid_document_hrefs(&doc, &expected).len(), 2);
+    }
+
+    #[test]
+    fn duplicate_summary_link_names_missing_document() {
+        let html = viewer_page(
+            "<section class=\"plan-documents\">\
+             <a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a>\
+             <a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></section>",
+        );
+        let checks = document_placement_checks(&parse_page(&html), &expected_documents());
+        let summary = checks.iter().find(|(key, _)| key == "summary").map(|(_, check)| check).unwrap();
+        assert_eq!(summary.level, Level::Fail);
+        assert!(summary.detail.contains("missing B"), "{summary:?}");
+        assert!(summary.detail.contains("duplicate A"), "{summary:?}");
+    }
+
+    #[test]
+    fn day_link_identity_must_match_its_data_doc() {
+        let html = viewer_page(
+            "<section class=\"plan-documents\">\
+             <a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a>\
+             <a class=\"doc-link\" data-doc=\"B\" href=\"/voucher/p-1/doc-b.pdf?token=abc\"></a></section>\
+             <section class=\"day\" data-day=\"1\"><a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></section>\
+             <section class=\"day\" data-day=\"2\"><a class=\"doc-link\" data-doc=\"B\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></section>",
+        );
+        let checks = document_placement_checks(&parse_page(&html), &expected_documents());
+        assert!(checks.iter().any(|(_, check)| {
+            check.level == Level::Fail
+                && check.detail.contains("data-doc B")
+                && check.detail.contains("/voucher/p-1/doc-a.pdf")
+        }), "{checks:?}");
+    }
+
+    #[test]
+    fn unexpected_day_placement_fails() {
+        let expected = expected_documents().into_iter().take(1).collect::<Vec<_>>();
+        let html = viewer_page(
+            "<section class=\"plan-documents\"><a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></section>\
+             <section class=\"day\" data-day=\"2\"><a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></section>",
+        );
+        let checks = document_placement_checks(&parse_page(&html), &expected);
+        assert!(checks.iter().any(|(key, check)| {
+            key.starts_with("unexpected-day-")
+                && check.level == Level::Fail
+                && check.detail.contains("A is not mapped to day 2")
+        }), "{checks:?}");
+    }
+
+    #[test]
+    fn document_links_inside_variants_still_fail() {
+        let expected = expected_documents().into_iter().take(1).collect::<Vec<_>>();
+        let html = viewer_page(
+            "<section class=\"plan-documents\"><a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></section>\
+             <section class=\"day\" data-day=\"1\"><details class=\"day-variant\"><a class=\"doc-link\" data-doc=\"A\" href=\"/voucher/p-1/doc-a.pdf?token=abc\"></a></details></section>",
+        );
+        let checks = document_placement_checks(&parse_page(&html), &expected);
+        assert!(checks.iter().any(|(key, check)| key == "variants" && check.level == Level::Fail), "{checks:?}");
+    }
+
+    #[test]
+    fn document_pdf_requires_signature_and_matching_sha256() {
+        let body = b"%PDF-1.7\nfixture";
+        let sha = format!("{:x}", Sha256::digest(body));
+        assert_eq!(document_verdict(200, body, &sha).level, Level::Pass);
+        assert_eq!(document_verdict(200, body, "00").level, Level::Fail);
+        assert_eq!(document_verdict(200, b"<html>", &sha).level, Level::Fail);
+        assert_eq!(document_verdict(404, body, &sha).level, Level::Fail);
     }
 
     #[test]

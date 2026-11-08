@@ -221,7 +221,8 @@ h1 {
 .booking-notes-body li { margin: 1px 0; }
 
 /* Voucher PDF link — small inline button consistent with the booking UI. */
-.voucher-link {
+.voucher-link,
+.doc-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -234,7 +235,16 @@ h1 {
   border-radius: 8px;
   text-decoration: none;
 }
-.voucher-link:hover { text-decoration: underline; }
+.voucher-link:hover,
+.doc-link:hover { text-decoration: underline; }
+.plan-documents h2 { margin: 0 0 8px; font-size: 18px; }
+.document-list { display: grid; gap: 8px; }
+.document-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.document-list .doc-link,
+.day-documents .doc-link { display: inline-block; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.document-days { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.document-day { color: var(--text-dim); font-size: 11px; background: var(--bg); border-radius: 999px; padding: 2px 7px; }
+.day-documents { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
 
 /* ---- Domestic candidates (sea-view shortlist) ---- */
 .candidate-grid {

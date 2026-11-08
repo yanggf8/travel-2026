@@ -235,6 +235,39 @@ pub struct CompanionOption {
     pub stops: Vec<CompanionStop>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PlanDocument {
+    pub doc_key: String,
+    pub kind: String,
+    pub label: String,
+    pub label_zh: String,
+    pub sort_order: i64,
+    pub r2_key: String,
+    pub days: Vec<i64>,
+}
+
+pub fn plan_documents(document_rows: &[Row], day_rows: &[Row]) -> Vec<PlanDocument> {
+    let mut documents: Vec<PlanDocument> = document_rows
+        .iter()
+        .map(|row| PlanDocument {
+            doc_key: s(row, "doc_key"),
+            kind: s(row, "kind"),
+            label: s(row, "label"),
+            label_zh: s(row, "label_zh"),
+            sort_order: i(row, "sort_order"),
+            r2_key: s(row, "r2_key"),
+            days: Vec::new(),
+        })
+        .collect();
+    for row in day_rows {
+        let key = s(row, "doc_key");
+        if let Some(document) = documents.iter_mut().find(|document| document.doc_key == key) {
+            document.days.push(i(row, "day_number"));
+        }
+    }
+    documents
+}
+
 #[derive(Debug, Default)]
 pub struct Plan {
     pub plan_id: String,
@@ -280,6 +313,7 @@ pub struct Plan {
     /// 同行方案 alternatives (unconfirmed), keyed stops for the companion map.
     /// Empty → the companion section renders from the note fallback only.
     pub companion_options: Vec<CompanionOption>,
+    pub documents: Vec<PlanDocument>,
     /// Clothing-advice bands from the GLOBAL `clothing_tips` reference table, in
     /// sort_order. Filled by the router; empty → the day cards show no tips.
     pub clothing_tips: Vec<ClothingTip>,
