@@ -2298,7 +2298,7 @@ async fn read_lifecycle(
 /// or `None` for every plan. Each message names the plan, destination and day, and contains
 /// "variant". Invariants: `variant_of` points at an existing trip day of the same plan+destination
 /// (no chain, no self-reference); a variant's date/day_type equal its main day's; a variant and a
-/// main day that has variants carry non-empty labels (EN printable ASCII 1-32, ZH 1-16 chars).
+/// main day that has variants carry non-empty labels (EN 1-24 chars of A-Za-z0-9 space . : - +, ZH 1-16 chars).
 async fn variant_violations(
     conn: &libsql::Connection,
     scope: Option<(&str, &str)>,
@@ -2396,9 +2396,8 @@ fn variant_label_problems(at: &str, who: &str, en: Option<&str>, zh: Option<&str
     match en.map(str::trim).filter(|s| !s.is_empty()) {
         None => out.push(format!("{at}: {who} has no variant_label")),
         Some(_) => {
-            let e = en.unwrap_or("");
-            if e.chars().count() > 32 || !e.chars().all(|c| (' '..='~').contains(&c)) {
-                out.push(format!("{at}: {who} variant_label must be printable ASCII, 1-32 chars"));
+            if let Some(p) = crate::day_variant::en_label_problem(en.unwrap_or("")) {
+                out.push(format!("{at}: {who} variant_label {p}"));
             }
         }
     }

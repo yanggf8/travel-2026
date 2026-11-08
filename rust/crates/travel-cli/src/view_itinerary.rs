@@ -362,12 +362,18 @@ fn render_day(out: &mut String, d: &DayView, view: &PlanView, is_variant: bool) 
         _ => "",
     };
     if !is_variant {
+        // A main day that has variants shows its own option label (`[晴天方案]`).
+        let option = match d.variants.is_empty() || d.variant_label_zh.is_empty() {
+            true => String::new(),
+            false => format!(" [{}]", d.variant_label_zh),
+        };
         out.push_str(&format!(
-            "Day {} ({}) {}{}\n",
+            "Day {} ({}) {}{}{}\n",
             d.day_number,
             format_date(&d.date),
             day_label,
-            if d.excursion { " [一日遊地圖]" } else { "" }
+            if d.excursion { " [一日遊地圖]" } else { "" },
+            option
         ));
     }
 

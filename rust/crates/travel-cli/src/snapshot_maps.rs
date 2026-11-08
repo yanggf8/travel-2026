@@ -4260,6 +4260,15 @@ mod tests {
     }
 
     #[test]
+    fn longest_variant_title_fits_the_canvas() {
+        let label = "A".repeat(24);
+        for key in ["day-12.png", "day-12-logistics.png", "day-12-away.png"] {
+            let t = map_title(key, Some((12, &label))).unwrap();
+            assert!(title_rect(t.chars().count()).2 <= WIDTH as i32 - 8, "{key}: {t}");
+        }
+    }
+
+    #[test]
     fn map_title_is_parent_aware() {
         let v = Some((4, "Sunny-day plan"));
         assert_eq!(map_title("day-6.png", v).as_deref(), Some("Day 4 route \u{b7} Sunny-day plan"));

@@ -367,11 +367,13 @@ fn mentions_day(text: &str, prefix: &str, n: i64, suffix: &str) -> bool {
 
 /// Day-variant markup checks (worker render/day.rs): `variants` is the plan's
 /// variant day_number -> (main day, EN label); `trip_days` the number of trip
-/// days (variants excluded). A plan with no variants and a page with no
+/// days (variants excluded); `labels` maps each main day to its variants' labels in the page
+/// language (each must match one block's summary, one-to-one). A plan with no variants and a page with no
 /// variant blocks yields no findings, so plain plans report exactly as before.
 pub(crate) fn variant_checks(
     doc: &PageDoc,
     variants: &HashMap<i64, (i64, Option<String>)>,
+    labels: &HashMap<i64, Vec<String>>,
     trip_days: usize,
 ) -> Vec<(&'static str, Check)> {
     if variants.is_empty() && doc.variants.is_empty() {
@@ -410,6 +412,29 @@ pub(crate) fn variant_checks(
         }
         if v.summary.is_empty() {
             problems.push(format!("day-variant of day {name} has an empty summary"));
+        }
+    }
+    let mut mains: Vec<i64> = labels.keys().copied().collect();
+    for v in &doc.variants {
+        if let Some(of) = v.of {
+            if !mains.contains(&of) {
+                mains.push(of);
+            }
+        }
+    }
+    mains.sort_unstable();
+    for main in mains {
+        let mut unused: Vec<&str> = doc.variants.iter().filter(|v| v.of == Some(main)).map(|v| v.summary.as_str()).collect();
+        for label in labels.get(&main).map(Vec::as_slice).unwrap_or(&[]) {
+            match unused.iter().position(|s| s.contains(label.as_str())) {
+                Some(i) => {
+                    unused.remove(i);
+                }
+                None => problems.push(format!("day {main}: no day-variant block labelled {label:?}")),
+            }
+        }
+        for extra in unused {
+            problems.push(format!("day {main}: unexpected day-variant block {extra:?} (no matching variant label)"));
         }
     }
     let mut internal: Vec<i64> = variants.keys().copied().collect();
@@ -813,16 +838,28 @@ mod tests {
 
     const GOOD_VARIANT: &str = "<details class=\"day-variant\" data-variant-of=\"2\" open><summary class=\"day-variant-summary\">替代方案：雨天</summary><div class=\"day-variant-body\"><div class=\"theme\">第 2 天 · 雨天</div></div></details>";
 
+    fn labels_of(pairs: &[(i64, &str)]) -> HashMap<i64, Vec<String>> {
+        let mut m: HashMap<i64, Vec<String>> = HashMap::new();
+        for (main, l) in pairs {
+            m.entry(*main).or_default().push(l.to_string());
+        }
+        m
+    }
+
     fn variant_verdict(html: &str, v: &HashMap<i64, (i64, Option<String>)>) -> Check {
+        variant_verdict_with(html, v, &labels_of(&[(2, "雨天")]))
+    }
+
+    fn variant_verdict_with(html: &str, v: &HashMap<i64, (i64, Option<String>)>, l: &HashMap<i64, Vec<String>>) -> Check {
         let doc = parse_page(html);
-        let mut out = variant_checks(&doc, v, 2);
+        let mut out = variant_checks(&doc, v, l, 2);
         assert_eq!(out.len(), 1);
         out.remove(0).1
     }
 
     #[test]
     fn plain_page_has_no_variant_findings() {
-        assert!(variant_checks(&parse_page(&viewer_page("")), &HashMap::new(), 1).is_empty());
+        assert!(variant_checks(&parse_page(&viewer_page("")), &HashMap::new(), &HashMap::new(), 1).is_empty());
     }
 
     #[test]
@@ -842,6 +879,23 @@ mod tests {
             "<section class=\"day day-full\" data-day=\"1\">{GOOD_VARIANT}</section>"
         ));
         assert_eq!(variant_verdict(&wrong, &variants_of(&[(3, 2)])).level, Level::Fail);
+    }
+
+    #[test]
+    fn duplicate_variant_blocks_fail() {
+        let sunny = GOOD_VARIANT.replace("雨天", "晴天");
+        let html = variant_html(&format!("{sunny}{sunny}"));
+        let v = variants_of(&[(3, 2), (4, 2)]);
+        let c = variant_verdict_with(&html, &v, &labels_of(&[(2, "晴天"), (2, "陰天")]));
+        assert_eq!(c.level, Level::Fail, "{c:?}");
+        assert!(c.detail.contains("陰天"), "{c:?}");
+    }
+
+    #[test]
+    fn wrong_label_fails() {
+        let c = variant_verdict_with(&variant_html(GOOD_VARIANT), &variants_of(&[(3, 2)]), &labels_of(&[(2, "晴天")]));
+        assert_eq!(c.level, Level::Fail, "{c:?}");
+        assert!(c.detail.contains("晴天"), "{c:?}");
     }
 
     #[test]

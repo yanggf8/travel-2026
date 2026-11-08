@@ -15,7 +15,7 @@
 - Columns on `days`: `variant_of INTEGER` (NULL = trip day), `variant_label TEXT` (EN), `variant_label_zh TEXT` (ZH). Added with `db_migrate.rs` `add_column(...)` (idempotent).
 - "Trip day" predicate everywhere: `variant_of IS NULL`.
 - A variant's day_number = `MAX(day_number)+1` for plan+destination at creation; its `date`/`day_type` = its main day's.
-- EN label: printable ASCII, 1–32 chars (it is drawn into PNG titles with the ASCII bitmap font). ZH label: 1–16 chars.
+- EN label: 1–24 chars of `A–Z a–z 0–9`, space and `. : - +` only — exactly the glyphs the 5×7 PNG title font draws, and 24 keeps the longest title ("Day 12 hotel round trip · " + label) inside the 640px canvas (ruling 2026-11-08 after K3.1 Pro review). ZH label: 1–16 chars.
 - Visible day identity of a variant: ZH 「第 {main} 天 · {label_zh}」, EN "Day {main} · {label}". The internal number never appears in visible text.
 - PNG titles (`snapshot_maps::map_title`): variant day map "Day {main} route · {label}", logistics "Day {main} hotel round trip · {label}", away "Day {main} beyond the area · {label}". Trip days unchanged ("Day 3 route").
 - Worker markup: main card `<section class="day day-{day_type}" data-day="{n}">` — `data-day` is added ONLY to cards that have variants (ruling 2026-11-08: keeps no-variant day-card HTML byte-identical); cards are counted by `<section class="day `; main option chip `<span class="day-option-label">`; variant `<details class="day-variant" data-variant-of="{main}" open>` → `<summary class="day-variant-summary">` → `<div class="day-variant-body">`.

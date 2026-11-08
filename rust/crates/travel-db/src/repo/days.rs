@@ -114,6 +114,37 @@ pub async fn variant_map(
     Ok(out)
 }
 
+/// Every day variant's (main day, EN label, ZH label), optionally for one destination. Labels are
+/// `None` only on an invariant violation validate already blocks.
+pub async fn variant_label_rows(
+    conn: &Connection,
+    plan_id: &str,
+    destination: Option<&str>,
+) -> Result<Vec<(i64, Option<String>, Option<String>)>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT variant_of, variant_label, variant_label_zh FROM days WHERE plan_id = ?1 \
+             AND variant_of IS NOT NULL AND (?2 IS NULL OR destination = ?2) ORDER BY day_number",
+            libsql::params![plan_id.to_string(), destination.map(str::to_string)],
+        )
+        .await
+        .map_err(|e| format!("days variant labels query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("days variant labels row read failed: {e}"))?
+    {
+        let g = |e: libsql::Error| format!("days variant labels decode failed: {e}");
+        out.push((
+            row.get::<i64>(0).map_err(g)?,
+            row.get::<Option<String>>(1).map_err(g)?,
+            row.get::<Option<String>>(2).map_err(g)?,
+        ));
+    }
+    Ok(out)
+}
+
 /// Next free day_number for plan+destination: `MAX(day_number)+1` over trip days AND variants
 /// (1 when the plan has no days yet).
 pub async fn next_day_number(

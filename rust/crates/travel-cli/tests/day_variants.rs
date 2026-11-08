@@ -9,6 +9,11 @@ use std::process::Command;
 mod common;
 use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
+/// Serializes this file's tests: swap-days / day-variant writes run inside one remote
+/// transaction, and a parallel test's write would hit SQLITE_BUSY on the shared Turso DB.
+/// Taken first in each test so it is released last (after the teardown guard).
+static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn publish(plan_id: &str, dest: &str) -> (bool, String) {
     let out = Command::new(bin())
         .args(["validate", "publish", "--plan-id", plan_id, "--dest", dest])
@@ -29,17 +34,18 @@ fn variant_lines(out: &str) -> Vec<&str> {
 
 #[test]
 fn variant_invariants_block_publish() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     if db_exec("SELECT 1 AS n").is_none() {
         return;
     }
     let tag = nanos();
     let plan_id = format!("zz-test-{tag}-var");
     let dest = format!("zz_test_{tag}_var");
-    seed_plan(&plan_id, &dest, 0);
     let _g = Guard::new({
         let (plan_id, dest) = (plan_id.clone(), dest.clone());
         move || teardown_plan(&plan_id, &dest)
     });
+    seed_plan(&plan_id, &dest, 0);
     let ok = db_exec(&format!(
         "INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
            VALUES ('{plan_id}', '{dest}', 1, '2026-09-01', 'T1', 'arrival', 'draft'); \
@@ -130,17 +136,18 @@ fn seed_two_days(plan_id: &str, dest: &str) {
 
 macro_rules! fixture {
     ($tag:ident, $plan_id:ident, $dest:ident, $guard:ident) => {
+        let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
         if db_exec("SELECT 1 AS n").is_none() {
             return;
         }
         let $tag = nanos();
         let $plan_id = format!("zz-test-{}-va", $tag);
         let $dest = format!("zz_test_{}_va", $tag);
-        seed_plan(&$plan_id, &$dest, 0);
         let $guard = Guard::new({
             let (p, d) = ($plan_id.clone(), $dest.clone());
             move || teardown_plan(&p, &d)
         });
+        seed_plan(&$plan_id, &$dest, 0);
         seed_two_days(&$plan_id, &$dest);
     };
 }
@@ -223,8 +230,8 @@ fn add_variant_refuses_a_variant_as_main() {
 #[test]
 fn label_rules() {
     fixture!(tag, plan_id, dest, _g);
-    let long = "x".repeat(33);
-    for bad in ["晴天", long.as_str(), ""] {
+    let long = "x".repeat(25);
+    for bad in ["晴天", long.as_str(), "", "Rain/sun", "Yang's plan"] {
         let (ok, out) = cli(
             &["add-day-variant", "1", "--label", bad, "--label-zh", "晴天方案",
               "--main-label", "Rainy", "--main-label-zh", "雨天"],
@@ -249,7 +256,7 @@ fn label_rules() {
     );
     // exact bounds pass
     let (ok, out) = cli(
-        &["set-day-variant-label", "1", "--label", &"x".repeat(32), "--label-zh", &"晴".repeat(16)],
+        &["set-day-variant-label", "1", "--label", &"x".repeat(24), "--label-zh", &"晴".repeat(16)],
         &plan_id, &dest,
     );
     assert!(ok, "boundary labels must pass: {out}");
@@ -462,6 +469,7 @@ fn swap_refuses_foreign_variant_and_two_variants() {
 
 #[test]
 fn swap_days_resyncs_bookings() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     if db_exec("SELECT 1 AS n").is_none() {
         return;
     }
@@ -469,7 +477,6 @@ fn swap_days_resyncs_bookings() {
     let plan_id = format!("zz-test-{tag}-vb");
     let dest = format!("zz_test_{tag}_vb");
     let trip_id = format!("zz_test_{tag}_vb");
-    seed_plan(&plan_id, &dest, 0);
     // bookings_current is keyed by trip_id, not plan_id: delete BEFORE teardown_plan.
     let _g = Guard::new({
         let (p, d, t) = (plan_id.clone(), dest.clone(), trip_id.clone());
@@ -478,6 +485,7 @@ fn swap_days_resyncs_bookings() {
             teardown_plan(&p, &d)
         }
     });
+    seed_plan(&plan_id, &dest, 0);
     seed_two_days(&plan_id, &dest);
     let act = format!("zz-bk-{tag}");
     insert_activity(&act, &plan_id, &dest, 1, "morning", ", booking_required", ", 1");
@@ -639,6 +647,8 @@ fn itinerary_groups_variant_under_main() {
     .expect("variant theme");
     let (ok, out) = cli(&["itinerary"], &plan_id, &dest);
     assert!(ok, "itinerary failed: {out}");
+    let hdr = out.lines().find(|l| l.starts_with("Day 1 (")).expect("Day 1 header line");
+    assert!(hdr.contains("[雨天方案]"), "main day header shows its option label; hdr={hdr}");
     assert!(out.contains("(2 days)"), "header counts trip days only; out={out}");
     assert!(out.contains("  ↳ 替代方案 [晴天方案] (day 3)"), "variant label line; out={out}");
     assert!(!out.contains("Day 3"), "variant gets no Day header; out={out}");

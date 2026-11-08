@@ -19,15 +19,27 @@ pub const REMOVE_USAGE: &str = "travel remove-day-variant <variant_day> [--dest 
 
 const PROCESS: &str = "process_5_daily_itinerary";
 
-/// EN label: printable ASCII, 1-32 chars (drawn into PNG titles with the ASCII bitmap font).
-pub fn check_label_en(s: &str) -> Result<(), String> {
+/// A char the PNG title font (`snapshot_maps::glyph`) draws: A-Z a-z 0-9, space, `.`, `:`, `-`, `+`.
+pub(crate) fn en_label_char_ok(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | ':' | '-' | '+')
+}
+
+/// Why `s` is not a valid EN variant label (None when it is): 1-24 chars of the PNG font's set.
+/// 24 keeps "Day 12 hotel round trip · " + label inside the 640px map canvas.
+pub(crate) fn en_label_problem(s: &str) -> Option<String> {
     let n = s.chars().count();
-    if n == 0 || n > 32 || s.trim().is_empty() || !s.chars().all(|c| (' '..='~').contains(&c)) {
-        return Err(format!(
-            "--label must be printable ASCII, 1-32 chars (got {n} chars: {s:?})"
-        ));
+    if n == 0 || n > 24 || s.trim().is_empty() || !s.chars().all(en_label_char_ok) {
+        return Some(format!("must be 1-24 chars of letters, digits, space and . : - + (got {n} chars: {s:?})"));
     }
-    Ok(())
+    None
+}
+
+/// EN label: see `en_label_problem`.
+pub fn check_label_en(s: &str) -> Result<(), String> {
+    match en_label_problem(s) {
+        Some(p) => Err(format!("--label {p}")),
+        None => Ok(()),
+    }
 }
 
 /// ZH label: 1-16 chars.
