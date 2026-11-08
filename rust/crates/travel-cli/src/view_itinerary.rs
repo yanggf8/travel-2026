@@ -88,12 +88,21 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let view = plan::load(&plan_id).await?;
     plan::assert_dest_matches(dest_opt.as_deref(), &view.active_destination)?;
     if let Some(n) = day_opt
-        && !view.days.iter().any(|d| d.day_number == n)
+        && !view
+            .days
+            .iter()
+            .any(|d| d.day_number == n || d.variants.iter().any(|v| v.day_number == n))
     {
         let days: Vec<String> = view.days.iter().map(|d| d.day_number.to_string()).collect();
+        let variants: Vec<String> = view
+            .days
+            .iter()
+            .flat_map(|d| d.variants.iter().map(move |v| format!("{} of {}", v.day_number, d.day_number)))
+            .collect();
         return Err(format!(
-            "day {n} does not exist in plan {plan_id} (days: {})",
-            if days.is_empty() { "none".to_string() } else { days.join(", ") }
+            "day {n} does not exist in plan {plan_id} (days: {}{})",
+            if days.is_empty() { "none".to_string() } else { days.join(", ") },
+            if variants.is_empty() { String::new() } else { format!("; variants: {}", variants.join(", ")) }
         ));
     }
     print!("{}", render(&view, day_opt));
@@ -227,19 +236,35 @@ fn render(view: &PlanView, day_filter: Option<i64>) -> String {
     out.push('\n');
 
     // Day loop (filtered to --day N when given; the trip header above stays
-    // full-trip so the day count remains readable).
+    // full-trip so the day count remains readable). `--day <main>` shows the main day and its
+    // variants; `--day <variant>` shows only that variant's block.
     for d in &view.days {
-        if day_filter.is_some_and(|n| d.day_number != n) {
+        let only_variant = day_filter.filter(|n| d.variants.iter().any(|v| v.day_number == *n));
+        if only_variant.is_none() && day_filter.is_some_and(|n| d.day_number != n) {
             continue;
         }
-        render_day(&mut out, d, view);
+        if only_variant.is_none() {
+            render_day(&mut out, d, view, false);
+        }
+        for v in d.variants.iter().filter(|v| only_variant.is_none_or(|n| v.day_number == n)) {
+            out.push_str(&format!("  ↳ 替代方案 [{}] (day {})\n", v.variant_label_zh, v.day_number));
+            let mut body = String::new();
+            render_day(&mut body, v, view, true);
+            for line in body.lines() {
+                if line.is_empty() {
+                    out.push('\n');
+                } else {
+                    out.push_str(&format!("    {line}\n"));
+                }
+            }
+        }
     }
 
     // Pending bookings section (scoped to the filtered day, so a day view
     // cannot present another day's deadlines as its own).
     let pending: Vec<_> = collect_pending(view)
         .into_iter()
-        .filter(|pb| day_filter.is_none_or(|n| pb.day == n))
+        .filter(|pb| day_filter.is_none_or(|n| pb.day == n || pb.src_day == n))
         .collect();
     if !pending.is_empty() {
         // TS: console.log('─'.repeat(60))
@@ -324,22 +349,27 @@ fn fmt_ap(code: &str, term: &str) -> String {
     }
 }
 
-fn render_day(out: &mut String, d: &DayView, view: &PlanView) {
-    // Day separator (`─` × 60) + `Day N (formatDate) <label>`.
-    out.push_str(&"─".repeat(60));
-    out.push('\n');
+fn render_day(out: &mut String, d: &DayView, view: &PlanView, is_variant: bool) {
+    // Day separator (`─` × 60) + `Day N (formatDate) <label>`. A variant's identity line is the
+    // `↳ 替代方案` line its caller already printed, so it gets neither.
+    if !is_variant {
+        out.push_str(&"─".repeat(60));
+        out.push('\n');
+    }
     let day_label = match d.day_type.as_str() {
         "arrival" => "✈️ ARRIVAL",
         "departure" => "✈️ DEPARTURE",
         _ => "",
     };
-    out.push_str(&format!(
-        "Day {} ({}) {}{}\n",
-        d.day_number,
-        format_date(&d.date),
-        day_label,
-        if d.excursion { " [一日遊地圖]" } else { "" }
-    ));
+    if !is_variant {
+        out.push_str(&format!(
+            "Day {} ({}) {}{}\n",
+            d.day_number,
+            format_date(&d.date),
+            day_label,
+            if d.excursion { " [一日遊地圖]" } else { "" }
+        ));
+    }
 
     // `Theme: <theme>` — only if theme is set.
     if !d.theme.is_empty() {
@@ -489,7 +519,10 @@ fn render_route_segment(seg: &RouteSegment) -> String {
 }
 
 struct PendingBooking {
+    /// The trip day it lists under (a variant's main day).
     day: i64,
+    /// The day row it comes from (the variant's own number for a variant item).
+    src_day: i64,
     title: String,
     book_by: String,
 }
@@ -501,18 +534,24 @@ struct PendingBooking {
 /// in DB order.
 fn collect_pending(view: &PlanView) -> Vec<PendingBooking> {
     let mut pending: Vec<PendingBooking> = Vec::new();
-    for d in &view.days {
-        for session_name in SESSIONS_IN_ORDER {
-            let Some(s) = d.sessions.get(*session_name) else { continue };
-            for a in &s.activities {
-                let is_pending = a.booking_status == "pending"
-                    || (a.booking_required && a.booking_status.is_empty());
-                if is_pending {
-                    pending.push(PendingBooking {
-                        day: d.day_number,
-                        title: a.title.clone(),
-                        book_by: a.book_by.clone(),
-                    });
+    for main in &view.days {
+        // Variant items list under the main day, prefixed `[label_zh]`.
+        for (d, prefix) in std::iter::once((main, String::new())).chain(
+            main.variants.iter().map(|v| (v, format!("[{}] ", v.variant_label_zh))),
+        ) {
+            for session_name in SESSIONS_IN_ORDER {
+                let Some(s) = d.sessions.get(*session_name) else { continue };
+                for a in &s.activities {
+                    let is_pending = a.booking_status == "pending"
+                        || (a.booking_required && a.booking_status.is_empty());
+                    if is_pending {
+                        pending.push(PendingBooking {
+                            day: main.day_number,
+                            src_day: d.day_number,
+                            title: format!("{prefix}{}", a.title),
+                            book_by: a.book_by.clone(),
+                        });
+                    }
                 }
             }
         }

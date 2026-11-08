@@ -106,6 +106,16 @@ fn render(view: &PlanView) -> String {
 
         for d in &view.days {
             render_day(&mut out, d);
+            for v in &d.variants {
+                out.push_str(&format!("  ↳ 替代方案 [{}] (day {})\n", v.variant_label_zh, v.day_number));
+                for session_name in SESSIONS_IN_ORDER {
+                    let Some(s) = v.sessions.get(*session_name) else { continue };
+                    if s.transit_notes.is_empty() {
+                        continue;
+                    }
+                    out.push_str(&format!("    {}: {}\n", session_name, s.transit_notes));
+                }
+            }
         }
     }
 

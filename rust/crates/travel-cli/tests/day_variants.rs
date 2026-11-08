@@ -613,3 +613,86 @@ fn variant_only_excursion_expects_no_plan_excursion() {
     let text = check();
     assert!(text.contains("plan-excursion.png"), "a flagged trip day expects it; out={text}");
 }
+
+// ---------------------------------------------------------------------------
+// Task A6: CLI views group variants under their main day.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn itinerary_groups_variant_under_main() {
+    fixture!(tag, plan_id, dest, _g);
+    let _ = tag;
+    db_exec(&format!(
+        "INSERT INTO date_anchors (plan_id, destination, start_date, end_date, days) \
+           VALUES ('{plan_id}', '{dest}', '2026-09-01', '2026-09-02', 2);"
+    ))
+    .expect("seed anchor");
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "add-day-variant failed: {out}");
+    db_exec(&format!(
+        "UPDATE days SET theme='VarTheme' WHERE plan_id='{plan_id}' AND destination='{dest}' AND day_number=3;"
+    ))
+    .expect("variant theme");
+    let (ok, out) = cli(&["itinerary"], &plan_id, &dest);
+    assert!(ok, "itinerary failed: {out}");
+    assert!(out.contains("(2 days)"), "header counts trip days only; out={out}");
+    assert!(out.contains("  ↳ 替代方案 [晴天方案] (day 3)"), "variant label line; out={out}");
+    assert!(!out.contains("Day 3"), "variant gets no Day header; out={out}");
+    let day1 = out.find("Day 1 (").expect("Day 1 header");
+    let label = out.find("↳ 替代方案").expect("label line");
+    let day2 = out.find("Day 2 (").expect("Day 2 header");
+    assert!(day1 < label && label < day2, "variant sits between day 1 and day 2; out={out}");
+    assert!(out.contains("    Theme: VarTheme"), "variant content indented; out={out}");
+
+    // `--day <variant>` shows only that variant's block; `--day <main>` shows main + variants.
+    let (ok, out) = cli(&["itinerary", "--day", "3"], &plan_id, &dest);
+    assert!(ok, "itinerary --day 3 failed: {out}");
+    assert!(out.contains("  ↳ 替代方案 [晴天方案] (day 3)"), "variant block; out={out}");
+    assert!(out.contains("    Theme: VarTheme"), "variant content; out={out}");
+    assert!(!out.contains("Day 1 (") && !out.contains("Day 2 ("), "no trip-day blocks; out={out}");
+    let (ok, out) = cli(&["itinerary", "--day", "1"], &plan_id, &dest);
+    assert!(ok, "itinerary --day 1 failed: {out}");
+    assert!(out.contains("Day 1 (") && out.contains("↳ 替代方案 [晴天方案]"), "main + variant; out={out}");
+    let (ok, out) = cli(&["itinerary", "--day", "9"], &plan_id, &dest);
+    assert!(!ok && out.contains("variants: 3 of 1"), "missing day lists variants; out={out}");
+}
+
+#[test]
+fn bookings_label_variant_items() {
+    fixture!(tag, plan_id, dest, _g);
+    let _ = tag;
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "add-day-variant failed: {out}");
+    insert_activity(
+        &format!("zz{tag}a"), &plan_id, &dest, 3, "morning",
+        ", booking_status, booking_ref", ", 'booked', 'REF1'",
+    );
+    db_exec(&format!(
+        "INSERT INTO timesofday (plan_id, destination, day_number, session_type) \
+           VALUES ('{plan_id}', '{dest}', 1, 'morning');"
+    ))
+    .expect("seed main session");
+    insert_activity(
+        &format!("zz{tag}b"), &plan_id, &dest, 1, "morning",
+        ", booking_status, booking_ref", ", 'booked', 'REF2'",
+    );
+    let (ok, out) = cli(&["bookings"], &plan_id, &dest);
+    assert!(ok, "bookings failed: {out}");
+    assert!(
+        out.lines().any(|l| l.contains("Day 1: [晴天方案] T-") && l.contains("[REF1]")),
+        "variant item listed under the main day with its label; out={out}"
+    );
+    assert!(
+        out.lines().any(|l| l.contains("Day 1: T-") && l.contains("[REF2]")),
+        "main item stays unprefixed; out={out}"
+    );
+    assert!(!out.contains("Day 3"), "internal variant number never shown; out={out}");
+}

@@ -74,7 +74,7 @@ pub struct PlanView {
     /// Same quirk as `selected_offer` — surfaced for the next view port.
     #[allow(dead_code)]
     pub offer_includes: Vec<String>,
-    pub days: Vec<DayView>,                                      // ordered by day_number
+    pub days: Vec<DayView>,                                      // trip days, ordered by day_number (variants nest in DayView.variants)
     /// Per-day route segments from `day_route_segments` (keyed by
     /// `day_number`). Consumed by the itinerary view (per-day ROUTE
     /// block). `status.rs` does not surface it.
@@ -182,6 +182,15 @@ pub struct DayView {
     #[allow(dead_code)]
     pub weather: Option<DayWeather>,
     pub sessions: HashMap<String, SessionView>, // "morning"|"noon"|"afternoon"|"evening"
+    /// Day variants of this trip day (`days.variant_of = day_number`), ascending. Always empty on a
+    /// variant itself; `PlanView.days` holds trip days only.
+    pub variants: Vec<DayView>,
+    /// `days.variant_label` / `variant_label_zh` — set only on a variant.
+    #[allow(dead_code)]
+    pub variant_label: String,
+    pub variant_label_zh: String,
+    /// `days.variant_of` — `Some(main day)` only on a variant.
+    pub variant_of: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -440,6 +449,10 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
             })
         };
         view.days.push(DayView {
+            variants: Vec::new(),
+            variant_label: d.variant_label,
+            variant_label_zh: d.variant_label_zh,
+            variant_of: d.variant_of,
             day_number: d.day_number,
             excursion: d.excursion,
             date: d.date,
@@ -515,6 +528,17 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
             .entry(r.day_number as i32)
             .or_default()
             .push(seg);
+    }
+
+    // 17. group day variants under their main trip day: `view.days` ends up trip days only.
+    let (variants, trip): (Vec<DayView>, Vec<DayView>) =
+        view.days.drain(..).partition(|d| d.variant_of.is_some());
+    view.days = trip;
+    for v in variants {
+        let main = v.variant_of.unwrap_or_default();
+        if let Some(m) = view.days.iter_mut().find(|d| d.day_number == main) {
+            m.variants.push(v);
+        }
     }
 
     Ok(view)

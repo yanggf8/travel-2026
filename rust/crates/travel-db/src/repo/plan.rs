@@ -387,6 +387,10 @@ pub struct DayRow {
     pub weather_code: i64,
     pub weather_source_id: String,
     pub weather_sourced_at: String,
+    /// `days.variant_of` — `Some(main day)` for a day variant, `None` for a trip day.
+    pub variant_of: Option<i64>,
+    pub variant_label: String,
+    pub variant_label_zh: String,
 }
 
 pub async fn days(
@@ -398,7 +402,7 @@ pub async fn days(
         .query(
             "SELECT day_number, date, theme, day_type, weather_label, temp_low_c, \
                     temp_high_c, precipitation_pct, weather_code, weather_source_id, \
-                    weather_sourced_at, excursion \
+                    weather_sourced_at, excursion, variant_of, variant_label, variant_label_zh \
              FROM days \
              WHERE plan_id = ?1 AND destination = ?2 \
              ORDER BY day_number",
@@ -421,6 +425,9 @@ pub async fn days(
             weather_source_id: r.get(9).unwrap_or_default(),
             weather_sourced_at: r.get(10).unwrap_or_default(),
             excursion: r.get::<i64>(11).map_err(|e| format!("day excursion: {e}"))? == 1,
+            variant_of: r.get::<Option<i64>>(12).map_err(|e| format!("day variant_of: {e}"))?,
+            variant_label: r.get::<Option<String>>(13).unwrap_or_default().unwrap_or_default(),
+            variant_label_zh: r.get::<Option<String>>(14).unwrap_or_default().unwrap_or_default(),
         });
     }
     Ok(out)

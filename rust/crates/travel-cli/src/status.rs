@@ -246,23 +246,28 @@ fn render_hotel(out: &mut String, view: &PlanView) {
 
 fn render_fixed_activities(out: &mut String, view: &PlanView) {
     let mut fixed: Vec<FixedActivity> = Vec::new();
-    for d in &view.days {
-        for session_name in SESSIONS_IN_ORDER {
-            let Some(s) = d.sessions.get(*session_name) else { continue };
-            for a in &s.activities {
-                if is_fixed_or_reservation(a) {
-                    fixed.push(FixedActivity {
-                        day: d.day_number,
-                        session: session_name.to_string(),
-                        title: a.title.clone(),
-                        start: a.start_time.clone(),
-                        end: a.end_time.clone(),
-                        session_start: s.time_range_start.clone(),
-                        session_end: s.time_range_end.clone(),
-                        booking_status: a.booking_status.clone(),
-                        booking_ref: a.booking_ref.clone(),
-                        booking_required: a.booking_required,
-                    });
+    for main in &view.days {
+        // Variant items list under the main day, prefixed `[label_zh]`.
+        for (d, prefix) in std::iter::once((main, String::new())).chain(
+            main.variants.iter().map(|v| (v, format!("[{}] ", v.variant_label_zh))),
+        ) {
+            for session_name in SESSIONS_IN_ORDER {
+                let Some(s) = d.sessions.get(*session_name) else { continue };
+                for a in &s.activities {
+                    if is_fixed_or_reservation(a) {
+                        fixed.push(FixedActivity {
+                            day: main.day_number,
+                            session: session_name.to_string(),
+                            title: format!("{prefix}{}", a.title),
+                            start: a.start_time.clone(),
+                            end: a.end_time.clone(),
+                            session_start: s.time_range_start.clone(),
+                            session_end: s.time_range_end.clone(),
+                            booking_status: a.booking_status.clone(),
+                            booking_ref: a.booking_ref.clone(),
+                            booking_required: a.booking_required,
+                        });
+                    }
                 }
             }
         }

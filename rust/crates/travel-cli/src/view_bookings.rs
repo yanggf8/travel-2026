@@ -235,37 +235,42 @@ fn collect_bookings(
 ) -> (Vec<BookedRow>, Vec<PendingRow>) {
     let mut booked: Vec<BookedRow> = Vec::new();
     let mut pending: Vec<PendingRow> = Vec::new();
-    for d in &view.days {
-        for session_name in SESSIONS_IN_ORDER {
-            let Some(s) = d.sessions.get(*session_name) else { continue };
-            for (idx, a) in s.activities.iter().enumerate() {
-                if a.booking_status == "booked" {
-                    booked.push(BookedRow {
-                        day: d.day_number,
-                        title: a.title.clone(),
-                        ref_str: a.booking_ref.clone(),
-                    });
-                } else if a.booking_status == "pending"
-                    || (a.booking_required && a.booking_status.is_empty())
-                {
-                    // Use sort_order when present (the DB primary key path);
-                    // fall back to iteration index for the rare case where
-                    // sort_order is unset (TS doesn't care about the key
-                    // for rendering — it just reads a.book_by by name).
-                    let by = book_by
-                        .get(&(d.day_number, session_name.to_string(), a.sort_order))
-                        .cloned()
-                        .or_else(|| {
-                            book_by
-                                .get(&(d.day_number, session_name.to_string(), idx as i64))
-                                .cloned()
-                        })
-                        .unwrap_or_default();
-                    pending.push(PendingRow {
-                        day: d.day_number,
-                        title: a.title.clone(),
-                        book_by: by,
-                    });
+    for main in &view.days {
+        // Variant items list under the main day, prefixed `[label_zh]`.
+        for (d, prefix) in std::iter::once((main, String::new())).chain(
+            main.variants.iter().map(|v| (v, format!("[{}] ", v.variant_label_zh))),
+        ) {
+            for session_name in SESSIONS_IN_ORDER {
+                let Some(s) = d.sessions.get(*session_name) else { continue };
+                for (idx, a) in s.activities.iter().enumerate() {
+                    if a.booking_status == "booked" {
+                        booked.push(BookedRow {
+                            day: main.day_number,
+                            title: format!("{prefix}{}", a.title),
+                            ref_str: a.booking_ref.clone(),
+                        });
+                    } else if a.booking_status == "pending"
+                        || (a.booking_required && a.booking_status.is_empty())
+                    {
+                        // Use sort_order when present (the DB primary key path);
+                        // fall back to iteration index for the rare case where
+                        // sort_order is unset (TS doesn't care about the key
+                        // for rendering — it just reads a.book_by by name).
+                        let by = book_by
+                            .get(&(d.day_number, session_name.to_string(), a.sort_order))
+                            .cloned()
+                            .or_else(|| {
+                                book_by
+                                    .get(&(d.day_number, session_name.to_string(), idx as i64))
+                                    .cloned()
+                            })
+                            .unwrap_or_default();
+                        pending.push(PendingRow {
+                            day: main.day_number,
+                            title: format!("{prefix}{}", a.title),
+                            book_by: by,
+                        });
+                    }
                 }
             }
         }
