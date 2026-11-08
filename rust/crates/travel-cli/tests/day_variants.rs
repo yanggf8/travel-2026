@@ -570,3 +570,46 @@ fn validate_publish_weather_gate_and_day_count_skip_variants() {
         "variant must not count against the weather window gate; out={out}"
     );
 }
+
+#[test]
+fn variant_only_excursion_expects_no_plan_excursion() {
+    fixture!(tag, plan_id, dest, _g);
+    let _ = tag;
+    let (ok, out) = cli(
+        &[
+            "add-day-variant", "1", "--label", "Far trip", "--label-zh", "遠遊",
+            "--main-label", "Local plan", "--main-label-zh", "市區方案",
+        ],
+        &plan_id,
+        &dest,
+    );
+    assert!(ok, "add-day-variant failed: {out}");
+    // One manifest row so check-maps-fresh lists the expected keys it finds missing.
+    db_exec(&format!(
+        "INSERT INTO map_artifacts (plan_id, map_key, byte_size, sha256, status, has_roads, generated_at) \
+           VALUES ('{plan_id}', 'plan.png', 1000, 'x', 'uploaded', 1, '2026-01-01T00:00:00Z'); \
+         UPDATE days SET excursion=1 WHERE plan_id='{plan_id}' AND destination='{dest}' AND day_number=3;"
+    ))
+    .expect("seed manifest + variant excursion");
+    let check = || {
+        let out = Command::new(bin())
+            .args(["check-maps-fresh", "--plan-id", &plan_id])
+            .env_remove("TRAVEL_PLAN_ID")
+            .output()
+            .expect("run check-maps-fresh");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let text = check();
+    assert!(text.contains("day-3.png"), "a variant still gets its own day slots; out={text}");
+    assert!(
+        !text.contains("plan-excursion.png"),
+        "a variant flagged excursion=1 alone must expect no plan-excursion; out={text}"
+    );
+    // A trip day with the flag does expect it.
+    db_exec(&format!(
+        "UPDATE days SET excursion=1 WHERE plan_id='{plan_id}' AND destination='{dest}' AND day_number=2;"
+    ))
+    .expect("flag trip day");
+    let text = check();
+    assert!(text.contains("plan-excursion.png"), "a flagged trip day expects it; out={text}");
+}

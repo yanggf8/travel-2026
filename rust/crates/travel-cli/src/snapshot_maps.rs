@@ -211,6 +211,9 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
 /// loaded up front so `assemble_maps` itself only resolves places and roads.
 pub(crate) struct MapSource {
     days: Vec<i64>,
+    /// Day variants: variant day_number -> (main day, EN label). A variant gets its own
+    /// day maps but stays out of every multi-day map and the plan-logistics endpoints.
+    variants: HashMap<i64, (i64, Option<String>)>,
     excursion: HashSet<i64>,
     segments: Vec<Segment>,
     pois: Vec<(i64, String, f64, f64)>,
@@ -247,8 +250,10 @@ impl MapSource {
             .await?
             .into_iter()
             .collect();
+        let variants = travel_db::repo::days::variant_map(read, plan_id, Some(dest)).await?;
         Ok(Self {
             days,
+            variants,
             excursion,
             segments: query_segments(read, plan_id, dest).await?,
             pois: query_pois(read, plan_id, dest).await?,
@@ -387,10 +392,25 @@ impl PlannedMap {
         misses: Vec<String>,
         off_area: Vec<OffAreaStop>,
     ) -> Self {
+        Self::render_titled(key, None, kind, points, routes, misses, off_area)
+    }
+
+    /// `title` overrides the plain `map_title(key, None)` (a variant day's parent-aware title).
+    fn render_titled(
+        key: &str,
+        title: Option<String>,
+        kind: MapKind,
+        points: Vec<Point>,
+        routes: Vec<RouteLine>,
+        misses: Vec<String>,
+        off_area: Vec<OffAreaStop>,
+    ) -> Self {
         Self {
             key: key.to_string(),
             plan: MapPlan::Render {
-                title: map_title(key).expect("assembled map keys always have a title"),
+                title: title.unwrap_or_else(|| {
+                    map_title(key, None).expect("assembled map keys always have a title")
+                }),
                 kind,
                 points,
                 routes,
@@ -433,7 +453,36 @@ impl PlannedMap {
 /// Map title drawn into the PNG for a map key. The single source of the titles:
 /// the assembly titles each map through it and verify-site sizes the reserved
 /// title strip from it.
-pub(crate) fn map_title(key: &str) -> Option<String> {
+///
+/// `variant = (main_day, en_label)` for a day variant's day keys, None otherwise: the title names
+/// the MAIN day (a variant's own day_number never appears) plus the label.
+pub(crate) fn map_title(key: &str, variant: Option<(i64, &str)>) -> Option<String> {
+    let base = map_title_plain(key)?;
+    let (Some((main, label)), Some(rest)) = (variant, key.strip_prefix("day-")) else {
+        return Some(base);
+    };
+    let n = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+    let renamed = base.replacen(&format!("Day {n} "), &format!("Day {main} "), 1);
+    Some(format!("{renamed} · {label}"))
+}
+
+/// The day variant a `day-{n}*` key belongs to, as `map_title` wants it. A variant with no EN
+/// label (an invariant violation validate blocks) yields None: the plain trip-day title.
+pub(crate) fn variant_of_key<'a>(
+    variants: &'a HashMap<i64, (i64, Option<String>)>,
+    key: &str,
+) -> Option<(i64, &'a str)> {
+    let n: i64 = key
+        .strip_prefix("day-")?
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()?;
+    let (main, label) = variants.get(&n)?;
+    Some((*main, label.as_deref()?))
+}
+
+fn map_title_plain(key: &str) -> Option<String> {
     match key {
         "plan.png" => Some("Sightseeing overview".to_string()),
         "plan-excursion.png" => Some("Day trip".to_string()),
@@ -550,6 +599,11 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
 ) -> Result<Vec<PlannedMap>, String> {
     let days = &src.days;
     let excursion = &src.excursion;
+    // A day variant gets its own day maps (parent-aware titles) but never feeds a multi-day map.
+    let is_variant = |d: &i64| src.variants.contains_key(d);
+    let day_title = |key: &str, day: &i64| {
+        map_title(key, variant_of_key(&src.variants, key)).filter(|_| is_variant(day))
+    };
     let mut gate = HubGate::new(src.hub);
     let mut day_points = HashMap::<i64, Vec<Point>>::new();
     let mut day_misses = HashMap::<i64, Vec<String>>::new();
@@ -668,11 +722,11 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     // station the airport train reaches) is on both maps.
     let airport_days: HashSet<i64> = days
         .iter()
-        .filter(|d| !excursion.contains(d))
+        .filter(|d| !excursion.contains(d) && !is_variant(d))
         .filter(|d| day_airport_leg_stops.get(d).is_some_and(|stops| !stops.is_empty()))
         .copied()
         .collect();
-    let on_overview = |day: &i64| !excursion.contains(day);
+    let on_overview = |day: &i64| !excursion.contains(day) && !is_variant(day);
     let on_airport_leg = |day: &i64, p: &Point| {
         day_airport_leg_stops
             .get(day)
@@ -729,7 +783,15 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             ));
         } else {
             let routes = net.routes(&local_pts).await?;
-            maps.push(PlannedMap::render(&key, MapKind::Day, local_pts, routes, misses_of(day), off_area_of(day)));
+            maps.push(PlannedMap::render_titled(
+                &key,
+                day_title(&key, day),
+                MapKind::Day,
+                local_pts,
+                routes,
+                misses_of(day),
+                off_area_of(day),
+            ));
         }
         // Keep each day's local map zoomed to its sightseeing area. A separate
         // compact map draws the commute chain — the hotel round trip, with the
@@ -750,6 +812,9 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             // number. The day's other sights still feed the overview below.
             airport_points.extend(airport_day_points(day));
         }
+        if is_variant(day) {
+            continue;
+        }
         let (bucket, pts) = if excursion.contains(day) {
             let sights = all_pts.into_iter().filter(|p| p.kind == Kind::Sightseeing).collect::<Vec<_>>();
             (&mut excursion_points, sights)
@@ -769,8 +834,9 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     for day in days {
         let key = format!("day-{day}-logistics.png");
         if let Some((points, routes)) = daily_logistics.remove(day) {
-            maps.push(PlannedMap::render(
+            maps.push(PlannedMap::render_titled(
                 &key,
+                day_title(&key, day),
                 MapKind::DayLogistics,
                 points,
                 routes,
@@ -801,7 +867,15 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             maps.push(PlannedMap::skip(&key, "no off-area stops", None, misses_of(day), Vec::new()));
         } else {
             let routes = net.routes(&points).await?;
-            maps.push(PlannedMap::render(&key, MapKind::Day, points, routes, misses_of(day), Vec::new()));
+            maps.push(PlannedMap::render_titled(
+                &key,
+                day_title(&key, day),
+                MapKind::Day,
+                points,
+                routes,
+                misses_of(day),
+                Vec::new(),
+            ));
         }
     }
 
@@ -817,7 +891,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     // Off-area logistics endpoints draw nowhere: a flight label is tied to no
     // day, and a segment airport already sits on its day's away map.
     let (logistics_off_area, _) = gate.take();
-    for day in days.iter().filter(|d| !excursion.contains(d)) {
+    for day in days.iter().filter(|d| !excursion.contains(d) && !is_variant(d)) {
         if net.diagnostics()
             && let Some(points) = day_points.get(day)
             && let Some((stop, km)) = distant_excursion_stop(points, &logistics)
@@ -1453,7 +1527,7 @@ fn render_png(
             (cols * PLAN_LEGEND_STEP, rows)
         }
     };
-    let mut reserved = vec![title_rect(title.len()), CREDIT_RECT];
+    let mut reserved = vec![title_rect(title.chars().count()), CREDIT_RECT];
     if legend_w > 0 {
         reserved.push((8, 30, 12 + legend_w, 30 + legend_rows * PLAN_LEGEND_ROW));
     }
@@ -1472,7 +1546,7 @@ fn render_png(
     let title = title.to_ascii_uppercase();
     if basemap.is_some() {
         // Solid backing strips keep title and credits readable over the basemap.
-        for (x0, y0, x1, y1) in [title_rect(title.len()), CREDIT_RECT] {
+        for (x0, y0, x1, y1) in [title_rect(title.chars().count()), CREDIT_RECT] {
             raster.fill_rect(x0, y0, x1 - x0, y1 - y0, [255, 255, 255]);
         }
     }
@@ -2068,6 +2142,7 @@ fn glyph(c: char) -> [u8; 7] {
         '-' => [0, 0, 0, 31, 0, 0, 0],
         '+' => [0, 4, 4, 31, 4, 4, 0],
         '©' => [14, 17, 23, 20, 23, 17, 14],
+        '·' => [0, 0, 0, 4, 0, 0, 0],
         ' ' => [0; 7],
         _ => [0; 7],
     }
@@ -3074,7 +3149,8 @@ async fn query_flight_rows(c: &Connection, p: &str, d: &str) -> Result<Vec<Fligh
 
 /// Every non-NULL `day_route_segments` endpoint, in the query's own row order.
 async fn query_route_endpoints(c: &Connection, p: &str, d: &str) -> Result<Vec<String>, String> {
-    let mut r=c.query("SELECT from_place,to_place FROM day_route_segments WHERE plan_id=?1 AND destination=?2",params![p.to_string(),d.to_string()]).await.map_err(err("logistics route query"))?;
+    let mut r=c.query("SELECT from_place,to_place FROM day_route_segments WHERE plan_id=?1 AND destination=?2 \
+         AND day_number NOT IN (SELECT day_number FROM days WHERE plan_id=?1 AND destination=?2 AND variant_of IS NOT NULL)",params![p.to_string(),d.to_string()]).await.map_err(err("logistics route query"))?;
     let mut out = Vec::new();
     while let Some(x) = r.next().await.map_err(err("logistics route read"))? {
         for i in 0..2 {
@@ -3340,7 +3416,7 @@ pub(crate) mod test_render {
             Bg::Basemap(b) => Some(b),
             _ => None,
         };
-        render_png(&map_title(key).unwrap(), &points, &routes, &roads, basemap, MapKind::Day).unwrap()
+        render_png(&map_title(key, None).unwrap(), &points, &routes, &roads, basemap, MapKind::Day).unwrap()
     }
 
     /// A multi-day map (MapKind::Plan: plan.png and its insets) titled for
@@ -3365,7 +3441,7 @@ pub(crate) mod test_render {
             RouteLine { points: vec![(35.0, 135.0), (35.01, 135.012)], routed: true, color: DAY_COLORS[0] },
             RouteLine { points: vec![(35.004, 135.02), (34.995, 135.03)], routed: true, color: DAY_COLORS[1] },
         ];
-        render_png(&map_title(key).unwrap(), &points, &routes, &[], Some(basemap), MapKind::Plan).unwrap()
+        render_png(&map_title(key, None).unwrap(), &points, &routes, &[], Some(basemap), MapKind::Plan).unwrap()
     }
 
     /// ArcGIS-like basemap: land-use blocks of similar luminance on a soft
@@ -3502,6 +3578,7 @@ mod tests {
     fn fixture_source(day1_last: &str) -> MapSource {
         MapSource {
             days: vec![1, 2],
+            variants: HashMap::new(),
             excursion: HashSet::new(),
             segments: vec![
                 seg(1, "hotel", "Kinkakuji"),
@@ -3629,6 +3706,41 @@ mod tests {
         assert_eq!(maps["plan-airport.png"].input_sha256(), None, "no airport day → skip");
         assert!(maps.values().all(|m| m.geocode_misses.is_empty()));
         assert!(maps.values().all(|m| m.off_area.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn variant_stops_stay_off_overview_and_logistics() {
+        // Day 3 is a variant of day 2; its unique stop (Kiyomizu) and airport leg must not
+        // reach any multi-day map, while its own day maps render with a parent-aware title.
+        let mut src = fixture_source("Kiyomizu");
+        src.days.push(3);
+        src.variants.insert(3, (2, Some("Rain plan".into())));
+        src.segments.push(seg(3, "hotel", "Kiyomizu"));
+        src.segments.push(seg(3, "Kinkakuji", "KIX"));
+        let base = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        let maps = assembled(&src, &mut fake_net()).await;
+        for key in ["plan.png", "plan-logistics.png", "plan-excursion.png", "plan-airport.png"] {
+            assert_eq!(maps[key].input_sha256(), base[key].input_sha256(), "{key}");
+        }
+        let title = |key: &str| match &maps[key].plan {
+            MapPlan::Render { title, .. } => title.clone(),
+            MapPlan::Skip { .. } => panic!("{key} skipped"),
+        };
+        assert_eq!(title("day-3.png"), "Day 2 route \u{b7} Rain plan");
+        assert_eq!(title("day-1.png"), "Day 1 route");
+        assert!(maps.contains_key("day-3-logistics.png") && maps.contains_key("day-3-away.png"));
+    }
+
+    #[tokio::test]
+    async fn a_variant_never_makes_a_plan_excursion_or_airport_map() {
+        let mut src = fixture_source("Kiyomizu");
+        src.days.push(3);
+        src.variants.insert(3, (2, Some("Far trip".into())));
+        src.segments.push(seg(3, "Kinkakuji", "KIX"));
+        // The repo predicates keep a variant out of `excursion`, so it is never in the set.
+        let maps = assembled(&src, &mut fake_net()).await;
+        assert_eq!(maps["plan-excursion.png"].input_sha256(), None);
+        assert_eq!(maps["plan-airport.png"].input_sha256(), None);
     }
 
     #[tokio::test]
@@ -4125,16 +4237,16 @@ mod tests {
 
     #[test]
     fn map_title_names_every_key_the_assembly_emits() {
-        assert_eq!(map_title("day-3.png").as_deref(), Some("Day 3 route"));
-        assert_eq!(map_title("day-12-logistics.png").as_deref(), Some("Day 12 hotel round trip"));
-        assert_eq!(map_title("plan.png").as_deref(), Some("Sightseeing overview"));
-        assert_eq!(map_title("plan-excursion.png").as_deref(), Some("Day trip"));
-        assert_eq!(map_title("plan-airport.png").as_deref(), Some("Airport days"));
-        assert_eq!(map_title("plan-logistics.png").as_deref(), Some("Hotels and airports"));
-        assert_eq!(map_title("day-4-away.png").as_deref(), Some("Day 4 beyond the area"));
-        assert_eq!(map_title("day-x-away.png"), None);
-        assert_eq!(map_title("day-x.png"), None);
-        assert_eq!(map_title("other.png"), None);
+        assert_eq!(map_title("day-3.png", None).as_deref(), Some("Day 3 route"));
+        assert_eq!(map_title("day-12-logistics.png", None).as_deref(), Some("Day 12 hotel round trip"));
+        assert_eq!(map_title("plan.png", None).as_deref(), Some("Sightseeing overview"));
+        assert_eq!(map_title("plan-excursion.png", None).as_deref(), Some("Day trip"));
+        assert_eq!(map_title("plan-airport.png", None).as_deref(), Some("Airport days"));
+        assert_eq!(map_title("plan-logistics.png", None).as_deref(), Some("Hotels and airports"));
+        assert_eq!(map_title("day-4-away.png", None).as_deref(), Some("Day 4 beyond the area"));
+        assert_eq!(map_title("day-x-away.png", None), None);
+        assert_eq!(map_title("day-x.png", None), None);
+        assert_eq!(map_title("other.png", None), None);
     }
 
     #[test]
@@ -4143,6 +4255,36 @@ mod tests {
         assert_eq!(text_ink("1", 1), 10);
         assert_eq!(text_ink("1", 2), 40);
         assert_eq!(text_ink("1 1", 1), 20);
+        // The middle dot separates a variant title's main day from its label.
+        assert_eq!(text_ink("\u{b7}", 1), 1);
+    }
+
+    #[test]
+    fn map_title_is_parent_aware() {
+        let v = Some((4, "Sunny-day plan"));
+        assert_eq!(map_title("day-6.png", v).as_deref(), Some("Day 4 route \u{b7} Sunny-day plan"));
+        assert_eq!(
+            map_title("day-6-logistics.png", v).as_deref(),
+            Some("Day 4 hotel round trip \u{b7} Sunny-day plan")
+        );
+        assert_eq!(
+            map_title("day-6-away.png", v).as_deref(),
+            Some("Day 4 beyond the area \u{b7} Sunny-day plan")
+        );
+        assert_eq!(map_title("day-3.png", None).as_deref(), Some("Day 3 route"));
+        // Multi-day keys never take a variant suffix.
+        assert_eq!(map_title("plan.png", v).as_deref(), Some("Sightseeing overview"));
+    }
+
+    #[test]
+    fn variant_of_key_needs_a_label() {
+        let mut m = HashMap::new();
+        m.insert(6, (4, Some("A".to_string())));
+        m.insert(7, (4, None));
+        assert_eq!(variant_of_key(&m, "day-6-away.png"), Some((4, "A")));
+        assert_eq!(variant_of_key(&m, "day-7.png"), None);
+        assert_eq!(variant_of_key(&m, "day-3.png"), None);
+        assert_eq!(variant_of_key(&m, "plan.png"), None);
     }
 
     #[test]

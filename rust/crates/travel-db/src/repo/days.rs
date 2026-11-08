@@ -81,6 +81,39 @@ pub async fn variants_of(
     Ok(out)
 }
 
+/// Every day variant of a plan (optionally one destination): variant day_number -> (main day,
+/// EN label). The label is `None` only on an invariant violation validate already blocks.
+pub async fn variant_map(
+    conn: &Connection,
+    plan_id: &str,
+    destination: Option<&str>,
+) -> Result<std::collections::HashMap<i64, (i64, Option<String>)>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT day_number, variant_of, variant_label FROM days WHERE plan_id = ?1 \
+             AND variant_of IS NOT NULL AND (?2 IS NULL OR destination = ?2)",
+            libsql::params![plan_id.to_string(), destination.map(str::to_string)],
+        )
+        .await
+        .map_err(|e| format!("days variant map query failed: {e}"))?;
+    let mut out = std::collections::HashMap::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("days variant map row read failed: {e}"))?
+    {
+        out.insert(
+            row.get::<i64>(0).map_err(|e| format!("days variant map day decode failed: {e}"))?,
+            (
+                row.get::<i64>(1).map_err(|e| format!("days variant map parent decode failed: {e}"))?,
+                row.get::<Option<String>>(2)
+                    .map_err(|e| format!("days variant map label decode failed: {e}"))?,
+            ),
+        );
+    }
+    Ok(out)
+}
+
 /// Next free day_number for plan+destination: `MAX(day_number)+1` over trip days AND variants
 /// (1 when the plan has no days yet).
 pub async fn next_day_number(

@@ -255,6 +255,7 @@ async fn verify_plans(
     }
     for plan in plan_ids {
         let expected = crate::check_maps_fresh::expected_keys_for_plan(conn, plan).await?;
+        let variants = travel_db::repo::days::variant_map(conn, plan, None).await?;
         let manifest = read_manifest(conn, plan).await?;
         let mut keys = expected.clone();
         let mut extra: Vec<&String> = manifest.keys().filter(|k| !expected.contains(k)).collect();
@@ -286,7 +287,7 @@ async fn verify_plans(
                 Ok(live) => {
                     tally.emit(plan, "asset", key, &asset_verdict(row, &live, &placeholder));
                     if row.status == "uploaded" && live.http == 200 && live.body != placeholder {
-                        let report = content_checks(&live.body, key);
+                        let report = content_checks(&live.body, key, maps::variant_of_key(&variants, key));
                         if report.findings.is_empty() {
                             tally.emit(plan, "content", key, &Check::pass(report.summary()));
                         }
@@ -1036,7 +1037,7 @@ fn in_any(rects: &[Rect], x: usize, y: usize) -> bool {
 
 /// Layer 3 checks for one live PNG. `key` names the map (its title sizes the
 /// reserved title strip). Pure.
-pub(crate) fn content_checks(bytes: &[u8], key: &str) -> ContentReport {
+pub(crate) fn content_checks(bytes: &[u8], key: &str, variant: Option<(i64, &str)>) -> ContentReport {
     let mut findings = Vec::new();
     let report = |findings, background| ContentReport { findings, background };
     let Some((w, h)) = png_dims(bytes) else {
@@ -1055,8 +1056,8 @@ pub(crate) fn content_checks(bytes: &[u8], key: &str) -> ContentReport {
         return report(findings, None);
     };
     let img = Img { rgba: &rgba, w: w as usize, h: h as usize };
-    let title = maps::map_title(key).map(|t| t.to_ascii_uppercase());
-    let title_rect = maps::title_rect(title.as_ref().map_or(0, String::len));
+    let title = maps::map_title(key, variant).map(|t| t.to_ascii_uppercase());
+    let title_rect = maps::title_rect(title.as_ref().map_or(0, |t| t.chars().count()));
     let reserved = [title_rect, maps::CREDIT_RECT];
 
     let background = classify_background(&img, &reserved);
@@ -1391,11 +1392,11 @@ mod tests {
     #[test]
     fn known_good_maps_pass_content_checks() {
         let textured = test_render::textured_basemap();
-        let basemap = content_checks(&test_render::day_map(Bg::Basemap(&textured)), "day-1.png");
+        let basemap = content_checks(&test_render::day_map(Bg::Basemap(&textured)), "day-1.png", None);
         assert!(basemap.findings.is_empty(), "{:?}", levels(&basemap));
         assert_eq!(basemap.background, Some(Background::Basemap));
 
-        let roads = content_checks(&test_render::day_map(Bg::Roads), "day-1.png");
+        let roads = content_checks(&test_render::day_map(Bg::Roads), "day-1.png", None);
         assert!(roads.findings.is_empty(), "{:?}", levels(&roads));
         assert_eq!(roads.background, Some(Background::OverpassRoads));
     }
@@ -1406,12 +1407,12 @@ mod tests {
         // extra manifest key, and sizes its title strip from map_title.
         let textured = test_render::textured_basemap();
         let png = test_render::day_style_map("day-1-away.png", Bg::Basemap(&textured));
-        let report = content_checks(&png, "day-1-away.png");
+        let report = content_checks(&png, "day-1-away.png", None);
         assert!(report.findings.is_empty(), "{:?}", levels(&report));
         assert_eq!(report.background, Some(Background::Basemap));
 
-        let title = maps::title_rect(maps::map_title("day-1-away.png").unwrap().len());
-        let found = levels(&content_checks(&erase(&png, title), "day-1-away.png"));
+        let title = maps::title_rect(maps::map_title("day-1-away.png", None).unwrap().len());
+        let found = levels(&content_checks(&erase(&png, title), "day-1-away.png", None));
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].0 == Level::Fail && found[0].1.contains("title text missing"), "{found:?}");
     }
@@ -1423,12 +1424,12 @@ mod tests {
         // manifest key, and sizes its title strip from map_title.
         let textured = test_render::textured_basemap();
         let png = test_render::plan_style_map("plan-airport.png", &textured);
-        let report = content_checks(&png, "plan-airport.png");
+        let report = content_checks(&png, "plan-airport.png", None);
         assert!(report.findings.is_empty(), "{:?}", levels(&report));
         assert_eq!(report.background, Some(Background::Basemap));
 
-        let title = maps::title_rect(maps::map_title("plan-airport.png").unwrap().len());
-        let found = levels(&content_checks(&erase(&png, title), "plan-airport.png"));
+        let title = maps::title_rect(maps::map_title("plan-airport.png", None).unwrap().len());
+        let found = levels(&content_checks(&erase(&png, title), "plan-airport.png", None));
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].0 == Level::Fail && found[0].1.contains("title text missing"), "{found:?}");
     }
@@ -1436,7 +1437,7 @@ mod tests {
     #[test]
     fn flat_basemap_is_only_a_warning() {
         let flat = test_render::flat_basemap([170, 211, 223]);
-        let report = content_checks(&test_render::day_map(Bg::Basemap(&flat)), "day-1.png");
+        let report = content_checks(&test_render::day_map(Bg::Basemap(&flat)), "day-1.png", None);
         assert_eq!(report.background, Some(Background::Basemap));
         let found = levels(&report);
         assert_eq!(found.len(), 1, "{found:?}");
@@ -1446,7 +1447,7 @@ mod tests {
 
     #[test]
     fn grid_only_background_fails() {
-        let report = content_checks(&test_render::day_map(Bg::Grid), "day-1.png");
+        let report = content_checks(&test_render::day_map(Bg::Grid), "day-1.png", None);
         assert_eq!(report.background, Some(Background::GridOnly));
         let found = levels(&report);
         assert_eq!(found.len(), 1, "{found:?}");
@@ -1473,12 +1474,12 @@ mod tests {
             (test_render::day_map(Bg::Basemap(&textured)), "basemap"),
             (test_render::day_map(Bg::Roads), "roads"),
         ] {
-            let title = maps::title_rect(maps::map_title("day-1.png").unwrap().len());
-            let found = levels(&content_checks(&erase(&png, title), "day-1.png"));
+            let title = maps::title_rect(maps::map_title("day-1.png", None).unwrap().len());
+            let found = levels(&content_checks(&erase(&png, title), "day-1.png", None));
             assert_eq!(found.len(), 1, "{bg}: {found:?}");
             assert!(found[0].0 == Level::Fail && found[0].1.contains("title text missing"), "{bg}: {found:?}");
 
-            let found = levels(&content_checks(&erase(&png, maps::CREDIT_RECT), "day-1.png"));
+            let found = levels(&content_checks(&erase(&png, maps::CREDIT_RECT), "day-1.png", None));
             assert_eq!(found.len(), 1, "{bg}: {found:?}");
             assert!(found[0].0 == Level::Fail && found[0].1.contains("credit text missing"), "{bg}: {found:?}");
         }
@@ -1487,14 +1488,14 @@ mod tests {
     #[test]
     fn wrong_size_and_placeholder_bytes_fail() {
         let small = test_render::encode(&vec![200u8; 320 * 220 * 4], 320, 220);
-        let found = levels(&content_checks(&small, "day-1.png"));
+        let found = levels(&content_checks(&small, "day-1.png", None));
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].0 == Level::Fail && found[0].1.contains("320x220"), "{found:?}");
 
-        let found = levels(&content_checks(&placeholder(), "day-1.png"));
+        let found = levels(&content_checks(&placeholder(), "day-1.png", None));
         assert!(found[0].0 == Level::Fail && found[0].1.contains("1x1"), "{found:?}");
 
-        let found = levels(&content_checks(b"not a png", "day-1.png"));
+        let found = levels(&content_checks(b"not a png", "day-1.png", None));
         assert!(found[0].0 == Level::Fail && found[0].1.contains("not a decodable PNG"), "{found:?}");
     }
 
@@ -1506,7 +1507,7 @@ mod tests {
                 test_render::stamp_text(&mut stamped, x, y, "API KEY REQUIRED", [90, 90, 90], 2);
             }
         }
-        let report = content_checks(&test_render::day_map(Bg::Basemap(&stamped)), "day-1.png");
+        let report = content_checks(&test_render::day_map(Bg::Basemap(&stamped)), "day-1.png", None);
         let found = levels(&report);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].0, Level::Warn);

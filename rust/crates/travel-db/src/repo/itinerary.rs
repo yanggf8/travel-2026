@@ -1142,11 +1142,11 @@ pub async fn set_day_excursion(
     Ok(())
 }
 
-/// Whether any day requires a separate excursion map for this plan.
+/// Whether any trip day (a day variant never counts) requires a separate excursion map for this plan.
 pub async fn has_plan_excursion(conn: &Connection, plan_id: &str) -> Result<bool, String> {
     let mut rows = conn
         .query(
-            "SELECT EXISTS(SELECT 1 FROM days WHERE plan_id = ?1 AND excursion = 1)",
+            "SELECT EXISTS(SELECT 1 FROM days WHERE plan_id = ?1 AND excursion = 1 AND variant_of IS NULL)",
             libsql::params![plan_id.to_string()],
         )
         .await
@@ -1159,7 +1159,7 @@ pub async fn has_plan_excursion(conn: &Connection, plan_id: &str) -> Result<bool
     Ok(row.get::<i64>(0).map_err(|e| format!("plan excursion value: {e}"))? == 1)
 }
 
-/// Day numbers flagged `excursion = 1` for a plan+destination, ascending.
+/// Trip-day numbers flagged `excursion = 1` for a plan+destination, ascending (variants excluded).
 pub async fn excursion_days(
     conn: &Connection,
     plan_id: &str,
@@ -1168,7 +1168,7 @@ pub async fn excursion_days(
     let mut rows = conn
         .query(
             "SELECT day_number FROM days WHERE plan_id = ?1 AND destination = ?2 AND excursion = 1 \
-             ORDER BY day_number",
+             AND variant_of IS NULL ORDER BY day_number",
             libsql::params![plan_id.to_string(), destination.to_string()],
         )
         .await
