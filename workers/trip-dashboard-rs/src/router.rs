@@ -689,7 +689,7 @@ async fn check_map_status(
     let mut day_status = HashMap::new();
     let mut day_logistics_status = HashMap::new();
     let mut day_away_status = HashMap::new();
-    for d in days {
+    for d in days_with_variants(days) {
         day_status.insert(d.day_number, next());
         day_logistics_status.insert(d.day_number, next());
         day_away_status.insert(d.day_number, next());
@@ -707,9 +707,14 @@ async fn check_map_status(
     })
 }
 
+fn days_with_variants(days: &[model::Day]) -> impl Iterator<Item = &model::Day> {
+    days.iter()
+        .flat_map(|d| std::iter::once(d).chain(d.variants.iter()))
+}
+
 /// The R2 keys `check_map_status` HEADs, in the order it reads the results back:
 /// the four overview maps (plan, logistics, excursion, airport), then (day,
-/// logistics, away) per day.
+/// logistics, away) per main day and its variants.
 fn map_status_keys(plan_id: &str, days: &[model::Day]) -> Vec<String> {
     let mut keys = vec![
         format!("{plan_id}/plan.png"),
@@ -717,7 +722,7 @@ fn map_status_keys(plan_id: &str, days: &[model::Day]) -> Vec<String> {
         format!("{plan_id}/plan-excursion.png"),
         format!("{plan_id}/plan-airport.png"),
     ];
-    for d in days {
+    for d in days_with_variants(days) {
         for suffix in ["", "-logistics", "-away"] {
             keys.push(format!("{plan_id}/day-{}{suffix}.png", d.day_number));
         }
@@ -845,7 +850,8 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         format!(
             "SELECT day_number, date, day_type, theme, theme_zh, weather_label, \
-             temp_low_c, temp_high_c, precipitation_pct, feels_like_low_c, feels_like_high_c \
+             temp_low_c, temp_high_c, precipitation_pct, feels_like_low_c, feels_like_high_c, \
+             variant_of, variant_label, variant_label_zh \
              FROM days WHERE plan_id = '{slug}' ORDER BY day_number"
         ),
         format!(
@@ -1178,6 +1184,32 @@ mod tests {
         .expect("NULL day columns must not drop the row")
         .1;
         assert_eq!((old.seq, old.day_number, old.pin_no, old.color), (4, None, None, None));
+    }
+
+    #[test]
+    fn map_status_keys_include_variants() {
+        let day = |n| model::Day { day_number: n, ..Default::default() };
+        let mut day1 = day(1);
+        day1.variants.push(day(3));
+        let keys = map_status_keys("kyoto-2026", &[day1, day(2)]);
+        assert_eq!(
+            keys,
+            [
+                "kyoto-2026/plan.png",
+                "kyoto-2026/plan-logistics.png",
+                "kyoto-2026/plan-excursion.png",
+                "kyoto-2026/plan-airport.png",
+                "kyoto-2026/day-1.png",
+                "kyoto-2026/day-1-logistics.png",
+                "kyoto-2026/day-1-away.png",
+                "kyoto-2026/day-3.png",
+                "kyoto-2026/day-3-logistics.png",
+                "kyoto-2026/day-3-away.png",
+                "kyoto-2026/day-2.png",
+                "kyoto-2026/day-2-logistics.png",
+                "kyoto-2026/day-2-away.png",
+            ]
+        );
     }
 
     #[test]

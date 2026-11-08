@@ -64,6 +64,10 @@ pub struct Day {
     pub precipitation_pct: Option<f64>,
     pub feels_like_low_c: Option<f64>,
     pub feels_like_high_c: Option<f64>,
+    pub variant_of: Option<i64>,
+    pub variant_label: String,
+    pub variant_label_zh: String,
+    pub variants: Vec<Day>,
     pub sessions: Vec<Session>, // ALWAYS 4: morning, noon, afternoon, evening
     pub route_segments: Vec<RouteSegment>,
     /// Map waypoints for this day (from day_landmarks, in sort_order). Listed under the day map.
@@ -388,8 +392,8 @@ fn domestic_stay(r: &Row) -> DomesticStay {
 }
 
 /// Assemble a Plan from the pipeline result vectors (query order defined in the router/loader).
-/// Row slices MUST be pre-sorted by their sort_order in the SQL query — this
-/// function preserves input order and does not re-sort.
+/// Content row slices MUST be pre-sorted by their sort_order in the SQL query;
+/// assembly preserves their order. Variants are attached in day_number order.
 pub fn assemble(
     plan_rows: &[Row],
     day_rows: &[Row],
@@ -580,6 +584,7 @@ pub fn assemble(
             }
         })
         .collect();
+    let mut all_days = Vec::with_capacity(day_rows.len());
     for d in day_rows {
         let dn = i(d, "day_number");
         let acts: Vec<Row> = activity_rows
@@ -609,7 +614,7 @@ pub fn assemble(
                 source: s(r, "source"),
             })
             .collect();
-        plan.days.push(Day {
+        all_days.push(Day {
             day_number: dn,
             date: s(d, "date"),
             day_type: s(d, "day_type"),
@@ -621,6 +626,10 @@ pub fn assemble(
             precipitation_pct: f(d, "precipitation_pct"),
             feels_like_low_c: f(d, "feels_like_low_c"),
             feels_like_high_c: f(d, "feels_like_high_c"),
+            variant_of: opt_i(d, "variant_of"),
+            variant_label: s(d, "variant_label"),
+            variant_label_zh: s(d, "variant_label_zh"),
+            variants: Vec::new(),
             sessions,
             route_segments,
             landmarks: landmark_rows
@@ -629,6 +638,20 @@ pub fn assemble(
                 .map(|r| s(r, "landmark"))
                 .collect(),
         });
+    }
+    let (mut variants, trip_days): (Vec<Day>, Vec<Day>) =
+        all_days.into_iter().partition(|d| d.variant_of.is_some());
+    plan.days = trip_days;
+    variants.sort_by_key(|d| d.day_number);
+    for variant in variants {
+        let main_day_number = variant.variant_of.unwrap();
+        if let Some(main_day) = plan
+            .days
+            .iter_mut()
+            .find(|d| d.day_number == main_day_number)
+        {
+            main_day.variants.push(variant);
+        }
     }
     plan
 }
@@ -1112,6 +1135,105 @@ mod tests {
         ));
         assert!(!super::has_embedded_maps_url("just a venue name"));
         assert!(!super::has_embedded_maps_url("see https://example.com/foo")); // url but not maps
+    }
+
+    #[test]
+    fn variant_rows_attach_to_main_day() {
+        let plan_rows = vec![row(&[
+            ("plan_id", json!("kyoto-2026")),
+            ("display_name", json!("Kyoto")),
+            ("start_date", json!("2026-11-14")),
+            ("end_date", json!("2026-11-15")),
+        ])];
+        let day_rows = vec![
+            row(&[
+                ("day_number", json!("1")),
+                ("date", json!("2026-11-14")),
+                ("theme", json!("Main day")),
+            ]),
+            row(&[("day_number", json!(2)), ("date", json!("2026-11-15"))]),
+            row(&[
+                ("day_number", json!("3")),
+                ("date", json!("2026-11-14")),
+                ("theme", json!("Variant day")),
+                ("variant_of", json!("1")),
+                ("variant_label", json!("Sunny-day plan")),
+                ("variant_label_zh", json!("晴天方案")),
+            ]),
+        ];
+        let session_rows = vec![row(&[
+            ("day_number", json!("3")),
+            ("session_type", json!("morning")),
+            ("focus_zh", json!(" variant focus ")),
+            ("transit_notes_zh", json!("variant transit")),
+        ])];
+        let activity_rows = vec![row(&[
+            ("day_number", json!("3")),
+            ("session_type", json!("noon")),
+            ("title", json!("Variant activity")),
+        ])];
+        let meal_rows = vec![row(&[
+            ("day_number", json!("3")),
+            ("session_type", json!("noon")),
+            ("meal", json!("Variant lunch")),
+            ("source", json!("confirmed")),
+        ])];
+        let route_rows = vec![row(&[
+            ("day_number", json!("3")),
+            ("from_place", json!("Kyoto Station")),
+            ("to_place", json!("Ohara")),
+            ("mode", json!("driving")),
+            ("duration_min", json!("45")),
+        ])];
+        let landmark_rows = vec![row(&[
+            ("day_number", json!("3")),
+            ("landmark", json!("Sanzen-in")),
+        ])];
+        let plan = assemble(
+            &plan_rows,
+            &day_rows,
+            &session_rows,
+            &activity_rows,
+            &meal_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &route_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &landmark_rows,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(
+            plan.days.iter().map(|d| d.day_number).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert!(plan.days[1].variants.is_empty());
+        assert_eq!(plan.days[0].variants.len(), 1);
+        let variant = &plan.days[0].variants[0];
+        assert_eq!(variant.day_number, 3);
+        assert_eq!(variant.variant_of, Some(1));
+        assert_eq!(variant.variant_label, "Sunny-day plan");
+        assert_eq!(variant.variant_label_zh, "晴天方案");
+        assert_eq!(variant.theme, "Variant day");
+        let morning = &variant.sessions[0];
+        assert_eq!(morning.focus_zh, " variant focus ");
+        assert_eq!(morning.transit_zh, "variant transit");
+        let noon = &variant.sessions[1];
+        assert_eq!(noon.activities[0].title, "Variant activity");
+        assert_eq!(noon.meals[0].text, "Variant lunch");
+        assert_eq!(variant.route_segments[0].to_place, "Ohara");
+        assert_eq!(variant.landmarks, ["Sanzen-in"]);
     }
 
     #[test]
