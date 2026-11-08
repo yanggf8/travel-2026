@@ -66,9 +66,25 @@ pub(crate) struct Companion {
     pub(crate) img_srcs: Vec<String>,
 }
 
+/// One `details.day-variant` block as the page renders it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct VariantBlock {
+    /// `data-variant-of` (the main day the block claims to belong to).
+    pub(crate) of: Option<i64>,
+    /// `data-day` of the nearest enclosing `section.day` card, if any.
+    pub(crate) card_day: Option<i64>,
+    pub(crate) open: bool,
+    pub(crate) summary: String,
+}
+
 /// Everything layer 1 reads from one page.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PageDoc {
+    /// `section.day` cards (one per trip day; variants live inside them).
+    pub(crate) day_cards: usize,
+    pub(crate) variants: Vec<VariantBlock>,
+    /// Visible text of the body (no `<script>` / `<style>` content).
+    pub(crate) visible_text: String,
     pub(crate) html_lang: Option<String>,
     pub(crate) notranslate: bool,
     pub(crate) booking_summary: bool,
@@ -173,6 +189,33 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
                 .count(),
             img_srcs: srcs(section, "img.companion-map-img"),
         });
+    }
+    out.day_cards = body.select(&sel("section.day")).count();
+    let summary = sel("summary.day-variant-summary");
+    for d in body.select(&sel("details.day-variant")) {
+        out.variants.push(VariantBlock {
+            of: d.value().attr("data-variant-of").and_then(|v| v.trim().parse().ok()),
+            card_day: d
+                .ancestors()
+                .filter_map(ElementRef::wrap)
+                .find(|a| a.value().name() == "section" && has_class(*a, "day"))
+                .and_then(|a| a.value().attr("data-day"))
+                .and_then(|v| v.trim().parse().ok()),
+            open: d.value().attr("open").is_some(),
+            summary: d.select(&summary).next().map(|s| text_of(s).trim().to_string()).unwrap_or_default(),
+        });
+    }
+    for node in body.descendants() {
+        if let Some(t) = node.value().as_text() {
+            let hidden = node
+                .parent()
+                .and_then(ElementRef::wrap)
+                .is_some_and(|p| matches!(p.value().name(), "script" | "style"));
+            if !hidden {
+                out.visible_text.push_str(t);
+                out.visible_text.push(' ');
+            }
+        }
     }
     out.stay_photos = srcs(body, ".booking-cand-detail img.candidate-gallery-img");
     out.stay_minimaps = srcs(body, ".booking-cand-detail img.cand-minimap-img");
@@ -311,6 +354,77 @@ pub(crate) fn page_checks(http: u16, doc: &PageDoc, lang: Lang, plan_id: &str) -
         },
     ));
     out
+}
+
+/// True when `text` holds `prefix{n}suffix` where a digit does not continue `n`.
+fn mentions_day(text: &str, prefix: &str, n: i64, suffix: &str) -> bool {
+    let needle = format!("{prefix}{n}{suffix}");
+    text.match_indices(&needle).any(|(i, _)| {
+        suffix.starts_with(|c: char| !c.is_ascii_digit())
+            || !text[i + needle.len()..].starts_with(|c: char| c.is_ascii_digit())
+    })
+}
+
+/// Day-variant markup checks (worker render/day.rs): `variants` is the plan's
+/// variant day_number -> (main day, EN label); `trip_days` the number of trip
+/// days (variants excluded). A plan with no variants and a page with no
+/// variant blocks yields no findings, so plain plans report exactly as before.
+pub(crate) fn variant_checks(
+    doc: &PageDoc,
+    variants: &HashMap<i64, (i64, Option<String>)>,
+    trip_days: usize,
+) -> Vec<(&'static str, Check)> {
+    if variants.is_empty() && doc.variants.is_empty() {
+        return Vec::new();
+    }
+    let mut problems = Vec::new();
+    if variants.is_empty() {
+        problems.push(format!("{} day-variant block(s) on a plan with no day variants", doc.variants.len()));
+    } else if doc.variants.is_empty() {
+        return vec![(
+            "variant",
+            Check::fail(
+                format!("{} day variant(s) in the data but no details.day-variant on the page", variants.len()),
+                Some(Next::Deploy),
+            ),
+        )];
+    }
+    if doc.day_cards != trip_days {
+        problems.push(format!("{} section.day card(s) for {trip_days} trip day(s)", doc.day_cards));
+    }
+    if doc.variants.len() != variants.len() {
+        problems.push(format!("{} day-variant block(s) for {} variant(s)", doc.variants.len(), variants.len()));
+    }
+    for v in &doc.variants {
+        let name = v.of.map_or("?".to_string(), |n| n.to_string());
+        match (v.of, v.card_day) {
+            (None, _) => problems.push("a day-variant has no numeric data-variant-of".to_string()),
+            (Some(of), Some(card)) if of == card => {}
+            (Some(of), card) => problems.push(format!(
+                "day-variant of day {of} sits in {} instead of section.day[data-day={of}]",
+                card.map_or("no data-day card".to_string(), |c| format!("the card for day {c}"))
+            )),
+        }
+        if !v.open {
+            problems.push(format!("day-variant of day {name} is collapsed (no open attribute)"));
+        }
+        if v.summary.is_empty() {
+            problems.push(format!("day-variant of day {name} has an empty summary"));
+        }
+    }
+    let mut internal: Vec<i64> = variants.keys().copied().collect();
+    internal.sort_unstable();
+    for n in internal {
+        if mentions_day(&doc.visible_text, "第 ", n, " 天") || mentions_day(&doc.visible_text, "Day ", n, "") {
+            problems.push(format!("the variant's internal day number {n} is visible as a day heading"));
+        }
+    }
+    let check = if problems.is_empty() {
+        Check::pass(format!("{} day variant(s) open inside their main day cards", doc.variants.len()))
+    } else {
+        Check::fail(problems.join("; "), None)
+    };
+    vec![("variant", check)]
 }
 
 /// What the plan's data says the page should hold.
@@ -685,6 +799,75 @@ mod tests {
         }
         assert_eq!(doc.overview, Some(0));
         assert_eq!(doc.figures.len(), 3);
+    }
+
+    fn variants_of(pairs: &[(i64, i64)]) -> HashMap<i64, (i64, Option<String>)> {
+        pairs.iter().map(|(v, m)| (*v, (*m, Some("Rainy".to_string())))).collect()
+    }
+
+    fn variant_html(details: &str) -> String {
+        viewer_page(&format!(
+            "<section class=\"day day-full\" data-day=\"2\"><h2>第 2 天 · 2026-11-15</h2><span class=\"day-option-label\">晴天</span>{details}</section>"
+        ))
+    }
+
+    const GOOD_VARIANT: &str = "<details class=\"day-variant\" data-variant-of=\"2\" open><summary class=\"day-variant-summary\">替代方案：雨天</summary><div class=\"day-variant-body\"><div class=\"theme\">第 2 天 · 雨天</div></div></details>";
+
+    fn variant_verdict(html: &str, v: &HashMap<i64, (i64, Option<String>)>) -> Check {
+        let doc = parse_page(html);
+        let mut out = variant_checks(&doc, v, 2);
+        assert_eq!(out.len(), 1);
+        out.remove(0).1
+    }
+
+    #[test]
+    fn plain_page_has_no_variant_findings() {
+        assert!(variant_checks(&parse_page(&viewer_page("")), &HashMap::new(), 1).is_empty());
+    }
+
+    #[test]
+    fn variant_page_passes() {
+        let c = variant_verdict(&variant_html(GOOD_VARIANT), &variants_of(&[(3, 2)]));
+        assert_eq!(c.level, Level::Pass, "{c:?}");
+    }
+
+    #[test]
+    fn variant_outside_its_card_fails() {
+        let html = viewer_page(&format!(
+            "<section class=\"day day-full\" data-day=\"2\"><h2>第 2 天</h2></section>{GOOD_VARIANT}"
+        ));
+        let c = variant_verdict(&html, &variants_of(&[(3, 2)]));
+        assert_eq!(c.level, Level::Fail, "{c:?}");
+        let wrong = viewer_page(&format!(
+            "<section class=\"day day-full\" data-day=\"1\">{GOOD_VARIANT}</section>"
+        ));
+        assert_eq!(variant_verdict(&wrong, &variants_of(&[(3, 2)])).level, Level::Fail);
+    }
+
+    #[test]
+    fn collapsed_variant_fails() {
+        let closed = GOOD_VARIANT.replace(" open>", ">");
+        let c = variant_verdict(&variant_html(&closed), &variants_of(&[(3, 2)]));
+        assert_eq!(c.level, Level::Fail, "{c:?}");
+    }
+
+    #[test]
+    fn internal_number_visible_fails() {
+        let leaky = GOOD_VARIANT.replace("第 2 天 · 雨天", "第 3 天 · 雨天");
+        let c = variant_verdict(&variant_html(&leaky), &variants_of(&[(3, 2)]));
+        assert_eq!(c.level, Level::Fail, "{c:?}");
+        let leaky_en = GOOD_VARIANT.replace("第 2 天 · 雨天", "Day 3 · Rainy");
+        assert_eq!(variant_verdict(&variant_html(&leaky_en), &variants_of(&[(3, 2)])).level, Level::Fail);
+        let fine = GOOD_VARIANT.replace("第 2 天 · 雨天", "Day 31 and 第 30 天");
+        assert_eq!(variant_verdict(&variant_html(&fine), &variants_of(&[(3, 2)])).level, Level::Pass);
+    }
+
+    #[test]
+    fn empty_summary_and_missing_markup_fail() {
+        let empty = GOOD_VARIANT.replace("替代方案：雨天", "  ");
+        assert_eq!(variant_verdict(&variant_html(&empty), &variants_of(&[(3, 2)])).level, Level::Fail);
+        let c = variant_verdict(&viewer_page(""), &variants_of(&[(3, 2)]));
+        assert_eq!(c.level, Level::Fail);
     }
 
     #[test]

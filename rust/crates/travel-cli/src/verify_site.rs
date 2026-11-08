@@ -476,6 +476,8 @@ async fn viewer_page_checks(
     let day_numbers = crate::check_maps_fresh::read_day_numbers(conn, plan).await?;
     let statuses: HashMap<String, String> = manifest.iter().map(|(k, r)| (k.clone(), r.status.clone())).collect();
     let facts = SlotFacts { day_numbers: &day_numbers, has_flights: has_flights(conn, plan).await?, statuses: &statuses };
+    let variants = travel_db::repo::days::variant_map(conn, plan, None).await?;
+    let trip_days = day_numbers.len().saturating_sub(variants.len());
     let legends = read_legend_rows(conn, plan).await?;
     let base = Url::parse(&format!("https://{host}/")).map_err(|e| format!("dashboard host {host:?}: {e}"))?;
     let plan_url = crate::share_token::share_url(plan, token);
@@ -502,6 +504,9 @@ async fn viewer_page_checks(
         }
         if !page::page_usable(live.http, &doc) {
             continue;
+        }
+        for (layer, check) in page::variant_checks(&doc, &variants, trip_days) {
+            tally.emit(plan, layer, code, &check);
         }
         for (key, check) in page::slot_checks(&doc.figures, &facts) {
             tally.emit(plan, "slot", &format!("{code}:{key}"), &check);
