@@ -90,8 +90,17 @@ fn day_route_caption(day_number: i64, lang: &str) -> String {
 /// itself is present — stale legend rows for an absent map must not leak out.
 /// Rows that carry a day render grouped by day — a heading with the day's pin
 /// color and 第 N 天 / Day N, then that day's pins by the number drawn on them;
-/// day-less rows (logistics maps, older snapshots) render as one flat list.
+/// a variant map uses its localized main-day option label instead. Day-less rows
+/// (logistics maps, older snapshots) render as one flat list.
 fn map_legend_html(legend: &[LegendStop], lang: &str) -> String {
+    map_legend_html_with_option(legend, lang, None)
+}
+
+fn map_legend_html_with_option(
+    legend: &[LegendStop],
+    lang: &str,
+    option_label: Option<&str>,
+) -> String {
     if legend.is_empty() {
         return String::new();
     }
@@ -114,7 +123,9 @@ fn map_legend_html(legend: &[LegendStop], lang: &str) -> String {
             .find_map(|s| s.color.as_deref().filter(|c| is_hex_color(c)))
             .map(|c| format!("<span class=\"leg-swatch\" style=\"background:{c}\"></span>"))
             .unwrap_or_default();
-        let label = i18n::tf("dayLabel", lang, &[("day", &d.to_string())]);
+        let label = option_label
+            .map(str::to_owned)
+            .unwrap_or_else(|| i18n::tf("dayLabel", lang, &[("day", &d.to_string())]));
         h.push_str(&format!(
             "<div class=\"map-legend-day\"><div class=\"leg-day\">{swatch}{}</div>{}</div>",
             esc(&label),
@@ -277,7 +288,31 @@ pub fn day_map_slot(
     lang: &str,
     legend: &[LegendStop],
 ) -> String {
-    let caption = day_route_caption(day_number, lang);
+    day_map_slot_with_option(plan_id, day_number, version, lang, legend, None)
+}
+
+pub fn variant_day_map_slot(
+    plan_id: &str,
+    day_number: i64,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+    option_label: &str,
+) -> String {
+    day_map_slot_with_option(plan_id, day_number, version, lang, legend, Some(option_label))
+}
+
+fn day_map_slot_with_option(
+    plan_id: &str,
+    day_number: i64,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+    option_label: Option<&str>,
+) -> String {
+    let caption = option_label
+        .map(str::to_owned)
+        .unwrap_or_else(|| day_route_caption(day_number, lang));
     if let Some(v) = version {
         format!(
             "<figure class=\"map-frame\"{}><img class=\"daymap\" alt=\"{}\" \
@@ -288,7 +323,7 @@ pub fn day_map_slot(
             day_number,
             cache_bust(v),
             map_caption(&caption),
-            map_legend_html(legend, lang),
+            map_legend_html_with_option(legend, lang, option_label),
         )
     } else {
         let not_avail = i18n::t("mapNotAvailable", lang);
@@ -311,7 +346,23 @@ pub fn day_logistics_map_slot(
     legend: &[LegendStop],
 ) -> String {
     let caption = i18n::tf("dayHotelRoundTrip", lang, &[("day", &day_number.to_string())]);
-    compact_day_map_slot(plan_id, day_number, "logistics", "", &caption, version, lang, legend)
+    compact_day_map_slot(plan_id, day_number, "logistics", "", &caption, version, lang, legend, None)
+}
+
+pub fn variant_day_logistics_map_slot(
+    plan_id: &str,
+    day_number: i64,
+    main_day_number: i64,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+    option_name: &str,
+) -> String {
+    let day = main_day_number.to_string();
+    let args = [("day", day.as_str()), ("label", option_name)];
+    let caption = i18n::tf("dayOptionHotelRoundTrip", lang, &args);
+    let option_label = i18n::tf("dayOption", lang, &args);
+    compact_day_map_slot(plan_id, day_number, "logistics", "", &caption, version, lang, legend, Some(&option_label))
 }
 
 /// Compact map for the day's stops beyond the destination area
@@ -324,7 +375,23 @@ pub fn day_away_map_slot(
     legend: &[LegendStop],
 ) -> String {
     let caption = i18n::tf("dayAway", lang, &[("day", &day_number.to_string())]);
-    compact_day_map_slot(plan_id, day_number, "away", " map-frame--day-away", &caption, version, lang, legend)
+    compact_day_map_slot(plan_id, day_number, "away", " map-frame--day-away", &caption, version, lang, legend, None)
+}
+
+pub fn variant_day_away_map_slot(
+    plan_id: &str,
+    day_number: i64,
+    main_day_number: i64,
+    version: Option<&str>,
+    lang: &str,
+    legend: &[LegendStop],
+    option_name: &str,
+) -> String {
+    let day = main_day_number.to_string();
+    let args = [("day", day.as_str()), ("label", option_name)];
+    let caption = i18n::tf("dayOptionAway", lang, &args);
+    let option_label = i18n::tf("dayOption", lang, &args);
+    compact_day_map_slot(plan_id, day_number, "away", " map-frame--day-away", &caption, version, lang, legend, Some(&option_label))
 }
 
 /// The compact per-day map frame shared by `day-{n}-{suffix}.png` maps: only
@@ -338,6 +405,7 @@ fn compact_day_map_slot(
     version: Option<&str>,
     lang: &str,
     legend: &[LegendStop],
+    option_label: Option<&str>,
 ) -> String {
     if let Some(v) = version {
         format!(
@@ -350,7 +418,7 @@ fn compact_day_map_slot(
             suffix,
             cache_bust(v),
             map_caption(caption),
-            map_legend_html(legend, lang),
+            map_legend_html_with_option(legend, lang, option_label),
         )
     } else {
         String::new()

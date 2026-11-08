@@ -7,9 +7,28 @@ pub mod map;
 pub mod session;
 pub mod share;
 pub mod summary;
-use crate::i18n::t;
-use crate::model::Plan;
+use crate::i18n::{t, tf};
+use crate::model::{Day, Plan};
 pub use activity_text::render_activity_text;
+
+pub fn day_option_name<'a>(day: &'a Day, lang: &str) -> &'a str {
+    if lang == "en" && !day.variant_label.is_empty() {
+        &day.variant_label
+    } else {
+        &day.variant_label_zh
+    }
+}
+
+pub fn day_option_label(day: &Day, main_day: i64, lang: &str) -> String {
+    tf(
+        "dayOption",
+        lang,
+        &[
+            ("day", &main_day.to_string()),
+            ("label", day_option_name(day, lang)),
+        ],
+    )
+}
 
 /// Wrap a rendered body in the full HTML page shell: charset, mobile viewport,
 /// `notranslate` (the ZH content must not be browser-auto-translated), and the
@@ -109,26 +128,11 @@ pub fn render_plan(
     }
     body.push_str(&summary::render(plan, lang, token));
     for d in &plan.days {
-        let map_ver = map_status
-            .days
-            .get(&d.day_number)
-            .and_then(|v| v.as_deref());
         body.push_str(&day::render_with_logistics(
             d,
             &plan.plan_id,
             lang,
-            map_ver,
-            map_status
-                .day_logistics
-                .get(&d.day_number)
-                .and_then(|v| v.as_deref()),
-            map_status.legend_for(&format!("day-{}.png", d.day_number)),
-            map_status.legend_for(&format!("day-{}-logistics.png", d.day_number)),
-            map_status
-                .day_away
-                .get(&d.day_number)
-                .and_then(|v| v.as_deref()),
-            map_status.legend_for(&format!("day-{}-away.png", d.day_number)),
+            map_status,
             &plan.clothing_tips,
         ));
     }
@@ -798,6 +802,155 @@ mod tests {
 
         let en = render_plan(&plan, "en", None, &map_status, "");
         assert!(en.contains("Day 1 beyond the area"), "{en}");
+    }
+
+    #[test]
+    fn variant_block_renders_open_under_main() {
+        use crate::model::{Day, Plan, RouteSegment, Session};
+        let plan = Plan {
+            plan_id: "kyoto-nov-2026".into(),
+            display_name: "Kyoto".into(),
+            days: vec![
+                Day {
+                    day_number: 1,
+                    date: "2026-11-14".into(),
+                    day_type: "full".into(),
+                    variant_label: "Rainy-day plan".into(),
+                    variant_label_zh: "雨天方案".into(),
+                    theme_zh: "車站周邊".into(),
+                    variants: vec![Day {
+                        day_number: 3,
+                        variant_of: Some(1),
+                        variant_label: "Sunny-day plan".into(),
+                        variant_label_zh: "晴天方案".into(),
+                        theme_zh: "大原散策".into(),
+                        weather_label: "variant weather must not render".into(),
+                        landmarks: vec!["三千院".into()],
+                        route_segments: vec![RouteSegment {
+                            from_place: "京都站".into(),
+                            to_place: "大原".into(),
+                            ..Default::default()
+                        }],
+                        sessions: vec![Session {
+                            session_type: "morning".into(),
+                            focus_zh: "寺院散策".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                Day {
+                    day_number: 2,
+                    date: "2026-11-15".into(),
+                    day_type: "full".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
+        assert_eq!(html.matches("<section class=\"day ").count(), 2, "{html}");
+        let day1_open = "<section class=\"day day-full\" data-day=\"1\">";
+        let day1_start = html.find(day1_open).expect("day 1 card");
+        let day1_end = day1_start
+            + html[day1_start..]
+                .find("</section>")
+                .expect("day 1 section end")
+                + "</section>".len();
+        let day1 = &html[day1_start..day1_end];
+        assert!(
+            day1.contains("<span class=\"day-option-label\">雨天方案</span>"),
+            "{day1}"
+        );
+        assert!(day1.contains("<details class=\"day-variant\" data-variant-of=\"1\" open><summary class=\"day-variant-summary\">替代方案：晴天方案</summary><div class=\"day-variant-body\">"), "{day1}");
+        for section in html.split("<section class=\"day ").skip(1) {
+            let section = section.split("</section>").next().expect("day section end");
+            if !section.starts_with("day-full\" data-day=\"1\">") {
+                assert!(!section.contains("data-variant-of="), "{section}");
+            }
+        }
+        let body = day1.split("<div class=\"day-variant-body\">").nth(1).unwrap();
+        let map = body.find("day-map-stack").unwrap();
+        let landmark = body.find("day-landmarks").unwrap();
+        let route = body.find("route-block").unwrap();
+        let session = body.find("session-morning").unwrap();
+        assert!(map < landmark && landmark < route && route < session, "{body}");
+        assert!(body.contains("大原散策"), "{body}");
+        assert!(body.contains("三千院"), "{body}");
+        assert!(body.contains("寺院散策"), "{body}");
+        assert!(!html.contains("第 3 天"), "{html}");
+        assert!(!html.contains("variant weather must not render"), "{html}");
+    }
+
+    #[test]
+    fn variant_map_caption_uses_main_day() {
+        use crate::model::{Day, Plan};
+        let variant = |label: &str| Day {
+            day_number: 3,
+            variant_of: Some(1),
+            variant_label: label.into(),
+            variant_label_zh: "晴天方案".into(),
+            ..Default::default()
+        };
+        let plan = |label: &str| Plan {
+            plan_id: "kyoto-nov-2026".into(),
+            display_name: "Kyoto".into(),
+            days: vec![Day {
+                day_number: 1,
+                date: "2026-11-14".into(),
+                day_type: "full".into(),
+                variant_label: "Rainy-day plan".into(),
+                variant_label_zh: "雨天方案".into(),
+                variants: vec![variant(label)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let map_status = map::MapStatus {
+            days: [(3, Some("v1".into()))].into_iter().collect(),
+            day_logistics: [(3, Some("v2".into()))].into_iter().collect(),
+            day_away: [(3, Some("v3".into()))].into_iter().collect(),
+            legends: [(
+                "day-3.png".into(),
+                vec![map::LegendStop {
+                    seq: 1,
+                    label: "三千院".into(),
+                    lat: 35.12,
+                    lon: 135.84,
+                    day_number: Some(3),
+                    ..Default::default()
+                }],
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let zh = render_plan(&plan("Sunny-day plan"), "zh", None, &map_status, "");
+        assert!(zh.contains("data-map-key=\"day-3.png\""), "{zh}");
+        assert!(zh.contains("src=\"/map/kyoto-nov-2026/day-3.png?v=v1\""), "{zh}");
+        assert!(zh.contains("alt=\"第 1 天 · 晴天方案\""), "{zh}");
+        assert!(zh.contains("<figcaption>第 1 天 · 晴天方案 "), "{zh}");
+        assert!(zh.contains("alt=\"第 1 天 · 晴天方案・旅社來回\""), "{zh}");
+        assert!(zh.contains("<figcaption>第 1 天 · 晴天方案・旅社來回 "), "{zh}");
+        assert!(zh.contains("alt=\"第 1 天 · 晴天方案・本區以外的行程\""), "{zh}");
+        assert!(zh.contains("<figcaption>第 1 天 · 晴天方案・本區以外的行程 "), "{zh}");
+        assert!(zh.contains("<div class=\"leg-day\">第 1 天 · 晴天方案</div>"), "{zh}");
+        assert!(!zh.contains("第 3 天"), "{zh}");
+
+        let en = render_plan(&plan("Sunny-day plan"), "en", None, &map_status, "");
+        assert!(en.contains("alt=\"Day 1 · Sunny-day plan\""), "{en}");
+        assert!(en.contains("<figcaption>Day 1 · Sunny-day plan "), "{en}");
+        assert!(en.contains("alt=\"Day 1 · Sunny-day plan · hotel round trip\""), "{en}");
+        assert!(en.contains("<figcaption>Day 1 · Sunny-day plan · hotel round trip "), "{en}");
+        assert!(en.contains("alt=\"Day 1 · Sunny-day plan · beyond the area\""), "{en}");
+        assert!(en.contains("<figcaption>Day 1 · Sunny-day plan · beyond the area "), "{en}");
+        assert!(en.contains("<div class=\"leg-day\">Day 1 · Sunny-day plan</div>"), "{en}");
+        assert!(!en.contains("Day 3"), "{en}");
+        let fallback = render_plan(&plan(""), "en", None, &map_status, "");
+        assert!(fallback.contains("alt=\"Day 1 · 晴天方案\""), "{fallback}");
+        assert!(fallback.contains("alt=\"Day 1 · 晴天方案 · hotel round trip\""), "{fallback}");
+        assert!(fallback.contains("alt=\"Day 1 · 晴天方案 · beyond the area\""), "{fallback}");
     }
 
     #[test]

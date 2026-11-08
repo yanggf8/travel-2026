@@ -191,29 +191,39 @@ fn render_pending_alerts_with<F: FnMut() -> f64>(
 ) -> String {
     let mut out = String::new();
     let mut now_ms: Option<f64> = None;
-    for day in &plan.days {
-        for sess in &day.sessions {
-            for a in &sess.activities {
-                if a.booking_status != "pending" {
-                    continue;
+    for main_day in &plan.days {
+        for day in std::iter::once(main_day).chain(main_day.variants.iter()) {
+            for sess in &day.sessions {
+                for a in &sess.activities {
+                    if a.booking_status != "pending" {
+                        continue;
+                    }
+                    if is_meal_title(&a.title) != meal_only {
+                        continue;
+                    }
+                    let (title, embedded_url) = strip_embedded_maps(&a.title);
+                    let title = if main_day.variants.is_empty() {
+                        title
+                    } else {
+                        format!(
+                            "{}｜{title}",
+                            super::day_option_label(day, main_day.day_number, lang)
+                        )
+                    };
+                    // Prefer the embedded maps URL; else the booking_url.
+                    let maps_url = embedded_url
+                        .or_else(|| (!a.booking_url.is_empty()).then(|| a.booking_url.clone()));
+                    // Resolve "now" once, lazily, on the first emitted alert.
+                    let n = *now_ms.get_or_insert_with(&mut now);
+                    let urgent = is_urgent(&a.book_by, n);
+                    out.push_str(&alert_html(
+                        &title,
+                        maps_url.as_deref(),
+                        &a.book_by,
+                        urgent,
+                        lang,
+                    ));
                 }
-                if is_meal_title(&a.title) != meal_only {
-                    continue;
-                }
-                let (title, embedded_url) = strip_embedded_maps(&a.title);
-                // Prefer the embedded maps URL; else the booking_url.
-                let maps_url = embedded_url
-                    .or_else(|| (!a.booking_url.is_empty()).then(|| a.booking_url.clone()));
-                // Resolve "now" once, lazily, on the first emitted alert.
-                let n = *now_ms.get_or_insert_with(&mut now);
-                let urgent = is_urgent(&a.book_by, n);
-                out.push_str(&alert_html(
-                    &title,
-                    maps_url.as_deref(),
-                    &a.book_by,
-                    urgent,
-                    lang,
-                ));
             }
         }
     }
@@ -601,6 +611,41 @@ mod tests {
             html.contains("href=\"https://booking.example/x\""),
             "got: {html}"
         );
+    }
+
+    #[test]
+    fn alerts_prefix_variant_label() {
+        let now = parse_iso_date_millis("2026-06-22").unwrap();
+        let mut plan = plan_with(vec![pending("午餐：旅社", "2026-12-01", "")]);
+        plan.days[0].variant_label = "Rainy-day plan".into();
+        plan.days[0].variant_label_zh = "雨天方案".into();
+        plan.days[0].variants = vec![Day {
+            day_number: 3,
+            variant_of: Some(1),
+            variant_label: "Sunny-day plan".into(),
+            variant_label_zh: "晴天方案".into(),
+            sessions: vec![Session {
+                session_type: "noon".into(),
+                activities: vec![pending(
+                    "午餐：三千院 Google Maps：https://maps.google.com/?q=ohara",
+                    "2026-12-01",
+                    "https://booking.example/should-not-win",
+                )],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let zh = render_pending_alerts_with(&plan, "zh", true, || now);
+        assert!(zh.contains("<strong>第 1 天 · 雨天方案｜午餐：旅社</strong>"), "{zh}");
+        assert!(zh.contains("<strong>第 1 天 · 晴天方案｜午餐：三千院</strong>"), "{zh}");
+        assert!(zh.contains("href=\"https://maps.google.com/?q=ohara\""), "{zh}");
+        assert!(!zh.contains("should-not-win"), "{zh}");
+        assert!(!zh.contains("第 3 天"), "{zh}");
+
+        let en = render_pending_alerts_with(&plan, "en", true, || now);
+        assert!(en.contains("<strong>Day 1 · Rainy-day plan｜午餐：旅社</strong>"), "{en}");
+        assert!(en.contains("<strong>Day 1 · Sunny-day plan｜午餐：三千院</strong>"), "{en}");
+        assert!(!en.contains("Day 3"), "{en}");
     }
 
     // ---- transit assembly with / without station+lines ----

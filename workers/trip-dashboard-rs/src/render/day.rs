@@ -173,66 +173,102 @@ pub fn render(
     map_version: Option<&str>,
     legend: &[super::map::LegendStop],
 ) -> String {
-    render_with_logistics(day, plan_id, lang, map_version, None, legend, &[], None, &[], &[])
+    let map_status = super::map::MapStatus {
+        days: [(day.day_number, map_version.map(str::to_owned))]
+            .into_iter()
+            .collect(),
+        legends: [(format!("day-{}.png", day.day_number), legend.to_vec())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    render_with_logistics(day, plan_id, lang, &map_status, &[])
 }
 
-/// One day card with its map stack: the day map, then the compact hotel
-/// round-trip map and the beyond-the-area map (each only when uploaded).
-#[allow(clippy::too_many_arguments)]
-pub fn render_with_logistics(
+fn render_content(
     day: &Day,
     plan_id: &str,
     lang: &str,
-    map_version: Option<&str>,
-    logistics_version: Option<&str>,
-    legend: &[super::map::LegendStop],
-    logistics_legend: &[super::map::LegendStop],
-    away_version: Option<&str>,
-    away_legend: &[super::map::LegendStop],
+    map_status: &super::map::MapStatus,
     clothing_tips: &[ClothingTip],
+    option_label: Option<&str>,
 ) -> String {
     let theme = if lang == "zh" && !day.theme_zh.is_empty() {
         &day.theme_zh
     } else {
         &day.theme
     };
-    let mut h = String::new();
-    h.push_str(&format!(
-        "<section class=\"day day-{}\">",
-        esc(&day.day_type)
-    ));
-    h.push_str(&format!(
-        "<h2>{}</h2>",
-        esc(&tf(
-            "dayHeading",
-            lang,
-            &[("day", &day.day_number.to_string()), ("date", &day.date)],
-        ))
-    ));
-    h.push_str(&format!("<div class=\"theme\">{}</div>", esc(theme)));
-    h.push_str(&weather_strip(day, clothing_tips, lang));
+    let mut h = format!("<div class=\"theme\">{}</div>", esc(theme));
+    if option_label.is_none() {
+        h.push_str(&weather_strip(day, clothing_tips, lang));
+    }
     h.push_str("<div class=\"day-map-stack\">");
-    h.push_str(&super::map::day_map_slot(
-        plan_id,
-        day.day_number,
-        map_version,
-        lang,
-        legend,
-    ));
-    h.push_str(&super::map::day_logistics_map_slot(
-        plan_id,
-        day.day_number,
-        logistics_version,
-        lang,
-        logistics_legend,
-    ));
-    h.push_str(&super::map::day_away_map_slot(
-        plan_id,
-        day.day_number,
-        away_version,
-        lang,
-        away_legend,
-    ));
+    let map_version = map_status
+        .days
+        .get(&day.day_number)
+        .and_then(|v| v.as_deref());
+    let logistics_version = map_status
+        .day_logistics
+        .get(&day.day_number)
+        .and_then(|v| v.as_deref());
+    let away_version = map_status
+        .day_away
+        .get(&day.day_number)
+        .and_then(|v| v.as_deref());
+    let legend = map_status.legend_for(&format!("day-{}.png", day.day_number));
+    let logistics_legend =
+        map_status.legend_for(&format!("day-{}-logistics.png", day.day_number));
+    let away_legend = map_status.legend_for(&format!("day-{}-away.png", day.day_number));
+    if let Some(label) = option_label {
+        h.push_str(&super::map::variant_day_map_slot(
+            plan_id,
+            day.day_number,
+            map_version,
+            lang,
+            legend,
+            label,
+        ));
+        h.push_str(&super::map::variant_day_logistics_map_slot(
+            plan_id,
+            day.day_number,
+            day.variant_of.unwrap_or(day.day_number),
+            logistics_version,
+            lang,
+            logistics_legend,
+            super::day_option_name(day, lang),
+        ));
+        h.push_str(&super::map::variant_day_away_map_slot(
+            plan_id,
+            day.day_number,
+            day.variant_of.unwrap_or(day.day_number),
+            away_version,
+            lang,
+            away_legend,
+            super::day_option_name(day, lang),
+        ));
+    } else {
+        h.push_str(&super::map::day_map_slot(
+            plan_id,
+            day.day_number,
+            map_version,
+            lang,
+            legend,
+        ));
+        h.push_str(&super::map::day_logistics_map_slot(
+            plan_id,
+            day.day_number,
+            logistics_version,
+            lang,
+            logistics_legend,
+        ));
+        h.push_str(&super::map::day_away_map_slot(
+            plan_id,
+            day.day_number,
+            away_version,
+            lang,
+            away_legend,
+        ));
+    }
     h.push_str("</div>");
     if !day.landmarks.is_empty() {
         h.push_str(&render_landmarks(&day.landmarks, lang));
@@ -247,6 +283,73 @@ pub fn render_with_logistics(
         }
         h.push_str(&session::render(sess, lang));
         h.push_str(&super::map::stop_list(&sess.stops));
+    }
+    h
+}
+
+/// One day card with its map stack and any alternative plans for the same date.
+pub fn render_with_logistics(
+    day: &Day,
+    plan_id: &str,
+    lang: &str,
+    map_status: &super::map::MapStatus,
+    clothing_tips: &[ClothingTip],
+) -> String {
+    let mut h = String::new();
+    if day.variants.is_empty() {
+        h.push_str(&format!(
+            "<section class=\"day day-{}\">",
+            esc(&day.day_type)
+        ));
+    } else {
+        h.push_str(&format!(
+            "<section class=\"day day-{}\" data-day=\"{}\">",
+            esc(&day.day_type),
+            day.day_number
+        ));
+    }
+    h.push_str(&format!(
+        "<h2>{}</h2>",
+        esc(&tf(
+            "dayHeading",
+            lang,
+            &[("day", &day.day_number.to_string()), ("date", &day.date)],
+        ))
+    ));
+    if !day.variants.is_empty() {
+        h.push_str(&format!(
+            "<span class=\"day-option-label\">{}</span>",
+            esc(super::day_option_name(day, lang))
+        ));
+    }
+    h.push_str(&render_content(
+        day,
+        plan_id,
+        lang,
+        map_status,
+        clothing_tips,
+        None,
+    ));
+    for variant in &day.variants {
+        let option_label = super::day_option_label(variant, day.day_number, lang);
+        h.push_str(&format!(
+            "<details class=\"day-variant\" data-variant-of=\"{}\" open><summary class=\"day-variant-summary\">{}</summary><div class=\"day-variant-body\">",
+            day.day_number,
+            esc(&tf(
+                "dayVariant",
+                lang,
+                &[("label", super::day_option_name(variant, lang))],
+            ))
+        ));
+        h.push_str(&render_content(
+            variant,
+            plan_id,
+            lang,
+            map_status,
+            clothing_tips,
+            Some(&option_label),
+        ));
+        h.push_str("</div></details>");
     }
     h.push_str("</section>");
     h
@@ -263,6 +366,68 @@ mod tests {
             ..Default::default()
         }
     }
+
+    #[test]
+    fn no_variant_plan_html_unchanged() {
+        let day = Day {
+            day_number: 2,
+            date: "2026-11-14".into(),
+            day_type: "full".into(),
+            theme: "Kyoto highlights".into(),
+            theme_zh: "京都巡禮".into(),
+            weather_label: "晴".into(),
+            temp_low_c: Some(12.0),
+            temp_high_c: Some(20.0),
+            precipitation_pct: Some(10.0),
+            landmarks: vec!["金閣寺".into()],
+            route_segments: vec![RouteSegment {
+                from_place: "旅社".into(),
+                to_place: "金閣寺".into(),
+                mode: "transit".into(),
+                duration_min: 25,
+                ..Default::default()
+            }],
+            sessions: vec![Session {
+                session_type: "morning".into(),
+                focus_zh: "寺院散策".into(),
+                activities: vec![act("金閣寺參觀")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let legend = [super::super::map::LegendStop {
+            seq: 1,
+            label: "金閣寺".into(),
+            lat: 35.0394,
+            lon: 135.7292,
+            ..Default::default()
+        }];
+        let map_status = super::super::map::MapStatus {
+            days: [(2, Some("day-v1".into()))].into_iter().collect(),
+            day_logistics: [(2, Some("log-v1".into()))].into_iter().collect(),
+            day_away: [(2, Some("away-v1".into()))].into_iter().collect(),
+            legends: [
+                ("day-2.png".into(), legend.to_vec()),
+                ("day-2-logistics.png".into(), legend.to_vec()),
+                ("day-2-away.png".into(), legend.to_vec()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let html = render_with_logistics(
+            &day,
+            "kyoto-nov-2026",
+            "zh",
+            &map_status,
+            &sample_tips(),
+        );
+        assert_eq!(
+            html,
+            "<section class=\"day day-full\"><h2>第 2 天 · 2026-11-14</h2><div class=\"theme\">京都巡禮</div><div class=\"weather\">🌧️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></section>"
+        );
+    }
+
     #[test]
     fn renders_route_block() {
         let day = Day {
@@ -523,7 +688,13 @@ mod tests {
 
     /// Day card rendered with the loaded clothing bands.
     fn render_tips(day: &Day, lang: &str) -> String {
-        render_with_logistics(day, "okinawa-2026", lang, None, None, &[], &[], None, &[], &sample_tips())
+        render_with_logistics(
+            day,
+            "okinawa-2026",
+            lang,
+            &super::super::map::MapStatus::default(),
+            &sample_tips(),
+        )
     }
 
     // ---- clothing_tip band evaluation (thresholds/order of the old TS clothingTip) ----

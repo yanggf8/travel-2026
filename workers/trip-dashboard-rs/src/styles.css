@@ -771,6 +771,59 @@ h1 {
   color: var(--text);
 }
 
+.day-option-label {
+  grid-column: 1 / -1;
+  display: inline-block;
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin: 0 16px 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.day-variant {
+  grid-column: 1 / -1;
+  min-width: 0;
+  max-width: 100%;
+  margin: 8px 12px 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fbfdff;
+}
+
+.day-variant-summary {
+  display: list-item;
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.day-variant-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.day-variant-body {
+  min-width: 0;
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.day-variant-body .theme { padding: 12px 0 8px; }
+.day-variant-body .day-map-stack { min-width: 0; max-width: 100%; }
+.day-variant-body .map-frame { max-width: 100%; }
+.day-variant-body .map-frame figcaption,
+.day-variant-body .leg-day { overflow-wrap: anywhere; }
+.day-variant-body .session { padding-left: 0; padding-right: 0; }
+
 /* Weather strip */
 .weather {
   display: flex;
@@ -980,6 +1033,8 @@ h1 {
 }
 .alert-icon { font-size: 18px; flex-shrink: 0; }
 .alert-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 13px;
   font-weight: 500;
 }
