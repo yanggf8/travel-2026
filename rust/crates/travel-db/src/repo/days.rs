@@ -107,6 +107,111 @@ pub async fn next_day_number(
     }
 }
 
+/// (variant_label, variant_label_zh) of one day row (both NULL when unset).
+pub async fn variant_labels(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<(Option<String>, Option<String>), String> {
+    let mut rows = conn
+        .query(
+            "SELECT variant_label, variant_label_zh FROM days \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
+            libsql::params![plan_id.to_string(), destination.to_string(), day],
+        )
+        .await
+        .map_err(|e| format!("days labels query failed: {e}"))?;
+    match rows
+        .next()
+        .await
+        .map_err(|e| format!("days labels row read failed: {e}"))?
+    {
+        Some(row) => Ok((
+            row.get::<Option<String>>(0).map_err(|e| format!("days label decode failed: {e}"))?,
+            row.get::<Option<String>>(1).map_err(|e| format!("days label_zh decode failed: {e}"))?,
+        )),
+        None => Err(format!("day {day} does not exist for plan {plan_id} ({destination})")),
+    }
+}
+
+/// Overwrite both variant labels of a day (NULL clears); no `updated_at` bump (swap-days touches separately).
+pub async fn set_variant_labels(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    label: &Option<String>,
+    label_zh: &Option<String>,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE days SET variant_label = ?1, variant_label_zh = ?2 \
+         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5",
+        libsql::params![
+            label.clone(),
+            label_zh.clone(),
+            plan_id.to_string(),
+            destination.to_string(),
+            day
+        ],
+    )
+    .await
+    .map_err(|e| format!("days label update failed: {e}"))?;
+    Ok(())
+}
+
+/// Re-point the variant `variant_day` at `new_main`, copying the new main's `date`/`day_type`.
+pub async fn repoint_variant(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    variant_day: i64,
+    new_main: i64,
+    date: &Option<String>,
+    day_type: &Option<String>,
+    now_db: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE days SET variant_of = ?1, date = ?2, day_type = ?3, updated_at = ?4 \
+         WHERE plan_id = ?5 AND destination = ?6 AND day_number = ?7",
+        libsql::params![
+            new_main,
+            date.clone(),
+            day_type.clone(),
+            now_db.to_string(),
+            plan_id.to_string(),
+            destination.to_string(),
+            variant_day
+        ],
+    )
+    .await
+    .map_err(|e| format!("days variant repoint failed: {e}"))?;
+    Ok(())
+}
+
+/// (date, day_type) of one day row.
+pub async fn date_and_type(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<(Option<String>, Option<String>), String> {
+    let mut rows = conn
+        .query(
+            "SELECT date, day_type FROM days WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
+            libsql::params![plan_id.to_string(), destination.to_string(), day],
+        )
+        .await
+        .map_err(|e| format!("days date query failed: {e}"))?;
+    match rows.next().await.map_err(|e| format!("days date row read failed: {e}"))? {
+        Some(row) => Ok((
+            row.get::<Option<String>>(0).map_err(|e| format!("days date decode failed: {e}"))?,
+            row.get::<Option<String>>(1).map_err(|e| format!("days day_type decode failed: {e}"))?,
+        )),
+        None => Err(format!("day {day} does not exist for plan {plan_id} ({destination})")),
+    }
+}
+
 /// Apply a `set-day-theme` write to the `days` row, always bumping `updated_at` to `now_db`:
 /// - both `theme` and `theme_zh` present → set both
 /// - only `theme` → set theme

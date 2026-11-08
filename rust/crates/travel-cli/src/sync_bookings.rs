@@ -22,6 +22,7 @@
 
 use crate::booking_integrity::{extract_bookings, payload_to_kv, BookingRow};
 use crate::db;
+use libsql::Connection;
 use travel_db::repo::bookings::{
     self, BookingCurrentWrite, BookingEventWrite, ExistingBooking,
 };
@@ -50,27 +51,50 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     // Write tier — we upsert bookings_current + events.
     let conn = db::connect_write().await?;
 
-    let (bookings, warnings) = extract_bookings(&conn, &effective_plan_id, &trip_id).await?;
-
-    if !warnings.is_empty() {
-        eprintln!("Warnings:");
-        for w in &warnings {
-            eprintln!("  - {w}");
-        }
-    }
-
-    if bookings.is_empty() {
-        // TS: returns { synced: 0 } and prints the synced line.
+    if dry_run {
+        let (bookings, warnings) = extract_bookings(&conn, &effective_plan_id, &trip_id).await?;
+        print_warnings(&warnings);
         println!(
-            "{} 0 bookings to Turso.",
-            if dry_run { "Would sync" } else { "Synced" }
+            "Would sync {} bookings to Turso.",
+            bookings.len()
         );
         return Ok(());
     }
 
-    if dry_run {
-        println!("Would sync {} bookings to Turso.", bookings.len());
-        return Ok(());
+    let n = resync_plan_bookings(&conn, &effective_plan_id, &trip_id).await?;
+    if n == 0 {
+        println!("Synced 0 bookings to Turso.");
+    } else {
+        println!("✅ Synced {n} bookings to Turso.");
+    }
+    Ok(())
+}
+
+fn print_warnings(warnings: &[String]) {
+    if !warnings.is_empty() {
+        eprintln!("Warnings:");
+        for w in warnings {
+            eprintln!("  - {w}");
+        }
+    }
+}
+
+/// Re-derive the plan's bookings from the plan tables and rewrite `bookings_current` for
+/// `trip_id` (diff-based `bookings_events`). Shared by `sync-bookings`, `swap-days` and
+/// `remove-day-variant`: activity booking keys embed day_number + session, so any command that
+/// moves or deletes activities must re-run this. Returns the number of bookings now stored.
+/// A derivation of ZERO rows clears the trip's stale rows (nothing left to book).
+pub async fn resync_plan_bookings(
+    conn: &Connection,
+    plan_id: &str,
+    trip_id: &str,
+) -> Result<usize, String> {
+    let (bookings, warnings) = extract_bookings(conn, plan_id, trip_id).await?;
+    print_warnings(&warnings);
+
+    if bookings.is_empty() {
+        bookings::delete_current_for_trip(conn, trip_id).await?;
+        return Ok(0);
     }
 
     // Fetch existing rows for the affected trip_ids for diff-based events.
@@ -78,32 +102,29 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     trip_ids.sort();
     trip_ids.dedup();
 
-    let existing = bookings::current_snapshot_for_trips(&conn, &trip_ids).await?;
+    let existing = bookings::current_snapshot_for_trips(conn, &trip_ids).await?;
 
     // DELETE stale rows for these trip_ids (payload child rows first).
     for tid in &trip_ids {
-        bookings::delete_current_for_trip(&conn, tid).await?;
+        bookings::delete_current_for_trip(conn, tid).await?;
     }
 
     // Upsert current bookings + diff-based events.
     for row in &bookings {
-        bookings::upsert_current(&conn, &to_current_write(row)).await?;
+        bookings::upsert_current(conn, &to_current_write(row)).await?;
 
-        let prev = existing.get(&row.booking_key);
-        match prev {
+        match existing.get(&row.booking_key) {
             None => {
-                bookings::insert_event(&conn, &to_event_write(row, "created")).await?;
+                bookings::insert_event(conn, &to_event_write(row, "created")).await?;
             }
             Some(p) => {
                 if booking_changed(p, row) {
-                    bookings::insert_event(&conn, &to_event_write(row, "updated")).await?;
+                    bookings::insert_event(conn, &to_event_write(row, "updated")).await?;
                 }
             }
         }
     }
-
-    println!("✅ Synced {} bookings to Turso.", bookings.len());
-    Ok(())
+    Ok(bookings.len())
 }
 
 fn booking_changed(prev: &ExistingBooking, row: &BookingRow) -> bool {

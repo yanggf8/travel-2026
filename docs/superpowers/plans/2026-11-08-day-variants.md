@@ -18,7 +18,7 @@
 - EN label: printable ASCII, 1–32 chars (it is drawn into PNG titles with the ASCII bitmap font). ZH label: 1–16 chars.
 - Visible day identity of a variant: ZH 「第 {main} 天 · {label_zh}」, EN "Day {main} · {label}". The internal number never appears in visible text.
 - PNG titles (`snapshot_maps::map_title`): variant day map "Day {main} route · {label}", logistics "Day {main} hotel round trip · {label}", away "Day {main} beyond the area · {label}". Trip days unchanged ("Day 3 route").
-- Worker markup: main card `<section class="day day-{n}" data-day="{n}">` (add `data-day` to the existing card, `render/day.rs:201`); main option chip `<span class="day-option-label">`; variant `<details class="day-variant" data-variant-of="{main}" open>` → `<summary class="day-variant-summary">` → `<div class="day-variant-body">`.
+- Worker markup: main card `<section class="day day-{day_type}" data-day="{n}">` — `data-day` is added ONLY to cards that have variants (ruling 2026-11-08: keeps no-variant day-card HTML byte-identical); cards are counted by `<section class="day `; main option chip `<span class="day-option-label">`; variant `<details class="day-variant" data-variant-of="{main}" open>` → `<summary class="day-variant-summary">` → `<div class="day-variant-body">`.
 - ZH chrome in `i18n.rs` keys: `dayVariant` = 「替代方案：{label}」 / "Alternative: {label}", `dayOption` = 「第 {day} 天 · {label}」 / "Day {day} · {label}".
 - Delegates run NO git commands. "Hand back" ends each task; the coordinator reviews and commits.
 - Real-Turso integration tests: per-run `zz_test_<nanos>_*` ids, RAII `Guard` armed right after the plan id is bound, `common::teardown_plan`, run in the background.

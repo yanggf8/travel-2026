@@ -176,6 +176,22 @@ pub fn db_exec_teardown(sql: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Delete the booking-ledger rows (`bookings_current`, payload, events, event data) of a fixture
+/// trip. These tables are keyed by `booking_key` (prefix `<trip_id>:`), NOT plan_id, so
+/// `teardown_plan` never reaches them. Run BEFORE `teardown_plan`; best-effort, never panics.
+/// trip_id = plan id with '-' -> '_' (what swap-days / sync-bookings / remove-day-variant write).
+pub fn teardown_trip_bookings(trip_id: &str) {
+    let t = trip_id.replace('\'', "''");
+    let n = t.chars().count() + 1;
+    let pred = format!("substr(booking_key, 1, {n}) = '{t}:'");
+    let _ = db_exec_teardown(&format!(
+        "DELETE FROM bookings_current_payload WHERE {pred}; \
+         DELETE FROM bookings_event_data WHERE {pred}; \
+         DELETE FROM bookings_events WHERE {pred}; \
+         DELETE FROM bookings_current WHERE {pred};"
+    ));
+}
+
 /// Delete every live table that has a `plan_id` column for this plan.
 ///
 /// `dest` is intentionally unused: old test teardowns drifted because each test

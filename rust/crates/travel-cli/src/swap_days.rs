@@ -21,7 +21,7 @@
 // plans.version + record an operation_runs audit row.
 
 use libsql::Connection;
-use travel_db::repo::itinerary;
+use travel_db::repo::{days, itinerary};
 
 #[derive(Default, Debug)]
 struct ParsedArgs {
@@ -40,11 +40,54 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     require_day(&conn, &plan_id, &destination, parsed.day_a, "dayA").await?;
     require_day(&conn, &plan_id, &destination, parsed.day_b, "dayB").await?;
 
+    // Variant rules: allowed = main <-> its own variant, or two trip days.
+    let parent_a = days::variant_parent(&conn, &plan_id, &destination, parsed.day_a).await?;
+    let parent_b = days::variant_parent(&conn, &plan_id, &destination, parsed.day_b).await?;
+    let trip_day_swap = parent_a.is_none() && parent_b.is_none();
+    let promote = parent_a == Some(parsed.day_b) || parent_b == Some(parsed.day_a);
+    if !trip_day_swap && !promote {
+        let fmt = |p: Option<i64>| p.map_or("none (trip day)".to_string(), |m| m.to_string());
+        return Err(format!(
+            "swap-days refused: day {} (variant_of {}) and day {} (variant_of {}) — allowed pairs are \
+             two trip days, or a main day with its own variant",
+            parsed.day_a,
+            fmt(parent_a),
+            parsed.day_b,
+            fmt(parent_b)
+        ));
+    }
+
     println!("\n🔄 Swapping days:");
     println!("   Destination: {destination}");
     println!("   Day {} ↔ Day {}", parsed.day_a, parsed.day_b);
 
+    // Variants to carry along (trip-day swap only), read BEFORE the content flip.
+    let (vars_a, vars_b) = if trip_day_swap {
+        (
+            days::variants_of(&conn, &plan_id, &destination, parsed.day_a).await?,
+            days::variants_of(&conn, &plan_id, &destination, parsed.day_b).await?,
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
     swap_content(&conn, &plan_id, &destination, parsed.day_a, parsed.day_b).await?;
+
+    // Each side's variants follow their content: variant_of a->b / b->a, date/day_type of the new main.
+    let mut repointed: Vec<String> = Vec::new();
+    if trip_day_swap {
+        let now_db = now_db_datetime();
+        let (date_a, type_a) = days::date_and_type(&conn, &plan_id, &destination, parsed.day_a).await?;
+        let (date_b, type_b) = days::date_and_type(&conn, &plan_id, &destination, parsed.day_b).await?;
+        for v in &vars_a {
+            days::repoint_variant(&conn, &plan_id, &destination, *v, parsed.day_b, &date_b, &type_b, &now_db).await?;
+            repointed.push(format!("{v}->{}", parsed.day_b));
+        }
+        for v in &vars_b {
+            days::repoint_variant(&conn, &plan_id, &destination, *v, parsed.day_a, &date_a, &type_a, &now_db).await?;
+            repointed.push(format!("{v}->{}", parsed.day_a));
+        }
+    }
 
     // touchItinerary — bump updated_at on both day rows.
     touch_day(&conn, &plan_id, &destination, parsed.day_a).await?;
@@ -53,6 +96,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let kv: Vec<(&str, String)> = vec![
         ("day_a", parsed.day_a.to_string()),
         ("day_b", parsed.day_b.to_string()),
+        ("variants_repointed", repointed.join(",")),
     ];
     execute_event(
         &conn,
@@ -64,6 +108,10 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         &kv,
     )
     .await?;
+
+    let trip_id = plan_id.replace('-', "_");
+    let n = crate::sync_bookings::resync_plan_bookings(&conn, &plan_id, &trip_id).await?;
+    println!("bookings re-synced ({n})");
 
     println!("✅ Days swapped successfully");
     Ok(())
@@ -134,6 +182,11 @@ async fn swap_content(
     let (theme_b, theme_zh_b) = read_day_theme(conn, plan_id, destination, day_b).await?;
     itinerary::swap_day_theme(conn, plan_id, destination, day_a, &theme_b, &theme_zh_b).await?;
     itinerary::swap_day_theme(conn, plan_id, destination, day_b, &theme_a, &theme_zh_a).await?;
+    // Variant labels describe the content too (a promoted variant keeps its label with it).
+    let lab_a = days::variant_labels(conn, plan_id, destination, day_a).await?;
+    let lab_b = days::variant_labels(conn, plan_id, destination, day_b).await?;
+    days::set_variant_labels(conn, plan_id, destination, day_a, &lab_b.0, &lab_b.1).await?;
+    days::set_variant_labels(conn, plan_id, destination, day_b, &lab_a.0, &lab_a.1).await?;
     // The excursion flag describes the content (a far-off day trip), so it moves too.
     let exc_a = itinerary::day_excursion(conn, plan_id, destination, day_a).await?.unwrap_or(false);
     let exc_b = itinerary::day_excursion(conn, plan_id, destination, day_b).await?.unwrap_or(false);

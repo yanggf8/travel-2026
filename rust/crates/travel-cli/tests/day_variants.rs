@@ -346,3 +346,148 @@ fn reused_number_purges_old_maps() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Task A3: swap-days with variants + bookings resync
+// ---------------------------------------------------------------------------
+
+fn insert_activity(id: &str, plan_id: &str, dest: &str, day: i64, session: &str, extra_cols: &str, extra_vals: &str) {
+    db_exec(&format!(
+        "INSERT INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title{extra_cols}) \
+           VALUES ('{id}', '{plan_id}', '{dest}', {day}, '{session}', 0, 'T-{id}'{extra_vals});"
+    ))
+    .expect("seed activity");
+}
+
+#[test]
+fn promote_variant_swaps_content_and_labels() {
+    fixture!(tag, plan_id, dest, _g);
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "{out}");
+    db_exec(&format!("UPDATE days SET theme='V' WHERE plan_id='{plan_id}' AND day_number=3")).expect("theme");
+    let (a1, a3) = (format!("zz-a1-{tag}"), format!("zz-a3-{tag}"));
+    insert_activity(&a1, &plan_id, &dest, 1, "morning", "", "");
+    insert_activity(&a3, &plan_id, &dest, 3, "morning", "", "");
+
+    let (ok, out) = cli(&["swap-days", "1", "3"], &plan_id, &dest);
+    assert!(ok, "promote swap failed: {out}");
+
+    let row = |d: i64| scalar(&format!(
+        "SELECT theme || '|' || variant_label || '|' || variant_label_zh || '|' || date || '|' || COALESCE(variant_of,'NULL') AS v \
+         FROM days WHERE plan_id='{plan_id}' AND day_number={d}"
+    ));
+    assert_eq!(row(1), "V|Sunny plan|晴天方案|2026-09-01|NULL", "main now holds variant content + labels");
+    assert_eq!(row(3), "T1|Rainy plan|雨天方案|2026-09-01|1", "variant now holds old main content + labels");
+    assert_eq!(scalar(&format!("SELECT day_number AS n FROM activities WHERE id='{a1}'")), "3");
+    assert_eq!(scalar(&format!("SELECT day_number AS n FROM activities WHERE id='{a3}'")), "1");
+}
+
+#[test]
+fn trip_day_swap_carries_variants() {
+    fixture!(tag, plan_id, dest, _g);
+    db_exec(&format!(
+        "INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
+           VALUES ('{plan_id}', '{dest}', 3, '2026-09-03', 'T3', 'full', 'draft'); \
+         INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
+           VALUES ('{plan_id}', '{dest}', 4, '2026-09-04', 'T4', 'full', 'draft');"
+    ))
+    .expect("seed days 3-4");
+    // Variant of day 4 gets day_number 5.
+    let (ok, out) = cli(
+        &["add-day-variant", "4", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "{out}");
+    assert_eq!(scalar(&format!("SELECT variant_of AS n FROM days WHERE plan_id='{plan_id}' AND day_number=5")), "4");
+
+    let (ok, out) = cli(&["swap-days", "2", "4"], &plan_id, &dest);
+    assert!(ok, "trip-day swap failed: {out}");
+
+    let v = scalar(&format!(
+        "SELECT variant_of || '|' || date || '|' || day_type AS v FROM days WHERE plan_id='{plan_id}' AND day_number=5"
+    ));
+    assert_eq!(v, "2|2026-09-02|departure", "variant follows content to day 2 and takes its date/day_type");
+    let labels = scalar(&format!(
+        "SELECT COALESCE(variant_label,'NULL') || '|' || COALESCE(variant_label_zh,'NULL') AS v FROM days WHERE plan_id='{plan_id}' AND day_number=2"
+    ));
+    assert_eq!(labels, "Rainy plan|雨天方案", "main labels moved with the content");
+    assert_eq!(
+        scalar(&format!("SELECT variant_label AS v FROM days WHERE plan_id='{plan_id}' AND day_number=4")),
+        "",
+        "day 4 no longer has labels"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT COUNT(*) AS n FROM plan_event_data WHERE plan_id='{plan_id}' AND key='variants_repointed' AND value='5->2'"
+        )),
+        "2" // dest_process + timeline event copies, as with every audited command
+    );
+}
+
+#[test]
+fn swap_refuses_foreign_variant_and_two_variants() {
+    fixture!(tag, plan_id, dest, _g);
+    for main in ["1", "2"] {
+        let (ok, out) = cli(
+            &["add-day-variant", main, "--label", "Alt", "--label-zh", "替代",
+              "--main-label", "Main", "--main-label-zh", "主"],
+            &plan_id, &dest,
+        );
+        assert!(ok, "{out}");
+    }
+    // Day 3 is a variant of 1, day 4 a variant of 2.
+    let (ok, out) = cli(&["swap-days", "2", "3"], &plan_id, &dest);
+    assert!(!ok && out.contains("variant_of"), "foreign variant must be refused: {out}");
+    let (ok, out) = cli(&["swap-days", "3", "4"], &plan_id, &dest);
+    assert!(!ok && out.contains("variant_of"), "two variants must be refused: {out}");
+    assert_eq!(
+        scalar(&format!("SELECT variant_of AS n FROM days WHERE plan_id='{plan_id}' AND day_number=3")),
+        "1",
+        "refused swap changed nothing"
+    );
+}
+
+#[test]
+fn swap_days_resyncs_bookings() {
+    if db_exec("SELECT 1 AS n").is_none() {
+        return;
+    }
+    let tag = nanos();
+    let plan_id = format!("zz-test-{tag}-vb");
+    let dest = format!("zz_test_{tag}_vb");
+    let trip_id = format!("zz_test_{tag}_vb");
+    seed_plan(&plan_id, &dest, 0);
+    // bookings_current is keyed by trip_id, not plan_id: delete BEFORE teardown_plan.
+    let _g = Guard::new({
+        let (p, d, t) = (plan_id.clone(), dest.clone(), trip_id.clone());
+        move || {
+            common::teardown_trip_bookings(&t);
+            teardown_plan(&p, &d)
+        }
+    });
+    seed_two_days(&plan_id, &dest);
+    let act = format!("zz-bk-{tag}");
+    insert_activity(&act, &plan_id, &dest, 1, "morning", ", booking_required", ", 1");
+
+    let out = Command::new(bin())
+        .args(["sync-bookings", "--plan-id", &plan_id])
+        .env_remove("TRAVEL_PLAN_ID")
+        .output()
+        .expect("run sync-bookings");
+    assert!(out.status.success(), "sync-bookings failed: {}", String::from_utf8_lossy(&out.stderr));
+    let keys = |day: i64| scalar(&format!(
+        "SELECT COUNT(*) AS n FROM bookings_current WHERE trip_id='{trip_id}' AND booking_key LIKE '%activity:{day}:%{act}%'"
+    ));
+    assert_eq!(keys(1), "1", "precondition: key under day 1");
+
+    let (ok, out) = cli(&["swap-days", "1", "2"], &plan_id, &dest);
+    assert!(ok, "swap failed: {out}");
+    assert!(out.contains("bookings re-synced (1)"), "{out}");
+    assert_eq!(keys(2), "1", "key moved to day 2");
+    assert_eq!(keys(1), "0", "no stale day-1 key");
+}

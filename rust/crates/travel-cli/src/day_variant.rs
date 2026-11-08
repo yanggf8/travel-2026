@@ -340,6 +340,9 @@ pub async fn run_remove(args: &[String], plan_id: String) -> Result<(), String> 
     if cleared {
         set_labels(&conn, &plan_id, &dest, main, None, None, &now_db_datetime()).await?;
     }
+    let trip_id = plan_id.replace('-', "_");
+    let n = crate::sync_bookings::resync_plan_bookings(&conn, &plan_id, &trip_id).await?;
+    println!("bookings re-synced ({n})");
     audit(
         &conn,
         &plan_id,

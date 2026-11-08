@@ -218,7 +218,8 @@ async fn validate_booking_integrity(issues: &mut Vec<Issue>) {
                 category: "bookings".to_string(),
                 severity: Severity::Warning,
                 message: format!(
-                    "{plan_id}: plan-only booking not in bookings_current: {} ({}: {})",
+                    "{plan_id}: plan-only booking not in bookings_current: {} ({}: {}) — \
+                     run: travel sync-bookings --plan-id {plan_id}",
                     f.booking_key, f.category, f.title
                 ),
                 file: Some("turso:bookings_current".to_string()),
@@ -231,7 +232,8 @@ async fn validate_booking_integrity(issues: &mut Vec<Issue>) {
                 severity: Severity::Warning,
                 message: format!(
                     "{plan_id}: db-only booking not derivable from plan tables: {} ({}: {}) — \
-                     stale row from an old itinerary?",
+                     stale row from an old itinerary? — \
+                     run: travel sync-bookings --plan-id {plan_id}",
                     f.booking_key, f.category, f.title
                 ),
                 file: Some("turso:bookings_current".to_string()),

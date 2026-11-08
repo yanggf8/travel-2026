@@ -131,9 +131,14 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
     let d = sql_lit(&dest);
     let _g = Guard::new({
         let (plan, dest) = (plan.clone(), dest.clone());
-        move || teardown(&plan, &dest)
+        move || {
+            // swap-days resyncs bookings_current for trip_id = plan with '-' -> '_'.
+            common::teardown_trip_bookings(&plan.replace('-', "_"));
+            teardown(&plan, &dest)
+        }
     });
 
+    common::teardown_trip_bookings(&plan.replace('-', "_"));
     teardown(&plan, &dest);
     seed_plan_days_and_sessions(&plan, &dest);
 
