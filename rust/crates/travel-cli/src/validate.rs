@@ -69,6 +69,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_clothing_tips(&mut issues).await;
     validate_reference_tables(&mut issues).await;
     validate_booking_integrity(&mut issues).await;
+    validate_day_variants(&mut issues).await;
 
     // Always-run: documentation ↔ code drift checks
     validate_completed_items(&mut issues);
@@ -2061,6 +2062,15 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
         }
     }
 
+    // Day-variant invariants (BLOCK)
+    for msg in variant_violations(&conn, Some((plan_id, &destination))).await? {
+        issues.push(PublishIssue {
+            category: "variant".to_string(),
+            severity: PublishSeverity::Block,
+            message: msg,
+        });
+    }
+
     // ZH content (BLOCK) — upcoming/active only; empty sessions skipped via SQL
     if check_zh_weather {
         for day in missing_day_zh(&conn, plan_id, &destination).await? {
@@ -2280,6 +2290,152 @@ async fn read_lifecycle(
         }
     }
     Ok(None)
+}
+
+/// Day-variant invariant violations (spec 2026-11-08-day-variants). `scope` = one plan+destination,
+/// or `None` for every plan. Each message names the plan, destination and day, and contains
+/// "variant". Invariants: `variant_of` points at an existing trip day of the same plan+destination
+/// (no chain, no self-reference); a variant's date/day_type equal its main day's; a variant and a
+/// main day that has variants carry non-empty labels (EN printable ASCII 1-32, ZH 1-16 chars).
+async fn variant_violations(
+    conn: &libsql::Connection,
+    scope: Option<(&str, &str)>,
+) -> Result<Vec<String>, String> {
+    let (plan, dest) = scope.unwrap_or(("", ""));
+    let all = i64::from(scope.is_none());
+    let mut out = Vec::new();
+
+    let mut rows = conn
+        .query(
+            "SELECT v.plan_id, v.destination, v.day_number, v.variant_of, v.variant_label, \
+                    v.variant_label_zh, v.date, v.day_type, \
+                    m.day_number, m.variant_of, m.date, m.day_type \
+             FROM days v LEFT JOIN days m ON m.plan_id = v.plan_id \
+                  AND m.destination = v.destination AND m.day_number = v.variant_of \
+             WHERE v.variant_of IS NOT NULL AND (?3 = 1 OR (v.plan_id = ?1 AND v.destination = ?2)) \
+             ORDER BY v.plan_id, v.destination, v.day_number",
+            params![plan.to_string(), dest.to_string(), all],
+        )
+        .await
+        .map_err(|e| format!("variant invariant query failed: {e}"))?;
+    while let Some(r) = rows
+        .next()
+        .await
+        .map_err(|e| format!("variant invariant row read failed: {e}"))?
+    {
+        let g = |e: libsql::Error| format!("variant invariant decode failed: {e}");
+        let (p, d): (String, String) = (r.get(0).map_err(g)?, r.get(1).map_err(g)?);
+        let day: i64 = r.get(2).map_err(g)?;
+        let parent: i64 = r.get(3).map_err(g)?;
+        let label: Option<String> = r.get(4).map_err(g)?;
+        let label_zh: Option<String> = r.get(5).map_err(g)?;
+        let (date, day_type): (String, String) = (r.get(6).map_err(g)?, r.get(7).map_err(g)?);
+        let main_day: Option<i64> = r.get(8).map_err(g)?;
+        let main_of: Option<i64> = r.get(9).map_err(g)?;
+        let main_date: Option<String> = r.get(10).map_err(g)?;
+        let main_type: Option<String> = r.get(11).map_err(g)?;
+        let at = format!("{p} ({d}) day {day}");
+        if parent == day {
+            out.push(format!("{at}: variant_of points at itself"));
+        } else if main_day.is_none() {
+            out.push(format!("{at}: variant_of {parent} does not exist"));
+        } else if main_of.is_some() {
+            out.push(format!("{at}: variant_of {parent} is itself a variant (chains are not allowed)"));
+        } else {
+            if main_date.as_deref() != Some(date.as_str()) {
+                out.push(format!(
+                    "{at}: variant date {date} differs from main day {parent} date {}",
+                    main_date.unwrap_or_default()
+                ));
+            }
+            if main_type.as_deref() != Some(day_type.as_str()) {
+                out.push(format!(
+                    "{at}: variant day_type {day_type} differs from main day {parent} day_type {}",
+                    main_type.unwrap_or_default()
+                ));
+            }
+        }
+        out.extend(variant_label_problems(&at, "variant", label.as_deref(), label_zh.as_deref()));
+    }
+
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT m.plan_id, m.destination, m.day_number, m.variant_label, m.variant_label_zh \
+             FROM days m JOIN days v ON v.plan_id = m.plan_id AND v.destination = m.destination \
+                  AND v.variant_of = m.day_number \
+             WHERE m.variant_of IS NULL AND (?3 = 1 OR (m.plan_id = ?1 AND m.destination = ?2)) \
+             ORDER BY m.plan_id, m.destination, m.day_number",
+            params![plan.to_string(), dest.to_string(), all],
+        )
+        .await
+        .map_err(|e| format!("variant main-label query failed: {e}"))?;
+    while let Some(r) = rows
+        .next()
+        .await
+        .map_err(|e| format!("variant main-label row read failed: {e}"))?
+    {
+        let g = |e: libsql::Error| format!("variant main-label decode failed: {e}");
+        let (p, d): (String, String) = (r.get(0).map_err(g)?, r.get(1).map_err(g)?);
+        let day: i64 = r.get(2).map_err(g)?;
+        let label: Option<String> = r.get(3).map_err(g)?;
+        let label_zh: Option<String> = r.get(4).map_err(g)?;
+        out.extend(variant_label_problems(
+            &format!("{p} ({d}) day {day}"),
+            "main day with variants",
+            label.as_deref(),
+            label_zh.as_deref(),
+        ));
+    }
+    Ok(out)
+}
+
+fn variant_label_problems(at: &str, who: &str, en: Option<&str>, zh: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    match en.map(str::trim).filter(|s| !s.is_empty()) {
+        None => out.push(format!("{at}: {who} has no variant_label")),
+        Some(_) => {
+            let e = en.unwrap_or("");
+            if e.chars().count() > 32 || !e.chars().all(|c| (' '..='~').contains(&c)) {
+                out.push(format!("{at}: {who} variant_label must be printable ASCII, 1-32 chars"));
+            }
+        }
+    }
+    match zh.map(str::trim).filter(|s| !s.is_empty()) {
+        None => out.push(format!("{at}: {who} has no variant_label_zh")),
+        Some(z) => {
+            if z.chars().count() > 16 {
+                out.push(format!("{at}: {who} variant_label_zh must be 1-16 chars"));
+            }
+        }
+    }
+    out
+}
+
+/// `validate data`: day-variant invariants across every plan (Error).
+async fn validate_day_variants(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else {
+        return;
+    };
+    match variant_violations(&conn, None).await {
+        Ok(msgs) => {
+            for message in msgs {
+                issues.push(Issue {
+                    category: "day-variants".to_string(),
+                    severity: Severity::Error,
+                    message,
+                    file: Some("turso:days".to_string()),
+                    line: None,
+                });
+            }
+        }
+        Err(message) => issues.push(Issue {
+            category: "day-variants".to_string(),
+            severity: Severity::Error,
+            message,
+            file: Some("turso:days".to_string()),
+            line: None,
+        }),
+    }
 }
 
 async fn count_days(

@@ -274,7 +274,7 @@ CREATE TABLE "days" (
   weather_code INTEGER,
   weather_source_id TEXT,
   weather_sourced_at TEXT,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, feels_like_low_c REAL, feels_like_high_c REAL, theme_zh TEXT, excursion INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, feels_like_low_c REAL, feels_like_high_c REAL, theme_zh TEXT, excursion INTEGER NOT NULL DEFAULT 0, variant_of INTEGER, variant_label TEXT, variant_label_zh TEXT,
   PRIMARY KEY (plan_id, destination, day_number)
 );
 

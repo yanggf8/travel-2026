@@ -80,6 +80,13 @@ Rules (spec §CLI): allowed = main↔own variant, or two trip days; refused othe
 - [ ] Run (fail) → implement → run (pass). Existing `tests/swap_days.rs` + `swap_days_repoint_behavior_lock.rs` still pass.
 - [ ] Hand back.
 
+**Added 2026-11-08 (Yang: fix the stale bookings_current rows too).** Root cause: `bookings_current` is derived from the plan tables (activity booking keys embed day_number + session), but only `sync-bookings` / `mark-booked` refresh it, so `swap-days` left stale keys (kyoto-nov data already re-synced by the coordinator).
+- Extract the body of `sync_bookings::run` (after arg parsing) into `pub async fn resync_plan_bookings(conn: &Connection, plan_id: &str, trip_id: &str) -> Result<usize, String>` in `sync_bookings.rs`; `run` calls it (output unchanged).
+- `swap-days` calls `resync_plan_bookings` (trip_id = plan_id with '-'→'_') after the swap succeeds and prints `bookings re-synced (N)`.
+- `remove-day-variant` (Task A2's command, already in the tree) calls it too after its deletes.
+- `validate.rs:221` and `:233` drift warnings end with ` — run: travel sync-bookings --plan-id {plan_id}` so an agent can act in one step.
+- Test `swap_days_resyncs_bookings`: fixture plan with a pending booking activity on day 1, run `sync-bookings`, then `swap-days 1 2` → `bookings_current` holds the key with `activity:2:` and none with `activity:1:` for that activity id.
+
 ### Task A4: Readers — weather, populate, scaffold, counts
 
 **Files:** Modify `weather.rs` (`load_days` `:240`, both write loops `:125-145`, `:182-196`), `populate_itinerary.rs` (`read_days` `:648`, `allocate_clusters_to_days` `:397`), `travel-db/src/repo/itinerary.rs` (`replace_skeleton` `:31-59`), `compare_content_depth.rs` (`:56`, `:91`, `:96`), `validate.rs` (`missing_weather_in_window` `:2440`, `count_days` `:2285`); Test `tests/day_variants.rs` + `tests/scaffold_itinerary_behavior_lock.rs`

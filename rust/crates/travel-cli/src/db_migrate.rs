@@ -434,6 +434,12 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     )
     .await;
 
+    // Day variants: a row with variant_of set is a plan option for that main day, not a trip
+    // day. Labels live on both sides (main day once it has variants, and each variant).
+    for col in ["variant_of INTEGER", "variant_label TEXT", "variant_label_zh TEXT"] {
+        add_column(&conn, &format!("ALTER TABLE days ADD COLUMN {col};")).await;
+    }
+
     // 11. version column on the plans/plans_current table (whichever exists).
     let plans_table = if table_exists(&conn, "plans_current").await {
         "plans_current"
