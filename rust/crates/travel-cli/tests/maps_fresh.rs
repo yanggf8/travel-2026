@@ -109,9 +109,11 @@ fn full_maps_fresh_lifecycle() {
         "expected 'maps fresh' after snapshot, got:\n{stdout}"
     );
 
-    // 4. Touch an activity to be NEWER than the snapshot → STALE.
+    // 4. Edit a MAP-BEARING activity (POI-linked — freshness ignores free-text activities since
+    //    beaaf23) to be NEWER than the snapshot → STALE.
     db_exec(&format!(
-        "UPDATE activities SET updated_at = datetime('now','+1 hour') WHERE plan_id = '{plan_id}'"
+        "UPDATE activities SET poi_id = 'zz-poi-mapsfresh', updated_at = datetime('now','+1 hour') \
+           WHERE plan_id = '{plan_id}'"
     ))
     .expect("creds");
     let (ok, stdout, _) = run_cmd(&["check-maps-fresh", "--plan-id", &plan_id]);
