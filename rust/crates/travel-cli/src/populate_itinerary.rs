@@ -35,6 +35,8 @@ struct ParsedArgs {
 struct Day {
     day_number: i64,
     day_type: String,
+    /// A day variant (`variant_of IS NOT NULL`): only an explicit `--assign` may target it.
+    is_variant: bool,
 }
 
 struct Poi {
@@ -401,11 +403,17 @@ fn allocate_clusters_to_days(
 ) -> Vec<Allocation> {
     let full_days: Vec<i64> = days
         .iter()
-        .filter(|d| d.day_type == "full")
+        .filter(|d| !d.is_variant && d.day_type == "full")
         .map(|d| d.day_number)
         .collect();
-    let arrival_day = days.iter().find(|d| d.day_type == "arrival").map(|d| d.day_number);
-    let departure_day = days.iter().find(|d| d.day_type == "departure").map(|d| d.day_number);
+    let arrival_day = days
+        .iter()
+        .find(|d| !d.is_variant && d.day_type == "arrival")
+        .map(|d| d.day_number);
+    let departure_day = days
+        .iter()
+        .find(|d| !d.is_variant && d.day_type == "departure")
+        .map(|d| d.day_number);
     let day_numbers: std::collections::BTreeSet<i64> = days.iter().map(|d| d.day_number).collect();
 
     let assigned_days: std::collections::BTreeSet<i64> = explicit.values().copied().collect();
@@ -649,7 +657,7 @@ async fn read_days(conn: &Connection, plan_id: &str, destination: &str) -> Resul
     let mut out = Vec::new();
     let mut rows = conn
         .query(
-            "SELECT day_number, day_type FROM days \
+            "SELECT day_number, day_type, variant_of IS NOT NULL FROM days \
              WHERE plan_id = ?1 AND destination = ?2 ORDER BY day_number",
             libsql::params![plan_id.to_string(), destination.to_string()],
         )
@@ -663,6 +671,7 @@ async fn read_days(conn: &Connection, plan_id: &str, destination: &str) -> Resul
         out.push(Day {
             day_number: r.get(0).unwrap_or(0),
             day_type: r.get(1).unwrap_or_default(),
+            is_variant: r.get::<i64>(2).unwrap_or(0) != 0,
         });
     }
     Ok(out)
@@ -1147,7 +1156,7 @@ mod tests {
     use super::*;
 
     fn d(n: i64, t: &str) -> Day {
-        Day { day_number: n, day_type: t.to_string() }
+        Day { day_number: n, day_type: t.to_string(), is_variant: false }
     }
 
     #[test]
@@ -1176,6 +1185,21 @@ mod tests {
         assert_eq!(alloc[0].day_number, 2);
         assert_eq!(alloc[1].day_number, 3);
         assert_eq!(alloc[2].day_number, 2); // wraps
+    }
+
+    #[test]
+    fn populate_skips_variants_in_round_robin() {
+        let mut v = d(5, "full");
+        v.is_variant = true;
+        let days = vec![d(1, "arrival"), d(2, "full"), d(3, "full"), d(4, "departure"), v];
+        let goals: Vec<String> = ["c1", "c2", "c3", "c4"].iter().map(|s| s.to_string()).collect();
+        let alloc = allocate_clusters_to_days(&goals, &days, &BTreeMap::new());
+        assert!(alloc.iter().all(|a| a.day_number != 5));
+        // explicit assignment may still name the variant
+        let mut explicit = BTreeMap::new();
+        explicit.insert("c1".to_string(), 5i64);
+        let alloc = allocate_clusters_to_days(&goals[..1], &days, &explicit);
+        assert_eq!(alloc[0].day_number, 5);
     }
 
     #[test]

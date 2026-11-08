@@ -43,11 +43,23 @@ pub async fn replace_skeleton(
     )
     .await
     .map_err(|e| format!("activity_tags delete failed: {e}"))?;
+    // Day-N map legends carry no destination column: scope them by the day numbers this
+    // destination is about to lose (must run before the `days` delete). Plan-level legends stay.
+    conn.execute(
+        "DELETE FROM map_legend_stops WHERE plan_id = ?1 AND map_key LIKE 'day-%' \
+           AND CAST(substr(map_key, 5) AS INTEGER) IN \
+               (SELECT day_number FROM days WHERE plan_id = ?1 AND destination = ?2)",
+        libsql::params![plan_id.to_string(), destination.to_string()],
+    )
+    .await
+    .map_err(|e| format!("map_legend_stops delete failed: {e}"))?;
     for tbl in [
         "session_meals",
         "session_activities_zh",
         "activities",
         "timesofday",
+        "day_route_segments",
+        "day_landmarks",
         "days",
     ] {
         conn.execute(

@@ -2447,7 +2447,7 @@ async fn count_days(
 ) -> Result<i64, String> {
     let mut rows = conn
         .query(
-            "SELECT COUNT(*) FROM days WHERE plan_id = ?1 AND destination = ?2",
+            "SELECT COUNT(*) FROM days WHERE plan_id = ?1 AND destination = ?2 AND variant_of IS NULL",
             params![plan_id.to_string(), destination.to_string()],
         )
         .await
@@ -2603,7 +2603,7 @@ async fn missing_weather_in_window(
 ) -> Result<Vec<i64>, String> {
     let sql = "SELECT day_number \
         FROM days \
-        WHERE plan_id = ?1 AND destination = ?2 \
+        WHERE plan_id = ?1 AND destination = ?2 AND variant_of IS NULL \
           AND date >= ?3 AND date <= date(?3, '+16 days') \
           AND (weather_label IS NULL OR weather_source_id IS NULL)";
     let mut rows = conn

@@ -102,6 +102,31 @@ fn seed_stale_itinerary(plan: &str, dest: &str, stale_activity_id: &str) {
          VALUES ({p}, {d}, 99, 'morning', 0, 'stale zh activity')"
     ));
     exec_ok(&format!(
+        "INSERT OR REPLACE INTO day_route_segments \
+            (plan_id, destination, day_number, sort_order, from_place, to_place, mode) \
+         VALUES ({p}, {d}, 99, 0, 'stale from', 'stale to', 'walk')"
+    ));
+    exec_ok(&format!(
+        "INSERT OR REPLACE INTO day_landmarks \
+            (plan_id, destination, day_number, sort_order, landmark) \
+         VALUES ({p}, {d}, 99, 0, 'stale landmark')"
+    ));
+    exec_ok(&format!(
+        "INSERT OR REPLACE INTO map_legend_stops \
+            (plan_id, map_key, seq, label, lat, lon, day_number) \
+         VALUES ({p}, 'day-99.png', 0, 'stale pin', 26.2, 127.7, 99)"
+    ));
+    exec_ok(&format!(
+        "INSERT OR REPLACE INTO map_legend_stops \
+            (plan_id, map_key, seq, label, lat, lon, day_number) \
+         VALUES ({p}, 'day-99-logistics.png', 0, 'stale pin', 26.2, 127.7, 99)"
+    ));
+    exec_ok(&format!(
+        "INSERT OR REPLACE INTO map_legend_stops \
+            (plan_id, map_key, seq, label, lat, lon) \
+         VALUES ({p}, 'plan.png', 0, 'plan-level pin', 26.2, 127.7)"
+    ));
+    exec_ok(&format!(
         "INSERT OR REPLACE INTO process_statuses \
             (plan_id, destination, process_id, status) \
          VALUES ({p}, {d}, 'process_5_daily_itinerary', 'pending')"
@@ -226,6 +251,19 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
         stale_counts.scalar().as_deref(),
         Some("0|0|0|0|0|0"),
         "forced scaffold should clear stale child rows and prove activity_tags were cleared before activities; out={stale_counts}"
+    );
+
+    let day_children = exec_ok(&format!(
+        "SELECT \
+            (SELECT COUNT(*) FROM day_route_segments WHERE plan_id = {p} AND destination = {d}) || '|' || \
+            (SELECT COUNT(*) FROM day_landmarks WHERE plan_id = {p} AND destination = {d}) || '|' || \
+            (SELECT COUNT(*) FROM map_legend_stops WHERE plan_id = {p} AND map_key LIKE 'day-%') || '|' || \
+            (SELECT COUNT(*) FROM map_legend_stops WHERE plan_id = {p} AND map_key = 'plan.png') AS v"
+    ));
+    assert_eq!(
+        day_children.scalar().as_deref(),
+        Some("0|0|0|1"),
+        "forced scaffold must clear route segments, landmarks and day-N legends but keep plan-level legends; out={day_children}"
     );
 
     let days = exec_ok(&format!(

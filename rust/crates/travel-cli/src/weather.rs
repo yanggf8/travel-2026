@@ -139,17 +139,15 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     }
 
     let sourced_at = now_rfc3339();
-    let n = days.len().min(forecasts.len());
-    for idx in 0..n {
-        let (day_number, _date) = &days[idx];
-        write_day_weather(&conn, &plan_id, &dest, *day_number, &forecasts[idx], &sourced_at).await?;
+    let assigned = assign_forecasts(&days, &forecasts);
+    for (day_number, f) in &assigned {
+        write_day_weather(&conn, &plan_id, &dest, *day_number, f, &sourced_at).await?;
     }
 
     finalize(&conn, &plan_id, &dest).await?;
 
-    println!("✅ Weather updated for {} day(s) in {dest}:", forecasts.len());
-    for idx in 0..forecasts.len().min(days.len()) {
-        let f = &forecasts[idx];
+    println!("✅ Weather updated for {} day(s) in {dest}:", assigned.len());
+    for (day_number, f) in &assigned {
         let feels_like = match (f.feels_like_low_c, f.feels_like_high_c) {
             (Some(lo), Some(hi)) => format!(" (體感 {}–{}°C)", fmt_temp(lo), fmt_temp(hi)),
             _ => String::new(),
@@ -160,7 +158,7 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             .unwrap_or_else(|| "null".to_string());
         println!(
             "  Day {}: {} {}–{}°C{}, Rain: {}%",
-            days[idx].0,
+            day_number,
             f.weather_label,
             fmt_temp(f.temp_low_c),
             fmt_temp(f.temp_high_c),
@@ -190,11 +188,11 @@ async fn update_destination_weather(
         return Ok(0);
     }
     let sourced_at = now_rfc3339();
-    let n = days.len().min(forecasts.len());
-    for idx in 0..n {
-        write_day_weather(conn, plan_id, dest, days[idx].0, &forecasts[idx], &sourced_at).await?;
+    let assigned = assign_forecasts(&days, &forecasts);
+    for (day_number, f) in &assigned {
+        write_day_weather(conn, plan_id, dest, *day_number, f, &sourced_at).await?;
     }
-    Ok(forecasts.len())
+    Ok(assigned.len())
 }
 
 async fn list_destinations(conn: &Connection, plan_id: &str) -> Result<Vec<String>, String> {
@@ -237,7 +235,16 @@ async fn read_active_destination(conn: &Connection, plan_id: &str) -> Result<Str
     Err(format!("plan_metadata.active_destination missing for plan_id={plan_id}"))
 }
 
-/// Load (day_number, date) ordered for a destination's days.
+/// Pair each forecast with the trip day whose date equals the forecast date.
+/// Dates drive the match (never position): a day with no forecast is skipped.
+fn assign_forecasts<'a>(days: &[(i64, String)], forecasts: &'a [Forecast]) -> Vec<(i64, &'a Forecast)> {
+    days.iter()
+        .filter_map(|(n, d)| forecasts.iter().find(|f| &f.date == d).map(|f| (*n, f)))
+        .collect()
+}
+
+/// Load (day_number, date) ordered for a destination's TRIP days (variants excluded —
+/// a variant shares its main day's date and keeps no weather of its own).
 async fn load_days(
     conn: &Connection,
     plan_id: &str,
@@ -246,7 +253,7 @@ async fn load_days(
     let mut rows = conn
         .query(
             "SELECT day_number, date FROM days \
-             WHERE plan_id = ?1 AND destination = ?2 ORDER BY day_number",
+             WHERE plan_id = ?1 AND destination = ?2 AND variant_of IS NULL ORDER BY day_number",
             libsql::params![plan_id.to_string(), dest.to_string()],
         )
         .await
@@ -580,6 +587,43 @@ mod tests {
     #[test]
     fn encode_timezone() {
         assert_eq!(url_encode("Asia/Tokyo"), "Asia%2FTokyo");
+    }
+
+    fn fc(date: &str) -> Forecast {
+        Forecast {
+            date: date.to_string(),
+            temp_high_c: 20.0,
+            temp_low_c: 10.0,
+            feels_like_high_c: None,
+            feels_like_low_c: None,
+            precipitation_pct: None,
+            weather_code: 0,
+            weather_label: "Clear sky".to_string(),
+        }
+    }
+
+    #[test]
+    fn weather_matches_by_date_with_variant_of_non_final_day() {
+        // trip days 1,2,4 (day 3 is a variant, filtered out upstream) on consecutive dates
+        let days = vec![
+            (1, "2026-12-01".to_string()),
+            (2, "2026-12-02".to_string()),
+            (4, "2026-12-03".to_string()),
+        ];
+        let f = vec![fc("2026-12-01"), fc("2026-12-02"), fc("2026-12-03")];
+        let got: Vec<(i64, String)> =
+            assign_forecasts(&days, &f).into_iter().map(|(n, x)| (n, x.date.clone())).collect();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[2], (4, "2026-12-03".to_string()));
+    }
+
+    #[test]
+    fn assign_forecasts_skips_days_without_forecast() {
+        let days = vec![(1, "2026-12-01".to_string()), (2, "2026-12-09".to_string())];
+        let f = vec![fc("2026-12-01")];
+        let got = assign_forecasts(&days, &f);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, 1);
     }
 
     #[test]

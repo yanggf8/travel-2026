@@ -491,3 +491,74 @@ fn swap_days_resyncs_bookings() {
     assert_eq!(keys(2), "1", "key moved to day 2");
     assert_eq!(keys(1), "0", "no stale day-1 key");
 }
+
+// ---------------------------------------------------------------------------
+// Task A4: readers (populate, content-depth, validate counts) ignore variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn content_depth_ignores_variants() {
+    fixture!(tag, plan_id, dest, _g);
+    // Day 1 = trip day with 2 activities; Day 2 (departure) trip day with none; a variant of
+    // day 1 (day 3) carries 5 more activities that must not enter the denominators.
+    let (ok, out) = cli(
+        &[
+            "add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+            "--main-label", "Rainy plan", "--main-label-zh", "雨天方案",
+        ],
+        &plan_id,
+        &dest,
+    );
+    assert!(ok, "add-day-variant failed: {out}");
+    let variant = scalar(&format!(
+        "SELECT day_number FROM days WHERE plan_id='{plan_id}' AND destination='{dest}' AND variant_of=1"
+    ));
+    for i in 0..2 {
+        insert_activity(&format!("{tag}-m{i}"), &plan_id, &dest, 1, "morning", "", "");
+    }
+    for i in 0..5 {
+        insert_activity(&format!("{tag}-v{i}"), &plan_id, &dest, variant.parse().unwrap(), "morning", "", "");
+    }
+    let out = Command::new(bin())
+        .args(["compare", "content-depth", "--plan-id", &plan_id, "--against", &plan_id])
+        .env_remove("TRAVEL_PLAN_ID")
+        .output()
+        .expect("run compare content-depth");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "content-depth failed: {text}");
+    // Totals are summed over trip days only: 2 activities, never 7.
+    let total_line = text
+        .lines()
+        .find(|l| l.contains("activities") && l.contains("2"))
+        .unwrap_or_else(|| panic!("no activities total line; out={text}"));
+    assert!(!total_line.contains('7'), "variant activities leaked into totals: {text}");
+    assert!(!text.contains(&format!("Day {variant}")), "variant row listed as a day: {text}");
+}
+
+#[test]
+fn validate_publish_weather_gate_and_day_count_skip_variants() {
+    fixture!(tag, plan_id, dest, _g);
+    let _ = tag;
+    // A variant with NULL weather inside the forecast window must not raise the weather WARN;
+    // both trip days get weather so the only possible source is the variant row.
+    let today = scalar("SELECT date('now') AS d");
+    db_exec(&format!(
+        "UPDATE days SET date='{today}', weather_label='Clear', weather_source_id='open-meteo' \
+           WHERE plan_id='{plan_id}' AND destination='{dest}' AND day_number IN (1,2);"
+    ))
+    .expect("set weather");
+    let (ok, out) = cli(
+        &[
+            "add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+            "--main-label", "Rainy plan", "--main-label-zh", "雨天方案",
+        ],
+        &plan_id,
+        &dest,
+    );
+    assert!(ok, "add-day-variant failed: {out}");
+    let (_, out) = publish(&plan_id, &dest);
+    assert!(
+        !out.contains("missing weather within 16-day forecast window"),
+        "variant must not count against the weather window gate; out={out}"
+    );
+}
