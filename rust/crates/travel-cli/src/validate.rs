@@ -2415,8 +2415,18 @@ fn variant_label_problems(at: &str, who: &str, en: Option<&str>, zh: Option<&str
 
 /// `validate data`: day-variant invariants across every plan (Error).
 async fn validate_day_variants(issues: &mut Vec<Issue>) {
-    let Ok(conn) = db::connect_read().await else {
-        return;
+    let conn = match db::connect_read().await {
+        Ok(c) => c,
+        Err(e) => {
+            issues.push(Issue {
+                category: "day-variants".to_string(),
+                severity: Severity::Error,
+                message: format!("cannot check day variants: {e}"),
+                file: Some("turso:days".to_string()),
+                line: None,
+            });
+            return;
+        }
     };
     match variant_violations(&conn, None).await {
         Ok(msgs) => {

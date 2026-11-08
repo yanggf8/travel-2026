@@ -293,3 +293,87 @@ pub async fn set_theme(
     }
     Ok(())
 }
+
+/// Insert a variant `days` row (status `draft`, `variant_of = main`) plus its four empty
+/// `timesofday` sessions. Writes only; the caller owns the transaction and the audit triad.
+pub async fn insert_variant_day(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    date: &Option<String>,
+    day_type: &Option<String>,
+    main_day: i64,
+    label: &str,
+    label_zh: &str,
+    now_db: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status, \
+                           updated_at, variant_of, variant_label, variant_label_zh) \
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'draft', ?6, ?7, ?8, ?9)",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            date.clone(),
+            day_type.clone(),
+            now_db.to_string(),
+            main_day,
+            label.to_string(),
+            label_zh.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("days INSERT failed: {e}"))?;
+    for sess in ["morning", "noon", "afternoon", "evening"] {
+        conn.execute(
+            "INSERT INTO timesofday (plan_id, destination, day_number, session_type, focus, \
+                                     transit_notes, booking_notes, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, ?5)",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                sess,
+                now_db.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("timesofday INSERT failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Delete one day row and every child row it owns (activity_tags first, `days` last).
+pub async fn delete_day_content(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM activity_tags WHERE activity_id IN \
+            (SELECT id FROM activities WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3)",
+        libsql::params![plan_id.to_string(), destination.to_string(), day],
+    )
+    .await
+    .map_err(|e| format!("activity_tags delete failed: {e}"))?;
+    for tbl in [
+        "activities",
+        "session_meals",
+        "session_activities_zh",
+        "timesofday",
+        "day_route_segments",
+        "day_landmarks",
+        "days",
+    ] {
+        conn.execute(
+            &format!("DELETE FROM {tbl} WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3"),
+            libsql::params![plan_id.to_string(), destination.to_string(), day],
+        )
+        .await
+        .map_err(|e| format!("{tbl} delete failed: {e}"))?;
+    }
+    Ok(())
+}

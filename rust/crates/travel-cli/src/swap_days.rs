@@ -71,46 +71,86 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         (Vec::new(), Vec::new())
     };
 
-    swap_content(&conn, &plan_id, &destination, parsed.day_a, parsed.day_b).await?;
+    conn.execute("BEGIN", libsql::params![])
+        .await
+        .map_err(|e| format!("swap-days BEGIN failed: {e}"))?;
+    let outcome: Result<usize, String> = async {
+        swap_content(&conn, &plan_id, &destination, parsed.day_a, parsed.day_b).await?;
 
-    // Each side's variants follow their content: variant_of a->b / b->a, date/day_type of the new main.
-    let mut repointed: Vec<String> = Vec::new();
-    if trip_day_swap {
-        let now_db = now_db_datetime();
-        let (date_a, type_a) = days::date_and_type(&conn, &plan_id, &destination, parsed.day_a).await?;
-        let (date_b, type_b) = days::date_and_type(&conn, &plan_id, &destination, parsed.day_b).await?;
-        for v in &vars_a {
-            days::repoint_variant(&conn, &plan_id, &destination, *v, parsed.day_b, &date_b, &type_b, &now_db).await?;
-            repointed.push(format!("{v}->{}", parsed.day_b));
+        // Each side's variants follow their content: variant_of a->b / b->a, date/day_type of the new main.
+        let mut repointed: Vec<String> = Vec::new();
+        if trip_day_swap {
+            let now_db = now_db_datetime();
+            let (date_a, type_a) =
+                days::date_and_type(&conn, &plan_id, &destination, parsed.day_a).await?;
+            let (date_b, type_b) =
+                days::date_and_type(&conn, &plan_id, &destination, parsed.day_b).await?;
+            for v in &vars_a {
+                days::repoint_variant(
+                    &conn,
+                    &plan_id,
+                    &destination,
+                    *v,
+                    parsed.day_b,
+                    &date_b,
+                    &type_b,
+                    &now_db,
+                )
+                .await?;
+                repointed.push(format!("{v}->{}", parsed.day_b));
+            }
+            for v in &vars_b {
+                days::repoint_variant(
+                    &conn,
+                    &plan_id,
+                    &destination,
+                    *v,
+                    parsed.day_a,
+                    &date_a,
+                    &type_a,
+                    &now_db,
+                )
+                .await?;
+                repointed.push(format!("{v}->{}", parsed.day_a));
+            }
         }
-        for v in &vars_b {
-            days::repoint_variant(&conn, &plan_id, &destination, *v, parsed.day_a, &date_a, &type_a, &now_db).await?;
-            repointed.push(format!("{v}->{}", parsed.day_a));
-        }
+
+        // touchItinerary — bump updated_at on both day rows.
+        touch_day(&conn, &plan_id, &destination, parsed.day_a).await?;
+        touch_day(&conn, &plan_id, &destination, parsed.day_b).await?;
+
+        let kv: Vec<(&str, String)> = vec![
+            ("day_a", parsed.day_a.to_string()),
+            ("day_b", parsed.day_b.to_string()),
+            ("variants_repointed", repointed.join(",")),
+        ];
+        let trip_id = plan_id.replace('-', "_");
+        let n = crate::sync_bookings::resync_plan_bookings(&conn, &plan_id, &trip_id).await?;
+        execute_event(
+            &conn,
+            &plan_id,
+            &destination,
+            "days_swapped",
+            "swap-days",
+            &format!("D{} ↔ D{}", parsed.day_a, parsed.day_b),
+            &kv,
+        )
+        .await?;
+        Ok(n)
     }
-
-    // touchItinerary — bump updated_at on both day rows.
-    touch_day(&conn, &plan_id, &destination, parsed.day_a).await?;
-    touch_day(&conn, &plan_id, &destination, parsed.day_b).await?;
-
-    let kv: Vec<(&str, String)> = vec![
-        ("day_a", parsed.day_a.to_string()),
-        ("day_b", parsed.day_b.to_string()),
-        ("variants_repointed", repointed.join(",")),
-    ];
-    execute_event(
-        &conn,
-        &plan_id,
-        &destination,
-        "days_swapped",
-        "swap-days",
-        &format!("D{} ↔ D{}", parsed.day_a, parsed.day_b),
-        &kv,
-    )
-    .await?;
-
-    let trip_id = plan_id.replace('-', "_");
-    let n = crate::sync_bookings::resync_plan_bookings(&conn, &plan_id, &trip_id).await?;
+    .await;
+    let n = match outcome {
+        Ok(n) => {
+            conn.execute("COMMIT", libsql::params![])
+                .await
+                .map_err(|e| format!("swap-days COMMIT failed: {e}"))?;
+            n
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", libsql::params![]).await;
+            return Err(e);
+        }
+    };
     println!("bookings re-synced ({n})");
 
     println!("✅ Days swapped successfully");
@@ -147,9 +187,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         }
     }
     if positional.len() < 2 {
-        return Err(
-            "Error: swap-days requires <dayA> <dayB>\nExample: swap-days 2 3".to_string(),
-        );
+        return Err("Error: swap-days requires <dayA> <dayB>\nExample: swap-days 2 3".to_string());
     }
     p.day_a = positional[0]
         .parse::<i64>()
@@ -188,8 +226,12 @@ async fn swap_content(
     days::set_variant_labels(conn, plan_id, destination, day_a, &lab_b.0, &lab_b.1).await?;
     days::set_variant_labels(conn, plan_id, destination, day_b, &lab_a.0, &lab_a.1).await?;
     // The excursion flag describes the content (a far-off day trip), so it moves too.
-    let exc_a = itinerary::day_excursion(conn, plan_id, destination, day_a).await?.unwrap_or(false);
-    let exc_b = itinerary::day_excursion(conn, plan_id, destination, day_b).await?.unwrap_or(false);
+    let exc_a = itinerary::day_excursion(conn, plan_id, destination, day_a)
+        .await?
+        .unwrap_or(false);
+    let exc_b = itinerary::day_excursion(conn, plan_id, destination, day_b)
+        .await?
+        .unwrap_or(false);
     itinerary::set_day_excursion(conn, plan_id, destination, day_a, exc_b).await?;
     itinerary::set_day_excursion(conn, plan_id, destination, day_b, exc_a).await?;
 
@@ -380,7 +422,11 @@ async fn next_dest_process_sort_order(
             "SELECT COALESCE(MAX(sort_order), -1) AS m FROM plan_events \
              WHERE plan_id = ?1 AND scope = 'dest_process' \
                AND destination = ?2 AND process_id = ?3",
-            libsql::params![plan_id.to_string(), dest.to_string(), process_id.to_string()],
+            libsql::params![
+                plan_id.to_string(),
+                dest.to_string(),
+                process_id.to_string()
+            ],
         )
         .await
         .map_err(|e| format!("plan_events MAX query failed: {e}"))?;
@@ -434,7 +480,13 @@ async fn insert_event(
         "DELETE FROM plan_events \
          WHERE plan_id = ?1 AND scope = ?2 AND destination = ?3 \
            AND process_id = ?4 AND sort_order = ?5",
-        libsql::params![plan_id.to_string(), scope.to_string(), destination.to_string(), process_id.to_string(), sort_order],
+        libsql::params![
+            plan_id.to_string(),
+            scope.to_string(),
+            destination.to_string(),
+            process_id.to_string(),
+            sort_order
+        ],
     )
     .await
     .map_err(|e| format!("plan_events DELETE failed: {e}"))?;
@@ -443,7 +495,15 @@ async fn insert_event(
             (plan_id, scope, destination, process_id, sort_order, \
              event, event_at, from_state, to_state) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL)",
-        libsql::params![plan_id.to_string(), scope.to_string(), destination.to_string(), process_id.to_string(), sort_order, event.to_string(), event_at.to_string()],
+        libsql::params![
+            plan_id.to_string(),
+            scope.to_string(),
+            destination.to_string(),
+            process_id.to_string(),
+            sort_order,
+            event.to_string(),
+            event_at.to_string()
+        ],
     )
     .await
     .map_err(|e| format!("plan_events INSERT failed: {e}"))?;
@@ -463,7 +523,13 @@ async fn insert_kv(
         "DELETE FROM plan_event_data \
          WHERE plan_id = ?1 AND scope = ?2 AND destination = ?3 \
            AND process_id = ?4 AND sort_order = ?5",
-        libsql::params![plan_id.to_string(), scope.to_string(), destination.to_string(), process_id.to_string(), sort_order],
+        libsql::params![
+            plan_id.to_string(),
+            scope.to_string(),
+            destination.to_string(),
+            process_id.to_string(),
+            sort_order
+        ],
     )
     .await
     .map_err(|e| format!("plan_event_data DELETE failed: {e}"))?;
@@ -472,7 +538,15 @@ async fn insert_kv(
             "INSERT INTO plan_event_data \
                 (plan_id, scope, destination, process_id, sort_order, key, value) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            libsql::params![plan_id.to_string(), scope.to_string(), destination.to_string(), process_id.to_string(), sort_order, k.to_string(), v.clone()],
+            libsql::params![
+                plan_id.to_string(),
+                scope.to_string(),
+                destination.to_string(),
+                process_id.to_string(),
+                sort_order,
+                k.to_string(),
+                v.clone()
+            ],
         )
         .await
         .map_err(|e| format!("plan_event_data INSERT failed: {e}"))?;
@@ -492,7 +566,9 @@ fn now_db_datetime() -> String {
 
 fn now_civil() -> (i32, u32, u32, u32, u32, u32, u32) {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let d = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = d.as_secs() as i64;
     let ms = d.subsec_millis();
     let days = secs.div_euclid(86_400);

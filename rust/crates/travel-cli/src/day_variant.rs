@@ -5,7 +5,7 @@
 // Every command writes the audit triad: plan_events (+ plan_event_data), plans.version bump and
 // an operation_runs row (via cascade::common::record_operation).
 
-use libsql::{params, Connection};
+use libsql::{Connection, params};
 use travel_db::repo::days;
 
 use crate::cascade::common::{
@@ -95,27 +95,18 @@ async fn labels_of(
     plan: &str,
     dest: &str,
     day: i64,
-) -> Result<(Option<String>, Option<String>, String, String), String> {
-    let mut rows = conn
-        .query(
-            "SELECT variant_label, variant_label_zh, date, day_type FROM days \
-             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
-            params![plan.to_string(), dest.to_string(), day],
-        )
-        .await
-        .map_err(|e| format!("days read failed: {e}"))?;
-    let row = rows
-        .next()
-        .await
-        .map_err(|e| format!("days row read failed: {e}"))?
-        .ok_or_else(|| format!("day {day} does not exist for plan {plan} ({dest})"))?;
-    let g = |e: libsql::Error| format!("days decode failed: {e}");
-    Ok((
-        row.get::<Option<String>>(0).map_err(g)?,
-        row.get::<Option<String>>(1).map_err(g)?,
-        row.get::<String>(2).map_err(g)?,
-        row.get::<String>(3).map_err(g)?,
-    ))
+) -> Result<
+    (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+    String,
+> {
+    let (en, zh) = days::variant_labels(conn, plan, dest, day).await?;
+    let (date, day_type) = days::date_and_type(conn, plan, dest, day).await?;
+    Ok((en, zh, date, day_type))
 }
 
 fn nonempty(o: &Option<String>) -> bool {
@@ -131,21 +122,38 @@ async fn set_labels(
     zh: Option<&str>,
     now_db: &str,
 ) -> Result<(), String> {
-    conn.execute(
-        "UPDATE days SET variant_label = ?4, variant_label_zh = ?5, updated_at = ?6 \
-         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",
-        params![
-            plan.to_string(),
-            dest.to_string(),
-            day,
-            en.map(str::to_string),
-            zh.map(str::to_string),
-            now_db.to_string()
-        ],
+    days::set_variant_labels(
+        conn,
+        plan,
+        dest,
+        day,
+        &en.map(str::to_string),
+        &zh.map(str::to_string),
     )
-    .await
-    .map_err(|e| format!("days label update failed: {e}"))?;
-    Ok(())
+    .await?;
+    travel_db::repo::itinerary::touch_day(conn, plan, dest, day, now_db).await
+}
+
+/// Run `body` inside BEGIN/COMMIT on `conn`; ROLLBACK (error ignored) and return the Err otherwise.
+async fn in_tx<T, F>(conn: &Connection, name: &str, body: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    conn.execute("BEGIN", params![])
+        .await
+        .map_err(|e| format!("{name} BEGIN failed: {e}"))?;
+    match body.await {
+        Ok(v) => {
+            conn.execute("COMMIT", params![])
+                .await
+                .map_err(|e| format!("{name} COMMIT failed: {e}"))?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", params![]).await;
+            Err(e)
+        }
+    }
 }
 
 /// Emit the dest_process + timeline events (with KV) and the operation_runs/version back half.
@@ -163,9 +171,24 @@ async fn audit(
     let before = read_version(conn, plan).await?;
     let dp = next_dest_process_sort_order(conn, plan, dest, PROCESS).await?;
     let tl = next_timeline_sort_order(conn, plan).await?;
-    insert_event(conn, plan, "dest_process", dest, PROCESS, dp, event, &now_iso, None, None).await?;
+    insert_event(
+        conn,
+        plan,
+        "dest_process",
+        dest,
+        PROCESS,
+        dp,
+        event,
+        &now_iso,
+        None,
+        None,
+    )
+    .await?;
     insert_kv_rows(conn, plan, "dest_process", dest, PROCESS, dp, kv).await?;
-    insert_event(conn, plan, "timeline", "", PROCESS, tl, event, &now_iso, None, None).await?;
+    insert_event(
+        conn, plan, "timeline", "", PROCESS, tl, event, &now_iso, None, None,
+    )
+    .await?;
     insert_kv_rows(conn, plan, "timeline", "", PROCESS, tl, kv).await?;
     record_operation(conn, plan, command, summary, before, before + 1, &now_db).await?;
     Ok(())
@@ -189,7 +212,10 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
     let conn = crate::db::connect_write().await?;
     let dest = resolve_active_destination(&conn, &plan_id, p.dest.as_deref()).await?;
 
-    if days::variant_parent(&conn, &plan_id, &dest, p.day).await?.is_some() {
+    if days::variant_parent(&conn, &plan_id, &dest, p.day)
+        .await?
+        .is_some()
+    {
         return Err(format!(
             "day {} is itself a variant; add the variant to its main trip day",
             p.day
@@ -210,52 +236,30 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
     crate::map_objects::purge_day_maps(&plan_id, n).await?;
 
     let now_db = now_db_datetime();
-    if let (Some(en), Some(zh)) = (&p.main_label, &p.main_label_zh) {
-        set_labels(&conn, &plan_id, &dest, p.day, Some(en), Some(zh), &now_db).await?;
-    }
-    conn.execute(
-        "INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status, \
-                           updated_at, variant_of, variant_label, variant_label_zh) \
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'draft', ?6, ?7, ?8, ?9)",
-        params![
-            plan_id.clone(),
-            dest.clone(),
-            n,
-            date,
-            day_type,
-            now_db.clone(),
-            p.day,
-            label.to_string(),
-            label_zh.to_string()
-        ],
-    )
-    .await
-    .map_err(|e| format!("days INSERT failed: {e}"))?;
-    for sess in ["morning", "noon", "afternoon", "evening"] {
-        conn.execute(
-            "INSERT INTO timesofday (plan_id, destination, day_number, session_type, focus, \
-                                     transit_notes, booking_notes, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, ?5)",
-            params![plan_id.clone(), dest.clone(), n, sess, now_db.clone()],
+    in_tx(&conn, "add-day-variant", async {
+        if let (Some(en), Some(zh)) = (&p.main_label, &p.main_label_zh) {
+            set_labels(&conn, &plan_id, &dest, p.day, Some(en), Some(zh), &now_db).await?;
+        }
+        days::insert_variant_day(
+            &conn, &plan_id, &dest, n, &date, &day_type, p.day, label, label_zh, &now_db,
+        )
+        .await?;
+        audit(
+            &conn,
+            &plan_id,
+            &dest,
+            "day_variant_added",
+            "add-day-variant",
+            &format!("D{} variant D{n}", p.day),
+            &[
+                ("main_day", p.day.to_string()),
+                ("variant_day", n.to_string()),
+                ("label", label.to_string()),
+                ("label_zh", label_zh.to_string()),
+            ],
         )
         .await
-        .map_err(|e| format!("timesofday INSERT failed: {e}"))?;
-    }
-
-    audit(
-        &conn,
-        &plan_id,
-        &dest,
-        "day_variant_added",
-        "add-day-variant",
-        &format!("D{} variant D{n}", p.day),
-        &[
-            ("main_day", p.day.to_string()),
-            ("variant_day", n.to_string()),
-            ("label", label.to_string()),
-            ("label_zh", label_zh.to_string()),
-        ],
-    )
+    })
     .await?;
     println!(
         "variant day {n} of day {} created — write it with the usual commands on day {n}",
@@ -267,7 +271,9 @@ pub async fn run_add(args: &[String], plan_id: String) -> Result<(), String> {
 pub async fn run_label(args: &[String], plan_id: String) -> Result<(), String> {
     let p = parse(args, LABEL_USAGE)?;
     if p.main_label.is_some() || p.main_label_zh.is_some() {
-        return Err("unknown argument: --main-label (use --label/--label-zh on the day itself)".into());
+        return Err(
+            "unknown argument: --main-label (use --label/--label-zh on the day itself)".into(),
+        );
     }
     let label = p.label.as_deref().ok_or("--label is required")?;
     let label_zh = p.label_zh.as_deref().ok_or("--label-zh is required")?;
@@ -277,21 +283,32 @@ pub async fn run_label(args: &[String], plan_id: String) -> Result<(), String> {
     let conn = crate::db::connect_write().await?;
     let dest = resolve_active_destination(&conn, &plan_id, p.dest.as_deref()).await?;
     labels_of(&conn, &plan_id, &dest, p.day).await?; // fail loud if the day is missing
-    set_labels(&conn, &plan_id, &dest, p.day, Some(label), Some(label_zh), &now_db_datetime())
+    in_tx(&conn, "set-day-variant-label", async {
+        set_labels(
+            &conn,
+            &plan_id,
+            &dest,
+            p.day,
+            Some(label),
+            Some(label_zh),
+            &now_db_datetime(),
+        )
         .await?;
-    audit(
-        &conn,
-        &plan_id,
-        &dest,
-        "day_variant_label_set",
-        "set-day-variant-label",
-        &format!("D{}", p.day),
-        &[
-            ("day", p.day.to_string()),
-            ("label", label.to_string()),
-            ("label_zh", label_zh.to_string()),
-        ],
-    )
+        audit(
+            &conn,
+            &plan_id,
+            &dest,
+            "day_variant_label_set",
+            "set-day-variant-label",
+            &format!("D{}", p.day),
+            &[
+                ("day", p.day.to_string()),
+                ("label", label.to_string()),
+                ("label_zh", label_zh.to_string()),
+            ],
+        )
+        .await
+    })
     .await?;
     println!("day {} labels set: {label} / {label_zh}", p.day);
     Ok(())
@@ -299,7 +316,10 @@ pub async fn run_label(args: &[String], plan_id: String) -> Result<(), String> {
 
 pub async fn run_remove(args: &[String], plan_id: String) -> Result<(), String> {
     let p = parse(args, REMOVE_USAGE)?;
-    if p.label.is_some() || p.label_zh.is_some() || p.main_label.is_some() || p.main_label_zh.is_some()
+    if p.label.is_some()
+        || p.label_zh.is_some()
+        || p.main_label.is_some()
+        || p.main_label_zh.is_some()
     {
         return Err("remove-day-variant takes no label flags".into());
     }
@@ -307,56 +327,44 @@ pub async fn run_remove(args: &[String], plan_id: String) -> Result<(), String> 
     let dest = resolve_active_destination(&conn, &plan_id, p.dest.as_deref()).await?;
     let main = days::variant_parent(&conn, &plan_id, &dest, p.day)
         .await?
-        .ok_or_else(|| format!("day {} is a trip day, not a variant; refusing to remove it", p.day))?;
+        .ok_or_else(|| {
+            format!(
+                "day {} is a trip day, not a variant; refusing to remove it",
+                p.day
+            )
+        })?;
 
     // R2 first: a failure aborts with nothing deleted.
     crate::map_objects::purge_day_maps(&plan_id, p.day).await?;
 
-    let (pl, de, d) = (plan_id.clone(), dest.clone(), p.day);
-    conn.execute(
-        "DELETE FROM activity_tags WHERE activity_id IN \
-            (SELECT id FROM activities WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3)",
-        params![pl.clone(), de.clone(), d],
-    )
-    .await
-    .map_err(|e| format!("activity_tags delete failed: {e}"))?;
-    for tbl in [
-        "activities",
-        "session_meals",
-        "session_activities_zh",
-        "timesofday",
-        "day_route_segments",
-        "day_landmarks",
-        "days",
-    ] {
-        conn.execute(
-            &format!("DELETE FROM {tbl} WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3"),
-            params![pl.clone(), de.clone(), d],
+    let n = in_tx(&conn, "remove-day-variant", async {
+        days::delete_day_content(&conn, &plan_id, &dest, p.day).await?;
+        let cleared = days::variants_of(&conn, &plan_id, &dest, main)
+            .await?
+            .is_empty();
+        if cleared {
+            set_labels(&conn, &plan_id, &dest, main, None, None, &now_db_datetime()).await?;
+        }
+        let trip_id = plan_id.replace('-', "_");
+        let n = crate::sync_bookings::resync_plan_bookings(&conn, &plan_id, &trip_id).await?;
+        audit(
+            &conn,
+            &plan_id,
+            &dest,
+            "day_variant_removed",
+            "remove-day-variant",
+            &format!("D{} variant of D{main}", p.day),
+            &[
+                ("main_day", main.to_string()),
+                ("variant_day", p.day.to_string()),
+                ("main_labels_cleared", cleared.to_string()),
+            ],
         )
-        .await
-        .map_err(|e| format!("{tbl} delete failed: {e}"))?;
-    }
-    let cleared = days::variants_of(&conn, &plan_id, &dest, main).await?.is_empty();
-    if cleared {
-        set_labels(&conn, &plan_id, &dest, main, None, None, &now_db_datetime()).await?;
-    }
-    let trip_id = plan_id.replace('-', "_");
-    let n = crate::sync_bookings::resync_plan_bookings(&conn, &plan_id, &trip_id).await?;
-    println!("bookings re-synced ({n})");
-    audit(
-        &conn,
-        &plan_id,
-        &dest,
-        "day_variant_removed",
-        "remove-day-variant",
-        &format!("D{} variant of D{main}", p.day),
-        &[
-            ("main_day", main.to_string()),
-            ("variant_day", p.day.to_string()),
-            ("main_labels_cleared", cleared.to_string()),
-        ],
-    )
+        .await?;
+        Ok(n)
+    })
     .await?;
+    println!("bookings re-synced ({n})");
     println!("variant day {} of day {main} removed", p.day);
     Ok(())
 }

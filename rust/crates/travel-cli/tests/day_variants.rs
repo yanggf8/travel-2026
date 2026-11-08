@@ -277,6 +277,14 @@ fn remove_deletes_all_variant_rows_and_clears_main_labels() {
     );
     assert!(ok, "{out}");
     let act = format!("zz-act-{tag}");
+    // activity_tags has no plan_id column, so teardown_plan misses it; declared after the fixture
+    // guard so it drops (and deletes) first.
+    let _tags_guard = Guard::new({
+        let act = act.clone();
+        move || {
+            db_exec(&format!("DELETE FROM activity_tags WHERE activity_id = '{act}'"));
+        }
+    });
     db_exec(&format!(
         "INSERT INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title) \
            VALUES ('{act}', '{plan_id}', '{dest}', 3, 'morning', 0, 'A'); \
