@@ -3213,35 +3213,10 @@ fn classify(s: &str) -> Kind {
 async fn remove_stale_map(_c: &Connection, plan: &str, key: &str, reason: &str) -> Result<(), String> {
     // Reconnect like record_artifact: this runs after Wrangler uploads, which can
     // outlive Turso's idle timeout, so the caller's long-lived `write` may be dead.
-    let c = crate::db::connect_write().await?;
-    let mut r = c
-        .query(
-            "SELECT status FROM map_artifacts WHERE plan_id = ?1 AND map_key = ?2",
-            params![plan.to_string(), key.to_string()],
-        )
-        .await
-        .map_err(err("map manifest read"))?;
-    let was_uploaded = match r.next().await.map_err(err("map manifest row"))? {
-        Some(row) => row.get::<Option<String>>(0).ok().flatten().as_deref() == Some("uploaded"),
-        None => false,
-    };
-    if was_uploaded {
-        let status = wrangler_command()
-            .args([
-                "wrangler",
-                "r2",
-                "object",
-                "delete",
-                &format!("{BUCKET}/{plan}/{key}"),
-                "--remote",
-            ])
-            .status()
-            .map_err(|e| format!("failed to run Wrangler delete for {key}: {e}"))?;
-        if !status.success() {
-            return Err(format!("Wrangler could not delete stale {key} (exit {status})"));
-        }
+    if crate::map_objects::purge_map_key(plan, key, reason).await? {
         println!("   removed stale {key} ({reason})");
     }
+    let c = crate::db::connect_write().await?;
     record_artifact(&c, plan, key, 0, None, "skipped", Some(reason), None, None).await?;
     Ok(())
 }
@@ -3262,7 +3237,7 @@ async fn record_artifact(
     c.execute("INSERT INTO map_artifacts (plan_id,map_key,byte_size,sha256,status,skip_reason,generated_at,input_sha256,has_roads) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(plan_id,map_key) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256,status=excluded.status,skip_reason=excluded.skip_reason,generated_at=excluded.generated_at,input_sha256=excluded.input_sha256,has_roads=excluded.has_roads",params![p.to_string(),key.to_string(),size as i64,sha.unwrap_or_default().to_string(),status.to_string(),reason.map(str::to_string),now,input_sha.map(str::to_string),has_roads]).await.map_err(err("map manifest write"))?;
     Ok(())
 }
-fn wrangler_command() -> Command {
+pub(crate) fn wrangler_command() -> Command {
     let mut c = Command::new("npx");
     c.env_remove("CLOUDFLARE_API_TOKEN");
     if node_major() < 22 {

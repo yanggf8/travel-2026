@@ -91,3 +91,258 @@ fn variant_invariants_block_publish() {
     assert!(!success, "chained variant must block; out={out}");
     assert!(out.contains("itself a variant"), "expected chain message; out={out}");
 }
+
+// ---------------------------------------------------------------------------
+// Task A2: add-day-variant / set-day-variant-label / remove-day-variant
+// ---------------------------------------------------------------------------
+
+/// Run the CLI with the R2 dry-delete seam on (tests must never run real wrangler).
+fn cli(args: &[&str], plan_id: &str, dest: &str) -> (bool, String) {
+    let out = Command::new(bin())
+        .args(args)
+        .args(["--plan-id", plan_id, "--dest", dest])
+        .env("TRAVEL_MAPS_DRY_DELETE", "1")
+        .env_remove("TRAVEL_PLAN_ID")
+        .output()
+        .unwrap_or_else(|e| panic!("run {args:?}: {e}"));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+fn scalar(sql: &str) -> String {
+    db_exec(sql).and_then(|r| r.scalar()).unwrap_or_default()
+}
+
+/// Two trip days (Day 1 arrival 2026-09-01, Day 2 departure 2026-09-02), no variants.
+fn seed_two_days(plan_id: &str, dest: &str) {
+    db_exec(&format!(
+        "INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
+           VALUES ('{plan_id}', '{dest}', 1, '2026-09-01', 'T1', 'arrival', 'draft'); \
+         INSERT INTO days (plan_id, destination, day_number, date, theme, day_type, status) \
+           VALUES ('{plan_id}', '{dest}', 2, '2026-09-02', 'T2', 'departure', 'draft');"
+    ))
+    .expect("seed days");
+}
+
+macro_rules! fixture {
+    ($tag:ident, $plan_id:ident, $dest:ident, $guard:ident) => {
+        if db_exec("SELECT 1 AS n").is_none() {
+            return;
+        }
+        let $tag = nanos();
+        let $plan_id = format!("zz-test-{}-va", $tag);
+        let $dest = format!("zz_test_{}_va", $tag);
+        seed_plan(&$plan_id, &$dest, 0);
+        let $guard = Guard::new({
+            let (p, d) = ($plan_id.clone(), $dest.clone());
+            move || teardown_plan(&p, &d)
+        });
+        seed_two_days(&$plan_id, &$dest);
+    };
+}
+
+#[test]
+fn add_variant_creates_row_and_sessions() {
+    fixture!(tag, plan_id, dest, _g);
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "add failed: {out}");
+    assert!(
+        out.contains("variant day 3 of day 1 created — write it with the usual commands on day 3"),
+        "out={out}"
+    );
+    let row = scalar(&format!(
+        "SELECT date || '|' || day_type || '|' || variant_of || '|' || variant_label || '|' || variant_label_zh \
+         AS v FROM days WHERE plan_id='{plan_id}' AND day_number=3"
+    ));
+    assert_eq!(row, "2026-09-01|arrival|1|Sunny plan|晴天方案");
+    let main = scalar(&format!(
+        "SELECT variant_label || '|' || variant_label_zh AS v FROM days WHERE plan_id='{plan_id}' AND day_number=1"
+    ));
+    assert_eq!(main, "Rainy plan|雨天方案");
+    assert_eq!(
+        scalar(&format!("SELECT COUNT(*) AS n FROM timesofday WHERE plan_id='{plan_id}' AND day_number=3")),
+        "4"
+    );
+    assert_eq!(scalar(&format!("SELECT version AS v FROM plans WHERE plan_id='{plan_id}'")), "1");
+    assert_eq!(
+        scalar(&format!(
+            "SELECT COUNT(*) AS n FROM operation_runs WHERE plan_id='{plan_id}' AND command_type='add-day-variant'"
+        )),
+        "1"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id='{plan_id}' AND event='day_variant_added'"
+        )),
+        "2"
+    );
+}
+
+#[test]
+fn add_variant_requires_main_label_first_time() {
+    fixture!(tag, plan_id, dest, _g);
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案"],
+        &plan_id, &dest,
+    );
+    assert!(!ok, "must refuse without main labels: {out}");
+    assert!(out.contains("--main-label"), "out={out}");
+    assert_eq!(
+        scalar(&format!("SELECT COUNT(*) AS n FROM days WHERE plan_id='{plan_id}'")),
+        "2",
+        "nothing created"
+    );
+}
+
+#[test]
+fn add_variant_refuses_a_variant_as_main() {
+    fixture!(tag, plan_id, dest, _g);
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "{out}");
+    let (ok, out) = cli(
+        &["add-day-variant", "3", "--label", "Other", "--label-zh", "其他",
+          "--main-label", "X", "--main-label-zh", "甲"],
+        &plan_id, &dest,
+    );
+    assert!(!ok, "variant as main must be refused: {out}");
+    assert!(out.contains("itself a variant"), "out={out}");
+}
+
+#[test]
+fn label_rules() {
+    fixture!(tag, plan_id, dest, _g);
+    let long = "x".repeat(33);
+    for bad in ["晴天", long.as_str(), ""] {
+        let (ok, out) = cli(
+            &["add-day-variant", "1", "--label", bad, "--label-zh", "晴天方案",
+              "--main-label", "Rainy", "--main-label-zh", "雨天"],
+            &plan_id, &dest,
+        );
+        assert!(!ok, "EN label {bad:?} must be rejected: {out}");
+    }
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny", "--label-zh", &"晴".repeat(17),
+          "--main-label", "Rainy", "--main-label-zh", "雨天"],
+        &plan_id, &dest,
+    );
+    assert!(!ok, "17-char ZH label must be rejected: {out}");
+    let (ok, out) = cli(
+        &["set-day-variant-label", "1", "--label", "caf\u{e9}", "--label-zh", "好"],
+        &plan_id, &dest,
+    );
+    assert!(!ok, "non-ASCII on set-day-variant-label must be rejected: {out}");
+    assert_eq!(
+        scalar(&format!("SELECT COUNT(*) AS n FROM days WHERE plan_id='{plan_id}'")),
+        "2"
+    );
+    // exact bounds pass
+    let (ok, out) = cli(
+        &["set-day-variant-label", "1", "--label", &"x".repeat(32), "--label-zh", &"晴".repeat(16)],
+        &plan_id, &dest,
+    );
+    assert!(ok, "boundary labels must pass: {out}");
+}
+
+#[test]
+fn remove_refuses_a_trip_day() {
+    fixture!(tag, plan_id, dest, _g);
+    let (ok, out) = cli(&["remove-day-variant", "2"], &plan_id, &dest);
+    assert!(!ok, "{out}");
+    assert!(out.contains("not a variant"), "out={out}");
+    assert_eq!(
+        scalar(&format!("SELECT COUNT(*) AS n FROM days WHERE plan_id='{plan_id}'")),
+        "2"
+    );
+}
+
+#[test]
+fn remove_deletes_all_variant_rows_and_clears_main_labels() {
+    fixture!(tag, plan_id, dest, _g);
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "{out}");
+    let act = format!("zz-act-{tag}");
+    db_exec(&format!(
+        "INSERT INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title) \
+           VALUES ('{act}', '{plan_id}', '{dest}', 3, 'morning', 0, 'A'); \
+         INSERT INTO activity_tags (activity_id, tag) VALUES ('{act}', 'zz'); \
+         INSERT INTO session_meals (plan_id, destination, day_number, session_type, sort_order, meal) \
+           VALUES ('{plan_id}', '{dest}', 3, 'noon', 0, 'M'); \
+         INSERT INTO session_activities_zh (plan_id, destination, day_number, session_type, sort_order, activity) \
+           VALUES ('{plan_id}', '{dest}', 3, 'morning', 0, 'Z'); \
+         INSERT INTO day_route_segments (plan_id, destination, day_number, sort_order, from_place, to_place, mode) \
+           VALUES ('{plan_id}', '{dest}', 3, 0, 'a', 'b', 'walk'); \
+         INSERT INTO day_landmarks (plan_id, destination, day_number, sort_order, landmark) \
+           VALUES ('{plan_id}', '{dest}', 3, 0, 'L');"
+    ))
+    .expect("seed variant content");
+    let (ok, out) = cli(&["remove-day-variant", "3"], &plan_id, &dest);
+    assert!(ok, "remove failed: {out}");
+    for tbl in [
+        "days", "timesofday", "activities", "session_meals", "session_activities_zh",
+        "day_route_segments", "day_landmarks",
+    ] {
+        assert_eq!(
+            scalar(&format!("SELECT COUNT(*) AS n FROM {tbl} WHERE plan_id='{plan_id}' AND day_number=3")),
+            "0",
+            "{tbl} must have no variant rows"
+        );
+    }
+    assert_eq!(scalar(&format!("SELECT COUNT(*) AS n FROM activity_tags WHERE activity_id='{act}'")), "0");
+    let main = scalar(&format!(
+        "SELECT COALESCE(variant_label,'NULL') || '|' || COALESCE(variant_label_zh,'NULL') AS v \
+         FROM days WHERE plan_id='{plan_id}' AND day_number=1"
+    ));
+    assert_eq!(main, "NULL|NULL", "main labels cleared when no variants remain");
+    assert_eq!(
+        scalar(&format!(
+            "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id='{plan_id}' AND event='day_variant_removed'"
+        )),
+        "2"
+    );
+}
+
+#[test]
+fn reused_number_purges_old_maps() {
+    fixture!(tag, plan_id, dest, _g);
+    // add will hand out day 3; seed an uploaded map + legend stops for it.
+    db_exec(&format!(
+        "INSERT INTO map_artifacts (plan_id, map_key, byte_size, sha256, status, generated_at) \
+           VALUES ('{plan_id}', 'day-3.png', 10, 'x', 'uploaded', '2026-01-01'); \
+         INSERT INTO map_legend_stops (plan_id, map_key, seq, label, lat, lon) \
+           VALUES ('{plan_id}', 'day-3.png', 0, 'S', 1.0, 2.0);"
+    ))
+    .expect("seed map rows");
+    let (ok, out) = cli(
+        &["add-day-variant", "1", "--label", "Sunny plan", "--label-zh", "晴天方案",
+          "--main-label", "Rainy plan", "--main-label-zh", "雨天方案"],
+        &plan_id, &dest,
+    );
+    assert!(ok, "add failed: {out}");
+    assert!(
+        out.contains(&format!("would delete trip-dashboard-maps/{plan_id}/day-3.png")),
+        "out={out}"
+    );
+    for tbl in ["map_artifacts", "map_legend_stops"] {
+        assert_eq!(
+            scalar(&format!("SELECT COUNT(*) AS n FROM {tbl} WHERE plan_id='{plan_id}' AND map_key='day-3.png'")),
+            "0",
+            "{tbl} rows for the reused key must be gone"
+        );
+    }
+}

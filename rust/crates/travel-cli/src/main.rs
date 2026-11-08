@@ -68,6 +68,8 @@ mod view_transport;
 mod scaffold_itinerary; // batch 2
 mod populate_itinerary; // batch 2
 mod swap_days;          // batch 2
+mod day_variant;        // add/remove/label day variants
+mod map_objects;        // shared R2 map purge
 mod mark_booked;        // batch 3
 mod sync_bookings;      // batch 3
 mod booking_integrity;  // batch 3 (check-booking-integrity)
@@ -833,6 +835,28 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
 
+        [cmd, rest @ ..] if cmd == "add-day-variant" => {
+            if wants_help(rest, day_variant::ADD_USAGE) { return Ok(()); }
+            plan_resolver::reject_unknown_flags(rest, &["--label", "--label-zh", "--main-label", "--main-label-zh", "--dest", "--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"], &[])?;
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            day_variant::run_add(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-day-variant-label" => {
+            if wants_help(rest, day_variant::LABEL_USAGE) { return Ok(()); }
+            plan_resolver::reject_unknown_flags(rest, &["--label", "--label-zh", "--dest", "--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"], &[])?;
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            day_variant::run_label(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "remove-day-variant" => {
+            if wants_help(rest, day_variant::REMOVE_USAGE) { return Ok(()); }
+            plan_resolver::reject_unknown_flags(rest, &["--dest", "--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"], &[])?;
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            day_variant::run_remove(rest, plan_id).await?;
+            Ok(())
+        }
+
         // batch 3: bookings / status
         [cmd, rest @ ..] if cmd == "mark-booked" => {
             // Reject unknown flags BEFORE resolve_plan_id opens Turso — else a
@@ -1058,7 +1082,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   create-plan <plan_id> --dest <slug> --start <d> --end <d> --airport <IATA> [--region ..] [--nights N]  Create a fast-path plan\n\
   set-dates <start> <end> [reason]\n\
   set-day-theme <day> [theme] [--zh \"<zh>\"]\n\
-  scaffold-itinerary | populate-itinerary | swap-days <dayA> <dayB>\n\
+  scaffold-itinerary | populate-itinerary | swap-days <dayA> <dayB> | add-day-variant | set-day-variant-label | remove-day-variant\n\
   add-activity <day> <session> <title> [--after <id|title>] [--zh \"<zh>\"] [...]\n\
   set-activity-title <day> <session> <activity> <new_title> [--zh \"<zh>\"]\n\
   set-activity-time | set-activity-poi | set-activity-booking | delete-activity\n\
