@@ -834,6 +834,8 @@ h1 {
 .day-variant-body .leg-day { overflow-wrap: anywhere; }
 .day-variant-body .session,
 .day-variant-body .stoplist { padding-left: 0; padding-right: 0; }
+.day-variant-body .route-block,
+.day-variant-body .day-landmarks { margin-left: 0; margin-right: 0; }
 
 /* Weather strip */
 .weather {
@@ -943,14 +945,14 @@ h1 {
 
 /* ---- Today's route (day_route_segments) ---- */
 .route-block {
-  margin: 8px 0 4px;
+  margin: 8px 16px 4px;
   padding: 8px 10px;
   border-radius: 8px;
   background: #f0f9ff;
   border: 1px solid #bae6fd;
 }
 .day-landmarks {
-  margin: 6px 0 4px;
+  margin: 6px 16px 4px;
   padding: 8px 10px;
   border-radius: 8px;
   background: #fefce8;

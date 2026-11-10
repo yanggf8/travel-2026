@@ -438,7 +438,13 @@ fn map_caption(caption: &str) -> String {
 /// `maps_link` field was built by the model from trusted lat/lon (or a
 /// /maps/search/<title> fallback) — render it as the href; esc() guards the
 /// attribute and text.
+///
+/// Every activity becomes a stop, and the session above already prints each
+/// activity's text (with any inline map link) via render_activity_text. A stop
+/// with no maps link, no address and no ticket price would repeat that bullet
+/// word for word, so it is left out; a list with nothing left is omitted.
 pub fn stop_list(stops: &[Stop]) -> String {
+    let stops: Vec<&Stop> = stops.iter().filter(|s| stop_adds_info(s)).collect();
     if stops.is_empty() {
         return String::new();
     }
@@ -478,6 +484,12 @@ pub fn stop_list(stops: &[Stop]) -> String {
     }
     h.push_str("</ul>");
     h
+}
+
+/// Whether a stop shows anything its session bullet does not: a maps link, an
+/// address or a ticket price.
+fn stop_adds_info(s: &Stop) -> bool {
+    !s.maps_link.is_empty() || !s.address.is_empty() || s.cost_estimate > 0
 }
 
 /// `?v=<version>` for a map URL. The version is the R2 object's ETag, reduced to
@@ -684,11 +696,13 @@ mod tests {
 
     #[test]
     fn stop_list_plain_embedded_maps_url_renders_short_label() {
+        // Kept because it carries an address the session bullet does not show.
         let stops = vec![Stop {
             title:
                 "午餐（實際）：安里屋すば\nGoogle Maps：https://www.google.com/maps/search/asatoya"
                     .into(),
             maps_link: "".into(),
+            address: "那覇市安里".into(),
             ..Default::default()
         }];
         let h = stop_list(&stops);
@@ -697,6 +711,24 @@ mod tests {
             !h.contains(">https://www.google.com/maps/search/"),
             "got: {h}"
         );
+    }
+
+    #[test]
+    fn stop_list_drops_stops_that_only_repeat_the_session_bullet() {
+        let bare = |t: &str| Stop { title: t.into(), ..Default::default() };
+        // Nothing but repeats: no list at all.
+        assert_eq!(stop_list(&[bare("紅樹林開車出發"), bare("Kyoto Station dinner")]), "");
+        // A repeat next to stops with a link, an address or a price: only the repeat goes.
+        let stops = vec![
+            bare("紅樹林開車出發"),
+            Stop { title: "Naminoue".into(), maps_link: "https://www.google.com/maps?q=26.2,127.6".into(), ..Default::default() },
+            Stop { title: "西本願寺".into(), address: "Horikawa-dori, Kyoto".into(), ..Default::default() },
+            Stop { title: "天龍寺".into(), cost_estimate: 500, ..Default::default() },
+        ];
+        let h = stop_list(&stops);
+        assert!(!h.contains("紅樹林開車出發"), "got: {h}");
+        assert_eq!(h.matches("<li>").count(), 3, "got: {h}");
+        assert!(h.contains("Naminoue") && h.contains("Horikawa-dori") && h.contains("¥500"), "got: {h}");
     }
 
     #[test]
