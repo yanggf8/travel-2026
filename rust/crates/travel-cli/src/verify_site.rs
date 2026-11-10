@@ -1,6 +1,6 @@
-//! `travel verify-site [--plan-id <id>] [--contact-sheet <dir>]` — read-only
-//! check of what the LIVE dashboard actually serves for each plan
-//! (docs/plans/2026-10-30-verify-site.md, phases 1-3: layers 1-4).
+//! `travel verify-site [--plan-id <id>] [--contact-sheet <dir>] [--render <dir>]`
+//! — read-only check of what the LIVE dashboard actually serves for each plan
+//! (docs/plans/2026-10-30-verify-site.md, phases 1-3: layers 1-4; layer 5).
 //!
 //! Layer 2 (asset / fresh): every expected map key (check-maps-fresh's own key
 //! list) and every other `map_artifacts` key is fetched from
@@ -34,6 +34,16 @@
 //! Layer 4 (`--contact-sheet <dir>`): one thumbnail-grid PNG per plan
 //! (`verify_site_sheet`); advisory, never a verdict.
 //!
+//! Layer 5 (`--render <dir>`, opt-in; `verify_site_render`): the same token
+//! viewer page, opened in a real CDP Chrome (gwebcdb's `bridge-core`, attach-only,
+//! endpoint from `GWEBCDB_CDP_PORT`) in zh/en × 390px/1280px, inside the verify
+//! token's lifetime. FAILs: sideways overflow, broken images, doc links / day
+//! variants / map images present but not shown (or a variant closed), text that
+//! starts left of its card's title text (inset), and text cut at a day card's right
+//! edge (clipped); WARN on unloaded fonts. No CDP Chrome = one FAIL per plan, never
+//! a silent skip. Each summary box and day card is also saved as
+//! `<dir>/<plan>/<lang>-<viewport>-NN.png` (advisory, never a verdict).
+//!
 //! Read-only apart from the run's own verify token rows: no other Turso writes, no
 //! Nominatim/OSRM/Overpass calls, no cookies. Plain-text verdict lines; exits
 //! non-zero iff any FAIL.
@@ -52,9 +62,10 @@ use url::Url;
 
 use crate::snapshot_maps as maps;
 use crate::verify_site_page::{self as page, Lang, LegendRow, SlotFacts};
+use crate::verify_site_render as render;
 use crate::verify_site_sheet::{self as sheet, SheetCell};
 
-pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>]\n  \
+pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>] [--render <dir>]\n  \
 Read-only check of the LIVE dashboard: each map key's live bytes vs map_artifacts \
 (sha256 + size; skipped keys must serve the worker placeholder), input-hash freshness \
 (recomputed from cached geocodes/road legs only), image content (size, geographic \
@@ -63,7 +74,12 @@ and en (page, language, no owner chrome, data-plan-id/data-view, map slots vs \
 map_artifacts via data-map-key, the ?v= map URL bytes, legends vs map_legend_stops, \
 companion/stay images, voucher PDFs, and plan-document PDFs (day/summary placement + sha256)). All live plans by default. One verdict line per \
 check, then a summary; exits 1 on any FAIL. --contact-sheet <dir> also writes \
-<dir>/<plan>.png, a labelled thumbnail grid of the plan's live maps (advisory). The \
+<dir>/<plan>.png, a labelled thumbnail grid of the plan's live maps (advisory). \
+--render <dir> also opens the viewer page in a CDP Chrome (gwebcdb; GWEBCDB_CDP_PORT, \
+default 9222) in zh/en at 390px and 1280px and FAILs on sideways overflow, broken \
+images, hidden doc links/variants/map images, text left of its card's title (inset) \
+or cut at a day card's edge (clipped); no Chrome is a FAIL. It saves each summary box \
+and day card as <dir>/<plan>/<lang>-<viewport>-NN.png (advisory). The \
 viewer page is opened with a verify token minted for this run and deleted right after \
 (fingerprints only). Host: TRAVEL_DASHBOARD_HOST (as share-token).";
 
@@ -86,6 +102,8 @@ pub(crate) enum Next {
     DeleteStale,
     /// Deploy the dashboard worker (the live page predates a markup change).
     Deploy,
+    /// Make a CDP Chrome reachable for the render layer.
+    Chrome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,7 +193,17 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let host = crate::share_token::dashboard_host();
     let nonce = nonce()?;
     let tmp = std::env::temp_dir().join(format!("travel-verify-site-{nonce}.body"));
-    let result = verify_plans(&conn, &plan_ids, &first_plan, &host, &nonce, &tmp, args.contact_sheet.as_deref()).await;
+    let result = verify_plans(
+        &conn,
+        &plan_ids,
+        &first_plan,
+        &host,
+        &nonce,
+        &tmp,
+        args.contact_sheet.as_deref(),
+        args.render.as_deref(),
+    )
+    .await;
     let _ = fs::remove_file(&tmp);
     let tally = result?;
 
@@ -228,11 +256,16 @@ fn format_line(plan: &str, layer: &str, key: &str, check: &Check) -> String {
         Some(Next::Deploy) => line.push_str(
             " → cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy",
         ),
+        Some(Next::Chrome) => line.push_str(
+            " → eval \"$(gwebcdb-session acquire | grep '^export GWEBCDB_CDP_PORT=')\" \
+             (or export GWEBCDB_CDP_PORT=<port> of a running CDP Chrome), then re-run",
+        ),
         None => {}
     }
     line
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn verify_plans(
     conn: &Connection,
     plan_ids: &[String],
@@ -241,6 +274,7 @@ async fn verify_plans(
     nonce: &str,
     tmp: &Path,
     sheet_dir: Option<&Path>,
+    render_dir: Option<&Path>,
 ) -> Result<Tally, String> {
     // The worker answers every unusable /map/* request with one placeholder PNG
     // (HTTP 200). Learn its bytes from a key that cannot exist.
@@ -308,7 +342,7 @@ async fn verify_plans(
             }
         }
 
-        verify_viewer_page(conn, plan, host, tmp, &manifest, &placeholder, &mut tally).await?;
+        verify_viewer_page(conn, plan, host, tmp, &manifest, &placeholder, render_dir, &mut tally).await?;
 
         if let Some(dir) = sheet_dir {
             let path = write_contact_sheet(dir, plan, &cells)?;
@@ -355,7 +389,7 @@ async fn remove_verify_tokens(conn: &Connection, token: Option<&str>) -> Result<
 }
 
 /// Replace every occurrence of the secret with its fingerprint.
-fn redact(text: &str, secret: &str) -> String {
+pub(crate) fn redact(text: &str, secret: &str) -> String {
     if secret.is_empty() {
         return text.to_string();
     }
@@ -426,8 +460,10 @@ async fn has_flights(conn: &Connection, plan_id: &str) -> Result<bool, String> {
         .is_some())
 }
 
-/// Layer 1 for one plan: mint this run's verify token, check the viewer page
-/// through it, and delete it again — whether the checks succeeded or not.
+/// Layer 1 (and layer 5 when `render_dir` is set) for one plan: mint this
+/// run's verify token, check the viewer page through it, and delete it again —
+/// whether the checks succeeded or not.
+#[allow(clippy::too_many_arguments)]
 async fn verify_viewer_page(
     conn: &Connection,
     plan: &str,
@@ -435,12 +471,13 @@ async fn verify_viewer_page(
     tmp: &Path,
     manifest: &HashMap<String, ArtifactRow>,
     placeholder: &[u8],
+    render_dir: Option<&Path>,
     tally: &mut Tally,
 ) -> Result<(), String> {
     let token = crate::share_token::mint_for_plan(conn, plan, VERIFY_CREATED_BY)
         .await
         .map_err(|e| format!("cannot mint this run's verify token for {plan}: {e}"))?;
-    let checked = viewer_page_checks(conn, plan, &token, host, tmp, manifest, placeholder, tally).await;
+    let checked = viewer_page_checks(conn, plan, &token, host, tmp, manifest, placeholder, render_dir, tally).await;
     let fp = crate::share_token::token_fingerprint(&token);
     // The delete outcome is reported even when the checks failed too: a token
     // that survived is the security-relevant half.
@@ -461,7 +498,8 @@ async fn verify_viewer_page(
     }
 }
 
-/// The viewer page (zh + en) through `token`.
+/// The viewer page (zh + en) through `token`; with `render_dir`, also the
+/// rendered page (layer 5) while the token is still alive.
 #[allow(clippy::too_many_arguments)]
 async fn viewer_page_checks(
     conn: &Connection,
@@ -471,6 +509,7 @@ async fn viewer_page_checks(
     tmp: &Path,
     manifest: &HashMap<String, ArtifactRow>,
     placeholder: &[u8],
+    render_dir: Option<&Path>,
     tally: &mut Tally,
 ) -> Result<(), String> {
     let day_numbers = crate::check_maps_fresh::read_day_numbers(conn, plan).await?;
@@ -574,6 +613,20 @@ async fn viewer_page_checks(
     if let Some(doc) = zh_doc {
         extended_checks(&doc, plan, &base, token, tmp, tally, &documents);
     }
+
+    if let Some(dir) = render_dir {
+        let targets = [("zh", plan_url.clone()), ("en", format!("{plan_url}&lang=en"))];
+        let report = render::render_plan(plan, &targets, token, dir).await;
+        for (key, check) in &report.checks {
+            tally.emit(plan, render::LAYER, key, check);
+        }
+        if let Some(n) = report.shots {
+            println!(
+                "render-shots {plan} {} ({n} image(s); advisory, not a verdict)",
+                report.shot_dir.display()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -666,6 +719,7 @@ fn dedup(items: &[String]) -> Vec<&str> {
 pub(crate) struct Args {
     pub(crate) plan: Option<String>,
     pub(crate) contact_sheet: Option<PathBuf>,
+    pub(crate) render: Option<PathBuf>,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -685,6 +739,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--contact-sheet" => {
                 out.contact_sheet = Some(PathBuf::from(value(i, "--contact-sheet")?));
+                i += 2;
+            }
+            "--render" => {
+                out.render = Some(PathBuf::from(value(i, "--render")?));
                 i += 2;
             }
             other => return Err(format!("unexpected argument: {other}\nUsage:\n  {USAGE}")),
@@ -1591,6 +1649,12 @@ mod tests {
         let a = parse_args(&s(&["--contact-sheet", "/tmp/cs", "--plan-id", "p"])).unwrap();
         assert_eq!(a.contact_sheet.as_deref(), Some(Path::new("/tmp/cs")));
         assert!(parse_args(&s(&["--contact-sheet"])).is_err());
+        let a = parse_args(&s(&["--render", "/tmp/rs", "--contact-sheet", "/tmp/cs"])).unwrap();
+        assert_eq!(a.render.as_deref(), Some(Path::new("/tmp/rs")));
+        assert_eq!(a.contact_sheet.as_deref(), Some(Path::new("/tmp/cs")));
+        assert_eq!(parse_args(&s(&["--plan-id", "p"])).unwrap().render, None);
+        assert!(parse_args(&s(&["--render"])).is_err());
+        assert!(parse_args(&s(&["--render", "--plan-id", "p"])).is_err());
         // The token is per run now: the old provisioning flags are gone.
         assert!(parse_args(&s(&["--plan-id", "p", "--provision-token"])).is_err());
     }
@@ -1615,6 +1679,9 @@ mod tests {
         assert!(line.contains("r2 object delete trip-dashboard-maps/p-1/day-3.png --remote"), "{line}");
         let line = format_line("p-1", "ident", "zh", &Check::fail("x", Some(Next::Deploy)));
         assert!(line.contains("npx wrangler deploy"), "{line}");
+        let line = format_line("p-1", "render", "cdp", &Check::fail("no CDP Chrome", Some(Next::Chrome)));
+        assert!(line.starts_with("FAIL p-1 render  cdp  no CDP Chrome → "), "{line}");
+        assert!(line.contains("gwebcdb-session acquire") && line.contains("GWEBCDB_CDP_PORT"), "{line}");
     }
 
     #[test]

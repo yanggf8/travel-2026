@@ -112,6 +112,7 @@ mod snapshot_maps;      // snapshot-maps (Turso → Rust PNG renderer → R2)
 mod verify_site;        // verify-site (read-only check of the LIVE dashboard maps vs Turso)
 mod verify_site_page;   // verify-site layer 1: viewer-page HTML judgements (pure)
 mod verify_site_sheet;  // verify-site layer 4: --contact-sheet thumbnail grid
+mod verify_site_render; // verify-site layer 5: --render rendered-page checks (CDP Chrome)
 mod road_leg;           // road-leg list|refetch — OSRM road-geometry cache management
 mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
 mod clear_accommodation; // clear-accommodation — cancel domestic accommodation (P4 -> selecting)
@@ -803,7 +804,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             if wants_help(rest, verify_site::USAGE) {
                 return Ok(());
             }
-            plan_resolver::reject_unknown_flags(rest, &["--plan-id", "--contact-sheet"], &[])?;
+            plan_resolver::reject_unknown_flags(rest, &["--plan-id", "--contact-sheet", "--render"], &[])?;
             verify_site::run(rest).await
         }
         // OSRM road-geometry cache management (global, no --plan-id).
