@@ -6,9 +6,10 @@
 // (timeline scope), NOT catalog_audit.rs.
 
 use crate::cascade::common::{
-    insert_event, insert_kv_rows, next_timeline_sort_order, now_db_datetime, now_rfc3339,
-    read_version, record_operation,
+    begin_immediate, finish_tx, insert_event, insert_kv_rows, next_timeline_sort_order,
+    now_db_datetime, now_rfc3339, read_version, record_operation,
 };
+use crate::cascade::status_machine::{self, Hop, Ladder, Mode, P3, P34};
 
 pub const STAGES: &[&str] = &["shaping", "itinerary", "shop", "publish"];
 pub const DECISIONS: &[&str] = &["enter", "skip", "mode"];
@@ -27,9 +28,42 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         .await
         .map_err(|e| format!("failed to connect to Turso (write tier): {e}"))?;
 
-    let version_before = read_version(&conn, &plan_id).await?;
-    let version_after = version_before + 1;
-    let sort_order = next_timeline_sort_order(&conn, &plan_id).await?;
+    // Domestic defer: when the caller records `shop mode --mode defer` for a
+    // domestic destination, also move the dest-scoped package/transport
+    // processes (P3_4, P3) to `skipped` so `status --full` immediately reflects
+    // "shop deferred". P4 accommodation is NOT touched — a domestic trip still
+    // books a stay (set-accommodation). A P3_4/P3 already booked/confirmed is
+    // left alone (defer means "no shopping", not "forget a booking"). Planned in
+    // a preflight before any write; any error propagates and nothing is written.
+    let defer = parsed.stage == "shop"
+        && parsed.decision == "mode"
+        && parsed.mode.as_deref() == Some("defer");
+    let mut skips: Vec<(String, &'static str, Option<String>, Vec<Hop>)> = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
+    if defer {
+        let dest = crate::cascade::common::resolve_active_destination(&conn, &plan_id, None).await?;
+        if is_domestic_destination(&conn, &dest).await {
+            for pid in [P34, P3] {
+                let cur = travel_db::repo::process_statuses::get(&conn, &plan_id, &dest, pid).await?;
+                if let Some(s @ ("booked" | "confirmed")) = cur.as_deref() {
+                    kept.push(format!("{pid} stays {s}"));
+                    continue;
+                }
+                // A missing row plans as pending; it is then inserted directly
+                // (one status_changed with from_state NULL).
+                let planned = status_machine::plan_path(
+                    Ladder::Booking,
+                    cur.as_deref().unwrap_or("pending"),
+                    "skipped",
+                    Mode::Any,
+                )
+                .map_err(|e| format!("{dest}.{pid}: {e}; nothing was written"))?;
+                let hops = if cur.is_some() { planned } else { Vec::new() };
+                skips.push((dest.clone(), pid, cur, hops));
+            }
+        }
+    }
+
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
 
@@ -55,84 +89,64 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         summary.push_str(&format!(" reason={r}"));
     }
 
-    insert_event(
-        &conn,
-        &plan_id,
-        "timeline",
-        "",
-        "",
-        sort_order,
-        "flow_decision",
-        &now_iso,
-        None,
-        None,
-    )
-    .await?;
+    begin_immediate(&conn, "flow-decision").await?;
+    let written: Result<(), String> = async {
+        let version_before = read_version(&conn, &plan_id).await?;
+        let version_after = version_before + 1;
+        let sort_order = next_timeline_sort_order(&conn, &plan_id).await?;
 
-    insert_kv_rows(
-        &conn,
-        &plan_id,
-        "timeline",
-        "",
-        "",
-        sort_order,
-        &kv,
-    )
-    .await?;
-
-    // Domestic defer: when the caller records `shop mode --mode defer` for a
-    // domestic destination, also flip the dest-scoped package/transport process
-    // so `status --full` immediately reflects "shop deferred" instead of staying
-    // stuck on `pending` until a manual `set-process-status` is run. This is the
-    // domestic analogue of international's select-offer → cascade populate.
-    // Best-effort and idempotent: only act on `shop` + `defer` + domestic dest;
-    // any failure here must not undo the flow_decision event already written above.
-    if parsed.stage == "shop"
-        && parsed.decision == "mode"
-        && parsed.mode.as_deref() == Some("defer")
-    {
-        if let Ok(dest) = crate::cascade::common::resolve_active_destination(
-            &conn, &plan_id, None,
+        insert_event(
+            &conn,
+            &plan_id,
+            "timeline",
+            "",
+            "",
+            sort_order,
+            "flow_decision",
+            &now_iso,
+            None,
+            None,
         )
-        .await
-        {
-            if is_domestic_destination(&conn, &dest).await {
-                let defer_targets = ["process_3_4_packages", "process_3_transportation"];
-                for pid in defer_targets {
-                    let _ = advance_process_to_skipped(&conn, &plan_id, &dest, pid).await;
-                }
-                // For domestic lodging: only defer if P4 is still pending/selecting
-                // (already booked → don't clobber the stay).
-                let p4 = read_process_status(&conn, &plan_id, &dest, "process_4_accommodation")
-                    .await
-                    .unwrap_or(None);
-                if matches!(p4.as_deref(), None | Some("pending") | Some("selecting") | Some("researching") | Some("researched")) {
-                    let _ = advance_process_to_skipped(
-                        &conn, &plan_id, &dest, "process_4_accommodation",
-                    )
-                    .await;
-                }
-            }
-        }
-    }
+        .await?;
 
-    record_operation(
-        &conn,
-        &plan_id,
-        "flow-decision",
-        &summary,
-        version_before,
-        version_after,
-        &now_db,
-    )
-    .await?;
+        insert_kv_rows(&conn, &plan_id, "timeline", "", "", sort_order, &kv).await?;
+
+        for (dest, pid, cur, hops) in &skips {
+            status_machine::apply_path(
+                &conn,
+                &plan_id,
+                dest,
+                pid,
+                cur.as_deref(),
+                hops,
+                "skipped",
+                &now_iso,
+                &now_db,
+            )
+            .await?;
+        }
+
+        record_operation(
+            &conn,
+            &plan_id,
+            "flow-decision",
+            &summary,
+            version_before,
+            version_after,
+            &now_db,
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    finish_tx(&conn, "flow-decision", written).await?;
 
     println!("✅ flow-decision recorded: {summary}");
-    if parsed.stage == "shop"
-        && parsed.decision == "mode"
-        && parsed.mode.as_deref() == Some("defer")
-    {
-        println!("   domestic shop deferred → P3/P4 marked skipped (re-run with --mode shop to re-enter selection)");
+    if !skips.is_empty() {
+        println!("   domestic shop deferred → P3_4/P3 marked skipped; P4 accommodation untouched (book the stay with set-accommodation; re-run with --mode shop to re-enter selection)");
+    }
+    for k in &kept {
+        println!("   domestic shop deferred → {k} (already booked; not skipped)");
     }
     Ok(())
 }
@@ -295,81 +309,6 @@ async fn is_domestic_destination(conn: &libsql::Connection, dest: &str) -> bool 
     // Fallback: non-japan slugs (jiufen, etc.) are domestic; known JP slugs contain _2026 with JP currency pattern.
     // If unknown, treat as domestic only if slug doesn't look like a Japan trio.
     !matches!(dest, "tokyo_2026" | "kyoto_2026" | "osaka_2026" | "osaka_kyoto_2026" | "nagoya_2026" | "okinawa_2026")
-}
-
-async fn read_process_status(
-    conn: &libsql::Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<Option<String>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT status FROM process_statuses WHERE plan_id = ?1 AND destination = ?2 AND process_id = ?3",
-            libsql::params![plan_id.to_string(), dest.to_string(), process_id.to_string()],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let s: String = row.get(0).unwrap_or_default();
-        return Ok(if s.is_empty() { None } else { Some(s) });
-    }
-    Ok(None)
-}
-
-async fn advance_process_to_skipped(
-    conn: &libsql::Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<(), String> {
-    let cur = read_process_status(conn, plan_id, dest, process_id)
-        .await?
-        .unwrap_or_else(|| "pending".to_string());
-    if cur == "skipped" {
-        return Ok(());
-    }
-    // Use shared transition graph to find shortest path to skipped.
-    let hops = {
-        use std::collections::{HashSet, VecDeque};
-        let mut queue: VecDeque<(&str, Vec<(&str, &str)>)> = VecDeque::new();
-        let mut visited: HashSet<&str> = HashSet::new();
-        // Seed with current — need static str for visited; leak the owned cur for queue search by matching against known literals.
-        let start: &str = match cur.as_str() {
-            "pending" | "researching" | "researched" | "selecting" | "selected" | "populated" | "booking" | "booked" | "confirmed" | "skipped" => cur.as_str(),
-            _ => "pending",
-        };
-        queue.push_back((start, Vec::new()));
-        visited.insert(start);
-        let mut found: Option<Vec<(&str, &str)>> = None;
-        while let Some((node, path)) = queue.pop_front() {
-            for &next in crate::cascade::common::allowed_transition_targets(node) {
-                if visited.contains(next) {
-                    continue;
-                }
-                let mut np = path.clone();
-                np.push((node, next));
-                if next == "skipped" {
-                    found = Some(np);
-                    break;
-                }
-                visited.insert(next);
-                queue.push_back((next, np));
-            }
-            if found.is_some() {
-                break;
-            }
-        }
-        found.ok_or_else(|| format!("no legal path from {cur} to skipped"))?
-    };
-    let now_iso = crate::cascade::common::now_rfc3339();
-    let now_db = crate::cascade::common::now_db_datetime();
-    for (from, to) in hops {
-        crate::cascade::common::validate_transition(Some(from), to, dest, process_id)?;
-        travel_db::repo::process_statuses::upsert(conn, plan_id, dest, process_id, to, &now_db).await?;
-        crate::cascade::common::emit_status_changed(conn, plan_id, dest, process_id, Some(from), to, &now_iso).await?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

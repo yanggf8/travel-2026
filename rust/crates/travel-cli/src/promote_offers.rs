@@ -9,8 +9,9 @@
 //
 // Design + Codex review: docs/superpowers/specs/2026-06-28-promote-offers-bridge-design.md
 //
-// Structurally parallels import_offers.rs (merge-by-id delete + reinsert, P3_4→researched
-// upsert, events, audit triad) but reads the `offers` TABLE instead of scrape JSON files.
+// Structurally parallels import_offers.rs (merge-by-id delete + reinsert, P3_4 raised to
+// researched — forward only, never regressed — events, audit triad, one transaction) but
+// reads the `offers` TABLE instead of scrape JSON files.
 //
 // Differences from import_offers.rs (deliberate):
 //   - reads `offers` (latest snapshot per id via MAX(scraped_at)) not files.
@@ -22,9 +23,10 @@
 //     (no fabrication from the offer-id string).
 
 use crate::cascade::common::{
-    insert_event, insert_kv_rows, next_dest_process_sort_order, next_timeline_sort_order,
-    now_db_datetime, now_rfc3339, read_version, record_operation,
+    begin_immediate, finish_tx, insert_event, insert_kv_rows, next_dest_process_sort_order,
+    next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version, record_operation,
 };
+use crate::cascade::status_machine::{self, Ladder};
 use libsql::Connection;
 use travel_db::repo::plan_offers::{
     self, PlanOfferFlightWrite, PlanOfferHotelWrite, PlanOfferWrite,
@@ -206,101 +208,119 @@ pub async fn run(opts: PromoteOpts) -> Result<(), String> {
         return Ok(());
     }
 
+    // --- Preflight: P3_4 → researched only from below (or a missing row); never regresses. ---
+    let p34_from = travel_db::repo::process_statuses::get(&conn, &opts.plan_id, &opts.dest, P34).await?;
+    let p34_move = status_machine::raise_to(Ladder::Booking, p34_from.as_deref(), "researched")
+        .map_err(|e| format!("{}.{P34}: {e}; nothing was written", opts.dest))?;
+
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
-    let version_before = read_version(&conn, &opts.plan_id).await?;
-    let version_after = version_before + 1;
+    begin_immediate(&conn, "promote-offers").await?;
+    let written: Result<(), String> = async {
+        let version_before = read_version(&conn, &opts.plan_id).await?;
+        let version_after = version_before + 1;
 
-    // --- Write each promotable offer (merge-by-id: delete then reinsert). ---
-    for o in &to_write {
-        plan_offers::delete_offer_rows(&conn, &opts.plan_id, &opts.dest, &o.id).await?;
-        let write = build_plan_offer_write(&opts.plan_id, &opts.dest, o, opts.pax);
-        plan_offers::insert_offer(&conn, &write, &now_db).await?;
-    }
-
-    // --- P3_4 → researched if null/pending/researching (UPSERT). ---
-    let current_status = read_process_status(&conn, &opts.plan_id, &opts.dest, P34).await?;
-    let new_status: &str = match current_status.as_deref() {
-        None | Some("pending") | Some("researching") => "researched",
-        Some(s) => s,
-    };
-    travel_db::repo::process_statuses::upsert(&conn, &opts.plan_id, &opts.dest, P34, new_status, &now_db)
-        .await?;
-
-    // --- Events: package_offers_promoted (dest_process + timeline), per source. ---
-    for src in &order {
-        let count = promoted.get(src).copied().unwrap_or(0);
-        if count == 0 {
-            continue;
+        // --- Write each promotable offer (merge-by-id: delete then reinsert). ---
+        for o in &to_write {
+            plan_offers::delete_offer_rows(&conn, &opts.plan_id, &opts.dest, &o.id).await?;
+            let write = build_plan_offer_write(&opts.plan_id, &opts.dest, o, opts.pax);
+            plan_offers::insert_offer(&conn, &write, &now_db).await?;
         }
-        let kv: Vec<(&str, String)> = vec![
-            ("source_id", src.clone()),
-            ("offers_found", count.to_string()),
-            ("note", format!("promote-offers: {src}")),
-        ];
 
-        let dest_so =
-            next_dest_process_sort_order(&conn, &opts.plan_id, &opts.dest, P34).await?;
-        insert_event(
-            &conn,
-            &opts.plan_id,
-            "dest_process",
-            &opts.dest,
-            P34,
-            dest_so,
-            "package_offers_promoted",
-            &now_iso,
-            None,
-            None,
-        )
-        .await?;
-        insert_kv_rows(&conn, &opts.plan_id, "dest_process", &opts.dest, P34, dest_so, &kv)
+        // --- P3_4 → researched (status_changed per hop; missing row inserted directly). ---
+        if let Some(hops) = &p34_move {
+            status_machine::apply_path(
+                &conn,
+                &opts.plan_id,
+                &opts.dest,
+                P34,
+                p34_from.as_deref(),
+                hops,
+                "researched",
+                &now_iso,
+                &now_db,
+            )
             .await?;
+        }
 
-        let tl_so = next_timeline_sort_order(&conn, &opts.plan_id).await?;
-        insert_event(
+        // --- Events: package_offers_promoted (dest_process + timeline), per source. ---
+        for src in &order {
+            let count = promoted.get(src).copied().unwrap_or(0);
+            if count == 0 {
+                continue;
+            }
+            let kv: Vec<(&str, String)> = vec![
+                ("source_id", src.clone()),
+                ("offers_found", count.to_string()),
+                ("note", format!("promote-offers: {src}")),
+            ];
+
+            let dest_so =
+                next_dest_process_sort_order(&conn, &opts.plan_id, &opts.dest, P34).await?;
+            insert_event(
+                &conn,
+                &opts.plan_id,
+                "dest_process",
+                &opts.dest,
+                P34,
+                dest_so,
+                "package_offers_promoted",
+                &now_iso,
+                None,
+                None,
+            )
+            .await?;
+            insert_kv_rows(&conn, &opts.plan_id, "dest_process", &opts.dest, P34, dest_so, &kv)
+                .await?;
+
+            let tl_so = next_timeline_sort_order(&conn, &opts.plan_id).await?;
+            insert_event(
+                &conn,
+                &opts.plan_id,
+                "timeline",
+                "",
+                P34,
+                tl_so,
+                "package_offers_promoted",
+                &now_iso,
+                None,
+                None,
+            )
+            .await?;
+            insert_kv_rows(&conn, &opts.plan_id, "timeline", "", P34, tl_so, &kv).await?;
+        }
+
+        // --- Audit triad back-half: operation_runs + plans.version (shared helper). ---
+        let summary = format!(
+            "{}: {}",
+            opts.dest,
+            order
+                .iter()
+                .filter_map(|s| {
+                    let c = promoted.get(s).copied().unwrap_or(0);
+                    if c > 0 {
+                        Some(format!("{s}:{c}"))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        record_operation(
             &conn,
             &opts.plan_id,
-            "timeline",
-            "",
-            P34,
-            tl_so,
-            "package_offers_promoted",
-            &now_iso,
-            None,
-            None,
+            "promote-offers",
+            &summary,
+            version_before,
+            version_after,
+            &now_db,
         )
         .await?;
-        insert_kv_rows(&conn, &opts.plan_id, "timeline", "", P34, tl_so, &kv).await?;
+        Ok(())
     }
-
-    // --- Audit triad back-half: operation_runs + plans.version (shared helper). ---
-    let summary = format!(
-        "{}: {}",
-        opts.dest,
-        order
-            .iter()
-            .filter_map(|s| {
-                let c = promoted.get(s).copied().unwrap_or(0);
-                if c > 0 {
-                    Some(format!("{s}:{c}"))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    record_operation(
-        &conn,
-        &opts.plan_id,
-        "promote-offers",
-        &summary,
-        version_before,
-        version_after,
-        &now_db,
-    )
-    .await?;
+    .await;
+    finish_tx(&conn, "promote-offers", written).await?;
 
     println!("✅ Saved to Turso (plan_offers).");
     eprintln!(
@@ -460,29 +480,6 @@ fn build_plan_offer_write(
     }
 }
 
-async fn read_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<Option<String>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT status FROM process_statuses \
-             WHERE plan_id = ?1 AND destination = ?2 AND process_id = ?3",
-            libsql::params![plan_id.to_string(), dest.to_string(), process_id.to_string()],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let status: String = row.get(0).unwrap_or_default();
-        if status.is_empty() {
-            return Ok(None);
-        }
-        return Ok(Some(status));
-    }
-    Ok(None)
-}
 
 /// Map a libsql column read to Option<String>, treating NULL/error and the empty
 /// string as None (matches select_offer.rs::opt).

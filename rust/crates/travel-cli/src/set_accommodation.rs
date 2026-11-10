@@ -5,16 +5,21 @@
 //   1. validate --hotel / --room-type / optional --price (+ --date shape)
 //   2. resolve dest via `cascade::common::resolve_active_destination` (fail loud)
 //   3. verify `domestic_accommodations` contains the room, or at least the hotel when price is unknown
-//   4. INSERT/UPSERT `bookings_current` (category=accommodation, title="Hotel Room", status=booked, optional price_twd)
-//   5. advance `process_statuses` P4 (process_4_accommodation) to `booked` via shortest-legal hops
-//      (emit_status_changed per hop + record_operation once)
-//   6. plain-text output: ✅ Booked accommodation: <hotel> <room> TWD <price> for <dest> plan <plan_id>
+//   4. preflight: plan P4 (process_4_accommodation) → `booked` with
+//      `status_machine::plan_path(.., Mode::Forward)` BEFORE any write — a P4 already
+//      `confirmed` is past booked and is refused; a missing row is inserted directly
+//   5. one BEGIN IMMEDIATE … COMMIT: INSERT/UPSERT `bookings_current` (category=accommodation,
+//      title="Hotel Room", status=booked, optional price_twd) + the legacy `bookings` row,
+//      the P4 hops (status_changed per hop), ONE `accommodation_booking_updated` domain event
+//      (KV hotel/price/date — written even with no status hop, so a price correction on a
+//      booked stay is audited), and record_operation
+//   6. plain-text output after COMMIT: ✅ Booked accommodation: <hotel> <room> TWD <price> for <dest> plan <plan_id>
 
 use crate::cascade::common::{
-    emit_status_changed, now_db_datetime, now_rfc3339, read_version, record_operation,
-    resolve_active_destination, validate_transition,
+    begin_immediate, emit_event_both, finish_tx, now_db_datetime, now_rfc3339, read_version,
+    record_operation, resolve_active_destination,
 };
-use std::collections::{HashSet, VecDeque};
+use crate::cascade::status_machine::{self, Ladder, Mode, P4};
 
 #[derive(Debug)]
 struct Args {
@@ -53,48 +58,67 @@ pub async fn run(raw: &[String], plan_id: String) -> Result<(), String> {
         return Err(msg);
     }
 
+    // Preflight: the P4 path to booked, before any write.
+    let current = travel_db::repo::process_statuses::get(&conn, &plan_id, &dest, P4).await?;
+    let target = "booked";
+    let hops = match current.as_deref() {
+        None => Vec::new(),
+        Some(cur) => status_machine::plan_path(Ladder::Booking, cur, target, Mode::Forward).map_err(|e| {
+            if cur == "confirmed" {
+                format!(
+                    "{dest}.{P4} is already confirmed (past booked); set-accommodation only moves P4 forward, nothing was written ({e}). To correct a confirmed stay, reopen it first: travel set-process-status p4 booked --dest {dest} --plan-id {plan_id}"
+                )
+            } else {
+                format!("{dest}.{P4}: {e}; nothing was written")
+            }
+        })?,
+    };
+
     // Ensure bookings_current category CHECK allows 'accommodation' (live DB may still have
     // the 3-value CHECK). Best-effort idempotent widen: rebuild if needed.
     ensure_accommodation_category(&conn).await;
 
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
-    let version_before = read_version(&conn, &plan_id).await?;
-    let version_after = version_before + 1;
+    let price_text = args.price.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string());
 
-    // 4. UPSERT bookings_current (accommodation).
-    let booking_key = format!("{plan_id}:{dest}:{}:{}", args.hotel, args.room_type)
-        .replace(' ', "_");
-    let title = format!("{} {}", args.hotel, args.room_type);
-    let row = travel_db::repo::bookings::BookingCurrentWrite {
-        booking_key: booking_key.clone(),
-        trip_id: plan_id.clone(),
-        destination: dest.clone(),
-        category: "accommodation".to_string(),
-        subtype: None,
-        title: title.clone(),
-        status: "booked".to_string(),
-        reference: None,
-        book_by: None,
-        booked_at: Some(now_iso.clone()),
-        source_id: None,
-        offer_id: None,
-        selected_date: args.date.clone(),
-        price_amount: args.price,
-        price_currency: "TWD".to_string(),
-        origin_path: "set-accommodation".to_string(),
-        payload_kv: vec![
-            ("hotel".to_string(), args.hotel.clone()),
-            ("room_type".to_string(), args.room_type.clone()),
-        ],
-    };
-    travel_db::repo::bookings::upsert_current(&conn, &row).await?;
+    begin_immediate(&conn, "set-accommodation").await?;
+    let written: Result<(), String> = async {
+        let version_before = read_version(&conn, &plan_id).await?;
+        let version_after = version_before + 1;
 
-    // Also keep legacy `bookings` row for backward-compat viewers (some dashboards read it).
-    // PK is (destination, offer_id) — synthesize offer_id from booking_key.
-    let legacy_offer_id = format!("domestic:{}", booking_key);
-    let _ = conn
-        .execute(
+        // UPSERT bookings_current (accommodation).
+        let booking_key = format!("{plan_id}:{dest}:{}:{}", args.hotel, args.room_type)
+            .replace(' ', "_");
+        let title = format!("{} {}", args.hotel, args.room_type);
+        let row = travel_db::repo::bookings::BookingCurrentWrite {
+            booking_key: booking_key.clone(),
+            trip_id: plan_id.clone(),
+            destination: dest.clone(),
+            category: "accommodation".to_string(),
+            subtype: None,
+            title: title.clone(),
+            status: "booked".to_string(),
+            reference: None,
+            book_by: None,
+            booked_at: Some(now_iso.clone()),
+            source_id: None,
+            offer_id: None,
+            selected_date: args.date.clone(),
+            price_amount: args.price,
+            price_currency: "TWD".to_string(),
+            origin_path: "set-accommodation".to_string(),
+            payload_kv: vec![
+                ("hotel".to_string(), args.hotel.clone()),
+                ("room_type".to_string(), args.room_type.clone()),
+            ],
+        };
+        travel_db::repo::bookings::upsert_current(&conn, &row).await?;
+
+        // Also keep legacy `bookings` row for backward-compat viewers (some dashboards read it).
+        // PK is (destination, offer_id) — synthesize offer_id from booking_key.
+        let legacy_offer_id = format!("domestic:{}", booking_key);
+        conn.execute(
             "INSERT INTO bookings (destination, offer_id, selected_date, price_per_person, price_total, currency, status, hotel_name, selected_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?4, 'TWD', 'booked', ?5, ?6, ?6) \
              ON CONFLICT(destination, offer_id) DO UPDATE SET selected_date=excluded.selected_date, price_per_person=excluded.price_per_person, price_total=excluded.price_total, status='booked', hotel_name=excluded.hotel_name, selected_at=excluded.selected_at, updated_at=excluded.updated_at",
@@ -110,44 +134,61 @@ pub async fn run(raw: &[String], plan_id: String) -> Result<(), String> {
         .await
         .map_err(|e| format!("bookings legacy upsert failed: {e}"))?;
 
-    // 5. Advance P4 to booked via shortest-legal hops.
-    let current = read_process_status(&conn, &plan_id, &dest, "process_4_accommodation").await?;
-    let target = "booked";
-    let hops = match current.as_deref() {
-        None => {
-            // No row yet — create directly as booked (no prior to validate).
-            travel_db::repo::process_statuses::upsert(&conn, &plan_id, &dest, "process_4_accommodation", target, &now_db).await?;
-            emit_status_changed(&conn, &plan_id, &dest, "process_4_accommodation", None, target, &now_iso).await?;
-            vec![]
-        }
-        Some(cur) if cur == target => {
-            // Already booked — still ensure booking row above, but no status hops.
-            vec![]
-        }
-        Some(cur) => {
-            let hops = legal_status_path(&cur, target)?;
-            for hop in &hops {
-                validate_transition(Some(hop.from), hop.to, &dest, "process_4_accommodation")?;
-                travel_db::repo::process_statuses::upsert(&conn, &plan_id, &dest, "process_4_accommodation", hop.to, &now_db).await?;
-                emit_status_changed(&conn, &plan_id, &dest, "process_4_accommodation", Some(hop.from), hop.to, &now_iso).await?;
-            }
-            hops
-        }
-    };
-    let _ = hops;
+        // P4 → booked (no row yet: inserted directly; already booked: no hop).
+        status_machine::apply_path(
+            &conn,
+            &plan_id,
+            &dest,
+            P4,
+            current.as_deref(),
+            &hops,
+            target,
+            &now_iso,
+            &now_db,
+        )
+        .await?;
 
-    record_operation(
-        &conn,
-        &plan_id,
-        "set-accommodation",
-        &format!("{dest} {} {} TWD {}", args.hotel, args.room_type, args.price.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string())),
-        version_before,
-        version_after,
-        &now_db,
-    )
-    .await?;
+        // The booking change itself, even with no status hop (e.g. a price correction).
+        let kv: Vec<(&str, String)> = vec![
+            ("hotel", args.hotel.clone()),
+            ("price", price_text.clone()),
+            ("date", args.date.clone().unwrap_or_else(|| "unknown".to_string())),
+        ];
+        emit_event_both(
+            &conn,
+            &plan_id,
+            &dest,
+            P4,
+            "accommodation_booking_updated",
+            &now_iso,
+            None,
+            None,
+            &kv,
+        )
+        .await?;
 
-    println!("✅ Booked accommodation: {} {} TWD {} for {dest} plan {plan_id}", args.hotel, args.room_type, args.price.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string()));
+        record_operation(
+            &conn,
+            &plan_id,
+            "set-accommodation",
+            &format!("{dest} {} {} TWD {price_text}", args.hotel, args.room_type),
+            version_before,
+            version_after,
+            &now_db,
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    finish_tx(&conn, "set-accommodation", written).await?;
+
+    println!("✅ Booked accommodation: {} {} TWD {price_text} for {dest} plan {plan_id}", args.hotel, args.room_type);
+    if !hops.is_empty() {
+        println!(
+            "   P4 accommodation: {}",
+            status_machine::format_path(current.as_deref().unwrap_or(target), &hops, " → ")
+        );
+    }
     Ok(())
 }
 
@@ -262,77 +303,6 @@ async fn find_accommodation(
         return Ok(Some(id));
     }
     Ok(None)
-}
-
-async fn read_process_status(
-    conn: &libsql::Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<Option<String>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT status FROM process_statuses WHERE plan_id = ?1 AND destination = ?2 AND process_id = ?3",
-            libsql::params![plan_id.to_string(), dest.to_string(), process_id.to_string()],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let s: String = row.get(0).unwrap_or_default();
-        return Ok(if s.is_empty() { None } else { Some(s) });
-    }
-    Ok(None)
-}
-
-fn status_literal(s: &str) -> Option<&'static str> {
-    match s {
-        "pending" => Some("pending"),
-        "researching" => Some("researching"),
-        "researched" => Some("researched"),
-        "selecting" => Some("selecting"),
-        "selected" => Some("selected"),
-        "populated" => Some("populated"),
-        "booking" => Some("booking"),
-        "booked" => Some("booked"),
-        "confirmed" => Some("confirmed"),
-        "skipped" => Some("skipped"),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StatusHop {
-    from: &'static str,
-    to: &'static str,
-}
-
-fn legal_status_path(current: &str, target: &str) -> Result<Vec<StatusHop>, String> {
-    if current == target {
-        return Ok(Vec::new());
-    }
-    let start = status_literal(current).ok_or_else(|| format!("unknown current status: {current}"))?;
-    let end = status_literal(target).ok_or_else(|| format!("unknown target status: {target}"))?;
-
-    let mut queue: VecDeque<(&'static str, Vec<StatusHop>)> = VecDeque::new();
-    let mut visited: HashSet<&'static str> = HashSet::new();
-    queue.push_back((start, Vec::new()));
-    visited.insert(start);
-
-    while let Some((node, path)) = queue.pop_front() {
-        for &next in crate::cascade::common::allowed_transition_targets(node) {
-            if visited.contains(next) {
-                continue;
-            }
-            let mut new_path = path.clone();
-            new_path.push(StatusHop { from: node, to: next });
-            if next == end {
-                return Ok(new_path);
-            }
-            visited.insert(next);
-            queue.push_back((next, new_path));
-        }
-    }
-    Err(format!("no legal status path from {current} to {target}"))
 }
 
 /// Ensure `bookings_current.category` CHECK allows 'accommodation'.

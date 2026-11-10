@@ -16,10 +16,14 @@ use common::{bin, db_exec, is_credless, nanos, seed_plan, teardown_plan, Guard};
 static SELECT_OFFER_CASCADE_LOCK: Mutex<()> = Mutex::new(());
 
 fn seed_process_statuses(plan: &str, dest: &str) {
+    seed_process_statuses_with(plan, dest, "pending");
+}
+
+fn seed_process_statuses_with(plan: &str, dest: &str, p4: &str) {
     for (process_id, status) in [
         ("process_3_4_packages", "researched"),
         ("process_3_transportation", "pending"),
-        ("process_4_accommodation", "pending"),
+        ("process_4_accommodation", p4),
     ] {
         db_exec(&format!(
             "INSERT OR REPLACE INTO process_statuses \
@@ -362,4 +366,129 @@ async fn select_offer_writes_full_package_cascade_surface() {
     let version = db_exec(&format!("SELECT version AS value_text FROM plans WHERE plan_id = '{plan}'"))
         .expect("creds");
     assert_eq!(version.scalar().as_deref(), Some("8"), "plans.version should bump by one");
+}
+
+fn scalar(sql: &str) -> Option<String> {
+    db_exec(sql).and_then(|r| r.scalar())
+}
+
+/// The select-offer write surface in one line: selection, legs, hotel, statuses,
+/// events, audit, version.
+fn write_surface(plan: &str, dest: &str) -> String {
+    scalar(&format!(
+        "SELECT \
+            (SELECT COUNT(*) FROM plan_offer_selection WHERE plan_id = '{plan}') || '|' || \
+            (SELECT COUNT(*) || ':' || COALESCE(MAX(flight_number), '') FROM flight_legs WHERE plan_id = '{plan}') || '|' || \
+            (SELECT COALESCE(MAX(name), '') FROM hotels WHERE plan_id = '{plan}') || '|' || \
+            (SELECT COUNT(*) FROM hotel_access_lines WHERE plan_id = '{plan}') || '|' || \
+            (SELECT GROUP_CONCAT(process_id || '=' || status, ',') FROM \
+               (SELECT process_id, status FROM process_statuses WHERE plan_id = '{plan}' \
+                AND destination = '{dest}' ORDER BY process_id)) || '|' || \
+            (SELECT COUNT(*) FROM plan_events WHERE plan_id = '{plan}') || '|' || \
+            (SELECT COUNT(*) FROM operation_runs WHERE plan_id = '{plan}') || '|' || \
+            (SELECT version FROM plans WHERE plan_id = '{plan}') AS v"
+    ))
+    .unwrap_or_default()
+}
+
+/// A booked P4 cannot be repopulated by select-offer: the preflight refuses
+/// BEFORE any write — selection, flight legs, hotel and statuses unchanged.
+#[tokio::test]
+async fn select_offer_refuses_booked_p4_with_no_writes() {
+    let _guard = SELECT_OFFER_CASCADE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if db_exec("SELECT 1").is_none() {
+        return;
+    }
+    let tag = nanos();
+    let plan = format!("zz_test_{tag}_so_booked");
+    let dest = format!("zz_test_{tag}_d");
+    let offer = format!("zz_test_{tag}_offer");
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.clone());
+        move || teardown_plan(&plan, &dest)
+    });
+    seed_plan(&plan, &dest, 7);
+    seed_process_statuses_with(&plan, &dest, "booked");
+    seed_offer(&plan, &dest, &offer, "2026-09-04");
+    seed_stale_populated_rows(&plan, &dest);
+    let before = write_surface(&plan, &dest);
+    assert!(before.contains("Old Hotel") && before.contains("OLD999"), "seeded; {before}");
+
+    let (ok, out, err) = run_select_offer(&plan, &offer, "2026-09-04");
+    if !ok && is_credless(&err) {
+        return;
+    }
+    assert!(!ok, "a booked P4 must refuse select-offer; out={out}");
+    assert!(err.contains("process_4_accommodation"), "names the process; err={err}");
+    assert!(err.contains("booked"), "names the status; err={err}");
+    assert_eq!(write_surface(&plan, &dest), before, "nothing may be written");
+}
+
+/// A re-run with another offer records the new selection (offer_selected, the
+/// populate rows, the audit) but emits no from==to status_changed event.
+#[tokio::test]
+async fn select_offer_rerun_logs_no_self_loop_but_records_the_new_offer() {
+    let _guard = SELECT_OFFER_CASCADE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if db_exec("SELECT 1").is_none() {
+        return;
+    }
+    let tag = nanos();
+    let plan = format!("zz_test_{tag}_so_rerun");
+    let dest = format!("zz_test_{tag}_d");
+    let offer_a = format!("zz_test_{tag}_a");
+    let offer_b = format!("zz_test_{tag}_b");
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.clone());
+        move || teardown_plan(&plan, &dest)
+    });
+    seed_plan(&plan, &dest, 7);
+    seed_process_statuses(&plan, &dest);
+    seed_offer(&plan, &dest, &offer_a, "2026-09-04");
+    seed_offer(&plan, &dest, &offer_b, "2026-09-04");
+
+    let (ok, out, err) = run_select_offer(&plan, &offer_a, "2026-09-04");
+    if !ok && is_credless(&err) {
+        return;
+    }
+    assert!(ok, "first select-offer; err={err}\nout={out}");
+    let (ok, out, err) = run_select_offer(&plan, &offer_b, "2026-09-04");
+    assert!(ok, "re-run with another offer; err={err}\nout={out}");
+
+    let self_loops = scalar(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}' \
+           AND event = 'status_changed' AND from_state = to_state"
+    ));
+    assert_eq!(self_loops.as_deref(), Some("0"), "no from==to status_changed");
+    let status_changes = scalar(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}' \
+           AND scope = 'dest_process' AND event = 'status_changed'"
+    ));
+    assert_eq!(status_changes.as_deref(), Some("3"), "only the first run moved P3_4/P3/P4");
+    let offers_selected = db_exec(&format!(
+        "SELECT value AS v FROM plan_event_data WHERE plan_id = '{plan}' AND scope = 'dest_process' \
+           AND key = 'offer_id' ORDER BY sort_order"
+    ))
+    .expect("creds");
+    assert_eq!(
+        offers_selected.column(),
+        vec![offer_a.clone(), offer_b.clone()],
+        "both selections logged as offer_selected; out={offers_selected}"
+    );
+    let selection = scalar(&format!(
+        "SELECT selected_offer_id AS v FROM plan_offer_selection WHERE plan_id = '{plan}'"
+    ));
+    assert_eq!(selection.as_deref(), Some(offer_b.as_str()), "selection points at offer B");
+    let audit = scalar(&format!(
+        "SELECT COUNT(*) || '|' || (SELECT version FROM plans WHERE plan_id = '{plan}') AS v \
+         FROM operation_runs WHERE plan_id = '{plan}'"
+    ));
+    assert_eq!(audit.as_deref(), Some("2|9"), "two audited runs, version 7 -> 9");
+    let populated_from = scalar(&format!(
+        "SELECT populated_from AS v FROM hotels WHERE plan_id = '{plan}'"
+    ));
+    assert_eq!(
+        populated_from,
+        Some(format!("package:{offer_b}")),
+        "populate rows rewritten from offer B"
+    );
 }

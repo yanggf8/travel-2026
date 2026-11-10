@@ -291,44 +291,42 @@ pub(crate) async fn emit_event_both(
     Ok(())
 }
 
-pub(crate) fn allowed_transition_targets(from: &str) -> &'static [&'static str] {
-    match from {
-        "pending" => &["researching", "populated", "confirmed", "skipped"],
-        "researching" => &["researched", "pending", "skipped"],
-        "researched" => &["selecting", "selected", "researching", "skipped"],
-        "selecting" => &["selected", "researched", "skipped"],
-        "selected" => &["booking", "selecting", "populated", "skipped"],
-        "populated" => &["booking", "selected", "pending", "skipped"],
-        "booking" => &["booked", "selected", "skipped"],
-        "booked" => &["confirmed", "cancelled", "skipped"],
-        "cancelled" => &["pending", "selecting", "skipped"],
-        "confirmed" => &["skipped"],
-        "skipped" => &["pending"],
-        _ => &[],
-    }
+/// Open the command's single write transaction (`BEGIN IMMEDIATE`) on the
+/// connection's hrana stream. Every read the command needs to plan its writes
+/// happens BEFORE this; everything from here to [`finish_tx`] is writes plus the
+/// MAX+1 reads (sort_order, version) that must see the locked state.
+pub(crate) async fn begin_immediate(conn: &Connection, cmd: &str) -> Result<(), String> {
+    conn.execute("BEGIN IMMEDIATE", libsql::params![])
+        .await
+        .map_err(|e| format!("{cmd} BEGIN IMMEDIATE failed: {e}"))?;
+    Ok(())
 }
 
-/// Mirror StateManager.isValidTransition + the throw in setProcessStatus.
-/// A None `from` is always allowed (no current status to validate).
-pub(crate) fn validate_transition(
-    from: Option<&str>,
-    to: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<(), String> {
-    let Some(from) = from else {
-        return Ok(());
-    };
-    if from == to {
-        return Ok(()); // idempotent (no event in TS, but we never call it that way)
-    }
-    let allowed = allowed_transition_targets(from);
-    if allowed.contains(&to) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Invalid transition: {from} → {to} for {dest}.{process_id}"
-        ))
+/// COMMIT when `outcome` is Ok, ROLLBACK otherwise. A failed COMMIT is rolled
+/// back and reported; a failed ROLLBACK is reported too (the server discards an
+/// open transaction when the stream closes, so nothing is committed either way).
+pub(crate) async fn finish_tx<T>(
+    conn: &Connection,
+    cmd: &str,
+    outcome: Result<T, String>,
+) -> Result<T, String> {
+    match outcome {
+        Ok(v) => match conn.execute("COMMIT", libsql::params![]).await {
+            Ok(_) => Ok(v),
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", libsql::params![]).await;
+                Err(format!("{cmd} COMMIT failed: {e} (nothing was committed)"))
+            }
+        },
+        Err(e) => {
+            let note = match conn.execute("ROLLBACK", libsql::params![]).await {
+                Ok(_) => "rolled back, nothing was written".to_string(),
+                Err(re) => format!(
+                    "ROLLBACK reported: {re}; the open transaction is discarded by the server, nothing was committed"
+                ),
+            };
+            Err(format!("{e} ({note})"))
+        }
     }
 }
 

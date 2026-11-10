@@ -1,26 +1,33 @@
 //! mark-booked — port of src/cli/commands/mark-booked.ts.
 //!
-//! Transitions P3+4 (packages), P3 (transport), P4 (accommodation) from
-//! selected/populated → booking → booked for one destination, then records
-//! the confirmation and re-points the workflow at the daily itinerary.
+//! Moves P3+4 (packages), P3 (transport), P4 (accommodation) forward to
+//! `booked` for one destination along the Booking ladder
+//! (cascade::status_machine, `Mode::Forward`: selected → booking → booked,
+//! populated → booking → booked, booking → booked), then records the
+//! confirmation and re-points the workflow at the daily itinerary.
 //!
 //! Per-process rule (mirrors the TS loop):
 //!   - no status row            → skip ("no status")
 //!   - already booked/confirmed → skip ("already <status>")
-//!   - status ∉ {selected,populated} → skip ("cannot book from <status>")
-//!   - else → status = 'booked', clear the dirty flag
+//!   - status ∉ {selected,populated,booking} → skip ("cannot book from <status>")
+//!     (`booking` is eligible so a run stranded between booking and booked resumes)
+//!   - else → walk the forward path to booked, clear the dirty flag
 //!
-//! Side effects on success (matching saveWithTracking + the TS body):
-//!   - process_statuses + event_log_dest_processes status → booked
+//! Side effects on success, all in ONE BEGIN IMMEDIATE … COMMIT (paths planned first):
+//!   - process_statuses → booked, one status_changed (dest_process + timeline) per hop
 //!   - cascade_dirty_flags.dirty → 0 for the booked processes
 //!   - event_log_state.current_focus → '<dest>.process_5_daily_itinerary'
 //!   - event_log_next_actions replaced with the 3 follow-up actions
-//!   - 1 booking_confirmed timeline plan_event (+ KV data)
+//!   - 1 booking_confirmed timeline plan_event (+ KV data), allocated after the hops
 //!   - operation_runs audit row + plans.version bump
-//!   - bookings re-synced into bookings_current (TS: save() → syncBookingsToDb)
+//!
+//! After COMMIT: bookings re-synced into bookings_current (TS: save() →
+//! syncBookingsToDb; a failure there is a warning, the booking is already durable).
 //!
 //! --dry-run prints the planned transitions without writing.
 
+use crate::cascade::common::{begin_immediate, finish_tx};
+use crate::cascade::status_machine::{self, Hop, Ladder, Mode};
 use crate::db;
 use libsql::{params, Connection};
 
@@ -56,28 +63,36 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         process_id: &'static str,
         name: &'static str,
         from: String,
+        hops: Vec<Hop>,
     }
     let mut to_book: Vec<Plan> = Vec::new();
 
+    // Preflight: every eligible process's forward path, before any write.
     for (process_id, name) in PROCESSES {
-        let current = read_process_status(&conn, &plan_id, &destination, process_id).await?;
+        let current =
+            travel_db::repo::process_statuses::get(&conn, &plan_id, &destination, process_id).await?;
         match current.as_deref() {
-            None | Some("") => {
+            None => {
                 println!("   ⏭️  {name}: skipped (no status)");
             }
             Some(s @ ("booked" | "confirmed")) => {
                 println!("   ✓  {name}: already {s}");
             }
-            Some(s) if s == "selected" || s == "populated" => {
-                if !dry_run {
-                    to_book.push(Plan {
-                        process_id,
-                        name,
-                        from: s.to_string(),
-                    });
-                } else {
-                    println!("   ✅ {name}: {s} → booking → booked");
+            Some(s @ ("selected" | "populated" | "booking")) => {
+                let hops = status_machine::plan_path(Ladder::Booking, s, "booked", Mode::Forward)
+                    .map_err(|e| format!("{destination}.{process_id}: {e}; nothing was written"))?;
+                if dry_run {
+                    println!(
+                        "   ✅ {name}: {}",
+                        status_machine::format_path(s, &hops, " → ")
+                    );
                 }
+                to_book.push(Plan {
+                    process_id,
+                    name,
+                    from: s.to_string(),
+                    hops,
+                });
             }
             Some(s) => {
                 println!("   ⚠️  {name}: cannot book from {s}");
@@ -93,49 +108,73 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let now_db = now_db_datetime();
     let now_iso = now_rfc3339();
 
-    let version_before = read_version(&conn, &plan_id).await?;
-    let version_after = version_before + 1;
+    begin_immediate(&conn, "mark-booked").await?;
+    let written: Result<(), String> = async {
+        let version_before = read_version(&conn, &plan_id).await?;
+        let version_after = version_before + 1;
+
+        for p in &to_book {
+            status_machine::apply_path(
+                &conn,
+                &plan_id,
+                &destination,
+                p.process_id,
+                Some(&p.from),
+                &p.hops,
+                "booked",
+                &now_iso,
+                &now_db,
+            )
+            .await?;
+            clear_dirty(&conn, &plan_id, &destination, p.process_id, &now_db).await?;
+        }
+
+        // booking_confirmed timeline event (sort_order allocated after the hops).
+        let processes_joined = PROCESSES
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let timeline_so = next_timeline_sort_order(&conn, &plan_id).await?;
+        insert_timeline_event(
+            &conn,
+            &plan_id,
+            timeline_so,
+            "booking_confirmed",
+            &now_iso,
+            &[
+                ("destination", destination.clone()),
+                ("processes", processes_joined),
+                ("confirmed_at", now_iso.clone()),
+            ],
+        )
+        .await?;
+
+        set_next_actions(&conn, &plan_id).await?;
+        set_focus(&conn, &plan_id, &destination, &now_db).await?;
+
+        crate::cascade::common::record_operation(
+            &conn,
+            &plan_id,
+            "mark-booked",
+            &destination,
+            version_before,
+            version_after,
+            &now_db,
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    finish_tx(&conn, "mark-booked", written).await?;
 
     for p in &to_book {
-        set_process_status(&conn, &plan_id, &destination, p.process_id, "booked", &now_db).await?;
-        clear_dirty(&conn, &plan_id, &destination, p.process_id, &now_db).await?;
-        println!("   ✅ {}: {} → booking → booked", p.name, p.from);
+        println!(
+            "   ✅ {}: {}",
+            p.name,
+            status_machine::format_path(&p.from, &p.hops, " → ")
+        );
     }
-
-    // booking_confirmed timeline event.
-    let processes_joined = PROCESSES
-        .iter()
-        .map(|(id, _)| *id)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let timeline_so = next_timeline_sort_order(&conn, &plan_id).await?;
-    insert_timeline_event(
-        &conn,
-        &plan_id,
-        timeline_so,
-        "booking_confirmed",
-        &now_iso,
-        &[
-            ("destination", destination.clone()),
-            ("processes", processes_joined),
-            ("confirmed_at", now_iso.clone()),
-        ],
-    )
-    .await?;
-
-    set_next_actions(&conn, &plan_id).await?;
-    set_focus(&conn, &plan_id, &destination, &now_db).await?;
-
-    crate::cascade::common::record_operation(
-        &conn,
-        &plan_id,
-        "mark-booked",
-        &destination,
-        version_before,
-        version_after,
-        &now_db,
-    )
-    .await?;
 
     // Re-sync bookings (TS: save() → syncBookingsToDb()).
     let trip_id = plan_id.replace('-', "_");
@@ -193,46 +232,7 @@ async fn sync_bookings_inline(
     resync_current(conn, trip_id, &rows).await
 }
 
-// ── status / focus / next-action writers ─────────────────────────────
-
-async fn set_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-    status: &str,
-    now_db: &str,
-) -> Result<(), String> {
-    conn.execute(
-        "INSERT INTO process_statuses (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(plan_id, destination, process_id) DO UPDATE SET status = ?4, updated_at = ?5",
-        params![
-            plan_id.to_string(),
-            dest.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now_db.to_string()
-        ],
-    )
-    .await
-    .map_err(|e| format!("process_statuses upsert failed: {e}"))?;
-    conn.execute(
-        "INSERT INTO event_log_dest_processes (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT(plan_id, destination, process_id) DO UPDATE SET status = ?4, updated_at = ?5",
-        params![
-            plan_id.to_string(),
-            dest.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now_db.to_string()
-        ],
-    )
-    .await
-    .map_err(|e| format!("event_log_dest_processes upsert failed: {e}"))?;
-    Ok(())
-}
+// ── dirty-flag / focus / next-action writers ─────────────────────────
 
 async fn clear_dirty(
     conn: &Connection,
@@ -366,30 +366,6 @@ async fn read_destination(
     dest_opt: Option<&str>,
 ) -> Result<String, String> {
     crate::cascade::common::resolve_active_destination(conn, plan_id, dest_opt).await
-}
-
-async fn read_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<Option<String>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT status FROM process_statuses \
-             WHERE plan_id = ?1 AND destination = ?2 AND process_id = ?3",
-            params![plan_id.to_string(), dest.to_string(), process_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("process_statuses query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("process_statuses row read failed: {e}"))?
-    {
-        return Ok(row.get(0).ok().flatten());
-    }
-    Ok(None)
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {

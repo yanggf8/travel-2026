@@ -38,9 +38,11 @@
 // Do NOT "fix" this to match the TS crash.
 
 use crate::cascade::common::{
+    begin_immediate, finish_tx,
     insert_event, insert_kv_rows, next_dest_process_sort_order, next_timeline_sort_order,
     now_db_datetime, now_rfc3339, read_version, record_operation,
 };
+use crate::cascade::status_machine::{self, Ladder};
 use crate::scrape_parser;
 use crate::scrape_parser::CanonicalOffer;
 use libsql::Connection;
@@ -230,128 +232,147 @@ pub async fn run(opts: ImportOpts) -> Result<(), String> {
         return Ok(());
     }
 
-    // Write to DB
+    // Preflight: P3_4 → researched only from below (or a missing row); never regresses.
+    let p34_from = travel_db::repo::process_statuses::get(&conn, &opts.plan_id, &dest, P34).await?;
+    let mut p34_move = status_machine::raise_to(Ladder::Booking, p34_from.as_deref(), "researched")
+        .map_err(|e| format!("{dest}.{P34}: {e}; nothing was written"))?;
+
+    // Write to DB — one transaction.
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
-    let version_before = read_version(&conn, &opts.plan_id).await?;
-    let mut version_after = version_before;
+    begin_immediate(&conn, "import-offers").await?;
+    let written: Result<(), String> = async {
+        let version_before = read_version(&conn, &opts.plan_id).await?;
+        let mut version_after = version_before;
 
-    for group in &parsed {
-        if group.offers.is_empty() {
-            continue;
-        }
-        let source_id = &group.source_id;
-        let note_str = match &opts.note {
-            Some(n) => n.clone(),
-            None => format!("import-offers: {}", group.file_name),
-        };
+        for group in &parsed {
+            if group.offers.is_empty() {
+                continue;
+            }
+            let source_id = &group.source_id;
+            let note_str = match &opts.note {
+                Some(n) => n.clone(),
+                None => format!("import-offers: {}", group.file_name),
+            };
 
-        // Delete existing offers for these offer IDs (merge-by-id semantics)
-        for offer in &group.offers {
-            plan_offers::delete_offer_rows(&conn, &opts.plan_id, &dest, &offer.id).await?;
-        }
+            // Delete existing offers for these offer IDs (merge-by-id semantics)
+            for offer in &group.offers {
+                plan_offers::delete_offer_rows(&conn, &opts.plan_id, &dest, &offer.id).await?;
+            }
 
-        // Insert new offer rows
-        for offer in &group.offers {
-            let w = map_import_offer(&opts.plan_id, &dest, offer);
-            plan_offers::insert_import_offer(&conn, &w, &now_db).await?;
-        }
+            // Insert new offer rows
+            for offer in &group.offers {
+                let w = map_import_offer(&opts.plan_id, &dest, offer);
+                plan_offers::insert_import_offer(&conn, &w, &now_db).await?;
+            }
 
-        // Insert provenance
-        plan_offers::insert_import_provenance(
-            &conn,
-            &opts.plan_id,
-            &dest,
-            source_id,
-            &now_iso,
-            &group.file_path,
-            group.offers.len() as i64,
-        )
-        .await?;
-
-        // Insert warnings
-        for w in &group.warnings {
-            plan_offers::insert_warning(&conn, &opts.plan_id, &dest, w).await?;
-        }
-
-        // Update process_statuses: P3_4 → researched if null/pending/researching
-        let current_status = read_process_status(&conn, &opts.plan_id, &dest, P34).await?;
-        let new_status: &str = match current_status.as_deref() {
-            None | Some("pending") | Some("researching") => "researched",
-            Some(s) => s,
-        };
-        travel_db::repo::process_statuses::upsert(&conn, &opts.plan_id, &dest, P34, new_status, &now_db)
+            // Insert provenance
+            plan_offers::insert_import_provenance(
+                &conn,
+                &opts.plan_id,
+                &dest,
+                source_id,
+                &now_iso,
+                &group.file_path,
+                group.offers.len() as i64,
+            )
             .await?;
 
-        // Emit events: package_offers_imported (dest_process + timeline)
-        let kv: Vec<(&str, String)> = vec![
-            ("source_id", source_id.clone()),
-            ("offers_found", group.offers.len().to_string()),
-            ("note", note_str.clone()),
-        ];
+            // Insert warnings
+            for w in &group.warnings {
+                plan_offers::insert_warning(&conn, &opts.plan_id, &dest, w).await?;
+            }
 
-        let dest_so = next_dest_process_sort_order(&conn, &opts.plan_id, &dest, P34).await?;
-        insert_event(
-            &conn,
-            &opts.plan_id,
-            "dest_process",
-            &dest,
-            P34,
-            dest_so,
-            "package_offers_imported",
-            &now_iso,
-            None,
-            None,
-        )
-        .await?;
-        insert_kv_rows(
-            &conn,
-            &opts.plan_id,
-            "dest_process",
-            &dest,
-            P34,
-            dest_so,
-            &kv,
-        )
-        .await?;
+            // P3_4 → researched (once, at the first imported source — same place the
+            // status write always sat; status_changed per hop).
+            if let Some(hops) = p34_move.take() {
+                status_machine::apply_path(
+                    &conn,
+                    &opts.plan_id,
+                    &dest,
+                    P34,
+                    p34_from.as_deref(),
+                    &hops,
+                    "researched",
+                    &now_iso,
+                    &now_db,
+                )
+                .await?;
+            }
 
-        let tl_so = next_timeline_sort_order(&conn, &opts.plan_id).await?;
-        insert_event(
+            // Emit events: package_offers_imported (dest_process + timeline)
+            let kv: Vec<(&str, String)> = vec![
+                ("source_id", source_id.clone()),
+                ("offers_found", group.offers.len().to_string()),
+                ("note", note_str.clone()),
+            ];
+
+            let dest_so = next_dest_process_sort_order(&conn, &opts.plan_id, &dest, P34).await?;
+            insert_event(
+                &conn,
+                &opts.plan_id,
+                "dest_process",
+                &dest,
+                P34,
+                dest_so,
+                "package_offers_imported",
+                &now_iso,
+                None,
+                None,
+            )
+            .await?;
+            insert_kv_rows(
+                &conn,
+                &opts.plan_id,
+                "dest_process",
+                &dest,
+                P34,
+                dest_so,
+                &kv,
+            )
+            .await?;
+
+            let tl_so = next_timeline_sort_order(&conn, &opts.plan_id).await?;
+            insert_event(
+                &conn,
+                &opts.plan_id,
+                "timeline",
+                "",
+                P34,
+                tl_so,
+                "package_offers_imported",
+                &now_iso,
+                None,
+                None,
+            )
+            .await?;
+            insert_kv_rows(&conn, &opts.plan_id, "timeline", "", P34, tl_so, &kv).await?;
+        }
+
+        version_after += 1;
+        let summary = format!(
+            "{}: {}",
+            dest,
+            counts
+                .iter()
+                .map(|(k, v)| format!("{k}:{v}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        record_operation(
             &conn,
             &opts.plan_id,
-            "timeline",
-            "",
-            P34,
-            tl_so,
-            "package_offers_imported",
-            &now_iso,
-            None,
-            None,
+            "import-offers",
+            &summary,
+            version_before,
+            version_after,
+            &now_db,
         )
         .await?;
-        insert_kv_rows(&conn, &opts.plan_id, "timeline", "", P34, tl_so, &kv).await?;
+        Ok(())
     }
-
-    version_after += 1;
-    let summary = format!(
-        "{}: {}",
-        dest,
-        counts
-            .iter()
-            .map(|(k, v)| format!("{k}:{v}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    record_operation(
-        &conn,
-        &opts.plan_id,
-        "import-offers",
-        &summary,
-        version_before,
-        version_after,
-        &now_db,
-    )
-    .await?;
+    .await;
+    finish_tx(&conn, "import-offers", written).await?;
 
     println!("✅ Saved to Turso (plan_offers).");
     Ok(())
@@ -455,30 +476,3 @@ fn map_import_offer(
     }
 }
 
-async fn read_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<Option<String>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT status FROM process_statuses \
-             WHERE plan_id = ?1 AND destination = ?2 AND process_id = ?3",
-            libsql::params![
-                plan_id.to_string(),
-                dest.to_string(),
-                process_id.to_string()
-            ],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let status: String = row.get(0).unwrap_or_default();
-        if status.is_empty() {
-            return Ok(None);
-        }
-        return Ok(Some(status));
-    }
-    Ok(None)
-}

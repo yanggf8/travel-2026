@@ -114,34 +114,6 @@ pub async fn replace_skeleton(
     Ok(())
 }
 
-/// `INSERT OR REPLACE` one `process_statuses` row. NOTE: this is the INSERT OR REPLACE variant
-/// used by `scaffold_itinerary::set_process_status` — distinct from the ON CONFLICT upsert in
-/// [`crate::repo::process_statuses::upsert`]. SQL copied verbatim; caller passes `now`.
-pub async fn upsert_process_status_replace(
-    conn: &Connection,
-    plan_id: &str,
-    destination: &str,
-    process_id: &str,
-    status: &str,
-    now: &str,
-) -> Result<(), String> {
-    conn.execute(
-        "INSERT OR REPLACE INTO process_statuses \
-            (plan_id, destination, process_id, status, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        libsql::params![
-            plan_id.to_string(),
-            destination.to_string(),
-            process_id.to_string(),
-            status.to_string(),
-            now.to_string()
-        ],
-    )
-    .await
-    .map_err(|e| format!("process_statuses UPSERT failed: {e}"))?;
-    Ok(())
-}
-
 /// `INSERT OR REPLACE` one `cascade_dirty_flags` row with `dirty = 0`. SQL copied verbatim from
 /// `scaffold_itinerary::clear_dirty`; caller passes `now` for `last_changed`.
 pub async fn clear_dirty(

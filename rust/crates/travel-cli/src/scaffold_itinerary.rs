@@ -10,10 +10,18 @@
 //   1. Read date anchor (date_anchors.start_date/end_date) — fail loud if absent.
 //   2. Refuse to overwrite an existing itinerary unless --force.
 //   3. Read outbound/return flight legs for arrival/departure transit notes.
-//   4. Replace days + sessions (delete stale, insert fresh skeleton).
-//   5. process_5 status → 'researching', clear its dirty flag.
-//   6. Emit `itinerary_scaffolded` plan_event, bump plans.version, audit row.
+//   4. Preflight: plan P5's path to 'researching' on the Itinerary ladder
+//      (`status_machine::plan_path(.., Mode::Any)`) BEFORE the skeleton is
+//      replaced — a re-scaffold is a logged reset (e.g. confirmed → researched →
+//      researching), and the hops are printed. A missing P5 row is inserted
+//      directly (one status_changed with from_state NULL).
+//   5. One BEGIN IMMEDIATE … COMMIT: replace days + sessions (delete stale,
+//      insert fresh skeleton), the P5 hops (status_changed per hop), clear its
+//      dirty flag, emit `itinerary_scaffolded`, bump plans.version, audit row.
+//   6. Print only after COMMIT.
 
+use crate::cascade::common::{begin_immediate, finish_tx};
+use crate::cascade::status_machine::{self, Ladder, Mode, P5};
 use libsql::Connection;
 
 #[derive(Default, Debug)]
@@ -77,6 +85,55 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         });
     }
 
+    // 4. Preflight: P5's path to researching, before anything is replaced.
+    let p5_from = travel_db::repo::process_statuses::get(&conn, &plan_id, &destination, P5).await?;
+    let p5_hops = match p5_from.as_deref() {
+        None => Vec::new(),
+        Some(cur) => status_machine::plan_path(Ladder::Itinerary, cur, "researching", Mode::Any)
+            .map_err(|e| format!("{destination}.{P5}: {e}; nothing was written"))?,
+    };
+
+    // 5. One transaction: skeleton + P5 hops + dirty flag + event + audit.
+    let now_iso = crate::cascade::common::now_rfc3339();
+    let now_db = crate::cascade::common::now_db_datetime();
+    begin_immediate(&conn, "scaffold-itinerary").await?;
+    let written: Result<(), String> = async {
+        write_skeleton(&conn, &plan_id, &destination, &days).await?;
+
+        status_machine::apply_path(
+            &conn,
+            &plan_id,
+            &destination,
+            P5,
+            p5_from.as_deref(),
+            &p5_hops,
+            "researching",
+            &now_iso,
+            &now_db,
+        )
+        .await?;
+        clear_dirty(&conn, &plan_id, &destination, P5).await?;
+
+        let day_types: Vec<String> = days.iter().map(|d| d.day_type.to_string()).collect();
+        let kv: Vec<(&str, String)> = vec![
+            ("days_count", days.len().to_string()),
+            ("day_types", day_types.join(", ")),
+        ];
+        execute_event(
+            &conn,
+            &plan_id,
+            &destination,
+            "itinerary_scaffolded",
+            "scaffold-itinerary",
+            &format!("{destination} {} days", days.len()),
+            &kv,
+        )
+        .await
+    }
+    .await;
+    finish_tx(&conn, "scaffold-itinerary", written).await?;
+
+    // 6. Output (after COMMIT).
     println!("\n📅 Scaffolding itinerary for {destination}:");
     println!("   Dates: {start} → {end}");
     println!("   Days: {}", days.len());
@@ -95,37 +152,14 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         };
         println!("   {icon} Day {}: {} ({})", d.day_number, d.date, d.day_type);
     }
-
-    // 4. Replace day skeleton (delete stale child + day rows, insert fresh).
-    write_skeleton(&conn, &plan_id, &destination, &days).await?;
-
-    // 5. process_5 → researching; clear its dirty flag.
-    set_process_status(
-        &conn,
-        &plan_id,
-        &destination,
-        "process_5_daily_itinerary",
-        "researching",
-    )
-    .await?;
-    clear_dirty(&conn, &plan_id, &destination, "process_5_daily_itinerary").await?;
-
-    // 6. Emit event + version bump + audit.
-    let day_types: Vec<String> = days.iter().map(|d| d.day_type.to_string()).collect();
-    let kv: Vec<(&str, String)> = vec![
-        ("days_count", days.len().to_string()),
-        ("day_types", day_types.join(", ")),
-    ];
-    execute_event(
-        &conn,
-        &plan_id,
-        &destination,
-        "itinerary_scaffolded",
-        "scaffold-itinerary",
-        &format!("{destination} {} days", days.len()),
-        &kv,
-    )
-    .await?;
+    match p5_from.as_deref() {
+        None => println!("\n   P5 itinerary: (no row) → researching"),
+        Some(cur) if p5_hops.is_empty() => println!("\n   P5 itinerary: already {cur}"),
+        Some(cur) => println!(
+            "\n   P5 itinerary: {}",
+            status_machine::format_path(cur, &p5_hops, " → ")
+        ),
+    }
 
     println!("\n✅ Itinerary scaffolded");
     println!("\nNext action: Review day structure, then populate activities with /p5-itinerary");
@@ -369,24 +403,6 @@ fn days_to_ymd(z: i64) -> (i64, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m as u32, d as u32)
-}
-
-async fn set_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    destination: &str,
-    process_id: &str,
-    status: &str,
-) -> Result<(), String> {
-    travel_db::repo::itinerary::upsert_process_status_replace(
-        conn,
-        plan_id,
-        destination,
-        process_id,
-        status,
-        &now_db_datetime(),
-    )
-    .await
 }
 
 async fn clear_dirty(

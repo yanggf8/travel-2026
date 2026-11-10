@@ -107,12 +107,15 @@ struct RouteLeg {
     mode: String,
 }
 
-/// Return itinerary validator ERROR-level messages for publish-readiness reuse.
+/// Return itinerary validator ERROR-level messages for publish-readiness reuse,
+/// on the caller's connection and an already-resolved destination.
 /// READ-ONLY — no DB writes.
-pub async fn error_messages(plan_id: &str, dest_opt: Option<&str>) -> Result<Vec<String>, String> {
-    let conn = db::connect_read().await?;
-    let destination = read_destination(&conn, plan_id, dest_opt).await?;
-    let days = load_day_summaries(&conn, plan_id, &destination).await?;
+pub async fn error_messages(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<String>, String> {
+    let days = load_day_summaries(conn, plan_id, destination).await?;
     if days.is_empty() {
         return Ok(Vec::new());
     }

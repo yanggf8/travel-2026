@@ -1,13 +1,29 @@
 //! Domestic flow-decision defer auto-skip integration tests (real Turso, Guard panic-safe).
 //!
 //! Verifies: `travel flow-decision shop mode --mode defer` for a domestic
-//! destination auto-advances P3/P34 to skipped, and conditionally P4:
-//!   - when P4 is pending/selecting -> skipped
+//! destination auto-advances P3/P34 to skipped and leaves P4 accommodation
+//! untouched (CLAUDE.md: "P4 accommodation is NOT skipped — a domestic trip
+//! still books a stay"; realigned 2026-11-11 — it used to skip a pending P4):
+//!   - when P4 is pending -> stays pending, no P4 status_changed
 //!   - when P4 is booked -> preserved (not clobbered)
 
 mod common;
 use common::{bin, db_exec, is_credless, teardown_plan, Guard};
 use std::process::Command;
+
+// The commands under test write in ONE transaction; two concurrent transactions
+// on the shared DB hit SQLITE_BUSY, so the DB tests in this file run one at a time.
+static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The booking-ledger rows set-accommodation writes are NOT plan-keyed
+/// (bookings_current/payload keyed by `<plan>:` booking_key, legacy `bookings` by
+/// `domestic:<plan>:` offer_id), so teardown_plan misses them — run before it.
+fn teardown_bookings(plan: &str, dest: &str) {
+    common::teardown_trip_bookings(plan);
+    let _ = common::db_exec_teardown(&format!(
+        "DELETE FROM bookings WHERE destination = '{dest}' AND offer_id LIKE 'domestic:{plan}:%'"
+    ));
+}
 
 fn run(args: &[&str]) -> (bool, String, String) {
     let out = Command::new(bin()).args(args).output().expect("run travel");
@@ -60,7 +76,8 @@ fn process_status(plan: &str, dest: &str, pid: &str) -> Option<String> {
 }
 
 #[test]
-fn domestic_defer_auto_advances_p3_p34_p4_to_skipped() {
+fn domestic_defer_skips_p3_p34_and_leaves_p4_untouched() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless — skip");
         return;
@@ -81,6 +98,7 @@ fn domestic_defer_auto_advances_p3_p34_p4_to_skipped() {
             let _ = common::db_exec_teardown(
                 &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
+            teardown_bookings(&plan, &dest);
             teardown_plan(&plan, &dest);
         }
     });
@@ -132,13 +150,11 @@ fn domestic_defer_auto_advances_p3_p34_p4_to_skipped() {
         return;
     }
     assert!(ok, "flow-decision defer should succeed; stdout={stdout} stderr={stderr}");
-    assert!(
-        stdout.contains("domestic shop deferred") || stdout.contains("P3/P4 marked skipped"),
-        "hint present: {stdout}"
-    );
+    assert!(stdout.contains("domestic shop deferred"), "hint present: {stdout}");
+    assert!(stdout.contains("P4 accommodation untouched"), "hint names P4: {stdout}");
 
-    // Assert P3/P34/P4 all skipped via SELECT status
-    for pid in ["process_3_transportation", "process_3_4_packages", "process_4_accommodation"] {
+    // P3/P34 skipped; P4 untouched (still pending, no P4 status_changed).
+    for pid in ["process_3_transportation", "process_3_4_packages"] {
         let st = process_status(&plan, dest, pid);
         assert_eq!(
             st.as_deref(),
@@ -146,10 +162,33 @@ fn domestic_defer_auto_advances_p3_p34_p4_to_skipped() {
             "{pid} should be skipped after defer; got {st:?}"
         );
     }
+    let p4 = process_status(&plan, dest, "process_4_accommodation");
+    assert_eq!(p4.as_deref(), Some("pending"), "P4 must stay pending after defer; got {p4:?}");
+    let p4_events = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}' \
+           AND process_id = 'process_4_accommodation' AND event = 'status_changed'"
+    ))
+    .and_then(|r| r.scalar());
+    assert_eq!(p4_events.as_deref(), Some("0"), "no P4 status_changed from defer");
+    let hops = db_exec(&format!(
+        "SELECT process_id || ':' || from_state || '->' || to_state AS v FROM plan_events \
+         WHERE plan_id = '{plan}' AND scope = 'dest_process' AND event = 'status_changed' \
+         ORDER BY process_id, sort_order"
+    ))
+    .expect("query hops");
+    assert_eq!(
+        hops.column(),
+        vec![
+            "process_3_4_packages:pending->skipped".to_string(),
+            "process_3_transportation:pending->skipped".to_string(),
+        ],
+        "one logged hop per deferred process; out={hops}"
+    );
 }
 
 #[test]
 fn domestic_defer_preserves_booked_p4() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless — skip");
         return;
@@ -170,6 +209,7 @@ fn domestic_defer_preserves_booked_p4() {
             let _ = common::db_exec_teardown(
                 &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
+            teardown_bookings(&plan, &dest);
             teardown_plan(&plan, &dest);
         }
     });
@@ -277,4 +317,56 @@ fn domestic_defer_preserves_booked_p4() {
         "DELETE FROM bookings WHERE destination = '{dest}' AND hotel_name LIKE '%{}%' AND offer_id LIKE 'domestic:{plan}:%'",
         fx[0]
     ));
+}
+
+#[test]
+fn domestic_defer_leaves_booked_p3_alone() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(_) = db_exec("SELECT 1") else {
+        eprintln!("credless — skip");
+        return;
+    };
+    let n = common::nanos();
+    let plan = format!("zztest-defer-p3-{n}");
+    let dest = "jiufen";
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.to_string());
+        move || teardown_plan(&plan, &dest)
+    });
+
+    let (ok, stdout, stderr) = run(&[
+        "create-plan", &plan, "--dest", dest, "--start", "2026-11-01", "--end", "2026-11-02",
+        "--airport", "TPE",
+    ]);
+    if is_credless(&stderr) {
+        eprintln!("credless on create-plan — skip");
+        return;
+    }
+    assert!(ok, "create-plan should succeed; stdout={stdout} stderr={stderr}");
+
+    let (ok, stdout, stderr) = run(&[
+        "set-process-status", "p3", "booked", "--dest", dest, "--plan-id", &plan,
+    ]);
+    assert!(ok, "p3 -> booked; stdout={stdout} stderr={stderr}");
+
+    let (ok, stdout, stderr) = run(&[
+        "flow-decision", "shop", "mode", "--mode", "defer", "--reason", "test-p3-booked",
+        "--plan-id", &plan,
+    ]);
+    assert!(ok, "flow-decision defer should succeed; stdout={stdout} stderr={stderr}");
+    assert!(
+        stdout.contains("process_3_transportation stays booked"),
+        "names the kept process: {stdout}"
+    );
+
+    // A booked P3 is never demoted to skipped; P3_4 still is.
+    assert_eq!(process_status(&plan, dest, "process_3_transportation").as_deref(), Some("booked"));
+    assert_eq!(process_status(&plan, dest, "process_3_4_packages").as_deref(), Some("skipped"));
+    let p3_skips = db_exec(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}' \
+           AND process_id = 'process_3_transportation' AND event = 'status_changed' \
+           AND scope = 'dest_process' AND to_state = 'skipped'"
+    ))
+    .and_then(|r| r.scalar());
+    assert_eq!(p3_skips.as_deref(), Some("0"), "no P3 -> skipped hop");
 }

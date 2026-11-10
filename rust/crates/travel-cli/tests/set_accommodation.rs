@@ -2,6 +2,20 @@ mod common;
 use common::{bin, db_exec, is_credless, teardown_plan, Guard};
 use std::process::Command;
 
+// The commands under test write in ONE transaction; two concurrent transactions
+// on the shared DB hit SQLITE_BUSY, so the DB tests in this file run one at a time.
+static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The booking-ledger rows set-accommodation writes are NOT plan-keyed
+/// (bookings_current/payload keyed by `<plan>:` booking_key, legacy `bookings` by
+/// `domestic:<plan>:` offer_id), so teardown_plan misses them — run before it.
+fn teardown_bookings(plan: &str, dest: &str) {
+    common::teardown_trip_bookings(plan);
+    let _ = common::db_exec_teardown(&format!(
+        "DELETE FROM bookings WHERE destination = '{dest}' AND offer_id LIKE 'domestic:{plan}:%'"
+    ));
+}
+
 fn run(args: &[&str]) -> (bool, String, String) {
     let out = Command::new(bin()).args(args).output().expect("run travel");
     (
@@ -51,6 +65,7 @@ fn seed_p4_pending(plan: &str, dest: &str) {
 
 #[test]
 fn set_accommodation_books_and_advances_p4() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless — skip");
         return;
@@ -70,6 +85,7 @@ fn set_accommodation_books_and_advances_p4() {
             let _ = common::db_exec_teardown(
                 &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
+            teardown_bookings(&plan, &dest);
             teardown_plan(&plan, &dest);
         }
     });
@@ -130,6 +146,7 @@ fn set_accommodation_books_and_advances_p4() {
 
 #[test]
 fn set_accommodation_rejects_unknown_hotel() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless — skip");
         return;
@@ -148,6 +165,7 @@ fn set_accommodation_rejects_unknown_hotel() {
             let _ = common::db_exec_teardown(
                 &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
+            teardown_bookings(&plan, &dest);
             teardown_plan(&plan, &dest);
         }
     });
@@ -203,4 +221,98 @@ fn set_accommodation_validates_required_flags() {
     ]);
     assert!(!ok2, "non-int price should fail");
     assert!(err2.contains("--price"), "err2={err2}");
+}
+
+fn scalar(sql: &str) -> Option<String> {
+    db_exec(sql).and_then(|r| r.scalar())
+}
+
+/// Re-booking a stay whose P4 is already booked (e.g. a corrected price) has no
+/// status hop, but still writes the `accommodation_booking_updated` event — the
+/// audit gap this closes. A P4 already confirmed is past booked and is refused.
+#[test]
+fn set_accommodation_on_booked_p4_writes_the_booking_change_event() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if db_exec("SELECT 1").is_none() {
+        return;
+    }
+    let n = common::nanos();
+    let plan = format!("zz_test_{n}_setacc_upd");
+    let dest = "jiufen";
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.to_string());
+        move || {
+            let _ = common::db_exec_teardown(&format!(
+                "DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"
+            ));
+            teardown_bookings(&plan, &dest);
+            teardown_plan(&plan, &dest);
+        }
+    });
+    common::seed_plan(&plan, dest, 1);
+    let fx = ensure_domestic_seed(n);
+    seed_p4_pending(&plan, dest);
+    let book = |price: &str| {
+        run(&[
+            "set-accommodation", "--hotel", fx[0].as_str(), "--room-type", "海景雙人房",
+            "--price", price, "--date", "2026-09-03", "--dest", dest, "--plan-id", &plan,
+        ])
+    };
+
+    let (ok, stdout, stderr) = book("5200");
+    if is_credless(&stderr) {
+        return;
+    }
+    assert!(ok, "first booking; stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("pending → populated → booking → booked"), "path printed: {stdout}");
+
+    let (ok, stdout, stderr) = book("5300");
+    assert!(ok, "price correction on a booked P4; stdout={stdout} stderr={stderr}");
+
+    let status_changes = scalar(&format!(
+        "SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}' AND scope = 'dest_process' \
+           AND process_id = 'process_4_accommodation' AND event = 'status_changed'"
+    ));
+    assert_eq!(status_changes.as_deref(), Some("3"), "only the first booking moved P4");
+    let prices = db_exec(&format!(
+        "SELECT d.value AS v FROM plan_event_data d JOIN plan_events e \
+           ON e.plan_id = d.plan_id AND e.scope = d.scope AND e.destination = d.destination \
+          AND e.process_id = d.process_id AND e.sort_order = d.sort_order \
+         WHERE d.plan_id = '{plan}' AND d.scope = 'dest_process' \
+           AND e.event = 'accommodation_booking_updated' AND d.key = 'price' ORDER BY d.sort_order"
+    ))
+    .expect("event kv");
+    assert_eq!(prices.column(), vec!["5200", "5300"], "one booking-change event per run; out={prices}");
+    let kv_keys = db_exec(&format!(
+        "SELECT DISTINCT d.key AS v FROM plan_event_data d JOIN plan_events e \
+           ON e.plan_id = d.plan_id AND e.scope = d.scope AND e.destination = d.destination \
+          AND e.process_id = d.process_id AND e.sort_order = d.sort_order \
+         WHERE d.plan_id = '{plan}' AND e.event = 'accommodation_booking_updated' ORDER BY d.key"
+    ))
+    .expect("event kv keys");
+    assert_eq!(kv_keys.column(), vec!["date", "hotel", "price"], "out={kv_keys}");
+    assert_eq!(
+        scalar(&format!("SELECT price_amount AS v FROM bookings_current WHERE trip_id = '{plan}'")).as_deref(),
+        Some("5300"),
+        "booking row carries the corrected price"
+    );
+
+    // Confirmed is past booked: refused, nothing written.
+    let (ok, stdout, stderr) =
+        run(&["set-process-status", "p4", "confirmed", "--dest", dest, "--plan-id", &plan]);
+    assert!(ok, "booked -> confirmed; stdout={stdout} stderr={stderr}");
+    let events_before = scalar(&format!("SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}'"));
+    let (ok, stdout, stderr) = book("5400");
+    assert!(!ok, "a confirmed P4 must refuse set-accommodation; stdout={stdout}");
+    assert!(stderr.contains("already confirmed"), "stderr={stderr}");
+    assert_eq!(
+        scalar(&format!("SELECT COUNT(*) AS n FROM plan_events WHERE plan_id = '{plan}'")),
+        events_before,
+        "nothing written"
+    );
+    assert_eq!(
+        scalar(&format!("SELECT price_amount AS v FROM bookings_current WHERE trip_id = '{plan}'")).as_deref(),
+        Some("5300"),
+        "booking row untouched"
+    );
 }

@@ -7,8 +7,9 @@
 //! event_log_state + one plan_destinations row + a plan_offer_selection row + a
 //! PENDING bookings_current row keyed exactly as the re-sync will re-key it. Runs
 //! `mark-booked --dest <slug>` and asserts the full side-effect set:
-//!   - process_statuses P3+4 selected -> booked
-//!   - event_log_dest_processes P3+4 -> booked (upserted in lockstep)
+//!   - process_statuses P3+4 selected -> booked, one status_changed per hop
+//!     (selected -> booking, booking -> booked) in both buckets
+//!   - NO event_log_dest_processes write (dropped 2026-11-11: no active reader)
 //!   - cascade_dirty_flags P3+4 dirty -> 0
 //!   - event_log_state.current_focus -> '<dest>.process_5_daily_itinerary'
 //!   - event_log_next_actions replaced with the 3 canonical follow-up actions
@@ -33,6 +34,10 @@ static MARK_BOOKED_LOCK: Mutex<()> = Mutex::new(());
 /// package booking. `booking_key` must equal the re-sync's derived key
 /// (`<trip_id>:<dest>:package:<offer_id>`) so the pending row is replaced.
 fn seed(plan: &str, dest: &str, offer_id: &str, booking_key: &str) {
+    seed_with_status(plan, dest, offer_id, booking_key, "selected");
+}
+
+fn seed_with_status(plan: &str, dest: &str, offer_id: &str, booking_key: &str, p34: &str) {
     seed_plan(plan, dest, 0);
     // NOTE: no `--` comments and no stray `;`/`'` inside this SQL — `db exec` splits
     // on `;` BEFORE stripping comment lines, so an inline comment would corrupt the
@@ -40,9 +45,7 @@ fn seed(plan: &str, dest: &str, offer_id: &str, booking_key: &str) {
     let trip_id = plan.replace('-', "_");
     let sql = format!(
         "INSERT OR REPLACE INTO process_statuses (plan_id, destination, process_id, status) \
-           VALUES ('{plan}', '{dest}', 'process_3_4_packages', 'selected'); \
-         INSERT OR REPLACE INTO event_log_dest_processes (plan_id, destination, process_id, status) \
-           VALUES ('{plan}', '{dest}', 'process_3_4_packages', 'selected'); \
+           VALUES ('{plan}', '{dest}', 'process_3_4_packages', '{p34}'); \
          INSERT OR REPLACE INTO cascade_dirty_flags (plan_id, destination, process_id, dirty) \
            VALUES ('{plan}', '{dest}', 'process_3_4_packages', 1); \
          INSERT OR REPLACE INTO event_log_state \
@@ -172,17 +175,44 @@ fn mark_booked_locks_full_write_surface() {
         "P3+4 process_statuses should move selected -> booked; out={ps}"
     );
 
-    // event_log_dest_processes: mirrored to booked in lockstep.
+    // event_log_dest_processes: no longer written (no active reader).
     let elp = db_exec(&format!(
-        "SELECT status AS v FROM event_log_dest_processes \
-         WHERE plan_id = '{plan}' AND destination = '{dest}' \
-           AND process_id = 'process_3_4_packages'"
+        "SELECT COUNT(*) AS n FROM event_log_dest_processes WHERE plan_id = '{plan}'"
     ))
     .expect("creds");
     assert_eq!(
         elp.scalar().as_deref(),
-        Some("booked"),
-        "event_log_dest_processes P3+4 should be booked; out={elp}"
+        Some("0"),
+        "mark-booked must not write event_log_dest_processes; out={elp}"
+    );
+
+    // One status_changed per hop, in both buckets.
+    let hops = db_exec(&format!(
+        "SELECT scope || ':' || from_state || '->' || to_state AS li FROM plan_events \
+         WHERE plan_id = '{plan}' AND process_id = 'process_3_4_packages' \
+           AND event = 'status_changed' ORDER BY scope, sort_order"
+    ))
+    .expect("creds");
+    assert_eq!(
+        hops.column(),
+        vec![
+            "dest_process:selected->booking",
+            "dest_process:booking->booked",
+            "timeline:selected->booking",
+            "timeline:booking->booked",
+        ],
+        "mark-booked must log every hop; out={hops}"
+    );
+    // booking_confirmed is allocated AFTER the hops on the timeline.
+    let order = db_exec(&format!(
+        "SELECT event AS li FROM plan_events WHERE plan_id = '{plan}' AND scope = 'timeline' \
+         ORDER BY sort_order"
+    ))
+    .expect("creds");
+    assert_eq!(
+        order.column(),
+        vec!["status_changed", "status_changed", "booking_confirmed"],
+        "timeline order; out={order}"
     );
 
     // cascade_dirty_flags: dirty cleared to 0.
@@ -310,4 +340,99 @@ fn mark_booked_locks_full_write_surface() {
     );
 
     // Guard's Drop runs teardown here (and on any panic above).
+}
+
+/// A run stranded at `booking` (the old hop-by-hop writer could fail between
+/// booking and booked) resumes: booking is eligible, one booking -> booked hop.
+#[test]
+fn mark_booked_resumes_from_booking() {
+    let _lock = MARK_BOOKED_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if db_exec("SELECT 1 AS n").is_none() {
+        return;
+    }
+    let tag = nanos();
+    let plan = format!("zz_test_{tag}_mb_resume");
+    let dest = format!("zz_test_{tag}_d");
+    let offer_id = format!("zz_test_{tag}_offer");
+    let trip_id = plan.replace('-', "_");
+    let booking_key = format!("{trip_id}:{dest}:package:{offer_id}");
+    let _g = Guard::new({
+        let (plan, dest, booking_key) = (plan.clone(), dest.clone(), booking_key.clone());
+        move || teardown(&plan, &dest, &booking_key)
+    });
+    seed_with_status(&plan, &dest, &offer_id, &booking_key, "booking");
+
+    let (ok, stdout, stderr) = run_mark_booked(&plan, &dest);
+    if !ok && is_credless(&stderr) {
+        return;
+    }
+    assert!(ok, "mark-booked should resume; stdout={stdout} stderr={stderr}");
+    assert!(
+        stdout.contains("P3+4 Packages: booking → booked"),
+        "resume path printed; stdout={stdout}"
+    );
+    let ps = db_exec(&format!(
+        "SELECT status AS v FROM process_statuses WHERE plan_id = '{plan}' \
+           AND destination = '{dest}' AND process_id = 'process_3_4_packages'"
+    ))
+    .expect("creds");
+    assert_eq!(ps.scalar().as_deref(), Some("booked"), "out={ps}");
+    let hops = db_exec(&format!(
+        "SELECT from_state || '->' || to_state AS li FROM plan_events \
+         WHERE plan_id = '{plan}' AND scope = 'dest_process' \
+           AND process_id = 'process_3_4_packages' AND event = 'status_changed' ORDER BY sort_order"
+    ))
+    .expect("creds");
+    assert_eq!(hops.column(), vec!["booking->booked"], "out={hops}");
+}
+
+/// The motivating failure: a failure between booking and booked must not strand
+/// the row at booking — the whole command rolls back.
+#[test]
+fn mark_booked_failure_mid_path_leaves_nothing() {
+    let _lock = MARK_BOOKED_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if db_exec("SELECT 1 AS n").is_none() {
+        return;
+    }
+    let tag = nanos();
+    let plan = format!("zz_test_{tag}_mb_fail");
+    let dest = format!("zz_test_{tag}_d");
+    let offer_id = format!("zz_test_{tag}_offer");
+    let trip_id = plan.replace('-', "_");
+    let booking_key = format!("{trip_id}:{dest}:package:{offer_id}");
+    let _g = Guard::new({
+        let (plan, dest, booking_key) = (plan.clone(), dest.clone(), booking_key.clone());
+        move || teardown(&plan, &dest, &booking_key)
+    });
+    seed(&plan, &dest, &offer_id, &booking_key);
+
+    let out = Command::new(bin())
+        .args(["mark-booked", "--dest", &dest])
+        .env("TRAVEL_PLAN_ID", &plan)
+        .env("TRAVEL_STATUS_FAIL_AT", "booked")
+        .output()
+        .expect("run mark-booked");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() && is_credless(&stderr) {
+        return;
+    }
+    assert!(!out.status.success(), "injected failure must fail mark-booked");
+    assert!(stderr.contains("injected failure"), "stderr={stderr}");
+
+    let row = db_exec(&format!(
+        "SELECT (SELECT status FROM process_statuses WHERE plan_id = '{plan}' \
+                   AND destination = '{dest}' AND process_id = 'process_3_4_packages') || '|' || \
+                (SELECT COUNT(*) FROM plan_events WHERE plan_id = '{plan}') || '|' || \
+                (SELECT COUNT(*) FROM operation_runs WHERE plan_id = '{plan}') || '|' || \
+                (SELECT version FROM plans WHERE plan_id = '{plan}') || '|' || \
+                (SELECT dirty FROM cascade_dirty_flags WHERE plan_id = '{plan}' \
+                   AND process_id = 'process_3_4_packages') || '|' || \
+                (SELECT current_focus FROM event_log_state WHERE plan_id = '{plan}') AS v"
+    ))
+    .expect("creds");
+    assert_eq!(
+        row.scalar(),
+        Some(format!("selected|0|0|0|1|{dest}.process_2_destination")),
+        "status, events, audit, version, dirty flag and focus all untouched; out={row}"
+    );
 }

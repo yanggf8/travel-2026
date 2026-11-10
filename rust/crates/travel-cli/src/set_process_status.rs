@@ -1,16 +1,22 @@
 // `travel set-process-status <process_id> <target_status> [--dest <slug>]` —
-// explicit process-status ladder advancement via the shared transition graph.
+// explicit process-status move along the process's own ladder
+// (cascade::status_machine: Anchor for P1/P2, Booking for P3_4/P3/P4,
+// Itinerary for P5).
 //
-// Mirrors the select-offer status_changed dual-bucket event pattern and uses
-// `travel_db::repo::process_statuses::upsert` for domain writes. The audit
-// triad stays in `cascade::common`.
+// Preflight first (no writes): the target must be on the process's ladder, the
+// row must exist, `plan_path(.., Mode::Any)` must find a legal path, and a P5
+// move to `confirmed` must pass the publish gate
+// (`validate::collect_publish_issues` — any Block refuses the confirm). Then one
+// BEGIN IMMEDIATE … COMMIT writes every hop (`apply_path`: upsert +
+// status_changed per hop) and the audit triad back half; output is printed only
+// after COMMIT.
 
 use crate::cascade::common::{
-    emit_status_changed, now_db_datetime, now_rfc3339, read_version, record_operation,
-    resolve_active_destination, validate_transition,
+    begin_immediate, finish_tx, now_db_datetime, now_rfc3339, read_version, record_operation,
+    resolve_active_destination,
 };
+use crate::cascade::status_machine::{self, Hop, Mode};
 use libsql::Connection;
-use std::collections::{HashSet, VecDeque};
 
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let parsed = parse_args(args)?;
@@ -59,18 +65,12 @@ struct ParsedArgs {
     dest: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StatusHop {
-    from: &'static str,
-    to: &'static str,
-}
-
 #[derive(Debug)]
 struct StatusChangeResult {
     process_id: &'static str,
     current_status: String,
     target_status: &'static str,
-    hops: Vec<StatusHop>,
+    hops: Vec<Hop>,
     version_before: Option<i64>,
     version_after: Option<i64>,
 }
@@ -114,7 +114,12 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
 fn usage_error() -> String {
     "Usage: set-process-status <process_id> <target_status> [--dest <slug>] [--plan-id <id>]
 Example: set-process-status process_3_transportation booked --dest okinawa_2026
-Aliases: p1|date, p2|destination, p34|packages, p3|transport|flight, p4|hotel, p5|itinerary"
+Aliases: p1|date, p2|destination, p34|packages, p3|transport|flight, p4|hotel, p5|itinerary
+Ladders: p1/p2 anchor = pending|researching|researched|confirmed|skipped;
+         p34/p3/p4 booking = pending|researching|researched|selecting|selected|populated|booking|booked|confirmed|skipped|cancelled
+                             (confirmed only via booked);
+         p5 itinerary = pending|researching|researched|confirmed|skipped
+         (p5 confirmed is refused while `validate publish` reports a blocker)"
         .to_string()
 }
 
@@ -157,65 +162,9 @@ fn normalize_status(raw: &str) -> Result<&'static str, String> {
         "booked" => Ok("booked"),
         "confirmed" => Ok("confirmed"),
         "skipped" => Ok("skipped"),
+        "cancelled" => Ok("cancelled"),
         other => Err(format!("unknown status: {other}")),
     }
-}
-
-fn status_literal(s: &str) -> Option<&'static str> {
-    normalize_status(s).ok()
-}
-
-async fn read_process_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<Option<String>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT status FROM process_statuses \
-             WHERE plan_id = ?1 AND destination = ?2 AND process_id = ?3",
-            libsql::params![plan_id.to_string(), dest.to_string(), process_id.to_string()],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let s: String = row.get(0).unwrap_or_default();
-        return Ok(if s.is_empty() { None } else { Some(s) });
-    }
-    Ok(None)
-}
-
-fn legal_status_path(current: &str, target: &str) -> Result<Vec<StatusHop>, String> {
-    if current == target {
-        return Ok(Vec::new());
-    }
-    let start = status_literal(current)
-        .filter(|s| !crate::cascade::common::allowed_transition_targets(s).is_empty())
-        .ok_or_else(|| format!("unknown current status: {current}"))?;
-    let end = status_literal(target).ok_or_else(|| format!("unknown target status: {target}"))?;
-
-    let mut queue: VecDeque<(&'static str, Vec<StatusHop>)> = VecDeque::new();
-    let mut visited: HashSet<&'static str> = HashSet::new();
-    queue.push_back((start, Vec::new()));
-    visited.insert(start);
-
-    while let Some((node, path)) = queue.pop_front() {
-        for &next in crate::cascade::common::allowed_transition_targets(node) {
-            if visited.contains(next) {
-                continue;
-            }
-            let mut new_path = path.clone();
-            new_path.push(StatusHop { from: node, to: next });
-            if next == end {
-                return Ok(new_path);
-            }
-            visited.insert(next);
-            queue.push_back((next, new_path));
-        }
-    }
-
-    Err(format!("no legal status path from {current} to {target}"))
 }
 
 async fn execute(
@@ -225,16 +174,20 @@ async fn execute(
     process_id: &'static str,
     target_status: &'static str,
 ) -> Result<StatusChangeResult, String> {
-    let now_iso = now_rfc3339();
-    let now_db = now_db_datetime();
+    // ── preflight: nothing below writes until every check passed ──────────
+    let ladder = status_machine::ladder(process_id)?;
+    if !status_machine::on_ladder(ladder, target_status) {
+        return Err(format!(
+            "status {target_status} is not on the {} ladder",
+            ladder.name()
+        ));
+    }
 
-    let current = read_process_status(conn, plan_id, dest, process_id)
+    let current = travel_db::repo::process_statuses::get(conn, plan_id, dest, process_id)
         .await?
-        .ok_or_else(|| {
-            format!("no process_statuses row for {dest}.{process_id}")
-        })?;
+        .ok_or_else(|| format!("no process_statuses row for {dest}.{process_id}"))?;
 
-    let hops = legal_status_path(&current, target_status)?;
+    let hops = status_machine::plan_path(ladder, &current, target_status, Mode::Any)?;
 
     if hops.is_empty() {
         return Ok(StatusChangeResult {
@@ -247,37 +200,43 @@ async fn execute(
         });
     }
 
-    let version_before = read_version(conn, plan_id).await?;
-    let version_after = version_before + 1;
+    if process_id == status_machine::P5 && target_status == "confirmed" {
+        p5_confirm_gate(conn, plan_id, dest).await?;
+    }
 
-    for hop in &hops {
-        validate_transition(Some(hop.from), hop.to, dest, process_id)?;
-        travel_db::repo::process_statuses::upsert(
-            conn, plan_id, dest, process_id, hop.to, &now_db,
-        )
-        .await?;
-        emit_status_changed(
+    // ── one transaction: hops + audit ─────────────────────────────────────
+    let now_iso = now_rfc3339();
+    let now_db = now_db_datetime();
+    begin_immediate(conn, "set-process-status").await?;
+    let written: Result<(i64, i64), String> = async {
+        let version_before = read_version(conn, plan_id).await?;
+        let version_after = version_before + 1;
+        status_machine::apply_path(
             conn,
             plan_id,
             dest,
             process_id,
-            Some(hop.from),
-            hop.to,
+            Some(&current),
+            &hops,
+            target_status,
             &now_iso,
+            &now_db,
         )
         .await?;
+        record_operation(
+            conn,
+            plan_id,
+            "set-process-status",
+            &format!("{dest} {process_id} {current}->{target_status}"),
+            version_before,
+            version_after,
+            &now_db,
+        )
+        .await?;
+        Ok((version_before, version_after))
     }
-
-    record_operation(
-        conn,
-        plan_id,
-        "set-process-status",
-        &format!("{dest} {process_id} {current}->{target_status}"),
-        version_before,
-        version_after,
-        &now_db,
-    )
-    .await?;
+    .await;
+    let (version_before, version_after) = finish_tx(conn, "set-process-status", written).await?;
 
     Ok(StatusChangeResult {
         process_id,
@@ -289,13 +248,23 @@ async fn execute(
     })
 }
 
-fn format_path(current: &str, hops: &[StatusHop]) -> String {
-    let mut parts: Vec<&str> = Vec::with_capacity(hops.len() + 1);
-    parts.push(current);
-    for hop in hops {
-        parts.push(hop.to);
+/// P5 → confirmed means the itinerary is final: refuse while the publish gate
+/// reports any blocker (warnings and info do not block).
+async fn p5_confirm_gate(conn: &Connection, plan_id: &str, dest: &str) -> Result<(), String> {
+    let issues = crate::validate::collect_publish_issues(conn, plan_id, dest).await?;
+    let blockers: Vec<String> = issues
+        .iter()
+        .filter(|i| i.is_block())
+        .map(|i| format!("  ❌ [{}] {}", i.category, i.message))
+        .collect();
+    if blockers.is_empty() {
+        return Ok(());
     }
-    parts.join(" -> ")
+    Err(format!(
+        "P5 confirm refused for {dest}: {} publish blocker(s); nothing was written. Fix them, then re-run (full report: travel validate publish --plan-id {plan_id} --dest {dest})\n{}",
+        blockers.len(),
+        blockers.join("\n")
+    ))
 }
 
 fn print_result(plan_id: &str, dest: &str, result: &StatusChangeResult) {
@@ -312,7 +281,7 @@ fn print_result(plan_id: &str, dest: &str, result: &StatusChangeResult) {
     println!("   Process: {}", result.process_id);
     println!(
         "   Path: {}",
-        format_path(&result.current_status, &result.hops)
+        status_machine::format_path(&result.current_status, &result.hops, " -> ")
     );
     if let (Some(before), Some(after)) = (result.version_before, result.version_after) {
         println!("   Version: {before} -> {after}");
@@ -321,57 +290,4 @@ fn print_result(plan_id: &str, dest: &str, result: &StatusChangeResult) {
         "✅ {} → {}",
         result.process_id, result.target_status
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn path_pending_to_booked_walks_shortest_chain() {
-        assert_eq!(
-            legal_status_path("pending", "booked").unwrap(),
-            vec![
-                StatusHop {
-                    from: "pending",
-                    to: "populated"
-                },
-                StatusHop {
-                    from: "populated",
-                    to: "booking"
-                },
-                StatusHop {
-                    from: "booking",
-                    to: "booked"
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn path_idempotent_is_empty() {
-        assert!(legal_status_path("booked", "booked").unwrap().is_empty());
-    }
-
-    #[test]
-    fn path_booking_to_confirmed() {
-        assert_eq!(
-            legal_status_path("booking", "confirmed").unwrap(),
-            vec![
-                StatusHop {
-                    from: "booking",
-                    to: "booked"
-                },
-                StatusHop {
-                    from: "booked",
-                    to: "confirmed"
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn path_unknown_current_fails() {
-        assert!(legal_status_path("archived", "booked").is_err());
-    }
 }

@@ -114,12 +114,15 @@ fn render(view: &PlanView, book_by: &HashMap<(i64, String, i64), String>) -> Str
     out.push_str("📦 PACKAGE\n");
     out.push_str(&"─".repeat(50));
     out.push('\n');
+    // `confirmed` is past `booked` on the Booking ladder (reachable only through it).
     if package_status == "booked" {
         out.push_str("  Status: 🎫 Booked\n");
+    } else if package_status == "confirmed" {
+        out.push_str("  Status: 🎫 Confirmed\n");
     } else {
         out.push_str(&format!("  Status: ⏳ {package_status}\n"));
     }
-    if (package_status == "booked" || package_status == "selected")
+    if matches!(package_status, "booked" | "confirmed" | "selected")
         && let Some(sel) = &view.selected_offer
         && !sel.id.is_empty()
     {

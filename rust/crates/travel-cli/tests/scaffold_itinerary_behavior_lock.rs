@@ -365,13 +365,17 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
          FROM plan_events WHERE plan_id = {p} \
          ORDER BY CASE scope WHEN 'dest_process' THEN 0 ELSE 1 END, sort_order"
     ));
+    // Status machine (2026-11-11): the P5 move to researching is a logged hop
+    // (pending -> researching), emitted before itinerary_scaffolded.
     assert_eq!(
         events.column(),
         vec![
-            format!("dest_process|{dest}|process_5_daily_itinerary|0|itinerary_scaffolded|<NULL>><NULL>"),
-            "timeline||process_5_daily_itinerary|0|itinerary_scaffolded|<NULL>><NULL>".to_string(),
+            format!("dest_process|{dest}|process_5_daily_itinerary|0|status_changed|pending>researching"),
+            format!("dest_process|{dest}|process_5_daily_itinerary|1|itinerary_scaffolded|<NULL>><NULL>"),
+            "timeline||process_5_daily_itinerary|0|status_changed|pending>researching".to_string(),
+            "timeline||process_5_daily_itinerary|1|itinerary_scaffolded|<NULL>><NULL>".to_string(),
         ],
-        "plan_events should include current dest_process and timeline emissions; out={events}"
+        "plan_events should include the P5 hop and the dest_process + timeline emissions; out={events}"
     );
 
     let event_data = exec_ok(&format!(
@@ -383,11 +387,71 @@ fn scaffold_itinerary_refuses_then_replaces_and_audits_current_surface() {
     assert_eq!(
         event_data.column(),
         vec![
-            format!("dest_process|{dest}|process_5_daily_itinerary|0|day_types=arrival, full, departure"),
-            format!("dest_process|{dest}|process_5_daily_itinerary|0|days_count=3"),
-            "timeline||process_5_daily_itinerary|0|day_types=arrival, full, departure".to_string(),
-            "timeline||process_5_daily_itinerary|0|days_count=3".to_string(),
+            format!("dest_process|{dest}|process_5_daily_itinerary|1|day_types=arrival, full, departure"),
+            format!("dest_process|{dest}|process_5_daily_itinerary|1|days_count=3"),
+            "timeline||process_5_daily_itinerary|1|day_types=arrival, full, departure".to_string(),
+            "timeline||process_5_daily_itinerary|1|days_count=3".to_string(),
         ],
         "plan_event_data should include the current two KV pairs for both emitted scopes; out={event_data}"
     );
+}
+
+/// A re-scaffold of a CONFIRMED itinerary is a logged reset along the itinerary
+/// ladder: confirmed -> researched -> researching, both hops logged and printed.
+#[test]
+fn scaffold_on_confirmed_p5_logs_the_reset() {
+    let _lock = SCAFFOLD_ITINERARY_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if db_exec("SELECT 1 AS n").is_none() {
+        return;
+    }
+    let tag = nanos();
+    let plan = format!("zz_test_{tag}_scaffold_reset");
+    let dest = format!("zz_test_{tag}_d");
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.clone());
+        move || teardown_plan(&plan, &dest)
+    });
+    seed_plan_anchor_and_flights(&plan, &dest);
+    let p = sql_lit(&plan);
+    let d = sql_lit(&dest);
+    exec_ok(&format!(
+        "INSERT OR REPLACE INTO process_statuses (plan_id, destination, process_id, status) \
+         VALUES ({p}, {d}, 'process_5_daily_itinerary', 'confirmed')"
+    ));
+
+    let (ok, out, err) = run_scaffold(&plan, &dest, false);
+    if !ok && is_credless(&err) {
+        return;
+    }
+    assert!(ok, "scaffold should succeed on an empty itinerary; err={err}\nout={out}");
+    assert!(
+        out.contains("P5 itinerary: confirmed → researched → researching"),
+        "the reset hops are printed; out={out}"
+    );
+    let hops = exec_ok(&format!(
+        "SELECT scope || ':' || from_state || '>' || to_state AS v FROM plan_events \
+         WHERE plan_id = {p} AND event = 'status_changed' ORDER BY scope, sort_order"
+    ));
+    assert_eq!(
+        hops.column(),
+        vec![
+            "dest_process:confirmed>researched".to_string(),
+            "dest_process:researched>researching".to_string(),
+            "timeline:confirmed>researched".to_string(),
+            "timeline:researched>researching".to_string(),
+        ],
+        "out={hops}"
+    );
+    let status = exec_ok(&format!(
+        "SELECT status AS v FROM process_statuses WHERE plan_id = {p} AND destination = {d} \
+           AND process_id = 'process_5_daily_itinerary'"
+    ));
+    assert_eq!(status.scalar().as_deref(), Some("researching"));
+    let audit = exec_ok(&format!(
+        "SELECT COUNT(*) || '|' || (SELECT version FROM plans WHERE plan_id = {p}) AS v \
+         FROM operation_runs WHERE plan_id = {p}"
+    ));
+    assert_eq!(audit.scalar().as_deref(), Some("1|12"), "one audit row, version 11 -> 12");
 }

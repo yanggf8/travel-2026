@@ -53,22 +53,29 @@
 // timeline sort_order is a single global index — both = MAX(existing)+1,
 // incremented per appended event in emission order.
 //
+// STATUS MOVES are single-hop (cascade::status_machine, Booking ladder), checked
+// in a preflight BEFORE any write: P3_4 → selected must already be selected or
+// be one legal edge away (researched/selecting/populated/booking → selected;
+// booked/confirmed are refused); P3/P4 → populated likewise (pending/selected →
+// populated; booking/booked/confirmed refused). Any failure → Err with nothing
+// written. A process already at its target gets no status write and no
+// status_changed event, but a different offer still writes the selection,
+// offer_selected, the populate rows and the audit. A missing row is inserted
+// directly with from_state NULL. All writes run in ONE BEGIN IMMEDIATE …
+// COMMIT; output is printed only after COMMIT.
+//
 // Volatile fields (normalized out of the diff):
 //   - updated_at / last_changed on every row
 //   - operation_runs.run_id / started_at / completed_at
 //   - plan_events.event_at; plan_offer_selection.selected_at
 
 use super::common::{
-    emit_event_both, emit_status_changed, insert_event, insert_kv_rows,
+    begin_immediate, emit_event_both, finish_tx, insert_event, insert_kv_rows,
     next_timeline_sort_order, now_db_datetime, now_rfc3339, read_version,
-    validate_transition,
 };
+use super::status_machine::{self, Hop, Ladder, P3, P34, P4};
 use crate::status::format_date;
 use libsql::Connection;
-
-const P34: &str = "process_3_4_packages";
-const P3: &str = "process_3_transportation";
-const P4: &str = "process_4_accommodation";
 
 /// One flight leg from the chosen offer (`plan_offer_flights`).
 struct OfferFlightLeg {
@@ -143,6 +150,61 @@ pub async fn run(
     Ok(())
 }
 
+/// One process's planned status move: the row's current status (None = no row)
+/// and the single hop to the target (empty = no write).
+struct StatusMove {
+    process_id: &'static str,
+    from: Option<String>,
+    hops: Vec<Hop>,
+    to: &'static str,
+}
+
+impl StatusMove {
+    async fn plan(
+        conn: &Connection,
+        plan_id: &str,
+        dest: &str,
+        process_id: &'static str,
+        to: &'static str,
+    ) -> Result<Self, String> {
+        let from = travel_db::repo::process_statuses::get(conn, plan_id, dest, process_id).await?;
+        let hops = status_machine::single_hop(Ladder::Booking, from.as_deref(), to)
+            .map_err(|e| {
+                let hint = match from.as_deref() {
+                    Some("pending" | "researching") if to == "selected" => format!(
+                        " — offers are normally promoted first (promote-offers / import-offers raise it to researched); \
+                         or move it explicitly: travel set-process-status {process_id} researched --dest {dest} --plan-id {plan_id}"
+                    ),
+                    _ => String::new(),
+                };
+                format!("select-offer refused for {dest}.{process_id}: {e}; nothing was written{hint}")
+            })?;
+        Ok(StatusMove { process_id, from, hops, to })
+    }
+
+    async fn apply(
+        &self,
+        conn: &Connection,
+        plan_id: &str,
+        dest: &str,
+        now_iso: &str,
+        now_db: &str,
+    ) -> Result<(), String> {
+        status_machine::apply_path(
+            conn,
+            plan_id,
+            dest,
+            self.process_id,
+            self.from.as_deref(),
+            &self.hops,
+            self.to,
+            now_iso,
+            now_db,
+        )
+        .await
+    }
+}
+
 /// The full cascade write. Kept separate from `run` so the side-effect
 /// surface is one auditable function (matches date_change::execute).
 #[allow(clippy::too_many_arguments)]
@@ -155,108 +217,108 @@ async fn execute(
     populate: bool,
     offer: &OfferData,
 ) -> Result<i64, String> {
+    // --- 0. Preflight: every status move this run makes, BEFORE any write. ---
+    let p34 = StatusMove::plan(conn, plan_id, dest, P34, "selected").await?;
+    let p3 = if populate && offer.has_flight() {
+        Some(StatusMove::plan(conn, plan_id, dest, P3, "populated").await?)
+    } else {
+        None
+    };
+    let p4 = if populate && offer.has_hotel() {
+        Some(StatusMove::plan(conn, plan_id, dest, P4, "populated").await?)
+    } else {
+        None
+    };
+
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
-    let version_before = read_version(conn, plan_id).await?;
-    let version_after = version_before + 1;
+    begin_immediate(conn, "select-offer").await?;
+    let written: Result<i64, String> = async {
+        let version_before = read_version(conn, plan_id).await?;
+        let version_after = version_before + 1;
 
-    // --- 0. Validate the P3_4 transition BEFORE any write. The TS path
-    //    mutates the offer selection in memory first, but throws inside
-    //    setProcessStatus before save() ever flushes — so on an invalid
-    //    transition NOTHING is persisted. Validating up front gives the
-    //    same all-or-nothing behavior (no stray plan_offer_selection row).
-    let p34_from = read_status(conn, plan_id, dest, P34).await?;
-    validate_transition(p34_from.as_deref(), "selected", dest, P34)?;
-
-    // --- 1. plan_offer_selection (DELETE-then-insert). selected_date=NULL. ---
-    travel_db::repo::plan_offers::set_selection(conn, plan_id, dest, offer_id, &now_iso, &now_db)
-        .await?;
-
-    // --- 2. P3_4 researched→selected (UPDATE + status_changed) ---
-    set_status(conn, plan_id, dest, P34, "selected", &now_db).await?;
-    emit_status_changed(conn, plan_id, dest, P34, p34_from.as_deref(), "selected", &now_iso)
-        .await?;
-
-    // --- 3. offer_selected event (P3_4) ---
-    {
-        // offer_name is `String(offer.name)` where the assembled offer has
-        // no `name` field → "undefined". Faithful to the TS KV value.
-        let kv: Vec<(&str, String)> = vec![
-            ("date", date.to_string()),
-            ("hotel", offer.hotel_name.clone().unwrap_or_else(|| "undefined".to_string())),
-            ("offer_id", offer_id.to_string()),
-            ("offer_name", "undefined".to_string()),
-            ("price_total", offer.price_total.clone().unwrap_or_else(|| "undefined".to_string())),
-        ];
-        emit_event_both(conn, plan_id, dest, P34, "offer_selected", &now_iso, None, None, &kv)
+        // --- 1. plan_offer_selection (DELETE-then-insert). selected_date=NULL. ---
+        travel_db::repo::plan_offers::set_selection(conn, plan_id, dest, offer_id, &now_iso, &now_db)
             .await?;
-    }
 
-    // --- 4. populate cascade (if requested) ---
-    if populate {
-        if offer.has_flight() {
-            rewrite_flight_legs(conn, plan_id, dest, offer_id, date, offer, &now_db).await?;
-            let p3_from = read_status(conn, plan_id, dest, P3).await?;
-            validate_transition(p3_from.as_deref(), "populated", dest, P3)?;
-            set_status(conn, plan_id, dest, P3, "populated", &now_db).await?;
-            emit_status_changed(conn, plan_id, dest, P3, p3_from.as_deref(), "populated", &now_iso)
+        // --- 2. P3_4 → selected (status write + status_changed, unless already selected) ---
+        p34.apply(conn, plan_id, dest, &now_iso, &now_db).await?;
+
+        // --- 3. offer_selected event (P3_4) ---
+        {
+            // offer_name is `String(offer.name)` where the assembled offer has
+            // no `name` field → "undefined". Faithful to the TS KV value.
+            let kv: Vec<(&str, String)> = vec![
+                ("date", date.to_string()),
+                ("hotel", offer.hotel_name.clone().unwrap_or_else(|| "undefined".to_string())),
+                ("offer_id", offer_id.to_string()),
+                ("offer_name", "undefined".to_string()),
+                ("price_total", offer.price_total.clone().unwrap_or_else(|| "undefined".to_string())),
+            ];
+            emit_event_both(conn, plan_id, dest, P34, "offer_selected", &now_iso, None, None, &kv)
                 .await?;
         }
-        if offer.has_hotel() {
-            rewrite_hotel(conn, plan_id, dest, offer_id, date, offer, &now_db).await?;
-            let p4_from = read_status(conn, plan_id, dest, P4).await?;
-            validate_transition(p4_from.as_deref(), "populated", dest, P4)?;
-            set_status(conn, plan_id, dest, P4, "populated", &now_db).await?;
-            emit_status_changed(conn, plan_id, dest, P4, p4_from.as_deref(), "populated", &now_iso)
-                .await?;
+
+        // --- 4. populate cascade (if requested) ---
+        if populate {
+            if let Some(p3) = &p3 {
+                rewrite_flight_legs(conn, plan_id, dest, offer_id, date, offer, &now_db).await?;
+                p3.apply(conn, plan_id, dest, &now_iso, &now_db).await?;
+            }
+            if let Some(p4) = &p4 {
+                rewrite_hotel(conn, plan_id, dest, offer_id, date, offer, &now_db).await?;
+                p4.apply(conn, plan_id, dest, &now_iso, &now_db).await?;
+            }
+
+            // cascade_populated — TIMELINE ONLY (no dest_process row).
+            let so = next_timeline_sort_order(conn, plan_id).await?;
+            insert_event(
+                conn,
+                plan_id,
+                "timeline",
+                "",
+                "",
+                so,
+                "cascade_populated",
+                &now_iso,
+                None,
+                None,
+            )
+            .await?;
+            insert_kv_rows(
+                conn,
+                plan_id,
+                "timeline",
+                "",
+                "",
+                so,
+                &[
+                    (
+                        "populated",
+                        "process_3_transportation, process_4_accommodation".to_string(),
+                    ),
+                    ("source", format!("package:{offer_id}")),
+                ],
+            )
+            .await?;
         }
 
-        // cascade_populated — TIMELINE ONLY (no dest_process row).
-        let so = next_timeline_sort_order(conn, plan_id).await?;
-        insert_event(
+        // --- 5. operation_runs + plans.version (shared audit-triad back half) ---
+        super::common::record_operation(
             conn,
             plan_id,
-            "timeline",
-            "",
-            "",
-            so,
-            "cascade_populated",
-            &now_iso,
-            None,
-            None,
+            "select-offer",
+            offer_id,
+            version_before,
+            version_after,
+            &now_db,
         )
         .await?;
-        insert_kv_rows(
-            conn,
-            plan_id,
-            "timeline",
-            "",
-            "",
-            so,
-            &[
-                (
-                    "populated",
-                    "process_3_transportation, process_4_accommodation".to_string(),
-                ),
-                ("source", format!("package:{offer_id}")),
-            ],
-        )
-        .await?;
+
+        Ok(version_after)
     }
-
-    // --- 5. operation_runs + plans.version (shared audit-triad back half) ---
-    super::common::record_operation(
-        conn,
-        plan_id,
-        "select-offer",
-        offer_id,
-        version_before,
-        version_after,
-        &now_db,
-    )
-    .await?;
-
-    Ok(version_after)
+    .await;
+    finish_tx(conn, "select-offer", written).await
 }
 
 /// DELETE all flight_legs for the destination, reinsert one row per offer
@@ -317,47 +379,6 @@ async fn rewrite_hotel(
         access: offer.hotel_access.clone(),
     };
     travel_db::repo::hotels::replace_from_offer(conn, plan_id, dest, &input, now_db).await
-}
-
-// ---------------------------------------------------------------------------
-// Status helpers
-// ---------------------------------------------------------------------------
-
-/// Read a process status, or None if the row is missing.
-async fn read_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-) -> Result<Option<String>, String> {
-    let mut rows = conn
-        .query(
-            "SELECT status FROM process_statuses \
-             WHERE plan_id = ?1 AND destination = ?2 AND process_id = ?3",
-            libsql::params![plan_id.to_string(), dest.to_string(), process_id.to_string()],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let s: String = row.get(0).unwrap_or_default();
-        return Ok(if s.is_empty() { None } else { Some(s) });
-    }
-    Ok(None)
-}
-
-async fn set_status(
-    conn: &Connection,
-    plan_id: &str,
-    dest: &str,
-    process_id: &str,
-    status: &str,
-    now_db: &str,
-) -> Result<(), String> {
-    // UPSERT, not a bare UPDATE: a real plan carries the full P1–P5 status ladder, but a
-    // plan whose ladder lacks this process_id (e.g. seeded without it) would otherwise have
-    // this write silently no-op, leaving the populate cascade invisible (GitHub issue #5).
-    // INSERT-on-missing keeps the populate honest; ON CONFLICT preserves the UPDATE path.
-    travel_db::repo::process_statuses::upsert(conn, plan_id, dest, process_id, status, now_db).await
 }
 
 // ---------------------------------------------------------------------------

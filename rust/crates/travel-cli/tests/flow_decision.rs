@@ -7,6 +7,10 @@ use std::process::Command;
 mod common;
 use common::{bin, db_exec, nanos, seed_plan, teardown_plan, Guard};
 
+// flow-decision writes in ONE transaction; two concurrent transactions on the
+// shared DB hit SQLITE_BUSY, so the DB tests in this file run one at a time.
+static FLOW_DECISION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn count(sql: &str) -> Option<i64> {
     db_exec(sql)?.scalar().and_then(|s| s.parse::<i64>().ok())
 }
@@ -64,6 +68,7 @@ fn assert_no_audit_rows(plan_id: &str) {
 
 #[test]
 fn flow_decision_mode_happy_path_writes_triad() {
+    let _lock = FLOW_DECISION_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
     let plan_id = format!("zztest-flow-mode-{tag}");
     let dest = format!("zztest_flow_{tag}");
@@ -146,6 +151,7 @@ fn flow_decision_mode_happy_path_writes_triad() {
 
 #[test]
 fn flow_decision_mode_without_mode_flag_fails_writes_nothing() {
+    let _lock = FLOW_DECISION_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
     let plan_id = format!("zztest-flow-nomode-{tag}");
     let dest = format!("zztest_flow_{tag}");
@@ -165,6 +171,7 @@ fn flow_decision_mode_without_mode_flag_fails_writes_nothing() {
 
 #[test]
 fn flow_decision_enter_with_mode_flag_fails() {
+    let _lock = FLOW_DECISION_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
     let plan_id = format!("zztest-flow-badmode-{tag}");
     let dest = format!("zztest_flow_{tag}");
@@ -187,6 +194,7 @@ fn flow_decision_enter_with_mode_flag_fails() {
 
 #[test]
 fn flow_decision_invalid_stage_fails() {
+    let _lock = FLOW_DECISION_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
     let plan_id = format!("zztest-flow-badstage-{tag}");
     let dest = format!("zztest_flow_{tag}");
@@ -206,6 +214,7 @@ fn flow_decision_invalid_stage_fails() {
 
 #[test]
 fn flow_decision_enter_happy_path_writes_triad() {
+    let _lock = FLOW_DECISION_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tag = nanos();
     let plan_id = format!("zztest-flow-enter-{tag}");
     let dest = format!("zztest_flow_{tag}");

@@ -72,6 +72,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_day_variants(&mut issues).await;
     validate_plan_documents(&mut issues).await;
     validate_fit_booking(&mut issues).await;
+    validate_process_status_ladders(&mut issues).await;
 
     // Always-run: documentation ↔ code drift checks
     validate_completed_items(&mut issues);
@@ -2017,16 +2018,22 @@ fn format_loc(r: &Issue) -> String {
 // ============================================================================
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PublishSeverity {
+pub(crate) enum PublishSeverity {
     Block,
     Warn,
     Info,
 }
 
-struct PublishIssue {
-    category: String,
-    severity: PublishSeverity,
-    message: String,
+pub(crate) struct PublishIssue {
+    pub(crate) category: String,
+    pub(crate) severity: PublishSeverity,
+    pub(crate) message: String,
+}
+
+impl PublishIssue {
+    pub(crate) fn is_block(&self) -> bool {
+        self.severity == PublishSeverity::Block
+    }
 }
 
 /// Run publish-readiness checks for one plan + destination. Exit 1 on any BLOCK.
@@ -2037,8 +2044,33 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
 
     println!("Running publish-readiness validation for {plan_id} ({destination})...\n");
 
+    let issues = collect_publish_issues(&conn, plan_id, &destination).await?;
+
+    emit_publish_report(&issues);
+
+    let blockers = issues
+        .iter()
+        .filter(|i| i.severity == PublishSeverity::Block)
+        .count();
+    if blockers > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// The publish-readiness checks for one plan + (already resolved) destination,
+/// without printing. `validate publish` prints them; `set-process-status p5
+/// confirmed` refuses on any Block. A past plan keeps its `is_past` handling
+/// (no ZH/weather/content-depth checks).
+pub(crate) async fn collect_publish_issues(
+    conn: &libsql::Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<PublishIssue>, String> {
+    let destination = destination.to_string();
+
     let today = crate::plans::today_iso_pub();
-    let lifecycle = read_lifecycle(&conn, plan_id, &destination).await?;
+    let lifecycle = read_lifecycle(conn, plan_id, &destination).await?;
     let is_past = lifecycle.as_deref() == Some("past");
     let check_zh_weather = !is_past;
 
@@ -2056,7 +2088,8 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
 
     // Itinerary errors (BLOCK) — reuse validate-itinerary error path
     if day_count > 0 {
-        let errors = crate::validate_itinerary::error_messages(plan_id, dest_opt).await?;
+        let errors =
+            crate::validate_itinerary::error_messages(conn, plan_id, &destination).await?;
         for msg in errors {
             issues.push(PublishIssue {
                 category: "itinerary".to_string(),
@@ -2255,16 +2288,7 @@ async fn run_publish(plan_id: &str, dest_opt: Option<&str>) -> Result<(), String
         }
     }
 
-    emit_publish_report(&issues);
-
-    let blockers = issues
-        .iter()
-        .filter(|i| i.severity == PublishSeverity::Block)
-        .count();
-    if blockers > 0 {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(issues)
 }
 
 async fn read_lifecycle(
@@ -2542,6 +2566,57 @@ async fn validate_fit_booking(issues: &mut Vec<Issue>) {
         ),
         Err(e) => push(issues, Severity::Error, format!("cannot check FIT booked markers: {e}")),
     }
+}
+
+/// `validate data`: every process row of a live plan must hold a status on its
+/// own ladder (cascade::status_machine — Anchor P1/P2, Booking P3_4/P3/P4,
+/// Itinerary P5). Off-ladder statuses and unknown process ids are Errors, so
+/// drift fails loud. A check that cannot run is an Error too.
+async fn validate_process_status_ladders(issues: &mut Vec<Issue>) {
+    let push = |issues: &mut Vec<Issue>, message: String| {
+        issues.push(Issue {
+            category: "process-status".to_string(),
+            severity: Severity::Error,
+            message,
+            file: Some("turso:process_statuses".to_string()),
+            line: None,
+        })
+    };
+    let conn = match db::connect_read().await {
+        Ok(c) => c,
+        Err(e) => {
+            push(issues, format!("cannot check process status ladders: {e}"));
+            return;
+        }
+    };
+    match travel_db::repo::process_statuses::list_live(&conn).await {
+        Ok(rows) => {
+            for row in &rows {
+                if let Some(message) = off_ladder_message(row) {
+                    push(issues, message);
+                }
+            }
+        }
+        Err(e) => push(issues, format!("cannot check process status ladders: {e}")),
+    }
+}
+
+/// Pure predicate behind `validate_process_status_ladders`.
+fn off_ladder_message(row: &travel_db::repo::process_statuses::ProcessStatusRow) -> Option<String> {
+    use crate::cascade::status_machine::{ladder, on_ladder};
+    let at = format!("{} / {} {}", row.plan_id, row.destination, row.process_id);
+    let l = match ladder(&row.process_id) {
+        Ok(l) => l,
+        Err(e) => return Some(format!("{at}: {e}")),
+    };
+    if on_ladder(l, &row.status) {
+        return None;
+    }
+    let shown = if row.status.is_empty() { "<empty>" } else { row.status.as_str() };
+    Some(format!(
+        "{at}: status {shown} is not on the {} ladder — move it with set-process-status",
+        l.name()
+    ))
 }
 
 /// Pure predicate behind `validate_fit_booking`: the warning lines for one
@@ -3117,6 +3192,30 @@ mod fit_booking_tests {
             booked,
             selection_matches,
         }
+    }
+
+    fn ps_row(process_id: &str, status: &str) -> travel_db::repo::process_statuses::ProcessStatusRow {
+        travel_db::repo::process_statuses::ProcessStatusRow {
+            plan_id: "p".to_string(),
+            destination: "d".to_string(),
+            process_id: process_id.to_string(),
+            status: status.to_string(),
+        }
+    }
+
+    #[test]
+    fn off_ladder_statuses_are_flagged() {
+        assert!(off_ladder_message(&ps_row("process_5_daily_itinerary", "researched")).is_none());
+        assert!(off_ladder_message(&ps_row("process_4_accommodation", "cancelled")).is_none());
+        assert!(off_ladder_message(&ps_row("process_1_date_anchor", "confirmed")).is_none());
+        let m = off_ladder_message(&ps_row("process_5_daily_itinerary", "booked")).unwrap();
+        assert!(m.contains("not on the itinerary ladder"), "{m}");
+        let m = off_ladder_message(&ps_row("process_2_destination", "selecting")).unwrap();
+        assert!(m.contains("not on the anchor ladder"), "{m}");
+        assert!(off_ladder_message(&ps_row("process_3_transportation", "archived")).is_some());
+        assert!(off_ladder_message(&ps_row("process_3_transportation", "")).is_some());
+        let m = off_ladder_message(&ps_row("process_9_bogus", "pending")).unwrap();
+        assert!(m.contains("unknown process id"), "{m}");
     }
 
     #[test]

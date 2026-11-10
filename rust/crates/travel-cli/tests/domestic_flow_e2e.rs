@@ -2,6 +2,20 @@ mod common;
 use common::{bin, db_exec, is_credless, teardown_plan, Guard};
 use std::process::Command;
 
+// The commands under test write in ONE transaction; two concurrent transactions
+// on the shared DB hit SQLITE_BUSY, so the DB tests in this file run one at a time.
+static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The booking-ledger rows set-accommodation writes are NOT plan-keyed
+/// (bookings_current/payload keyed by `<plan>:` booking_key, legacy `bookings` by
+/// `domestic:<plan>:` offer_id), so teardown_plan misses them — run before it.
+fn teardown_bookings(plan: &str, dest: &str) {
+    common::teardown_trip_bookings(plan);
+    let _ = common::db_exec_teardown(&format!(
+        "DELETE FROM bookings WHERE destination = '{dest}' AND offer_id LIKE 'domestic:{plan}:%'"
+    ));
+}
+
 fn run(args: &[&str]) -> (bool, String, String) {
     let out = Command::new(bin())
         .args(args)
@@ -45,6 +59,7 @@ fn ensure_domestic_seed(n: u128) -> [String; 3] {
 
 #[test]
 fn domestic_jiufen_flow_query_then_book() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let Some(_) = db_exec("SELECT 1") else {
         eprintln!("credless — skip");
         return;
@@ -66,6 +81,7 @@ fn domestic_jiufen_flow_query_then_book() {
             let _ = common::db_exec_teardown(
                 &format!("DELETE FROM domestic_accommodations WHERE id LIKE 'zz_test_{n}_%'"),
             );
+            teardown_bookings(&plan, &dest);
             teardown_plan(&plan, &dest);
         }
     });
