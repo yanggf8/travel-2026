@@ -175,6 +175,42 @@ fn fit_badge_html(
     }
 }
 
+/// The booked hotel's display name: `name_zh` on the ZH page when present,
+/// else `name`. Shared by the Hotel block and the marker-booked FIT card.
+fn hotel_display_name(hotel: &Row, lang: &str) -> String {
+    let name_zh = rs(hotel, "name_zh");
+    if lang == "zh" && !name_zh.is_empty() {
+        name_zh
+    } else {
+        rs(hotel, "name")
+    }
+}
+
+/// The plan's booked flight legs on one line, for the marker-booked FIT card:
+/// per leg `date number airline DEP→ARR`, legs joined with " · ". Same
+/// flight_legs rows the Flights block renders; empty when none are booked.
+fn booked_flights_text(plan: &Plan) -> String {
+    plan.flights
+        .iter()
+        .map(|f| {
+            let (dep, arr) = (rs(f, "departure_code"), rs(f, "arrival_code"));
+            let route = if dep.is_empty() || arr.is_empty() {
+                String::new()
+            } else {
+                format!("{dep}→{arr}")
+            };
+            join_parts(&[
+                rs(f, "flight_date"),
+                rs(f, "flight_number"),
+                rs(f, "airline"),
+                route,
+            ])
+        })
+        .filter(|leg| !leg.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 /// Wrap flight display text in a Google search link (opens new tab). Port of the
 /// TS worker's `flightLink` (render.ts:979-982): the search query is the
 /// PERCENT-ENCODED flight number ONLY (`number.trim()`), never the airline. With
@@ -701,16 +737,31 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     // A booking made without ever marking a --recommend pick falls back to
     // showing every stored candidate, so the section can never silently vanish.
     // Booked-FIT framing only when the selected offer IS one of the compared
-    // FIT packages — an Agoda/self-booked P4 must not claim an FIT was booked.
-    let fit_booked = plan.p4_status == "booked"
-        && plan
-            .offer
-            .as_ref()
-            .is_some_and(|o| plan.fit_offers.iter().any(|fit| fit.source_id == o.source_id));
+    // FIT packages — an Agoda/self-booked P4 must not claim an FIT was booked —
+    // or when a listed FIT carries the `set-fit-offer --booked` marker (a plan
+    // booked via set-flight/set-hotel has no offer selection at all).
+    // `confirmed` is past `booked` on the ladder; it is still a booked stay.
+    let p4_booked = matches!(plan.p4_status.as_str(), "booked" | "confirmed");
+    let booked_by_marker = p4_booked && plan.fit_offers.iter().any(|fit| fit.booked);
+    let fit_booked = booked_by_marker
+        || (p4_booked
+            && plan
+                .offer
+                .as_ref()
+                .is_some_and(|o| plan.fit_offers.iter().any(|fit| fit.source_id == o.source_id)));
     let has_recommended = plan.fit_offers.iter().any(|fit| fit.recommended);
+    // Marker path: only the marked offer(s). Its offers row is a pre-booking
+    // quote, so the card's flight/hotel rows come from the plan's real booking
+    // and the quote price is not shown (the FIT note carries the real price).
     let shown_fit_offers: Vec<_> = plan.fit_offers
         .iter()
-        .filter(|fit| !fit_booked || !has_recommended || fit.recommended)
+        .filter(|fit| {
+            if booked_by_marker {
+                fit.booked
+            } else {
+                !fit_booked || !has_recommended || fit.recommended
+            }
+        })
         .collect();
     if !shown_fit_offers.is_empty() {
         h.push_str(&format!(
@@ -751,7 +802,9 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                     .find(|name| !name.is_empty())
                     .unwrap_or(source_id)
             };
-            let recommended = offers.iter().any(|fit| fit.recommended);
+            let recommended = offers
+                .iter()
+                .any(|fit| fit.recommended || (booked_by_marker && fit.booked));
             let rec_class = if recommended { " is-recommended" } else { "" };
             let header_badge = if recommended {
                 format!(
@@ -796,14 +849,22 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 } else {
                     t("priceUnconfirmed", lang).to_string()
                 };
-                let mut date_text = if fit.departure_date.is_empty() {
+                let mut date_text = if booked_by_marker {
+                    // The quote's dates/availability are pre-booking; the trip's
+                    // own date anchors are what was booked.
+                    if plan.start_date.is_empty() || plan.end_date.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}–{}", plan.start_date, plan.end_date)
+                    }
+                } else if fit.departure_date.is_empty() {
                     t("dateUnconfirmed", lang).to_string()
                 } else if fit.return_date.is_empty() {
                     tf("departNoReturn", lang, &[("date", &fit.departure_date)])
                 } else {
                     format!("{}–{}", fit.departure_date, fit.return_date)
                 };
-                if fit.nights > 0 {
+                if fit.nights > 0 && !booked_by_marker {
                     date_text.push_str(&format!(
                         " · {}",
                         tf(
@@ -813,23 +874,38 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                         )
                     ));
                 }
-                if !fit.availability.is_empty() {
+                if !fit.availability.is_empty() && !booked_by_marker {
                     date_text.push_str(&format!(" · {}", fit.availability));
                 }
 
                 h.push_str("<div class=\"fit-agency-offer\">");
                 h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(t("fitAgency", lang)), esc(source)));
-                let flights = [
-                    fit.airline.as_str(),
-                    fit.flight_outbound.as_str(),
-                    fit.flight_return.as_str(),
-                ]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · ");
+                let (flights, hotel) = if booked_by_marker {
+                    // The plan's actual booking — the same flight_legs / hotels
+                    // rows the Flights and Hotel blocks below render.
+                    (
+                        booked_flights_text(plan),
+                        plan.hotel
+                            .as_ref()
+                            .map(|row| hotel_display_name(row, lang))
+                            .unwrap_or_default(),
+                    )
+                } else {
+                    (
+                        [
+                            fit.airline.as_str(),
+                            fit.flight_outbound.as_str(),
+                            fit.flight_return.as_str(),
+                        ]
+                        .into_iter()
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                        hotel.to_string(),
+                    )
+                };
                 h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(t("fitFlights", lang)), esc(if flights.is_empty() { "—" } else { &flights })));
-                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(t("fitHotel", lang)), esc(hotel)));
+                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span>{}</span></div>", esc(t("fitHotel", lang)), esc(if hotel.is_empty() { "—" } else { &hotel })));
                 let room = fit_text(lang, &fit.room_zh, &fit.room_en);
                 if !room.is_empty() {
                     h.push_str(&format!(
@@ -838,10 +914,12 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                         esc(&room)
                     ));
                 }
-                h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span class=\"fit-detail-price\">{}</span></div>", esc(t("fitPrice", lang)), esc(&price)));
+                if !booked_by_marker {
+                    h.push_str(&format!("<div class=\"fit-detail-row\"><span class=\"fit-detail-label\">{}</span><span class=\"fit-detail-price\">{}</span></div>", esc(t("fitPrice", lang)), esc(&price)));
+                }
                 h.push_str(&fit_badge_html(
                     lang,
-                    fit.recommended,
+                    fit.recommended || (booked_by_marker && fit.booked),
                     fit_booked,
                     if fit_booked { None } else { fit_price_badge(fit, &plan.fit_offers) },
                 ));
@@ -852,10 +930,12 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                         esc(&reason)
                     ));
                 }
-                h.push_str(&format!(
-                    "<div class=\"fit-detail-meta\">{}</div>",
-                    esc(&date_text)
-                ));
+                if !date_text.is_empty() {
+                    h.push_str(&format!(
+                        "<div class=\"fit-detail-meta\">{}</div>",
+                        esc(&date_text)
+                    ));
+                }
                 h.push_str("</div>");
             }
             h.push_str("</div></details>");
@@ -913,12 +993,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
 
     // Hotel
     if let Some(hotel) = &plan.hotel {
-        let name_zh = rs(hotel, "name_zh");
-        let name = if lang == "zh" && !name_zh.is_empty() {
-            name_zh
-        } else {
-            rs(hotel, "name")
-        };
+        let name = hotel_display_name(hotel, lang);
         let check_in = rs(hotel, "check_in");
         let notes = rs(hotel, "notes");
         let voucher_url = rs(hotel, "voucher_url");
@@ -979,7 +1054,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     // Domestic stays (Taiwan, via bookings_current category=accommodation)
     // P4-aware: when p4_status == booked, this is the primary block; when pending/selecting
     // and there is no booked stay, the block is hidden (empty → no render).
-    let is_booked = plan.p4_status == "booked";
+    let is_booked = matches!(plan.p4_status.as_str(), "booked" | "confirmed");
     if !plan.domestic_stays.is_empty() {
         let domestic_title = if is_booked {
             t("bookedAccommodation", lang)
@@ -1725,6 +1800,146 @@ mod tests {
         assert!(zh.contains("<h2>已訂 FIT 方案</h2>"), "{zh}");
         assert!(zh.contains("21,646"), "{zh}");
         assert!(zh.contains("18,990"), "{zh}");
+    }
+
+    /// The FIT section only: from the agency list up to the next heading
+    /// (the Flights / Hotel blocks below repeat the real booking on purpose).
+    fn fit_section(html: &str) -> &str {
+        let start = html.find("fit-agency-list").expect("FIT section rendered");
+        let rest = &html[start..];
+        &rest[..rest.find("<h2>").unwrap_or(rest.len())]
+    }
+
+    fn row(pairs: &[(&str, &str)]) -> Row {
+        let mut r = Row::new();
+        for (k, v) in pairs {
+            r.insert((*k).into(), serde_json::json!(v));
+        }
+        r
+    }
+
+    /// kyoto-nov shape: P4 booked via set-flight/set-hotel (no offer selection),
+    /// the FIT list holds a pre-booking quote for the agency actually used.
+    fn marker_booked_plan() -> Plan {
+        let mut quote = sample_fit("liontravel", 30123, "TWD", false, "實付 TWD 25,000／人");
+        quote.hotel_name = "QUOTE HOTEL".into();
+        quote.airline = "QUOTE AIR".into();
+        quote.flight_outbound = "QQ100".into();
+        quote.departure_date = "2026-11-01".into();
+        quote.availability = "剩 2 位".into();
+        quote.booked = true;
+        Plan {
+            p4_status: "booked".into(),
+            start_date: "2026-11-12".into(),
+            end_date: "2026-11-16".into(),
+            fit_compare_zh: "訂購前比價條件".into(),
+            fit_offers: vec![quote, sample_fit("lifetour", 18990, "TWD", true, "")],
+            flights: vec![row(&[
+                ("flight_number", "CI152"),
+                ("airline", "China Airlines"),
+                ("departure_code", "TPE"),
+                ("arrival_code", "KIX"),
+                ("flight_date", "2026-11-12"),
+            ])],
+            hotel: Some(row(&[("name", "Real Kyoto Hotel"), ("name_zh", "京都真實飯店")])),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fit_booked_marker_shows_only_the_marked_offer_with_the_real_booking() {
+        let plan = marker_booked_plan();
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("<h2>已訂 FIT 方案</h2>"), "{zh}");
+        assert!(!zh.contains("FIT 方案比較"), "{zh}");
+        assert!(!zh.contains("訂購前比價條件"), "{zh}");
+        let fit = fit_section(&zh);
+        // Only the marked offer: the unmarked (even recommended) one is gone.
+        assert!(!zh.contains("18,990"), "{zh}");
+        assert!(!fit.contains("lifetour"), "{fit}");
+        // Flight / hotel rows are the plan's actual booking, not the quote.
+        assert!(fit.contains("2026-11-12 CI152 China Airlines TPE→KIX"), "{fit}");
+        assert!(fit.contains("<span>京都真實飯店</span>"), "{fit}");
+        assert!(!fit.contains("QUOTE HOTEL") && !fit.contains("QQ100"), "{fit}");
+        assert!(!fit.contains("QUOTE AIR"), "{fit}");
+        // No pre-booking price row; the note carries the real price.
+        assert!(!zh.contains("30,123"), "{zh}");
+        assert!(!fit.contains("價格"), "{fit}");
+        assert!(!fit.contains("最低價") && !fit.contains("貴 TWD"), "{fit}");
+        assert!(fit.contains("實付 TWD 25,000／人"), "{fit}");
+        // Quote dates/availability give way to the trip's own dates.
+        assert!(fit.contains("2026-11-12–2026-11-16"), "{fit}");
+        assert!(!fit.contains("2026-11-01") && !fit.contains("剩 2 位"), "{fit}");
+        assert!(fit.contains("fit-badge-rec\">已訂</span>"), "{fit}");
+        let en = render(&plan, "en", None);
+        assert!(en.contains("<h2>Booked FIT package</h2>"), "{en}");
+        let fit = fit_section(&en);
+        assert!(fit.contains("<span>Real Kyoto Hotel</span>"), "{fit}");
+        assert!(!fit.contains("Price"), "{fit}");
+        assert!(fit.contains("fit-badge-rec\">Booked</span>"), "{fit}");
+    }
+
+    #[test]
+    fn fit_booked_marker_without_real_booking_rows_shows_dashes() {
+        let mut plan = marker_booked_plan();
+        plan.flights.clear();
+        plan.hotel = None;
+        let zh = render(&plan, "zh", None);
+        let fit = fit_section(&zh);
+        assert!(!fit.contains("QUOTE HOTEL") && !fit.contains("QQ100"), "{fit}");
+        assert!(fit.contains("<span>—</span>"), "{fit}");
+    }
+
+    #[test]
+    fn fit_list_without_marker_or_selection_keeps_the_comparison_heading() {
+        // P4 booked, nothing marked, no selection: unchanged comparison framing.
+        let mut plan = marker_booked_plan();
+        for fit in &mut plan.fit_offers {
+            fit.booked = false;
+        }
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("FIT 方案比較（優先評估，非已訂）"), "{zh}");
+        assert!(!zh.contains("已訂 FIT 方案"), "{zh}");
+        assert!(zh.contains("訂購前比價條件"), "{zh}");
+        let fit = fit_section(&zh);
+        assert!(fit.contains("30,123") && fit.contains("18,990"), "{fit}");
+        assert!(fit.contains("QUOTE HOTEL") && fit.contains("QQ100"), "{fit}");
+        assert!(!fit.contains("京都真實飯店"), "{fit}");
+    }
+
+    #[test]
+    fn fit_marker_is_ignored_until_p4_is_booked() {
+        let mut plan = marker_booked_plan();
+        plan.p4_status = "selecting".into();
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("FIT 方案比較（優先評估，非已訂）"), "{zh}");
+        let fit = fit_section(&zh);
+        assert!(fit.contains("30,123") && fit.contains("18,990"), "{fit}");
+        assert!(!fit.contains("fit-badge-rec\">已訂"), "{fit}");
+    }
+
+    #[test]
+    fn fit_selection_booking_is_unchanged_by_the_marker_path() {
+        // Selection-based booking: the selected offer's FIT card keeps its quote
+        // flight/hotel/price rows — the real-booking substitution is marker-only.
+        let mut plan = marker_booked_plan();
+        for fit in &mut plan.fit_offers {
+            fit.booked = false;
+        }
+        plan.offer = Some(Offer {
+            source_id: "liontravel".into(),
+            ..Default::default()
+        });
+        plan.fit_offers[0].recommended = true;
+        plan.fit_offers[1].recommended = false;
+        let zh = render(&plan, "zh", None);
+        assert!(zh.contains("<h2>已訂 FIT 方案</h2>"), "{zh}");
+        let fit = fit_section(&zh);
+        assert!(fit.contains("30,123") && fit.contains("價格"), "{fit}");
+        assert!(fit.contains("QUOTE HOTEL") && fit.contains("QQ100"), "{fit}");
+        assert!(!fit.contains("京都真實飯店"), "{fit}");
+        assert!(!fit.contains("18,990"), "{fit}");
+        assert!(fit.contains("2026-11-01") && fit.contains("剩 2 位"), "{fit}");
     }
 
     #[test]

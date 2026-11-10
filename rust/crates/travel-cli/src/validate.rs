@@ -71,6 +71,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_booking_integrity(&mut issues).await;
     validate_day_variants(&mut issues).await;
     validate_plan_documents(&mut issues).await;
+    validate_fit_booking(&mut issues).await;
 
     // Always-run: documentation ↔ code drift checks
     validate_completed_items(&mut issues);
@@ -2500,6 +2501,75 @@ async fn validate_plan_documents(issues: &mut Vec<Issue>) {
     }
 }
 
+/// `validate data`: the dashboard FIT section's booked framing must match the
+/// data (Warning). A plan booked through ingest-known (set-flight / set-hotel)
+/// has no plan_offer_selection, so unless one listed FIT carries the booked
+/// marker the page frames a booked trip as 優先評估，非已訂. Conversely a booked
+/// marker while P4 is not booked claims a booking that does not exist.
+/// A check that cannot run is an ERROR — a silent skip hides the drift.
+async fn validate_fit_booking(issues: &mut Vec<Issue>) {
+    let push = |issues: &mut Vec<Issue>, severity: Severity, message: String| {
+        issues.push(Issue {
+            category: "fit-offers".to_string(),
+            severity,
+            message,
+            file: Some("turso:plan_fit_offers".to_string()),
+            line: None,
+        })
+    };
+    let conn = match db::connect_read().await {
+        Ok(c) => c,
+        Err(e) => {
+            push(issues, Severity::Error, format!("cannot check FIT booked markers: {e}"));
+            return;
+        }
+    };
+    match travel_db::repo::plan_fit_offers::booking_states(&conn).await {
+        Ok(states) => {
+            for state in &states {
+                for message in fit_booking_warnings(state) {
+                    push(issues, Severity::Warning, message);
+                }
+            }
+        }
+        Err(e) if e.contains("no such column") => push(
+            issues,
+            Severity::Error,
+            format!(
+                "cannot check FIT booked markers: plan_fit_offers.booked is missing — \
+                 run ./bin/travel db migrate ({e})"
+            ),
+        ),
+        Err(e) => push(issues, Severity::Error, format!("cannot check FIT booked markers: {e}")),
+    }
+}
+
+/// Pure predicate behind `validate_fit_booking`: the warning lines for one
+/// plan+destination's FIT-list state.
+fn fit_booking_warnings(state: &travel_db::repo::plan_fit_offers::FitBookingState) -> Vec<String> {
+    let at = format!("{} / {}", state.plan_id, state.destination);
+    // `confirmed` is past `booked` on the ladder (the worker treats both as booked).
+    let p4_booked = matches!(state.p4_status.as_str(), "booked" | "confirmed");
+    let mut out = Vec::new();
+    if p4_booked && state.listed > 0 && state.booked == 0 && !state.selection_matches {
+        out.push(format!(
+            "{at}: FIT list present but no FIT is marked booked; the dashboard shows it as \
+             優先評估，非已訂 — run set-fit-offer <offer_id> --booked --plan-id {} --dest {}, \
+             or remove the stale FIT list",
+            state.plan_id, state.destination
+        ));
+    }
+    if state.booked > 0 && !p4_booked {
+        let p4 = if state.p4_status.is_empty() { "unset" } else { state.p4_status.as_str() };
+        out.push(format!(
+            "{at}: a FIT is marked booked but P4 (process_4_accommodation) is {p4} — \
+             run set-fit-offer <offer_id> --not-booked --plan-id {} --dest {}, or book P4",
+            state.plan_id, state.destination
+        ));
+    }
+    out
+}
+
 /// `validate data`: day-variant invariants across every plan (Error).
 async fn validate_day_variants(issues: &mut Vec<Issue>) {
     let conn = match db::connect_read().await {
@@ -3030,5 +3100,58 @@ mod date_range_tests {
             validate_date_range("", "2026-03-05"),
             Err("start date is required".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod fit_booking_tests {
+    use super::*;
+    use travel_db::repo::plan_fit_offers::FitBookingState;
+
+    fn state(p4: &str, listed: i64, booked: i64, selection_matches: bool) -> FitBookingState {
+        FitBookingState {
+            plan_id: "kyoto-nov-2026".into(),
+            destination: "kyoto_nov_2026".into(),
+            p4_status: p4.into(),
+            listed,
+            booked,
+            selection_matches,
+        }
+    }
+
+    #[test]
+    fn booked_p4_with_unmarked_fit_list_warns() {
+        let w = fit_booking_warnings(&state("booked", 1, 0, false));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("no FIT is marked booked"), "{w:?}");
+        assert!(w[0].contains("優先評估，非已訂"), "{w:?}");
+        assert!(w[0].contains("--booked --plan-id kyoto-nov-2026 --dest kyoto_nov_2026"), "{w:?}");
+    }
+
+    #[test]
+    fn marker_or_matching_selection_satisfies_booked_p4() {
+        assert!(fit_booking_warnings(&state("booked", 2, 1, false)).is_empty());
+        assert!(fit_booking_warnings(&state("booked", 2, 0, true)).is_empty());
+        // A confirmed P4 is still booked: the marker is valid, its absence still warns.
+        assert!(fit_booking_warnings(&state("confirmed", 1, 1, false)).is_empty());
+        assert_eq!(fit_booking_warnings(&state("confirmed", 1, 0, false)).len(), 1);
+    }
+
+    #[test]
+    fn unbooked_p4_without_marker_is_fine() {
+        assert!(fit_booking_warnings(&state("selecting", 2, 0, false)).is_empty());
+        assert!(fit_booking_warnings(&state("", 2, 0, false)).is_empty());
+        // No listed offer the page would show → no misleading heading to warn on.
+        assert!(fit_booking_warnings(&state("booked", 0, 0, false)).is_empty());
+    }
+
+    #[test]
+    fn marker_without_booked_p4_warns() {
+        let w = fit_booking_warnings(&state("selecting", 1, 1, false));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("marked booked but P4"), "{w:?}");
+        assert!(w[0].contains("is selecting"), "{w:?}");
+        let w = fit_booking_warnings(&state("", 1, 1, false));
+        assert!(w[0].contains("is unset"), "{w:?}");
     }
 }

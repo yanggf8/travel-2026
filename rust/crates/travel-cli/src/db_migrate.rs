@@ -425,6 +425,27 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "ALTER TABLE plan_fit_notes ADD COLUMN room_en TEXT NOT NULL DEFAULT '';",
     )
     .await;
+    // Booked-FIT marker: which listed FIT offer was actually booked, for plans
+    // booked through ingest-known (set-flight/set-hotel) with no
+    // plan_offer_selection row. CREATE TABLE below has it on a new database.
+    add_column(
+        &conn,
+        "ALTER TABLE plan_fit_offers ADD COLUMN booked INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await;
+    // At most one booked FIT per plan+destination; `set-fit-offer --booked`
+    // unmarks the previous one first so this index can commit. Fail loud, like
+    // the pick index above: a swallowed error would let two booked FITs land.
+    if let Err(e) = exec(
+        &conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_fit_offers_one_booked ON plan_fit_offers(plan_id, destination) WHERE booked = 1",
+    )
+    .await
+    {
+        if !e.contains("already exists") {
+            return Err(format!("plan_fit_offers booked index: {e}"));
+        }
+    }
 
     // A far-off day trip (e.g. a coach tour 100 km out) is flagged so snapshot-maps
     // keeps it off the sightseeing overview and draws it as its own inset map.
@@ -2672,13 +2693,16 @@ const PHASE1_TABLES: &[&str] = &[
 )"#,
     // Which offers the dashboard FIT comparison lists for a plan+destination —
     // curated with `set-fit-offer` (the worker used to hardcode agency/hotel
-    // filters). sort_order is the card order before the price sort.
+    // filters). sort_order is the card order before the price sort. booked=1
+    // marks the FIT that was actually booked (`set-fit-offer --booked`); at most
+    // one per plan+destination (idx_plan_fit_offers_one_booked).
     r#"CREATE TABLE IF NOT EXISTS plan_fit_offers (
   plan_id TEXT NOT NULL,
   destination TEXT NOT NULL,
   offer_id TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT,
+  booked INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (plan_id, destination, offer_id)
 )"#,
 ];

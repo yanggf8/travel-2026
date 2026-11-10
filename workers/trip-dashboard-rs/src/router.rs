@@ -901,7 +901,8 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         // [12] selected package offer + its price at the selected date (falls back to
         // price_per_person when there is no date-specific row). Booking-summary package row.
-        // The FIT rows (UNION half) are the offers curated in plan_fit_offers (set-fit-offer).
+        // The FIT rows (UNION half) are the offers curated in plan_fit_offers (set-fit-offer);
+        // fit_booked is the set-fit-offer --booked marker (the selection half has none).
         format!(
             "SELECT o.source_id, o.product_code, o.price_per_person, o.currency, \
              o.title, '' AS hotel_name, '' AS airline, '' AS flight_outbound, \
@@ -909,7 +910,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              sel.selected_date, dp.price AS date_price, '1' AS is_selected, '0' AS is_fit, \
              '0' AS fit_recommended, '' AS fit_note_zh, '' AS fit_note_en, \
              '' AS fit_compare_zh, '' AS fit_compare_en, \
-             '' AS fit_room_zh, '' AS fit_room_en, '' AS source_name \
+             '' AS fit_room_zh, '' AS fit_room_en, '' AS source_name, '0' AS fit_booked \
              FROM plan_offer_selection sel \
              JOIN plan_offers o ON o.plan_id = sel.plan_id AND o.destination = sel.destination \
                AND o.id = sel.selected_offer_id \
@@ -929,7 +930,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              COALESCE(c.body_en, '') AS fit_compare_en, \
              COALESCE(n.room_zh, '') AS fit_room_zh, \
              COALESCE(n.room_en, '') AS fit_room_en, \
-             COALESCE(os.name, '') AS source_name \
+             COALESCE(os.name, '') AS source_name, f.booked AS fit_booked \
              FROM plan_fit_offers f \
              JOIN offers o ON o.id = f.offer_id \
              LEFT JOIN ota_sources os ON os.source_id = o.source_id \

@@ -380,6 +380,9 @@ pub struct FitOffer {
     /// Room size for the card's 面積 row. Empty hides the row.
     pub room_zh: String,
     pub room_en: String,
+    /// `plan_fit_offers.booked` — this FIT is the one actually booked
+    /// (`set-fit-offer --booked`), for a plan booked with no offer selection.
+    pub booked: bool,
 }
 
 /// One booked domestic stay row (bookings_current + its payload halves).
@@ -521,6 +524,7 @@ pub fn assemble(
             note_en: s(o, "fit_note_en"),
             room_zh: s(o, "fit_room_zh"),
             room_en: s(o, "fit_room_en"),
+            booked: i(o, "fit_booked") == 1,
         })
         .collect();
     if let Some(note) = offer_rows.iter().find(|o| {
@@ -1334,6 +1338,34 @@ mod tests {
         assert_eq!(seg.to_place, "Naminoue");
         assert_eq!(seg.mode, "driving");
         assert_eq!(seg.duration_min, 12);
+    }
+
+    #[test]
+    fn assemble_reads_the_fit_booked_marker() {
+        let fit = |source: &str, booked: &str| {
+            row(&[
+                ("source_id", json!(source)),
+                ("is_selected", json!("0")),
+                ("is_fit", json!("1")),
+                ("fit_booked", json!(booked)),
+            ])
+        };
+        // The selection half carries fit_booked '0'; it never becomes a FitOffer.
+        let selected = row(&[
+            ("source_id", json!("liontravel")),
+            ("is_selected", json!("1")),
+            ("is_fit", json!("0")),
+            ("fit_booked", json!("0")),
+        ]);
+        let offers = vec![selected, fit("liontravel", "1"), fit("lifetour", "0")];
+        let plan = assemble(
+            &[], &[], &[], &[], &[], &[], &[], &[], &[], &[], &[], &[], &offers, &[], &[], &[],
+            &[], &[], &[], &[], &[], &[], &[],
+        );
+        assert_eq!(plan.fit_offers.len(), 2);
+        assert!(plan.fit_offers[0].booked);
+        assert!(!plan.fit_offers[1].booked);
+        assert_eq!(plan.offer.as_ref().map(|o| o.source_id.as_str()), Some("liontravel"));
     }
 
     #[test]

@@ -470,7 +470,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "set-fit-offer" => {
             if wants_help(
                 rest,
-                "travel set-fit-offer <offer-id> [--order N] [--dest <slug>]\n  travel set-fit-offer <offer-id> --remove [--dest <slug>]\n  travel set-fit-offer --list [--dest <slug>]\n  Curate which package offers the dashboard FIT comparison lists (plan_fit_offers). The offer must be a package offer for the destination.",
+                "travel set-fit-offer <offer-id> [--order N] [--dest <slug>]\n  travel set-fit-offer <offer-id> --remove [--dest <slug>]\n  travel set-fit-offer <offer-id> --booked | --not-booked [--dest <slug>]\n  travel set-fit-offer --list [--dest <slug>]\n  Curate which package offers the dashboard FIT comparison lists (plan_fit_offers). The offer must be a package offer for the destination.\n  --booked marks an already-listed offer as the FIT that was actually booked (for a plan booked via set-flight/set-hotel with no offer selection); it unmarks any other booked FIT for the destination and says which. --not-booked unmarks it. An offer not in the list fails.",
             ) {
                 return Ok(());
             }
