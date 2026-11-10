@@ -244,7 +244,7 @@ h1 {
 .day-documents .doc-link { display: inline-block; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .document-days { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .document-day { color: var(--text-dim); font-size: 11px; background: var(--bg); border-radius: 999px; padding: 2px 7px; }
-.day-documents { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.day-documents { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 16px 8px; }
 
 /* ---- Domestic candidates (sea-view shortlist) ---- */
 .candidate-grid {
@@ -832,7 +832,8 @@ h1 {
 .day-variant-body .map-frame { max-width: 100%; }
 .day-variant-body .map-frame figcaption,
 .day-variant-body .leg-day { overflow-wrap: anywhere; }
-.day-variant-body .session { padding-left: 0; padding-right: 0; }
+.day-variant-body .session,
+.day-variant-body .stoplist { padding-left: 0; padding-right: 0; }
 
 /* Weather strip */
 .weather {
@@ -989,7 +990,7 @@ h1 {
 /* ---- Stop list (per-session maps links) ---- */
 .stoplist {
   list-style: none;
-  padding: 4px 0 0;
+  padding: 4px 16px 0;
   margin: 0;
 }
 .stoplist li {
@@ -1253,6 +1254,7 @@ h1 {
   .day h2 { grid-column: 1 / -1; }
   .theme { grid-column: 1 / -1; }
   .weather { grid-column: 1 / -1; }
+  .day-documents { grid-column: 1 / -1; }
   .day-map-stack { grid-column: 2; grid-row: span 20; align-self: start; min-width: 0; }
   .day-map-stack > .map-frame { margin-top: 0; }
   .day-map-stack > .map-frame--day-logistics { margin-top: 10px; }
