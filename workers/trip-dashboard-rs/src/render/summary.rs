@@ -529,22 +529,12 @@ fn candidate_minimap(
 /// 「10/12（一）1 晚」 / "Mon 10/12 · 1 night". Empty when the plan has no
 /// dates yet (nothing to state).
 fn criteria_dates(plan: &crate::model::Plan, lang: &str) -> String {
-    let parse = |d: &str| -> Option<(i64, i64, i64)> {
-        let mut it = d.split('-');
-        let y = it.next()?.parse().ok()?;
-        let m = it.next()?.parse().ok()?;
-        let day = it.next()?.parse().ok()?;
-        Some((y, m, day))
-    };
-    let Some((y, m, day)) = parse(&plan.start_date) else {
+    let Some((y, m, day)) = parse_ymd(&plan.start_date) else {
         return String::new();
     };
-    // days since the Unix epoch (Hinnant's civil_from_days inverse) → weekday;
-    // 1970-01-01 was a Thursday, so (days + 4) mod 7 indexes 0=Sunday.
     let days = civil_days(y, m, day);
-    let wd_idx = (days + 4).rem_euclid(7);
-    let wd = t(&format!("weekday{wd_idx}"), lang);
-    let nights = parse(&plan.end_date)
+    let wd = weekday_name(days, lang);
+    let nights = parse_ymd(&plan.end_date)
         .map(|(ey, em, ed)| civil_days(ey, em, ed) - days)
         .filter(|n| *n > 0);
     let key = match nights {
@@ -562,6 +552,34 @@ fn criteria_dates(plan: &crate::model::Plan, lang: &str) -> String {
             ("n", &nights.unwrap_or(0).to_string()),
         ],
     )
+}
+
+/// A `YYYY-MM-DD` date as (year, month, day); None when it does not parse.
+fn parse_ymd(d: &str) -> Option<(i64, i64, i64)> {
+    let mut it = d.split('-');
+    let y = it.next()?.parse().ok()?;
+    let m = it.next()?.parse().ok()?;
+    let day = it.next()?.parse().ok()?;
+    Some((y, m, day))
+}
+
+/// Weekday name for a day count since the Unix epoch. 1970-01-01 was a
+/// Thursday, so (days + 4) mod 7 indexes 0=Sunday.
+fn weekday_name(days: i64, lang: &str) -> &'static str {
+    t(&format!("weekday{}", (days + 4).rem_euclid(7)), lang)
+}
+
+/// A `YYYY-MM-DD` date with its weekday, in the page language —
+/// 「11/14（六）」 / "Sat 11/14" (the criteria line's `stayDate` format).
+/// None when the date does not parse.
+pub(crate) fn date_with_weekday(date: &str, lang: &str) -> Option<String> {
+    let (y, m, d) = parse_ymd(date)?;
+    let wd = weekday_name(civil_days(y, m, d), lang);
+    Some(tf(
+        "stayDate",
+        lang,
+        &[("wd", wd), ("m", &m.to_string()), ("d", &d.to_string())],
+    ))
 }
 
 /// Days since 1970-01-01 for a civil (proleptic Gregorian) date.

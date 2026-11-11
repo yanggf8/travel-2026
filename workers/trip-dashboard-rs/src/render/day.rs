@@ -1,5 +1,5 @@
 use super::{esc, render_activity_text, session};
-use crate::i18n::{fill, t, tf, wmo_weather};
+use crate::i18n::{fill, t, tf, wmo_emoji, wmo_weather};
 use crate::model::{ClothingTip, Day, RouteSegment};
 
 /// Render the day's map landmarks (waypoints listed under the day map). Ported from
@@ -65,44 +65,73 @@ pub fn clothing_tip(
         .collect()
 }
 
-/// Render the per-day weather strip: description + temp range + feels-like + rain%,
-/// followed by the clothing tips. Each piece is shown only when present.
-/// The description comes from the WMO `weather_code` in the page language
-/// (`i18n::wmo_weather`); a NULL or unmapped code shows the stored `weather_label`.
-fn weather_strip(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> String {
-    let description: &str = day
-        .weather_code
+/// The day's weather description in the page language: the WMO `weather_code`
+/// via `i18n::wmo_weather`; a NULL or unmapped code shows the stored
+/// `weather_label` (data, as-is). Empty when neither is present.
+fn weather_description<'a>(day: &'a Day, lang: &str) -> &'a str {
+    day.weather_code
         .and_then(|code| wmo_weather(code, lang))
-        .unwrap_or(&day.weather_label);
-    // No weather data at all → keep the old plain label line (or nothing).
-    if description.is_empty()
-        && day.temp_low_c.is_none()
-        && day.temp_high_c.is_none()
-        && day.precipitation_pct.is_none()
-    {
+        .unwrap_or(&day.weather_label)
+}
+
+/// Whether the day has any weather to show (description, a temp, or rain%).
+/// The day strip and the weather overview use the same test.
+fn has_weather(day: &Day, lang: &str) -> bool {
+    !weather_description(day, lang).is_empty()
+        || day.temp_low_c.is_some()
+        || day.temp_high_c.is_some()
+        || day.precipitation_pct.is_some()
+}
+
+/// The day's what-to-wear lines (unescaped): feels-like temps when available,
+/// else actual; rain defaults to 0. Empty without a temperature pair or when
+/// no band matches. Shared by the day strip and the weather overview.
+fn day_clothing(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> Vec<String> {
+    let tip_low = day.feels_like_low_c.or(day.temp_low_c);
+    let tip_high = day.feels_like_high_c.or(day.temp_high_c);
+    match (tip_low, tip_high) {
+        (Some(tl), Some(th)) => {
+            let rain = day.precipitation_pct.unwrap_or(0.0);
+            clothing_tip(clothing_tips, tl, th, rain, lang)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// "12–20°C" from a low/high pair, rounded; None unless both are present.
+fn temp_range(lo: Option<f64>, hi: Option<f64>) -> Option<String> {
+    match (lo, hi) {
+        (Some(lo), Some(hi)) => Some(format!(
+            "{}\u{2013}{}°C",
+            lo.round() as i64,
+            hi.round() as i64
+        )),
+        _ => None,
+    }
+}
+
+/// Render the per-day weather strip: icon + description + temp range +
+/// feels-like + rain%, followed by the clothing tips. Each piece is shown only
+/// when present. The icon comes from the WMO code (`i18n::wmo_emoji`, a neutral
+/// 🌡️ for a NULL/unmapped code); the description from [`weather_description`].
+fn weather_strip(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> String {
+    // No weather data at all → nothing.
+    if !has_weather(day, lang) {
         return String::new();
     }
+    let description = weather_description(day, lang);
 
-    let mut strip = String::from("<div class=\"weather\">🌧️ ");
+    let mut strip = format!("<div class=\"weather\">{} ", wmo_emoji(day.weather_code));
     if !description.is_empty() {
         strip.push_str(&esc(description));
     }
     // temp range
-    if let (Some(lo), Some(hi)) = (day.temp_low_c, day.temp_high_c) {
-        strip.push_str(&format!(
-            " · {}\u{2013}{}°C",
-            lo.round() as i64,
-            hi.round() as i64
-        ));
+    if let Some(range) = temp_range(day.temp_low_c, day.temp_high_c) {
+        strip.push_str(&format!(" · {range}"));
     }
     // feels-like range
-    if let (Some(flo), Some(fhi)) = (day.feels_like_low_c, day.feels_like_high_c) {
-        let label = t("feelsLike", lang);
-        strip.push_str(&format!(
-            " · {label} {}\u{2013}{}°C",
-            flo.round() as i64,
-            fhi.round() as i64
-        ));
+    if let Some(range) = temp_range(day.feels_like_low_c, day.feels_like_high_c) {
+        strip.push_str(&format!(" · {} {range}", t("feelsLike", lang)));
     }
     // rain
     if let Some(rain) = day.precipitation_pct {
@@ -110,18 +139,78 @@ fn weather_strip(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> String
     }
     strip.push_str("</div>");
 
-    // Clothing tips: feels-like temps when available, else actual; rain default 0.
-    let tip_low = day.feels_like_low_c.or(day.temp_low_c);
-    let tip_high = day.feels_like_high_c.or(day.temp_high_c);
-    if let (Some(tl), Some(th)) = (tip_low, tip_high) {
-        let rain = day.precipitation_pct.unwrap_or(0.0);
-        let tips = clothing_tip(clothing_tips, tl, th, rain, lang);
-        if !tips.is_empty() {
-            let joined = tips.iter().map(|t| esc(t)).collect::<Vec<_>>().join(" · ");
-            strip.push_str(&format!("<div class=\"weather-clothing\">{joined}</div>"));
-        }
+    let tips = day_clothing(day, clothing_tips, lang);
+    if !tips.is_empty() {
+        let joined = tips.iter().map(|t| esc(t)).collect::<Vec<_>>().join(" · ");
+        strip.push_str(&format!("<div class=\"weather-clothing\">{joined}</div>"));
     }
     strip
+}
+
+/// The plan page's collapsible 天氣總覽 / Weather overview: one row per MAIN
+/// trip day (variants share their main day's date and carry no weather) with
+/// date + weekday, icon + description, temp range, feels-like range, rain%, and
+/// the day's clothing tips — the same values the day strips show. A native
+/// `<details open>` (no JS; viewer pages are SSR-only) that starts OPEN, so
+/// nothing is hidden on load. A missing value is an em dash; when no day has
+/// any weather the section renders nothing at all. Phones get one stacked block
+/// per day (styles.css `.wx-table`), wider screens a table.
+pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str) -> String {
+    const DASH: &str = "\u{2014}";
+    let main_days: Vec<&Day> = days.iter().filter(|d| d.variant_of.is_none()).collect();
+    if !main_days.iter().any(|d| has_weather(d, lang)) {
+        return String::new();
+    }
+    let temp_label = esc(t("wxTemp", lang));
+    let feels_label = esc(t("feelsLike", lang));
+    let rain_label = esc(t("wxRain", lang));
+    let mut h = format!(
+        "<details class=\"weather-overview\" open><summary><h2>{}</h2></summary>\
+         <table class=\"wx-table\"><thead><tr><th scope=\"col\">{}</th><th scope=\"col\">{}</th>\
+         <th scope=\"col\">{temp_label}</th><th scope=\"col\">{feels_label}</th>\
+         <th scope=\"col\">{rain_label}</th><th scope=\"col\">{}</th></tr></thead><tbody>",
+        esc(t("weatherOverview", lang)),
+        esc(t("wxDate", lang)),
+        esc(t("wxWeather", lang)),
+        esc(t("wxWear", lang)),
+    );
+    for day in main_days {
+        let date = match super::summary::date_with_weekday(&day.date, lang) {
+            Some(d) => esc(&d),
+            None if day.date.is_empty() => DASH.to_string(),
+            None => esc(&day.date),
+        };
+        let description = weather_description(day, lang);
+        let description = if description.is_empty() {
+            DASH.to_string()
+        } else {
+            esc(description)
+        };
+        let temp = temp_range(day.temp_low_c, day.temp_high_c).unwrap_or_else(|| DASH.into());
+        let feels = temp_range(day.feels_like_low_c, day.feels_like_high_c)
+            .unwrap_or_else(|| DASH.into());
+        let rain = day
+            .precipitation_pct
+            .map(|r| format!("{}%", r.round() as i64))
+            .unwrap_or_else(|| DASH.into());
+        let tips = day_clothing(day, clothing_tips, lang);
+        let wear = if tips.is_empty() {
+            DASH.to_string()
+        } else {
+            tips.iter().map(|t| esc(t)).collect::<Vec<_>>().join(" · ")
+        };
+        h.push_str(&format!(
+            "<tr><th scope=\"row\" class=\"wx-date\">{date}</th>\
+             <td class=\"wx-desc\">{} {description}</td>\
+             <td class=\"wx-temp\" data-label=\"{temp_label}\">{temp}</td>\
+             <td class=\"wx-feels\" data-label=\"{feels_label}\">{feels}</td>\
+             <td class=\"wx-rain\" data-label=\"{rain_label}\">{rain}</td>\
+             <td class=\"wx-wear\">{wear}</td></tr>",
+            wmo_emoji(day.weather_code),
+        ));
+    }
+    h.push_str("</tbody></table></details>");
+    h
 }
 
 /// Icon for a route-segment travel mode.
@@ -393,7 +482,8 @@ mod tests {
             day_type: "full".into(),
             theme: "Kyoto highlights".into(),
             theme_zh: "京都巡禮".into(),
-            weather_label: "晴".into(),
+            weather_label: "Clear sky".into(),
+            weather_code: Some(0),
             temp_low_c: Some(12.0),
             temp_high_c: Some(20.0),
             precipitation_pct: Some(10.0),
@@ -442,7 +532,7 @@ mod tests {
         );
         assert_eq!(
             html,
-            "<section class=\"day day-full\" data-day=\"2\"><h2>第 2 天 · 2026-11-14</h2><div class=\"theme\">京都巡禮</div><div class=\"weather\">🌧️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></section>"
+            "<section class=\"day day-full\" data-day=\"2\"><h2>第 2 天 · 2026-11-14</h2><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></section>"
         );
     }
 
@@ -991,12 +1081,12 @@ mod tests {
         };
         let html = render(&day, "kyoto-nov-2026", "en", None, &[]);
         assert!(
-            html.contains("<div class=\"weather\">🌧️ Foggy · 10\u{2013}20°C</div>"),
+            html.contains("<div class=\"weather\">🌫️ Foggy · 10\u{2013}20°C</div>"),
             "got: {html}"
         );
         let zh = render(&day, "kyoto-nov-2026", "zh", None, &[]);
         assert!(
-            zh.contains("<div class=\"weather\">🌧️ 霧 · 10\u{2013}20°C</div>"),
+            zh.contains("<div class=\"weather\">🌫️ 霧 · 10\u{2013}20°C</div>"),
             "got: {zh}"
         );
     }
@@ -1017,7 +1107,7 @@ mod tests {
         for lang in ["zh", "en"] {
             let html = render(&null_code, "kyoto-nov-2026", lang, None, &[]);
             assert!(
-                html.contains("<div class=\"weather\">🌧️ Partly sunny · 12\u{2013}19°C</div>"),
+                html.contains("<div class=\"weather\">🌡️ Partly sunny · 12\u{2013}19°C</div>"),
                 "{lang}: {html}"
             );
         }
@@ -1030,7 +1120,7 @@ mod tests {
         for lang in ["zh", "en"] {
             let html = render(&unmapped, "kyoto-nov-2026", lang, None, &[]);
             assert!(
-                html.contains("<div class=\"weather\">🌧️ WMO 123 · 12\u{2013}19°C</div>"),
+                html.contains("<div class=\"weather\">🌡️ WMO 123 · 12\u{2013}19°C</div>"),
                 "{lang}: {html}"
             );
         }
@@ -1049,5 +1139,176 @@ mod tests {
         assert!(html.contains("Sunny"), "got: {html}");
         assert!(!html.contains("體感"), "got: {html}");
         assert!(!html.contains("weather-clothing"), "got: {html}");
+    }
+
+    // ---- weather overview ----
+    fn overview_day() -> Day {
+        Day {
+            day_number: 2,
+            date: "2026-11-14".into(), // a Saturday
+            day_type: "full".into(),
+            weather_label: "Moderate rain showers".into(),
+            weather_code: Some(81),
+            temp_low_c: Some(13.2),
+            temp_high_c: Some(17.6),
+            precipitation_pct: Some(94.0),
+            feels_like_low_c: Some(13.0),
+            feels_like_high_c: Some(19.0),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn weather_overview_zh_renders_open_details_and_a_full_row() {
+        let html = weather_overview(&[overview_day()], &sample_tips(), "zh");
+        assert!(
+            html.starts_with(
+                "<details class=\"weather-overview\" open><summary><h2>天氣總覽</h2></summary>\
+                 <table class=\"wx-table\"><thead><tr><th scope=\"col\">日期</th><th scope=\"col\">天氣</th>\
+                 <th scope=\"col\">氣溫</th><th scope=\"col\">體感</th><th scope=\"col\">降雨機率</th>\
+                 <th scope=\"col\">穿著建議</th></tr></thead><tbody>"
+            ),
+            "got: {html}"
+        );
+        // Clothing uses the feels-like pair (13/19) and rain 94% — the same
+        // lines the day strip prints.
+        assert!(
+            html.contains(
+                "<tr><th scope=\"row\" class=\"wx-date\">11/14（六）</th>\
+                 <td class=\"wx-desc\">\u{1F327}\u{FE0F} 陣雨</td>\
+                 <td class=\"wx-temp\" data-label=\"氣溫\">13\u{2013}18°C</td>\
+                 <td class=\"wx-feels\" data-label=\"體感\">13\u{2013}19°C</td>\
+                 <td class=\"wx-rain\" data-label=\"降雨機率\">94%</td>\
+                 <td class=\"wx-wear\">👕 舒適19°C——長短袖皆可，早晚帶薄外套 · ☔ 帶傘（降雨機率高）</td></tr>"
+            ),
+            "got: {html}"
+        );
+        assert!(html.ends_with("</tbody></table></details>"), "got: {html}");
+        assert!(!html.contains("Moderate rain showers"), "got: {html}");
+    }
+
+    #[test]
+    fn weather_overview_en_renders_english_chrome_and_row() {
+        let html = weather_overview(&[overview_day()], &sample_tips(), "en");
+        assert!(html.contains("<summary><h2>Weather overview</h2></summary>"), "got: {html}");
+        assert!(html.contains("<th scope=\"col\">What to wear</th>"), "got: {html}");
+        assert!(
+            html.contains(
+                "<tr><th scope=\"row\" class=\"wx-date\">Sat 11/14</th>\
+                 <td class=\"wx-desc\">\u{1F327}\u{FE0F} Moderate rain showers</td>\
+                 <td class=\"wx-temp\" data-label=\"Temp\">13\u{2013}18°C</td>\
+                 <td class=\"wx-feels\" data-label=\"Feels\">13\u{2013}19°C</td>\
+                 <td class=\"wx-rain\" data-label=\"Rain\">94%</td>\
+                 <td class=\"wx-wear\">👕 Mild 19°C—short or long sleeves, light layer for evening · ☔ Bring umbrella (likely rain)</td></tr>"
+            ),
+            "got: {html}"
+        );
+        assert!(!html.contains("陣雨") && !html.contains("天氣總覽"), "got: {html}");
+    }
+
+    #[test]
+    fn weather_overview_skips_variant_days() {
+        let variant = Day {
+            day_number: 3,
+            date: "2026-11-14".into(),
+            variant_of: Some(2),
+            weather_label: "variant weather must not render".into(),
+            temp_low_c: Some(1.0),
+            temp_high_c: Some(2.0),
+            ..Default::default()
+        };
+        let main = Day {
+            variants: vec![Day { ..variant }],
+            ..overview_day()
+        };
+        // A variant reaching the top-level list (the assembler nests them) is
+        // skipped too: one row, for the main day only.
+        let stray = Day {
+            day_number: 4,
+            date: "2026-11-14".into(),
+            variant_of: Some(2),
+            weather_label: "variant weather must not render".into(),
+            ..Default::default()
+        };
+        let html = weather_overview(&[main, stray], &sample_tips(), "zh");
+        assert_eq!(html.matches("scope=\"row\"").count(), 1, "got: {html}");
+        assert!(!html.contains("variant weather must not render"), "got: {html}");
+        assert!(!html.contains("1\u{2013}2°C"), "got: {html}");
+    }
+
+    #[test]
+    fn weather_overview_renders_em_dash_for_missing_values() {
+        // Day 2 has only a stored label (NULL code, no temps, no rain): the
+        // neutral icon + label, and a dash for every number and the clothing
+        // (no temperature pair → no band). Day 3 has nothing at all, and its
+        // date does not parse (shown as-is, escaped); day 4 has no date.
+        let label_only = Day {
+            day_number: 2,
+            date: "2026-11-15".into(),
+            weather_label: "Partly <sunny>".into(),
+            ..Default::default()
+        };
+        let nothing = Day {
+            day_number: 3,
+            date: "TBD<".into(),
+            ..Default::default()
+        };
+        let no_date = Day { day_number: 4, ..Default::default() };
+        let html = weather_overview(
+            &[overview_day(), label_only, nothing, no_date],
+            &sample_tips(),
+            "zh",
+        );
+        assert_eq!(html.matches("scope=\"row\"").count(), 4, "got: {html}");
+        assert!(
+            html.contains(
+                "<tr><th scope=\"row\" class=\"wx-date\">11/15（日）</th>\
+                 <td class=\"wx-desc\">\u{1F321}\u{FE0F} Partly &lt;sunny&gt;</td>\
+                 <td class=\"wx-temp\" data-label=\"氣溫\">\u{2014}</td>\
+                 <td class=\"wx-feels\" data-label=\"體感\">\u{2014}</td>\
+                 <td class=\"wx-rain\" data-label=\"降雨機率\">\u{2014}</td>\
+                 <td class=\"wx-wear\">\u{2014}</td></tr>"
+            ),
+            "got: {html}"
+        );
+        assert!(
+            html.contains(
+                "<tr><th scope=\"row\" class=\"wx-date\">TBD&lt;</th>\
+                 <td class=\"wx-desc\">\u{1F321}\u{FE0F} \u{2014}</td>"
+            ),
+            "got: {html}"
+        );
+        assert!(
+            html.contains("<tr><th scope=\"row\" class=\"wx-date\">\u{2014}</th>"),
+            "got: {html}"
+        );
+        assert!(!html.contains("Partly <sunny>"), "got: {html}");
+    }
+
+    #[test]
+    fn weather_overview_renders_nothing_without_any_weather() {
+        // A day with neither a code/label nor any number, and only variants
+        // (nested and stray) carrying weather: nothing at all — variants are
+        // skipped, and the section has no row worth showing.
+        let days = || {
+            vec![
+                Day {
+                    day_number: 1,
+                    date: "2026-11-13".into(),
+                    ..Default::default()
+                },
+                Day {
+                    day_number: 2,
+                    date: "2026-11-14".into(),
+                    variants: vec![Day { variant_of: Some(2), ..overview_day() }],
+                    ..Default::default()
+                },
+                Day { day_number: 3, variant_of: Some(2), ..overview_day() },
+            ]
+        };
+        for lang in ["zh", "en"] {
+            assert_eq!(weather_overview(&[], &sample_tips(), lang), "", "{lang}");
+            assert_eq!(weather_overview(&days(), &sample_tips(), lang), "", "{lang}");
+        }
     }
 }

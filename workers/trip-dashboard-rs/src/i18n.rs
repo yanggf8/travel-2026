@@ -163,6 +163,19 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         // ---- day card chrome (render/day.rs) ----
         ("feelsLike", false) => "Feels",
         ("feelsLike", true) => "體感",
+        // weather overview (render/day.rs weather_overview): heading + column labels
+        ("weatherOverview", false) => "Weather overview",
+        ("weatherOverview", true) => "天氣總覽",
+        ("wxDate", false) => "Date",
+        ("wxDate", true) => "日期",
+        ("wxWeather", false) => "Weather",
+        ("wxWeather", true) => "天氣",
+        ("wxTemp", false) => "Temp",
+        ("wxTemp", true) => "氣溫",
+        ("wxRain", false) => "Rain",
+        ("wxRain", true) => "降雨機率",
+        ("wxWear", false) => "What to wear",
+        ("wxWear", true) => "穿著建議",
         ("todaysRoute", false) => "Today's route",
         ("todaysRoute", true) => "今日路線",
         ("dayHeading", false) => "Day {day} · {date}",
@@ -323,40 +336,43 @@ pub fn t(key: &str, lang: &str) -> &'static str {
     }
 }
 
-/// WMO weather-code descriptions (code, EN, ZH) — the full set Open-Meteo's
-/// `weather_code` returns. A fixed code→wording table is chrome, not content.
+/// WMO weather-code icons and descriptions (code, emoji, EN, ZH) — the full set
+/// Open-Meteo's `weather_code` returns. A fixed code→wording table is chrome, not
+/// content. Emoji by group: 0 clear ☀️, 1 mainly clear 🌤️, 2 partly cloudy ⛅,
+/// 3 overcast ☁️, 45/48 fog 🌫️, 51–57 drizzle 🌦️, 61–67 rain and 80–82 rain
+/// showers 🌧️, 71–77 snow and 85–86 snow showers 🌨️, 95–99 thunderstorm ⛈️.
 /// The EN text matches `travel fetch-weather`'s stored `weather_label`
 /// byte-for-byte (rust/crates/travel-cli/src/weather.rs `WMO_LABELS`), so the
 /// English page reads the same whether it renders from the code or the label.
-const WMO_WEATHER: &[(i64, &str, &str)] = &[
-    (0, "Clear sky", "晴"),
-    (1, "Mainly clear", "大致晴朗"),
-    (2, "Partly cloudy", "晴時多雲"),
-    (3, "Overcast", "陰"),
-    (45, "Foggy", "霧"),
-    (48, "Depositing rime fog", "霧凇"),
-    (51, "Light drizzle", "小毛毛雨"),
-    (53, "Moderate drizzle", "毛毛雨"),
-    (55, "Dense drizzle", "大毛毛雨"),
-    (56, "Light freezing drizzle", "小凍毛毛雨"),
-    (57, "Dense freezing drizzle", "大凍毛毛雨"),
-    (61, "Slight rain", "小雨"),
-    (63, "Moderate rain", "中雨"),
-    (65, "Heavy rain", "大雨"),
-    (66, "Light freezing rain", "小凍雨"),
-    (67, "Heavy freezing rain", "大凍雨"),
-    (71, "Slight snowfall", "小雪"),
-    (73, "Moderate snowfall", "中雪"),
-    (75, "Heavy snowfall", "大雪"),
-    (77, "Snow grains", "雪粒"),
-    (80, "Slight rain showers", "小陣雨"),
-    (81, "Moderate rain showers", "陣雨"),
-    (82, "Violent rain showers", "強陣雨"),
-    (85, "Slight snow showers", "小陣雪"),
-    (86, "Heavy snow showers", "大陣雪"),
-    (95, "Thunderstorm", "雷雨"),
-    (96, "Thunderstorm with slight hail", "雷雨伴隨小冰雹"),
-    (99, "Thunderstorm with heavy hail", "雷雨伴隨大冰雹"),
+const WMO_WEATHER: &[(i64, &str, &str, &str)] = &[
+    (0, "☀️", "Clear sky", "晴"),
+    (1, "🌤️", "Mainly clear", "大致晴朗"),
+    (2, "⛅", "Partly cloudy", "晴時多雲"),
+    (3, "☁️", "Overcast", "陰"),
+    (45, "🌫️", "Foggy", "霧"),
+    (48, "🌫️", "Depositing rime fog", "霧凇"),
+    (51, "🌦️", "Light drizzle", "小毛毛雨"),
+    (53, "🌦️", "Moderate drizzle", "毛毛雨"),
+    (55, "🌦️", "Dense drizzle", "大毛毛雨"),
+    (56, "🌦️", "Light freezing drizzle", "小凍毛毛雨"),
+    (57, "🌦️", "Dense freezing drizzle", "大凍毛毛雨"),
+    (61, "🌧️", "Slight rain", "小雨"),
+    (63, "🌧️", "Moderate rain", "中雨"),
+    (65, "🌧️", "Heavy rain", "大雨"),
+    (66, "🌧️", "Light freezing rain", "小凍雨"),
+    (67, "🌧️", "Heavy freezing rain", "大凍雨"),
+    (71, "🌨️", "Slight snowfall", "小雪"),
+    (73, "🌨️", "Moderate snowfall", "中雪"),
+    (75, "🌨️", "Heavy snowfall", "大雪"),
+    (77, "🌨️", "Snow grains", "雪粒"),
+    (80, "🌧️", "Slight rain showers", "小陣雨"),
+    (81, "🌧️", "Moderate rain showers", "陣雨"),
+    (82, "🌧️", "Violent rain showers", "強陣雨"),
+    (85, "🌨️", "Slight snow showers", "小陣雪"),
+    (86, "🌨️", "Heavy snow showers", "大陣雪"),
+    (95, "⛈️", "Thunderstorm", "雷雨"),
+    (96, "⛈️", "Thunderstorm with slight hail", "雷雨伴隨小冰雹"),
+    (99, "⛈️", "Thunderstorm with heavy hail", "雷雨伴隨大冰雹"),
 ];
 
 /// Localized description for a WMO weather code. `None` for an unmapped code —
@@ -364,8 +380,20 @@ const WMO_WEATHER: &[(i64, &str, &str)] = &[
 pub fn wmo_weather(code: i64, lang: &str) -> Option<&'static str> {
     WMO_WEATHER
         .iter()
-        .find(|(c, _, _)| *c == code)
-        .map(|(_, en, zh)| if lang == "en" { *en } else { *zh })
+        .find(|(c, _, _, _)| *c == code)
+        .map(|(_, _, en, zh)| if lang == "en" { *en } else { *zh })
+}
+
+/// Neutral icon for a day whose weather code is NULL or unmapped: a thermometer
+/// claims nothing about sun or rain.
+pub const WEATHER_EMOJI_UNKNOWN: &str = "🌡️";
+
+/// Weather emoji for a WMO code (same table as [`wmo_weather`]); a NULL or
+/// unmapped code gets the neutral [`WEATHER_EMOJI_UNKNOWN`].
+pub fn wmo_emoji(code: Option<i64>) -> &'static str {
+    code.and_then(|code| WMO_WEATHER.iter().find(|(c, _, _, _)| *c == code))
+        .map(|(_, emoji, _, _)| *emoji)
+        .unwrap_or(WEATHER_EMOJI_UNKNOWN)
 }
 
 /// `t` plus `{name}` placeholder filling — see [`fill`].
@@ -454,5 +482,33 @@ mod tests {
         assert_eq!(wmo_weather(45, "en"), Some("Foggy"));
         assert_eq!(wmo_weather(123, "zh"), None);
         assert_eq!(wmo_weather(-1, "en"), None);
+    }
+
+    #[test]
+    fn wmo_emoji_maps_each_code_group_and_falls_back_to_thermometer() {
+        let groups: &[(&[i64], &str)] = &[
+            (&[0], "\u{2600}\u{FE0F}"),           // ☀️
+            (&[1], "\u{1F324}\u{FE0F}"),          // 🌤️
+            (&[2], "\u{26C5}"),                    // ⛅
+            (&[3], "\u{2601}\u{FE0F}"),           // ☁️
+            (&[45, 48], "\u{1F32B}\u{FE0F}"),     // 🌫️
+            (&[51, 53, 55, 56, 57], "\u{1F326}\u{FE0F}"), // 🌦️
+            (&[61, 63, 65, 66, 67, 80, 81, 82], "\u{1F327}\u{FE0F}"), // 🌧️
+            (&[71, 73, 75, 77, 85, 86], "\u{1F328}\u{FE0F}"), // 🌨️
+            (&[95, 96, 99], "\u{26C8}\u{FE0F}"),  // ⛈️
+        ];
+        let mut covered = 0;
+        for (codes, emoji) in groups {
+            for &c in *codes {
+                assert_eq!(wmo_emoji(Some(c)), *emoji, "code {c}");
+                covered += 1;
+            }
+        }
+        // Every table row has an icon from the groups above.
+        assert_eq!(covered, WMO_WEATHER.len());
+        assert_eq!(WEATHER_EMOJI_UNKNOWN, "\u{1F321}\u{FE0F}"); // 🌡️
+        assert_eq!(wmo_emoji(None), WEATHER_EMOJI_UNKNOWN);
+        assert_eq!(wmo_emoji(Some(123)), WEATHER_EMOJI_UNKNOWN);
+        assert_eq!(wmo_emoji(Some(52)), WEATHER_EMOJI_UNKNOWN);
     }
 }

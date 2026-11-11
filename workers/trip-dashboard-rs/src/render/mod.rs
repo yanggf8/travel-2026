@@ -62,7 +62,8 @@ fn plan_body_attrs(plan_id: &str, owner_chrome: &str) -> String {
     format!(" data-plan-id=\"{}\" data-view=\"{view}\"", esc(plan_id))
 }
 
-/// Render a full plan page: plan overview map, booking summary, then each day card.
+/// Render a full plan page: plan overview map, booking summary, weather overview,
+/// then each day card.
 /// `token` is the access token the page was loaded with — threaded into the
 /// auth-gated voucher link so a click carries the same token (else 403).
 /// `owner_chrome` is the logged-in owner top bar (copy share link); empty for viewers.
@@ -127,6 +128,10 @@ pub fn render_plan(
         body.push_str("</div>");
     }
     body.push_str(&summary::render(plan, lang, token));
+    // Weather overview: last block of the top summary area, right before the
+    // day cards it summarizes. Built from the already-loaded days + clothing
+    // bands (no extra query); renders nothing when no day has weather.
+    body.push_str(&day::weather_overview(&plan.days, &plan.clothing_tips, lang));
     for d in &plan.days {
         body.push_str(&day::render_with_documents(
             d,
@@ -600,6 +605,43 @@ mod tests {
         let day_map = html.find("day-1.png").expect("day map img");
         assert!(plan_leg > plan_map, "plan legend sits under its map");
         assert!(day_leg > day_map, "day legend sits under its map");
+    }
+
+    #[test]
+    fn render_plan_puts_weather_overview_after_summary_before_day_cards() {
+        use crate::model::{Day, Plan};
+        let plan = Plan {
+            plan_id: "kyoto-nov-2026".into(),
+            display_name: "Kyoto".into(),
+            days: vec![Day {
+                day_number: 1,
+                date: "2026-11-14".into(),
+                day_type: "full".into(),
+                weather_code: Some(0),
+                temp_low_c: Some(12.0),
+                temp_high_c: Some(20.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
+        let summary = html.find("booking-summary").expect("summary");
+        let overview = html
+            .find("<details class=\"weather-overview\" open>")
+            .expect("weather overview");
+        let day_card = html.find("<section class=\"day ").expect("day card");
+        assert!(summary < overview && overview < day_card, "{html}");
+        assert!(html.contains("<td class=\"wx-desc\">\u{2600}\u{FE0F} 晴</td>"), "{html}");
+
+        // No weather on any day → no overview block at all.
+        let bare = Plan {
+            days: vec![Day { day_number: 1, date: "2026-11-14".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let html = render_plan(&bare, "zh", None, &map::MapStatus::default(), "");
+        // (The inlined stylesheet names the class, so look for the markup.)
+        assert!(!html.contains("<details class=\"weather-overview\""), "{html}");
+        assert!(!html.contains("<h2>天氣總覽</h2>"), "{html}");
     }
 
     #[test]

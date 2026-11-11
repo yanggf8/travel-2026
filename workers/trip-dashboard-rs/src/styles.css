@@ -861,6 +861,70 @@ h1 {
   border-bottom: 1px solid var(--border);
 }
 
+/* ---- Weather overview (天氣總覽): native <details open>, collapsible, no JS ---- */
+.weather-overview {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-top: 16px;
+}
+.weather-overview > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.weather-overview > summary::-webkit-details-marker { display: none; }
+.weather-overview > summary::after { content: '\25B8'; transition: transform 0.2s; font-size: 11px; color: var(--text-dim); }
+.weather-overview[open] > summary::after { transform: rotate(90deg); }
+.weather-overview h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.wx-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+/* Phone (mobile-first): one stacked block per day — date + weather, then the
+   three numbers (each prefixed by its column label), then what to wear. Six
+   table columns do not fit 390px; the header row is the labels' wide-screen form. */
+.wx-table thead { display: none; }
+.wx-table tbody { display: block; }
+.wx-table tr {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "date  desc  desc"
+    "temp  feels rain"
+    "wear  wear  wear";
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.wx-table th, .wx-table td { display: block; min-width: 0; text-align: left; font-weight: 400; overflow-wrap: anywhere; }
+.wx-table th.wx-date { grid-area: date; font-weight: 600; white-space: nowrap; }
+.wx-table .wx-desc { grid-area: desc; font-weight: 500; }
+.wx-temp { grid-area: temp; }
+.wx-feels { grid-area: feels; }
+.wx-rain { grid-area: rain; }
+.wx-wear { grid-area: wear; font-size: 12px; color: var(--text-dim); }
+.wx-temp::before, .wx-feels::before, .wx-rain::before { content: attr(data-label) ' '; color: var(--text-dim); }
+@media (min-width: 560px) {
+  .wx-table thead { display: table-header-group; }
+  .wx-table tbody { display: table-row-group; }
+  .wx-table tr { display: table-row; }
+  /* break-word, not anywhere: a column keeps a whole word's width ("Thunderstorm"). */
+  .wx-table th, .wx-table td { display: table-cell; padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: top; overflow-wrap: break-word; }
+  .wx-table thead th { border-top: 0; font-size: 12px; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
+  .wx-table tr > :first-child { padding-left: 0; }
+  .wx-table tr > :last-child { padding-right: 0; }
+  .wx-temp, .wx-feels, .wx-rain { white-space: nowrap; }
+  .wx-temp::before, .wx-feels::before, .wx-rain::before { content: none; }
+}
+
 /* ---- Session blocks ---- */
 .session {
   padding: 12px 16px;
