@@ -437,10 +437,12 @@ pub fn render_with_documents(
         clothing_tips,
         None,
     ));
+    // Each variant is a native `<details>` that starts COLLAPSED (no `open`;
+    // SSR-only, no JS): the main plan reads first, the alternative is one tap away.
     for variant in &day.variants {
         let option_label = super::day_option_label(variant, day.day_number, lang);
         h.push_str(&format!(
-            "<details class=\"day-variant\" data-variant-of=\"{}\" open><summary class=\"day-variant-summary\">{}</summary><div class=\"day-variant-body\">",
+            "<details class=\"day-variant\" data-variant-of=\"{}\"><summary class=\"day-variant-summary\">{}</summary><div class=\"day-variant-body\">",
             day.day_number,
             esc(&tf(
                 "dayVariant",

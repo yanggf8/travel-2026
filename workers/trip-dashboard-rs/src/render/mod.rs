@@ -849,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn variant_block_renders_open_under_main() {
+    fn variant_block_renders_collapsed_under_main() {
         use crate::model::{Day, Plan, RouteSegment, Session};
         let plan = Plan {
             plan_id: "kyoto-nov-2026".into(),
@@ -907,7 +907,12 @@ mod tests {
             day1.contains("<span class=\"day-option-label\">雨天方案</span>"),
             "{day1}"
         );
-        assert!(day1.contains("<details class=\"day-variant\" data-variant-of=\"1\" open><summary class=\"day-variant-summary\">替代方案：晴天方案</summary><div class=\"day-variant-body\">"), "{day1}");
+        assert!(day1.contains("<details class=\"day-variant\" data-variant-of=\"1\"><summary class=\"day-variant-summary\">替代方案：晴天方案</summary><div class=\"day-variant-body\">"), "{day1}");
+        // Collapsed by default: no `open` attribute on the variant block.
+        assert!(!day1.contains("data-variant-of=\"1\" open"), "{day1}");
+        // The block sits in the day card after the main day's own content.
+        let details_at = day1.find("<details class=\"day-variant\"").unwrap();
+        assert!(day1.find("車站周邊").unwrap() < details_at, "{day1}");
         for section in html.split("<section class=\"day ").skip(1) {
             let section = section.split("</section>").next().expect("day section end");
             if !section.starts_with("day-full\" data-day=\"1\">") {

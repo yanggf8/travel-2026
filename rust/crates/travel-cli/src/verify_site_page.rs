@@ -74,6 +74,7 @@ pub(crate) struct VariantBlock {
     pub(crate) of: Option<i64>,
     /// `data-day` of the nearest enclosing `section.day` card, if any.
     pub(crate) card_day: Option<i64>,
+    /// The `open` attribute — the worker serves every variant collapsed (without it).
     pub(crate) open: bool,
     pub(crate) summary: String,
 }
@@ -398,7 +399,8 @@ fn mentions_day(text: &str, prefix: &str, n: i64, suffix: &str) -> bool {
 /// variant day_number -> (main day, EN label); `trip_days` the number of trip
 /// days (variants excluded); `labels` maps each main day to its variants' labels in the page
 /// language (each must match one block's summary, one-to-one). A plan with no variants and a page with no
-/// variant blocks yields no findings, so plain plans report exactly as before.
+/// variant blocks yields no findings, so plain plans report exactly as before. Each block must be
+/// served collapsed (no `open` attribute): the main plan reads first.
 pub(crate) fn variant_checks(
     doc: &PageDoc,
     variants: &HashMap<i64, (i64, Option<String>)>,
@@ -436,8 +438,8 @@ pub(crate) fn variant_checks(
                 card.map_or("no data-day card".to_string(), |c| format!("the card for day {c}"))
             )),
         }
-        if !v.open {
-            problems.push(format!("day-variant of day {name} is collapsed (no open attribute)"));
+        if v.open {
+            problems.push(format!("day-variant of day {name} is served open (must be collapsed: no open attribute)"));
         }
         if v.summary.is_empty() {
             problems.push(format!("day-variant of day {name} has an empty summary"));
@@ -474,7 +476,7 @@ pub(crate) fn variant_checks(
         }
     }
     let check = if problems.is_empty() {
-        Check::pass(format!("{} day variant(s) open inside their main day cards", doc.variants.len()))
+        Check::pass(format!("{} day variant(s) collapsed inside their main day cards", doc.variants.len()))
     } else {
         Check::fail(problems.join("; "), None)
     };
@@ -1015,7 +1017,7 @@ mod tests {
         ))
     }
 
-    const GOOD_VARIANT: &str = "<details class=\"day-variant\" data-variant-of=\"2\" open><summary class=\"day-variant-summary\">替代方案：雨天</summary><div class=\"day-variant-body\"><div class=\"theme\">第 2 天 · 雨天</div></div></details>";
+    const GOOD_VARIANT: &str = "<details class=\"day-variant\" data-variant-of=\"2\"><summary class=\"day-variant-summary\">替代方案：雨天</summary><div class=\"day-variant-body\"><div class=\"theme\">第 2 天 · 雨天</div></div></details>";
 
     fn labels_of(pairs: &[(i64, &str)]) -> HashMap<i64, Vec<String>> {
         let mut m: HashMap<i64, Vec<String>> = HashMap::new();
@@ -1078,10 +1080,12 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_variant_fails() {
-        let closed = GOOD_VARIANT.replace(" open>", ">");
-        let c = variant_verdict(&variant_html(&closed), &variants_of(&[(3, 2)]));
+    fn open_variant_fails() {
+        let open = GOOD_VARIANT.replace("data-variant-of=\"2\">", "data-variant-of=\"2\" open>");
+        assert_ne!(open, GOOD_VARIANT);
+        let c = variant_verdict(&variant_html(&open), &variants_of(&[(3, 2)]));
         assert_eq!(c.level, Level::Fail, "{c:?}");
+        assert!(c.detail.contains("served open"), "{c:?}");
     }
 
     #[test]

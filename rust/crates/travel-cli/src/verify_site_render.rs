@@ -7,7 +7,8 @@
 //! edge by `.day { overflow: hidden }`.
 //!
 //! The browser side is thin: one new blank tab per language × viewport, navigate,
-//! scroll (lazy images), wait for images and fonts, ONE metrics expression
+//! open every `details.day-variant` (served collapsed; opened so its contents are
+//! measured and shot), scroll (lazy images), wait for images and fonts, ONE metrics expression
 //! (`METRICS_JS`) deserialized into `Metrics`, element screenshots, close. Every
 //! browser await has a wall-clock bound, so `render_plan` always returns. Every
 //! verdict comes from the pure `render_checks(&Metrics)`. The token URL is never
@@ -121,7 +122,7 @@ pub(crate) struct Metrics {
     pub(crate) pending_imgs: usize,
     /// Every `a.doc-link`.
     pub(crate) doc_links: Vec<Shown>,
-    /// Every `details.day-variant` (with `open`).
+    /// Every `details.day-variant`, measured after `PREPARE_JS` opened it.
     pub(crate) variants: Vec<Shown>,
     /// Every `figure[data-map-key] img` (label = the map key).
     pub(crate) map_imgs: Vec<Shown>,
@@ -138,9 +139,6 @@ pub(crate) struct Shown {
     pub(crate) label: String,
     /// Empty when shown; else `display:none`, `visibility:hidden` or `zero-size`.
     pub(crate) state: String,
-    /// `details` only.
-    #[serde(default)]
-    pub(crate) open: Option<bool>,
 }
 
 /// One text-bearing element: where its direct text starts and ends.
@@ -255,7 +253,7 @@ pub(crate) const METRICS_JS: &str = r#"(function () {
       return { label: norm(a.textContent).slice(0, 40), state: boxState(a) };
     }),
     variants: Array.prototype.map.call(document.querySelectorAll('details.day-variant'), function (d) {
-      return { label: norm((d.querySelector('summary') || d).textContent).slice(0, 40), state: boxState(d), open: d.open };
+      return { label: norm((d.querySelector('summary') || d).textContent).slice(0, 40), state: boxState(d) };
     }),
     mapImgs: Array.prototype.map.call(document.querySelectorAll('figure[data-map-key] img'), function (i) {
       return { label: i.closest('figure').getAttribute('data-map-key') || '', state: boxState(i) };
@@ -283,10 +281,14 @@ const HIDE_SCROLLBAR_JS: &str = "(function(){ if (!document.getElementById('veri
 const SCROLL_HEIGHT_JS: &str = "(function(){ return document.documentElement.scrollHeight; })()";
 const SCROLL_TOP_JS: &str = "(function(){ window.scrollTo(0, 0); return true; })()";
 
-/// Lazy images load regardless of scroll position once marked eager, so the
-/// settle wait does not depend on how a (possibly background) tab schedules them.
-/// Returns the page height for the scroll loop.
-const PREPARE_JS: &str = "(function(){ document.querySelectorAll('img[loading=lazy]').forEach(function(i){ i.loading = 'eager'; }); return document.documentElement.scrollHeight; })()";
+/// Opens every `details.day-variant` first: the worker serves them collapsed (the
+/// default is fine, never a verdict), and opening them lets the hidden / inset /
+/// clipped / map-img checks and the day-card shots cover the variant's contents
+/// — and lets its images load. Then lazy images are marked eager: they load
+/// regardless of scroll position, so the settle wait does not depend on how a
+/// (possibly background) tab schedules them. Returns the page height (with the
+/// variants open) for the scroll loop.
+const PREPARE_JS: &str = "(function(){ document.querySelectorAll('details.day-variant').forEach(function(d){ d.open = true; }); document.querySelectorAll('img[loading=lazy]').forEach(function(i){ i.loading = 'eager'; }); return document.documentElement.scrollHeight; })()";
 const SETTLED_JS: &str = "(function(){ return Array.prototype.every.call(document.images, function(i){ return i.complete; }) && (!document.fonts || document.fonts.status === 'loaded'); })()";
 
 // ---------------------------------------------------------------------------
@@ -327,8 +329,6 @@ pub(crate) fn render_checks(m: &Metrics) -> Vec<Check> {
     for v in &m.variants {
         if !v.state.is_empty() {
             hidden.push(format!("details.day-variant {:?} {}", snippet(&v.label, SNIPPET_CHARS), v.state));
-        } else if v.open != Some(true) {
-            hidden.push(format!("details.day-variant {:?} closed", snippet(&v.label, SNIPPET_CHARS)));
         }
     }
     for i in &m.map_imgs {
@@ -773,7 +773,7 @@ mod tests {
     }
 
     fn shown(label: &str) -> Shown {
-        Shown { label: label.into(), state: String::new(), open: None }
+        Shown { label: label.into(), state: String::new() }
     }
 
     fn good() -> Metrics {
@@ -786,7 +786,7 @@ mod tests {
             broken_imgs: vec![],
             pending_imgs: 0,
             doc_links: vec![shown("Ticket A"), shown("Ticket B")],
-            variants: vec![Shown { label: "Rain plan".into(), state: String::new(), open: Some(true) }],
+            variants: vec![shown("Rain plan")],
             map_imgs: vec![shown("day-1.png")],
             text_blocks: vec![
                 block("h2", "第 1 天", 20.0, 120.0),
@@ -837,19 +837,21 @@ mod tests {
     }
 
     #[test]
-    fn hidden_links_closed_variants_and_hidden_maps_fail() {
+    fn hidden_links_variants_and_hidden_maps_fail() {
         let mut m = good();
-        m.doc_links.push(Shown { label: "Voucher".into(), state: "zero-size".into(), open: None });
-        m.variants.push(Shown { label: "Plan B".into(), state: String::new(), open: Some(false) });
-        m.variants.push(Shown { label: "Plan C".into(), state: "display:none".into(), open: Some(true) });
-        m.map_imgs.push(Shown { label: "day-2.png".into(), state: "visibility:hidden".into(), open: None });
+        m.doc_links.push(Shown { label: "Voucher".into(), state: "zero-size".into() });
+        // Served collapsed, opened by PREPARE_JS, shown: no finding.
+        m.variants.push(shown("Plan B"));
+        m.variants.push(Shown { label: "Plan C".into(), state: "display:none".into() });
+        m.map_imgs.push(Shown { label: "day-2.png".into(), state: "visibility:hidden".into() });
         let c = only(&render_checks(&m), "hidden:");
         assert_eq!(c.len(), 1, "{c:?}");
         let d = &c[0].detail;
         assert_eq!(c[0].level, Level::Fail);
-        assert!(d.starts_with("hidden: 4 element(s)"), "{d}");
+        assert!(d.starts_with("hidden: 3 element(s)"), "{d}");
         assert!(d.contains("a.doc-link \"Voucher\" zero-size"), "{d}");
-        assert!(d.contains("details.day-variant \"Plan B\" closed"), "{d}");
+        assert!(!d.contains("Plan B"), "{d}");
+        assert!(!d.contains("closed"), "{d}");
         assert!(d.contains("details.day-variant \"Plan C\" display:none"), "{d}");
         assert!(d.contains("img[data-map-key=day-2.png] visibility:hidden"), "{d}");
     }
@@ -975,7 +977,7 @@ mod tests {
         // final 32-hex scrub cannot see.
         let mut m = good();
         m.text_blocks.push(block("li", &format!("{frag}{frag}"), 4.0, 100.0));
-        m.doc_links.push(Shown { label: format!("{TOKEN}"), state: "zero-size".into(), open: None });
+        m.doc_links.push(Shown { label: format!("{TOKEN}"), state: "zero-size".into() });
         m.broken_imgs.push(format!("/v?t={frag}"));
         let raw: String = render_checks(&m).iter().map(|c| scrub(&c.detail, TOKEN)).collect();
         assert!(raw.contains(&TOKEN[..16]), "the hazard this guards: {raw}");
@@ -1004,22 +1006,21 @@ mod tests {
             "innerWidth": 390, "clientWidth": 375, "scrollWidth": 375, "dayCards": 2, "imgs": 3,
             "brokenImgs": [], "pendingImgs": 0,
             "docLinks": [{"label": "T", "state": ""}],
-            "variants": [{"label": "V", "state": "", "open": true}],
+            "variants": [{"label": "V", "state": ""}],
             "mapImgs": [{"label": "day-1.png", "state": ""}],
             "textBlocks": [{"element": "h2", "text": "Day 1", "left": 20.5, "right": 99, "refX": 20.5,
                             "cardRight": null, "ellipsis": false}],
             "fontsStatus": "loaded"
         });
         let m: Metrics = serde_json::from_value(v.clone()).unwrap();
-        assert_eq!(m.variants[0].open, Some(true));
-        assert_eq!(m.doc_links[0].open, None);
+        assert_eq!(m.variants[0].label, "V");
         assert_eq!(m.text_blocks[0].card_right, None);
         assert_eq!(render_checks(&m)[0].level, Level::Pass);
         // Every key the struct reads is one the JS returns.
         for key in v.as_object().unwrap().keys() {
             assert!(METRICS_JS.contains(&format!("{key}:")), "METRICS_JS lacks {key}");
         }
-        for key in ["refX", "cardRight", "ellipsis", "label", "state", "open"] {
+        for key in ["refX", "cardRight", "ellipsis", "label", "state"] {
             assert!(METRICS_JS.contains(&format!("{key}:")), "METRICS_JS lacks {key}");
         }
         let mut missing = v;
@@ -1039,6 +1040,15 @@ mod tests {
             "section.booking-summary, section.plan-documents, details.weather-overview, section.day"
         ));
         assert!(serde_json::from_value::<Vec<ShotRect>>(serde_json::json!([{"x": 0, "y": 1, "width": 2}])).is_err());
+    }
+
+    #[test]
+    fn prepare_opens_day_variants_before_loading_lazy_images() {
+        let open = PREPARE_JS.find("querySelectorAll('details.day-variant').forEach(function(d){ d.open = true; })");
+        let eager = PREPARE_JS.find("querySelectorAll('img[loading=lazy]')");
+        let height = PREPARE_JS.find("return document.documentElement.scrollHeight");
+        assert!(open.is_some() && eager.is_some() && height.is_some(), "{PREPARE_JS}");
+        assert!(open < eager && eager < height, "variants open before the lazy flip and the height read: {PREPARE_JS}");
     }
 
     #[test]
