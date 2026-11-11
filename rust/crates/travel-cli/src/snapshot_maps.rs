@@ -637,6 +637,15 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 let resolved =
                     resolve_segment_label(net, label, &src.dest_pois, &src.hotel_names).await?;
                 if resolved.is_none() && unresolved.insert(label.clone()) && net.diagnostics() {
+                    if is_generic_hotel_token(label) {
+                        eprintln!(
+                            "   ⚠ day {day}: \"{label}\" is a bare stay word and the plan has {} hotels, \
+                             not exactly one — it is left off the map; name the hotel in the segment \
+                             (set-route-segment)",
+                            src.hotel_names.len()
+                        );
+                        continue;
+                    }
                     eprintln!(
                         "   ⚠ day {day}: \"{label}\" could not be geocoded — it is left off the map; \
                          rename the stop or pin it with set-place-geocode"
@@ -2205,14 +2214,23 @@ pub(crate) struct LegRow {
 /// feature choice moves a stop by hundreds of metres), so an exact 5-dp key match
 /// misses and every leg falls back to a straight dashed connector — the "empty map"
 /// regression. A cached leg therefore also matches when BOTH endpoints sit within
-/// MATCH_RADIUS_M of the stop pair; the closest such leg wins. Exact key first.
+/// the match radius of the stop pair; the closest such leg wins. Exact key first.
 const MATCH_RADIUS_M: f64 = 500.0;
+/// The match radius also shrinks with the pair: at most this fraction of the
+/// stops' own straight-line distance. A fixed 500 m let a 416 m walk (第一旭 →
+/// 京都車站) reuse a leg that started 499 m away at a stray "hotel" geocode, so
+/// the drawn road began at a place the day never visits; 500 m of drift is
+/// tolerable on a 16 km drive, not on a leg shorter than the drift itself.
+const MATCH_RADIUS_FRAC: f64 = 0.1;
+
+fn leg_match_radius_m(from: (f64, f64), to: (f64, f64)) -> f64 {
+    MATCH_RADIUS_M.min(MATCH_RADIUS_FRAC * haversine_m(from, to))
+}
 
 pub(crate) fn match_leg<'a>(legs: &'a [LegRow], from: (f64, f64), to: (f64, f64)) -> Option<&'a LegRow> {
+    let radius = leg_match_radius_m(from, to);
     legs.iter()
-        .filter(|l| {
-            haversine_m(l.from, from) <= MATCH_RADIUS_M && haversine_m(l.to, to) <= MATCH_RADIUS_M
-        })
+        .filter(|l| haversine_m(l.from, from) <= radius && haversine_m(l.to, to) <= radius)
         .min_by(|a, b| {
             let da = haversine_m(a.from, from) + haversine_m(a.to, to);
             let db = haversine_m(b.from, from) + haversine_m(b.to, to);
@@ -2531,7 +2549,7 @@ async fn cached_routes(
             pair[0].lat, pair[0].lon, pair[1].lat, pair[1].lon
         );
         // Exact 5-dp key hit, else the nearest cached leg whose endpoints both sit
-        // within MATCH_RADIUS_M (geocode drift tolerance).
+        // within leg_match_radius_m (geocode drift tolerance).
         let leg = legs
             .iter()
             .find(|l| l.key == exact)
@@ -2781,6 +2799,10 @@ async fn resolve_segment_label<R: MapResolver>(
     }
     let place = match match_hotel(label, hotel_names) {
         Some(name) => name,
+        // A bare stay word ("hotel") with no unique plan hotel names no place:
+        // geocoding it returns an arbitrary first hit ("hotel, Kyoto" → a spot
+        // north of 七条通). Leave it unresolved so the caller warns instead.
+        None if is_generic_hotel_token(label) => return Ok(None),
         None => label.to_string(),
     };
     Ok(net
@@ -4536,6 +4558,75 @@ mod tests {
         )];
         assert!(match_leg(&legs, (35.0, 135.0), (36.0, 136.0)).is_none());
         assert!(match_leg(&legs, (40.0, 140.0), (35.5, 135.5)).is_none());
+    }
+
+    #[test]
+    fn match_leg_rejects_drift_on_a_leg_shorter_than_the_drift() {
+        // kyoto-nov-2026 day 5: 第一旭 → 京都車站 (a 416 m walk) reused the
+        // leg cached from the stray "hotel|Kyoto" geocode (34.99104), 499 m
+        // from 第一旭 — the drawn road started north of 七条通.
+        let bogus = [leg(
+            "34.99104,135.76116>34.98535,135.75877|osrm-demo|driving",
+            (34.9910409, 135.761165),
+            (34.9853497, 135.758766),
+        )];
+        let asahi = (34.986687, 135.7624885);
+        let station = (34.9852246, 135.7582872);
+        let hotel = (34.9878078, 135.7615257);
+        assert!(match_leg(&bogus, asahi, station).is_none());
+        // Every hotel → station commute leg reused the same bogus leg (361 m off).
+        assert!(match_leg(&bogus, hotel, station).is_none());
+        // Day 6: a 208 m walk 三千院 → 宝泉院 reused a leg 437 m off at one end.
+        let sanzen = leg(
+            "35.11902,135.83018>35.11964,135.83492|osrm-demo|driving",
+            (35.11902, 135.83018),
+            (35.11964, 135.83492),
+        );
+        assert!(match_leg(&[sanzen], (35.11964, 135.83492), (35.12135, 135.83400)).is_none());
+    }
+
+    #[test]
+    fn match_leg_keeps_small_drift_on_a_short_leg() {
+        // 一福茶屋 → 寂光院: a 1.3 km leg whose cached start drifted 115 m.
+        let l = leg(
+            "35.11964,135.83492>35.12406,135.82082|osrm-demo|driving",
+            (35.11964, 135.83492),
+            (35.12406, 135.82082),
+        );
+        let from = (35.11903, 135.83391); // 一福茶屋, ~115 m from the cached start
+        assert!(haversine_m(from, l.from) > 100.0);
+        assert!(match_leg(&[l], from, (35.12406, 135.82082)).is_some());
+    }
+
+    #[test]
+    fn leg_match_radius_scales_with_the_pair_up_to_the_cap() {
+        let a = (35.0, 135.0);
+        assert_eq!(leg_match_radius_m(a, a), 0.0);
+        let r = leg_match_radius_m(a, (35.0036, 135.0)); // ~400 m apart
+        assert!((39.0..=41.0).contains(&r), "got {r}");
+        assert_eq!(leg_match_radius_m(a, (35.2, 135.2)), MATCH_RADIUS_M);
+    }
+
+    #[tokio::test]
+    async fn a_bare_stay_word_without_a_unique_hotel_is_never_geocoded() {
+        // The resolver would answer "hotel" with an arbitrary first hit; it
+        // must not be asked at all unless the plan has exactly one hotel.
+        let bogus = (34.9910409, 135.761165);
+        let mut net = FakeNet {
+            coords: HashMap::from([("hotel", bogus), ("飯店", bogus), ("APA Hotel", HOTEL)]),
+            misses: Vec::new(),
+        };
+        let two = vec!["APA Hotel".to_string(), "Hearton Hotel".to_string()];
+        for hotels in [Vec::new(), two] {
+            for label in ["hotel", "Hotel", "飯店"] {
+                let got = resolve_segment_label(&mut net, label, &[], &hotels).await.unwrap();
+                assert_eq!(got, None, "{label} with {} hotels", hotels.len());
+            }
+        }
+        assert!(net.take_misses().is_empty(), "no geocode lookup may be attempted");
+        let one = vec!["APA Hotel".to_string()];
+        let got = resolve_segment_label(&mut net, "hotel", &[], &one).await.unwrap();
+        assert_eq!(got, Some((HOTEL.0, HOTEL.1, Kind::Hotel)));
     }
 
     #[test]
