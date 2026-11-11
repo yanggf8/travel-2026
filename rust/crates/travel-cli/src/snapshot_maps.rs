@@ -637,7 +637,9 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 let resolved =
                     resolve_segment_label(net, label, &src.dest_pois, &src.hotel_names).await?;
                 if resolved.is_none() && unresolved.insert(label.clone()) && net.diagnostics() {
-                    if is_generic_hotel_token(label) {
+                    // With exactly one hotel the bare word resolved to it; a miss
+                    // there is that hotel's geocode failing — the generic warning.
+                    if is_generic_hotel_token(label) && src.hotel_names.len() != 1 {
                         eprintln!(
                             "   ⚠ day {day}: \"{label}\" is a bare stay word and the plan has {} hotels, \
                              not exactly one — it is left off the map; name the hotel in the segment \
@@ -2897,7 +2899,8 @@ fn is_generic_hotel_token(label: &str) -> bool {
     t.eq_ignore_ascii_case("hotel")
         || t.eq_ignore_ascii_case("hostel")
         || t.eq_ignore_ascii_case("ryokan")
-        || matches!(t, "飯店" | "旅館" | "民宿" | "ホテル")
+        || t.eq_ignore_ascii_case("inn")
+        || matches!(t, "飯店" | "酒店" | "賓館" | "旅館" | "民宿" | "ホテル")
 }
 
 /// Legend label for a segment endpoint: the hotel's full name when the label
@@ -4618,7 +4621,7 @@ mod tests {
         };
         let two = vec!["APA Hotel".to_string(), "Hearton Hotel".to_string()];
         for hotels in [Vec::new(), two] {
-            for label in ["hotel", "Hotel", "飯店"] {
+            for label in ["hotel", "Hotel", "飯店", "酒店", "賓館", "Inn"] {
                 let got = resolve_segment_label(&mut net, label, &[], &hotels).await.unwrap();
                 assert_eq!(got, None, "{label} with {} hotels", hotels.len());
             }
