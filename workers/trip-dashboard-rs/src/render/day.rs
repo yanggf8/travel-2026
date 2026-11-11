@@ -213,6 +213,85 @@ pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str)
     h
 }
 
+/// The plan page's collapsible 用餐總覽 / Meal overview: one row per day per
+/// session that has meals, in trip order — each main day's sessions
+/// (morning → noon → afternoon → evening), then each of its variants' sessions.
+/// Columns: date + weekday, session name, 主選 (the session's first meal in
+/// sort_order), 備選 (every later meal, one per line; em dash when none). Cells
+/// show [`session::meal_short`]'s 「料理｜店名」 form plus the day cards'
+/// AI-recommended badge. A day with variants labels its rows with the day's
+/// option name (「11/15（日）· 雨天方案」) and each variant's rows with its own
+/// (「11/15（日）· 晴天方案」); a variant's meals are listed even when they
+/// repeat the main day's — the table states what each plan has. Variants only
+/// count nested under their main day (as the assembler builds them); a stray
+/// top-level variant is skipped, like the weather overview does. A native
+/// `<details open>` (no JS), the same pattern as [`weather_overview`]; no meals
+/// anywhere → nothing at all. Phones get one stacked block per row
+/// (styles.css `.meal-table`), wider screens a table.
+pub fn meal_overview(days: &[Day], lang: &str) -> String {
+    const DASH: &str = "\u{2014}";
+    let date_cell = |day: &Day, fallback_date: &str, option: &str| -> String {
+        let raw = if day.date.is_empty() { fallback_date } else { &day.date };
+        let date = match super::summary::date_with_weekday(raw, lang) {
+            Some(d) => d,
+            None if raw.is_empty() => DASH.to_string(),
+            None => raw.to_string(),
+        };
+        if option.is_empty() {
+            esc(&date)
+        } else {
+            esc(&tf("dateOption", lang, &[("date", &date), ("label", option)]))
+        }
+    };
+    let meal_cell = |m: &crate::model::Meal| -> String {
+        let short = session::meal_short(&m.text);
+        let short = if short.is_empty() { DASH.to_string() } else { esc(&short) };
+        format!("{short}{}", super::ai_rec_badge(&m.source, lang))
+    };
+    let main_label = esc(t("mealMain", lang));
+    let backup_label = esc(t("mealBackup", lang));
+    let mut rows = String::new();
+    for main in days.iter().filter(|d| d.variant_of.is_none()) {
+        let has_variants = !main.variants.is_empty();
+        for day in std::iter::once(main).chain(main.variants.iter()) {
+            let option = if has_variants {
+                super::day_option_name(day, lang)
+            } else {
+                ""
+            };
+            for sess in day.sessions.iter().filter(|s| !s.meals.is_empty()) {
+                let backups: Vec<String> = sess.meals[1..].iter().map(meal_cell).collect();
+                let backup = if backups.is_empty() {
+                    DASH.to_string()
+                } else {
+                    backups.join("<br>")
+                };
+                rows.push_str(&format!(
+                    "<tr><th scope=\"row\" class=\"ml-date\">{}</th>\
+                     <td class=\"ml-session\">{}</td>\
+                     <td class=\"ml-main\" data-label=\"{main_label}\">{}</td>\
+                     <td class=\"ml-backup\" data-label=\"{backup_label}\">{backup}</td></tr>",
+                    date_cell(day, &main.date, option),
+                    esc(session::session_label(&sess.session_type, lang)),
+                    meal_cell(&sess.meals[0]),
+                ));
+            }
+        }
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<details class=\"meal-overview\" open><summary><h2>{}</h2></summary>\
+         <table class=\"meal-table\"><thead><tr><th scope=\"col\">{}</th><th scope=\"col\">{}</th>\
+         <th scope=\"col\">{main_label}</th><th scope=\"col\">{backup_label}</th></tr></thead>\
+         <tbody>{rows}</tbody></table></details>",
+        esc(t("mealOverview", lang)),
+        esc(t("wxDate", lang)),
+        esc(t("mealSession", lang)),
+    )
+}
+
 /// Icon for a route-segment travel mode.
 fn mode_icon(mode: &str) -> &'static str {
     match mode {
@@ -1311,6 +1390,244 @@ mod tests {
         for lang in ["zh", "en"] {
             assert_eq!(weather_overview(&[], &sample_tips(), lang), "", "{lang}");
             assert_eq!(weather_overview(&days(), &sample_tips(), lang), "", "{lang}");
+        }
+    }
+
+    // ---- meal overview ----
+    fn ml(text: &str, source: &str) -> Meal {
+        Meal { text: text.into(), source: source.into() }
+    }
+
+    /// The four canonical sessions; `meals` maps a session type to its meals.
+    fn meal_sessions(meals: Vec<(&str, Vec<Meal>)>) -> Vec<Session> {
+        crate::model::SESSION_ORDER
+            .iter()
+            .map(|&st| Session {
+                session_type: st.into(),
+                meals: meals
+                    .iter()
+                    .find(|(t, _)| *t == st)
+                    .map(|(_, m)| m.clone())
+                    .unwrap_or_default(),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    const KANEYO: &str = "主選：鰻魚飯｜京極かねよ：新京極六角，排隊約 20 分；招牌錦糸丼｜map:京極かねよ";
+    const PEACH: &str = "去程午餐｜樂桃不含機上餐；機場先買便當";
+
+    fn meal_day() -> Day {
+        Day {
+            day_number: 2,
+            date: "2026-11-14".into(), // a Saturday
+            sessions: meal_sessions(vec![
+                ("noon", vec![ml(PEACH, "confirmed")]),
+                (
+                    "evening",
+                    vec![
+                        ml(KANEYO, "confirmed"),
+                        ml("備選：親子丼｜鳥岩樓：西陣｜map:鳥岩樓", "ai_recommended"),
+                        ml("Ramen & <gyoza> at the station food court near the hotel", "confirmed"),
+                    ],
+                ),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn meal_overview_zh_renders_open_details_and_short_rows() {
+        let html = meal_overview(&[meal_day()], "zh");
+        assert!(
+            html.starts_with(
+                "<details class=\"meal-overview\" open><summary><h2>用餐總覽</h2></summary>\
+                 <table class=\"meal-table\"><thead><tr><th scope=\"col\">日期</th>\
+                 <th scope=\"col\">餐別</th><th scope=\"col\">主選</th><th scope=\"col\">備選</th>\
+                 </tr></thead><tbody>"
+            ),
+            "got: {html}"
+        );
+        // Noon: a single meal → its short form, no backup (em dash).
+        assert!(
+            html.contains(
+                "<tr><th scope=\"row\" class=\"ml-date\">11/14（六）</th>\
+                 <td class=\"ml-session\">中午</td>\
+                 <td class=\"ml-main\" data-label=\"主選\">去程午餐｜樂桃不含機上餐</td>\
+                 <td class=\"ml-backup\" data-label=\"備選\">\u{2014}</td></tr>"
+            ),
+            "got: {html}"
+        );
+        // Evening: sort_order 0 is 主選; 1 and 2 are both 備選, one per line,
+        // the AI-recommended one carrying the day cards' badge, the free-text
+        // one cut to 30 characters (escaped).
+        assert!(
+            html.contains(
+                "<tr><th scope=\"row\" class=\"ml-date\">11/14（六）</th>\
+                 <td class=\"ml-session\">晚上</td>\
+                 <td class=\"ml-main\" data-label=\"主選\">鰻魚飯｜京極かねよ</td>\
+                 <td class=\"ml-backup\" data-label=\"備選\">親子丼｜鳥岩樓\
+                 <span class=\"ai-rec-badge\">🤖 建議（未確認）</span>\
+                 <br>Ramen &amp; &lt;gyoza&gt; at the station\u{2026}</td></tr>"
+            ),
+            "got: {html}"
+        );
+        assert!(html.ends_with("</tbody></table></details>"), "got: {html}");
+        // The pin, the role prefix and the detail tail never reach the table.
+        for raw in ["map:", "主選：", "新京極六角", "機場先買便當"] {
+            assert!(!html.contains(raw), "{raw} leaked; got: {html}");
+        }
+    }
+
+    #[test]
+    fn meal_overview_en_renders_english_chrome() {
+        let html = meal_overview(&[meal_day()], "en");
+        assert!(html.contains("<summary><h2>Meal overview</h2></summary>"), "got: {html}");
+        assert!(
+            html.contains(
+                "<th scope=\"col\">Date</th><th scope=\"col\">Meal</th>\
+                 <th scope=\"col\">Main pick</th><th scope=\"col\">Backup</th>"
+            ),
+            "got: {html}"
+        );
+        assert!(
+            html.contains(
+                "<tr><th scope=\"row\" class=\"ml-date\">Sat 11/14</th>\
+                 <td class=\"ml-session\">Evening</td>\
+                 <td class=\"ml-main\" data-label=\"Main pick\">鰻魚飯｜京極かねよ</td>\
+                 <td class=\"ml-backup\" data-label=\"Backup\">親子丼｜鳥岩樓\
+                 <span class=\"ai-rec-badge\">🤖 AI-recommended (unconfirmed)</span>"
+            ),
+            "got: {html}"
+        );
+        for zh in ["用餐總覽", "餐別", "晚上", "（六）", "建議（未確認）"] {
+            assert!(!html.contains(zh), "{zh} in EN page; got: {html}");
+        }
+    }
+
+    #[test]
+    fn meal_overview_rows_follow_day_then_session_order() {
+        let day1 = Day {
+            day_number: 1,
+            date: "2026-11-13".into(),
+            sessions: meal_sessions(vec![
+                ("evening", vec![ml("D1 dinner", "confirmed")]),
+                ("morning", vec![ml("D1 breakfast", "confirmed")]),
+            ]),
+            ..Default::default()
+        };
+        let day2 = Day {
+            day_number: 2,
+            date: "2026-11-14".into(),
+            sessions: meal_sessions(vec![
+                ("afternoon", vec![ml("D2 tea", "confirmed")]),
+                ("noon", vec![ml("D2 lunch", "confirmed")]),
+            ]),
+            ..Default::default()
+        };
+        let html = meal_overview(&[day1, day2], "en");
+        let order: Vec<usize> = ["D1 breakfast", "D1 dinner", "D2 lunch", "D2 tea"]
+            .iter()
+            .map(|m| html.find(m).unwrap_or_else(|| panic!("{m} missing: {html}")))
+            .collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}: {html}");
+        // Sessions without meals get no row.
+        assert_eq!(html.matches("scope=\"row\"").count(), 4, "got: {html}");
+    }
+
+    #[test]
+    fn meal_overview_labels_main_and_variant_rows_with_their_option_names() {
+        let lunch = || vec![("noon", vec![ml("湯豆腐｜奧丹：南禪寺參道｜map:奧丹", "confirmed")])];
+        let variant = Day {
+            day_number: 4,
+            date: "2026-11-15".into(),
+            variant_of: Some(3),
+            variant_label: "Sunny-day plan".into(),
+            variant_label_zh: "晴天方案".into(),
+            // Same lunch as the main day: still listed, under the variant's label.
+            sessions: meal_sessions(lunch()),
+            ..Default::default()
+        };
+        let main = Day {
+            day_number: 3,
+            date: "2026-11-15".into(), // a Sunday
+            variant_label: "Rainy-day plan".into(),
+            variant_label_zh: "雨天方案".into(),
+            sessions: meal_sessions(lunch()),
+            variants: vec![variant],
+            ..Default::default()
+        };
+        // A stray top-level variant (the assembler nests them) is skipped.
+        let stray = Day {
+            day_number: 5,
+            date: "2026-11-15".into(),
+            variant_of: Some(3),
+            sessions: meal_sessions(vec![("noon", vec![ml("stray must not render", "confirmed")])]),
+            ..Default::default()
+        };
+        let html = meal_overview(&[main, stray], "zh");
+        assert_eq!(html.matches("scope=\"row\"").count(), 2, "got: {html}");
+        let rainy = html
+            .find("<th scope=\"row\" class=\"ml-date\">11/15（日）· 雨天方案</th><td class=\"ml-session\">中午</td><td class=\"ml-main\" data-label=\"主選\">湯豆腐｜奧丹</td>")
+            .unwrap_or_else(|| panic!("rainy row: {html}"));
+        let sunny = html
+            .find("<th scope=\"row\" class=\"ml-date\">11/15（日）· 晴天方案</th><td class=\"ml-session\">中午</td><td class=\"ml-main\" data-label=\"主選\">湯豆腐｜奧丹</td>")
+            .unwrap_or_else(|| panic!("sunny row: {html}"));
+        assert!(rainy < sunny, "main day first; got: {html}");
+        assert!(!html.contains("stray must not render"), "got: {html}");
+
+        let en = meal_overview(
+            &[Day {
+                day_number: 3,
+                date: "2026-11-15".into(),
+                variant_label: "Rainy-day plan".into(),
+                variant_label_zh: "雨天方案".into(),
+                sessions: meal_sessions(lunch()),
+                variants: vec![Day {
+                    day_number: 4,
+                    date: String::new(), // no own date → the main day's
+                    variant_of: Some(3),
+                    variant_label: "Sunny-day plan".into(),
+                    variant_label_zh: "晴天方案".into(),
+                    sessions: meal_sessions(lunch()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            "en",
+        );
+        assert!(en.contains("<th scope=\"row\" class=\"ml-date\">Sun 11/15 · Rainy-day plan</th>"), "got: {en}");
+        assert!(en.contains("<th scope=\"row\" class=\"ml-date\">Sun 11/15 · Sunny-day plan</th>"), "got: {en}");
+    }
+
+    #[test]
+    fn meal_overview_day_without_variants_has_no_option_label() {
+        // A plain day keeps a bare date even if a stale variant label lingers.
+        let day = Day { variant_label_zh: "雨天方案".into(), ..meal_day() };
+        let html = meal_overview(&[day], "zh");
+        assert!(html.contains("<th scope=\"row\" class=\"ml-date\">11/14（六）</th>"), "got: {html}");
+        assert!(!html.contains("雨天方案"), "got: {html}");
+    }
+
+    #[test]
+    fn meal_overview_renders_nothing_without_meals() {
+        // Days with sessions but no meals, plus a stray top-level variant with
+        // meals (skipped): nothing at all.
+        let days = || {
+            vec![
+                Day {
+                    day_number: 1,
+                    date: "2026-11-13".into(),
+                    sessions: meal_sessions(vec![]),
+                    ..Default::default()
+                },
+                Day { day_number: 2, date: "2026-11-14".into(), ..Default::default() },
+                Day { day_number: 3, variant_of: Some(2), ..meal_day() },
+            ]
+        };
+        for lang in ["zh", "en"] {
+            assert_eq!(meal_overview(&[], lang), "", "{lang}");
+            assert_eq!(meal_overview(&days(), lang), "", "{lang}");
         }
     }
 }

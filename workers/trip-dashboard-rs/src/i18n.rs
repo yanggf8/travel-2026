@@ -176,6 +176,19 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("wxRain", true) => "降雨機率",
         ("wxWear", false) => "What to wear",
         ("wxWear", true) => "穿著建議",
+        // meal overview (render/day.rs meal_overview): heading + column labels
+        // (the date column reuses wxDate); dateOption labels a day-variant row —
+        // ZH has no space after the full-width （六） paren: 「11/15（日）· 晴天方案」
+        ("mealOverview", false) => "Meal overview",
+        ("mealOverview", true) => "用餐總覽",
+        ("mealSession", false) => "Meal",
+        ("mealSession", true) => "餐別",
+        ("mealMain", false) => "Main pick",
+        ("mealMain", true) => "主選",
+        ("mealBackup", false) => "Backup",
+        ("mealBackup", true) => "備選",
+        ("dateOption", false) => "{date} · {label}",
+        ("dateOption", true) => "{date}· {label}",
         ("todaysRoute", false) => "Today's route",
         ("todaysRoute", true) => "今日路線",
         ("dayHeading", false) => "Day {day} · {date}",

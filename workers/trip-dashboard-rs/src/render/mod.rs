@@ -63,7 +63,7 @@ fn plan_body_attrs(plan_id: &str, owner_chrome: &str) -> String {
 }
 
 /// Render a full plan page: plan overview map, booking summary, weather overview,
-/// then each day card.
+/// meal overview, then each day card.
 /// `token` is the access token the page was loaded with — threaded into the
 /// auth-gated voucher link so a click carries the same token (else 403).
 /// `owner_chrome` is the logged-in owner top bar (copy share link); empty for viewers.
@@ -132,6 +132,9 @@ pub fn render_plan(
     // day cards it summarizes. Built from the already-loaded days + clothing
     // bands (no extra query); renders nothing when no day has weather.
     body.push_str(&day::weather_overview(&plan.days, &plan.clothing_tips, lang));
+    // Meal overview right after it (same slot when there is no weather): from
+    // the already-loaded session meals, no extra query; nothing without meals.
+    body.push_str(&day::meal_overview(&plan.days, lang));
     for d in &plan.days {
         body.push_str(&day::render_with_documents(
             d,
@@ -642,6 +645,71 @@ mod tests {
         // (The inlined stylesheet names the class, so look for the markup.)
         assert!(!html.contains("<details class=\"weather-overview\""), "{html}");
         assert!(!html.contains("<h2>天氣總覽</h2>"), "{html}");
+    }
+
+    #[test]
+    fn render_plan_puts_meal_overview_after_weather_before_day_cards() {
+        use crate::model::{Day, Meal, Plan, Session};
+        let noon = |text: &str| Session {
+            session_type: "noon".into(),
+            meals: vec![Meal { text: text.into(), source: "confirmed".into() }],
+            ..Default::default()
+        };
+        let plan = Plan {
+            plan_id: "kyoto-nov-2026".into(),
+            display_name: "Kyoto".into(),
+            days: vec![Day {
+                day_number: 1,
+                date: "2026-11-14".into(),
+                day_type: "full".into(),
+                weather_code: Some(0),
+                temp_low_c: Some(12.0),
+                temp_high_c: Some(20.0),
+                sessions: vec![noon("湯豆腐｜奧丹：南禪寺參道｜map:奧丹")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
+        let weather = html
+            .find("<details class=\"weather-overview\" open>")
+            .expect("weather overview");
+        let meals = html
+            .find("<details class=\"meal-overview\" open><summary><h2>用餐總覽</h2></summary>")
+            .expect("meal overview");
+        let day_card = html.find("<section class=\"day ").expect("day card");
+        assert!(weather < meals && meals < day_card, "{html}");
+        assert!(html.contains("<td class=\"ml-main\" data-label=\"主選\">湯豆腐｜奧丹</td>"), "{html}");
+
+        // No weather: the meal overview still sits between the summary and the
+        // day cards — where the weather overview would be.
+        let no_weather = Plan {
+            days: vec![Day {
+                day_number: 1,
+                date: "2026-11-14".into(),
+                day_type: "full".into(),
+                sessions: vec![noon("Lunch")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render_plan(&no_weather, "en", None, &map::MapStatus::default(), "");
+        assert!(!html.contains("<details class=\"weather-overview\""), "{html}");
+        let summary = html.find("booking-summary").expect("summary");
+        let meals = html.find("<details class=\"meal-overview\" open>").expect("meal overview");
+        let day_card = html.find("<section class=\"day ").expect("day card");
+        assert!(summary < meals && meals < day_card, "{html}");
+        assert!(html.contains("<h2>Meal overview</h2>"), "{html}");
+
+        // No meals on any day → no meal overview block at all.
+        let bare = Plan {
+            days: vec![Day { day_number: 1, date: "2026-11-14".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let html = render_plan(&bare, "zh", None, &map::MapStatus::default(), "");
+        // (The inlined stylesheet names the class, so look for the markup.)
+        assert!(!html.contains("<details class=\"meal-overview\""), "{html}");
+        assert!(!html.contains("<h2>用餐總覽</h2>"), "{html}");
     }
 
     #[test]

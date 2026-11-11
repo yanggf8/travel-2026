@@ -861,25 +861,26 @@ h1 {
   border-bottom: 1px solid var(--border);
 }
 
-/* ---- Weather overview (天氣總覽): native <details open>, collapsible, no JS ---- */
-.weather-overview {
+/* ---- Weather overview (天氣總覽) and meal overview (用餐總覽): native
+   <details open>, collapsible, no JS — one shared card/summary/heading style ---- */
+.weather-overview, .meal-overview {
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 16px;
   margin-top: 16px;
 }
-.weather-overview > summary {
+.weather-overview > summary, .meal-overview > summary {
   cursor: pointer;
   list-style: none;
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.weather-overview > summary::-webkit-details-marker { display: none; }
-.weather-overview > summary::after { content: '\25B8'; transition: transform 0.2s; font-size: 11px; color: var(--text-dim); }
-.weather-overview[open] > summary::after { transform: rotate(90deg); }
-.weather-overview h2 {
+.weather-overview > summary::-webkit-details-marker, .meal-overview > summary::-webkit-details-marker { display: none; }
+.weather-overview > summary::after, .meal-overview > summary::after { content: '\25B8'; transition: transform 0.2s; font-size: 11px; color: var(--text-dim); }
+.weather-overview[open] > summary::after, .meal-overview[open] > summary::after { transform: rotate(90deg); }
+.weather-overview h2, .meal-overview h2 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
@@ -923,6 +924,42 @@ h1 {
   .wx-table tr > :last-child { padding-right: 0; }
   .wx-temp, .wx-feels, .wx-rain { white-space: nowrap; }
   .wx-temp::before, .wx-feels::before, .wx-rain::before { content: none; }
+}
+
+/* ---- Meal overview table (the card/summary/heading rules are shared with the
+   weather overview above) ---- */
+.meal-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+/* Phone (mobile-first): one stacked block per row — date + session, then the
+   main pick and the backups (each prefixed by its column label). */
+.meal-table thead { display: none; }
+.meal-table tbody { display: block; }
+.meal-table tr {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "date   session"
+    "main   main"
+    "backup backup";
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.meal-table th, .meal-table td { display: block; min-width: 0; text-align: left; font-weight: 400; overflow-wrap: anywhere; }
+.meal-table th.ml-date { grid-area: date; font-weight: 600; white-space: nowrap; }
+.meal-table .ml-session { grid-area: session; font-weight: 500; }
+.ml-main { grid-area: main; }
+.ml-backup { grid-area: backup; font-size: 12px; color: var(--text-dim); }
+.ml-main::before, .ml-backup::before { content: attr(data-label) ' '; color: var(--text-dim); }
+@media (min-width: 560px) {
+  .meal-table thead { display: table-header-group; }
+  .meal-table tbody { display: table-row-group; }
+  .meal-table tr { display: table-row; }
+  .meal-table th, .meal-table td { display: table-cell; padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+  .meal-table thead th { border-top: 0; font-size: 12px; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
+  .meal-table tr > :first-child { padding-left: 0; }
+  .meal-table tr > :last-child { padding-right: 0; }
+  .meal-table .ml-session { white-space: nowrap; }
+  .ml-main::before, .ml-backup::before { content: none; }
 }
 
 /* ---- Session blocks ---- */

@@ -104,16 +104,70 @@ fn matches_map_kw(c: &[char], i: usize) -> bool {
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
-/// Render one session block. Empty sessions are caller-skipped (see day.rs).
-pub fn render(sess: &Session, lang: &str) -> String {
-    let label = match sess.session_type.as_str() {
+/// Leading meal-role prefixes stripped by [`meal_short`] when the text before
+/// the first `：` ends with one (「主選：」「晚餐主選：」「備選：」「備案：」).
+/// A keyword list the worker matches data against — code, not chrome.
+const MEAL_ROLE_PREFIXES: [&str; 3] = ["主選", "備選", "備案"];
+
+/// Display width of [`meal_short`]'s fallback cut, in characters.
+const MEAL_SHORT_MAX_CHARS: usize = 30;
+
+/// The SHORT form of a `session_meals.meal` string for the plan page's meal
+/// overview (unescaped; the caller escapes):
+/// 1. drop a leading role prefix — the text up to the first `：` when it ends
+///    with 主選/備選/備案 and holds no pipe (「主選：」, 「晚餐主選：」);
+/// 2. drop the `｜map:<query>` pin and anything after it (the label half of
+///    [`split_meal_pin`], the same parser the day cards use);
+/// 3. keep 「料理｜店名」: everything up to the first `：` or `；` AFTER the
+///    first pipe (`｜` or `|`).
+///
+/// Without that structure (no pipe, or no `：`/`；` after it) the text is kept
+/// whole up to [`MEAL_SHORT_MAX_CHARS`] characters, longer text cut there with
+/// an ellipsis.
+/// 「主選：鰻魚飯｜京極かねよ：新京極六角，…；…｜map:京極かねよ」 → 「鰻魚飯｜京極かねよ」;
+/// 「去程午餐｜樂桃不含機上餐；…」 → 「去程午餐｜樂桃不含機上餐」.
+pub fn meal_short(meal: &str) -> String {
+    let mut text = meal.trim();
+    if let Some((head, rest)) = text.split_once('：') {
+        if !head.contains(is_pipe) && MEAL_ROLE_PREFIXES.iter().any(|p| head.trim_end().ends_with(p)) {
+            text = rest.trim_start();
+        }
+    }
+    let label = match split_meal_pin(text) {
+        Some((label, _, _)) => label,
+        None => text.to_string(),
+    };
+    if let Some(pipe) = label.find(is_pipe) {
+        let after = pipe + label[pipe..].chars().next().map_or(0, char::len_utf8);
+        if let Some(stop) = label[after..].find(|c| c == '：' || c == '；') {
+            return label[..after + stop].trim().to_string();
+        }
+    }
+    let label = label.trim();
+    if label.chars().count() <= MEAL_SHORT_MAX_CHARS {
+        label.to_string()
+    } else {
+        let cut: String = label.chars().take(MEAL_SHORT_MAX_CHARS).collect();
+        format!("{}\u{2026}", cut.trim_end())
+    }
+}
+
+/// Localized session name (上午/中午/下午/晚上 · Morning/Noon/Afternoon/Evening).
+/// Shared by the session block and the plan page's meal overview.
+pub fn session_label(session_type: &str, lang: &str) -> &'static str {
+    match session_type {
         "morning" => t("sessionMorning", lang),
         "noon" => t("sessionNoon", lang),
         "afternoon" => t("sessionAfternoon", lang),
         "evening" => t("sessionEvening", lang),
         // An unknown session type keeps the old untranslated fallback label.
         _ => t("sessionEvening", "en"),
-    };
+    }
+}
+
+/// Render one session block. Empty sessions are caller-skipped (see day.rs).
+pub fn render(sess: &Session, lang: &str) -> String {
+    let label = session_label(&sess.session_type, lang);
     let mut h = String::new();
     h.push_str(&format!(
         "<div class=\"session session-{}\"><div class=\"session-label\">{}</div>",
@@ -407,5 +461,52 @@ mod tests {
         };
         let html = render(&sess, "zh");
         assert!(!html.contains("ai-rec-badge"), "got: {html}");
+    }
+
+    // ---- meal_short (plan page meal overview) ----
+    #[test]
+    fn meal_short_keeps_dish_and_shop_from_a_pinned_meal() {
+        assert_eq!(
+            meal_short("主選：鰻魚飯｜京極かねよ：新京極六角，排隊約 20 分；招牌錦糸丼｜map:京極かねよ"),
+            "鰻魚飯｜京極かねよ"
+        );
+        // A meal-name role prefix (「晚餐主選：」) and 備選/備案 are stripped too.
+        assert_eq!(meal_short("晚餐主選：湯豆腐｜奧丹：南禪寺參道"), "湯豆腐｜奧丹");
+        assert_eq!(meal_short("備選：親子丼｜鳥岩樓：西陣｜map:鳥岩樓"), "親子丼｜鳥岩樓");
+        assert_eq!(meal_short("備案：蕎麥麵｜本家尾張屋；近車站"), "蕎麥麵｜本家尾張屋");
+    }
+
+    #[test]
+    fn meal_short_cuts_at_the_first_semicolon_after_the_pipe() {
+        assert_eq!(meal_short("去程午餐｜樂桃不含機上餐；機場先買便當"), "去程午餐｜樂桃不含機上餐");
+        // An ASCII pipe counts; a colon BEFORE the pipe is not the cut (and the
+        // text before it is not a role prefix, so it stays).
+        assert_eq!(meal_short("Lunch：Ramen|Ichiran：Shibuya"), "Lunch：Ramen|Ichiran");
+    }
+
+    #[test]
+    fn meal_short_falls_back_to_thirty_chars_with_ellipsis() {
+        // No pipe: short text whole, long text cut at 30 chars + 「…」.
+        assert_eq!(meal_short("Hotel breakfast"), "Hotel breakfast");
+        assert_eq!(meal_short("晚餐：ステーキ88｜map:ステーキ88 那覇"), "晚餐：ステーキ88");
+        assert_eq!(
+            meal_short("Ramen & <gyoza> at the station food court near the hotel"),
+            "Ramen & <gyoza> at the station\u{2026}"
+        );
+        // A pipe with no ：/； after it is not the 料理｜店名 shape → same fallback.
+        let long = "早餐｜飯店自助早餐含京都在地漬物與湯豆腐吧台還有現煎玉子燒與咖啡";
+        let cut: String = long.chars().take(30).collect();
+        assert_eq!(meal_short(long), format!("{cut}\u{2026}"));
+        assert_eq!(meal_short("早餐｜飯店"), "早餐｜飯店");
+        assert_eq!(meal_short("  "), "");
+    }
+
+    #[test]
+    fn session_label_is_bilingual_with_an_english_fallback() {
+        assert_eq!(session_label("noon", "zh"), "中午");
+        assert_eq!(session_label("evening", "en"), "Evening");
+        assert_eq!(session_label("morning", "zh"), "上午");
+        assert_eq!(session_label("afternoon", "en"), "Afternoon");
+        assert_eq!(session_label("brunch", "zh"), "Evening");
     }
 }
