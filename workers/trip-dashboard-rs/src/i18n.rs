@@ -323,6 +323,51 @@ pub fn t(key: &str, lang: &str) -> &'static str {
     }
 }
 
+/// WMO weather-code descriptions (code, EN, ZH) — the full set Open-Meteo's
+/// `weather_code` returns. A fixed code→wording table is chrome, not content.
+/// The EN text matches `travel fetch-weather`'s stored `weather_label`
+/// byte-for-byte (rust/crates/travel-cli/src/weather.rs `WMO_LABELS`), so the
+/// English page reads the same whether it renders from the code or the label.
+const WMO_WEATHER: &[(i64, &str, &str)] = &[
+    (0, "Clear sky", "晴"),
+    (1, "Mainly clear", "大致晴朗"),
+    (2, "Partly cloudy", "晴時多雲"),
+    (3, "Overcast", "陰"),
+    (45, "Foggy", "霧"),
+    (48, "Depositing rime fog", "霧凇"),
+    (51, "Light drizzle", "小毛毛雨"),
+    (53, "Moderate drizzle", "毛毛雨"),
+    (55, "Dense drizzle", "大毛毛雨"),
+    (56, "Light freezing drizzle", "小凍毛毛雨"),
+    (57, "Dense freezing drizzle", "大凍毛毛雨"),
+    (61, "Slight rain", "小雨"),
+    (63, "Moderate rain", "中雨"),
+    (65, "Heavy rain", "大雨"),
+    (66, "Light freezing rain", "小凍雨"),
+    (67, "Heavy freezing rain", "大凍雨"),
+    (71, "Slight snowfall", "小雪"),
+    (73, "Moderate snowfall", "中雪"),
+    (75, "Heavy snowfall", "大雪"),
+    (77, "Snow grains", "雪粒"),
+    (80, "Slight rain showers", "小陣雨"),
+    (81, "Moderate rain showers", "陣雨"),
+    (82, "Violent rain showers", "強陣雨"),
+    (85, "Slight snow showers", "小陣雪"),
+    (86, "Heavy snow showers", "大陣雪"),
+    (95, "Thunderstorm", "雷雨"),
+    (96, "Thunderstorm with slight hail", "雷雨伴隨小冰雹"),
+    (99, "Thunderstorm with heavy hail", "雷雨伴隨大冰雹"),
+];
+
+/// Localized description for a WMO weather code. `None` for an unmapped code —
+/// the caller then shows the stored `weather_label` as-is (it is data).
+pub fn wmo_weather(code: i64, lang: &str) -> Option<&'static str> {
+    WMO_WEATHER
+        .iter()
+        .find(|(c, _, _)| *c == code)
+        .map(|(_, en, zh)| if lang == "en" { *en } else { *zh })
+}
+
 /// `t` plus `{name}` placeholder filling — see [`fill`].
 pub fn tf(key: &str, lang: &str, args: &[(&str, &str)]) -> String {
     fill(t(key, lang), args)
@@ -388,5 +433,26 @@ mod tests {
         assert_eq!(t("homeBase", "zh"), "住宿");
         assert!(t("dailyTransit", "en").contains("Daily transit"));
         assert!(t("dailyTransit", "zh").contains("每日交通"));
+    }
+    #[test]
+    fn wmo_weather_covers_open_meteo_codes_in_both_languages() {
+        let codes = [
+            0, 1, 2, 3, 45, 48, 51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81,
+            82, 85, 86, 95, 96, 99,
+        ];
+        assert_eq!(WMO_WEATHER.len(), codes.len());
+        for c in codes {
+            let en = wmo_weather(c, "en").unwrap_or_else(|| panic!("EN missing for {c}"));
+            let zh = wmo_weather(c, "zh").unwrap_or_else(|| panic!("ZH missing for {c}"));
+            assert!(!en.is_empty() && !zh.is_empty(), "empty text for {c}");
+            assert!(en.is_ascii(), "EN must be English for {c}: {en}");
+            assert!(!zh.is_ascii(), "ZH must be Chinese for {c}: {zh}");
+        }
+        assert_eq!(wmo_weather(81, "zh"), Some("陣雨"));
+        assert_eq!(wmo_weather(81, "en"), Some("Moderate rain showers"));
+        assert_eq!(wmo_weather(45, "zh"), Some("霧"));
+        assert_eq!(wmo_weather(45, "en"), Some("Foggy"));
+        assert_eq!(wmo_weather(123, "zh"), None);
+        assert_eq!(wmo_weather(-1, "en"), None);
     }
 }

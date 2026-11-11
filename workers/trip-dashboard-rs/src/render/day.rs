@@ -1,5 +1,5 @@
 use super::{esc, render_activity_text, session};
-use crate::i18n::{fill, t, tf};
+use crate::i18n::{fill, t, tf, wmo_weather};
 use crate::model::{ClothingTip, Day, RouteSegment};
 
 /// Render the day's map landmarks (waypoints listed under the day map). Ported from
@@ -65,11 +65,17 @@ pub fn clothing_tip(
         .collect()
 }
 
-/// Render the per-day weather strip: label + temp range + feels-like + rain%,
+/// Render the per-day weather strip: description + temp range + feels-like + rain%,
 /// followed by the clothing tips. Each piece is shown only when present.
+/// The description comes from the WMO `weather_code` in the page language
+/// (`i18n::wmo_weather`); a NULL or unmapped code shows the stored `weather_label`.
 fn weather_strip(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> String {
+    let description: &str = day
+        .weather_code
+        .and_then(|code| wmo_weather(code, lang))
+        .unwrap_or(&day.weather_label);
     // No weather data at all → keep the old plain label line (or nothing).
-    if day.weather_label.is_empty()
+    if description.is_empty()
         && day.temp_low_c.is_none()
         && day.temp_high_c.is_none()
         && day.precipitation_pct.is_none()
@@ -78,8 +84,8 @@ fn weather_strip(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> String
     }
 
     let mut strip = String::from("<div class=\"weather\">🌧️ ");
-    if !day.weather_label.is_empty() {
-        strip.push_str(&esc(&day.weather_label));
+    if !description.is_empty() {
+        strip.push_str(&esc(description));
     }
     // temp range
     if let (Some(lo), Some(hi)) = (day.temp_low_c, day.temp_high_c) {
@@ -944,6 +950,90 @@ mod tests {
             html.contains("炎熱"),
             "expected feels-like-driven 炎熱, got: {html}"
         );
+    }
+
+    #[test]
+    fn weather_strip_zh_renders_chinese_for_mapped_code() {
+        let day = Day {
+            day_number: 2,
+            date: "2026-11-14".into(),
+            day_type: "full".into(),
+            weather_label: "Moderate rain showers".into(),
+            weather_code: Some(81),
+            temp_low_c: Some(13.0),
+            temp_high_c: Some(18.0),
+            precipitation_pct: Some(94.0),
+            feels_like_low_c: Some(13.0),
+            feels_like_high_c: Some(19.0),
+            ..Default::default()
+        };
+        let html = render(&day, "kyoto-nov-2026", "zh", None, &[]);
+        assert!(
+            html.contains(
+                "<div class=\"weather\">🌧️ 陣雨 · 13\u{2013}18°C · 體感 13\u{2013}19°C · 💧94%</div>"
+            ),
+            "got: {html}"
+        );
+        assert!(!html.contains("Moderate rain showers"), "got: {html}");
+    }
+
+    #[test]
+    fn weather_strip_en_renders_english_for_mapped_code() {
+        let day = Day {
+            day_number: 2,
+            date: "2026-11-14".into(),
+            day_type: "full".into(),
+            weather_label: "Foggy".into(),
+            weather_code: Some(45),
+            temp_low_c: Some(10.0),
+            temp_high_c: Some(20.0),
+            ..Default::default()
+        };
+        let html = render(&day, "kyoto-nov-2026", "en", None, &[]);
+        assert!(
+            html.contains("<div class=\"weather\">🌧️ Foggy · 10\u{2013}20°C</div>"),
+            "got: {html}"
+        );
+        let zh = render(&day, "kyoto-nov-2026", "zh", None, &[]);
+        assert!(
+            zh.contains("<div class=\"weather\">🌧️ 霧 · 10\u{2013}20°C</div>"),
+            "got: {zh}"
+        );
+    }
+
+    #[test]
+    fn weather_strip_falls_back_to_stored_label_for_null_or_unmapped_code() {
+        // NULL code → stored label, both languages.
+        let null_code = Day {
+            day_number: 1,
+            date: "2026-11-13".into(),
+            day_type: "full".into(),
+            weather_label: "Partly sunny".into(),
+            weather_code: None,
+            temp_low_c: Some(12.0),
+            temp_high_c: Some(19.0),
+            ..Default::default()
+        };
+        for lang in ["zh", "en"] {
+            let html = render(&null_code, "kyoto-nov-2026", lang, None, &[]);
+            assert!(
+                html.contains("<div class=\"weather\">🌧️ Partly sunny · 12\u{2013}19°C</div>"),
+                "{lang}: {html}"
+            );
+        }
+        // Unmapped code → stored label as-is (it is data), both languages.
+        let unmapped = Day {
+            weather_label: "WMO 123".into(),
+            weather_code: Some(123),
+            ..null_code
+        };
+        for lang in ["zh", "en"] {
+            let html = render(&unmapped, "kyoto-nov-2026", lang, None, &[]);
+            assert!(
+                html.contains("<div class=\"weather\">🌧️ WMO 123 · 12\u{2013}19°C</div>"),
+                "{lang}: {html}"
+            );
+        }
     }
 
     #[test]

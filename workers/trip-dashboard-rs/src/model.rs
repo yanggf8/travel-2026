@@ -59,6 +59,10 @@ pub struct Day {
     pub theme: String,
     pub theme_zh: String,
     pub weather_label: String,
+    /// WMO weather code from `travel fetch-weather`; NULL stays None. The day card
+    /// renders its localized description via `i18n::wmo_weather`, falling back to
+    /// `weather_label` when the code is absent or unmapped.
+    pub weather_code: Option<i64>,
     pub temp_low_c: Option<f64>,
     pub temp_high_c: Option<f64>,
     pub precipitation_pct: Option<f64>,
@@ -659,6 +663,7 @@ pub fn assemble(
             theme: s(d, "theme"),
             theme_zh: s(d, "theme_zh"),
             weather_label: s(d, "weather_label"),
+            weather_code: opt_i(d, "weather_code"),
             temp_low_c: f(d, "temp_low_c"),
             temp_high_c: f(d, "temp_high_c"),
             precipitation_pct: f(d, "precipitation_pct"),
@@ -1380,6 +1385,7 @@ mod tests {
         let day_rows = vec![row(&[
             ("day_number", json!("2")),
             ("date", json!("2026-06-13")),
+            ("weather_code", json!("63")),
             ("temp_low_c", json!("26.4")),
             ("temp_high_c", json!("30.1")),
             ("precipitation_pct", json!("73")),
@@ -1412,6 +1418,7 @@ mod tests {
             &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 2).unwrap();
+        assert_eq!(day.weather_code, Some(63));
         assert_eq!(day.temp_low_c, Some(26.4));
         assert_eq!(day.temp_high_c, Some(30.1));
         assert_eq!(day.precipitation_pct, Some(73.0));
@@ -1457,6 +1464,7 @@ mod tests {
             &[],
         );
         let day = plan.days.iter().find(|d| d.day_number == 1).unwrap();
+        assert_eq!(day.weather_code, None);
         assert_eq!(day.temp_low_c, None);
         assert_eq!(day.precipitation_pct, None);
         assert_eq!(day.feels_like_high_c, None);

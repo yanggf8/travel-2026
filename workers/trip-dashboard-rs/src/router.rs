@@ -849,7 +849,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              WHERE p.plan_id = '{slug}' AND p.deleted_at IS NULL"
         ),
         format!(
-            "SELECT day_number, date, day_type, theme, theme_zh, weather_label, \
+            "SELECT day_number, date, day_type, theme, theme_zh, weather_label, weather_code, \
              temp_low_c, temp_high_c, precipitation_pct, feels_like_low_c, feels_like_high_c, \
              variant_of, variant_label, variant_label_zh \
              FROM days WHERE plan_id = '{slug}' ORDER BY day_number"
