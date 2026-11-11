@@ -763,7 +763,7 @@ h1 {
   max-width: 360px;
 }
 
-/* ---- Page TOC (目錄): compact card under the booking summary; chips in a
+/* ---- Page TOC (目錄): compact card at the top of the page; chips in a
    2-column grid on phones. Collapse/expand-all buttons are served `hidden`
    (the inline script un-hides them) — keep [hidden] winning over display. ---- */
 .page-toc {
@@ -771,7 +771,7 @@ h1 {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 12px 16px 16px;
-  margin-top: 16px;
+  margin-bottom: 16px;
 }
 .toc-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 8px; }
 .toc-head h2 {

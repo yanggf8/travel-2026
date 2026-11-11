@@ -79,6 +79,19 @@ pub fn render_plan(
         body.push_str(owner_chrome);
         body.push_str(&share::copy_script());
     }
+    // Weather + meal overviews are built up front so the 目錄 knows whether
+    // they render; they are placed further down, right before the day cards.
+    // Weather overview: last block of the top summary area, right before the
+    // day cards it summarizes. Built from the already-loaded days + clothing
+    // bands (no extra query); renders nothing when no day has weather.
+    let weather = day::weather_overview(&plan.days, &plan.clothing_tips, lang);
+    // Meal overview right after it (same slot when there is no weather): from
+    // the already-loaded session meals, no extra query; nothing without meals.
+    let meals = day::meal_overview(&plan.days, lang);
+    // 目錄 at the very top of the page (user request 2026-11-11: the page is very
+    // long on a phone): links to the blocks that actually rendered, plus
+    // collapse/expand-all.
+    body.push_str(&page_toc(plan, lang, !weather.is_empty(), !meals.is_empty()));
     // Non-meal pending-booking alerts BEFORE the summary (mirror render.ts:1388).
     body.push_str(&alerts::render_pending_alerts(plan, lang, false));
     // Plan overview map ABOVE the booking summary (its own frame, never inside
@@ -128,16 +141,6 @@ pub fn render_plan(
         body.push_str("</div>");
     }
     body.push_str(&summary::render(plan, lang, token));
-    // Weather overview: last block of the top summary area, right before the
-    // day cards it summarizes. Built from the already-loaded days + clothing
-    // bands (no extra query); renders nothing when no day has weather.
-    let weather = day::weather_overview(&plan.days, &plan.clothing_tips, lang);
-    // Meal overview right after it (same slot when there is no weather): from
-    // the already-loaded session meals, no extra query; nothing without meals.
-    let meals = day::meal_overview(&plan.days, lang);
-    // 目錄 right under the booking summary (the page is very long on a phone):
-    // links to the blocks that actually rendered, plus collapse/expand-all.
-    body.push_str(&page_toc(plan, lang, !weather.is_empty(), !meals.is_empty()));
     body.push_str(&weather);
     body.push_str(&meals);
     for d in &plan.days {
@@ -865,12 +868,14 @@ mod tests {
     }
 
     #[test]
-    fn toc_follows_the_summary_and_links_every_rendered_block_in_page_order() {
+    fn toc_tops_the_page_and_links_every_rendered_block_in_page_order() {
         let html = render_plan(&full_nav_plan(), "zh", None, &map::MapStatus::default(), "");
-        let summary_end = html.find("id=\"sec-summary\"").expect("summary");
         let toc = html.find("<nav class=\"page-toc\" id=\"toc\" aria-label=\"目錄\">").expect("toc");
+        // First thing in <body>, above the plan map and the booking summary.
+        assert!(html.contains("<body data-plan-id=\"kyoto-nov-2026\" data-view=\"viewer\"><nav class=\"page-toc\""), "{html}");
+        let summary = html.find("id=\"sec-summary\"").expect("summary");
         let weather = html.find("<details class=\"weather-overview\" id=\"sec-weather\"").expect("weather");
-        assert!(summary_end < toc && toc < weather, "{html}");
+        assert!(toc < summary && summary < weather, "{html}");
         let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
         let hrefs: Vec<&str> = nav.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
         assert_eq!(hrefs, ["sec-docs", "sec-summary", "sec-weather", "sec-meals", "day-1", "day-2"], "{nav}");
