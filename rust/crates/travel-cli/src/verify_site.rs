@@ -559,6 +559,9 @@ async fn viewer_page_checks(
         for (layer, check) in page::variant_checks(&doc, &variants, &labels_for(lang), trip_days) {
             tally.emit(plan, layer, code, &check);
         }
+        for (layer, check) in page::toc_checks(&doc) {
+            tally.emit(plan, layer, code, &check);
+        }
         for (key, check) in page::slot_checks(&doc.figures, &facts) {
             tally.emit(plan, "slot", &format!("{code}:{key}"), &check);
         }

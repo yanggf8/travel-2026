@@ -88,6 +88,16 @@ h1 {
   margin: 12px 0 8px;
 }
 .booking-summary h2:first-child { margin-top: 0; }
+/* The summary's own collapsible title: larger than the section headings under it. */
+.booking-summary > details > summary > h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: -0.2px;
+  color: var(--text);
+}
+.booking-summary > details[open] > summary { margin-bottom: 4px; }
 
 .booking-grid { display: grid; gap: 10px; }
 
@@ -237,8 +247,8 @@ h1 {
 }
 .voucher-link:hover,
 .doc-link:hover { text-decoration: underline; }
-.plan-documents h2 { margin: 0 0 8px; font-size: 18px; }
-.document-list { display: grid; gap: 8px; }
+.plan-documents h2 { margin: 0; font-size: 18px; }
+.document-list { display: grid; gap: 8px; margin-top: 8px; }
 .document-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .document-list .doc-link,
 .day-documents .doc-link { display: inline-block; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
@@ -753,6 +763,88 @@ h1 {
   max-width: 360px;
 }
 
+/* ---- Page TOC (目錄): compact card under the booking summary; chips in a
+   2-column grid on phones. Collapse/expand-all buttons are served `hidden`
+   (the inline script un-hides them) — keep [hidden] winning over display. ---- */
+.page-toc {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 16px 16px;
+  margin-top: 16px;
+}
+.toc-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 8px; }
+.toc-head h2 {
+  margin-right: auto;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.toc-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.toc-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-light);
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.toc-btn[hidden] { display: none; }
+.toc-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.toc-list { list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.toc-list li { min-width: 0; }
+.toc-list a {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.toc-list a:hover, .toc-list a:focus-visible { border-color: var(--accent); color: var(--accent); }
+.toc-day-n { display: block; }
+.toc-day-theme {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (min-width: 560px) { .toc-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 900px) { .toc-list { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+/* Floating 「↑ 目錄」: pure CSS, bottom-right, clear of the home indicator. */
+.toc-fab {
+  position: fixed;
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 20;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-lg);
+  text-decoration: none;
+  opacity: 0.9;
+}
+.toc-fab:hover, .toc-fab:focus-visible { opacity: 1; }
+
 /* ---- Day cards ---- */
 .day {
   background: var(--card);
@@ -773,6 +865,12 @@ h1 {
   padding: 16px 16px 4px;
   letter-spacing: -0.3px;
 }
+/* The day heading is the card's <summary>; the chevron sits right after it. */
+.day > details > summary { padding-right: 16px; }
+.day > details > summary > h2 { padding-right: 0; }
+/* The h2 pads 16px above, 4px below: shift the centered chevron down 6px to the text's middle. */
+.day > details > summary::after { margin-top: 12px; }
+.day-body { min-width: 0; }
 
 .theme {
   font-size: 15px;
@@ -861,8 +959,26 @@ h1 {
   border-bottom: 1px solid var(--border);
 }
 
-/* ---- Weather overview (天氣總覽) and meal overview (用餐總覽): native
-   <details open>, collapsible, no JS — one shared card/summary/heading style ---- */
+/* ---- Collapsible info blocks: every details[data-block] (booking summary,
+   documents, weather/meal overview, each day card) — native <details open>,
+   works without JS; one shared summary + chevron style ---- */
+details[data-block] > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+details[data-block] > summary::-webkit-details-marker { display: none; }
+details[data-block] > summary::after { content: '\25B8'; flex: none; transition: transform 0.2s; font-size: 11px; color: var(--text-dim); }
+details[data-block][open] > summary::after { transform: rotate(90deg); }
+details[data-block] > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+details[data-block] > summary > h2 { min-width: 0; overflow-wrap: anywhere; }
+/* TOC targets land a little below the viewport top. */
+.page-toc, section.booking-summary, section.plan-documents, .weather-overview, .meal-overview, section.day { scroll-margin-top: 8px; }
+
+/* ---- Weather overview (天氣總覽) and meal overview (用餐總覽): one shared
+   card/heading style ---- */
 .weather-overview, .meal-overview {
   background: var(--card);
   border-radius: var(--radius);
@@ -870,16 +986,6 @@ h1 {
   padding: 16px;
   margin-top: 16px;
 }
-.weather-overview > summary, .meal-overview > summary {
-  cursor: pointer;
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.weather-overview > summary::-webkit-details-marker, .meal-overview > summary::-webkit-details-marker { display: none; }
-.weather-overview > summary::after, .meal-overview > summary::after { content: '\25B8'; transition: transform 0.2s; font-size: 11px; color: var(--text-dim); }
-.weather-overview[open] > summary::after, .meal-overview[open] > summary::after { transform: rotate(90deg); }
 .weather-overview h2, .meal-overview h2 {
   margin: 0;
   font-size: 13px;
@@ -1340,9 +1446,10 @@ h1 {
     width: 100%;
     clear: both;
   }
-  /* day content beside its day map */
-  .day {
-    clear: both;
+  /* day content beside its day map — the grid is .day-body (inside the card's
+     <details>), since a <details> itself cannot be a grid container */
+  .day { clear: both; }
+  .day-body {
     display: grid;
     /* minmax(0,1fr), NOT 1fr: a plain `1fr` track has a min-size of `auto` =
        min-content, so a non-wrapping line in a .stoplist <li> (e.g. a long Maps
@@ -1354,7 +1461,6 @@ h1 {
     column-gap: 16px;
     align-items: start;
   }
-  .day h2 { grid-column: 1 / -1; }
   .theme { grid-column: 1 / -1; }
   .weather { grid-column: 1 / -1; }
   .day-documents { grid-column: 1 / -1; }
@@ -1471,6 +1577,7 @@ h1 {
 /* Print */
 @media print {
   body { max-width: none; padding: 0; }
+  .page-toc, .toc-fab { display: none; }
   .day { break-inside: avoid; }
   .daymap, .planmap { break-inside: avoid; }
 }

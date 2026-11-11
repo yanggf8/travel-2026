@@ -8,7 +8,7 @@
 //! for a class name would hit the CSS. Only `<html lang>` and the notranslate
 //! `<meta>` are read outside the body (that is where they live).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use scraper::{ElementRef, Html, Selector};
 use sha2::{Digest, Sha256};
@@ -88,6 +88,17 @@ pub(crate) struct DocumentLink {
     pub(crate) variant: bool,
 }
 
+/// The page's 目錄 (`nav.page-toc#toc`, worker render/mod.rs `page_toc`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Toc {
+    /// `href` of every link inside the nav, as written.
+    pub(crate) hrefs: Vec<String>,
+    /// A floating `a.toc-fab[href="#toc"]` back link exists.
+    pub(crate) back_link: bool,
+    /// How many `nav.page-toc` the page has (exactly one is right).
+    pub(crate) navs: usize,
+}
+
 /// Everything layer 1 reads from one page.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PageDoc {
@@ -113,6 +124,15 @@ pub(crate) struct PageDoc {
     pub(crate) stay_minimaps: Vec<String>,
     pub(crate) voucher_hrefs: Vec<String>,
     pub(crate) document_links: Vec<DocumentLink>,
+    pub(crate) toc: Option<Toc>,
+    /// Every element `id` inside `<body>`.
+    pub(crate) ids: HashSet<String>,
+    /// Element ids that occur more than once (a fragment link to one is ambiguous).
+    pub(crate) duplicate_ids: Vec<String>,
+    /// `id` of each `section.day[data-day]` card (None = card without an id).
+    pub(crate) day_card_ids: Vec<(String, Option<String>)>,
+    /// Each collapsible block `details[data-block]`: (key, served open).
+    pub(crate) blocks: Vec<(String, bool)>,
 }
 
 pub(crate) fn parse_page(html: &str) -> PageDoc {
@@ -203,6 +223,34 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
         });
     }
     out.day_cards = body.select(&sel("section.day")).count();
+    for id in body.select(&sel("[id]")).filter_map(|e| e.value().attr("id")) {
+        if !out.ids.insert(id.to_string()) && !out.duplicate_ids.iter().any(|d| d == id) {
+            out.duplicate_ids.push(id.to_string());
+        }
+    }
+    out.day_card_ids = body
+        .select(&sel("section.day[data-day]"))
+        .map(|e| {
+            (
+                e.value().attr("data-day").unwrap_or("").trim().to_string(),
+                e.value().attr("id").map(str::to_string),
+            )
+        })
+        .collect();
+    out.blocks = body
+        .select(&sel("details[data-block]"))
+        .map(|d| (d.value().attr("data-block").unwrap_or("").to_string(), d.value().attr("open").is_some()))
+        .collect();
+    if let Some(nav) = body.select(&sel("nav.page-toc#toc")).next() {
+        out.toc = Some(Toc {
+            hrefs: nav
+                .select(&sel("a[href]"))
+                .filter_map(|a| a.value().attr("href").map(str::to_string))
+                .collect(),
+            back_link: body.select(&sel("a.toc-fab[href=\"#toc\"]")).next().is_some(),
+            navs: body.select(&sel("nav.page-toc")).count(),
+        });
+    }
     let summary = sel("summary.day-variant-summary");
     for d in body.select(&sel("details.day-variant")) {
         out.variants.push(VariantBlock {
@@ -384,6 +432,69 @@ pub(crate) fn page_checks(http: u16, doc: &PageDoc, lang: Lang, plan_id: &str) -
         },
     ));
     out
+}
+
+/// The 目錄 / collapsible-block checks (worker render/mod.rs `page_toc`): the page
+/// has `nav.page-toc#toc` and the floating `a.toc-fab` back link; every TOC link
+/// is a fragment that resolves to an element id on the page; every main day card
+/// has an id the TOC links to; every `details[data-block]` is served open (the
+/// collapsed state is a reader's choice, restored client-side, never the served
+/// default).
+pub(crate) fn toc_checks(doc: &PageDoc) -> Vec<(&'static str, Check)> {
+    let Some(toc) = &doc.toc else {
+        return vec![(
+            "toc",
+            Check::fail("no nav.page-toc#toc on the page (live worker predates the TOC)", Some(Next::Deploy)),
+        )];
+    };
+    let mut problems = Vec::new();
+    if toc.hrefs.is_empty() {
+        problems.push("the TOC has no links".to_string());
+    }
+    if toc.navs > 1 {
+        problems.push(format!("{} nav.page-toc on the page (exactly one)", toc.navs));
+    }
+    if !doc.duplicate_ids.is_empty() {
+        problems.push(format!("duplicate element id(s): {}", doc.duplicate_ids.join(", ")));
+    }
+    let mut linked = HashSet::new();
+    for href in &toc.hrefs {
+        match href.strip_prefix('#') {
+            Some(id) if !id.is_empty() => {
+                if doc.ids.contains(id) {
+                    linked.insert(id);
+                } else {
+                    problems.push(format!("link {href} resolves to no element id"));
+                }
+            }
+            _ => problems.push(format!("link {href:?} is not an in-page #fragment")),
+        }
+    }
+    for (day, id) in &doc.day_card_ids {
+        match id {
+            None => problems.push(format!("day {day} card has no id")),
+            Some(id) if !linked.contains(id.as_str()) => problems.push(format!("day {day} card (#{id}) is not in the TOC")),
+            Some(_) => {}
+        }
+    }
+    if !toc.back_link {
+        problems.push("no floating a.toc-fab[href=#toc] back link".to_string());
+    }
+    let closed: Vec<&str> = doc.blocks.iter().filter(|(_, open)| !open).map(|(k, _)| k.as_str()).collect();
+    if !closed.is_empty() {
+        problems.push(format!("block(s) served collapsed (must be open): {}", closed.join(", ")));
+    }
+    let check = if problems.is_empty() {
+        Check::pass(format!(
+            "{} TOC link(s) resolve, {} day card(s) listed, {} block(s) served open",
+            toc.hrefs.len(),
+            doc.day_card_ids.len(),
+            doc.blocks.len()
+        ))
+    } else {
+        Check::fail(problems.join("; "), None)
+    };
+    vec![("toc", check)]
 }
 
 /// True when `text` holds `prefix{n}suffix` where a digit does not continue `n`.
@@ -985,10 +1096,18 @@ mod tests {
         format!(
             "<figure class=\"map-frame\" data-map-key=\"plan.png\"><img class=\"planmap\" alt=\"景點總覽\" src=\"/map/p-1/plan.png?v=abc123\"><figcaption>景點總覽</figcaption>{LEGEND_FLAT}</figure>\
              <div class=\"map-insets\"><figure class=\"map-frame map-frame--inset map-missing\" data-map-key=\"plan-logistics.png\"><div class=\"map-missing-box\">地圖尚未產生</div><figcaption>機場</figcaption></figure></div>\
-             <section class=\"booking-summary summary-box\"><h2>住宿</h2></section>\
-             <section class=\"day day-arrival\"><div class=\"day-map-stack\"><figure class=\"map-frame map-missing\" data-map-key=\"day-1.png\"><div class=\"map-missing-box\">地圖尚未產生</div><figcaption>第 1 天路線</figcaption></figure></div></section>{extra}"
+             <section class=\"booking-summary summary-box\" id=\"sec-summary\"><details data-block=\"sec-summary\" open><summary><h2>預訂總表</h2></summary><h2>住宿</h2></details></section>\
+             {TOC}\
+             <section class=\"day day-arrival\" data-day=\"1\" id=\"day-1\"><details data-block=\"day-1\" open><summary><h2>第 1 天</h2></summary><div class=\"day-body\"><div class=\"day-map-stack\"><figure class=\"map-frame map-missing\" data-map-key=\"day-1.png\"><div class=\"map-missing-box\">地圖尚未產生</div><figcaption>第 1 天路線</figcaption></figure></div></div></details></section>{extra}"
         )
     }
+
+    /// The worker's 目錄 for the fixture page (summary + day 1) with its back link.
+    const TOC: &str = "<nav class=\"page-toc\" id=\"toc\" aria-label=\"目錄\"><div class=\"toc-head\"><h2>目錄</h2>\
+        <div class=\"toc-actions\"><button type=\"button\" class=\"toc-btn\" data-blocks=\"close\" hidden>全部收合</button>\
+        <button type=\"button\" class=\"toc-btn\" data-blocks=\"open\" hidden>全部展開</button></div></div><ol class=\"toc-list\">\
+        <li><a href=\"#sec-summary\">預訂總表</a></li><li><a class=\"toc-day\" href=\"#day-1\"><span class=\"toc-day-n\">第 1 天</span></a></li>\
+        </ol></nav><a class=\"toc-fab\" href=\"#toc\">↑ 目錄</a>";
 
     fn viewer_page(extra: &str) -> String {
         page("zh-TW", " data-plan-id=\"p-1\" data-view=\"viewer\"", &viewer_body(extra))
@@ -1005,6 +1124,92 @@ mod tests {
         }
         assert_eq!(doc.overview, Some(0));
         assert_eq!(doc.figures.len(), 3);
+    }
+
+    fn toc_verdict(html: &str) -> Check {
+        let mut out = toc_checks(&parse_page(html));
+        assert_eq!(out.len(), 1);
+        let (layer, check) = out.remove(0);
+        assert_eq!(layer, "toc");
+        check
+    }
+
+    #[test]
+    fn a_page_whose_toc_resolves_passes() {
+        let c = toc_verdict(&viewer_page(""));
+        assert_eq!(c.level, Level::Pass, "{c:?}");
+        assert!(c.detail.contains("2 TOC link(s)") && c.detail.contains("1 day card(s)") && c.detail.contains("2 block(s)"), "{c:?}");
+        // The page script is not visible text, and no rule forbids it on a viewer page.
+        let page_with_script = viewer_page("<script>(function(){ var k='trip-blocks:'; })();</script>");
+        let doc = parse_page(&page_with_script);
+        assert!(!doc.visible_text.contains("trip-blocks"), "{}", doc.visible_text);
+        assert!(page_checks(200, &doc, Lang::Zh, "p-1").iter().all(|(_, c)| c.level == Level::Pass));
+    }
+
+    #[test]
+    fn a_page_without_the_toc_is_a_deploy_fail() {
+        let html = viewer_page("").replace(TOC, "");
+        let c = toc_verdict(&html);
+        assert_eq!(c.level, Level::Fail);
+        assert_eq!(c.next, Some(Next::Deploy), "{c:?}");
+        // The class named only in the inlined CSS does not count as the nav.
+        let css_only = page("zh-TW", "", "<p>nav.page-toc#toc</p>");
+        assert_eq!(toc_verdict(&css_only).level, Level::Fail);
+    }
+
+    #[test]
+    fn dangling_links_unlisted_days_closed_blocks_and_no_back_link_fail() {
+        let dangling = viewer_page("").replace("href=\"#day-1\"", "href=\"#day-9\"");
+        let c = toc_verdict(&dangling);
+        assert_eq!(c.level, Level::Fail);
+        assert!(c.detail.contains("link #day-9 resolves to no element id"), "{c:?}");
+        assert!(c.detail.contains("day 1 card (#day-1) is not in the TOC"), "{c:?}");
+
+        let external = viewer_page("").replace("href=\"#sec-summary\"", "href=\"/?plan=p-1#sec-summary\"");
+        assert!(toc_verdict(&external).detail.contains("is not an in-page #fragment"));
+
+        let no_id = viewer_page("").replace(" id=\"day-1\"", "");
+        let c = toc_verdict(&no_id);
+        assert!(c.detail.contains("day 1 card has no id"), "{c:?}");
+
+        let dup = viewer_page("<section class=\"day day-full\" data-day=\"1\" id=\"day-1\"></section>");
+        let c = toc_verdict(&dup);
+        assert_eq!(c.level, Level::Fail, "{c:?}");
+        assert!(c.detail.contains("duplicate element id(s): day-1"), "{c:?}");
+
+        let two_navs = viewer_page(TOC);
+        let c = toc_verdict(&two_navs);
+        assert!(c.detail.contains("2 nav.page-toc on the page"), "{c:?}");
+
+        let closed = viewer_page("").replace("<details data-block=\"day-1\" open>", "<details data-block=\"day-1\">");
+        let c = toc_verdict(&closed);
+        assert_eq!(c.level, Level::Fail);
+        assert!(c.detail.contains("served collapsed (must be open): day-1"), "{c:?}");
+
+        let no_back = viewer_page("").replace("<a class=\"toc-fab\" href=\"#toc\">↑ 目錄</a>", "");
+        assert!(toc_verdict(&no_back).detail.contains("no floating a.toc-fab"));
+    }
+
+    #[test]
+    fn day_cards_inside_details_keep_variants_and_documents_attributed() {
+        // Worker shape: the variant and the day's doc link sit inside the card's
+        // own <details data-block>, inside .day-body.
+        let html = viewer_page("").replace(
+            "<div class=\"day-map-stack\">",
+            "<div class=\"day-documents\"><a class=\"doc-link\" data-doc=\"flight\" href=\"/voucher/p-1/doc-flight.pdf?token=abc\">機票</a></div>\
+             <details class=\"day-variant\" data-variant-of=\"1\"><summary class=\"day-variant-summary\">替代方案：雨天</summary><div class=\"day-variant-body\"></div></details>\
+             <div class=\"day-map-stack\">",
+        );
+        let doc = parse_page(&html);
+        assert_eq!(doc.day_cards, 1);
+        assert_eq!(doc.variants.len(), 1);
+        assert_eq!(doc.variants[0].card_day, Some(1));
+        assert!(!doc.variants[0].open);
+        assert_eq!(doc.variants[0].summary, "替代方案：雨天");
+        let link = &doc.document_links[0];
+        assert_eq!((link.day, link.variant, link.summary), (Some(1), false, false));
+        // The variant is not a data-block, so it never counts as a closed block.
+        assert_eq!(toc_verdict(&html).level, Level::Pass);
     }
 
     fn variants_of(pairs: &[(i64, i64)]) -> HashMap<i64, (i64, Option<String>)> {

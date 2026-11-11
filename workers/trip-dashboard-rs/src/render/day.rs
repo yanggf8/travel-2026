@@ -151,10 +151,29 @@ fn weather_strip(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> String
 /// trip day (variants share their main day's date and carry no weather) with
 /// date + weekday, icon + description, temp range, feels-like range, rain%, and
 /// the day's clothing tips — the same values the day strips show. A native
-/// `<details open>` (no JS; viewer pages are SSR-only) that starts OPEN, so
-/// nothing is hidden on load. A missing value is an em dash; when no day has
+/// `<details open>` (works without JS; the page's collapse-memory script may
+/// restore a reader's closed state) that starts OPEN, so nothing is hidden on load. A missing value is an em dash; when no day has
 /// any weather the section renders nothing at all. Phones get one stacked block
 /// per day (styles.css `.wx-table`), wider screens a table.
+/// Stable ids of the two overview blocks: the element id the TOC links to and
+/// the `data-block` key the collapse-memory script stores their state under.
+pub const BLOCK_WEATHER: &str = "sec-weather";
+pub const BLOCK_MEALS: &str = "sec-meals";
+
+/// The id (TOC target + `data-block` key) of a main day card.
+pub fn day_block_id(day_number: i64) -> String {
+    format!("day-{day_number}")
+}
+
+/// The day's theme in the page language (ZH falls back to the EN theme).
+pub fn day_theme<'a>(day: &'a Day, lang: &str) -> &'a str {
+    if lang == "zh" && !day.theme_zh.is_empty() {
+        &day.theme_zh
+    } else {
+        &day.theme
+    }
+}
+
 pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str) -> String {
     const DASH: &str = "\u{2014}";
     let main_days: Vec<&Day> = days.iter().filter(|d| d.variant_of.is_none()).collect();
@@ -165,7 +184,7 @@ pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str)
     let feels_label = esc(t("feelsLike", lang));
     let rain_label = esc(t("wxRain", lang));
     let mut h = format!(
-        "<details class=\"weather-overview\" open><summary><h2>{}</h2></summary>\
+        "<details class=\"weather-overview\" id=\"{BLOCK_WEATHER}\" data-block=\"{BLOCK_WEATHER}\" open><summary><h2>{}</h2></summary>\
          <table class=\"wx-table\"><thead><tr><th scope=\"col\">{}</th><th scope=\"col\">{}</th>\
          <th scope=\"col\">{temp_label}</th><th scope=\"col\">{feels_label}</th>\
          <th scope=\"col\">{rain_label}</th><th scope=\"col\">{}</th></tr></thead><tbody>",
@@ -282,7 +301,7 @@ pub fn meal_overview(days: &[Day], lang: &str) -> String {
         return String::new();
     }
     format!(
-        "<details class=\"meal-overview\" open><summary><h2>{}</h2></summary>\
+        "<details class=\"meal-overview\" id=\"{BLOCK_MEALS}\" data-block=\"{BLOCK_MEALS}\" open><summary><h2>{}</h2></summary>\
          <table class=\"meal-table\"><thead><tr><th scope=\"col\">{}</th><th scope=\"col\">{}</th>\
          <th scope=\"col\">{main_label}</th><th scope=\"col\">{backup_label}</th></tr></thead>\
          <tbody>{rows}</tbody></table></details>",
@@ -367,12 +386,7 @@ fn render_content(
     clothing_tips: &[ClothingTip],
     option_label: Option<&str>,
 ) -> String {
-    let theme = if lang == "zh" && !day.theme_zh.is_empty() {
-        &day.theme_zh
-    } else {
-        &day.theme
-    };
-    let mut h = format!("<div class=\"theme\">{}</div>", esc(theme));
+    let mut h = format!("<div class=\"theme\">{}</div>", esc(day_theme(day, lang)));
     if option_label.is_none() {
         h.push_str(&weather_strip(day, clothing_tips, lang));
     }
@@ -483,13 +497,17 @@ pub fn render_with_documents(
     token: Option<&str>,
 ) -> String {
     let mut h = String::new();
+    // The card is one collapsible block (native <details open>): the heading is
+    // its <summary>, everything else sits in .day-body (the desktop two-column
+    // grid lives there, since a <details> cannot be the grid container).
+    let block = day_block_id(day.day_number);
     h.push_str(&format!(
-        "<section class=\"day day-{}\" data-day=\"{}\">",
+        "<section class=\"day day-{}\" data-day=\"{}\" id=\"{block}\"><details data-block=\"{block}\" open>",
         esc(&day.day_type),
         day.day_number
     ));
     h.push_str(&format!(
-        "<h2>{}</h2>",
+        "<summary><h2>{}</h2></summary><div class=\"day-body\">",
         esc(&tf(
             "dayHeading",
             lang,
@@ -516,13 +534,16 @@ pub fn render_with_documents(
         clothing_tips,
         None,
     ));
-    // Each variant is a native `<details>` that starts COLLAPSED (no `open`;
-    // SSR-only, no JS): the main plan reads first, the alternative is one tap away.
+    // Each variant is a native `<details>` that starts COLLAPSED (no `open`):
+    // the main plan reads first, the alternative is one tap away.
+    // `data-variant-day` (the variant's own day number) is its stable identity
+    // for the page's collapse-memory script.
     for variant in &day.variants {
         let option_label = super::day_option_label(variant, day.day_number, lang);
         h.push_str(&format!(
-            "<details class=\"day-variant\" data-variant-of=\"{}\"><summary class=\"day-variant-summary\">{}</summary><div class=\"day-variant-body\">",
+            "<details class=\"day-variant\" data-variant-of=\"{}\" data-variant-day=\"{}\"><summary class=\"day-variant-summary\">{}</summary><div class=\"day-variant-body\">",
             day.day_number,
+            variant.day_number,
             esc(&tf(
                 "dayVariant",
                 lang,
@@ -539,7 +560,7 @@ pub fn render_with_documents(
         ));
         h.push_str("</div></details>");
     }
-    h.push_str("</section>");
+    h.push_str("</div></details></section>");
     h
 }
 
@@ -613,7 +634,7 @@ mod tests {
         );
         assert_eq!(
             html,
-            "<section class=\"day day-full\" data-day=\"2\"><h2>第 2 天 · 2026-11-14</h2><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></section>"
+            "<section class=\"day day-full\" data-day=\"2\" id=\"day-2\"><details data-block=\"day-2\" open><summary><h2>第 2 天 · 2026-11-14</h2></summary><div class=\"day-body\"><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></div></details></section>"
         );
     }
 
@@ -1244,7 +1265,7 @@ mod tests {
         let html = weather_overview(&[overview_day()], &sample_tips(), "zh");
         assert!(
             html.starts_with(
-                "<details class=\"weather-overview\" open><summary><h2>天氣總覽</h2></summary>\
+                "<details class=\"weather-overview\" id=\"sec-weather\" data-block=\"sec-weather\" open><summary><h2>天氣總覽</h2></summary>\
                  <table class=\"wx-table\"><thead><tr><th scope=\"col\">日期</th><th scope=\"col\">天氣</th>\
                  <th scope=\"col\">氣溫</th><th scope=\"col\">體感</th><th scope=\"col\">降雨機率</th>\
                  <th scope=\"col\">穿著建議</th></tr></thead><tbody>"
@@ -1441,7 +1462,7 @@ mod tests {
         let html = meal_overview(&[meal_day()], "zh");
         assert!(
             html.starts_with(
-                "<details class=\"meal-overview\" open><summary><h2>用餐總覽</h2></summary>\
+                "<details class=\"meal-overview\" id=\"sec-meals\" data-block=\"sec-meals\" open><summary><h2>用餐總覽</h2></summary>\
                  <table class=\"meal-table\"><thead><tr><th scope=\"col\">日期</th>\
                  <th scope=\"col\">餐別</th><th scope=\"col\">主選</th><th scope=\"col\">備選</th>\
                  </tr></thead><tbody>"

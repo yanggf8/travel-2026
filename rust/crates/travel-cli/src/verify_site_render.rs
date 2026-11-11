@@ -7,8 +7,9 @@
 //! edge by `.day { overflow: hidden }`.
 //!
 //! The browser side is thin: one new blank tab per language × viewport, navigate,
-//! open every `details.day-variant` (served collapsed; opened so its contents are
-//! measured and shot), scroll (lazy images), wait for images and fonts, ONE metrics expression
+//! open every `details` (day variants are served collapsed and a reader's
+//! remembered collapse state may close any block; opened so every block's contents
+//! are measured and shot), scroll (lazy images), wait for images and fonts, ONE metrics expression
 //! (`METRICS_JS`) deserialized into `Metrics`, element screenshots, close. Every
 //! browser await has a wall-clock bound, so `render_plan` always returns. Every
 //! verdict comes from the pure `render_checks(&Metrics)`. The token URL is never
@@ -122,7 +123,7 @@ pub(crate) struct Metrics {
     pub(crate) pending_imgs: usize,
     /// Every `a.doc-link`.
     pub(crate) doc_links: Vec<Shown>,
-    /// Every `details.day-variant`, measured after `PREPARE_JS` opened it.
+    /// Every `details.day-variant`, measured after `PREPARE_JS` opened every `details`.
     pub(crate) variants: Vec<Shown>,
     /// Every `figure[data-map-key] img` (label = the map key).
     pub(crate) map_imgs: Vec<Shown>,
@@ -270,7 +271,7 @@ pub(crate) const METRICS_JS: &str = r#"(function () {
 /// renders.
 pub(crate) const SHOT_RECTS_JS: &str = r#"(function () {
   var shots = [];
-  document.querySelectorAll('section.booking-summary, section.plan-documents, details.weather-overview, details.meal-overview, section.day').forEach(function (el) {
+  document.querySelectorAll('section.booking-summary, section.plan-documents, nav.page-toc, details.weather-overview, details.meal-overview, section.day').forEach(function (el) {
     var r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
     shots.push({ x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height });
@@ -282,14 +283,17 @@ const HIDE_SCROLLBAR_JS: &str = "(function(){ if (!document.getElementById('veri
 const SCROLL_HEIGHT_JS: &str = "(function(){ return document.documentElement.scrollHeight; })()";
 const SCROLL_TOP_JS: &str = "(function(){ window.scrollTo(0, 0); return true; })()";
 
-/// Opens every `details.day-variant` first: the worker serves them collapsed (the
-/// default is fine, never a verdict), and opening them lets the hidden / inset /
-/// clipped / map-img checks and the day-card shots cover the variant's contents
-/// — and lets its images load. Then lazy images are marked eager: they load
-/// regardless of scroll position, so the settle wait does not depend on how a
-/// (possibly background) tab schedules them. Returns the page height (with the
-/// variants open) for the scroll loop.
-const PREPARE_JS: &str = "(function(){ document.querySelectorAll('details.day-variant').forEach(function(d){ d.open = true; }); document.querySelectorAll('img[loading=lazy]').forEach(function(i){ i.loading = 'eager'; }); return document.documentElement.scrollHeight; })()";
+/// Opens every `details` first: the worker serves day variants collapsed (the
+/// default is fine, never a verdict), and the page's collapse-memory script may
+/// have restored a reader's closed blocks (this is the reader's own Chrome) —
+/// opening them all lets the hidden / inset / clipped / map-img checks and the
+/// shots cover every block's contents, and lets its images load. Before opening,
+/// it sets `<html data-no-block-memory>` so the worker script does not save this
+/// all-open state over the reader's remembered one. Then lazy images are marked
+/// eager: they load regardless of scroll position, so the settle wait does not
+/// depend on how a (possibly background) tab schedules them. Returns the page
+/// height (with every block open) for the scroll loop.
+const PREPARE_JS: &str = "(function(){ document.documentElement.setAttribute('data-no-block-memory', ''); document.querySelectorAll('details').forEach(function(d){ d.open = true; }); document.querySelectorAll('img[loading=lazy]').forEach(function(i){ i.loading = 'eager'; }); return document.documentElement.scrollHeight; })()";
 const SETTLED_JS: &str = "(function(){ return Array.prototype.every.call(document.images, function(i){ return i.complete; }) && (!document.fonts || document.fonts.status === 'loaded'); })()";
 
 // ---------------------------------------------------------------------------
@@ -1038,18 +1042,38 @@ mod tests {
             assert!(SHOT_RECTS_JS.contains(&format!("{key}:")), "SHOT_RECTS_JS lacks {key}");
         }
         assert!(SHOT_RECTS_JS.contains(
-            "section.booking-summary, section.plan-documents, details.weather-overview, details.meal-overview, section.day"
+            "section.booking-summary, section.plan-documents, nav.page-toc, details.weather-overview, details.meal-overview, section.day"
         ));
         assert!(serde_json::from_value::<Vec<ShotRect>>(serde_json::json!([{"x": 0, "y": 1, "width": 2}])).is_err());
     }
 
     #[test]
-    fn prepare_opens_day_variants_before_loading_lazy_images() {
-        let open = PREPARE_JS.find("querySelectorAll('details.day-variant').forEach(function(d){ d.open = true; })");
+    fn prepare_opens_every_details_before_loading_lazy_images() {
+        let no_save = PREPARE_JS.find("document.documentElement.setAttribute('data-no-block-memory', '')");
+        let open = PREPARE_JS.find("querySelectorAll('details').forEach(function(d){ d.open = true; })");
         let eager = PREPARE_JS.find("querySelectorAll('img[loading=lazy]')");
         let height = PREPARE_JS.find("return document.documentElement.scrollHeight");
-        assert!(open.is_some() && eager.is_some() && height.is_some(), "{PREPARE_JS}");
-        assert!(open < eager && eager < height, "variants open before the lazy flip and the height read: {PREPARE_JS}");
+        assert!(no_save.is_some() && open.is_some() && eager.is_some() && height.is_some(), "{PREPARE_JS}");
+        assert!(
+            no_save < open && open < eager && eager < height,
+            "memory off, then every block open, before the lazy flip and the height read: {PREPARE_JS}"
+        );
+        // Not only the variants: a remembered collapsed day card / summary must open too.
+        assert!(!PREPARE_JS.contains("details.day-variant"), "{PREPARE_JS}");
+    }
+
+    #[test]
+    fn shot_rects_still_select_every_info_block() {
+        for s in [
+            "section.booking-summary",
+            "section.plan-documents",
+            "nav.page-toc",
+            "details.weather-overview",
+            "details.meal-overview",
+            "section.day",
+        ] {
+            assert!(SHOT_RECTS_JS.contains(s), "{s}: {SHOT_RECTS_JS}");
+        }
     }
 
     #[test]

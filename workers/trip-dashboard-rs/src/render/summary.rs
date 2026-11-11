@@ -673,7 +673,7 @@ fn plan_documents(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         return String::new();
     }
     let mut h = format!(
-        "<section class=\"plan-documents summary-box\"><h2>{}</h2><div class=\"document-list\">",
+        "<section class=\"plan-documents summary-box\" id=\"{BLOCK_DOCS}\"><details data-block=\"{BLOCK_DOCS}\" open><summary><h2>{}</h2></summary><div class=\"document-list\">",
         esc(t("ticketsVouchers", lang))
     );
     let rank = |document: &crate::model::PlanDocument| match document.kind.as_str() {
@@ -704,15 +704,26 @@ fn plan_documents(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         }
         h.push_str("</div>");
     }
-    h.push_str("</div></section>");
+    h.push_str("</div></details></section>");
     h
 }
+
+/// Stable ids of the plan page's collapsible blocks: the element id the TOC
+/// links to (render/mod.rs `page_toc`) and the `data-block` key the inline
+/// collapse-memory script stores the block's open/closed state under.
+pub const BLOCK_DOCS: &str = "sec-docs";
+pub const BLOCK_SUMMARY: &str = "sec-summary";
 
 pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     let mut h = plan_documents(plan, lang, token);
     // `summary-box` adds the dashed frame (user visibility request); the plan map
     // slot is rendered ABOVE this section (render_plan), never inside the frame.
-    h.push_str("<section class=\"booking-summary summary-box\">");
+    // One collapsible block (native <details open>, same pattern as the weather
+    // overview): its own title in the <summary>, the section headings below it.
+    h.push_str(&format!(
+        "<section class=\"booking-summary summary-box\" id=\"{BLOCK_SUMMARY}\"><details data-block=\"{BLOCK_SUMMARY}\" open><summary><h2>{}</h2></summary>",
+        esc(t("bookingSummary", lang))
+    ));
 
     // Package offer (booking-summary package row) — the chosen plan_offer + its
     // selected-date price. Only shown when a package was selected (flight+hotel
@@ -1574,7 +1585,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         h.push_str("</div>");
     }
 
-    h.push_str("</section>");
+    h.push_str("</details></section>");
     h
 }
 
@@ -2461,7 +2472,27 @@ mod tests {
     fn summary_section_carries_dashed_box_class() {
         let plan = Plan::default();
         let html = render(&plan, "en", None);
-        assert!(html.contains("<section class=\"booking-summary summary-box\">"));
+        assert!(html.contains("<section class=\"booking-summary summary-box\" id=\"sec-summary\">"), "{html}");
+    }
+
+    #[test]
+    fn summary_and_documents_are_open_collapsible_blocks() {
+        let plan = Plan {
+            documents: vec![document("flight", "flight_eticket", 0)],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", None);
+        assert!(html.contains(
+            "<section class=\"plan-documents summary-box\" id=\"sec-docs\"><details data-block=\"sec-docs\" open><summary><h2>🎫 票券與憑證</h2></summary><div class=\"document-list\">"
+        ), "{html}");
+        assert!(html.contains(
+            "<section class=\"booking-summary summary-box\" id=\"sec-summary\"><details data-block=\"sec-summary\" open><summary><h2>預訂總表</h2></summary>"
+        ), "{html}");
+        // Each section closes its details before itself.
+        assert_eq!(html.matches("</details></section>").count(), 2, "{html}");
+        let en = render(&Plan::default(), "en", None);
+        assert!(en.contains("<summary><h2>Booking summary</h2></summary>"), "{en}");
+        assert!(en.ends_with("</details></section>"), "{en}");
     }
 
     #[test]

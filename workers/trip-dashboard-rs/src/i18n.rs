@@ -79,6 +79,19 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("voucher", true) => "住宿券 PDF",
         ("ticketsVouchers", false) => "🎫 Tickets & vouchers",
         ("ticketsVouchers", true) => "🎫 票券與憑證",
+        // page navigation (render/mod.rs page_toc): the booking summary's own
+        // collapsible title, the TOC heading, its collapse/expand-all buttons and
+        // the floating back-to-TOC link
+        ("bookingSummary", false) => "Booking summary",
+        ("bookingSummary", true) => "預訂總表",
+        ("toc", false) => "Contents",
+        ("toc", true) => "目錄",
+        ("tocBack", false) => "↑ Contents",
+        ("tocBack", true) => "↑ 目錄",
+        ("collapseAll", false) => "Collapse all",
+        ("collapseAll", true) => "全部收合",
+        ("expandAll", false) => "Expand all",
+        ("expandAll", true) => "全部展開",
         // package offer (booking-summary package row) — ported from render.ts:1081,1086
         ("package", false) => "Package",
         ("package", true) => "套裝",
@@ -458,6 +471,18 @@ mod tests {
     #[test]
     fn unknown_key_is_empty() {
         assert_eq!(t("nope", "en"), "");
+    }
+    #[test]
+    fn page_navigation_keys_are_bilingual() {
+        for key in ["bookingSummary", "toc", "tocBack", "collapseAll", "expandAll"] {
+            let (en, zh) = (t(key, "en"), t(key, "zh"));
+            assert!(!en.is_empty() && !zh.is_empty(), "{key} missing a language");
+            assert!(en.chars().all(|c| c.is_ascii() || c == '↑'), "{key} EN must be English: {en}");
+            assert!(!zh.is_ascii(), "{key} ZH must be Chinese: {zh}");
+        }
+        assert_eq!(t("toc", "zh"), "目錄");
+        assert_eq!(t("collapseAll", "zh"), "全部收合");
+        assert_eq!(t("expandAll", "en"), "Expand all");
     }
     #[test]
     fn voucher_label_is_bilingual() {

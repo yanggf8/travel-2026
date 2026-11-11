@@ -131,10 +131,15 @@ pub fn render_plan(
     // Weather overview: last block of the top summary area, right before the
     // day cards it summarizes. Built from the already-loaded days + clothing
     // bands (no extra query); renders nothing when no day has weather.
-    body.push_str(&day::weather_overview(&plan.days, &plan.clothing_tips, lang));
+    let weather = day::weather_overview(&plan.days, &plan.clothing_tips, lang);
     // Meal overview right after it (same slot when there is no weather): from
     // the already-loaded session meals, no extra query; nothing without meals.
-    body.push_str(&day::meal_overview(&plan.days, lang));
+    let meals = day::meal_overview(&plan.days, lang);
+    // 目錄 right under the booking summary (the page is very long on a phone):
+    // links to the blocks that actually rendered, plus collapse/expand-all.
+    body.push_str(&page_toc(plan, lang, !weather.is_empty(), !meals.is_empty()));
+    body.push_str(&weather);
+    body.push_str(&meals);
     for d in &plan.days {
         body.push_str(&day::render_with_documents(
             d,
@@ -150,8 +155,102 @@ pub fn render_plan(
     // then the transit cheat-sheet (mirror render.ts:1394).
     body.push_str(&alerts::render_pending_alerts(plan, lang, true));
     body.push_str(&alerts::render_transit_summary(plan, lang));
+    // Last in <body>: every block it restores/wires already exists. Viewer and
+    // owner pages alike; the page works fully without it.
+    body.push_str(BLOCK_MEMORY_SCRIPT);
     page_with_body_attrs(&plan.display_name, &body, lang, &plan_body_attrs(&plan.plan_id, owner_chrome))
 }
+
+/// The plan page's 目錄 / Contents: plain fragment links (no JS needed) to each
+/// rendered block — documents, booking summary, weather + meal overviews (only
+/// when they rendered), then one chip per main day card (variants live inside
+/// their day, no entry of their own). In page order. The collapse-all /
+/// expand-all buttons are served `hidden` and un-hidden by
+/// [`BLOCK_MEMORY_SCRIPT`], so a no-JS page never shows a dead button. The
+/// floating ↑ link (pure CSS position:fixed) jumps back here from anywhere.
+fn page_toc(plan: &Plan, lang: &str, has_weather: bool, has_meals: bool) -> String {
+    let mut items: Vec<(&str, String)> = Vec::new();
+    if !plan.documents.is_empty() {
+        items.push((summary::BLOCK_DOCS, esc(t("ticketsVouchers", lang))));
+    }
+    items.push((summary::BLOCK_SUMMARY, esc(t("bookingSummary", lang))));
+    if has_weather {
+        items.push((day::BLOCK_WEATHER, esc(t("weatherOverview", lang))));
+    }
+    if has_meals {
+        items.push((day::BLOCK_MEALS, esc(t("mealOverview", lang))));
+    }
+    let mut h = format!(
+        "<nav class=\"page-toc\" id=\"toc\" aria-label=\"{toc}\"><div class=\"toc-head\"><h2>{toc}</h2>\
+         <div class=\"toc-actions\"><button type=\"button\" class=\"toc-btn\" data-blocks=\"close\" hidden>{}</button>\
+         <button type=\"button\" class=\"toc-btn\" data-blocks=\"open\" hidden>{}</button></div></div><ol class=\"toc-list\">",
+        esc(t("collapseAll", lang)),
+        esc(t("expandAll", lang)),
+        toc = esc(t("toc", lang)),
+    );
+    for (id, label) in items {
+        h.push_str(&format!("<li><a href=\"#{id}\">{label}</a></li>"));
+    }
+    for d in &plan.days {
+        let date = summary::date_with_weekday(&d.date, lang).unwrap_or_else(|| d.date.clone());
+        let heading = if date.is_empty() {
+            tf("dayLabel", lang, &[("day", &d.day_number.to_string())])
+        } else {
+            tf("dayHeading", lang, &[("day", &d.day_number.to_string()), ("date", &date)])
+        };
+        let theme = day::day_theme(d, lang);
+        let theme = if theme.is_empty() {
+            String::new()
+        } else {
+            format!("<span class=\"toc-day-theme\">{}</span>", esc(theme))
+        };
+        h.push_str(&format!(
+            "<li><a class=\"toc-day\" href=\"#{}\"><span class=\"toc-day-n\">{}</span>{theme}</a></li>",
+            day::day_block_id(d.day_number),
+            esc(&heading),
+        ));
+    }
+    h.push_str(&format!(
+        "</ol></nav><a class=\"toc-fab\" href=\"#toc\">{}</a>",
+        esc(t("tocBack", lang))
+    ));
+    h
+}
+
+/// Remembered collapse state for the plan page's blocks — the ONE viewer-page
+/// script (inline, no external source, ES5, emitted once at the end of <body>).
+/// Every `details[data-block]` (summary, documents, overviews, day cards) and
+/// `details.day-variant` (keyed `v<its own data-variant-day>`, stable when a
+/// sibling variant is added or removed) is restored from
+/// localStorage `trip-blocks:<data-plan-id>` (`key=1|0;…`, plain text) and saved
+/// on every `toggle`. 全部收合 closes every block incl. variants; 全部展開 opens
+/// every block but leaves each variant as it is (variants are served collapsed by
+/// design). Following an in-page link opens the target block (and any closed
+/// ancestor), on click and on `hashchange` (Back/Forward). Printing opens every
+/// block (`beforeprint`) without saving and restores the screen state after
+/// (`afterprint`). Every storage access is in try/catch: no storage → session-only
+/// toggles. `<html data-no-block-memory>` (set by `travel verify-site --render`
+/// before it opens every block) stops saving, so a check never rewrites a
+/// reader's remembered state.
+const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
+(function(){
+  var d=document,de=d.documentElement,k='trip-blocks:'+(d.body.getAttribute('data-plan-id')||''),st={},els=[],ls=null,i;
+  try{ls=window.localStorage;var v=ls&&ls.getItem(k);if(v){var p=v.split(';');for(i=0;i<p.length;i++){var kv=p[i].split('=');if(kv.length===2&&kv[0])st[kv[0]]=kv[1]==='1';}}}catch(e){ls=null;}
+  function save(){if(!ls||de.hasAttribute('data-no-block-memory'))return;var o=[];for(var x in st)if(st.hasOwnProperty(x))o.push(x+'='+(st[x]?'1':'0'));try{ls.setItem(k,o.join(';'));}catch(e){}}
+  var list=d.querySelectorAll('details[data-block],details.day-variant');
+  for(i=0;i<list.length;i++){var el=list[i],b=el.getAttribute('data-block'),va=!b;if(va)b='v'+(el.getAttribute('data-variant-day')||'');els.push({el:el,k:b,v:va});if(st.hasOwnProperty(b))el.open=st[b];}
+  d.addEventListener('toggle',function(e){if(pr)return;for(var j=0;j<els.length;j++)if(els[j].el===e.target){if(st[els[j].k]!==e.target.open){st[els[j].k]=e.target.open;save();}return;}},true);
+  var pr=null;
+  window.addEventListener('beforeprint',function(){if(pr)return;pr=[];for(var j=0;j<els.length;j++){pr.push(els[j].el.open);els[j].el.open=true;}});
+  window.addEventListener('afterprint',function(){if(!pr)return;var o=pr;for(var j=0;j<els.length;j++)els[j].el.open=o[j];setTimeout(function(){pr=null;},0);});
+  var bs=d.querySelectorAll('.toc-btn[data-blocks]');
+  for(i=0;i<bs.length;i++){bs[i].hidden=false;bs[i].addEventListener('click',function(){var op=this.getAttribute('data-blocks')==='open';for(var j=0;j<els.length;j++)if(!(op&&els[j].v))els[j].el.open=op;});}
+  function reveal(id){var t=id&&d.getElementById(id);if(!t)return null;for(var p=t;p&&p!==d;p=p.parentNode)if(p.tagName==='DETAILS')p.open=true;var inner=t.querySelector&&t.querySelector('details[data-block]');if(inner)inner.open=true;return t;}
+  d.addEventListener('click',function(e){for(var a=e.target;a&&a!==d;a=a.parentNode)if(a.tagName==='A'){var h=a.getAttribute('href')||'';if(h.charAt(0)==='#')reveal(h.slice(1));return;}});
+  window.addEventListener('hashchange',function(){reveal(location.hash.slice(1));});
+  if(location.hash){var t=reveal(location.hash.slice(1));if(t&&t.scrollIntoView)t.scrollIntoView();}
+})();
+</script>"#;
 
 /// Render an explicit companion-options block from the temporary, unconfirmed
 /// itinerary note. This keeps alternatives visually separate from the official
@@ -630,7 +729,7 @@ mod tests {
         let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
         let summary = html.find("booking-summary").expect("summary");
         let overview = html
-            .find("<details class=\"weather-overview\" open>")
+            .find("<details class=\"weather-overview\" id=\"sec-weather\" data-block=\"sec-weather\" open>")
             .expect("weather overview");
         let day_card = html.find("<section class=\"day ").expect("day card");
         assert!(summary < overview && overview < day_card, "{html}");
@@ -672,10 +771,10 @@ mod tests {
         };
         let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
         let weather = html
-            .find("<details class=\"weather-overview\" open>")
+            .find("<details class=\"weather-overview\" id=\"sec-weather\" data-block=\"sec-weather\" open>")
             .expect("weather overview");
         let meals = html
-            .find("<details class=\"meal-overview\" open><summary><h2>用餐總覽</h2></summary>")
+            .find("<details class=\"meal-overview\" id=\"sec-meals\" data-block=\"sec-meals\" open><summary><h2>用餐總覽</h2></summary>")
             .expect("meal overview");
         let day_card = html.find("<section class=\"day ").expect("day card");
         assert!(weather < meals && meals < day_card, "{html}");
@@ -696,7 +795,7 @@ mod tests {
         let html = render_plan(&no_weather, "en", None, &map::MapStatus::default(), "");
         assert!(!html.contains("<details class=\"weather-overview\""), "{html}");
         let summary = html.find("booking-summary").expect("summary");
-        let meals = html.find("<details class=\"meal-overview\" open>").expect("meal overview");
+        let meals = html.find("<details class=\"meal-overview\" id=\"sec-meals\"").expect("meal overview");
         let day_card = html.find("<section class=\"day ").expect("day card");
         assert!(summary < meals && meals < day_card, "{html}");
         assert!(html.contains("<h2>Meal overview</h2>"), "{html}");
@@ -710,6 +809,165 @@ mod tests {
         // (The inlined stylesheet names the class, so look for the markup.)
         assert!(!html.contains("<details class=\"meal-overview\""), "{html}");
         assert!(!html.contains("<h2>用餐總覽</h2>"), "{html}");
+    }
+
+    /// A plan with every block: documents, weather, meals, two main days (day 1
+    /// has a variant, day_number 3).
+    fn full_nav_plan() -> crate::model::Plan {
+        use crate::model::{Day, Meal, Plan, PlanDocument, Session};
+        let noon = Session {
+            session_type: "noon".into(),
+            meals: vec![Meal { text: "湯豆腐".into(), source: "confirmed".into() }],
+            ..Default::default()
+        };
+        Plan {
+            plan_id: "kyoto-nov-2026".into(),
+            display_name: "Kyoto".into(),
+            documents: vec![PlanDocument {
+                doc_key: "flight".into(),
+                kind: "flight_eticket".into(),
+                label: "Flight".into(),
+                label_zh: "機票".into(),
+                r2_key: "kyoto-nov-2026/doc-flight.pdf".into(),
+                days: vec![1],
+                ..Default::default()
+            }],
+            days: vec![
+                Day {
+                    day_number: 1,
+                    date: "2026-11-14".into(),
+                    day_type: "full".into(),
+                    theme: "Kyoto highlights".into(),
+                    theme_zh: "京都巡禮".into(),
+                    weather_code: Some(0),
+                    temp_low_c: Some(12.0),
+                    temp_high_c: Some(20.0),
+                    sessions: vec![noon],
+                    variants: vec![Day {
+                        day_number: 3,
+                        date: "2026-11-14".into(),
+                        variant_of: Some(1),
+                        variant_label_zh: "雨天方案".into(),
+                        variant_label: "Rainy day".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                Day {
+                    day_number: 2,
+                    date: "2026-11-15".into(),
+                    day_type: "departure".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn toc_follows_the_summary_and_links_every_rendered_block_in_page_order() {
+        let html = render_plan(&full_nav_plan(), "zh", None, &map::MapStatus::default(), "");
+        let summary_end = html.find("id=\"sec-summary\"").expect("summary");
+        let toc = html.find("<nav class=\"page-toc\" id=\"toc\" aria-label=\"目錄\">").expect("toc");
+        let weather = html.find("<details class=\"weather-overview\" id=\"sec-weather\"").expect("weather");
+        assert!(summary_end < toc && toc < weather, "{html}");
+        let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
+        let hrefs: Vec<&str> = nav.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        assert_eq!(hrefs, ["sec-docs", "sec-summary", "sec-weather", "sec-meals", "day-1", "day-2"], "{nav}");
+        // Every link resolves to an id on the page.
+        for id in &hrefs {
+            assert_eq!(html.matches(&format!(" id=\"{id}\"")).count(), 1, "id {id}: {html}");
+        }
+        // Day chips: heading with the short dated weekday, then the theme; the
+        // variant (internal day 3) has no entry and its number never shows.
+        assert!(nav.contains(
+            "<li><a class=\"toc-day\" href=\"#day-1\"><span class=\"toc-day-n\">第 1 天 · 11/14（六）</span><span class=\"toc-day-theme\">京都巡禮</span></a></li>"
+        ), "{nav}");
+        assert!(nav.contains("<span class=\"toc-day-n\">第 2 天 · 11/15（日）</span></a>"), "{nav}");
+        assert!(!html.contains("第 3 天"), "{html}");
+        // Buttons are served hidden (the script un-hides them); the floating
+        // back link follows the nav.
+        assert!(nav.contains("<button type=\"button\" class=\"toc-btn\" data-blocks=\"close\" hidden>全部收合</button>"), "{nav}");
+        assert!(nav.contains("<button type=\"button\" class=\"toc-btn\" data-blocks=\"open\" hidden>全部展開</button>"), "{nav}");
+        assert!(html.contains("</nav><a class=\"toc-fab\" href=\"#toc\">↑ 目錄</a>"), "{html}");
+
+        let en = render_plan(&full_nav_plan(), "en", None, &map::MapStatus::default(), "");
+        assert!(en.contains("<h2>Contents</h2>"), "{en}");
+        assert!(en.contains(">Collapse all</button>") && en.contains(">Expand all</button>"), "{en}");
+        assert!(en.contains("<span class=\"toc-day-n\">Day 1 · Sat 11/14</span><span class=\"toc-day-theme\">Kyoto highlights</span>"), "{en}");
+        assert!(en.contains(">↑ Contents</a>"), "{en}");
+    }
+
+    #[test]
+    fn toc_lists_only_blocks_that_render() {
+        use crate::model::{Day, Plan};
+        let plan = Plan {
+            plan_id: "p".into(),
+            days: vec![Day { day_number: 1, ..Default::default() }],
+            ..Default::default()
+        };
+        let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
+        let toc = html.find("<nav class=\"page-toc\"").expect("toc");
+        let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
+        let hrefs: Vec<&str> = nav.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        assert_eq!(hrefs, ["sec-summary", "day-1"], "{nav}");
+        // No date → the chip is just the day label; no theme → no theme span.
+        assert!(nav.contains("<span class=\"toc-day-n\">第 1 天</span></a>"), "{nav}");
+        assert!(!nav.contains("toc-day-theme"), "{nav}");
+    }
+
+    #[test]
+    fn every_info_block_is_an_open_details_with_a_data_block_key() {
+        let html = render_plan(&full_nav_plan(), "zh", None, &map::MapStatus::default(), "");
+        for (outer, key) in [
+            ("<section class=\"plan-documents summary-box\" id=\"sec-docs\">", "sec-docs"),
+            ("<section class=\"booking-summary summary-box\" id=\"sec-summary\">", "sec-summary"),
+            ("<section class=\"day day-full\" data-day=\"1\" id=\"day-1\">", "day-1"),
+            ("<section class=\"day day-departure\" data-day=\"2\" id=\"day-2\">", "day-2"),
+        ] {
+            assert!(
+                html.contains(&format!("{outer}<details data-block=\"{key}\" open><summary><h2>")),
+                "{key}: {html}"
+            );
+        }
+        assert!(html.contains("<details class=\"weather-overview\" id=\"sec-weather\" data-block=\"sec-weather\" open><summary><h2>"), "{html}");
+        assert!(html.contains("<details class=\"meal-overview\" id=\"sec-meals\" data-block=\"sec-meals\" open><summary><h2>"), "{html}");
+        assert_eq!(html.matches("<details data-block=").count() + 2, html.matches(" data-block=\"").count(), "{html}");
+        assert_eq!(html.matches(" data-block=\"").count(), 6, "{html}");
+        // The variant stays collapsed and is not itself a data-block.
+        assert!(html.contains("<details class=\"day-variant\" data-variant-of=\"1\" data-variant-day=\"3\"><summary"), "{html}");
+    }
+
+    #[test]
+    fn block_memory_script_is_emitted_once_on_viewer_and_owner_pages() {
+        let plan = full_nav_plan();
+        let status = map::MapStatus::default();
+        let viewer = render_plan(&plan, "zh", Some("tok"), &status, "");
+        let owner = render_plan(&plan, "zh", None, &status, "<div class=\"owner-chrome\"></div>");
+        for (name, html, scripts) in [("viewer", &viewer, 1), ("owner", &owner, 2)] {
+            assert_eq!(html.matches("'trip-blocks:'").count(), 1, "{name}: {html}");
+            assert_eq!(html.matches("<script>").count(), scripts, "{name}: {html}");
+            // At the very end of <body>, after every block it wires.
+            assert!(html.ends_with("</script></body></html>"), "{name}");
+            assert!(!html.contains("<script src"), "{name}");
+        }
+        // Storage access is guarded and the verify-site hook stops saving.
+        assert!(BLOCK_MEMORY_SCRIPT.contains("try{ls=window.localStorage;"));
+        assert!(BLOCK_MEMORY_SCRIPT.contains("try{ls.setItem("));
+        assert!(BLOCK_MEMORY_SCRIPT.contains("data-no-block-memory"));
+        // Back/Forward to a fragment reveals it; print opens every block; a
+        // variant is keyed by its own day number, not its sibling position.
+        assert!(BLOCK_MEMORY_SCRIPT.contains("addEventListener('hashchange'"));
+        assert!(BLOCK_MEMORY_SCRIPT.contains("addEventListener('beforeprint'"));
+        assert!(BLOCK_MEMORY_SCRIPT.contains("addEventListener('afterprint'"));
+        assert!(BLOCK_MEMORY_SCRIPT.contains("b='v'+(el.getAttribute('data-variant-day')"));
+        assert_eq!(BLOCK_MEMORY_SCRIPT.matches("localStorage").count(), 1);
+        // ES5: no arrow functions, let/const or template literals.
+        for bad in ["=>", "let ", "const ", "`"] {
+            assert!(!BLOCK_MEMORY_SCRIPT.contains(bad), "{bad}");
+        }
+        // Pages other than the plan page carry no script.
+        assert!(!page("t", "x", "zh").contains("<script"));
     }
 
     #[test]
@@ -963,7 +1221,7 @@ mod tests {
         };
         let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
         assert_eq!(html.matches("<section class=\"day ").count(), 2, "{html}");
-        let day1_open = "<section class=\"day day-full\" data-day=\"1\">";
+        let day1_open = "<section class=\"day day-full\" data-day=\"1\" id=\"day-1\">";
         let day1_start = html.find(day1_open).expect("day 1 card");
         let day1_end = day1_start
             + html[day1_start..]
@@ -975,7 +1233,7 @@ mod tests {
             day1.contains("<span class=\"day-option-label\">雨天方案</span>"),
             "{day1}"
         );
-        assert!(day1.contains("<details class=\"day-variant\" data-variant-of=\"1\"><summary class=\"day-variant-summary\">替代方案：晴天方案</summary><div class=\"day-variant-body\">"), "{day1}");
+        assert!(day1.contains("<details class=\"day-variant\" data-variant-of=\"1\" data-variant-day=\"3\"><summary class=\"day-variant-summary\">替代方案：晴天方案</summary><div class=\"day-variant-body\">"), "{day1}");
         // Collapsed by default: no `open` attribute on the variant block.
         assert!(!day1.contains("data-variant-of=\"1\" open"), "{day1}");
         // The block sits in the day card after the main day's own content.
@@ -983,7 +1241,7 @@ mod tests {
         assert!(day1.find("車站周邊").unwrap() < details_at, "{day1}");
         for section in html.split("<section class=\"day ").skip(1) {
             let section = section.split("</section>").next().expect("day section end");
-            if !section.starts_with("day-full\" data-day=\"1\">") {
+            if !section.starts_with("day-full\" data-day=\"1\" id=\"day-1\">") {
                 assert!(!section.contains("data-variant-of="), "{section}");
             }
         }
