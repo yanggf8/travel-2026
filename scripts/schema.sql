@@ -13,7 +13,7 @@
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
 -- Generated: 2026-11-11
--- Tables: 143 | Indexes: 28
+-- Tables: 144 | Indexes: 28
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -210,6 +210,14 @@ CREATE TABLE catalog_runs (
   command_summary TEXT,
   status TEXT NOT NULL,
   changed_at TEXT NOT NULL
+);
+
+CREATE TABLE clothing_tip_items (
+  tip_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  item_zh TEXT NOT NULL,
+  item_en TEXT NOT NULL,
+  PRIMARY KEY (tip_id, sort_order)
 );
 
 CREATE TABLE clothing_tips (

@@ -826,8 +826,9 @@ fn owner_login_href_for_plan(slug: &str, lang: &str) -> String {
     format!("/auth/login?next={}", render::urlencode(&next))
 }
 
-/// Load the full plan via a 26-statement Turso pipeline. Query order matches
-/// model::assemble()'s argument order, followed by clothing tips and plan documents.
+/// Load the full plan via a 27-statement Turso pipeline. Query order matches
+/// model::assemble()'s argument order, followed by clothing tips, plan documents
+/// and (appended last so no index shifts) the clothing tips' items.
 async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Plan> {
     if !is_safe_slug(slug) {
         return Err(Error::RustError(format!("invalid plan slug: {slug}")));
@@ -998,8 +999,8 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              WHERE plan_id = '{slug}' ORDER BY option_key, seq"
         ),
         // [23] clothing-advice bands — GLOBAL reference data (set-clothing-tip),
-        // evaluated per day card by render::day::clothing_tip.
-        "SELECT kind, threshold, text_zh, text_en FROM clothing_tips \
+        // evaluated per day card by render::day::clothing_tip; tip_id joins [26].
+        "SELECT tip_id, kind, threshold, text_zh, text_en FROM clothing_tips \
          ORDER BY sort_order, tip_id"
             .to_string(),
         format!(
@@ -1013,18 +1014,24 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             "SELECT doc_key, day_number FROM plan_document_days \
              WHERE plan_id = '{slug}' ORDER BY doc_key, day_number"
         ),
+        // [26] each clothing band's items to pack (GLOBAL, set-clothing-tip --item) —
+        // the weather overview's 要帶的衣物 summary. A missing table (worker deployed
+        // before `travel db migrate`) fails the whole pipeline loudly, like any query.
+        "SELECT tip_id, sort_order, item_zh, item_en FROM clothing_tip_items \
+         ORDER BY tip_id, sort_order"
+            .to_string(),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 26 {
+    if r.len() < 27 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 26 results".into(),
+            "Turso pipeline returned fewer than 27 results".into(),
         ));
     }
     let mut plan = model::assemble(
         &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8], &r[9], &r[10], &r[11],
         &r[12], &r[13], &r[14], &r[15], &r[16], &r[17], &r[18], &r[19], &r[20], &r[21], &r[22],
     );
-    plan.clothing_tips = model::clothing_tips(&r[23]);
+    plan.clothing_tips = model::clothing_tips(&r[23], &r[26]);
     plan.documents = model::plan_documents(&r[24], &r[25]);
     Ok(plan)
 }

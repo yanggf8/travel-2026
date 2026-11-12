@@ -327,6 +327,8 @@ pub struct Plan {
 /// `travel set-clothing-tip`). Evaluated by `render::day::clothing_tip`.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ClothingTip {
+    /// Band key; joins the band's `clothing_tip_items` rows.
+    pub tip_id: String,
     /// temp_low_max | temp_high_max | temp_else | swing_min | rain_min
     pub kind: String,
     /// NULL only for `temp_else`.
@@ -334,16 +336,40 @@ pub struct ClothingTip {
     /// Templates; `{lo}` / `{hi}` are the rounded low/high temps.
     pub text_zh: String,
     pub text_en: String,
+    /// Clothing items the band recommends packing (`clothing_tip_items`, in
+    /// sort_order) — counted by the weather overview's packing summary.
+    pub items: Vec<ClothingItem>,
 }
 
-/// `clothing_tips` rows (already in sort_order) → bands.
-pub fn clothing_tips(rows: &[Row]) -> Vec<ClothingTip> {
+/// One clothing item to pack (`clothing_tip_items` row) — content, zh/en.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ClothingItem {
+    pub zh: String,
+    pub en: String,
+}
+
+/// `clothing_tips` rows (already in sort_order) + `clothing_tip_items` rows
+/// (ordered by tip_id, sort_order) → bands, each with its items joined by tip_id.
+pub fn clothing_tips(rows: &[Row], item_rows: &[Row]) -> Vec<ClothingTip> {
     rows.iter()
-        .map(|r| ClothingTip {
-            kind: s(r, "kind"),
-            threshold: f(r, "threshold"),
-            text_zh: s(r, "text_zh"),
-            text_en: s(r, "text_en"),
+        .map(|r| {
+            let tip_id = s(r, "tip_id");
+            let items = item_rows
+                .iter()
+                .filter(|it| s(it, "tip_id") == tip_id)
+                .map(|it| ClothingItem {
+                    zh: s(it, "item_zh"),
+                    en: s(it, "item_en"),
+                })
+                .collect();
+            ClothingTip {
+                kind: s(r, "kind"),
+                threshold: f(r, "threshold"),
+                text_zh: s(r, "text_zh"),
+                text_en: s(r, "text_en"),
+                items,
+                tip_id,
+            }
         })
         .collect()
 }
@@ -1850,5 +1876,54 @@ mod tests {
         assert_eq!(b.images.len(), 1);
         assert_eq!(b.images[0].label, "店內");
         assert!(b.link_url.is_empty());
+    }
+
+    // Clothing items join their band by tip_id and keep the query's sort_order;
+    // a band with no item rows gets none, an orphan item row attaches nowhere.
+    #[test]
+    fn clothing_tips_attach_items_by_tip_id() {
+        let bands = vec![
+            row(&[
+                ("tip_id", json!("cold")),
+                ("kind", json!("temp_low_max")),
+                ("threshold", json!("5.0")),
+                ("text_zh", json!("🧥 冷")),
+                ("text_en", json!("🧥 Cold")),
+            ]),
+            row(&[
+                ("tip_id", json!("hot")),
+                ("kind", json!("temp_else")),
+                ("threshold", Value::Null),
+                ("text_zh", json!("☀️ 熱")),
+                ("text_en", json!("☀️ Hot")),
+            ]),
+        ];
+        let item = |tip: &str, n: i64, zh: &str, en: &str| {
+            row(&[
+                ("tip_id", json!(tip)),
+                ("sort_order", json!(n.to_string())),
+                ("item_zh", json!(zh)),
+                ("item_en", json!(en)),
+            ])
+        };
+        let items = vec![
+            item("cold", 1, "圍巾", "Scarf"),
+            item("cold", 2, "手套", "Gloves"),
+            item("gone", 1, "孤兒", "Orphan"),
+        ];
+        let tips = clothing_tips(&bands, &items);
+        assert_eq!(tips.len(), 2);
+        assert_eq!(tips[0].tip_id, "cold");
+        assert_eq!(tips[0].threshold, Some(5.0));
+        assert_eq!(
+            tips[0].items,
+            vec![
+                ClothingItem { zh: "圍巾".into(), en: "Scarf".into() },
+                ClothingItem { zh: "手套".into(), en: "Gloves".into() },
+            ]
+        );
+        assert_eq!(tips[1].threshold, None);
+        assert!(tips[1].items.is_empty());
+        assert!(clothing_tips(&bands, &[]).iter().all(|t| t.items.is_empty()));
     }
 }

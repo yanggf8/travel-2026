@@ -1,7 +1,12 @@
-// `travel set-clothing-tip <tip_id> --kind <kind> [--threshold N] --sort N --zh "<text>" --en "<text>"`
+// `travel set-clothing-tip <tip_id> --kind <kind> [--threshold N] --sort N --zh "<text>" --en "<text>"
+//   [--item "<zh>|<en>"]...`
 // — inserts or fully replaces one clothing-advice band in `clothing_tips`, the GLOBAL
 // reference table the dashboard reads for the "what to wear" line under each day's
 // weather. NOT plan-keyed: NO --plan-id, NO audit triad (same family as add-transit).
+// Each repeatable `--item "<zh>|<en>"` is one clothing item the band recommends packing
+// (`clothing_tip_items`, in the order given); the items given are the band's COMPLETE list
+// — no --item leaves it with none. The weather overview's 「要帶的衣物」 summary counts, per
+// item, the main days its band matched.
 // Plain-text output: the written row, then every band in the order the worker reads them.
 //
 // How the worker evaluates the rows (render::day::clothing_tip):
@@ -11,9 +16,9 @@
 //   3. rain_min (rain% >= N): first match
 // Texts may use {lo} / {hi} (the rounded feels-like low/high temperature).
 
-use travel_db::repo::clothing_tips::{self, ClothingTip, KINDS, PLACEHOLDERS};
+use travel_db::repo::clothing_tips::{self, ClothingTip, ClothingTipItem, KINDS, PLACEHOLDERS};
 
-const VALUE_FLAGS: [&str; 5] = ["--kind", "--threshold", "--sort", "--zh", "--en"];
+const VALUE_FLAGS: [&str; 6] = ["--kind", "--threshold", "--sort", "--zh", "--en", "--item"];
 
 pub async fn run(args: &[String]) -> Result<(), String> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -23,13 +28,8 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     let tip = parse_args(args)?;
 
     let conn = crate::db::connect_write().await?;
-    let affected = clothing_tips::upsert(&conn, &tip).await?;
-    if affected != 1 {
-        return Err(format!(
-            "clothing_tips upsert affected {affected} rows (expected 1) for {}",
-            tip.tip_id
-        ));
-    }
+    // upsert itself fails (and rolls back band + items) unless exactly one band row changed.
+    clothing_tips::upsert(&conn, &tip).await?;
 
     println!(
         "✅ clothing_tips upserted: {} ({} {}, sort {})",
@@ -40,6 +40,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     );
     println!("  zh: {}", tip.text_zh);
     println!("  en: {}", tip.text_en);
+    println!("  items: {}", fmt_items(&tip.items));
     println!();
     println!("All bands (worker read order; temperature group first-match, then swing_min, then rain_min):");
     println!("  sort\ttip_id\tkind\tthreshold\ttext_zh");
@@ -52,15 +53,32 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             fmt_threshold(t.threshold),
             t.text_zh
         );
+        if !t.items.is_empty() {
+            println!("  \titems: {}", fmt_items(&t.items));
+        }
     }
     Ok(())
 }
 
+/// `圍巾|Scarf; 手套|Gloves` — the same `<zh>|<en>` form --item takes; "—" when none.
+fn fmt_items(items: &[ClothingTipItem]) -> String {
+    if items.is_empty() {
+        return "—".to_string();
+    }
+    items
+        .iter()
+        .map(|i| format!("{}|{}", i.zh, i.en))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn usage() -> String {
     format!(
-        "Usage:\n  travel set-clothing-tip <tip_id> --kind <{}> [--threshold N] --sort N --zh \"<text>\" --en \"<text>\"\n  \
+        "Usage:\n  travel set-clothing-tip <tip_id> --kind <{}> [--threshold N] --sort N --zh \"<text>\" --en \"<text>\" \
+         [--item \"<zh>|<en>\"]...\n  \
          (GLOBAL reference data — no --plan-id; insert-or-replace by tip_id. --threshold is required \
-         for every kind except temp_else. Texts may use {{lo}} / {{hi}}.)",
+         for every kind except temp_else. Texts may use {{lo}} / {{hi}}. Each --item is one clothing \
+         item to pack, split on the first '|'; the items given replace the band's whole item list.)",
         KINDS.join("|")
     )
 }
@@ -84,6 +102,7 @@ fn parse_args(args: &[String]) -> Result<ClothingTip, String> {
     let mut sort = None;
     let mut zh = None;
     let mut en = None;
+    let mut items: Vec<ClothingTipItem> = Vec::new();
     let mut positional: Vec<&String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -98,7 +117,17 @@ fn parse_args(args: &[String]) -> Result<ClothingTip, String> {
                 "--threshold" => threshold = Some(v),
                 "--sort" => sort = Some(v),
                 "--zh" => zh = Some(v),
-                _ => en = Some(v),
+                "--en" => en = Some(v),
+                "--item" => {
+                    let item = parse_item(&v)?;
+                    if items.iter().any(|i| i.zh == item.zh || i.en == item.en) {
+                        return Err(format!(
+                            "--item \"{v}\" repeats an item already given for this band"
+                        ));
+                    }
+                    items.push(item);
+                }
+                other => return Err(format!("internal: {other} is in VALUE_FLAGS but has no match arm")),
             }
             i += 2;
         } else {
@@ -164,7 +193,22 @@ fn parse_args(args: &[String]) -> Result<ClothingTip, String> {
         sort_order,
         text_zh,
         text_en,
+        items,
     })
+}
+
+/// `--item "<zh>|<en>"`: split on the FIRST `|`; both sides trimmed and non-empty.
+fn parse_item(v: &str) -> Result<ClothingTipItem, String> {
+    let (zh, en) = v
+        .split_once('|')
+        .ok_or_else(|| format!("--item must be \"<zh>|<en>\" (no '|' in \"{v}\")"))?;
+    let (zh, en) = (zh.trim(), en.trim());
+    if zh.is_empty() || en.is_empty() {
+        return Err(format!(
+            "--item needs both a zh and an en name around the first '|' (got \"{v}\")"
+        ));
+    }
+    Ok(ClothingTipItem { zh: zh.to_string(), en: en.to_string() })
 }
 
 /// Non-empty, and every `{…}` is a placeholder the worker fills — a typo such as
@@ -216,6 +260,45 @@ mod tests {
         assert_eq!(t.threshold, Some(5.0));
         assert_eq!(t.sort_order, 20);
         assert_eq!(t.text_zh, "🧥 早晚{lo}°C");
+        assert!(t.items.is_empty(), "no --item → the band has no items");
+    }
+
+    #[test]
+    fn parses_repeated_items_in_order_splitting_on_first_pipe() {
+        let t = parse_args(&a(&[
+            "low-5", "--item", " 圍巾 | Scarf ", "--kind", "temp_low_max", "--threshold", "5",
+            "--sort", "20", "--zh", "z", "--en", "e", "--item", "手套|Gloves | mittens",
+        ]))
+        .unwrap();
+        assert_eq!(
+            t.items,
+            vec![
+                ClothingTipItem { zh: "圍巾".into(), en: "Scarf".into() },
+                ClothingTipItem { zh: "手套".into(), en: "Gloves | mittens".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_duplicate_items() {
+        let with = |item: &str| {
+            parse_args(&a(&[
+                "x", "--kind", "temp_else", "--sort", "1", "--zh", "z", "--en", "e", "--item", item,
+            ]))
+        };
+        assert!(with("圍巾").unwrap_err().contains("no '|'"));
+        assert!(with(" |Scarf").unwrap_err().contains("both a zh and an en"));
+        assert!(with("圍巾|  ").unwrap_err().contains("both a zh and an en"));
+        assert!(with("|").unwrap_err().contains("both a zh and an en"));
+        let e = parse_args(&a(&[
+            "x", "--kind", "temp_else", "--sort", "1", "--zh", "z", "--en", "e", "--item",
+            "圍巾|Scarf", "--item", "圍巾|Muffler",
+        ]))
+        .unwrap_err();
+        assert!(e.contains("repeats an item"), "{e}");
+        assert!(parse_args(&a(&["x", "--kind", "temp_else", "--sort", "1", "--zh", "z", "--en", "e", "--item"]))
+            .unwrap_err()
+            .contains("--item needs a value"));
     }
 
     #[test]

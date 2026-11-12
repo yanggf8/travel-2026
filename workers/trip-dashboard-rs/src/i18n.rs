@@ -189,6 +189,14 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("wxRain", true) => "降雨機率",
         ("wxWear", false) => "What to wear",
         ("wxWear", true) => "穿著建議",
+        // packing summary under the weather table (render/day.rs packing_summary):
+        // label + one "item (N days)" entry; the item name is content (Turso)
+        ("packList", false) => "What to pack",
+        ("packList", true) => "要帶的衣物",
+        ("packItemOneDay", false) => "{item} ({n} day)",
+        ("packItemOneDay", true) => "{item}（{n} 天）",
+        ("packItemDays", false) => "{item} ({n} days)",
+        ("packItemDays", true) => "{item}（{n} 天）",
         // meal overview (render/day.rs meal_overview): heading + column labels
         // (the date column reuses wxDate); dateOption labels a day-variant row —
         // ZH has no space after the full-width （六） paren: 「11/15（日）· 晴天方案」
@@ -483,6 +491,15 @@ mod tests {
         assert_eq!(t("toc", "zh"), "目錄");
         assert_eq!(t("collapseAll", "zh"), "全部收合");
         assert_eq!(t("expandAll", "en"), "Expand all");
+    }
+    #[test]
+    fn packing_summary_keys_are_bilingual() {
+        assert_eq!(t("packList", "zh"), "要帶的衣物");
+        assert_eq!(t("packList", "en"), "What to pack");
+        assert_eq!(tf("packItemOneDay", "en", &[("item", "Scarf"), ("n", "1")]), "Scarf (1 day)");
+        assert_eq!(tf("packItemDays", "en", &[("item", "Scarf"), ("n", "3")]), "Scarf (3 days)");
+        assert_eq!(tf("packItemOneDay", "zh", &[("item", "圍巾"), ("n", "1")]), "圍巾（1 天）");
+        assert_eq!(tf("packItemDays", "zh", &[("item", "圍巾"), ("n", "3")]), "圍巾（3 天）");
     }
     #[test]
     fn voucher_label_is_bilingual() {

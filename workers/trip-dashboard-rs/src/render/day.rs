@@ -36,13 +36,30 @@ pub fn clothing_tip(
     rain_pct: f64,
     lang: &str,
 ) -> Vec<String> {
+    let lo = (temp_low.round() as i64).to_string();
+    let hi = (temp_high.round() as i64).to_string();
+    matched_bands(tips, temp_low, temp_high, rain_pct)
+        .into_iter()
+        .map(|tip| {
+            let text = if lang != "en" { &tip.text_zh } else { &tip.text_en };
+            fill(text, &[("lo", &lo), ("hi", &hi)])
+        })
+        .collect()
+}
+
+/// The bands [`clothing_tip`] prints, as bands: the first match of each group,
+/// in group order (temperature, swing, rain). The packing summary reads their items.
+fn matched_bands(
+    tips: &[ClothingTip],
+    temp_low: f64,
+    temp_high: f64,
+    rain_pct: f64,
+) -> Vec<&ClothingTip> {
     const GROUPS: [&[&str]; 3] = [
         &["temp_low_max", "temp_high_max", "temp_else"],
         &["swing_min"],
         &["rain_min"],
     ];
-    let lo = (temp_low.round() as i64).to_string();
-    let hi = (temp_high.round() as i64).to_string();
     let matches = |tip: &ClothingTip| match (tip.kind.as_str(), tip.threshold) {
         ("temp_low_max", Some(th)) => temp_low <= th,
         ("temp_high_max", Some(th)) => temp_high <= th,
@@ -57,10 +74,6 @@ pub fn clothing_tip(
             tips.iter()
                 .filter(|tip| group.contains(&tip.kind.as_str()))
                 .find(|tip| matches(tip))
-        })
-        .map(|tip| {
-            let text = if lang != "en" { &tip.text_zh } else { &tip.text_en };
-            fill(text, &[("lo", &lo), ("hi", &hi)])
         })
         .collect()
 }
@@ -83,19 +96,72 @@ fn has_weather(day: &Day, lang: &str) -> bool {
         || day.precipitation_pct.is_some()
 }
 
-/// The day's what-to-wear lines (unescaped): feels-like temps when available,
-/// else actual; rain defaults to 0. Empty without a temperature pair or when
-/// no band matches. Shared by the day strip and the weather overview.
+/// What the clothing bands evaluate a day against: (low, high, rain%) with
+/// feels-like temps when available, else actual; rain defaults to 0. None
+/// without a temperature pair.
+fn day_clothing_inputs(day: &Day) -> Option<(f64, f64, f64)> {
+    let tip_low = day.feels_like_low_c.or(day.temp_low_c)?;
+    let tip_high = day.feels_like_high_c.or(day.temp_high_c)?;
+    Some((tip_low, tip_high, day.precipitation_pct.unwrap_or(0.0)))
+}
+
+/// The day's what-to-wear lines (unescaped). Empty without a temperature pair
+/// or when no band matches. Shared by the day strip and the weather overview.
 fn day_clothing(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> Vec<String> {
-    let tip_low = day.feels_like_low_c.or(day.temp_low_c);
-    let tip_high = day.feels_like_high_c.or(day.temp_high_c);
-    match (tip_low, tip_high) {
-        (Some(tl), Some(th)) => {
-            let rain = day.precipitation_pct.unwrap_or(0.0);
-            clothing_tip(clothing_tips, tl, th, rain, lang)
-        }
-        _ => Vec::new(),
+    match day_clothing_inputs(day) {
+        Some((tl, th, rain)) => clothing_tip(clothing_tips, tl, th, rain, lang),
+        None => Vec::new(),
     }
+}
+
+/// The bands that matched the day (same inputs as [`day_clothing`]).
+fn day_bands<'a>(day: &Day, clothing_tips: &'a [ClothingTip]) -> Vec<&'a ClothingTip> {
+    match day_clothing_inputs(day) {
+        Some((tl, th, rain)) => matched_bands(clothing_tips, tl, th, rain),
+        None => Vec::new(),
+    }
+}
+
+/// The weather overview's 要帶的衣物 / What to pack line: every clothing item
+/// (content, `clothing_tip_items`) of the bands that matched each given day,
+/// with the number of days it is needed — 「圍巾（3 天） · 雨傘（1 天）」. An item
+/// counts once per day (deduped by its displayed-language text, so two bands
+/// sharing an item do not double-count it); items list in first-appearance
+/// order (day order, then band group order, then item sort_order). Empty
+/// item texts are skipped. No item on any day → empty string (no div).
+fn packing_summary(days: &[&Day], clothing_tips: &[ClothingTip], lang: &str) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for day in days {
+        let mut seen: Vec<&str> = Vec::new();
+        for band in day_bands(day, clothing_tips) {
+            for item in &band.items {
+                let text = if lang != "en" { item.zh.trim() } else { item.en.trim() };
+                if text.is_empty() || seen.contains(&text) {
+                    continue;
+                }
+                seen.push(text);
+                match counts.iter_mut().find(|(t, _)| *t == text) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((text, 1)),
+                }
+            }
+        }
+    }
+    if counts.is_empty() {
+        return String::new();
+    }
+    let items = counts
+        .iter()
+        .map(|(text, n)| {
+            let key = if *n == 1 { "packItemOneDay" } else { "packItemDays" };
+            esc(&tf(key, lang, &[("item", text), ("n", &n.to_string())]))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!(
+        "<div class=\"wx-pack\"><span class=\"wx-pack-label\">{}</span> {items}</div>",
+        esc(t("packList", lang))
+    )
 }
 
 /// "12–20°C" from a low/high pair, rounded; None unless both are present.
@@ -150,7 +216,8 @@ fn weather_strip(day: &Day, clothing_tips: &[ClothingTip], lang: &str) -> String
 /// The plan page's collapsible 天氣總覽 / Weather overview: one row per MAIN
 /// trip day (variants share their main day's date and carry no weather) with
 /// date + weekday, icon + description, temp range, feels-like range, rain%, and
-/// the day's clothing tips — the same values the day strips show. A native
+/// the day's clothing tips — the same values the day strips show — then, under
+/// the table, the trip's packing summary ([`packing_summary`], same main days). A native
 /// `<details open>` (works without JS; the page's collapse-memory script may
 /// restore a reader's closed state) that starts OPEN, so nothing is hidden on load. A missing value is an em dash; when no day has
 /// any weather the section renders nothing at all. Phones get one stacked block
@@ -193,7 +260,7 @@ pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str)
         esc(t("wxWeather", lang)),
         esc(t("wxWear", lang)),
     );
-    for day in main_days {
+    for day in main_days.iter().copied() {
         let date = match super::summary::date_with_weekday(&day.date, lang) {
             Some(d) => esc(&d),
             None if day.date.is_empty() => DASH.to_string(),
@@ -228,7 +295,9 @@ pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str)
             wmo_emoji(day.weather_code),
         ));
     }
-    h.push_str("</tbody></table></details>");
+    h.push_str("</tbody></table>");
+    h.push_str(&packing_summary(&main_days, clothing_tips, lang));
+    h.push_str("</details>");
     h
 }
 
@@ -949,6 +1018,7 @@ mod tests {
             threshold,
             text_zh: zh.into(),
             text_en: en.into(),
+            ..Default::default()
         };
         vec![
             row("temp_low_max", Some(0.0), "🧣 早晚接近0°C——厚外套、圍巾、手套", "🧣 Near 0°C morning/evening—heavy coat, scarf, gloves"),
@@ -1650,5 +1720,116 @@ mod tests {
             assert_eq!(meal_overview(&[], lang), "", "{lang}");
             assert_eq!(meal_overview(&days(), lang), "", "{lang}");
         }
+    }
+
+    // ---- packing summary (要帶的衣物) ----
+    /// Bands with items: two bands share 薄外套 (deduped per day), and the swing
+    /// band's 外套 shares its EN name with 薄外套 (deduped in EN only).
+    fn packing_tips() -> Vec<ClothingTip> {
+        let item = |zh: &str, en: &str| crate::model::ClothingItem { zh: zh.into(), en: en.into() };
+        let band = |kind: &str, threshold: Option<f64>, items: Vec<crate::model::ClothingItem>| ClothingTip {
+            tip_id: kind.into(),
+            kind: kind.into(),
+            threshold,
+            text_zh: format!("zh {kind}"),
+            text_en: format!("en {kind}"),
+            items,
+        };
+        vec![
+            band("temp_low_max", Some(5.0), vec![item("圍巾", "Scarf"), item("手套", "Gloves")]),
+            band("temp_else", None, vec![item("薄外套", "Light jacket")]),
+            band("swing_min", Some(10.0), vec![item("薄外套", "Light jacket"), item("外套", "Light jacket"), item("帽子", "Hat")]),
+            band("rain_min", Some(30.0), vec![item("雨傘", "Umbrella")]),
+        ]
+    }
+
+    fn packing_days() -> Vec<Day> {
+        let day = |n: i64, lo: Option<f64>, hi: Option<f64>, rain: Option<f64>| Day {
+            day_number: n,
+            date: format!("2026-11-{:02}", 12 + n),
+            temp_low_c: lo,
+            temp_high_c: hi,
+            precipitation_pct: rain,
+            ..Default::default()
+        };
+        // Day 1: feels-like 3/9 wins over actual 6/20 (no swing) → cold + rain.
+        let d1 = Day { feels_like_low_c: Some(3.0), feels_like_high_c: Some(9.0), ..day(1, Some(6.0), Some(20.0), Some(50.0)) };
+        // Day 2: mild catch-all + big swing (12 → 24), no rain → 薄外套 once, 外套, 帽子.
+        // It also carries a nested variant with freezing weather — never counted.
+        let d2 = Day {
+            variants: vec![Day { variant_of: Some(2), ..day(9, Some(-5.0), Some(0.0), Some(90.0)) }],
+            ..day(2, Some(12.0), Some(24.0), None)
+        };
+        // Day 3: cold + rain again (actual temps, no feels-like).
+        let d3 = day(3, Some(2.0), Some(8.0), Some(40.0));
+        // A stray top-level variant and a day without temps count nothing.
+        let stray = Day { variant_of: Some(3), ..day(4, Some(-5.0), Some(0.0), Some(90.0)) };
+        let no_temps = Day { weather_label: "Cloudy".into(), ..day(5, None, None, Some(80.0)) };
+        vec![d1, d2, d3, stray, no_temps]
+    }
+
+    #[test]
+    fn packing_summary_counts_days_per_item_in_first_appearance_order_zh() {
+        let html = weather_overview(&packing_days(), &packing_tips(), "zh");
+        assert!(
+            html.ends_with(
+                "</tbody></table><div class=\"wx-pack\"><span class=\"wx-pack-label\">要帶的衣物</span> \
+                 圍巾（2 天） · 手套（2 天） · 雨傘（2 天） · 薄外套（1 天） · 外套（1 天） · 帽子（1 天）</div></details>"
+            ),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn packing_summary_dedupes_by_displayed_text_en() {
+        // In EN 薄外套 and 外套 are both "Light jacket": one entry, one day.
+        let html = weather_overview(&packing_days(), &packing_tips(), "en");
+        assert!(
+            html.contains(
+                "<div class=\"wx-pack\"><span class=\"wx-pack-label\">What to pack</span> \
+                 Scarf (2 days) · Gloves (2 days) · Umbrella (2 days) · Light jacket (1 day) · Hat (1 day)</div>"
+            ),
+            "got: {html}"
+        );
+        assert!(!html.contains("要帶的衣物"), "got: {html}");
+    }
+
+    #[test]
+    fn packing_summary_excludes_variants_and_escapes_items() {
+        // Only the variants would match the freezing band: no main day does → no div.
+        let mut tips = packing_tips();
+        tips[0].threshold = Some(-1.0);
+        tips[0].items = vec![crate::model::ClothingItem { zh: "<羽絨>".into(), en: "<Down>".into() }];
+        tips.truncate(1);
+        let days = packing_days();
+        assert!(!weather_overview(&days, &tips, "zh").contains("wx-pack"));
+        // Lower the threshold onto day 3 (actual low 2): the item renders escaped.
+        tips[0].threshold = Some(2.0);
+        let html = weather_overview(&days, &tips, "zh");
+        assert!(html.contains("> &lt;羽絨&gt;（1 天）</div>"), "got: {html}");
+        assert!(!html.contains("<羽絨>"), "got: {html}");
+    }
+
+    #[test]
+    fn packing_summary_omitted_without_items() {
+        // Bands match but carry no items (the sample fixture) → no div at all.
+        for lang in ["zh", "en"] {
+            let html = weather_overview(&packing_days(), &sample_tips(), lang);
+            assert!(!html.contains("wx-pack"), "{lang}: {html}");
+            assert!(html.ends_with("</tbody></table></details>"), "{lang}: {html}");
+            // Blank item names are skipped, not rendered as an empty entry.
+            let mut tips = packing_tips();
+            for t in &mut tips {
+                t.items = vec![crate::model::ClothingItem { zh: "  ".into(), en: "".into() }];
+            }
+            assert!(!weather_overview(&packing_days(), &tips, lang).contains("wx-pack"), "{lang}");
+        }
+    }
+
+    #[test]
+    fn clothing_tip_text_is_unchanged_by_band_items() {
+        // The per-day strings stay the band texts; items only feed the summary.
+        let day1 = &packing_days()[0];
+        assert_eq!(day_clothing(day1, &packing_tips(), "zh"), vec!["zh temp_low_max", "zh rain_min"]);
     }
 }

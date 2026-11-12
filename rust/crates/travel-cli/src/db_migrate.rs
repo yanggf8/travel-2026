@@ -1752,6 +1752,22 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
+    // Each band's clothing ITEMS to pack (child of clothing_tips, same GLOBAL
+    // family — no plan_id, no audit triad), written ONLY by `travel
+    // set-clothing-tip --item "<zh>|<en>"`, which replaces a band's whole list.
+    // The dashboard's weather overview counts, per item, the main days its band
+    // matched (「要帶的衣物」). Schema only — the items are content, never seeded.
+    exec_create(
+        &conn,
+        r#"CREATE TABLE IF NOT EXISTS clothing_tip_items (
+  tip_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  item_zh TEXT NOT NULL,
+  item_en TEXT NOT NULL,
+  PRIMARY KEY (tip_id, sort_order)
+);"#,
+    )
+    .await;
     // `jiufen` must exist in destination_config so resolve_active_destination (and
     // the slug-keyed accommodation commands) can validate against it — a destination
     // REGISTRATION, not trip content.

@@ -1575,7 +1575,33 @@ async fn validate_clothing_tips(issues: &mut Vec<Issue>) {
              add bands via travel set-clothing-tip"
                 .to_string(),
         ),
-        Ok(_) => {}
+        // Bands exist: the weather overview's packing summary (要帶的衣物) counts
+        // the bands' items — none anywhere means that summary never shows.
+        Ok(_) => match travel_db::repo::clothing_tips::item_count(&conn).await {
+            Ok(0) => issues.push(Issue {
+                category: "clothing-tips".to_string(),
+                severity: Severity::Info,
+                message: "no clothing band has items — the weather overview shows no packing \
+                          summary; add them via travel set-clothing-tip --item \"<zh>|<en>\""
+                    .to_string(),
+                file: Some("turso:clothing_tip_items".to_string()),
+                line: None,
+            }),
+            Ok(_) => {}
+            Err(e) if e.contains("no such table") => warn(
+                issues,
+                "clothing_tip_items table missing — run ./bin/travel db migrate (the dashboard \
+                 fails to load plans until it exists)"
+                    .to_string(),
+            ),
+            Err(e) => issues.push(Issue {
+                category: "clothing-tips".to_string(),
+                severity: Severity::Error,
+                message: format!("failed to query clothing_tip_items: {e}"),
+                file: Some("turso:clothing_tip_items".to_string()),
+                line: None,
+            }),
+        },
         Err(e) if e.contains("no such table") => warn(
             issues,
             "clothing_tips table missing — run ./bin/travel db migrate, then add bands via travel set-clothing-tip"

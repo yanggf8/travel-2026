@@ -1,7 +1,9 @@
 //! `travel set-clothing-tip` against real Turso: the CLI inserts a band, a second
 //! call with the same tip_id REPLACES it (one row, new values), and a rejected call
-//! writes nothing. `clothing_tips` is GLOBAL (not plan-keyed), so the rows this test
-//! seeds are torn down locally by tip_id — no plan is created.
+//! writes nothing. `--item` rows land in `clothing_tip_items` and are REPLACED with the
+//! band. Both tables are GLOBAL (not plan-keyed), so the rows this test seeds are torn
+//! down locally by tip_id (items first) — no plan is created. Needs `db migrate` to
+//! have created `clothing_tip_items`.
 //!
 //! The fixture bands use kinds whose thresholds can never match (rain >= 1000 %,
 //! swing >= 1000 °C) and a huge sort_order, so the live dashboard — which reads this
@@ -44,6 +46,16 @@ fn row(tip_id: &str) -> Vec<String> {
     .column()
 }
 
+fn items(tip_id: &str) -> Vec<String> {
+    db_exec(&format!(
+        "SELECT sort_order || '|' || item_zh || '|' || item_en AS r FROM clothing_tip_items \
+         WHERE tip_id = {} ORDER BY sort_order",
+        sql_lit(tip_id)
+    ))
+    .expect("creds present (checked by the first CLI call)")
+    .column()
+}
+
 #[test]
 fn set_clothing_tip_inserts_replaces_and_rejects_without_writing() {
     let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -56,6 +68,7 @@ fn set_clothing_tip_inserts_replaces_and_rejects_without_writing() {
         let ids = [rain.clone(), swing.clone(), bad.clone()];
         move || {
             let list = ids.iter().map(|i| sql_lit(i)).collect::<Vec<_>>().join(", ");
+            let _ = db_exec_teardown(&format!("DELETE FROM clothing_tip_items WHERE tip_id IN ({list})"));
             let _ = db_exec_teardown(&format!("DELETE FROM clothing_tips WHERE tip_id IN ({list})"));
         }
     });
@@ -64,6 +77,7 @@ fn set_clothing_tip_inserts_replaces_and_rejects_without_writing() {
     let Some((ok, stdout, stderr)) = run(&[
         "set-clothing-tip", &rain, "--kind", "rain_min", "--threshold", "1000", "--sort",
         "2000000001", "--zh", "zz 帶傘 {hi}°C", "--en", "zz umbrella {lo}°C",
+        "--item", "zz 雨傘|zz umbrella", "--item", "zz 雨衣 | zz raincoat",
     ]) else {
         eprintln!("skipping (credless)");
         return;
@@ -73,6 +87,8 @@ fn set_clothing_tip_inserts_replaces_and_rejects_without_writing() {
     // The listing after the write shows the new band in read order.
     assert!(stdout.contains(&format!("2000000001\t{rain}\train_min\t1000\tzz 帶傘 {{hi}}°C")), "{stdout}");
     assert_eq!(row(&rain), vec!["rain_min|1000.0|2000000001|zz 帶傘 {hi}°C|zz umbrella {lo}°C"]);
+    assert_eq!(items(&rain), vec!["1|zz 雨傘|zz umbrella", "2|zz 雨衣|zz raincoat"]);
+    assert!(stdout.contains("items: zz 雨傘|zz umbrella; zz 雨衣|zz raincoat"), "{stdout}");
 
     // Same tip_id again → full replace, still one row.
     let (ok, stdout, stderr) = run(&[
@@ -82,6 +98,8 @@ fn set_clothing_tip_inserts_replaces_and_rejects_without_writing() {
     .expect("creds");
     assert!(ok, "replace failed; stdout={stdout} stderr={stderr}");
     assert_eq!(row(&rain), vec!["swing_min|999.5|2000000002|zz 改|zz changed"]);
+    // No --item on the replace → the band's items are gone too.
+    assert!(items(&rain).is_empty(), "replace without --item must clear the band's items");
 
     // A second band is its own row.
     let (ok, stdout, stderr) = run(&[
@@ -97,6 +115,7 @@ fn set_clothing_tip_inserts_replaces_and_rejects_without_writing() {
         (vec!["--kind", "rain_min", "--sort", "1", "--zh", "z", "--en", "e"], "--threshold N is required"),
         (vec!["--kind", "rain_min", "--threshold", "5", "--sort", "1", "--zh", "{low}", "--en", "e"], "unknown placeholder"),
         (vec!["--kind", "rain_min", "--threshold", "5", "--sort", "1", "--zh", "z", "--en", "e", "--bogus", "x"], "unknown argument: --bogus"),
+        (vec!["--kind", "rain_min", "--threshold", "5", "--sort", "1", "--zh", "z", "--en", "e", "--item", "zz 傘"], "no '|'"),
     ] {
         let mut full = vec!["set-clothing-tip", bad.as_str()];
         full.extend(args);
@@ -105,4 +124,5 @@ fn set_clothing_tip_inserts_replaces_and_rejects_without_writing() {
         assert!(stderr.contains(needle) || stdout.contains(needle), "{full:?}: stderr={stderr}");
     }
     assert!(row(&bad).is_empty(), "a rejected call wrote a row");
+    assert!(items(&bad).is_empty(), "a rejected call wrote an item");
 }

@@ -1031,6 +1031,17 @@ details[data-block] > summary > h2 { min-width: 0; overflow-wrap: anywhere; }
   .wx-temp, .wx-feels, .wx-rain { white-space: nowrap; }
   .wx-temp::before, .wx-feels::before, .wx-rain::before { content: none; }
 }
+/* Packing summary (要帶的衣物) under the weather table: one wrapping line of
+   「item（N 天）」 entries; long item names break instead of widening the page. */
+.wx-pack {
+  margin-top: 8px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.wx-pack-label { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-right: 4px; }
 
 /* ---- Meal overview table (the card/summary/heading rules are shared with the
    weather overview above) ---- */
@@ -1580,6 +1591,7 @@ details[data-block] > summary > h2 { min-width: 0; overflow-wrap: anywhere; }
   .page-toc, .toc-fab { display: none; }
   .day { break-inside: avoid; }
   .daymap, .planmap { break-inside: avoid; }
+  .wx-pack { break-inside: avoid; }
 }
 
 /* ---- companion options map (同行方案 · unconfirmed alternatives) ---- */

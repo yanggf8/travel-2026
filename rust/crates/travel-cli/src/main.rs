@@ -1133,7 +1133,7 @@ VALIDATE / CHECKS\n\
   set-place-geocode \"<place>\" --lat N --lon N (--dest slug|--context ctx)  (manually pin a label Nominatim can't resolve)\n\
   road-leg {{list|refetch --from <p|lat,lon> --to <p|lat,lon> [--via a;b] [--dest slug]}}  (OSRM road cache; --via forces a specific road)\n\
   add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
-  set-clothing-tip <tip_id> --kind <k> [--threshold N] --sort N --zh <t> --en <t>  (dashboard clothing-advice band; global, no --plan-id)\n\
+  set-clothing-tip <tip_id> --kind <k> [--threshold N] --sort N --zh <t> --en <t> [--item \"<zh>|<en>\"]...  (dashboard clothing-advice band + its packing items; global, no --plan-id)\n\
   add-accommodation | update-accommodation --id <id> [--image-url u] [--booking-url u] | delete-accommodation --id <id>  (domestic stay reference data; no --plan-id)\n\
   add-accommodation-image --id <id> --url <u> [--label t] | delete-accommodation-image --id <id> (--url u | --all)  (candidate gallery; no --plan-id)\n\
   set-accommodation-rating --id <id> --source <s> --score <n> [--reviews N] [--clear]  (per-source guest rating; no --plan-id)\n\
