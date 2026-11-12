@@ -57,6 +57,8 @@ pub(crate) struct MapFigure {
     pub(crate) legend: Vec<LegendItem>,
     /// `div.map-legend-day` blocks (a legend grouped by day).
     pub(crate) legend_day_blocks: usize,
+    /// Inside a `section.day` card (never the overview).
+    pub(crate) in_day_card: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -86,6 +88,8 @@ pub(crate) struct DocumentLink {
     pub(crate) summary: bool,
     pub(crate) day: Option<i64>,
     pub(crate) variant: bool,
+    /// Inside the 現在・接下來 card (a copy of today's day-card links).
+    pub(crate) now: bool,
 }
 
 /// The page's 目錄 (`nav.page-toc#toc`, worker render/mod.rs `page_toc`).
@@ -97,6 +101,10 @@ pub(crate) struct Toc {
     pub(crate) back_link: bool,
     /// How many `nav.page-toc` the page has (exactly one is right).
     pub(crate) navs: usize,
+    /// `input[type=search]` inside the nav, and whether its `.toc-search` box is
+    /// served `hidden` (the inline script un-hides it; no dead box without JS).
+    pub(crate) search_input: bool,
+    pub(crate) search_served_hidden: bool,
 }
 
 /// Everything layer 1 reads from one page.
@@ -133,6 +141,12 @@ pub(crate) struct PageDoc {
     pub(crate) day_card_ids: Vec<(String, Option<String>)>,
     /// Each collapsible block `details[data-block]`: (key, served open).
     pub(crate) blocks: Vec<(String, bool)>,
+    /// `data-block` keys served with `data-today` (today's day card during the trip).
+    pub(crate) today_blocks: Vec<String>,
+    /// `section.now-card#sec-now` exists (the page thinks the trip is in progress).
+    pub(crate) now_card: bool,
+    /// `section.quick-info#sec-quick` exists.
+    pub(crate) quick_info: bool,
 }
 
 pub(crate) fn parse_page(html: &str) -> PageDoc {
@@ -183,6 +197,8 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
     let img = sel("img");
     let day_block = sel("div.map-legend-day");
     let mut seen_summary = false;
+    // The overview is the first map figure outside the day cards (they precede
+    // the reference group since 2026-11-12) that is not an inset.
     for el in body.select(&sel("figure.map-frame, section.booking-summary")) {
         if el.value().name() == "section" {
             out.booking_summary |= has_class(el, "summary-box");
@@ -200,13 +216,24 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
                 }
             })
             .collect();
-        if !seen_summary && out.overview.is_none() && out.figures.is_empty() && !has_class(el, "map-frame--inset") {
+        let in_day_card = el
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .any(|a| a.value().name() == "section" && has_class(a, "day"));
+        let first_outside_days = !out.figures.iter().any(|f| !f.in_day_card);
+        if !seen_summary
+            && out.overview.is_none()
+            && !in_day_card
+            && first_outside_days
+            && !has_class(el, "map-frame--inset")
+        {
             out.overview = Some(out.figures.len());
         }
         out.figures.push(MapFigure {
             key: el.value().attr("data-map-key").map(str::to_string),
             img_src: el.select(&img).next().and_then(|i| i.value().attr("src")).map(str::to_string),
             missing_frame: has_class(el, "map-missing"),
+            in_day_card,
             legend,
             legend_day_blocks: el.select(&day_block).count(),
         });
@@ -241,6 +268,12 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
         .select(&sel("details[data-block]"))
         .map(|d| (d.value().attr("data-block").unwrap_or("").to_string(), d.value().attr("open").is_some()))
         .collect();
+    out.today_blocks = body
+        .select(&sel("details[data-block][data-today]"))
+        .map(|d| d.value().attr("data-block").unwrap_or("").to_string())
+        .collect();
+    out.now_card = body.select(&sel("section.now-card#sec-now")).next().is_some();
+    out.quick_info = body.select(&sel("section.quick-info#sec-quick")).next().is_some();
     if let Some(nav) = body.select(&sel("nav.page-toc#toc")).next() {
         out.toc = Some(Toc {
             hrefs: nav
@@ -249,6 +282,11 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
                 .collect(),
             back_link: body.select(&sel("a.toc-fab[href=\"#toc\"]")).next().is_some(),
             navs: body.select(&sel("nav.page-toc")).count(),
+            search_input: nav.select(&sel("input[type=search]")).next().is_some(),
+            search_served_hidden: nav
+                .select(&sel(".toc-search"))
+                .next()
+                .is_some_and(|b| b.value().attr("hidden").is_some()),
         });
     }
     let summary = sel("summary.day-variant-summary");
@@ -299,6 +337,7 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
             variant: ancestors.iter().any(|el| {
                 el.value().name() == "details" && has_class(*el, "day-variant")
             }),
+            now: ancestors.iter().any(|el| el.value().name() == "section" && has_class(*el, "now-card")),
         });
     }
     out
@@ -437,9 +476,12 @@ pub(crate) fn page_checks(http: u16, doc: &PageDoc, lang: Lang, plan_id: &str) -
 /// The 目錄 / collapsible-block checks (worker render/mod.rs `page_toc`): the page
 /// has `nav.page-toc#toc` and the floating `a.toc-fab` back link; every TOC link
 /// is a fragment that resolves to an element id on the page; every main day card
-/// has an id the TOC links to; every `details[data-block]` is served open (the
+/// has an id the TOC links to; the search box (`input[type=search]`) is in the
+/// nav, served hidden; every `details[data-block]` is served open (the
 /// collapsed state is a reader's choice, restored client-side, never the served
-/// default).
+/// default) — except, while the trip is in progress (`section.now-card` on the
+/// page), the day cards other than today's, which the worker serves collapsed;
+/// today's (`data-today`) must be open.
 pub(crate) fn toc_checks(doc: &PageDoc) -> Vec<(&'static str, Check)> {
     let Some(toc) = &doc.toc else {
         return vec![(
@@ -480,9 +522,28 @@ pub(crate) fn toc_checks(doc: &PageDoc) -> Vec<(&'static str, Check)> {
     if !toc.back_link {
         problems.push("no floating a.toc-fab[href=#toc] back link".to_string());
     }
-    let closed: Vec<&str> = doc.blocks.iter().filter(|(_, open)| !open).map(|(k, _)| k.as_str()).collect();
+    // A TOC without the search box is a live worker older than the search
+    // (2026-11-12) — the failure then points at a deploy.
+    let stale_worker = !toc.search_input;
+    if !toc.search_input {
+        problems.push("no input[type=search] in the TOC (live worker predates the search)".to_string());
+    } else if !toc.search_served_hidden {
+        problems.push("the TOC search box is not served hidden (a dead box without JS)".to_string());
+    }
+    let day_keys: HashSet<&str> = doc.day_card_ids.iter().filter_map(|(_, id)| id.as_deref()).collect();
+    let closed: Vec<&str> = doc
+        .blocks
+        .iter()
+        .filter(|(k, open)| {
+            !open && !(doc.now_card && day_keys.contains(k.as_str()) && !doc.today_blocks.contains(k))
+        })
+        .map(|(k, _)| k.as_str())
+        .collect();
     if !closed.is_empty() {
         problems.push(format!("block(s) served collapsed (must be open): {}", closed.join(", ")));
+    }
+    if doc.now_card && doc.today_blocks.len() != 1 {
+        problems.push(format!("trip in progress but {} day card(s) marked data-today (exactly one)", doc.today_blocks.len()));
     }
     let check = if problems.is_empty() {
         Check::pass(format!(
@@ -492,9 +553,41 @@ pub(crate) fn toc_checks(doc: &PageDoc) -> Vec<(&'static str, Check)> {
             doc.blocks.len()
         ))
     } else {
-        Check::fail(problems.join("; "), None)
+        Check::fail(problems.join("; "), stale_worker.then_some(Next::Deploy))
     };
     vec![("toc", check)]
+}
+
+/// The `?at=` clock pin for the page checks: noon JST on the day before the
+/// plan's first main day — outside the trip window, so the page is served in its
+/// deterministic all-open shape. None when the date does not parse.
+pub(crate) fn outside_trip_pin(first_main_day: &str) -> Option<String> {
+    let day = chrono::NaiveDate::parse_from_str(first_main_day.trim(), "%Y-%m-%d").ok()?;
+    Some(format!("{}T12:00", day.pred_opt()?.format("%Y-%m-%d")))
+}
+
+/// The 現在・接下來 / 常用資訊 checks on a page fetched with the clock pinned
+/// outside the trip (`pinned_outside`): no now card — one here means the worker
+/// ignored `?at=` (or the pin is wrong) — and, when the plan has flights, the
+/// 常用資訊 card (`section.quick-info#sec-quick`) is on the page.
+pub(crate) fn quick_checks(doc: &PageDoc, pinned_outside: bool, has_flights: bool) -> Vec<(&'static str, Check)> {
+    let mut problems = Vec::new();
+    if pinned_outside && doc.now_card {
+        problems.push("section.now-card rendered with ?at= pinned outside the trip window".to_string());
+    }
+    if has_flights && !doc.quick_info {
+        problems.push("the plan has flights but no section.quick-info#sec-quick (常用資訊)".to_string());
+    }
+    let check = if problems.is_empty() {
+        Check::pass(format!(
+            "{}; 常用資訊 {}",
+            if pinned_outside { "no now card outside the trip" } else { "no trip dates (now card not checked)" },
+            if doc.quick_info { "present" } else { "absent (no flights)" }
+        ))
+    } else {
+        Check::fail(problems.join("; "), Some(Next::Deploy))
+    };
+    vec![("quick", check)]
 }
 
 /// True when `text` holds `prefix{n}suffix` where a digit does not continue `n`.
@@ -994,7 +1087,7 @@ pub(crate) fn document_placement_checks(
                     ));
                 }
             }
-            None if !link.summary => out.push((
+            None if !link.summary && !link.now => out.push((
                 format!("placement-{}", index + 1),
                 Check::fail(
                     format!("{} is outside the summary and main day cards", link.key),
@@ -1105,7 +1198,9 @@ mod tests {
     /// The worker's 目錄 for the fixture page (summary + day 1) with its back link.
     const TOC: &str = "<nav class=\"page-toc\" id=\"toc\" aria-label=\"目錄\"><div class=\"toc-head\"><h2>目錄</h2>\
         <div class=\"toc-actions\"><button type=\"button\" class=\"toc-btn\" data-blocks=\"close\" hidden>全部收合</button>\
-        <button type=\"button\" class=\"toc-btn\" data-blocks=\"open\" hidden>全部展開</button></div></div><ol class=\"toc-list\">\
+        <button type=\"button\" class=\"toc-btn\" data-blocks=\"open\" hidden>全部展開</button></div></div>\
+        <div class=\"toc-search\" role=\"search\" hidden><div class=\"toc-search-row\"><input type=\"search\" class=\"toc-search-input\">\
+        <button type=\"button\" class=\"toc-btn toc-search-clear\" hidden>清除</button></div><ol class=\"search-results\" hidden></ol></div><ol class=\"toc-list\">\
         <li><a href=\"#sec-summary\">預訂總表</a></li><li><a class=\"toc-day\" href=\"#day-1\"><span class=\"toc-day-n\">第 1 天</span></a></li>\
         </ol></nav><a class=\"toc-fab\" href=\"#toc\">↑ 目錄</a>";
 
@@ -1188,6 +1283,93 @@ mod tests {
 
         let no_back = viewer_page("").replace("<a class=\"toc-fab\" href=\"#toc\">↑ 目錄</a>", "");
         assert!(toc_verdict(&no_back).detail.contains("no floating a.toc-fab"));
+    }
+
+    #[test]
+    fn the_toc_search_box_must_be_there_and_served_hidden() {
+        let shown = viewer_page("").replace("<div class=\"toc-search\" role=\"search\" hidden>", "<div class=\"toc-search\" role=\"search\">");
+        let c = toc_verdict(&shown);
+        assert_eq!(c.level, Level::Fail);
+        assert!(c.detail.contains("search box is not served hidden"), "{c:?}");
+        let gone = viewer_page("").replace("<input type=\"search\" class=\"toc-search-input\">", "");
+        assert!(toc_verdict(&gone).detail.contains("no input[type=search] in the TOC"));
+    }
+
+    /// The fixture page during the trip: a now card, day 1 (today) open +
+    /// data-today, day 2 served collapsed.
+    fn trip_page(day2_open: &str, today_attr: &str) -> String {
+        let now = "<section class=\"now-card\" id=\"sec-now\" data-now-date=\"2026-11-14\"><details data-block=\"sec-now\" open><summary><h2>現在・接下來</h2></summary>\
+                   <div class=\"day-documents\"><a class=\"doc-link\" data-doc=\"flight\" href=\"/voucher/p-1/doc-flight.pdf?token=abc\">機票</a></div></details></section>";
+        let html = viewer_page(&format!(
+            "<section class=\"day day-full\" data-day=\"2\" id=\"day-2\"><details data-block=\"day-2\"{day2_open}><summary><h2>第 2 天</h2></summary></details></section>"
+        ))
+        .replace("<details data-block=\"day-1\" open>", &format!("<details data-block=\"day-1\"{today_attr}>"))
+        .replace("<li><a href=\"#sec-summary\">", "<li><a href=\"#sec-now\">現在</a></li><li><a href=\"#day-2\">第 2 天</a></li><li><a href=\"#sec-summary\">");
+        html.replace("<figure class=\"map-frame\" data-map-key=\"plan.png\">", &format!("{now}<figure class=\"map-frame\" data-map-key=\"plan.png\">"))
+    }
+
+    #[test]
+    fn during_the_trip_only_other_day_cards_may_be_served_collapsed() {
+        let c = toc_verdict(&trip_page("", " data-today open"));
+        assert_eq!(c.level, Level::Pass, "{c:?}");
+        // Today's card served collapsed is still a fail.
+        let c = toc_verdict(&trip_page("", " data-today"));
+        assert!(c.detail.contains("served collapsed (must be open): day-1"), "{c:?}");
+        // No today marker at all.
+        let c = toc_verdict(&trip_page("", " open"));
+        assert!(c.detail.contains("0 day card(s) marked data-today"), "{c:?}");
+        // A collapsed non-day block is never exempt.
+        let c = toc_verdict(&trip_page("", " data-today open").replace("<details data-block=\"sec-summary\" open>", "<details data-block=\"sec-summary\">"));
+        assert!(c.detail.contains("served collapsed (must be open): sec-summary"), "{c:?}");
+        // Without a now card the exemption is off.
+        let c = toc_verdict(&viewer_page("<section class=\"day day-full\" data-day=\"2\" id=\"day-2\"><details data-block=\"day-2\"><summary><h2>第 2 天</h2></summary></details></section>")
+            .replace("<li><a href=\"#sec-summary\">", "<li><a href=\"#day-2\">第 2 天</a></li><li><a href=\"#sec-summary\">"));
+        assert!(c.detail.contains("served collapsed (must be open): day-2"), "{c:?}");
+        // The now card's copy of a day's document link is not a misplaced link.
+        let doc = parse_page(&trip_page("", " data-today open"));
+        assert!(doc.document_links.iter().any(|l| l.now && l.day.is_none() && !l.summary), "{:?}", doc.document_links);
+        assert!(doc.now_card);
+        assert_eq!(doc.today_blocks, ["day-1"]);
+    }
+
+    #[test]
+    fn quick_checks_want_no_now_card_when_pinned_outside_and_quick_info_with_flights() {
+        let plain = parse_page(&viewer_page(""));
+        assert_eq!(quick_checks(&plain, true, false)[0].1.level, Level::Pass);
+        let c = &quick_checks(&plain, true, true)[0].1;
+        assert_eq!((c.level, c.next), (Level::Fail, Some(Next::Deploy)), "{c:?}");
+        assert!(c.detail.contains("no section.quick-info#sec-quick"), "{c:?}");
+        let quick = parse_page(&viewer_page("<section class=\"quick-info\" id=\"sec-quick\"></section>"));
+        assert_eq!(quick_checks(&quick, true, true)[0].1.level, Level::Pass);
+        let trip = parse_page(&trip_page("", " data-today open"));
+        assert!(quick_checks(&trip, true, false)[0].1.detail.contains("now-card rendered with ?at= pinned outside"));
+        // No trip dates → no pin → the now card is not judged.
+        assert_eq!(quick_checks(&trip, false, false)[0].1.level, Level::Pass);
+        assert_eq!(outside_trip_pin("2026-11-12").as_deref(), Some("2026-11-11T12:00"));
+        assert_eq!(outside_trip_pin("2026-03-01").as_deref(), Some("2026-02-28T12:00"));
+        assert_eq!(outside_trip_pin("2026-11-xx"), None);
+    }
+
+    #[test]
+    fn the_overview_is_the_first_map_outside_the_day_cards() {
+        // Since the reorder the day cards (with their maps) come first.
+        let html = page(
+            "zh-TW",
+            " data-plan-id=\"p-1\" data-view=\"viewer\"",
+            "<section class=\"day day-full\" data-day=\"1\" id=\"day-1\"><details data-block=\"day-1\" open><summary><h2>第 1 天</h2></summary>\
+             <figure class=\"map-frame\" data-map-key=\"day-1.png\"><img src=\"/map/p-1/day-1.png?v=1\"></figure></details></section>\
+             <figure class=\"map-frame\" data-map-key=\"plan.png\"><img src=\"/map/p-1/plan.png?v=1\"></figure>\
+             <section class=\"booking-summary summary-box\" id=\"sec-summary\"></section>",
+        );
+        let doc = parse_page(&html);
+        assert_eq!(doc.overview, Some(1));
+        assert!(doc.figures[0].in_day_card && !doc.figures[1].in_day_card);
+        // An inset first outside the day cards is still not the overview.
+        let inset_first = html.replace(
+            "<figure class=\"map-frame\" data-map-key=\"plan.png\">",
+            "<figure class=\"map-frame map-frame--inset\" data-map-key=\"plan-airport.png\"></figure><figure class=\"map-frame\" data-map-key=\"plan.png\">",
+        );
+        assert_eq!(parse_page(&inset_first).overview, None);
     }
 
     #[test]

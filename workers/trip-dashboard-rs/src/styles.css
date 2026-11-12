@@ -975,7 +975,7 @@ details[data-block][open] > summary::after { transform: rotate(90deg); }
 details[data-block] > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 details[data-block] > summary > h2 { min-width: 0; overflow-wrap: anywhere; }
 /* TOC targets land a little below the viewport top. */
-.page-toc, section.booking-summary, section.plan-documents, .weather-overview, .meal-overview, section.day { scroll-margin-top: 8px; }
+.page-toc, section.now-card, section.quick-info, section.booking-summary, section.plan-documents, .weather-overview, .meal-overview, section.day, details.day-variant { scroll-margin-top: 8px; }
 
 /* ---- Weather overview (天氣總覽) and meal overview (用餐總覽): one shared
    card/heading style ---- */
@@ -1098,6 +1098,7 @@ details[data-block] > summary > h2 { min-width: 0; overflow-wrap: anywhere; }
   padding: 2px 8px;
   border-radius: 4px;
 }
+.session-label .session-time { font-weight: 600; letter-spacing: 0; text-transform: none; opacity: 0.85; }
 .session-morning .session-label { background: var(--morning); color: #92400e; }
 .session-noon .session-label { background: var(--noon); color: #166534; }
 .session-afternoon .session-label { background: var(--afternoon); color: #9d174d; }
@@ -1585,10 +1586,132 @@ details[data-block] > summary > h2 { min-width: 0; overflow-wrap: anywhere; }
   text-decoration: underline;
 }
 
+/* ---- 目錄 search (served hidden; the inline script un-hides it) ---- */
+.toc-search { margin: 0 0 10px; }
+.toc-search[hidden], .search-results[hidden], .toc-search-clear[hidden] { display: none; }
+.toc-search-row { display: flex; gap: 6px; align-items: center; }
+.toc-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px; /* ≥16px: iOS does not zoom the page on focus */
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+}
+.toc-search-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search-results {
+  list-style: none;
+  margin-top: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+}
+.search-results li + li { border-top: 1px solid var(--border); }
+.search-hit {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: none;
+  border: 0;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.search-hit:hover, .search-hit:focus-visible { background: var(--accent-light); outline: none; }
+.search-label { display: block; font-size: 12px; font-weight: 600; color: var(--accent); }
+.search-snip { display: block; font-size: 13px; color: var(--text-dim); overflow-wrap: anywhere; }
+.search-snip mark { background: var(--amber-bg); color: var(--text); border-radius: 3px; padding: 0 1px; }
+.search-none { padding: 8px 10px; font-size: 13px; color: var(--text-dim); }
+.search-flash { animation: search-flash 2s ease-out; }
+@keyframes search-flash {
+  0%, 40% { box-shadow: 0 0 0 3px var(--amber); background-color: var(--amber-bg); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.toc-list a.is-today { border-color: var(--accent); background: var(--accent-light); }
+.toc-today {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 999px;
+  vertical-align: 1px;
+}
+
+/* ---- 現在・接下來 (now & next) and 常用資訊 (quick info) cards ---- */
+.now-card, .quick-info {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.now-card { border-top: 3px solid var(--accent); }
+.now-card h2, .quick-info h2 { margin: 0; font-size: 16px; font-weight: 700; color: var(--text); }
+.now-body { margin-top: 8px; }
+.now-theme { font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
+.now-variants { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.now-variant, .now-more { font-size: 13px; font-weight: 600; color: var(--accent); text-decoration: none; }
+.now-more { display: inline-block; margin-top: 8px; }
+.now-card .day-documents { margin: 4px 0 8px; }
+.now-timeline { list-style: none; display: grid; gap: 8px; }
+.now-item {
+  border-left: 4px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px 10px;
+}
+.now-item[hidden] { display: none; }
+.now-s-morning { border-left-color: var(--morning); }
+.now-s-noon { border-left-color: var(--noon); }
+.now-s-afternoon { border-left-color: var(--afternoon); }
+.now-s-evening { border-left-color: var(--evening); }
+.now-item.is-past { opacity: 0.55; }
+.now-item.is-now { border-left-color: var(--accent); background: var(--accent-light); opacity: 1; }
+.now-item.is-next { border-left-color: var(--green); }
+.now-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.now-name { font-size: 14px; font-weight: 700; }
+.now-time { font-size: 13px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.now-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--accent);
+}
+.now-badge--next { background: var(--green); }
+.now-badge--tomorrow { background: var(--amber); }
+.now-leg .now-badge { margin-right: 4px; }
+.now-focus { font-size: 14px; line-height: 1.55; margin-top: 4px; overflow-wrap: anywhere; }
+.now-legs { list-style: none; margin-top: 4px; }
+.now-leg { font-size: 12px; color: #334155; padding: 2px 0; line-height: 1.4; overflow-wrap: anywhere; }
+.now-meal { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.now-meal a { color: var(--accent); text-decoration: none; }
+.now-meal-k { font-size: 11px; color: var(--text-dim); }
+.now-route { margin-top: 8px; }
+.now-route > summary { cursor: pointer; font-size: 13px; color: var(--text-dim); }
+.now-route .route-block { margin: 6px 0 0; }
+.qi-list { display: grid; gap: 6px; margin-top: 8px; }
+.qi-row { display: grid; grid-template-columns: 4.5em minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.qi-row dt { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.qi-row dd { font-size: 14px; overflow-wrap: anywhere; }
+span.qi-copy { user-select: all; -webkit-user-select: all; }
+a.qi-copy { color: var(--accent); font-weight: 600; text-decoration: none; }
+.qi-hint { display: block; font-size: 11px; color: var(--text-dim); }
+
 /* Print */
 @media print {
   body { max-width: none; padding: 0; }
-  .page-toc, .toc-fab { display: none; }
+  .page-toc, .toc-fab, .toc-search, .search-results { display: none; }
   .day { break-inside: avoid; }
   .daymap, .planmap { break-inside: avoid; }
   .wx-pack { break-inside: avoid; }

@@ -232,6 +232,12 @@ pub fn day_block_id(day_number: i64) -> String {
     format!("day-{day_number}")
 }
 
+/// The element id of a day variant's `details.day-variant` (the 現在・接下來
+/// card links to it; following the link opens it and its day card).
+pub fn variant_block_id(day_number: i64) -> String {
+    format!("variant-{day_number}")
+}
+
 /// The day's theme in the page language (ZH falls back to the EN theme).
 pub fn day_theme<'a>(day: &'a Day, lang: &str) -> &'a str {
     if lang == "zh" && !day.theme_zh.is_empty() {
@@ -261,11 +267,13 @@ pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str)
         esc(t("wxWear", lang)),
     );
     for day in main_days.iter().copied() {
-        let date = match super::summary::date_with_weekday(&day.date, lang) {
-            Some(d) => esc(&d),
+        let raw_date = match super::summary::date_with_weekday(&day.date, lang) {
+            Some(d) => d,
             None if day.date.is_empty() => DASH.to_string(),
-            None => esc(&day.date),
+            None => day.date.clone(),
         };
+        let unit = search_unit_attrs(Some(&format!("{} · {raw_date}", t("weatherOverview", lang))));
+        let date = esc(&raw_date);
         let description = weather_description(day, lang);
         let description = if description.is_empty() {
             DASH.to_string()
@@ -286,7 +294,7 @@ pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str)
             tips.iter().map(|t| esc(t)).collect::<Vec<_>>().join(" · ")
         };
         h.push_str(&format!(
-            "<tr><th scope=\"row\" class=\"wx-date\">{date}</th>\
+            "<tr{unit}><th scope=\"row\" class=\"wx-date\">{date}</th>\
              <td class=\"wx-desc\">{} {description}</td>\
              <td class=\"wx-temp\" data-label=\"{temp_label}\">{temp}</td>\
              <td class=\"wx-feels\" data-label=\"{feels_label}\">{feels}</td>\
@@ -318,6 +326,7 @@ pub fn weather_overview(days: &[Day], clothing_tips: &[ClothingTip], lang: &str)
 /// (styles.css `.meal-table`), wider screens a table.
 pub fn meal_overview(days: &[Day], lang: &str) -> String {
     const DASH: &str = "\u{2014}";
+    // Unescaped; the row escapes it as cell text and as its search label.
     let date_cell = |day: &Day, fallback_date: &str, option: &str| -> String {
         let raw = if day.date.is_empty() { fallback_date } else { &day.date };
         let date = match super::summary::date_with_weekday(raw, lang) {
@@ -326,9 +335,9 @@ pub fn meal_overview(days: &[Day], lang: &str) -> String {
             None => raw.to_string(),
         };
         if option.is_empty() {
-            esc(&date)
+            date
         } else {
-            esc(&tf("dateOption", lang, &[("date", &date), ("label", option)]))
+            tf("dateOption", lang, &[("date", &date), ("label", option)])
         }
     };
     let meal_cell = |m: &crate::model::Meal| -> String {
@@ -354,13 +363,25 @@ pub fn meal_overview(days: &[Day], lang: &str) -> String {
                 } else {
                     backups.join("<br>")
                 };
+                let date = date_cell(day, &main.date, option);
+                let session_name = session::session_label(&sess.session_type, lang);
+                let part = if option.is_empty() {
+                    session_name.to_string()
+                } else {
+                    format!("{option} · {session_name}")
+                };
+                let unit = search_unit_attrs(Some(&format!(
+                    "{} · {}",
+                    t("mealOverview", lang),
+                    tf("dateOption", lang, &[("date", &date_cell(day, &main.date, "")), ("label", &part)])
+                )));
                 rows.push_str(&format!(
-                    "<tr><th scope=\"row\" class=\"ml-date\">{}</th>\
+                    "<tr{unit}><th scope=\"row\" class=\"ml-date\">{}</th>\
                      <td class=\"ml-session\">{}</td>\
                      <td class=\"ml-main\" data-label=\"{main_label}\">{}</td>\
                      <td class=\"ml-backup\" data-label=\"{backup_label}\">{backup}</td></tr>",
-                    date_cell(day, &main.date, option),
-                    esc(session::session_label(&sess.session_type, lang)),
+                    esc(&date),
+                    esc(session_name),
                     meal_cell(&sess.meals[0]),
                 ));
             }
@@ -390,41 +411,78 @@ fn mode_icon(mode: &str) -> &'static str {
 }
 
 /// Render the per-day "今日路線" (today's route) block from door-to-door segments.
-fn render_route_block(segments: &[RouteSegment], lang: &str) -> String {
+/// With `search_label`, each leg is a search unit (`data-search-unit`) under
+/// that label; the now card's copy passes None so search never lists a leg twice.
+pub(crate) fn render_route_block(segments: &[RouteSegment], lang: &str, search_label: Option<&str>) -> String {
     let heading = t("todaysRoute", lang);
     let mut h = String::new();
     h.push_str(&format!(
         "<div class=\"route-block\"><div class=\"route-heading\">{heading}</div>"
     ));
+    let unit = search_unit_attrs(search_label);
     for seg in segments {
-        h.push_str("<div class=\"route-seg\">");
-        h.push_str(&format!(
-            "<span class=\"route-mode\">{}</span> ",
-            mode_icon(&seg.mode)
-        ));
-        h.push_str(&format!(
-            "{} → {}",
-            esc(&seg.from_place),
-            esc(&seg.to_place)
-        ));
-        if !seg.start_time.is_empty() {
-            h.push_str(&format!(" · {}", esc(&seg.start_time)));
-        }
-        // NULL duration arrives as 0 — omit it rather than publish "~0 min".
-        if seg.duration_min > 0 {
-            h.push_str(&format!(
-                " · {}",
-                tf("aboutMinutes", lang, &[("n", &seg.duration_min.to_string())])
-            ));
-        }
-        if !seg.notes.is_empty() {
-            h.push_str(&format!(" · {}", render_activity_text(&seg.notes)));
-        }
-        h.push_str(&super::ai_rec_badge(&seg.source, lang));
+        h.push_str(&format!("<div class=\"route-seg\"{unit}>"));
+        h.push_str(&route_seg_inner(seg, lang));
         h.push_str("</div>");
     }
     h.push_str("</div>");
     h
+}
+
+/// ` data-search-unit data-search-label="…"` for a search unit (the 目錄 search
+/// in the inline script lists these), or "" without a label.
+pub(crate) fn search_unit_attrs(label: Option<&str>) -> String {
+    match label {
+        Some(l) => format!(" data-search-unit data-search-label=\"{}\"", esc(l)),
+        None => String::new(),
+    }
+}
+
+/// One route leg's content (mode icon, from → to, start time, duration, notes,
+/// AI badge) — shared by the day card's 今日路線 and the 現在・接下來 card.
+pub(crate) fn route_seg_inner(seg: &RouteSegment, lang: &str) -> String {
+    let mut h = String::new();
+    h.push_str(&format!(
+        "<span class=\"route-mode\">{}</span> ",
+        mode_icon(&seg.mode)
+    ));
+    h.push_str(&format!(
+        "{} → {}",
+        esc(&seg.from_place),
+        esc(&seg.to_place)
+    ));
+    if !seg.start_time.is_empty() {
+        h.push_str(&format!(" · {}", esc(&seg.start_time)));
+    }
+    // NULL duration arrives as 0 — omit it rather than publish "~0 min".
+    if seg.duration_min > 0 {
+        h.push_str(&format!(
+            " · {}",
+            tf("aboutMinutes", lang, &[("n", &seg.duration_min.to_string())])
+        ));
+    }
+    if !seg.notes.is_empty() {
+        h.push_str(&format!(" · {}", render_activity_text(&seg.notes)));
+    }
+    h.push_str(&super::ai_rec_badge(&seg.source, lang));
+    h
+}
+
+/// The search label for a block of one day: 「11/15（日）· 上午」, with the
+/// option name when the day has variants (「11/15（日）· 晴天行程 · 上午」).
+pub(crate) fn day_search_label(day: &Day, with_option: bool, part: &str, lang: &str) -> String {
+    let date = super::summary::date_with_weekday(&day.date, lang).unwrap_or_else(|| day.date.clone());
+    let option = if with_option { super::day_option_name(day, lang) } else { "" };
+    let label = if option.is_empty() {
+        part.to_string()
+    } else {
+        format!("{option} · {part}")
+    };
+    if date.is_empty() {
+        label
+    } else {
+        tf("dateOption", lang, &[("date", &date), ("label", &label)])
+    }
 }
 
 #[cfg(test)]
@@ -530,15 +588,18 @@ fn render_content(
     if !day.landmarks.is_empty() {
         h.push_str(&render_landmarks(&day.landmarks, lang));
     }
+    let with_option = option_label.is_some() || !day.variants.is_empty();
     if !day.route_segments.is_empty() {
-        h.push_str(&render_route_block(&day.route_segments, lang));
+        let label = day_search_label(day, with_option, t("todaysRoute", lang), lang);
+        h.push_str(&render_route_block(&day.route_segments, lang, Some(&label)));
     }
     for sess in &day.sessions {
         // skip wholly-empty sessions to avoid 4 empty boxes on a light day
-        if sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty() {
+        if !session::has_content(sess) {
             continue;
         }
-        h.push_str(&session::render(sess, lang));
+        let label = day_search_label(day, with_option, session::session_label(&sess.session_type, lang), lang);
+        h.push_str(&session::render_unit(sess, lang, Some(&label)));
         h.push_str(&super::map::stop_list(&sess.stops));
     }
     h
@@ -552,7 +613,19 @@ pub fn render_with_logistics(
     map_status: &super::map::MapStatus,
     clothing_tips: &[ClothingTip],
 ) -> String {
-    render_with_documents(day, plan_id, lang, map_status, clothing_tips, &[], None)
+    render_with_documents(day, plan_id, lang, map_status, clothing_tips, &[], None, CardOpen::Open)
+}
+
+/// How a main day card is served. Outside the trip every card is `Open` (the
+/// page as it always was). During the trip (render/now.rs) today's card is
+/// `Today` — open, marked `data-today` so the inline script opens it even over a
+/// remembered collapsed state — and every other day is `Collapsed` (no `open`;
+/// the script still restores a reader's remembered state for it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CardOpen {
+    Open,
+    Today,
+    Collapsed,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -564,14 +637,20 @@ pub fn render_with_documents(
     clothing_tips: &[ClothingTip],
     documents: &[crate::model::PlanDocument],
     token: Option<&str>,
+    open: CardOpen,
 ) -> String {
     let mut h = String::new();
     // The card is one collapsible block (native <details open>): the heading is
     // its <summary>, everything else sits in .day-body (the desktop two-column
     // grid lives there, since a <details> cannot be the grid container).
     let block = day_block_id(day.day_number);
+    let open_attr = match open {
+        CardOpen::Open => " open",
+        CardOpen::Today => " data-today open",
+        CardOpen::Collapsed => "",
+    };
     h.push_str(&format!(
-        "<section class=\"day day-{}\" data-day=\"{}\" id=\"{block}\"><details data-block=\"{block}\" open>",
+        "<section class=\"day day-{}\" data-day=\"{}\" id=\"{block}\"><details data-block=\"{block}\"{open_attr}>",
         esc(&day.day_type),
         day.day_number
     ));
@@ -610,7 +689,8 @@ pub fn render_with_documents(
     for variant in &day.variants {
         let option_label = super::day_option_label(variant, day.day_number, lang);
         h.push_str(&format!(
-            "<details class=\"day-variant\" data-variant-of=\"{}\" data-variant-day=\"{}\"><summary class=\"day-variant-summary\">{}</summary><div class=\"day-variant-body\">",
+            "<details class=\"day-variant\" id=\"{}\" data-variant-of=\"{}\" data-variant-day=\"{}\"><summary class=\"day-variant-summary\">{}</summary><div class=\"day-variant-body\">",
+            variant_block_id(variant.day_number),
             day.day_number,
             variant.day_number,
             esc(&tf(
@@ -703,7 +783,7 @@ mod tests {
         );
         assert_eq!(
             html,
-            "<section class=\"day day-full\" data-day=\"2\" id=\"day-2\"><details data-block=\"day-2\" open><summary><h2>第 2 天 · 2026-11-14</h2></summary><div class=\"day-body\"><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></div></details></section>"
+            "<section class=\"day day-full\" data-day=\"2\" id=\"day-2\"><details data-block=\"day-2\" open><summary><h2>第 2 天 · 2026-11-14</h2></summary><div class=\"day-body\"><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\" data-search-unit data-search-label=\"11/14（六）· 今日路線\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\" data-search-unit data-search-label=\"11/14（六）· 上午\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></div></details></section>"
         );
     }
 
@@ -750,6 +830,7 @@ mod tests {
             &[],
             &documents,
             Some("t0k"),
+            CardOpen::Open,
         );
         let main = html.split("<details class=\"day-variant\"").next().unwrap();
         let variant = html.split("<details class=\"day-variant\"").nth(1).unwrap();
@@ -771,6 +852,7 @@ mod tests {
             &[],
             &[],
             None,
+            CardOpen::Open,
         );
         assert!(!html.contains("day-documents"));
     }
@@ -1346,7 +1428,7 @@ mod tests {
         // lines the day strip prints.
         assert!(
             html.contains(
-                "<tr><th scope=\"row\" class=\"wx-date\">11/14（六）</th>\
+                "<tr data-search-unit data-search-label=\"天氣總覽 · 11/14（六）\"><th scope=\"row\" class=\"wx-date\">11/14（六）</th>\
                  <td class=\"wx-desc\">\u{1F327}\u{FE0F} 陣雨</td>\
                  <td class=\"wx-temp\" data-label=\"氣溫\">13\u{2013}18°C</td>\
                  <td class=\"wx-feels\" data-label=\"體感\">13\u{2013}19°C</td>\
@@ -1366,7 +1448,7 @@ mod tests {
         assert!(html.contains("<th scope=\"col\">What to wear</th>"), "got: {html}");
         assert!(
             html.contains(
-                "<tr><th scope=\"row\" class=\"wx-date\">Sat 11/14</th>\
+                "<tr data-search-unit data-search-label=\"Weather overview · Sat 11/14\"><th scope=\"row\" class=\"wx-date\">Sat 11/14</th>\
                  <td class=\"wx-desc\">\u{1F327}\u{FE0F} Moderate rain showers</td>\
                  <td class=\"wx-temp\" data-label=\"Temp\">13\u{2013}18°C</td>\
                  <td class=\"wx-feels\" data-label=\"Feels\">13\u{2013}19°C</td>\
@@ -1434,7 +1516,7 @@ mod tests {
         assert_eq!(html.matches("scope=\"row\"").count(), 4, "got: {html}");
         assert!(
             html.contains(
-                "<tr><th scope=\"row\" class=\"wx-date\">11/15（日）</th>\
+                "<tr data-search-unit data-search-label=\"天氣總覽 · 11/15（日）\"><th scope=\"row\" class=\"wx-date\">11/15（日）</th>\
                  <td class=\"wx-desc\">\u{1F321}\u{FE0F} Partly &lt;sunny&gt;</td>\
                  <td class=\"wx-temp\" data-label=\"氣溫\">\u{2014}</td>\
                  <td class=\"wx-feels\" data-label=\"體感\">\u{2014}</td>\
@@ -1445,13 +1527,13 @@ mod tests {
         );
         assert!(
             html.contains(
-                "<tr><th scope=\"row\" class=\"wx-date\">TBD&lt;</th>\
+                "<tr data-search-unit data-search-label=\"天氣總覽 · TBD&lt;\"><th scope=\"row\" class=\"wx-date\">TBD&lt;</th>\
                  <td class=\"wx-desc\">\u{1F321}\u{FE0F} \u{2014}</td>"
             ),
             "got: {html}"
         );
         assert!(
-            html.contains("<tr><th scope=\"row\" class=\"wx-date\">\u{2014}</th>"),
+            html.contains("<tr data-search-unit data-search-label=\"天氣總覽 · \u{2014}\"><th scope=\"row\" class=\"wx-date\">\u{2014}</th>"),
             "got: {html}"
         );
         assert!(!html.contains("Partly <sunny>"), "got: {html}");
@@ -1542,7 +1624,7 @@ mod tests {
         // Noon: a single meal → its short form, no backup (em dash).
         assert!(
             html.contains(
-                "<tr><th scope=\"row\" class=\"ml-date\">11/14（六）</th>\
+                "<tr data-search-unit data-search-label=\"用餐總覽 · 11/14（六）· 中午\"><th scope=\"row\" class=\"ml-date\">11/14（六）</th>\
                  <td class=\"ml-session\">中午</td>\
                  <td class=\"ml-main\" data-label=\"主選\">去程午餐｜樂桃不含機上餐</td>\
                  <td class=\"ml-backup\" data-label=\"備選\">\u{2014}</td></tr>"
@@ -1554,7 +1636,7 @@ mod tests {
         // one cut to 30 characters (escaped).
         assert!(
             html.contains(
-                "<tr><th scope=\"row\" class=\"ml-date\">11/14（六）</th>\
+                "<tr data-search-unit data-search-label=\"用餐總覽 · 11/14（六）· 晚上\"><th scope=\"row\" class=\"ml-date\">11/14（六）</th>\
                  <td class=\"ml-session\">晚上</td>\
                  <td class=\"ml-main\" data-label=\"主選\">鰻魚飯｜京極かねよ</td>\
                  <td class=\"ml-backup\" data-label=\"備選\">親子丼｜鳥岩樓\
@@ -1583,7 +1665,7 @@ mod tests {
         );
         assert!(
             html.contains(
-                "<tr><th scope=\"row\" class=\"ml-date\">Sat 11/14</th>\
+                "<tr data-search-unit data-search-label=\"Meal overview · Sat 11/14 · Evening\"><th scope=\"row\" class=\"ml-date\">Sat 11/14</th>\
                  <td class=\"ml-session\">Evening</td>\
                  <td class=\"ml-main\" data-label=\"Main pick\">鰻魚飯｜京極かねよ</td>\
                  <td class=\"ml-backup\" data-label=\"Backup\">親子丼｜鳥岩樓\

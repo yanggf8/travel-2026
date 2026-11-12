@@ -689,6 +689,10 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 
     // 14c. voucher_url on hotels (dashboard hotel-section PDF link → /voucher/* R2 route).
     add_column(&conn, "ALTER TABLE hotels ADD COLUMN voucher_url TEXT;").await;
+    // 14c'. address + phone on hotels (`set-hotel --address/--phone`): the dashboard
+    //       常用資訊 card shows them for the arrival card / customs form.
+    add_column(&conn, "ALTER TABLE hotels ADD COLUMN address TEXT;").await;
+    add_column(&conn, "ALTER TABLE hotels ADD COLUMN phone TEXT;").await;
 
     // 14d. poi_id FK on activities — a durable activity→POI link so the dashboard
     //      attaches ticket price + map pin by id, not fragile title equality

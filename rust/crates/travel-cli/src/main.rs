@@ -427,7 +427,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "set-hotel" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
-                println!("Usage:\n  travel set-hotel [--dest slug] [--name \"Hotel Name\"] [--check-in YYYY-MM-DD] [--access \"route1 | route2\"] [--note \"...\"] [--source <provenance>]");
+                println!("Usage:\n  travel set-hotel [--dest slug] [--name \"Hotel Name\"] [--check-in YYYY-MM-DD] [--access \"route1 | route2\"] [--note \"...\"] [--source <provenance>] [--address \"<text>\"] [--phone \"<text>\"]\n  --address / --phone: the booked hotel's address and phone, shown on the dashboard 常用資訊 card (arrival card / customs form; phone as a tel: link). Needs `travel db migrate` once (hotels.address / hotels.phone).");
                 return Ok(());
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
@@ -804,7 +804,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             if wants_help(rest, verify_site::USAGE) {
                 return Ok(());
             }
-            plan_resolver::reject_unknown_flags(rest, &["--plan-id", "--contact-sheet", "--render"], &[])?;
+            plan_resolver::reject_unknown_flags(rest, &["--plan-id", "--contact-sheet", "--render", "--at"], &[])?;
             verify_site::run(rest).await
         }
         // OSRM road-geometry cache management (global, no --plan-id).

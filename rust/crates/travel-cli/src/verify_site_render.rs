@@ -264,14 +264,15 @@ pub(crate) const METRICS_JS: &str = r#"(function () {
   };
 })()"#;
 
-/// Document-coordinate rects of the booking summary, plan documents, weather
-/// overview, meal overview and day cards, in document order — the screenshot
+/// Document-coordinate rects of the TOC, the 現在・接下來 and 常用資訊 cards,
+/// the day cards, booking summary, plan documents, weather overview and meal
+/// overview, in document order — the screenshot
 /// clips. Evaluated only after the viewport has been grown to the page height
 /// (see the module doc), so the rects match the layout `captureBeyondViewport`
 /// renders.
 pub(crate) const SHOT_RECTS_JS: &str = r#"(function () {
   var shots = [];
-  document.querySelectorAll('section.booking-summary, section.plan-documents, nav.page-toc, details.weather-overview, details.meal-overview, section.day').forEach(function (el) {
+  document.querySelectorAll('nav.page-toc, section.now-card, section.quick-info, section.day, section.booking-summary, section.plan-documents, details.weather-overview, details.meal-overview').forEach(function (el) {
     var r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
     shots.push({ x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height });
@@ -1042,7 +1043,7 @@ mod tests {
             assert!(SHOT_RECTS_JS.contains(&format!("{key}:")), "SHOT_RECTS_JS lacks {key}");
         }
         assert!(SHOT_RECTS_JS.contains(
-            "section.booking-summary, section.plan-documents, nav.page-toc, details.weather-overview, details.meal-overview, section.day"
+            "nav.page-toc, section.now-card, section.quick-info, section.day, section.booking-summary, section.plan-documents, details.weather-overview, details.meal-overview"
         ));
         assert!(serde_json::from_value::<Vec<ShotRect>>(serde_json::json!([{"x": 0, "y": 1, "width": 2}])).is_err());
     }
@@ -1068,6 +1069,8 @@ mod tests {
             "section.booking-summary",
             "section.plan-documents",
             "nav.page-toc",
+            "section.now-card",
+            "section.quick-info",
             "details.weather-overview",
             "details.meal-overview",
             "section.day",

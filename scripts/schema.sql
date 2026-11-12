@@ -596,7 +596,7 @@ CREATE TABLE hotels (
   name TEXT,
   check_in TEXT,
   notes TEXT,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, name_zh TEXT, voucher_url TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, name_zh TEXT, voucher_url TEXT, address TEXT, phone TEXT,
   PRIMARY KEY (plan_id, destination)
 );
 

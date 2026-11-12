@@ -65,7 +65,9 @@ use crate::verify_site_page::{self as page, Lang, LegendRow, SlotFacts};
 use crate::verify_site_render as render;
 use crate::verify_site_sheet::{self as sheet, SheetCell};
 
-pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>] [--render <dir>]\n  \
+pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>] [--render <dir>] [--at YYYY-MM-DDTHH:MM]\n  \
+--at pins the dashboard clock (JST) instead of the day before the trip, so the during-trip page \
+(現在・接下來 card, today-only open day cards) is the one checked and rendered.\n  \
 Read-only check of the LIVE dashboard: each map key's live bytes vs map_artifacts \
 (sha256 + size; skipped keys must serve the worker placeholder), input-hash freshness \
 (recomputed from cached geocodes/road legs only), image content (size, geographic \
@@ -162,6 +164,7 @@ pub(crate) struct PlannedKey {
 
 pub async fn run(args: &[String]) -> Result<(), String> {
     let args = parse_args(args)?;
+    let _ = AT_OVERRIDE.set(args.at.clone());
     let plan_arg = args.plan;
     // Write tier: the run mints (and deletes) its own verify token per plan.
     let conn = crate::db::connect_write()
@@ -530,7 +533,23 @@ async fn viewer_page_checks(
     };
     let legends = read_legend_rows(conn, plan).await?;
     let base = Url::parse(&format!("https://{host}/")).map_err(|e| format!("dashboard host {host:?}: {e}"))?;
-    let plan_url = crate::share_token::share_url(plan, token);
+    // Pin the dashboard clock outside the trip window (the day before the first
+    // main day): during a trip the worker serves a 現在・接下來 card and collapses
+    // every day card but today's — the page checks below want the deterministic,
+    // all-open page. The render layer (layer 5) loads the same pinned URL.
+    // `--at` replaces the pin (and the page is then the during-trip one when
+    // it falls on a trip day — the toc layer allows its collapsed day cards).
+    let at_override = AT_OVERRIDE.get().cloned().flatten();
+    let pin = match &at_override {
+        Some(at) => Some(at.clone()),
+        None => travel_db::repo::days::first_main_day_date(conn, plan)
+            .await?
+            .and_then(|d| page::outside_trip_pin(&d)),
+    };
+    let plan_url = match &pin {
+        Some(at) => format!("{}&at={at}", crate::share_token::share_url(plan, token)),
+        None => crate::share_token::share_url(plan, token),
+    };
 
     let mut versioned: Vec<(String, Url)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -560,6 +579,9 @@ async fn viewer_page_checks(
             tally.emit(plan, layer, code, &check);
         }
         for (layer, check) in page::toc_checks(&doc) {
+            tally.emit(plan, layer, code, &check);
+        }
+        for (layer, check) in page::quick_checks(&doc, pin.is_some() && at_override.is_none(), facts.has_flights) {
             tally.emit(plan, layer, code, &check);
         }
         for (key, check) in page::slot_checks(&doc.figures, &facts) {
@@ -723,6 +745,17 @@ pub(crate) struct Args {
     pub(crate) plan: Option<String>,
     pub(crate) contact_sheet: Option<PathBuf>,
     pub(crate) render: Option<PathBuf>,
+    /// `--at YYYY-MM-DDTHH:MM`: the JST clock the dashboard is pinned to
+    /// (default: noon the day before the first main day — outside the trip).
+    pub(crate) at: Option<String>,
+}
+
+/// The `--at` override for this run (set once in [`run`]).
+static AT_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Strict `YYYY-MM-DDTHH:MM` with a real date and time (what the worker accepts).
+fn valid_at(s: &str) -> bool {
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").is_ok() && s.len() == 16
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -746,6 +779,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--render" => {
                 out.render = Some(PathBuf::from(value(i, "--render")?));
+                i += 2;
+            }
+            "--at" => {
+                let v = value(i, "--at")?;
+                if !valid_at(&v) {
+                    return Err(format!("--at must be YYYY-MM-DDTHH:MM (JST), got {v:?}"));
+                }
+                out.at = Some(v);
                 i += 2;
             }
             other => return Err(format!("unexpected argument: {other}\nUsage:\n  {USAGE}")),
@@ -1656,6 +1697,13 @@ mod tests {
         assert_eq!(a.render.as_deref(), Some(Path::new("/tmp/rs")));
         assert_eq!(a.contact_sheet.as_deref(), Some(Path::new("/tmp/cs")));
         assert_eq!(parse_args(&s(&["--plan-id", "p"])).unwrap().render, None);
+        assert_eq!(
+            parse_args(&s(&["--at", "2026-11-15T10:30"])).unwrap().at.as_deref(),
+            Some("2026-11-15T10:30")
+        );
+        assert!(parse_args(&s(&["--at", "2026-11-31T10:30"])).is_err());
+        assert!(parse_args(&s(&["--at", "2026-11-15 10:30"])).is_err());
+        assert!(parse_args(&s(&["--at"])).is_err());
         assert!(parse_args(&s(&["--render"])).is_err());
         assert!(parse_args(&s(&["--render", "--plan-id", "p"])).is_err());
         // The token is per run now: the old provisioning flags are gone.

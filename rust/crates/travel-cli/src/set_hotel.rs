@@ -28,6 +28,10 @@ struct HotelInput {
     /// `--source <text>` → hotels.populated_from (else a manual set-hotel after
     /// select-offer keeps claiming `package:<offer>`).
     source: Option<String>,
+    /// `--address <text>` → hotels.address (dashboard 常用資訊, arrival-card use).
+    address: Option<String>,
+    /// `--phone <text>` → hotels.phone (dashboard 常用資訊, `tel:` link).
+    phone: Option<String>,
 }
 
 pub async fn run(
@@ -41,8 +45,10 @@ pub async fn run(
         && input.check_in.is_none()
         && input.notes.is_none()
         && input.source.is_none()
+        && input.address.is_none()
+        && input.phone.is_none()
     {
-        eprintln!("Error: set-hotel requires at least one of --name, --access, --check-in, --note, --source");
+        eprintln!("Error: set-hotel requires at least one of --name, --access, --check-in, --note, --source, --address, --phone");
         eprintln!("Example: set-hotel --dest kyoto_2026 --name \"APA Hotel Kyoto Ekimae\" --check-in 2026-02-24 --access \"JR Kyoto Station 3min\"");
         std::process::exit(1);
     }
@@ -77,6 +83,12 @@ pub async fn run(
     }
     if let Some(n) = &input.notes {
         println!("   Notes: {n}");
+    }
+    if let Some(a) = &input.address {
+        println!("   Address: {a}");
+    }
+    if let Some(p) = &input.phone {
+        println!("   Phone: {p}");
     }
 
     match execute(&conn, &plan_id, &destination, &input).await {
@@ -124,6 +136,22 @@ fn parse_args(args: &[String]) -> Result<HotelInput, String> {
                     return Err("--source must not be empty".to_string());
                 }
                 input.source = Some(v);
+                i += 2;
+            }
+            "--address" => {
+                let v = arg_value(args, i, "--address")?;
+                if v.trim().is_empty() {
+                    return Err("--address must not be empty".to_string());
+                }
+                input.address = Some(v.trim().to_string());
+                i += 2;
+            }
+            "--phone" => {
+                let v = arg_value(args, i, "--phone")?;
+                if !v.chars().any(|c| c.is_ascii_digit()) {
+                    return Err(format!("--phone {v:?} has no digits (expected e.g. \"+81-75-000-0000\")"));
+                }
+                input.phone = Some(v.trim().to_string());
                 i += 2;
             }
             // `--dest <slug>` is advertised in the Example and consumed
@@ -198,6 +226,8 @@ async fn execute(
             check_in: input.check_in.clone(),
             notes: input.notes.clone(),
             populated_from: input.source.clone(),
+            address: input.address.clone(),
+            phone: input.phone.clone(),
             access: input.access.clone(),
         },
         &now_db,
@@ -240,6 +270,12 @@ async fn execute(
     }
     if let Some(src) = &input.source {
         kv.push(("source", src.clone()));
+    }
+    if let Some(a) = &input.address {
+        kv.push(("address", a.clone()));
+    }
+    if let Some(p) = &input.phone {
+        kv.push(("phone", p.clone()));
     }
 
     insert_event(
@@ -503,6 +539,23 @@ mod tests {
         let i = parse_args(&["--source".to_string(), "booking:lion_1".to_string()]).unwrap();
         assert_eq!(i.source.as_deref(), Some("booking:lion_1"));
         assert!(parse_args(&["--source".to_string(), " ".to_string()]).is_err());
+    }
+
+    #[test]
+    fn parse_args_address_and_phone() {
+        let i = parse_args(&[
+            "--address".to_string(),
+            " 〒600-8216 京都市下京区東塩小路町552-1 ".to_string(),
+            "--phone".to_string(),
+            "+81-75-000-0000".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(i.address.as_deref(), Some("〒600-8216 京都市下京区東塩小路町552-1"));
+        assert_eq!(i.phone.as_deref(), Some("+81-75-000-0000"));
+        assert!(parse_args(&["--address".to_string(), "  ".to_string()]).is_err());
+        let e = parse_args(&["--phone".to_string(), "front desk".to_string()]).unwrap_err();
+        assert!(e.contains("--phone") && e.contains("no digits"), "{e}");
+        assert!(parse_args(&["--phone".to_string()]).is_err());
     }
 
     #[test]

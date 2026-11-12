@@ -145,6 +145,24 @@ pub async fn variant_label_rows(
     Ok(out)
 }
 
+/// The earliest MAIN-day date of a plan (`days.date`, variants excluded); None when no main day
+/// has a date. `travel verify-site` pins the dashboard clock (`?at=`) to the day before it, so
+/// its page checks see the page outside the trip window (no 現在・接下來 card, every block open).
+pub async fn first_main_day_date(conn: &Connection, plan_id: &str) -> Result<Option<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT MIN(date) FROM days WHERE plan_id = ?1 AND variant_of IS NULL \
+             AND date IS NOT NULL AND date <> ''",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("days first-date query failed: {e}"))?;
+    match rows.next().await.map_err(|e| format!("days first-date row read failed: {e}"))? {
+        Some(row) => row.get::<Option<String>>(0).map_err(|e| format!("days first-date decode failed: {e}")),
+        None => Ok(None),
+    }
+}
+
 /// Next free day_number for plan+destination: `MAX(day_number)+1` over trip days AND variants
 /// (1 when the plan has no days yet).
 pub async fn next_day_number(

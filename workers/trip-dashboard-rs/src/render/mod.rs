@@ -4,6 +4,7 @@ pub mod auth;
 pub mod day;
 pub mod index;
 pub mod map;
+pub mod now;
 pub mod session;
 pub mod share;
 pub mod summary;
@@ -62,11 +63,9 @@ fn plan_body_attrs(plan_id: &str, owner_chrome: &str) -> String {
     format!(" data-plan-id=\"{}\" data-view=\"{view}\"", esc(plan_id))
 }
 
-/// Render a full plan page: plan overview map, booking summary, weather overview,
-/// meal overview, then each day card.
-/// `token` is the access token the page was loaded with — threaded into the
-/// auth-gated voucher link so a click carries the same token (else 403).
-/// `owner_chrome` is the logged-in owner top bar (copy share link); empty for viewers.
+/// Render a full plan page with no clock: the page outside any trip window
+/// (every block open, no 現在・接下來 card). See [`render_plan_at`].
+#[cfg(test)]
 pub fn render_plan(
     plan: &Plan,
     lang: &str,
@@ -74,26 +73,85 @@ pub fn render_plan(
     map_status: &map::MapStatus,
     owner_chrome: &str,
 ) -> String {
+    render_plan_at(plan, lang, token, map_status, owner_chrome, None)
+}
+
+/// Render a full plan page at `clock` (JST now, or the `?at=` pin).
+///
+/// Page order (user request 2026-11-12 — mid-trip on a phone the reader could
+/// not find things): 目錄 (+ search) → 現在・接下來 (during the trip only) →
+/// 常用資訊 → pending-booking alerts → the day cards → the reference group:
+/// plan maps, companion options, 預訂總表, 文件, 天氣總覽, 用餐總覽, meal
+/// alerts, transit cheat-sheet.
+///
+/// "During the trip" = the clock's JST date is a main day's date. Then today's
+/// day card is served open (and `data-today`), every other day collapsed.
+/// `token` is the access token the page was loaded with — threaded into the
+/// auth-gated voucher links so a click carries the same token (else 403).
+/// `owner_chrome` is the logged-in owner top bar (copy share link); empty for viewers.
+pub fn render_plan_at(
+    plan: &Plan,
+    lang: &str,
+    token: Option<&str>,
+    map_status: &map::MapStatus,
+    owner_chrome: &str,
+    clock: Option<&now::Clock>,
+) -> String {
     let mut body = String::new();
     if !owner_chrome.is_empty() {
         body.push_str(owner_chrome);
         body.push_str(&share::copy_script());
     }
-    // Weather + meal overviews are built up front so the 目錄 knows whether
-    // they render; they are placed further down, right before the day cards.
-    // Weather overview: last block of the top summary area, right before the
-    // day cards it summarizes. Built from the already-loaded days + clothing
-    // bands (no extra query); renders nothing when no day has weather.
+    let today = clock.and_then(|c| now::trip_today(&plan.days, c));
+    let now_card = match (today, clock) {
+        (Some(day), Some(c)) => now::now_card(plan, day, c, lang, token),
+        _ => String::new(),
+    };
+    let quick = now::quick_info(plan, lang);
+    // Weather overview: built from the already-loaded days + clothing bands (no
+    // extra query); renders nothing when no day has weather. Meal overview: from
+    // the already-loaded session meals; nothing without meals. Both are built up
+    // front so the 目錄 knows whether they render.
     let weather = day::weather_overview(&plan.days, &plan.clothing_tips, lang);
-    // Meal overview right after it (same slot when there is no weather): from
-    // the already-loaded session meals, no extra query; nothing without meals.
     let meals = day::meal_overview(&plan.days, lang);
     // 目錄 at the very top of the page (user request 2026-11-11: the page is very
     // long on a phone): links to the blocks that actually rendered, plus
-    // collapse/expand-all.
-    body.push_str(&page_toc(plan, lang, !weather.is_empty(), !meals.is_empty()));
-    // Non-meal pending-booking alerts BEFORE the summary (mirror render.ts:1388).
+    // collapse/expand-all and the search box.
+    body.push_str(&page_toc(
+        plan,
+        lang,
+        &TocBlocks {
+            now: !now_card.is_empty(),
+            quick: !quick.is_empty(),
+            weather: !weather.is_empty(),
+            meals: !meals.is_empty(),
+            today: today.map(|d| d.day_number),
+        },
+    ));
+    body.push_str(&now_card);
+    body.push_str(&quick);
+    // Non-meal pending-booking alerts before the day cards (actionable).
     body.push_str(&alerts::render_pending_alerts(plan, lang, false));
+    for d in &plan.days {
+        let open = match today {
+            None => day::CardOpen::Open,
+            Some(t) if t.day_number == d.day_number => day::CardOpen::Today,
+            Some(_) => day::CardOpen::Collapsed,
+        };
+        body.push_str(&day::render_with_documents(
+            d,
+            &plan.plan_id,
+            lang,
+            map_status,
+            &plan.clothing_tips,
+            &plan.documents,
+            token,
+            open,
+        ));
+    }
+    // Meal pending-booking alerts right after the day cards (mirror render.ts:1393).
+    body.push_str(&alerts::render_pending_alerts(plan, lang, true));
+    // ---- Reference group ----
     // Plan overview map ABOVE the booking summary (its own frame, never inside
     // the summary's dashed box) — user visibility request.
     body.push_str(&map::plan_map_slot(
@@ -140,23 +198,11 @@ pub fn render_plan(
         }
         body.push_str("</div>");
     }
-    body.push_str(&summary::render(plan, lang, token));
+    body.push_str(&summary::booking_summary(plan, lang, token));
+    body.push_str(&summary::documents_block(plan, lang, token));
     body.push_str(&weather);
     body.push_str(&meals);
-    for d in &plan.days {
-        body.push_str(&day::render_with_documents(
-            d,
-            &plan.plan_id,
-            lang,
-            map_status,
-            &plan.clothing_tips,
-            &plan.documents,
-            token,
-        ));
-    }
-    // Meal pending-booking alerts AFTER the day cards (mirror render.ts:1393),
-    // then the transit cheat-sheet (mirror render.ts:1394).
-    body.push_str(&alerts::render_pending_alerts(plan, lang, true));
+    // The transit cheat-sheet last (mirror render.ts:1394).
     body.push_str(&alerts::render_transit_summary(plan, lang));
     // Last in <body>: every block it restores/wires already exists. Viewer and
     // owner pages alike; the page works fully without it.
@@ -164,35 +210,50 @@ pub fn render_plan(
     page_with_body_attrs(&plan.display_name, &body, lang, &plan_body_attrs(&plan.plan_id, owner_chrome))
 }
 
+/// Which optional blocks rendered (the 目錄 lists only those) and which main
+/// day is today (during the trip).
+struct TocBlocks {
+    now: bool,
+    quick: bool,
+    weather: bool,
+    meals: bool,
+    today: Option<i64>,
+}
+
 /// The plan page's 目錄 / Contents: plain fragment links (no JS needed) to each
-/// rendered block — documents, booking summary, weather + meal overviews (only
-/// when they rendered), then one chip per main day card (variants live inside
-/// their day, no entry of their own). In page order. The collapse-all /
-/// expand-all buttons are served `hidden` and un-hidden by
-/// [`BLOCK_MEMORY_SCRIPT`], so a no-JS page never shows a dead button. The
-/// floating ↑ link (pure CSS position:fixed) jumps back here from anywhere.
-fn page_toc(plan: &Plan, lang: &str, has_weather: bool, has_meals: bool) -> String {
-    let mut items: Vec<(&str, String)> = Vec::new();
-    if !plan.documents.is_empty() {
-        items.push((summary::BLOCK_DOCS, esc(t("ticketsVouchers", lang))));
-    }
-    items.push((summary::BLOCK_SUMMARY, esc(t("bookingSummary", lang))));
-    if has_weather {
-        items.push((day::BLOCK_WEATHER, esc(t("weatherOverview", lang))));
-    }
-    if has_meals {
-        items.push((day::BLOCK_MEALS, esc(t("mealOverview", lang))));
-    }
+/// rendered block, in page order — 現在・接下來 and 常用資訊 (when they
+/// rendered), one chip per main day card (today's marked 今天 during the trip;
+/// variants live inside their day, no entry of their own), then the reference
+/// group: booking summary, documents, weather + meal overviews (each only when
+/// it rendered). The collapse-all / expand-all buttons and the search box are
+/// served `hidden` and un-hidden by [`BLOCK_MEMORY_SCRIPT`], so a no-JS page
+/// never shows a dead control. The floating ↑ link (pure CSS position:fixed)
+/// jumps back here from anywhere.
+fn page_toc(plan: &Plan, lang: &str, blocks: &TocBlocks) -> String {
     let mut h = format!(
         "<nav class=\"page-toc\" id=\"toc\" aria-label=\"{toc}\"><div class=\"toc-head\"><h2>{toc}</h2>\
          <div class=\"toc-actions\"><button type=\"button\" class=\"toc-btn\" data-blocks=\"close\" hidden>{}</button>\
-         <button type=\"button\" class=\"toc-btn\" data-blocks=\"open\" hidden>{}</button></div></div><ol class=\"toc-list\">",
+         <button type=\"button\" class=\"toc-btn\" data-blocks=\"open\" hidden>{}</button></div></div>\
+         <div class=\"toc-search\" role=\"search\" data-l-none=\"{}\" hidden><div class=\"toc-search-row\">\
+         <input type=\"search\" class=\"toc-search-input\" placeholder=\"{}\" aria-label=\"{}\" autocomplete=\"off\" enterkeyhint=\"search\">\
+         <button type=\"button\" class=\"toc-btn toc-search-clear\" hidden>{}</button></div>\
+         <ol class=\"search-results\" aria-live=\"polite\" hidden></ol></div><ol class=\"toc-list\">",
         esc(t("collapseAll", lang)),
         esc(t("expandAll", lang)),
+        esc(t("searchNone", lang)),
+        esc(t("searchPlaceholder", lang)),
+        esc(t("searchLabel", lang)),
+        esc(t("searchClear", lang)),
         toc = esc(t("toc", lang)),
     );
-    for (id, label) in items {
-        h.push_str(&format!("<li><a href=\"#{id}\">{label}</a></li>"));
+    let link = |h: &mut String, id: &str, label: &str| {
+        h.push_str(&format!("<li><a href=\"#{id}\">{}</a></li>", esc(label)));
+    };
+    if blocks.now {
+        link(&mut h, now::BLOCK_NOW, t("nowToc", lang));
+    }
+    if blocks.quick {
+        link(&mut h, now::BLOCK_QUICK, t("quickInfo", lang));
     }
     for d in &plan.days {
         let date = summary::date_with_weekday(&d.date, lang).unwrap_or_else(|| d.date.clone());
@@ -207,11 +268,26 @@ fn page_toc(plan: &Plan, lang: &str, has_weather: bool, has_meals: bool) -> Stri
         } else {
             format!("<span class=\"toc-day-theme\">{}</span>", esc(theme))
         };
+        let (class, today) = if blocks.today == Some(d.day_number) {
+            (" is-today", format!("<span class=\"toc-today\">{}</span>", esc(t("today", lang))))
+        } else {
+            ("", String::new())
+        };
         h.push_str(&format!(
-            "<li><a class=\"toc-day\" href=\"#{}\"><span class=\"toc-day-n\">{}</span>{theme}</a></li>",
+            "<li><a class=\"toc-day{class}\" href=\"#{}\"><span class=\"toc-day-n\">{today}{}</span>{theme}</a></li>",
             day::day_block_id(d.day_number),
             esc(&heading),
         ));
+    }
+    link(&mut h, summary::BLOCK_SUMMARY, t("bookingSummary", lang));
+    if !plan.documents.is_empty() {
+        link(&mut h, summary::BLOCK_DOCS, t("ticketsVouchers", lang));
+    }
+    if blocks.weather {
+        link(&mut h, day::BLOCK_WEATHER, t("weatherOverview", lang));
+    }
+    if blocks.meals {
+        link(&mut h, day::BLOCK_MEALS, t("mealOverview", lang));
     }
     h.push_str(&format!(
         "</ol></nav><a class=\"toc-fab\" href=\"#toc\">{}</a>",
@@ -220,38 +296,91 @@ fn page_toc(plan: &Plan, lang: &str, has_weather: bool, has_meals: bool) -> Stri
     h
 }
 
-/// Remembered collapse state for the plan page's blocks — the ONE viewer-page
-/// script (inline, no external source, ES5, emitted once at the end of <body>).
-/// Every `details[data-block]` (summary, documents, overviews, day cards) and
-/// `details.day-variant` (keyed `v<its own data-variant-day>`, stable when a
-/// sibling variant is added or removed) is restored from
-/// localStorage `trip-blocks:<data-plan-id>` (`key=1|0;…`, plain text) and saved
-/// on every `toggle`. 全部收合 closes every block incl. variants; 全部展開 opens
-/// every block but leaves each variant as it is (variants are served collapsed by
-/// design). Following an in-page link opens the target block (and any closed
-/// ancestor), on click and on `hashchange` (Back/Forward). Printing opens every
-/// block (`beforeprint`) without saving and restores the screen state after
-/// (`afterprint`). Every storage access is in try/catch: no storage → session-only
-/// toggles. `<html data-no-block-memory>` (set by `travel verify-site --render`
-/// before it opens every block) stops saving, so a check never rewrites a
-/// reader's remembered state.
+/// The ONE plan-page script (inline, no external source, ES5, emitted once at
+/// the end of <body>). Its jobs:
+///
+/// 1. **Collapse memory.** Every `details[data-block]` (now card, quick info,
+///    day cards, summary, documents, overviews) and `details.day-variant`
+///    (keyed `v<its own data-variant-day>`, stable when a sibling variant is
+///    added or removed) is restored from localStorage `trip-blocks:<data-plan-id>`
+///    (`key=1|0;…`, plain text) and saved on every `toggle` — except today's
+///    day card (`data-today`, during the trip), which always opens on load.
+///    全部收合 closes every block incl. variants; 全部展開 opens every block but
+///    leaves each variant as it is (variants are served collapsed by design).
+///    Following an in-page link opens the target block (and any closed
+///    ancestor), on click and on `hashchange` (Back/Forward). Printing opens
+///    every block (`beforeprint`) without saving and restores the screen state
+///    after (`afterprint`). Every storage access is in try/catch: no storage →
+///    session-only toggles. `<html data-no-block-memory>` (set by
+///    `travel verify-site --render` before it opens every block) stops saving,
+///    so a check never rewrites a reader's remembered state.
+/// 2. **Search** (目錄): un-hides `.toc-search`; as the reader types (≥1 CJK
+///    char or ≥2 others, debounced) it lists up to 30 `[data-search-unit]`
+///    matches (label + snippet with the match in <mark>, built with
+///    textContent — never innerHTML); a tap opens every ancestor <details>,
+///    scrolls to the unit and flashes it. Case-insensitive; full-width ASCII
+///    folds to half-width. Escape / the clear button resets.
+/// 3. **Now re-marking** (user request 2026-11-12): while the page's JST date
+///    (`#sec-now[data-now-date]`) is today and the clock is not pinned by
+///    `?at=`, re-marks 現在 / 接下來 on the timeline every minute (and when the
+///    tab becomes visible) from `data-start` / `data-end` / `data-at` (JST
+///    minutes), and shows the 明天 entry once the day's last session has ended.
 const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
 (function(){
   var d=document,de=d.documentElement,k='trip-blocks:'+(d.body.getAttribute('data-plan-id')||''),st={},els=[],ls=null,i;
   try{ls=window.localStorage;var v=ls&&ls.getItem(k);if(v){var p=v.split(';');for(i=0;i<p.length;i++){var kv=p[i].split('=');if(kv.length===2&&kv[0])st[kv[0]]=kv[1]==='1';}}}catch(e){ls=null;}
   function save(){if(!ls||de.hasAttribute('data-no-block-memory'))return;var o=[];for(var x in st)if(st.hasOwnProperty(x))o.push(x+'='+(st[x]?'1':'0'));try{ls.setItem(k,o.join(';'));}catch(e){}}
   var list=d.querySelectorAll('details[data-block],details.day-variant');
-  for(i=0;i<list.length;i++){var el=list[i],b=el.getAttribute('data-block'),va=!b;if(va)b='v'+(el.getAttribute('data-variant-day')||'');els.push({el:el,k:b,v:va});if(st.hasOwnProperty(b))el.open=st[b];}
+  for(i=0;i<list.length;i++){var el=list[i],b=el.getAttribute('data-block'),va=!b;if(va)b='v'+(el.getAttribute('data-variant-day')||'');els.push({el:el,k:b,v:va});if(st.hasOwnProperty(b)&&!el.hasAttribute('data-today'))el.open=st[b];}
   d.addEventListener('toggle',function(e){if(pr)return;for(var j=0;j<els.length;j++)if(els[j].el===e.target){if(st[els[j].k]!==e.target.open){st[els[j].k]=e.target.open;save();}return;}},true);
   var pr=null;
   window.addEventListener('beforeprint',function(){if(pr)return;pr=[];for(var j=0;j<els.length;j++){pr.push(els[j].el.open);els[j].el.open=true;}});
   window.addEventListener('afterprint',function(){if(!pr)return;var o=pr;for(var j=0;j<els.length;j++)els[j].el.open=o[j];setTimeout(function(){pr=null;},0);});
   var bs=d.querySelectorAll('.toc-btn[data-blocks]');
   for(i=0;i<bs.length;i++){bs[i].hidden=false;bs[i].addEventListener('click',function(){var op=this.getAttribute('data-blocks')==='open';for(var j=0;j<els.length;j++)if(!(op&&els[j].v))els[j].el.open=op;});}
-  function reveal(id){var t=id&&d.getElementById(id);if(!t)return null;for(var p=t;p&&p!==d;p=p.parentNode)if(p.tagName==='DETAILS')p.open=true;var inner=t.querySelector&&t.querySelector('details[data-block]');if(inner)inner.open=true;return t;}
+  function openUp(t){for(var p=t;p&&p!==d;p=p.parentNode)if(p.tagName==='DETAILS')p.open=true;}
+  function reveal(id){var t=id&&d.getElementById(id);if(!t)return null;openUp(t);var inner=t.querySelector&&t.querySelector('details[data-block]');if(inner)inner.open=true;return t;}
   d.addEventListener('click',function(e){for(var a=e.target;a&&a!==d;a=a.parentNode)if(a.tagName==='A'){var h=a.getAttribute('href')||'';if(h.charAt(0)==='#')reveal(h.slice(1));return;}});
   window.addEventListener('hashchange',function(){reveal(location.hash.slice(1));});
   if(location.hash){var t=reveal(location.hash.slice(1));if(t&&t.scrollIntoView)t.scrollIntoView();}
+  var sb=d.querySelector('.toc-search');
+  if(sb){
+    var q=sb.querySelector('input'),out=sb.querySelector('.search-results'),clr=sb.querySelector('.toc-search-clear'),idx=null,tm=null;
+    sb.hidden=false;
+    var fold=function(s){var o='';for(var j=0;j<s.length;j++){var c=s.charCodeAt(j);if(c>=0xFF01&&c<=0xFF5E)c-=0xFEE0;else if(c===0x3000)c=32;o+=String.fromCharCode(c);}return o.toLowerCase();}
+    var norm=function(s){return (s||'').replace(/\s+/g,' ').replace(/^ | $/g,'');}
+    var build=function(){idx=[];var u=d.querySelectorAll('[data-search-unit]');for(var j=0;j<u.length;j++){var x=norm(u[j].textContent);idx.push({el:u[j],t:x,f:fold(x),l:u[j].getAttribute('data-search-label')||''});}}
+    var clear=function(){while(out.firstChild)out.removeChild(out.firstChild);out.hidden=true;}
+    var ready=function(v){return /[\u2E80-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]/.test(v)||v.length>=2;}
+    var go=function(el){openUp(el);if(el.scrollIntoView)el.scrollIntoView({block:'center'});el.classList.add('search-flash');setTimeout(function(){el.classList.remove('search-flash');},2000);}
+    var row=function(it,p,n){var li=d.createElement('li'),bt=d.createElement('button'),lb=d.createElement('span'),sn=d.createElement('span'),mk=d.createElement('mark'),a=Math.max(0,p-18),z=Math.min(it.t.length,p+n+32);
+      bt.type='button';bt.className='search-hit';lb.className='search-label';lb.textContent=it.l;sn.className='search-snip';
+      sn.appendChild(d.createTextNode((a>0?'\u2026':'')+it.t.slice(a,p)));mk.textContent=it.t.slice(p,p+n);sn.appendChild(mk);sn.appendChild(d.createTextNode(it.t.slice(p+n,z)+(z<it.t.length?'\u2026':'')));
+      bt.appendChild(lb);bt.appendChild(sn);bt.addEventListener('click',function(){go(it.el);});li.appendChild(bt);return li;}
+    var run=function(){var v=norm(q.value);clr.hidden=!v;clear();if(!ready(v))return;if(!idx)build();var f=fold(v),c=0;
+      for(var j=0;j<idx.length&&c<30;j++){var p=idx[j].f.indexOf(f);if(p<0)continue;out.appendChild(row(idx[j],p,f.length));c++;}
+      if(!c){var li=d.createElement('li');li.className='search-none';li.textContent=sb.getAttribute('data-l-none')||'';out.appendChild(li);}out.hidden=false;}
+    var reset=function(){q.value='';clr.hidden=true;clear();}
+    q.addEventListener('input',function(){clearTimeout(tm);tm=setTimeout(run,160);});
+    q.addEventListener('keydown',function(e){if(e.key==='Escape'||e.keyCode===27){reset();}});
+    clr.addEventListener('click',function(){reset();q.focus();});
+  }
+  var nc=d.getElementById('sec-now');
+  if(nc&&!nc.hasAttribute('data-now-pinned')){
+    var mkb=function(el,c,txt,first){var s=d.createElement('span');s.className='now-badge now-badge--'+c;s.textContent=txt;if(first)el.insertBefore(s,el.firstChild);else el.appendChild(s);};
+    var remark=function(){var n=new Date(Date.now()+324e5),m=n.getUTCHours()*60+n.getUTCMinutes(),j;
+      var old=nc.querySelectorAll('.now-badge');for(j=old.length-1;j>=0;j--)if(!old[j].hasAttribute('data-fixed'))old[j].parentNode.removeChild(old[j]);
+      if(n.toISOString().slice(0,10)!==nc.getAttribute('data-now-date')){m=1e9;}
+      var it=nc.querySelectorAll('.now-item[data-start]'),cur=-1,nx=-1;
+      for(j=0;j<it.length;j++){var s=+it[j].getAttribute('data-start'),e=+it[j].getAttribute('data-end');if(s<=m&&m<e)cur=j;if(nx<0&&s>m)nx=j;}
+      for(j=0;j<it.length;j++){var c=it[j].classList,h=it[j].querySelector('.now-head');c.toggle('is-now',j===cur);c.toggle('is-next',j!==cur&&j===nx);c.toggle('is-past',+it[j].getAttribute('data-end')<=m);
+        if(h&&j===cur)mkb(h,'now',nc.getAttribute('data-l-now'),false);else if(h&&j===nx)mkb(h,'next',nc.getAttribute('data-l-next'),false);}
+      var lg=nc.querySelectorAll('.now-leg[data-at]'),bl=null,ba=1e9;for(j=0;j<lg.length;j++){var at=+lg[j].getAttribute('data-at');if(at>=m&&at<ba){ba=at;bl=lg[j];}}if(bl)mkb(bl,'next',nc.getAttribute('data-l-next'),true);
+      var tw=nc.querySelector('.now-tomorrow');if(tw)tw.hidden=!(cur<0&&nx<0);};
+    setInterval(remark,60000);
+    d.addEventListener('visibilitychange',function(){if(!d.hidden)remark();});
+    window.addEventListener('pageshow',function(e){if(e.persisted)remark();});
+  }
 })();
 </script>"#;
 
@@ -713,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn render_plan_puts_weather_overview_after_summary_before_day_cards() {
+    fn render_plan_puts_weather_overview_after_day_cards_and_summary() {
         use crate::model::{Day, Plan};
         let plan = Plan {
             plan_id: "kyoto-nov-2026".into(),
@@ -730,12 +859,12 @@ mod tests {
             ..Default::default()
         };
         let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
-        let summary = html.find("booking-summary").expect("summary");
+        let summary = html.find("<section class=\"booking-summary").expect("summary");
         let overview = html
             .find("<details class=\"weather-overview\" id=\"sec-weather\" data-block=\"sec-weather\" open>")
             .expect("weather overview");
         let day_card = html.find("<section class=\"day ").expect("day card");
-        assert!(summary < overview && overview < day_card, "{html}");
+        assert!(day_card < summary && summary < overview, "{html}");
         assert!(html.contains("<td class=\"wx-desc\">\u{2600}\u{FE0F} 晴</td>"), "{html}");
 
         // No weather on any day → no overview block at all.
@@ -750,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn render_plan_puts_meal_overview_after_weather_before_day_cards() {
+    fn render_plan_puts_meal_overview_after_weather_in_the_reference_group() {
         use crate::model::{Day, Meal, Plan, Session};
         let noon = |text: &str| Session {
             session_type: "noon".into(),
@@ -780,11 +909,11 @@ mod tests {
             .find("<details class=\"meal-overview\" id=\"sec-meals\" data-block=\"sec-meals\" open><summary><h2>用餐總覽</h2></summary>")
             .expect("meal overview");
         let day_card = html.find("<section class=\"day ").expect("day card");
-        assert!(weather < meals && meals < day_card, "{html}");
+        assert!(day_card < weather && weather < meals, "{html}");
         assert!(html.contains("<td class=\"ml-main\" data-label=\"主選\">湯豆腐｜奧丹</td>"), "{html}");
 
-        // No weather: the meal overview still sits between the summary and the
-        // day cards — where the weather overview would be.
+        // No weather: the meal overview still follows the summary — where the
+        // weather overview would be.
         let no_weather = Plan {
             days: vec![Day {
                 day_number: 1,
@@ -797,10 +926,10 @@ mod tests {
         };
         let html = render_plan(&no_weather, "en", None, &map::MapStatus::default(), "");
         assert!(!html.contains("<details class=\"weather-overview\""), "{html}");
-        let summary = html.find("booking-summary").expect("summary");
+        let summary = html.find("<section class=\"booking-summary").expect("summary");
         let meals = html.find("<details class=\"meal-overview\" id=\"sec-meals\"").expect("meal overview");
         let day_card = html.find("<section class=\"day ").expect("day card");
-        assert!(summary < meals && meals < day_card, "{html}");
+        assert!(day_card < summary && summary < meals, "{html}");
         assert!(html.contains("<h2>Meal overview</h2>"), "{html}");
 
         // No meals on any day → no meal overview block at all.
@@ -878,7 +1007,14 @@ mod tests {
         assert!(toc < summary && summary < weather, "{html}");
         let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
         let hrefs: Vec<&str> = nav.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
-        assert_eq!(hrefs, ["sec-docs", "sec-summary", "sec-weather", "sec-meals", "day-1", "day-2"], "{nav}");
+        assert_eq!(hrefs, ["day-1", "day-2", "sec-summary", "sec-docs", "sec-weather", "sec-meals"], "{nav}");
+        // The TOC is in page order.
+        let mut last = 0;
+        for id in &hrefs {
+            let at = html.find(&format!(" id=\"{id}\"")).expect("id");
+            assert!(at > last, "{id} out of page order: {html}");
+            last = at;
+        }
         // Every link resolves to an id on the page.
         for id in &hrefs {
             assert_eq!(html.matches(&format!(" id=\"{id}\"")).count(), 1, "id {id}: {html}");
@@ -903,6 +1039,102 @@ mod tests {
         assert!(en.contains(">↑ Contents</a>"), "{en}");
     }
 
+    /// [`full_nav_plan`] with session times, a flight and a hotel (quick info).
+    fn trip_nav_plan() -> crate::model::Plan {
+        let mut plan = full_nav_plan();
+        plan.days[0].sessions[0].time_start = "11:00".into();
+        plan.days[0].sessions[0].time_end = "13:00".into();
+        plan.days[1].sessions = vec![crate::model::Session {
+            session_type: "morning".into(),
+            time_start: "08:00".into(),
+            time_end: "10:00".into(),
+            focus_zh: "退房".into(),
+            ..Default::default()
+        }];
+        plan.flights = vec![[("direction", "return"), ("flight_number", "MM027"), ("flight_date", "2026-11-15")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+            .collect()];
+        plan
+    }
+
+    #[test]
+    fn during_the_trip_now_and_quick_info_lead_and_only_today_is_open() {
+        let plan = trip_nav_plan();
+        let at = now::parse_at("2026-11-14T12:00").unwrap();
+        let html = render_plan_at(&plan, "zh", None, &map::MapStatus::default(), "", Some(&at));
+        let toc = html.find("<nav class=\"page-toc\"").expect("toc");
+        let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
+        let hrefs: Vec<&str> = nav.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        assert_eq!(
+            hrefs,
+            ["sec-now", "sec-quick", "day-1", "day-2", "sec-summary", "sec-docs", "sec-weather", "sec-meals"],
+            "{nav}"
+        );
+        let mut last = 0;
+        for id in &hrefs {
+            let at = html.find(&format!(" id=\"{id}\"")).expect("id");
+            assert!(at > last, "{id} out of page order: {html}");
+            last = at;
+        }
+        // Now card right after the TOC, quick info right after it.
+        assert!(html.contains("<a class=\"toc-fab\" href=\"#toc\">↑ 目錄</a><section class=\"now-card\" id=\"sec-now\""), "{html}");
+        assert!(html.contains("</details></section><section class=\"quick-info\" id=\"sec-quick\">"), "{html}");
+        assert!(html.contains("<span class=\"now-badge now-badge--now\">現在</span>"), "{html}");
+        // Today's chip and card; the other day is served collapsed.
+        assert!(nav.contains("<a class=\"toc-day is-today\" href=\"#day-1\"><span class=\"toc-day-n\"><span class=\"toc-today\">今天</span>第 1 天 · 11/14（六）</span>"), "{nav}");
+        assert!(html.contains("id=\"day-1\"><details data-block=\"day-1\" data-today open>"), "{html}");
+        assert!(html.contains("id=\"day-2\"><details data-block=\"day-2\">"), "{html}");
+        // Reference blocks stay open.
+        assert!(html.contains("<details data-block=\"sec-summary\" open>"), "{html}");
+        assert!(html.contains("data-block=\"sec-weather\" open>"), "{html}");
+
+        // Outside the trip (before / after / a gap day): no now card, all open — today's page.
+        for outside in ["2026-11-13T12:00", "2026-11-16T08:00"] {
+            let at = now::parse_at(outside).unwrap();
+            let html = render_plan_at(&plan, "zh", None, &map::MapStatus::default(), "", Some(&at));
+            assert!(!html.contains("<section class=\"now-card\""), "{outside}: {html}");
+            assert!(!html.contains(" data-today open"), "{outside}");
+            assert!(html.contains("<details data-block=\"day-1\" open>") && html.contains("<details data-block=\"day-2\" open>"), "{outside}");
+            assert!(html.contains("<section class=\"quick-info\" id=\"sec-quick\">"), "{outside}: quick info is always shown");
+            assert!(!html.contains("<span class=\"toc-today\">"), "{outside}");
+        }
+    }
+
+    #[test]
+    fn search_box_is_served_hidden_and_units_carry_labels() {
+        let html = render_plan_at(
+            &trip_nav_plan(),
+            "zh",
+            None,
+            &map::MapStatus::default(),
+            "",
+            Some(&now::parse_at("2026-11-14T12:00").unwrap()),
+        );
+        let toc = html.find("<nav class=\"page-toc\"").expect("toc");
+        let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
+        assert!(nav.contains(
+            "<div class=\"toc-search\" role=\"search\" data-l-none=\"找不到符合的內容\" hidden><div class=\"toc-search-row\">\
+             <input type=\"search\" class=\"toc-search-input\" placeholder=\"搜尋地點、餐廳、時間…\" aria-label=\"搜尋本行程\" autocomplete=\"off\" enterkeyhint=\"search\">\
+             <button type=\"button\" class=\"toc-btn toc-search-clear\" hidden>清除</button></div>\
+             <ol class=\"search-results\" aria-live=\"polite\" hidden></ol></div>"
+        ), "{nav}");
+        for unit in [
+            // Day card session, quick info, summary row, document, weather + meal rows.
+            "<div class=\"session session-noon\" data-search-unit data-search-label=\"11/14（六）· 中午\">",
+            "<div class=\"qi-row\" data-search-unit data-search-label=\"常用資訊 · 回程\">",
+            "<div class=\"booking-item flight\" data-search-unit data-search-label=\"預訂總表 · 航班\">",
+            "<div class=\"document-item\" data-search-unit data-search-label=\"🎫 票券與憑證\">",
+            "<tr data-search-unit data-search-label=\"天氣總覽 · 11/14（六）\">",
+            "<tr data-search-unit data-search-label=\"用餐總覽 · 11/14（六）· 中午\">",
+        ] {
+            assert!(html.contains(unit), "{unit}: {html}");
+        }
+        // The now card repeats today's content but is never searched twice.
+        let now = &html[html.find("<section class=\"now-card\"").unwrap()..html.find("<section class=\"quick-info\"").unwrap()];
+        assert!(!now.contains("data-search-unit"), "{now}");
+    }
+
     #[test]
     fn toc_lists_only_blocks_that_render() {
         use crate::model::{Day, Plan};
@@ -915,7 +1147,7 @@ mod tests {
         let toc = html.find("<nav class=\"page-toc\"").expect("toc");
         let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
         let hrefs: Vec<&str> = nav.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
-        assert_eq!(hrefs, ["sec-summary", "day-1"], "{nav}");
+        assert_eq!(hrefs, ["day-1", "sec-summary"], "{nav}");
         // No date → the chip is just the day label; no theme → no theme span.
         assert!(nav.contains("<span class=\"toc-day-n\">第 1 天</span></a>"), "{nav}");
         assert!(!nav.contains("toc-day-theme"), "{nav}");
@@ -938,9 +1170,11 @@ mod tests {
         assert!(html.contains("<details class=\"weather-overview\" id=\"sec-weather\" data-block=\"sec-weather\" open><summary><h2>"), "{html}");
         assert!(html.contains("<details class=\"meal-overview\" id=\"sec-meals\" data-block=\"sec-meals\" open><summary><h2>"), "{html}");
         assert_eq!(html.matches("<details data-block=").count() + 2, html.matches(" data-block=\"").count(), "{html}");
+        // No clock → no now card, no collapsed day, no today marker.
+        assert!(!html.contains("id=\"sec-now\"") && !html.contains(" data-today open"), "{html}");
         assert_eq!(html.matches(" data-block=\"").count(), 6, "{html}");
         // The variant stays collapsed and is not itself a data-block.
-        assert!(html.contains("<details class=\"day-variant\" data-variant-of=\"1\" data-variant-day=\"3\"><summary"), "{html}");
+        assert!(html.contains("<details class=\"day-variant\" id=\"variant-3\" data-variant-of=\"1\" data-variant-day=\"3\"><summary"), "{html}");
     }
 
     #[test]
@@ -971,6 +1205,25 @@ mod tests {
         for bad in ["=>", "let ", "const ", "`"] {
             assert!(!BLOCK_MEMORY_SCRIPT.contains(bad), "{bad}");
         }
+        // Search + now re-marking live in the same ONE script.
+        for hook in [
+            "querySelector('.toc-search')",
+            "querySelectorAll('[data-search-unit]')",
+            "getAttribute('data-search-label')",
+            "createElement('mark')",
+            "e.key==='Escape'",
+            "getElementById('sec-now')",
+            "hasAttribute('data-now-pinned')",
+            "setInterval(remark,60000)",
+            "hasAttribute('data-today')",
+        ] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");
+        }
+        // Page text only ever reaches the DOM through textContent.
+        assert!(!BLOCK_MEMORY_SCRIPT.contains("innerHTML"));
+        assert!(!BLOCK_MEMORY_SCRIPT.contains("insertAdjacentHTML"));
+        let during = render_plan_at(&plan, "zh", None, &status, "", Some(&now::parse_at("2026-11-14T09:00").unwrap()));
+        assert_eq!(during.matches("<script>").count(), 1, "{during}");
         // Pages other than the plan page carry no script.
         assert!(!page("t", "x", "zh").contains("<script"));
     }
@@ -1238,7 +1491,7 @@ mod tests {
             day1.contains("<span class=\"day-option-label\">雨天方案</span>"),
             "{day1}"
         );
-        assert!(day1.contains("<details class=\"day-variant\" data-variant-of=\"1\" data-variant-day=\"3\"><summary class=\"day-variant-summary\">替代方案：晴天方案</summary><div class=\"day-variant-body\">"), "{day1}");
+        assert!(day1.contains("<details class=\"day-variant\" id=\"variant-3\" data-variant-of=\"1\" data-variant-day=\"3\"><summary class=\"day-variant-summary\">替代方案：晴天方案</summary><div class=\"day-variant-body\">"), "{day1}");
         // Collapsed by default: no `open` attribute on the variant block.
         assert!(!day1.contains("data-variant-of=\"1\" open"), "{day1}");
         // The block sits in the day card after the main day's own content.

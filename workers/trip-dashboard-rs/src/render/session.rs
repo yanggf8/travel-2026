@@ -51,7 +51,7 @@ pub fn render_meal(meal: &Meal, lang: &str) -> String {
 /// `｜備案：…` tail does not pollute it) and `trailing` is that remainder kept
 /// verbatim (including its leading pipe), or empty. `None` when there is no
 /// `｜map:` / `|map:` marker. Case-insensitive on the `map:` keyword.
-fn split_meal_pin(meal: &str) -> Option<(String, String, String)> {
+pub(crate) fn split_meal_pin(meal: &str) -> Option<(String, String, String)> {
     let c: Vec<char> = meal.chars().collect();
     // Find the first pipe (｜ or |) that is immediately followed (after optional
     // whitespace) by a case-insensitive `map:`. This is group-1's terminator.
@@ -165,13 +165,36 @@ pub fn session_label(session_type: &str, lang: &str) -> &'static str {
     }
 }
 
+/// True when a session has anything to show (focus, activities or meals) —
+/// the day card skips the rest, and so does the 現在・接下來 timeline.
+pub fn has_content(sess: &Session) -> bool {
+    !(sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty())
+}
+
 /// Render one session block. Empty sessions are caller-skipped (see day.rs).
+#[cfg(test)]
 pub fn render(sess: &Session, lang: &str) -> String {
+    render_unit(sess, lang, None)
+}
+
+/// [`render`] as a search unit (`data-search-unit` + `data-search-label`) when
+/// `search_label` is given — the day cards pass 「11/15（日）· 中午」.
+pub fn render_unit(sess: &Session, lang: &str, search_label: Option<&str>) -> String {
     let label = session_label(&sess.session_type, lang);
+    // The session's own time range next to its name (「上午 08:00–11:15」) — shown
+    // on the day card and part of the search unit's text, so a search for a
+    // clock time finds the session.
+    let (ts, te) = (sess.time_start.trim(), sess.time_end.trim());
+    let time = if ts.is_empty() && te.is_empty() {
+        String::new()
+    } else {
+        format!(" <span class=\"session-time\">{}\u{2013}{}</span>", esc(ts), esc(te))
+    };
     let mut h = String::new();
     h.push_str(&format!(
-        "<div class=\"session session-{}\"><div class=\"session-label\">{}</div>",
+        "<div class=\"session session-{}\"{}><div class=\"session-label\">{}{time}</div>",
         esc(&sess.session_type),
+        super::day::search_unit_attrs(search_label),
         label
     ));
     if !sess.focus_zh.is_empty() {

@@ -11,7 +11,7 @@ use crate::model::Plan;
 use crate::turso::Row;
 
 /// Read a Turso row field as an owned String (scalars come back as JSON strings).
-fn rs(row: &Row, k: &str) -> String {
+pub(crate) fn rs(row: &Row, k: &str) -> String {
     row.get(k)
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -177,7 +177,7 @@ fn fit_badge_html(
 
 /// The booked hotel's display name: `name_zh` on the ZH page when present,
 /// else `name`. Shared by the Hotel block and the marker-booked FIT card.
-fn hotel_display_name(hotel: &Row, lang: &str) -> String {
+pub(crate) fn hotel_display_name(hotel: &Row, lang: &str) -> String {
     let name_zh = rs(hotel, "name_zh");
     if lang == "zh" && !name_zh.is_empty() {
         name_zh
@@ -555,7 +555,7 @@ fn criteria_dates(plan: &crate::model::Plan, lang: &str) -> String {
 }
 
 /// A `YYYY-MM-DD` date as (year, month, day); None when it does not parse.
-fn parse_ymd(d: &str) -> Option<(i64, i64, i64)> {
+pub(crate) fn parse_ymd(d: &str) -> Option<(i64, i64, i64)> {
     let mut it = d.split('-');
     let y = it.next()?.parse().ok()?;
     let m = it.next()?.parse().ok()?;
@@ -583,7 +583,7 @@ pub(crate) fn date_with_weekday(date: &str, lang: &str) -> Option<String> {
 }
 
 /// Days since 1970-01-01 for a civil (proleptic Gregorian) date.
-fn civil_days(y: i64, m: i64, d: i64) -> i64 {
+pub(crate) fn civil_days(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
@@ -689,8 +689,9 @@ fn plan_documents(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             .cmp(&(rank(b), b.sort_order))
             .then_with(|| a.doc_key.cmp(&b.doc_key))
     });
+    let unit = super::day::search_unit_attrs(Some(t("ticketsVouchers", lang)));
     for document in documents {
-        h.push_str("<div class=\"document-item\">");
+        h.push_str(&format!("<div class=\"document-item\"{unit}>"));
         h.push_str(&document_link(document, lang, token));
         if !document.days.is_empty() {
             h.push_str("<span class=\"document-days\">");
@@ -714,8 +715,30 @@ fn plan_documents(plan: &Plan, lang: &str, token: Option<&str>) -> String {
 pub const BLOCK_DOCS: &str = "sec-docs";
 pub const BLOCK_SUMMARY: &str = "sec-summary";
 
+/// The documents block followed by the booking summary (both, in that order).
+/// The plan page places them separately (render/mod.rs: 預訂總表 then 文件, in
+/// the reference group below the day cards) via [`booking_summary`] and
+/// [`documents_block`].
+#[cfg(test)]
 pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
-    let mut h = plan_documents(plan, lang, token);
+    let mut h = documents_block(plan, lang, token);
+    h.push_str(&booking_summary(plan, lang, token));
+    h
+}
+
+/// The 🎫 票券與憑證 block (every plan document, ranked by kind); "" without documents.
+pub fn documents_block(plan: &Plan, lang: &str, token: Option<&str>) -> String {
+    plan_documents(plan, lang, token)
+}
+
+/// The search label of a booking-summary row: 「預訂總表 · 航班」.
+fn summary_unit(part: &str, lang: &str) -> String {
+    super::day::search_unit_attrs(Some(&format!("{} · {part}", t("bookingSummary", lang))))
+}
+
+/// The 預訂總表 block alone.
+pub fn booking_summary(plan: &Plan, lang: &str, token: Option<&str>) -> String {
+    let mut h = String::new();
     // `summary-box` adds the dashed frame (user visibility request); the plan map
     // slot is rendered ABOVE this section (render_plan), never inside the frame.
     // One collapsible block (native <details open>, same pattern as the weather
@@ -734,7 +757,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             let heading = t("package", lang);
             h.push_str(&format!("<h2>{}</h2>", esc(heading)));
             h.push_str("<div class=\"booking-grid\">");
-            h.push_str("<div class=\"booking-item package\">");
+            h.push_str(&format!("<div class=\"booking-item package\"{}>", summary_unit(heading, lang)));
             h.push_str("<span class=\"booking-icon\">📦</span>");
             h.push_str("<div class=\"booking-detail\">");
             let title = join_parts(&[offer.source_id.clone(), offer.product_code.clone()]);
@@ -999,7 +1022,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 rs(f, "arrival_time"),
             ]);
             let date = rs(f, "flight_date");
-            h.push_str("<div class=\"booking-item flight\">");
+            h.push_str(&format!("<div class=\"booking-item flight\"{}>", summary_unit(t("flights", lang), lang)));
             h.push_str("<span class=\"booking-icon\">✈️</span>");
             h.push_str("<div class=\"booking-detail\">");
             let display = join_parts(&[number.clone(), airline.clone()]);
@@ -1028,7 +1051,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         let voucher_url = rs(hotel, "voucher_url");
         h.push_str(&format!("<h2>{}</h2>", esc(t("hotel", lang))));
         h.push_str("<div class=\"booking-grid\">");
-        h.push_str("<div class=\"booking-item hotel\">");
+        h.push_str(&format!("<div class=\"booking-item hotel\"{}>", summary_unit(t("hotel", lang), lang)));
         h.push_str("<span class=\"booking-icon\">🏨</span>");
         h.push_str("<div class=\"booking-detail\">");
         h.push_str(&format!(
@@ -1114,7 +1137,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             } else {
                 "booking-item domestic"
             };
-            h.push_str(&format!("<div class=\"{item_class}\">"));
+            h.push_str(&format!("<div class=\"{item_class}\"{}>", summary_unit(domestic_title, lang)));
             h.push_str("<span class=\"booking-icon\">🏠</span>");
             h.push_str("<div class=\"booking-detail\">");
             h.push_str(&format!(
@@ -1523,7 +1546,7 @@ pub fn render(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             let route = rs(tr, "selected_route");
             let dur = rs(tr, "selected_duration_min");
             let price = rs(tr, "selected_price_yen");
-            h.push_str("<div class=\"booking-item transfer\">");
+            h.push_str(&format!("<div class=\"booking-item transfer\"{}>", summary_unit(t("transfers", lang), lang)));
             h.push_str("<span class=\"booking-icon\">🚃</span>");
             h.push_str("<div class=\"booking-detail\">");
             if !title.is_empty() {

@@ -321,12 +321,20 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         } else {
             String::new()
         };
-        return html_no_store(render::render_plan(
+        // JST "now" for the 現在・接下來 card; `?at=YYYY-MM-DDTHH:MM` (strict,
+        // invalid → ignored) pins it for tests / verify-site. The page is served
+        // `private, no-store`, so a pinned render is never cached for others.
+        let clock = query
+            .get("at")
+            .and_then(|at| render::now::parse_at(at))
+            .unwrap_or_else(|| render::now::jst_from_ms(worker::Date::now().as_millis() as i64));
+        return html_no_store(render::render_plan_at(
             &plan,
             lang,
             token,
             &map_status,
             &owner_chrome,
+            Some(&clock),
         ));
     }
 
@@ -856,7 +864,8 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              FROM days WHERE plan_id = '{slug}' ORDER BY day_number"
         ),
         format!(
-            "SELECT day_number, session_type, focus_zh, transit_notes_zh \
+            "SELECT day_number, session_type, focus_zh, transit_notes_zh, \
+             time_range_start, time_range_end \
              FROM timesofday WHERE plan_id = '{slug}'"
         ),
         format!(
@@ -870,13 +879,15 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         format!(
             "SELECT direction, flight_number, airline, departure_code, departure_terminal, \
-             departure_time, arrival_code, arrival_terminal, arrival_time, flight_date \
+             departure_time, arrival_code, arrival_terminal, arrival_time, flight_date, \
+             departure_airport, arrival_airport \
              FROM flight_legs WHERE plan_id = '{slug}' ORDER BY direction, leg_order"
         ),
-        format!(
-            "SELECT name, name_zh, check_in, notes, voucher_url \
-             FROM hotels WHERE plan_id = '{slug}'"
-        ),
+        // `SELECT *` on purpose: the 常用資訊 card reads `address` / `phone`
+        // (added by `travel db migrate`, written by `set-hotel --address/--phone`),
+        // and a worker deployed before the migration must not fail the whole
+        // pipeline on a missing column — absent keys render as empty.
+        format!("SELECT * FROM hotels WHERE plan_id = '{slug}'"),
         format!(
             "SELECT direction, selected_title, selected_route, selected_duration_min, \
              selected_price_yen FROM airport_transfers WHERE plan_id = '{slug}'"

@@ -45,6 +45,10 @@ pub struct Activity {
 pub struct Session {
     pub session_type: String, // morning|noon|afternoon|evening
     pub focus_zh: String,
+    /// `timesofday.time_range_start` / `_end` ("HH:MM", JST wall clock); empty
+    /// when unset. Drive the plan page's 現在・接下來 timeline (render/now.rs).
+    pub time_start: String,
+    pub time_end: String,
     pub transit_zh: String,
     pub activities: Vec<Activity>,
     pub meals: Vec<Meal>,
@@ -733,6 +737,8 @@ fn merge_session_meta(sessions: &mut [Session], session_rows: &[Row], day_number
         {
             sess.focus_zh = s(r, "focus_zh");
             sess.transit_zh = s(r, "transit_notes_zh");
+            sess.time_start = s(r, "time_range_start").trim().to_string();
+            sess.time_end = s(r, "time_range_end").trim().to_string();
         }
     }
 }

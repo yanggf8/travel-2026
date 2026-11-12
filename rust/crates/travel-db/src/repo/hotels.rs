@@ -15,6 +15,11 @@ pub struct HotelWrite {
     pub notes: Option<String>,
     /// `hotels.populated_from` provenance (`set-hotel --source`).
     pub populated_from: Option<String>,
+    /// `hotels.address` (`set-hotel --address`) — the dashboard 常用資訊 card shows it
+    /// for the arrival card / customs form.
+    pub address: Option<String>,
+    /// `hotels.phone` (`set-hotel --phone`) — shown as a `tel:` link on the 常用資訊 card.
+    pub phone: Option<String>,
     /// Access lines; when non-empty they REPLACE all existing rows (DELETE-then-reinsert).
     pub access: Vec<String>,
 }
@@ -83,6 +88,14 @@ async fn upsert_hotel_row(
     if let Some(src) = &input.populated_from {
         cols.push("populated_from");
         vals.push(src.clone());
+    }
+    if let Some(a) = &input.address {
+        cols.push("address");
+        vals.push(a.clone());
+    }
+    if let Some(p) = &input.phone {
+        cols.push("phone");
+        vals.push(p.clone());
     }
     cols.push("updated_at");
     vals.push(now_db.to_string());
