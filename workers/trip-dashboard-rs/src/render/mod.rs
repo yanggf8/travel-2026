@@ -324,7 +324,7 @@ fn page_toc(plan: &Plan, lang: &str, blocks: &TocBlocks) -> String {
 ///    (`#sec-now[data-now-date]`) is today and the clock is not pinned by
 ///    `?at=`, re-marks 現在 / 接下來 on the timeline every minute (and when the
 ///    tab becomes visible) from `data-start` / `data-end` / `data-at` (JST
-///    minutes), and shows the 明天 entry once the day's last session has ended.
+///    minutes), opens the new 現在 / 接下來 items and closes the ones it auto-opened before (`data-auto`; a user's own toggle clears the flag and is never undone), and shows the 明天 entry once the day's last session has ended.
 const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
 (function(){
   var d=document,de=d.documentElement,k='trip-blocks:'+(d.body.getAttribute('data-plan-id')||''),st={},els=[],ls=null,i;
@@ -374,9 +374,11 @@ const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
       var it=nc.querySelectorAll('.now-item[data-start]'),cur=-1,nx=-1;
       for(j=0;j<it.length;j++){var s=+it[j].getAttribute('data-start'),e=+it[j].getAttribute('data-end');if(s<=m&&m<e)cur=j;if(nx<0&&s>m)nx=j;}
       for(j=0;j<it.length;j++){var c=it[j].classList,h=it[j].querySelector('.now-head');c.toggle('is-now',j===cur);c.toggle('is-next',j!==cur&&j===nx);c.toggle('is-past',+it[j].getAttribute('data-end')<=m);
-        if(h&&j===cur)mkb(h,'now',nc.getAttribute('data-l-now'),false);else if(h&&j===nx)mkb(h,'next',nc.getAttribute('data-l-next'),false);}
+        if(h&&j===cur)mkb(h,'now',nc.getAttribute('data-l-now'),false);else if(h&&j===nx)mkb(h,'next',nc.getAttribute('data-l-next'),false);
+        var bx=it[j].querySelector('details.now-box');if(bx){if(j===cur||j===nx){if(!bx.open){bx.open=true;bx.setAttribute('data-auto','');}}else if(bx.hasAttribute('data-auto')){bx.open=false;bx.removeAttribute('data-auto');}}}
       var lg=nc.querySelectorAll('.now-leg[data-at]'),bl=null,ba=1e9;for(j=0;j<lg.length;j++){var at=+lg[j].getAttribute('data-at');if(at>=m&&at<ba){ba=at;bl=lg[j];}}if(bl)mkb(bl,'next',nc.getAttribute('data-l-next'),true);
       var tw=nc.querySelector('.now-tomorrow');if(tw)tw.hidden=!(cur<0&&nx<0);};
+    nc.addEventListener('click',function(e){for(var a=e.target;a&&a!==nc;a=a.parentNode)if(a.tagName==='SUMMARY'&&a.parentNode.hasAttribute('data-auto')){a.parentNode.removeAttribute('data-auto');return;}});
     setInterval(remark,60000);
     d.addEventListener('visibilitychange',function(){if(!d.hidden)remark();});
     window.addEventListener('pageshow',function(e){if(e.persisted)remark();});
@@ -1121,7 +1123,7 @@ mod tests {
         ), "{nav}");
         for unit in [
             // Day card session, quick info, summary row, document, weather + meal rows.
-            "<div class=\"session session-noon\" data-search-unit data-search-label=\"11/14（六）· 中午\">",
+            "<div class=\"session session-noon\" id=\"day-1-noon\" data-search-unit data-search-label=\"11/14（六）· 中午\">",
             "<div class=\"qi-row\" data-search-unit data-search-label=\"常用資訊 · 回程\">",
             "<div class=\"booking-item flight\" data-search-unit data-search-label=\"預訂總表 · 航班\">",
             "<div class=\"document-item\" data-search-unit data-search-label=\"🎫 票券與憑證\">",
@@ -1215,6 +1217,9 @@ mod tests {
             "getElementById('sec-now')",
             "hasAttribute('data-now-pinned')",
             "setInterval(remark,60000)",
+            "bx.setAttribute('data-auto','')",
+            "bx.open=false;bx.removeAttribute('data-auto')",
+            "a.parentNode.removeAttribute('data-auto')",
             "hasAttribute('data-today')",
         ] {
             assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");

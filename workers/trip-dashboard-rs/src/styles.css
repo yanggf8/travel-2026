@@ -1694,6 +1694,15 @@ details[data-block] > summary > h2 { min-width: 0; overflow-wrap: anywhere; }
 .now-focus { font-size: 14px; line-height: 1.55; margin-top: 4px; overflow-wrap: anywhere; }
 .now-legs { list-style: none; margin-top: 4px; }
 .now-leg { font-size: 12px; color: #334155; padding: 2px 0; line-height: 1.4; overflow-wrap: anywhere; }
+.now-transit { font-size: 12px; color: #334155; margin-top: 4px; line-height: 1.4; overflow-wrap: anywhere; }
+.now-box > summary { cursor: pointer; list-style: none; }
+.now-box > summary::-webkit-details-marker { display: none; }
+.now-box > summary::after { content: "▸"; float: right; color: var(--text-dim); font-size: 12px; }
+.now-box[open] > summary::after { content: "▾"; }
+.now-expand { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #cbd5e1; min-width: 0; }
+.now-expand .meal { display: block; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.now-expand .now-act { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.now-detail { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--accent); text-decoration: none; }
 .now-meal { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
 .now-meal a { color: var(--accent); text-decoration: none; }
 .now-meal-k { font-size: 11px; color: var(--text-dim); }

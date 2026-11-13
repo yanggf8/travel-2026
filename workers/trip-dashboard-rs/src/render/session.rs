@@ -171,15 +171,21 @@ pub fn has_content(sess: &Session) -> bool {
     !(sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty())
 }
 
+/// Stable element id of a session block on its day card (`day-2-morning`); the
+/// 現在・接下來 card links to it.
+pub fn session_anchor(day_number: i64, session_type: &str) -> String {
+    format!("day-{day_number}-{session_type}")
+}
+
 /// Render one session block. Empty sessions are caller-skipped (see day.rs).
 #[cfg(test)]
 pub fn render(sess: &Session, lang: &str) -> String {
-    render_unit(sess, lang, None)
+    render_unit(sess, lang, None, None)
 }
 
 /// [`render`] as a search unit (`data-search-unit` + `data-search-label`) when
 /// `search_label` is given — the day cards pass 「11/15（日）· 中午」.
-pub fn render_unit(sess: &Session, lang: &str, search_label: Option<&str>) -> String {
+pub fn render_unit(sess: &Session, lang: &str, search_label: Option<&str>, anchor: Option<&str>) -> String {
     let label = session_label(&sess.session_type, lang);
     // The session's own time range next to its name (「上午 08:00–11:15」) — shown
     // on the day card and part of the search unit's text, so a search for a
@@ -192,8 +198,9 @@ pub fn render_unit(sess: &Session, lang: &str, search_label: Option<&str>) -> St
     };
     let mut h = String::new();
     h.push_str(&format!(
-        "<div class=\"session session-{}\"{}><div class=\"session-label\">{}{time}</div>",
+        "<div class=\"session session-{}\"{}{}><div class=\"session-label\">{}{time}</div>",
         esc(&sess.session_type),
+        anchor.map(|a| format!(" id=\"{}\"", esc(a))).unwrap_or_default(),
         super::day::search_unit_attrs(search_label),
         label
     ));

@@ -218,9 +218,8 @@ fn meal_line(sess: &Session, lang: &str) -> String {
     h
 }
 
-/// One timeline entry's body: focus line (the activities when there is no
-/// focus), timed legs, meals.
-fn session_body(sess: &Session, legs: &[(&RouteSegment, i64, bool)], lang: &str) -> String {
+/// The focus line (the activities when there is no focus).
+fn focus_html(sess: &Session) -> String {
     let mut h = String::new();
     if !sess.focus_zh.is_empty() {
         h.push_str(&format!("<div class=\"now-focus\">{}</div>", esc(&sess.focus_zh)));
@@ -229,18 +228,56 @@ fn session_body(sess: &Session, legs: &[(&RouteSegment, i64, bool)], lang: &str)
             h.push_str(&format!("<div class=\"now-focus\">{}</div>", super::render_activity_text(&a.title)));
         }
     }
-    if !legs.is_empty() {
-        h.push_str("<ul class=\"now-legs\">");
-        for (seg, at, is_next) in legs {
-            let next = if *is_next { badge("next", lang) } else { String::new() };
-            h.push_str(&format!(
-                "<li class=\"now-leg\" data-at=\"{at}\">{next}{}</li>",
-                super::day::route_seg_inner(seg, lang)
-            ));
-        }
-        h.push_str("</ul>");
+    h
+}
+
+/// The session's transit notes, as on the day card (session.rs: ZH text only).
+fn transit_html(sess: &Session) -> String {
+    if sess.transit_zh.is_empty() {
+        return String::new();
     }
-    h.push_str(&meal_line(sess, lang));
+    format!("<div class=\"now-transit\">🚃 {}</div>", super::render_activity_text(&sess.transit_zh))
+}
+
+fn legs_html(legs: &[(&RouteSegment, i64, bool)], lang: &str) -> String {
+    if legs.is_empty() {
+        return String::new();
+    }
+    let mut h = String::from("<ul class=\"now-legs\">");
+    for (seg, at, is_next) in legs {
+        let next = if *is_next { badge("next", lang) } else { String::new() };
+        h.push_str(&format!(
+            "<li class=\"now-leg\" data-at=\"{at}\">{next}{}</li>",
+            super::day::route_seg_inner(seg, lang)
+        ));
+    }
+    h.push_str("</ul>");
+    h
+}
+
+/// What a timeline entry unfolds to: transit, the session's timed legs, every
+/// meal as the day card renders it, the activities (when the focus line is not
+/// already them) and a link to the session on the day card.
+fn expand_body(sess: &Session, legs: &[(&RouteSegment, i64, bool)], day_number: i64, tomorrow: bool, lang: &str) -> String {
+    let mut h = String::from("<div class=\"now-expand\">");
+    h.push_str(&transit_html(sess));
+    h.push_str(&legs_html(legs, lang));
+    if !sess.focus_zh.is_empty() {
+        for a in &sess.activities {
+            h.push_str(&format!("<div class=\"now-act\">{}</div>", super::render_activity_text(&a.title)));
+        }
+    }
+    for m in &sess.meals {
+        h.push_str(&super::session::render_meal(m, lang));
+    }
+    // Today's day card is served open, so its session anchor is visible without
+    // JS; tomorrow's card is collapsed, so link to the day card itself.
+    let (target, text) = if tomorrow {
+        (super::day::day_block_id(day_number), tf("nowOpenDay", lang, &[("day", &day_number.to_string())]))
+    } else {
+        (super::session::session_anchor(day_number, &sess.session_type), t("nowSessionDetail", lang).to_string())
+    };
+    h.push_str(&format!("<a class=\"now-detail\" href=\"#{}\">{}</a></div>", esc(&target), esc(&text)));
     h
 }
 
@@ -319,13 +356,17 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
         } else {
             format!("<span class=\"now-time\">{}</span>", esc(&time))
         };
+        // Served open (and flagged data-auto so the script may close it again
+        // when the clock moves on) only for 現在 / 接下來.
+        let open = if marks.current == Some(i) || marks.next == Some(i) { " open data-auto" } else { "" };
         h.push_str(&format!(
-            "<li class=\"{class}\" data-start=\"{}\" data-end=\"{}\"><div class=\"now-head\">\
-             <span class=\"now-name\">{}</span>{time}{b}</div>{}</li>",
+            "<li class=\"{class}\" data-start=\"{}\" data-end=\"{}\"><details class=\"now-box\"{open}><summary>\
+             <div class=\"now-head\"><span class=\"now-name\">{}</span>{time}{b}</div>{}</summary>{}</details></li>",
             slot.start,
             slot.end,
             esc(super::session::session_label(&slot.sess.session_type, lang)),
-            session_body(slot.sess, &per_slot[i], lang),
+            focus_html(slot.sess),
+            expand_body(slot.sess, &per_slot[i], today.day_number, false, lang),
         ));
     }
     // 明天: tomorrow's first session, shown once today is done (the script
@@ -346,13 +387,12 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
                 format!("<span class=\"now-time\">{}</span>", esc(&time))
             };
             h.push_str(&format!(
-                "<li class=\"now-item now-tomorrow\"{hidden}><div class=\"now-head\">{}<span class=\"now-name\">{}</span>{time}</div>{}\
-                 <a class=\"now-more\" href=\"#{}\">{}</a></li>",
+                "<li class=\"now-item now-tomorrow\"{hidden}><details class=\"now-box\"><summary><div class=\"now-head\">{}\
+                 <span class=\"now-name\">{}</span>{time}</div>{}</summary>{}</details></li>",
                 badge("tomorrow", lang),
                 esc(&name),
-                session_body(first, &[], lang),
-                super::day::day_block_id(tomorrow.day_number),
-                esc(&tf("nowOpenDay", lang, &[("day", &tomorrow.day_number.to_string())])),
+                focus_html(first),
+                expand_body(first, &[], tomorrow.day_number, true, lang),
             ));
         }
     }
@@ -708,7 +748,7 @@ mod tests {
              data-l-now=\"現在\" data-l-next=\"接下來\"><details data-block=\"sec-now\" open><summary><h2>現在・接下來 · 11/16（一）</h2></summary>"
         ), "{html}");
         assert!(html.contains(
-            "<li class=\"now-item now-s-morning is-now\" data-start=\"390\" data-end=\"495\"><div class=\"now-head\">\
+            "<li class=\"now-item now-s-morning is-now\" data-start=\"390\" data-end=\"495\"><details class=\"now-box\" open data-auto><summary><div class=\"now-head\">\
              <span class=\"now-name\">上午</span><span class=\"now-time\">06:30\u{2013}08:15</span>\
              <span class=\"now-badge now-badge--now\">現在</span></div>"
         ), "{html}");
@@ -722,9 +762,11 @@ mod tests {
         // The now card's route copy is never a search unit (no duplicate hits).
         assert!(!html.contains("data-search-unit"), "{html}");
         // Main meal (map link) + backup, short forms.
+        // The meals unfold with the day card's rendering (main linked to its map pin, backup plain).
         assert!(html.contains(
-            "<div class=\"now-meal\">🍽️ <span class=\"now-meal-k\">主選</span> <a href=\"https://www.google.com/maps/search/%E6%9C%AC%E5%AE%B6%20%E7%AC%AC%E4%B8%80%E6%97%AD\" \
-             target=\"_blank\" rel=\"noopener\">京都醬油拉麵｜本家 第一旭 🗺️</a> <span class=\"now-meal-k\">備選</span> 京都黑醬油拉麵｜新福菜館 本店</div>"
+            "<a class=\"meal\" href=\"https://www.google.com/maps/search/%E6%9C%AC%E5%AE%B6%20%E7%AC%AC%E4%B8%80%E6%97%AD\" \
+             target=\"_blank\" rel=\"noopener\">🍽️ 主選：京都醬油拉麵｜本家 第一旭：京都站東側 🗺️</a>\
+             <div class=\"meal\">🍽️ 備選：京都黑醬油拉麵｜新福菜館 本店：第一旭隔壁</div>"
         ), "{html}");
         // Today's documents, same voucher links as the day card.
         assert!(html.contains("<div class=\"day-documents\"><a class=\"doc-link\" data-doc=\"flight\" href=\"/voucher/kyoto-nov-2026/doc-flight.pdf?token=tok\""), "{html}");
@@ -753,11 +795,12 @@ mod tests {
         let today = &plan.days[0];
         let html = now_card(&plan, today, &clock("2026-11-15", "21:00"), "zh", None);
         assert!(html.contains(
-            "<li class=\"now-item now-tomorrow\"><div class=\"now-head\"><span class=\"now-badge now-badge--tomorrow\" data-fixed>明天</span>\
+            "<li class=\"now-item now-tomorrow\"><details class=\"now-box\"><summary><div class=\"now-head\"><span class=\"now-badge now-badge--tomorrow\" data-fixed>明天</span>\
              <span class=\"now-name\">11/16（一）· 上午</span><span class=\"now-time\">06:30\u{2013}08:15</span></div>\
-             <div class=\"now-focus\">拉麵早餐後退房</div>"
+             <div class=\"now-focus\">拉麵早餐後退房</div></summary>"
         ), "{html}");
-        assert!(html.contains("<a class=\"now-more\" href=\"#day-5\">第 5 天完整內容 ↓</a></li>"), "{html}");
+        // Collapsed, same unfolded content as the other items; its link goes to the (collapsed) day card itself.
+        assert!(html.contains("🍽️ 主選：京都醬油拉麵") && html.contains("<a class=\"now-detail\" href=\"#day-5\">第 5 天完整內容 ↓</a></div></details></li>"), "{html}");
         assert!(!html.contains("is-now"), "{html}");
         // Mid-day: tomorrow is in the DOM but hidden (the script un-hides it).
         let html = now_card(&plan, today, &clock("2026-11-15", "12:00"), "zh", None);
@@ -767,6 +810,73 @@ mod tests {
         assert!(html.contains("<div class=\"now-variants\"><a class=\"now-variant\" href=\"#variant-6\">替代方案：晴天行程</a></div>"), "{html}");
         let en = now_card(&plan, today, &clock("2026-11-15", "12:00"), "en", None);
         assert!(en.contains("<h2>Now &amp; next · Sun 11/15</h2>") && en.contains("Alternative: Sunny-day plan"), "{en}");
+    }
+
+    /// The `<li>` of the timeline entry whose class list holds `cls`.
+    fn item<'a>(html: &'a str, cls: &str) -> &'a str {
+        let from = html.find(&format!("<li class=\"now-item {cls}")).unwrap_or_else(|| panic!("{cls}: {html}"));
+        let rest = &html[from..];
+        &rest[..rest.find("</li></ol>").map_or(rest.len(), |e| e + 5).min(rest.find("</details></li>").map_or(rest.len(), |e| e + 15))]
+    }
+
+    #[test]
+    fn now_card_shows_session_transit_notes() {
+        let mut plan = trip();
+        plan.days[0].sessions[0].transit_zh = "京阪電車 東福寺→祇園四条\n約12分".into();
+        plan.days[0].sessions[1].transit_zh = String::new();
+        let html = now_card(&plan, &plan.days[0], &clock("2026-11-15", "09:00"), "zh", None);
+        let morning = item(&html, "now-s-morning");
+        assert!(morning.contains("<div class=\"now-transit\">🚃 京阪電車 東福寺→祇園四条"), "{morning}");
+        // An empty transit_zh prints no line.
+        let evening = item(&html, "now-s-evening");
+        assert!(!evening.contains("now-transit"), "{evening}");
+    }
+
+    #[test]
+    fn timeline_item_unfolds_to_transit_meals_activities_and_day_link() {
+        let mut plan = trip();
+        let mut morning = sess("morning", "08:00", "11:15", "東福寺通天橋");
+        morning.transit_zh = "JR奈良線 京都→東福寺".into();
+        morning.activities = vec![crate::model::Activity { title: "楓葉散步".into(), ..Default::default() }];
+        morning.meals = vec![
+            Meal { text: "主選：拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into() },
+            Meal { text: "備選：黑醬油拉麵｜新福菜館".into(), source: "confirmed".into() },
+        ];
+        plan.days[0].sessions[0] = morning;
+        plan.days[0].route_segments = vec![leg("飯店", "東福寺", "08:10")];
+        let html = now_card(&plan, &plan.days[0], &clock("2026-11-15", "09:00"), "zh", None);
+        let m = item(&html, "now-s-morning");
+        let (summary, body) = m.split_once("</summary>").expect("details/summary");
+        assert!(summary.contains("now-name") && summary.contains("東福寺通天橋"), "{m}");
+        assert!(!summary.contains("now-transit"), "{m}");
+        for want in [
+            "<div class=\"now-transit\">🚃 JR奈良線 京都→東福寺</div>",
+            "<li class=\"now-leg\" data-at=\"490\">",
+            "<div class=\"now-act\">楓葉散步</div>",
+            "href=\"https://www.google.com/maps/search/%E6%9C%AC%E5%AE%B6%20%E7%AC%AC%E4%B8%80%E6%97%AD\"",
+            "備選：黑醬油拉麵｜新福菜館",
+            "<a class=\"now-detail\" href=\"#day-4-morning\">看當天詳細 →</a>",
+        ] {
+            assert!(body.contains(want), "{want}: {m}");
+        }
+        // The anchor exists on the day card.
+        let card = crate::render::session::render_unit(&plan.days[0].sessions[0], "zh", None, Some("day-4-morning"));
+        assert!(card.contains("id=\"day-4-morning\""), "{card}");
+        let en = now_card(&plan, &plan.days[0], &clock("2026-11-15", "09:00"), "en", None);
+        assert!(en.contains("Full details for this block →"), "{en}");
+    }
+
+    #[test]
+    fn only_now_and_next_items_are_served_open() {
+        let plan = trip();
+        let html = now_card(&plan, &plan.days[0], &clock("2026-11-15", "09:00"), "zh", None);
+        assert!(item(&html, "now-s-morning is-now").contains("<details class=\"now-box\" open data-auto>"), "{html}");
+        assert!(item(&html, "now-s-evening is-next").contains("<details class=\"now-box\" open data-auto>"), "{html}");
+        // A past clock: the ended morning is collapsed.
+        let html = now_card(&plan, &plan.days[0], &clock("2026-11-15", "12:00"), "zh", None);
+        assert!(item(&html, "now-s-morning is-past").contains("<details class=\"now-box\">"), "{html}");
+        assert!(item(&html, "now-s-evening is-next").contains("<details class=\"now-box\" open data-auto>"), "{html}");
+        assert_eq!(html.matches("<details class=\"now-box\" open data-auto>").count(), 1, "{html}");
     }
 
     fn flight(direction: &str, number: &str, date: &str, dep: (&str, &str, &str), arr: (&str, &str, &str)) -> crate::turso::Row {

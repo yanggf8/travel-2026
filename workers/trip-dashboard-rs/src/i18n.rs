@@ -119,6 +119,8 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("tomorrowBadge", true) => "明天",
         ("nowFullRoute", false) => "Today's full route",
         ("nowFullRoute", true) => "今日完整路線",
+        ("nowSessionDetail", false) => "Full details for this block →",
+        ("nowSessionDetail", true) => "看當天詳細 →",
         ("nowOpenDay", false) => "Day {day} in full ↓",
         ("nowOpenDay", true) => "第 {day} 天完整內容 ↓",
         // 常用資訊 (render/now.rs quick_info): flights + the booked hotel's
