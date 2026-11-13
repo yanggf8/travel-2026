@@ -187,10 +187,6 @@ async fn collect_map_link_issues(plan_id: &str) -> Vec<Issue> {
     issues
 }
 
-/// Message prefix the reservation check emits — shared so the doctor hook can
-/// pick those findings back out of the issue list without re-deriving them.
-const RESERVATION_MSG_PREFIX: &str = "Restaurant may need a reservation";
-
 /// Agent-first hook for `doctor`: run only the map-link checks for one plan's
 /// active destination and return the ERROR-level findings (cross-country legs —
 /// the ocean-spanning Maps routes). Returns (day, message) pairs.
@@ -199,19 +195,6 @@ pub async fn map_link_errors(plan_id: &str) -> Vec<(i64, String)> {
         .await
         .into_iter()
         .filter(|i| matches!(i.severity, Severity::Error))
-        .map(|i| (i.day.unwrap_or(0), i.message))
-        .collect()
-}
-
-/// Agent-first hook for `doctor`: sit-down restaurants that may need a
-/// reservation and are NOT yet enrolled in the booking ledger (no booked/pending
-/// activity in their session). Self-clearing — once you `set-activity-booking …
-/// pending|booked`, the finding disappears. Returns (day, restaurant-label).
-pub async fn unbooked_reservations(plan_id: &str) -> Vec<(i64, String)> {
-    collect_map_link_issues(plan_id)
-        .await
-        .into_iter()
-        .filter(|i| i.message.starts_with(RESERVATION_MSG_PREFIX))
         .map(|i| (i.day.unwrap_or(0), i.message))
         .collect()
 }
@@ -416,87 +399,6 @@ fn validate_map_links(day: &DaySummary, out: &mut Vec<Issue>) {
             });
         }
     }
-
-    // (6) reservation check: a sit-down lunch/dinner restaurant probably needs a
-    // booking. Walk-in types (ramen, public-market food courts / 食堂, izakaya
-    // street-stall villages, supermarkets, casual soba) can't be reserved, so skip
-    // them. Breakfast is also skipped (hotel/conbini, never reserved).
-    //
-    // BOOKING-AWARE: once the restaurant is enrolled in the booking ledger — i.e.
-    // the same session already has an activity with booking_status booked/pending —
-    // the reservation is being tracked, so we stop flagging it. This makes the lint
-    // self-clearing: set-activity-booking … pending|booked silences it. (Path B:
-    // restaurant reservations reuse the activity booking lifecycle.)
-    for meal in &day.meals {
-        if needs_reservation_check(&meal.session, &meal.text)
-            && !session_has_tracked_booking(day, &meal.session)
-        {
-            out.push(Issue {
-                severity: Severity::Info,
-                day: Some(day.day_number),
-                session: Some(meal.session.clone()),
-                message: format!(
-                    "Restaurant may need a reservation: \"{}\"",
-                    truncate(&meal.text, 50)
-                ),
-                suggestion: Some(
-                    "Enroll it in the booking ledger so it's tracked: add-activity <day> <session> \"<restaurant>\" then set-activity-booking <day> <session> \"<restaurant>\" pending (→ booked once confirmed). Walk-in? Leave as-is.".to_string(),
-                ),
-            });
-        }
-    }
-}
-
-/// True when the given day+session already has a booking-tracked activity
-/// (booking_status booked/pending). Used to suppress the reservation flag once a
-/// restaurant has been enrolled in the booking ledger.
-fn session_has_tracked_booking(day: &DaySummary, session: &str) -> bool {
-    day.activities.iter().any(|a| {
-        a.session == session
-            && matches!(
-                a.booking_status.as_deref(),
-                Some("booked") | Some("pending") | Some("waitlist")
-            )
-    })
-}
-
-/// True when a meal is a sit-down lunch/dinner restaurant that plausibly needs a
-/// reservation — i.e. NOT a walk-in venue type and NOT breakfast.
-///
-/// Walk-in types we never flag (you can't / needn't book them):
-///   - ramen: 拉麵 / ラーメン / ramen
-///   - public-market food courts & 食堂: 市場 / 公設市場 / 食堂 / フードコート / food court
-///   - izakaya street-stall villages: 屋台 / 屋台村
-///   - supermarkets / convenience: 超市 / スーパー / リウボウ / Ryubo / コンビニ
-///   - casual standalone soba shops: そば / 沖繩そば / 沖縄そば (counter-service)
-fn needs_reservation_check(session: &str, text: &str) -> bool {
-    let s = session.to_lowercase();
-    // Only lunch/dinner sit-down meals; breakfast is always walk-in.
-    let is_meal_out = s.contains("noon") || s.contains("afternoon") || s.contains("evening") || s.contains("lunch") || s.contains("dinner");
-    if !is_meal_out {
-        return false;
-    }
-    let lower = text.to_lowercase();
-    // Walk-in markers (any present → no reservation needed).
-    const WALK_IN: &[&str] = &[
-        "\u{62C9}\u{9EBA}",          // 拉麵
-        "\u{30E9}\u{30FC}\u{30E1}\u{30F3}", // ラーメン
-        "ramen",
-        "\u{5E02}\u{5834}",          // 市場
-        "\u{516C}\u{8A2D}\u{5E02}\u{5834}", // 公設市場
-        "\u{98DF}\u{5802}",          // 食堂
-        "\u{30D5}\u{30FC}\u{30C9}\u{30B3}\u{30FC}\u{30C8}", // フードコート
-        "food court",
-        "\u{5C4B}\u{53F0}",          // 屋台 (covers 屋台村)
-        "\u{8D85}\u{5E02}",          // 超市
-        "\u{30B9}\u{30FC}\u{30D1}\u{30FC}", // スーパー
-        "\u{30EA}\u{30A6}\u{30DC}\u{30A6}", // リウボウ
-        "ryubo",
-        "\u{30B3}\u{30F3}\u{30D3}\u{30CB}", // コンビニ
-        "\u{305D}\u{3070}",          // そば
-        "soba",
-    ];
-    !WALK_IN.iter().any(|m| lower.contains(m))
 }
 
 // A stop is "ambiguous" if it's a short CJK place name with no station/city marker.
@@ -1233,7 +1135,7 @@ mod map_link_tests {
     // / place_country / mentions_rail_or_bus / meal_has_pin / extract_map_urls now
     // live in crate::checks and are unit-tested there. The tests below cover the
     // map-link lint BEHAVIOR (validate_map_links wiring) and the predicates that
-    // stayed local (is_ambiguous_stop, needs_reservation_check).
+    // stayed local (is_ambiguous_stop).
 
     fn activity(session: &str, title: &str, booking_status: Option<&str>) -> Activity {
         Activity {
@@ -1352,52 +1254,6 @@ mod map_link_tests {
         let t = truncate(&long, 10);
         assert!(t.chars().count() <= 11, "10 chars + ellipsis, got {}", t.chars().count());
         assert!(t.ends_with('…'));
-    }
-
-    #[test]
-    fn reservation_check_skips_walk_in_and_breakfast() {
-        assert!(needs_reservation_check("evening", "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}"));
-        assert!(needs_reservation_check("noon", "\u{5348}\u{9910}\u{FF1A}\u{9996}\u{91CC}\u{6BBF}\u{5167}"));
-        assert!(!needs_reservation_check("noon", "\u{7B2C}\u{4E00}\u{7261}\u{5FD7}\u{516C}\u{8A2D}\u{5E02}\u{5834} 2F \u{98DF}\u{5802}"));
-        assert!(!needs_reservation_check("evening", "\u{6804}\u{753A}\u{5E02}\u{5834} \u{5C4B}\u{53F0}\u{6751}"));
-        assert!(!needs_reservation_check("noon", "\u{6CE2}\u{4E4B}\u{4E0A}\u{5468}\u{908A}\u{FF08}\u{6C96}\u{7E69}\u{305D}\u{3070}\u{FF09}"));
-        assert!(!needs_reservation_check("noon", "Tonkotsu ramen counter"));
-        assert!(!needs_reservation_check("noon", "\u{30EA}\u{30A6}\u{30DC}\u{30A6} \u{5B89}\u{91CC}\u{5E97}"));
-        assert!(!needs_reservation_check("morning", "\u{65E9}\u{9910}\u{FF1A}\u{67D0}\u{9910}\u{5EF3}"));
-    }
-
-    #[test]
-    fn reservation_flag_clears_once_session_has_tracked_booking() {
-        let dinner = MealEntry {
-            session: "evening".into(),
-            text: "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}\u{FF5C}map:x".into(),
-        };
-        let mut base = empty_day();
-        base.meals = vec![dinner];
-        let mut out = Vec::new();
-        validate_map_links(&base, &mut out);
-        assert!(
-            out.iter().any(|i| i.message.starts_with("Restaurant may need a reservation")),
-            "unbooked sit-down restaurant should be flagged"
-        );
-
-        let mut booked = DaySummary {
-            activities: vec![activity("evening", "restaurant", Some("pending"))],
-            ..base
-        };
-        booked.meals = vec![MealEntry {
-            session: "evening".into(),
-            text: "\u{665A}\u{9910}\u{FF1A}\u{3086}\u{3046}\u{306A}\u{3093}\u{304E}\u{3044}\u{FF5C}map:x".into(),
-        }];
-        let mut out2 = Vec::new();
-        validate_map_links(&booked, &mut out2);
-        assert!(
-            !out2.iter().any(|i| i.message.starts_with("Restaurant may need a reservation")),
-            "a pending booking in the session should clear the reservation flag"
-        );
-
-        assert!(session_has_tracked_booking(&booked, "evening"));
-        assert!(!session_has_tracked_booking(&booked, "noon"));
     }
 
     #[test]

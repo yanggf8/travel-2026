@@ -486,6 +486,95 @@ pub async fn run_meals(args: &[String], plan_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// `clear-meals <day> <session> [--dest slug]`: remove every meal of one session.
+/// Nothing to clear -> one-line note, no write, no version bump.
+pub async fn run_clear_meals(args: &[String], plan_id: String) -> Result<(), String> {
+    let mut dest: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                dest = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --dest".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            f if crate::plan_resolver::is_resolver_flag(f) => i += 2,
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() != 2 {
+        return Err("Usage: clear-meals <day> <session> [--dest <slug>]".to_string());
+    }
+    let day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| "<day> must be a positive integer".to_string())?;
+    if day < 1 {
+        return Err("<day> must be a positive integer".to_string());
+    }
+    let session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &dest).await?;
+    require_session(&conn, &plan_id, &destination, day, &session).await?;
+
+    // One transaction: DELETE + touch_day + events + version + operation_runs
+    // commit together or not at all (same pattern as d563386; set-meals' run_meals
+    // is NOT transactional - left as is).
+    crate::cascade::common::begin_immediate(&conn, "clear-meals").await?;
+    let outcome: Result<u64, String> = async {
+        let removed =
+            itinerary::delete_session_meals(&conn, &plan_id, &destination, day, &session).await?;
+        if removed == 0 {
+            return Ok(0);
+        }
+        touch_day(&conn, &plan_id, &destination, day).await?;
+        let kv: Vec<(&str, String)> = vec![
+            ("day_number", day.to_string()),
+            ("session", session.clone()),
+            ("count", removed.to_string()),
+        ];
+        execute_tod(
+            &conn,
+            &plan_id,
+            &destination,
+            day,
+            &session,
+            None,
+            None,
+            None,
+            None,
+            &kv,
+            "itinerary_session_meals_cleared",
+            "clear-meals",
+            &format!("D{day}/{session}"),
+        )
+        .await?;
+        Ok(removed)
+    }
+    .await;
+    let removed = crate::cascade::common::finish_tx(&conn, "clear-meals", outcome).await?;
+    if removed == 0 {
+        println!("ℹ️ No meals to clear for day {day} session {session}");
+        return Ok(());
+    }
+    println!("✅ Cleared {removed} meal(s) for day {day} session {session}");
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Arg parsing
 // ─────────────────────────────────────────────────────────────────

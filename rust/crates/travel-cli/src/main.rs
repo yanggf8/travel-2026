@@ -624,6 +624,15 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             set_tod::run_meals(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "clear-meals" => {
+            if rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  travel clear-meals <day> <session> [--dest <slug>]\n  (delete every meal of one session; audited. No meals -> note only, no version bump)");
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_tod::run_clear_meals(rest, plan_id).await?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "set-activity-time" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
                 println!("Usage:\n  travel set-activity-time <day> <session> <activity> [--start HH:MM] [--end HH:MM] [--fixed true|false] [--dest <slug>]");
@@ -919,7 +928,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "validate-itinerary" => {
-            if wants_help(rest, "travel validate-itinerary [--dest slug] [--severity error|warn|info]\n  (lint the daily itinerary: map links, open hours, reservations)") { return Ok(()); }
+            if wants_help(rest, "travel validate-itinerary [--dest slug] [--severity error|warn|info]\n  (lint the daily itinerary: map links, open hours)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             validate_itinerary::run(rest, plan_id).await?;
             Ok(())
@@ -1111,6 +1120,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   reorder-activities <day> <session> <id|title> ...\n\
   move-activity <day> <from-session> <to-session> <id|title> [--to-day N]\n\
   set-meals <day> <session> --meal \"<text>\" [--meal ...] [--zh \"<zh>\" ...]\n\
+  clear-meals <day> <session> [--dest <slug>]  Delete every meal of one session (audited)\n\
   confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]  Flip AI-recommended → confirmed\n\
   derive-routes [--day N] [--dest <slug>]  Derive ai_recommended transit route segments from activity stations\n\
   set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\

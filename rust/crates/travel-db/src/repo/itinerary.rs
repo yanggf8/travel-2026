@@ -282,6 +282,28 @@ pub async fn replace_session_activities_zh(
     Ok(())
 }
 
+/// DELETE every `session_meals` row of a `(plan, dest, day, session)`; returns the number removed.
+pub async fn delete_session_meals(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+) -> Result<u64, String> {
+    conn.execute(
+        "DELETE FROM session_meals \
+         WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("session_meals DELETE failed: {e}"))
+}
+
 /// Ordered replace of `session_meals` for a `(plan, dest, day, session)`: DELETE all rows then
 /// re-INSERT one per meal with `sort_order` = index. SQL copied verbatim from the inline block in
 /// `set_tod::run_meals`. Caller keeps its per-meal stdout echo.
