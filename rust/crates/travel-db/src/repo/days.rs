@@ -163,6 +163,25 @@ pub async fn first_main_day_date(conn: &Connection, plan_id: &str) -> Result<Opt
     }
 }
 
+/// Every distinct MAIN-day date of a plan (`days.date`, variants excluded), ascending. Empty when
+/// no main day has a date. `travel verify-site --at` matches its clock date against this set
+/// (not just min/max) to tell whether the pinned page is a during-trip one.
+pub async fn main_day_dates(conn: &Connection, plan_id: &str) -> Result<Vec<String>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT date FROM days WHERE plan_id = ?1 AND variant_of IS NULL \
+             AND date IS NOT NULL AND date <> '' ORDER BY date",
+            libsql::params![plan_id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("days main-dates query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| format!("days main-dates row read failed: {e}"))? {
+        out.push(row.get::<String>(0).map_err(|e| format!("days main-dates decode failed: {e}"))?);
+    }
+    Ok(out)
+}
+
 /// Next free day_number for plan+destination: `MAX(day_number)+1` over trip days AND variants
 /// (1 when the plan has no days yet).
 pub async fn next_day_number(

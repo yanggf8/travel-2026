@@ -546,6 +546,14 @@ async fn viewer_page_checks(
             .await?
             .and_then(|d| page::outside_trip_pin(&d)),
     };
+    let quick_pin = match &at_override {
+        Some(_) => quick_pin_for(
+            pin.is_some(),
+            at_override.as_deref(),
+            &travel_db::repo::days::main_day_dates(conn, plan).await?,
+        ),
+        None => quick_pin_for(pin.is_some(), None, &[]),
+    };
     let plan_url = match &pin {
         Some(at) => format!("{}&at={at}", crate::share_token::share_url(plan, token)),
         None => crate::share_token::share_url(plan, token),
@@ -581,7 +589,7 @@ async fn viewer_page_checks(
         for (layer, check) in page::toc_checks(&doc) {
             tally.emit(plan, layer, code, &check);
         }
-        for (layer, check) in page::quick_checks(&doc, pin.is_some() && at_override.is_none(), facts.has_flights) {
+        for (layer, check) in page::quick_checks(&doc, &quick_pin, facts.has_flights) {
             tally.emit(plan, layer, code, &check);
         }
         for (key, check) in page::slot_checks(&doc.figures, &facts) {
@@ -751,6 +759,24 @@ pub(crate) struct Args {
 }
 
 /// The `--at` override for this run (set once in [`run`]).
+/// Which quick-layer rule applies. No `--at`: the day-before pin (`Outside`) when the plan has
+/// dated main days, else `None`. With `--at`: `Inside` when its date is one of the main-day
+/// dates (set membership, not min/max — a gap day is outside), else `Outside`.
+fn quick_pin_for(has_pin: bool, at: Option<&str>, main_dates: &[String]) -> page::QuickPin {
+    match at {
+        None if has_pin => page::QuickPin::Outside,
+        None => page::QuickPin::None,
+        Some(at) => {
+            let date = at.split('T').next().unwrap_or(at);
+            if main_dates.iter().any(|d| d == date) {
+                page::QuickPin::Inside(date.to_string())
+            } else {
+                page::QuickPin::Outside
+            }
+        }
+    }
+}
+
 static AT_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 /// Strict `YYYY-MM-DDTHH:MM` with a real date and time (what the worker accepts).
@@ -1413,6 +1439,20 @@ fn strip_text_missing(img: &Img, rect: Rect, need: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quick_pin_for_matches_the_at_date_against_main_days() {
+        use crate::verify_site_page::QuickPin;
+        let days: Vec<String> = ["2026-11-14", "2026-11-16"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(quick_pin_for(true, Some("2026-11-14T10:30"), &days), QuickPin::Inside("2026-11-14".into()));
+        assert_eq!(quick_pin_for(true, Some("2026-11-16T00:00"), &days), QuickPin::Inside("2026-11-16".into()));
+        assert_eq!(quick_pin_for(true, Some("2026-11-13T12:00"), &days), QuickPin::Outside);
+        assert_eq!(quick_pin_for(true, Some("2026-11-17T12:00"), &days), QuickPin::Outside);
+        // A gap between main days (e.g. only a variant has that date) is outside.
+        assert_eq!(quick_pin_for(true, Some("2026-11-15T12:00"), &days), QuickPin::Outside);
+        assert_eq!(quick_pin_for(true, None, &days), QuickPin::Outside);
+        assert_eq!(quick_pin_for(false, None, &[]), QuickPin::None);
+    }
+
     use super::*;
     use crate::snapshot_maps::test_render::{self, Bg};
 

@@ -145,6 +145,8 @@ pub(crate) struct PageDoc {
     pub(crate) today_blocks: Vec<String>,
     /// `section.now-card#sec-now` exists (the page thinks the trip is in progress).
     pub(crate) now_card: bool,
+    /// `data-now-date` of `section.now-card#sec-now` (the date the worker's clock says it is).
+    pub(crate) now_date: Option<String>,
     /// `section.quick-info#sec-quick` exists.
     pub(crate) quick_info: bool,
 }
@@ -272,7 +274,9 @@ pub(crate) fn parse_page(html: &str) -> PageDoc {
         .select(&sel("details[data-block][data-today]"))
         .map(|d| d.value().attr("data-block").unwrap_or("").to_string())
         .collect();
-    out.now_card = body.select(&sel("section.now-card#sec-now")).next().is_some();
+    let now_el = body.select(&sel("section.now-card#sec-now")).next();
+    out.now_card = now_el.is_some();
+    out.now_date = now_el.and_then(|e| e.value().attr("data-now-date")).map(str::to_string);
     out.quick_info = body.select(&sel("section.quick-info#sec-quick")).next().is_some();
     if let Some(nav) = body.select(&sel("nav.page-toc#toc")).next() {
         out.toc = Some(Toc {
@@ -566,24 +570,49 @@ pub(crate) fn outside_trip_pin(first_main_day: &str) -> Option<String> {
     Some(format!("{}T12:00", day.pred_opt()?.format("%Y-%m-%d")))
 }
 
-/// The 現在・接下來 / 常用資訊 checks on a page fetched with the clock pinned
-/// outside the trip (`pinned_outside`): no now card — one here means the worker
-/// ignored `?at=` (or the pin is wrong) — and, when the plan has flights, the
-/// 常用資訊 card (`section.quick-info#sec-quick`) is on the page.
-pub(crate) fn quick_checks(doc: &PageDoc, pinned_outside: bool, has_flights: bool) -> Vec<(&'static str, Check)> {
+/// Where the page's clock pin sits relative to the trip, for [`quick_checks`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum QuickPin {
+    /// Pinned outside the trip window: no now card may render.
+    Outside,
+    /// `--at` falls on a main day (the date, `YYYY-MM-DD`): the now card must render for it.
+    Inside(String),
+    /// No trip dates and no `--at`: the now card is not judged.
+    None,
+}
+
+/// The 現在・接下來 / 常用資訊 checks on a page fetched with the clock pinned per `pin`:
+/// `Outside` — no now card (one means the worker ignored `?at=` or the pin is wrong);
+/// `Inside` — `section.now-card#sec-now` present with `data-now-date` = the `--at` date;
+/// `None` — not judged. When the plan has flights the 常用資訊 card
+/// (`section.quick-info#sec-quick`) must be on the page in every case.
+pub(crate) fn quick_checks(doc: &PageDoc, pin: &QuickPin, has_flights: bool) -> Vec<(&'static str, Check)> {
     let mut problems = Vec::new();
-    if pinned_outside && doc.now_card {
-        problems.push("section.now-card rendered with ?at= pinned outside the trip window".to_string());
+    match pin {
+        QuickPin::Outside if doc.now_card => {
+            problems.push("section.now-card rendered with ?at= pinned outside the trip window".to_string());
+        }
+        QuickPin::Inside(date) if !doc.now_card => {
+            problems.push(format!("no section.now-card#sec-now although ?at= ({date}) falls on a trip day"));
+        }
+        QuickPin::Inside(date) if doc.now_date.as_deref() != Some(date.as_str()) => {
+            problems.push(format!(
+                "section.now-card data-now-date is {:?}, want the ?at= date {date}",
+                doc.now_date.as_deref().unwrap_or("")
+            ));
+        }
+        _ => {}
     }
     if has_flights && !doc.quick_info {
         problems.push("the plan has flights but no section.quick-info#sec-quick (常用資訊)".to_string());
     }
     let check = if problems.is_empty() {
-        Check::pass(format!(
-            "{}; 常用資訊 {}",
-            if pinned_outside { "no now card outside the trip" } else { "no trip dates (now card not checked)" },
-            if doc.quick_info { "present" } else { "absent (no flights)" }
-        ))
+        let head = match pin {
+            QuickPin::Outside => "no now card outside the trip".to_string(),
+            QuickPin::Inside(date) => format!("now card present (at={date})"),
+            QuickPin::None => "no trip dates (now card not checked)".to_string(),
+        };
+        Check::pass(format!("{head}; 常用資訊 {}", if doc.quick_info { "present" } else { "absent (no flights)" }))
     } else {
         Check::fail(problems.join("; "), Some(Next::Deploy))
     };
@@ -1334,17 +1363,48 @@ mod tests {
 
     #[test]
     fn quick_checks_want_no_now_card_when_pinned_outside_and_quick_info_with_flights() {
+        let out = QuickPin::Outside;
         let plain = parse_page(&viewer_page(""));
-        assert_eq!(quick_checks(&plain, true, false)[0].1.level, Level::Pass);
-        let c = &quick_checks(&plain, true, true)[0].1;
+        assert_eq!(quick_checks(&plain, &out, false)[0].1.level, Level::Pass);
+        let c = &quick_checks(&plain, &out, true)[0].1;
         assert_eq!((c.level, c.next), (Level::Fail, Some(Next::Deploy)), "{c:?}");
         assert!(c.detail.contains("no section.quick-info#sec-quick"), "{c:?}");
         let quick = parse_page(&viewer_page("<section class=\"quick-info\" id=\"sec-quick\"></section>"));
-        assert_eq!(quick_checks(&quick, true, true)[0].1.level, Level::Pass);
+        assert_eq!(quick_checks(&quick, &out, true)[0].1.level, Level::Pass);
         let trip = parse_page(&trip_page("", " data-today open"));
-        assert!(quick_checks(&trip, true, false)[0].1.detail.contains("now-card rendered with ?at= pinned outside"));
-        // No trip dates → no pin → the now card is not judged.
-        assert_eq!(quick_checks(&trip, false, false)[0].1.level, Level::Pass);
+        assert!(quick_checks(&trip, &out, false)[0].1.detail.contains("now-card rendered with ?at= pinned outside"));
+        // No trip dates and no --at → the now card is not judged.
+        let c = &quick_checks(&trip, &QuickPin::None, false)[0].1;
+        assert_eq!(c.level, Level::Pass);
+        assert!(c.detail.contains("no trip dates"), "{c:?}");
+        assert!(quick_checks(&plain, &out, false)[0].1.detail.contains("no now card outside the trip"));
+        assert!(!quick_checks(&plain, &out, false)[0].1.detail.contains("no trip dates"));
+    }
+
+    #[test]
+    fn quick_checks_want_the_now_card_for_the_at_date_when_pinned_inside() {
+        let inside = QuickPin::Inside("2026-11-14".to_string());
+        let trip = parse_page(&trip_page("", " data-today open"));
+        assert_eq!(trip.now_date.as_deref(), Some("2026-11-14"));
+        let c = &quick_checks(&trip, &inside, false)[0].1;
+        assert_eq!(c.level, Level::Pass, "{c:?}");
+        assert!(c.detail.contains("now card present (at=2026-11-14)"), "{c:?}");
+        assert!(!c.detail.contains("no trip dates"), "{c:?}");
+        // No now card although --at is on a trip day.
+        let plain = parse_page(&viewer_page(""));
+        let c = &quick_checks(&plain, &inside, false)[0].1;
+        assert_eq!((c.level, c.next), (Level::Fail, Some(Next::Deploy)), "{c:?}");
+        assert!(c.detail.contains("no section.now-card#sec-now") && c.detail.contains("2026-11-14"), "{c:?}");
+        // Now card for another date.
+        let c = &quick_checks(&trip, &QuickPin::Inside("2026-11-15".to_string()), false)[0].1;
+        assert_eq!(c.level, Level::Fail, "{c:?}");
+        assert!(c.detail.contains("data-now-date"), "{c:?}");
+        // quick-info is still required with flights.
+        assert_eq!(quick_checks(&trip, &inside, true)[0].1.level, Level::Fail);
+    }
+
+    #[test]
+    fn outside_trip_pin_is_the_day_before() {
         assert_eq!(outside_trip_pin("2026-11-12").as_deref(), Some("2026-11-11T12:00"));
         assert_eq!(outside_trip_pin("2026-03-01").as_deref(), Some("2026-02-28T12:00"));
         assert_eq!(outside_trip_pin("2026-11-xx"), None);
