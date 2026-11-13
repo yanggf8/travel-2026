@@ -301,6 +301,27 @@ async fn read_coords(conn: &Connection, dest: &str) -> Result<(f64, f64, String)
     }
 }
 
+/// Total attempts per fetch and the fixed pause between them. Retries are done
+/// here, not by curl `--retry`: curl honours Retry-After (unbounded wait) and
+/// keeps stdout already written by a failed attempt, which corrupts the JSON.
+/// Worst case: 3 x 20 s (--max-time) + 2 x 2 s pauses = ~64 s.
+const OPEN_METEO_MAX_ATTEMPTS: u32 = 3;
+const OPEN_METEO_RETRY_DELAY_SECS: u64 = 2;
+
+/// curl arguments for one Open-Meteo attempt (bounded connect and total time).
+fn open_meteo_curl_args(url: &str) -> Vec<String> {
+    ["-sf", "--connect-timeout", "10", "--max-time", "20", url]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Transient curl failures worth another attempt: 28 timeout, 7 cannot
+/// connect, 35 TLS handshake, 22 HTTP error under `-f` (retried always).
+fn is_transient_curl_exit(code: Option<i32>) -> bool {
+    matches!(code, Some(28) | Some(7) | Some(35) | Some(22))
+}
+
 /// Live fetch from Open-Meteo via curl. Returns empty vec if the start date is
 /// beyond the 16-day forecast window (matching the TS service).
 async fn fetch_weather(
@@ -332,17 +353,30 @@ async fn fetch_weather(
          &timezone={tz_enc}&start_date={start_date}&end_date={end_date}"
     );
 
-    let output = Command::new("curl")
-        .arg("-sf")
-        .arg(&url)
-        .output()
-        .map_err(|e| format!("Open-Meteo API request failed: {e}"))?;
-    if !output.status.success() {
+    let mut attempt = 0;
+    let output = loop {
+        attempt += 1;
+        let out = Command::new("curl")
+            .args(open_meteo_curl_args(&url))
+            .output()
+            .map_err(|e| format!("Open-Meteo API request failed: {e}"))?;
+        if out.status.success() {
+            break out;
+        }
+        let code = out.status.code();
+        if attempt < OPEN_METEO_MAX_ATTEMPTS && is_transient_curl_exit(code) {
+            tokio::time::sleep(std::time::Duration::from_secs(OPEN_METEO_RETRY_DELAY_SECS)).await;
+            continue;
+        }
+        if code == Some(28) {
+            return Err(format!(
+                "Open-Meteo API request timed out (curl exit 28) after {attempt} attempt(s)"
+            ));
+        }
         return Err(format!(
-            "Open-Meteo API request failed: curl exit {:?}",
-            output.status.code()
+            "Open-Meteo API request failed: curl exit {code:?} after {attempt} attempt(s)"
         ));
-    }
+    };
     let body = String::from_utf8_lossy(&output.stdout);
     let data: Value =
         serde_json::from_str(&body).map_err(|e| format!("Open-Meteo response parse failed: {e}"))?;
@@ -576,6 +610,28 @@ fn now_db_datetime() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curl_args_have_timeouts_no_curl_retry_and_url_last() {
+        let a = open_meteo_curl_args("https://x.test/f?a=1");
+        for (flag, val) in [("--connect-timeout", "10"), ("--max-time", "20")] {
+            let i = a.iter().position(|s| s == flag).unwrap_or_else(|| panic!("missing {flag}"));
+            assert_eq!(a[i + 1], val, "value of {flag}");
+        }
+        assert!(!a.iter().any(|s| s.starts_with("--retry")), "curl must not retry itself");
+        assert_eq!(a.last().unwrap(), "https://x.test/f?a=1");
+    }
+
+    #[test]
+    fn transient_curl_exits_retry_others_do_not() {
+        for c in [28, 7, 35, 22] {
+            assert!(is_transient_curl_exit(Some(c)), "exit {c} should retry");
+        }
+        for c in [6, 1, 3, 0] {
+            assert!(!is_transient_curl_exit(Some(c)), "exit {c} should not retry");
+        }
+        assert!(!is_transient_curl_exit(None));
+    }
 
     #[test]
     fn label_known_and_unknown() {
