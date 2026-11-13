@@ -66,10 +66,13 @@ still comparing dates, destinations, or flight prices, use `/shaping-research`.
 
    Create a concise day-by-day proposal:
    - Arrival day: airport, hotel/base area, light evening only.
-   - Full days: one primary area or city cluster per day.
+   - Full days: one primary area or city cluster per day, few stops, built
+     around the trip's theme (e.g. autumn foliage), then historic temples; leave
+     out shopping, generic strolls, experiences and observation decks or keep
+     them optional only. Nothing starts before 10:00 except fixed third-party
+     bookings (user, 2026-11-13).
    - Departure day: checkout, light activity only if flight time allows.
-   - Meals: lunch and dinner only by default; breakfast only if the selected
-     hotel/package includes it or the user asks for it.
+   - Meals: lunch and dinner only; never schedule breakfast (user, 2026-11-13).
 
 4. **Decide lodging topology before Stage 2**
 

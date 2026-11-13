@@ -110,14 +110,25 @@ Do **not** use this for the first coarse draft before shopping; use
    - Want/nice-to-have activities.
    - Meals and transit buffers.
 
+   Pacing and focus: few stops per day, built around the trip's theme. The theme
+   comes from the trip's purpose; first the theme itself, then historic temples
+   and shrines. Anything unrelated to the theme or history (shopping, generic
+   neighborhood strolls, experiences, observation decks) is left out or optional
+   only. Example: Kyoto in autumn → autumn foliage first, then old temples such as
+   Toji and Sanjusangendo (user, 2026-11-13).
+
 5. **Set timing, themes, and transit**
    ```bash
    ./bin/travel set-activity-time <day> <session> "<activity>" --start HH:MM --end HH:MM --fixed true
    ./bin/travel set-day-theme <day> "<theme>" --zh "<zh_title>" --dest <destination_slug>
    ./bin/travel set-tod-zh <day> <session> --zh "<focus_zh>" --transit-zh "<transit_zh>"
    ```
-   Default meals are lunch and dinner only. Add breakfast only when hotel or
-   package terms include it, or when the user asks for it.
+   Never schedule breakfast; meals are lunch and dinner only, each a main + a
+   backup (user, 2026-11-13).
+   Nothing starts before 10:00 — no session, route segment or activity. Exception:
+   fixed third-party bookings (agency day tours, flights, tickets) keep their own
+   times. An early start means too many stops: cut stops, do not compress times
+   (user, 2026-11-13).
 
 6. **Derive route segments (deterministic cascade — run this FIRST)**
 
@@ -160,7 +171,20 @@ Do **not** use this for the first coarse draft before shopping; use
    lunch (noon) AND a dinner (evening) on every full day; a dinner on arrival day
    and a lunch on departure day when the timing fits. Real restaurants only (see
    the restaurant-pick rules: nearest to the site, Google-rating-trusted,
-   authentic; always a main + a backup; never phone-only).
+   authentic; always a main + a backup; no reservation of any kind — see below).
+   - **No reservation of any kind** (replaces the old "never phone-only"): no
+     online or phone booking, no early in-person registration at the door, no
+     number ticket to come back later, and no shop where reservation holders get
+     priority so walk-ins rarely get in. Walk in directly or queue on the spot
+     (user, 2026-11-13).
+   - **Local, not available in Taiwan**: pick Japanese local everyday places
+     (local ramen, teishoku-ya, long-established udon/soba, obanzai, tofu cuisine,
+     old-school yoshoku, kissaten, etc.). Do not deliberately pick station/mall
+     branches, chains, tourist-oriented shops, or upscale places Taiwan also has
+     (premium steak, wagyu yakiniku, high-priced kaiseki). Write one sentence per
+     restaurant on why it counts as local (user, 2026-11-13).
+   - **No dietary screening**: do not filter restaurants by starch, sugar or
+     other diet limits; it removes too many options (user, 2026-11-13).
    ```bash
    ./bin/travel set-meals <day> <session> --meal "<label>｜map:<real place + area>" --recommended --dest <destination_slug>
    # Extra want/nice-to-have activities where the skeleton is too thin.
