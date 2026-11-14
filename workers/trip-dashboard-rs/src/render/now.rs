@@ -281,6 +281,17 @@ fn expand_body(sess: &Session, legs: &[(&RouteSegment, i64, bool)], day_number: 
     h
 }
 
+/// The `now-wx` line for one session of `day` (its stored session weather);
+/// empty when there is no row or the code is unmapped.
+fn now_wx_html(day: &Day, session_type: &str, lang: &str) -> String {
+    day.session_weather
+        .iter()
+        .find(|w| w.session == session_type)
+        .and_then(|w| super::day::session_weather_brief(w, lang))
+        .map(|b| format!("<div class=\"now-wx\">{}</div>", esc(&b)))
+        .unwrap_or_default()
+}
+
 /// The 現在・接下來 card for `today` at `clock` (see the module doc). Its
 /// `data-now-*` attributes carry what the inline script needs to re-mark.
 pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Option<&str>) -> String {
@@ -358,13 +369,7 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
         };
         // Served open (and flagged data-auto so the script may close it again
         // when the clock moves on) only for 現在 / 接下來.
-        let wx = today
-            .session_weather
-            .iter()
-            .find(|w| w.session == slot.sess.session_type)
-            .and_then(|w| super::day::session_weather_brief(w, lang))
-            .map(|b| format!("<div class=\"now-wx\">{}</div>", esc(&b)))
-            .unwrap_or_default();
+        let wx = now_wx_html(today, &slot.sess.session_type, lang);
         let open = if marks.current == Some(i) || marks.next == Some(i) { " open data-auto" } else { "" };
         h.push_str(&format!(
             "<li class=\"{class}\" data-start=\"{}\" data-end=\"{}\"><details class=\"now-box\"{open}><summary>\
@@ -395,10 +400,11 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
             };
             h.push_str(&format!(
                 "<li class=\"now-item now-tomorrow\"{hidden}><details class=\"now-box\"><summary><div class=\"now-head\">{}\
-                 <span class=\"now-name\">{}</span>{time}</div>{}</summary>{}</details></li>",
+                 <span class=\"now-name\">{}</span>{time}</div>{}{}</summary>{}</details></li>",
                 badge("tomorrow", lang),
                 esc(&name),
                 focus_html(first),
+                now_wx_html(tomorrow, &first.session_type, lang),
                 expand_body(first, &[], tomorrow.day_number, true, lang),
             ));
         }
@@ -817,6 +823,22 @@ mod tests {
         assert!(html.contains("<div class=\"now-variants\"><a class=\"now-variant\" href=\"#variant-6\">替代方案：晴天行程</a></div>"), "{html}");
         let en = now_card(&plan, today, &clock("2026-11-15", "12:00"), "en", None);
         assert!(en.contains("<h2>Now &amp; next · Sun 11/15</h2>") && en.contains("Alternative: Sunny-day plan"), "{en}");
+    }
+
+    #[test]
+    fn tomorrow_item_shows_its_session_weather_only_when_a_row_exists() {
+        let mut plan = trip();
+        let html = now_card(&plan, &plan.days[0], &clock("2026-11-15", "21:00"), "zh", None);
+        assert!(!item(&html, "now-tomorrow").contains("now-wx"), "{html}");
+        plan.days[1].session_weather = vec![
+            crate::model::SessionWeather { session: "morning".into(), weather_code: 61, precip_mm: 2.0, precip_max_mm_h: 0.0 },
+            // Another session's row must not leak onto the morning item.
+            crate::model::SessionWeather { session: "evening".into(), weather_code: 63, precip_mm: 9.0, precip_max_mm_h: 0.0 },
+        ];
+        let html = now_card(&plan, &plan.days[0], &clock("2026-11-15", "21:00"), "zh", None);
+        let li = item(&html, "now-tomorrow");
+        assert!(li.contains("<div class=\"now-wx\">小雨 2mm</div></summary>"), "{li}");
+        assert!(!li.contains("中雨"), "{li}");
     }
 
     /// The `<li>` of the timeline entry whose class list holds `cls`.
