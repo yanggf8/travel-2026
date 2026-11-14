@@ -309,8 +309,11 @@ const OPEN_METEO_MAX_ATTEMPTS: u32 = 3;
 const OPEN_METEO_RETRY_DELAY_SECS: u64 = 2;
 
 /// curl arguments for one Open-Meteo attempt (bounded connect and total time).
+/// `--http1.1`: curl's default HTTP/2 to api.open-meteo.com stalled after the
+/// TLS handshake on 2026-11-14 (all attempts hit --max-time, exit 28) while
+/// HTTP/1.1 answered in ~0.5 s.
 fn open_meteo_curl_args(url: &str) -> Vec<String> {
-    ["-sf", "--connect-timeout", "10", "--max-time", "20", url]
+    ["-sf", "--http1.1", "--connect-timeout", "10", "--max-time", "20", url]
         .iter()
         .map(|s| s.to_string())
         .collect()
@@ -618,6 +621,7 @@ mod tests {
             let i = a.iter().position(|s| s == flag).unwrap_or_else(|| panic!("missing {flag}"));
             assert_eq!(a[i + 1], val, "value of {flag}");
         }
+        assert!(a.iter().any(|s| s == "--http1.1"), "must force HTTP/1.1");
         assert!(!a.iter().any(|s| s.starts_with("--retry")), "curl must not retry itself");
         assert_eq!(a.last().unwrap(), "https://x.test/f?a=1");
     }
