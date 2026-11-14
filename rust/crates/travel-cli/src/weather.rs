@@ -439,11 +439,8 @@ const OPEN_METEO_MAX_ATTEMPTS: u32 = 3;
 const OPEN_METEO_RETRY_DELAY_SECS: u64 = 2;
 
 /// curl arguments for one Open-Meteo attempt (bounded connect and total time).
-/// `--http1.1`: curl's default HTTP/2 to api.open-meteo.com stalled after the
-/// TLS handshake on 2026-11-14 (all attempts hit --max-time, exit 28) while
-/// HTTP/1.1 answered in ~0.5 s.
 fn open_meteo_curl_args(url: &str) -> Vec<String> {
-    ["-sf", "--http1.1", "--connect-timeout", "10", "--max-time", "20", url]
+    ["-sf", "--connect-timeout", "10", "--max-time", "20", url]
         .iter()
         .map(|s| s.to_string())
         .collect()
@@ -453,6 +450,34 @@ fn open_meteo_curl_args(url: &str) -> Vec<String> {
 /// connect, 35 TLS handshake, 22 HTTP error under `-f` (retried always).
 fn is_transient_curl_exit(code: Option<i32>) -> bool {
     matches!(code, Some(28) | Some(7) | Some(35) | Some(22))
+}
+
+/// Final error after the attempts are exhausted (or a non-transient exit).
+/// The fetch happens before any write for this destination, so nothing from
+/// this fetch was saved; in an all-destinations run, earlier destinations may
+/// already have been written.
+fn open_meteo_failure_message(code: Option<i32>, attempts: u32) -> String {
+    let tail = "Nothing was written for this fetch (in an all-destinations run, destinations finished earlier were already saved).";
+    match code {
+        Some(28) => format!(
+            "Open-Meteo did not respond (curl exit 28: connection/TLS handshake timed out) after {attempts} attempt(s). The API host is intermittently unresponsive for a few minutes at a time - retry in ~5 minutes. {tail}"
+        ),
+        Some(7) => format!(
+            "Could not connect to Open-Meteo (curl exit 7) after {attempts} attempt(s). Check network connectivity or retry in a few minutes. {tail}"
+        ),
+        Some(6) => format!(
+            "Could not resolve the Open-Meteo host name (curl exit 6: DNS failure) after {attempts} attempt(s). Check DNS/network. {tail}"
+        ),
+        Some(22) => format!(
+            "Open-Meteo returned an HTTP error (curl exit 22) after {attempts} attempt(s), e.g. 429 rate limit (the free tier allows limited calls per minute/hour/day) or a server error. Wait a few minutes and retry, and avoid repeated runs. {tail}"
+        ),
+        Some(c) => format!(
+            "Open-Meteo API request failed: curl exit {c} after {attempts} attempt(s). {tail}"
+        ),
+        None => format!(
+            "Open-Meteo API request failed: curl was terminated by a signal after {attempts} attempt(s). {tail}"
+        ),
+    }
 }
 
 /// Live fetch from Open-Meteo via curl. Returns empty vec if the start date is
@@ -496,14 +521,7 @@ async fn fetch_weather(
             tokio::time::sleep(std::time::Duration::from_secs(OPEN_METEO_RETRY_DELAY_SECS)).await;
             continue;
         }
-        if code == Some(28) {
-            return Err(format!(
-                "Open-Meteo API request timed out (curl exit 28) after {attempt} attempt(s)"
-            ));
-        }
-        return Err(format!(
-            "Open-Meteo API request failed: curl exit {code:?} after {attempt} attempt(s)"
-        ));
+        return Err(open_meteo_failure_message(code, attempt));
     };
     let body = String::from_utf8_lossy(&output.stdout);
     let data: Value =
@@ -765,9 +783,23 @@ mod tests {
             let i = a.iter().position(|s| s == flag).unwrap_or_else(|| panic!("missing {flag}"));
             assert_eq!(a[i + 1], val, "value of {flag}");
         }
-        assert!(a.iter().any(|s| s == "--http1.1"), "must force HTTP/1.1");
+        assert!(!a.iter().any(|s| s.starts_with("--http")), "HTTP version must not be forced");
         assert!(!a.iter().any(|s| s.starts_with("--retry")), "curl must not retry itself");
         assert_eq!(a.last().unwrap(), "https://x.test/f?a=1");
+    }
+
+    #[test]
+    fn failure_message_per_exit_code() {
+        let m = open_meteo_failure_message(Some(28), 3);
+        assert!(m.contains("did not respond") && m.contains("exit 28") && m.contains("3 attempt"));
+        assert!(m.contains("retry in ~5 minutes") && m.contains("Nothing was written"));
+        assert!(open_meteo_failure_message(Some(22), 3).contains("429"));
+        assert!(open_meteo_failure_message(Some(22), 3).contains("free tier"));
+        assert!(open_meteo_failure_message(Some(7), 3).contains("Could not connect"));
+        assert!(open_meteo_failure_message(Some(6), 1).contains("DNS"));
+        let o = open_meteo_failure_message(Some(56), 1);
+        assert!(o.contains("curl exit 56 ") && o.contains("Nothing was written"));
+        assert!(open_meteo_failure_message(None, 1).contains("signal"));
     }
 
     #[test]
