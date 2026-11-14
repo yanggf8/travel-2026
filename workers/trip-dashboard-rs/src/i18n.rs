@@ -295,6 +295,11 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("sessionAfternoon", true) => "下午",
         ("sessionEvening", false) => "Evening",
         ("sessionEvening", true) => "晚上",
+        // per-session weather line (render/day.rs session_weather_line)
+        ("wxSessMm", false) => "{mm}mm",
+        ("wxSessMm", true) => "{mm}mm",
+        ("wxSessMax", false) => " (max {max}mm/h)",
+        ("wxSessMax", true) => "（最大 {max}mm/h）",
         // ---- map captions (render/map.rs) — {day} = day number ----
         ("dayRouteCaption", false) => "Day {day} route",
         ("dayRouteCaption", true) => "第 {day} 天路線",

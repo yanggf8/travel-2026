@@ -388,6 +388,7 @@ fn render_day(out: &mut String, d: &DayView, view: &PlanView, is_variant: bool) 
     {
         out.push_str(&render_weather_line(w));
     }
+    out.push_str(&render_session_weather_line(&d.session_weather));
 
     // Blank line after the day-header block.
     out.push('\n');
@@ -408,6 +409,65 @@ fn render_day(out: &mut String, d: &DayView, view: &PlanView, is_variant: bool) 
         }
         // Trailing blank line from `console.log('')` after the route loop.
         out.push('\n');
+    }
+}
+
+/// `Sessions: Morning Slight rain 2mm / Noon Moderate rain 9mm (max 5mm/h) / ...`
+/// — rain mm only when > 0, max mm/h only when >= 1; empty string without rows.
+fn render_session_weather_line(rows: &[travel_db::repo::day_weather_sessions::SessionWeatherRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            let name = match r.session.as_str() {
+                "morning" => "Morning",
+                "noon" => "Noon",
+                "afternoon" => "Afternoon",
+                _ => "Evening",
+            };
+            let mut p = format!("{name} {}", crate::weather::wmo_label(r.weather_code));
+            if r.precip_mm > 0.0 {
+                p.push_str(&format!(" {}mm", r.precip_mm));
+            }
+            if r.precip_max_mm_h >= 1.0 {
+                p.push_str(&format!(" (max {}mm/h)", r.precip_max_mm_h));
+            }
+            p
+        })
+        .collect();
+    format!("Sessions: {}\n", parts.join(" / "))
+}
+
+#[cfg(test)]
+mod session_weather_tests {
+    use super::*;
+    use travel_db::repo::day_weather_sessions::SessionWeatherRow;
+
+    fn row(session: &str, code: i64, mm: f64, max: f64) -> SessionWeatherRow {
+        SessionWeatherRow {
+            day_number: 1,
+            session: session.into(),
+            weather_code: code,
+            precip_mm: mm,
+            precip_max_mm_h: max,
+            precip_prob_max: None,
+        }
+    }
+
+    #[test]
+    fn session_line_shows_mm_only_when_rain_and_max_only_from_one() {
+        let line = render_session_weather_line(&[
+            row("morning", 61, 2.0, 0.8),
+            row("noon", 63, 9.0, 5.0),
+            row("evening", 3, 0.0, 0.0),
+        ]);
+        assert_eq!(
+            line,
+            "Sessions: Morning Slight rain 2mm / Noon Moderate rain 9mm (max 5mm/h) / Evening Overcast\n"
+        );
+        assert_eq!(render_session_weather_line(&[]), "");
     }
 }
 

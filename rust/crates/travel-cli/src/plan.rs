@@ -181,6 +181,8 @@ pub struct DayView {
     /// the next view port (itinerary weather line).
     #[allow(dead_code)]
     pub weather: Option<DayWeather>,
+    /// `day_weather_sessions` rows of this day (morning/noon/afternoon/evening order).
+    pub session_weather: Vec<travel_db::repo::day_weather_sessions::SessionWeatherRow>,
     pub sessions: HashMap<String, SessionView>, // "morning"|"noon"|"afternoon"|"evening"
     /// Day variants of this trip day (`days.variant_of = day_number`), ascending. Always empty on a
     /// variant itself; `PlanView.days` holds trip days only.
@@ -434,6 +436,7 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
     }
 
     // 12. days.
+    let session_weather = travel_db::repo::day_weather_sessions::list(&conn, plan_id, dest).await?;
     for d in repo::days(&conn, plan_id, dest).await? {
         let weather = if d.weather_label.is_empty() {
             None
@@ -459,6 +462,11 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
             theme: d.theme,
             day_type: d.day_type,
             weather,
+            session_weather: session_weather
+                .iter()
+                .filter(|r| r.day_number == d.day_number)
+                .cloned()
+                .collect(),
             sessions: HashMap::new(),
         });
     }

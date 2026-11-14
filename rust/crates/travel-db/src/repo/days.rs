@@ -467,6 +467,7 @@ pub async fn delete_day_content(
         "timesofday",
         "day_route_segments",
         "day_landmarks",
+        "day_weather_sessions",
         "days",
     ] {
         conn.execute(

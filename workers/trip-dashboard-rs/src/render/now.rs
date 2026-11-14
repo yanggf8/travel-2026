@@ -358,10 +358,17 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
         };
         // Served open (and flagged data-auto so the script may close it again
         // when the clock moves on) only for 現在 / 接下來.
+        let wx = today
+            .session_weather
+            .iter()
+            .find(|w| w.session == slot.sess.session_type)
+            .and_then(|w| super::day::session_weather_brief(w, lang))
+            .map(|b| format!("<div class=\"now-wx\">{}</div>", esc(&b)))
+            .unwrap_or_default();
         let open = if marks.current == Some(i) || marks.next == Some(i) { " open data-auto" } else { "" };
         h.push_str(&format!(
             "<li class=\"{class}\" data-start=\"{}\" data-end=\"{}\"><details class=\"now-box\"{open}><summary>\
-             <div class=\"now-head\"><span class=\"now-name\">{}</span>{time}{b}</div>{}</summary>{}</details></li>",
+             <div class=\"now-head\"><span class=\"now-name\">{}</span>{time}{b}</div>{}{wx}</summary>{}</details></li>",
             slot.start,
             slot.end,
             esc(super::session::session_label(&slot.sess.session_type, lang)),

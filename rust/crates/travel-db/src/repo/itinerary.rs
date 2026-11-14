@@ -60,6 +60,7 @@ pub async fn replace_skeleton(
         "timesofday",
         "day_route_segments",
         "day_landmarks",
+        "day_weather_sessions",
         "days",
     ] {
         conn.execute(

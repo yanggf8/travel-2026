@@ -1,6 +1,6 @@
 use super::{esc, render_activity_text, session};
 use crate::i18n::{fill, t, tf, wmo_emoji, wmo_weather};
-use crate::model::{ClothingTip, Day, RouteSegment};
+use crate::model::{ClothingTip, Day, RouteSegment, SessionWeather};
 
 /// Render the day's map landmarks (waypoints listed under the day map). Ported from
 /// the TS worker, which listed the day's landmarks beneath the route map.
@@ -174,6 +174,50 @@ fn temp_range(lo: Option<f64>, hi: Option<f64>) -> Option<String> {
         )),
         _ => None,
     }
+}
+
+/// Rain amount as shown: whole numbers without a decimal ("9"), else one decimal ("4.5").
+fn fmt_mm(v: f64) -> String {
+    let r = (v * 10.0).round() / 10.0;
+    if r.fract() == 0.0 { format!("{}", r as i64) } else { format!("{r}") }
+}
+
+/// One session's weather without its name: "小雨 3mm（最大 5mm/h）". The description
+/// is the WMO code's wording (`i18n::wmo_weather`); rain mm only when > 0, the
+/// peak mm/h only when >= 1. `None` for an unmapped code (nothing is invented).
+pub(crate) fn session_weather_brief(sw: &SessionWeather, lang: &str) -> Option<String> {
+    let mut text = wmo_weather(sw.weather_code, lang)?.to_string();
+    if sw.precip_mm > 0.0 {
+        text.push(' ');
+        text.push_str(&tf("wxSessMm", lang, &[("mm", &fmt_mm(sw.precip_mm))]));
+    }
+    if sw.precip_max_mm_h >= 1.0 {
+        text.push_str(&tf("wxSessMax", lang, &[("max", &fmt_mm(sw.precip_max_mm_h))]));
+    }
+    Some(text)
+}
+
+/// The day card's per-session weather line, e.g.
+/// 「上午 小雨 2mm／中午 中雨 9mm（最大 5mm/h）／下午 小雨 6mm／晚上 陰」.
+/// Empty when the day has no stored session weather.
+pub fn session_weather_line(day: &Day, lang: &str) -> String {
+    let parts: Vec<String> = day
+        .session_weather
+        .iter()
+        .filter_map(|sw| {
+            let brief = session_weather_brief(sw, lang)?;
+            Some(format!(
+                "<span class=\"wx-sess wx-sess-{}\">{} {}</span>",
+                esc(&sw.session),
+                esc(session::session_label(&sw.session, lang)),
+                esc(&brief)
+            ))
+        })
+        .collect();
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!("<div class=\"weather-sessions\">{}</div>", parts.join(t("labelJoin", lang)))
 }
 
 /// Render the per-day weather strip: icon + description + temp range +
@@ -516,6 +560,7 @@ fn render_content(
     let mut h = format!("<div class=\"theme\">{}</div>", esc(day_theme(day, lang)));
     if option_label.is_none() {
         h.push_str(&weather_strip(day, clothing_tips, lang));
+        h.push_str(&session_weather_line(day, lang));
     }
     h.push_str("<div class=\"day-map-stack\">");
     let map_version = map_status
@@ -1217,6 +1262,44 @@ mod tests {
         assert!(joined.contains("Hot"), "got: {joined}");
         assert!(joined.contains("Bring umbrella"), "got: {joined}");
     }
+
+    #[test]
+    fn session_weather_line_formats_zh_and_en_and_hides_zero_values() {
+        let sw = |s: &str, code, mm, max| SessionWeather {
+            session: s.into(),
+            weather_code: code,
+            precip_mm: mm,
+            precip_max_mm_h: max,
+        };
+        let day = Day {
+            session_weather: vec![
+                sw("morning", 61, 2.0, 0.8),
+                sw("noon", 63, 9.0, 5.0),
+                sw("afternoon", 61, 6.4, 0.9),
+                sw("evening", 3, 0.0, 0.0),
+            ],
+            ..Default::default()
+        };
+        let zh = session_weather_line(&day, "zh");
+        assert!(zh.starts_with("<div class=\"weather-sessions\">"), "{zh}");
+        let text: String = {
+            let mut o = String::new();
+            let mut in_tag = false;
+            for c in zh.chars() {
+                match c { '<' => in_tag = true, '>' => in_tag = false, _ if !in_tag => o.push(c), _ => {} }
+            }
+            o
+        };
+        assert_eq!(text, "上午 小雨 2mm／中午 中雨 9mm（最大 5mm/h）／下午 小雨 6.4mm／晚上 陰");
+        let en = session_weather_line(&day, "en");
+        assert!(en.contains("Morning Slight rain 2mm"), "{en}");
+        assert!(en.contains("Noon Moderate rain 9mm (max 5mm/h)"), "{en}");
+        // no rows, or unmapped code -> nothing
+        assert_eq!(session_weather_line(&Day::default(), "zh"), "");
+        let odd = Day { session_weather: vec![sw("morning", 123, 1.0, 1.0)], ..Default::default() };
+        assert_eq!(session_weather_line(&odd, "zh"), "");
+    }
+
 
     // ---- weather strip ----
     #[test]

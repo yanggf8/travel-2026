@@ -105,6 +105,14 @@ async fn table_ddl(conn: &libsql::Connection, name: &str) -> Option<String> {
     row.get::<String>(0).ok()
 }
 
+/// DDL of `day_weather_sessions` (PK only, no CHECK; session keys are validated
+/// in Rust by `travel_db::repo::day_weather_sessions::is_session_key`).
+fn day_weather_sessions_ddl(name: &str) -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {name} (\n  plan_id TEXT NOT NULL,\n  destination TEXT NOT NULL,\n  day_number INTEGER NOT NULL,\n  session TEXT NOT NULL,\n  weather_code INTEGER NOT NULL,\n  precip_mm REAL NOT NULL,\n  precip_max_mm_h REAL NOT NULL,\n  precip_prob_max INTEGER,\n  source TEXT NOT NULL,\n  fetched_at TEXT NOT NULL,\n  PRIMARY KEY (plan_id, destination, day_number, session)\n);"
+    )
+}
+
 /// Widen `ota_job_params.param_key` CHECK to include `destination` (idempotent table-rebuild).
 async fn migrate_ota_job_params_destination(conn: &libsql::Connection) -> Result<(), String> {
     if !table_exists(conn, "ota_job_params").await {
@@ -1772,6 +1780,32 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
+    // Per-session weather (morning/noon/afternoon/evening) aggregated from
+    // Open-Meteo hourly data by `travel fetch-weather`; plan-keyed (teardown_plan
+    // covers it via plan_id). Schema only — rows are fetched data, never seeded.
+    exec_create(&conn, &day_weather_sessions_ddl("day_weather_sessions")).await;
+    // An early version carried a CHECK on `session` (project rule: no constraints
+    // beyond the PK; the keys are validated in Rust). Rebuild it, keeping rows.
+    if table_ddl(&conn, "day_weather_sessions")
+        .await
+        .is_some_and(|ddl| ddl.to_ascii_uppercase().contains("CHECK"))
+    {
+        exec_lenient(&conn, "DROP TABLE IF EXISTS day_weather_sessions_new").await;
+        exec_lenient(&conn, &day_weather_sessions_ddl("day_weather_sessions_new")).await;
+        exec_lenient(
+            &conn,
+            "INSERT INTO day_weather_sessions_new SELECT plan_id, destination, day_number, session, \
+             weather_code, precip_mm, precip_max_mm_h, precip_prob_max, source, fetched_at \
+             FROM day_weather_sessions",
+        )
+        .await;
+        exec_lenient(&conn, "DROP TABLE day_weather_sessions").await;
+        exec_lenient(
+            &conn,
+            "ALTER TABLE day_weather_sessions_new RENAME TO day_weather_sessions",
+        )
+        .await;
+    }
     // `jiufen` must exist in destination_config so resolve_active_destination (and
     // the slug-keyed accommodation commands) can validate against it — a destination
     // REGISTRATION, not trip content.

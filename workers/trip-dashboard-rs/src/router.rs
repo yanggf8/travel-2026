@@ -1031,11 +1031,18 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         "SELECT tip_id, sort_order, item_zh, item_en FROM clothing_tip_items \
          ORDER BY tip_id, sort_order"
             .to_string(),
+        // [27] per-session weather (day_weather_sessions, `travel fetch-weather`).
+        format!(
+            "SELECT day_number, session, weather_code, precip_mm, precip_max_mm_h \
+             FROM day_weather_sessions WHERE plan_id = '{slug}' \
+             ORDER BY day_number, CASE session WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 \
+                                               WHEN 'afternoon' THEN 2 ELSE 3 END"
+        ),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 27 {
+    if r.len() < 28 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 27 results".into(),
+            "Turso pipeline returned fewer than 28 results".into(),
         ));
     }
     let mut plan = model::assemble(
@@ -1044,6 +1051,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
     );
     plan.clothing_tips = model::clothing_tips(&r[23], &r[26]);
     plan.documents = model::plan_documents(&r[24], &r[25]);
+    model::attach_session_weather(&mut plan.days, &r[27]);
     Ok(plan)
 }
 

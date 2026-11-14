@@ -55,6 +55,33 @@ pub struct Session {
     pub stops: Vec<Stop>,
 }
 
+/// One `day_weather_sessions` row: a session's representative WMO code and rain.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SessionWeather {
+    /// morning | noon | afternoon | evening (the itinerary's session keys).
+    pub session: String,
+    pub weather_code: i64,
+    pub precip_mm: f64,
+    pub precip_max_mm_h: f64,
+}
+
+/// Attach `day_weather_sessions` rows (already ordered by day, session) to the
+/// matching main days by day_number.
+pub fn attach_session_weather(days: &mut [Day], rows: &[Row]) {
+    for d in days.iter_mut() {
+        d.session_weather = rows
+            .iter()
+            .filter(|r| i(r, "day_number") == d.day_number)
+            .map(|r| SessionWeather {
+                session: s(r, "session"),
+                weather_code: i(r, "weather_code"),
+                precip_mm: f(r, "precip_mm").unwrap_or(0.0),
+                precip_max_mm_h: f(r, "precip_max_mm_h").unwrap_or(0.0),
+            })
+            .collect();
+    }
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Day {
     pub day_number: i64,
@@ -76,6 +103,9 @@ pub struct Day {
     pub variant_label: String,
     pub variant_label_zh: String,
     pub variants: Vec<Day>,
+    /// Per-session weather (`day_weather_sessions`, itinerary order). Empty when
+    /// `travel fetch-weather` stored none — nothing renders then.
+    pub session_weather: Vec<SessionWeather>,
     pub sessions: Vec<Session>, // ALWAYS 4: morning, noon, afternoon, evening
     pub route_segments: Vec<RouteSegment>,
     /// Map waypoints for this day (from day_landmarks, in sort_order). Listed under the day map.
@@ -703,6 +733,7 @@ pub fn assemble(
             variant_label: s(d, "variant_label"),
             variant_label_zh: s(d, "variant_label_zh"),
             variants: Vec::new(),
+            session_weather: Vec::new(),
             sessions,
             route_segments,
             landmarks: landmark_rows

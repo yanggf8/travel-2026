@@ -12,8 +12,8 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-11-11
--- Tables: 144 | Indexes: 28
+-- Generated: 2026-11-14
+-- Tables: 145 | Indexes: 28
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -283,6 +283,20 @@ CREATE TABLE day_route_segments (
   from_place TEXT NOT NULL, to_place TEXT NOT NULL,
   mode TEXT NOT NULL, duration_min INTEGER, notes TEXT, start_time TEXT, source TEXT NOT NULL DEFAULT 'confirmed',
   PRIMARY KEY (plan_id, destination, day_number, sort_order)
+);
+
+CREATE TABLE "day_weather_sessions" (
+  plan_id TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  day_number INTEGER NOT NULL,
+  session TEXT NOT NULL,
+  weather_code INTEGER NOT NULL,
+  precip_mm REAL NOT NULL,
+  precip_max_mm_h REAL NOT NULL,
+  precip_prob_max INTEGER,
+  source TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (plan_id, destination, day_number, session)
 );
 
 CREATE TABLE "days" (

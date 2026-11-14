@@ -51,7 +51,132 @@ const WMO_LABELS: &[(i64, &str)] = &[
     (99, "Thunderstorm with heavy hail"),
 ];
 
-fn wmo_label(code: i64) -> String {
+/// The ONE place the session windows live: (itinerary session key, first hour,
+/// end hour exclusive), JST wall clock. An hour belongs to a window by its START
+/// time (12:00 -> noon, 14:00 -> afternoon); hours outside 09-22 are ignored.
+/// CAVEAT: Open-Meteo's hourly `precipitation` / `precipitation_probability` at
+/// stamp T cover the PRECEDING hour (T-1 .. T), so those two use the stamps
+/// from+1 ..= to (morning 10,11,12; noon 13,14; afternoon 15..18; evening 19..22),
+/// while `weather_code` (instantaneous) uses the start-hour stamps from ..< to.
+/// Keys match `timesofday.session_type` so the dashboard attaches each line to
+/// the same itinerary session.
+pub const SESSION_WINDOWS: [(&str, u32, u32); 4] = [
+    ("morning", 9, 12),
+    ("noon", 12, 14),
+    ("afternoon", 14, 18),
+    ("evening", 18, 22),
+];
+
+/// Request params for the hourly block (same request as the daily one).
+const HOURLY_PARAMS: &str = "precipitation,precipitation_probability,weather_code";
+
+/// One Open-Meteo hour (any field may be null).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HourSample {
+    hour: u32,
+    precip_mm: Option<f64>,
+    prob: Option<f64>,
+    code: Option<i64>,
+}
+
+/// One aggregated session.
+#[derive(Debug, Clone, PartialEq)]
+struct SessionAgg {
+    session: &'static str,
+    weather_code: i64,
+    precip_mm: f64,
+    precip_max_mm_h: f64,
+    precip_prob_max: Option<i64>,
+}
+
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// Representative WMO code of a session: the MOST FREQUENT code among its hours;
+/// a tie goes to the more severe one (higher WMO number: 95 > 81 > 61 > 3 > 0).
+/// Deliberately NOT the maximum: one stormy hour must not label a mostly-dry
+/// session (the daily code is that worst-hour value, which is the very problem).
+fn representative_code(codes: &[i64]) -> Option<i64> {
+    let mut counts: std::collections::BTreeMap<i64, usize> = std::collections::BTreeMap::new();
+    for c in codes {
+        *counts.entry(*c).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(code, n)| (*n, *code))
+        .map(|(code, _)| code)
+}
+
+/// Aggregate one day's hours into per-session rows (itinerary order). A window
+/// with no usable hour (no weather code among them) yields no row. Precipitation
+/// totals/maxima are rounded to 0.1 mm; the probability is the window's max.
+fn aggregate_sessions(hours: &[HourSample]) -> Vec<SessionAgg> {
+    let mut out = Vec::new();
+    for (session, from, to) in SESSION_WINDOWS {
+        let in_window: Vec<&HourSample> =
+            hours.iter().filter(|h| h.hour >= from && h.hour < to).collect();
+        // Preceding-hour quantities: stamps from+1 ..= to.
+        let in_precip: Vec<&HourSample> =
+            hours.iter().filter(|h| h.hour > from && h.hour <= to).collect();
+        let codes: Vec<i64> = in_window.iter().filter_map(|h| h.code).collect();
+        let Some(weather_code) = representative_code(&codes) else {
+            continue;
+        };
+        let mm: Vec<f64> = in_precip.iter().filter_map(|h| h.precip_mm).collect();
+        let prob = in_precip
+            .iter()
+            .filter_map(|h| h.prob)
+            .fold(None, |m: Option<f64>, p| Some(m.map_or(p, |x| x.max(p))));
+        out.push(SessionAgg {
+            session,
+            weather_code,
+            precip_mm: round1(mm.iter().sum()),
+            precip_max_mm_h: round1(mm.iter().cloned().fold(0.0, f64::max)),
+            precip_prob_max: prob.map(|p| p.round() as i64),
+        });
+    }
+    out
+}
+
+/// Group Open-Meteo's `hourly` block by local date ("2026-11-14T09:00" ->
+/// ("2026-11-14", 9)). Unparseable timestamps are skipped.
+fn group_hourly(data: &Value) -> std::collections::HashMap<String, Vec<HourSample>> {
+    let mut by_date: std::collections::HashMap<String, Vec<HourSample>> = Default::default();
+    let Some(h) = data.get("hourly") else {
+        return by_date;
+    };
+    let arr = |key: &str| -> Vec<Value> {
+        h.get(key).and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    };
+    let times = arr("time");
+    let (mm, prob, codes) = (arr("precipitation"), arr("precipitation_probability"), arr("weather_code"));
+    for (i, t) in times.iter().enumerate() {
+        let Some(ts) = t.as_str() else { continue };
+        let Some((date, clock)) = ts.split_once('T') else { continue };
+        let Some(hour) = clock.get(..2).and_then(|x| x.parse::<u32>().ok()) else { continue };
+        by_date.entry(date.to_string()).or_default().push(HourSample {
+            hour,
+            precip_mm: mm.get(i).and_then(|v| v.as_f64()),
+            prob: prob.get(i).and_then(|v| v.as_f64()),
+            code: codes.get(i).and_then(|v| v.as_i64()),
+        });
+    }
+    by_date
+}
+
+/// The Open-Meteo forecast URL: daily block (unchanged) + hourly block.
+fn open_meteo_url(lat: f64, lon: f64, tz: &str, start_date: &str, end_date: &str) -> String {
+    format!(
+        "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}\
+         &daily=temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,weather_code\
+         &hourly={HOURLY_PARAMS}\
+         &timezone={}&start_date={start_date}&end_date={end_date}",
+        url_encode(tz)
+    )
+}
+
+pub(crate) fn wmo_label(code: i64) -> String {
     WMO_LABELS
         .iter()
         .find(|(c, _)| *c == code)
@@ -68,6 +193,8 @@ struct Forecast {
     precipitation_pct: Option<f64>,
     weather_code: i64,
     weather_label: String,
+    /// Hourly-derived per-session weather (empty when the hourly block is missing).
+    sessions: Vec<SessionAgg>,
 }
 
 pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
@@ -165,6 +292,9 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             feels_like,
             rain
         );
+        for a in &f.sessions {
+            println!("      {}: {} {}mm (max {}mm/h)", a.session, wmo_label(a.weather_code), a.precip_mm, a.precip_max_mm_h);
+        }
     }
 
     Ok(())
@@ -349,12 +479,7 @@ async fn fetch_weather(
         }
     }
 
-    let tz_enc = url_encode(&tz);
-    let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}\
-         &daily=temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,weather_code\
-         &timezone={tz_enc}&start_date={start_date}&end_date={end_date}"
-    );
+    let url = open_meteo_url(lat, lon, &tz, start_date, end_date);
 
     let mut attempt = 0;
     let output = loop {
@@ -406,11 +531,14 @@ async fn fetch_weather(
     let precip = arr("precipitation_probability_max");
     let codes = arr("weather_code");
 
+    let hourly = group_hourly(&data);
     let mut out = Vec::new();
     for idx in 0..times.len() {
+        let date = times[idx].as_str().unwrap_or_default().to_string();
+        let sessions = hourly.get(&date).map(|h| aggregate_sessions(h)).unwrap_or_default();
         let code = codes.get(idx).and_then(|v| v.as_i64()).unwrap_or(0);
         out.push(Forecast {
-            date: times[idx].as_str().unwrap_or_default().to_string(),
+            date,
             temp_high_c: t_max.get(idx).and_then(|v| v.as_f64()).unwrap_or(0.0),
             temp_low_c: t_min.get(idx).and_then(|v| v.as_f64()).unwrap_or(0.0),
             feels_like_high_c: a_max.get(idx).and_then(|v| v.as_f64()),
@@ -418,6 +546,7 @@ async fn fetch_weather(
             precipitation_pct: precip.get(idx).and_then(|v| v.as_f64()),
             weather_code: code,
             weather_label: wmo_label(code),
+            sessions,
         });
     }
     Ok(out)
@@ -449,6 +578,21 @@ async fn write_day_weather(
         &now_db,
     )
     .await?;
+
+    let rows: Vec<travel_db::repo::day_weather_sessions::SessionWeatherRow> = f
+        .sessions
+        .iter()
+        .map(|a| travel_db::repo::day_weather_sessions::SessionWeatherRow {
+            day_number,
+            session: a.session.to_string(),
+            weather_code: a.weather_code,
+            precip_mm: a.precip_mm,
+            precip_max_mm_h: a.precip_max_mm_h,
+            precip_prob_max: a.precip_prob_max,
+        })
+        .collect();
+    travel_db::repo::day_weather_sessions::replace_day(conn, plan_id, dest, day_number, &rows, "open_meteo", sourced_at)
+        .await?;
 
     // Emit weather_updated event (dest_process + timeline), like setDayWeather.
     let now_iso = now_rfc3339();
@@ -659,6 +803,7 @@ mod tests {
             precipitation_pct: None,
             weather_code: 0,
             weather_label: "Clear sky".to_string(),
+            sessions: Vec::new(),
         }
     }
 
@@ -684,6 +829,96 @@ mod tests {
         let got = assign_forecasts(&days, &f);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, 1);
+    }
+
+    fn hs(hour: u32, mm: Option<f64>, prob: Option<f64>, code: Option<i64>) -> HourSample {
+        HourSample { hour, precip_mm: mm, prob, code }
+    }
+
+    #[test]
+    fn session_windows_cover_09_to_22_without_gaps_or_overlap() {
+        assert_eq!(SESSION_WINDOWS[0], ("morning", 9, 12));
+        for w in SESSION_WINDOWS.windows(2) {
+            assert_eq!(w[0].2, w[1].1, "windows must be contiguous");
+        }
+        assert_eq!(SESSION_WINDOWS[3].2, 22);
+    }
+
+    #[test]
+    fn code_uses_start_hour_stamps_precip_uses_preceding_hour_stamps() {
+        // mm and prob at stamp h both equal h, so the sums show exactly which stamps count.
+        let hours: Vec<HourSample> = (0..24).map(|h| hs(h, Some(h as f64), Some(h as f64), Some(61))).collect();
+        let a = aggregate_sessions(&hours);
+        let by = |k: &str| a.iter().find(|s| s.session == k).unwrap().clone();
+        assert_eq!(a.len(), 4);
+        assert_eq!(by("morning").precip_mm, 33.0); // stamps 10,11,12
+        assert_eq!(by("noon").precip_mm, 27.0); // 13,14
+        assert_eq!(by("afternoon").precip_mm, 66.0); // 15..18
+        assert_eq!(by("evening").precip_mm, 82.0); // 19..22; 23 and 0-9 never count
+        assert_eq!(by("morning").precip_max_mm_h, 12.0);
+        assert_eq!(by("evening").precip_prob_max, Some(22));
+        assert_eq!(by("noon").precip_prob_max, Some(14));
+        // Code stamps: a dry-start window keeps its own code even when rain stamps differ.
+        let mut h2: Vec<HourSample> = (9..13).map(|h| hs(h, Some(0.0), Some(0.0), Some(3))).collect();
+        h2[3].code = Some(65); // stamp 12 belongs to noon's code window, not morning's
+        assert_eq!(aggregate_sessions(&h2)[0].weather_code, 3);
+    }
+
+    #[test]
+    fn aggregation_empty_hours_or_missing_codes_yield_no_row() {
+        assert!(aggregate_sessions(&[]).is_empty());
+        // only morning has data
+        let a = aggregate_sessions(&[hs(10, Some(0.0), None, Some(3))]);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].session, "morning");
+        assert_eq!(a[0].precip_prob_max, None);
+        // hour present but null code -> no row
+        assert!(aggregate_sessions(&[hs(10, Some(1.0), Some(50.0), None)]).is_empty());
+    }
+
+    #[test]
+    fn representative_code_is_most_frequent_ties_to_severe_never_plain_max() {
+        assert_eq!(representative_code(&[61, 61, 61, 65]), Some(61)); // not the max
+        assert_eq!(representative_code(&[3, 63, 3, 63]), Some(63)); // tie -> severe
+        assert_eq!(representative_code(&[0]), Some(0));
+        assert_eq!(representative_code(&[]), None);
+    }
+
+    #[test]
+    fn aggregation_rounds_mm_to_one_decimal_and_reports_max_hour() {
+        let hours = [
+            hs(9, Some(50.0), Some(99.0), Some(61)), // stamp 9 covers 08-09: not morning precip
+            hs(10, Some(0.04), None, Some(61)),
+            hs(11, Some(1.26), Some(80.4), Some(61)),
+            hs(12, Some(0.1), Some(90.5), Some(61)),
+        ];
+        let a = aggregate_sessions(&hours);
+        assert_eq!(a[0].precip_mm, 1.4); // 1.40 -> 1.4
+        assert_eq!(a[0].precip_max_mm_h, 1.3);
+        assert_eq!(a[0].precip_prob_max, Some(91)); // 90.5 rounds up
+    }
+
+    #[test]
+    fn hourly_grouping_splits_by_local_date() {
+        let data: Value = serde_json::json!({"hourly": {
+            "time": ["2026-11-14T09:00", "2026-11-14T10:00", "2026-11-15T09:00"],
+            "precipitation": [1.0, null, 2.0],
+            "precipitation_probability": [10, 20, 30],
+            "weather_code": [61, 61, 3]
+        }});
+        let g = group_hourly(&data);
+        assert_eq!(g["2026-11-14"].len(), 2);
+        assert_eq!(g["2026-11-14"][1].precip_mm, None);
+        assert_eq!(g["2026-11-15"][0].hour, 9);
+        assert!(group_hourly(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn url_requests_daily_and_hourly_in_one_call() {
+        let u = open_meteo_url(35.0, 135.7, "Asia/Tokyo", "2026-11-14", "2026-11-17");
+        assert!(u.contains("&daily=temperature_2m_max,"), "{u}");
+        assert!(u.contains("&hourly=precipitation,precipitation_probability,weather_code"), "{u}");
+        assert!(u.contains("&timezone=Asia%2FTokyo&start_date=2026-11-14&end_date=2026-11-17"), "{u}");
     }
 
     #[test]

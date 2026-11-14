@@ -2,6 +2,7 @@ pub mod airport_transfers;
 pub mod bookings;
 pub mod captures;
 pub mod clothing_tips;
+pub mod day_weather_sessions;
 pub mod days;
 pub mod destination_ref;
 pub mod flight_legs;
