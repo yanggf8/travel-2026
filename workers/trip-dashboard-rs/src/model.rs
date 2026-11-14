@@ -65,6 +65,45 @@ pub struct SessionWeather {
     pub precip_max_mm_h: f64,
 }
 
+/// One `weather_providers` row (GLOBAL reference data): who the forecast came from
+/// and the licence to credit. Resolved onto a day as `Day.weather_provider`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct WeatherProvider {
+    pub provider_id: String,
+    pub name_zh: String,
+    pub name_en: String,
+    pub attribution_url: String,
+    pub license: String,
+}
+
+/// Resolve each main day's weather provider: `days.weather_source_id` first, else
+/// the first stored session's `source`; matched against `weather_providers` rows.
+/// An id with no provider row (or no id) leaves `weather_provider` None — nothing
+/// renders, nothing fails.
+pub fn attach_weather_providers(days: &mut [Day], provider_rows: &[Row], session_rows: &[Row]) {
+    for d in days.iter_mut() {
+        let id = if !d.weather_source_id.is_empty() {
+            d.weather_source_id.clone()
+        } else {
+            session_rows
+                .iter()
+                .find(|r| i(r, "day_number") == d.day_number && !s(r, "source").is_empty())
+                .map(|r| s(r, "source"))
+                .unwrap_or_default()
+        };
+        if id.is_empty() {
+            continue;
+        }
+        d.weather_provider = provider_rows.iter().find(|r| s(r, "provider_id") == id).map(|r| WeatherProvider {
+            provider_id: id.clone(),
+            name_zh: s(r, "name_zh"),
+            name_en: s(r, "name_en"),
+            attribution_url: s(r, "attribution_url"),
+            license: s(r, "license"),
+        });
+    }
+}
+
 /// Attach `day_weather_sessions` rows (already ordered by day, session) to the
 /// matching main days by day_number.
 pub fn attach_session_weather(days: &mut [Day], rows: &[Row]) {
@@ -94,6 +133,10 @@ pub struct Day {
     /// renders its localized description via `i18n::wmo_weather`, falling back to
     /// `weather_label` when the code is absent or unmapped.
     pub weather_code: Option<i64>,
+    /// `days.weather_source_id` (the provider that wrote the forecast); "" when NULL.
+    pub weather_source_id: String,
+    /// Provider resolved from `weather_providers` for the attribution line.
+    pub weather_provider: Option<WeatherProvider>,
     pub temp_low_c: Option<f64>,
     pub temp_high_c: Option<f64>,
     pub precipitation_pct: Option<f64>,
@@ -724,6 +767,8 @@ pub fn assemble(
             theme_zh: s(d, "theme_zh"),
             weather_label: s(d, "weather_label"),
             weather_code: opt_i(d, "weather_code"),
+            weather_source_id: s(d, "weather_source_id"),
+            weather_provider: None,
             temp_low_c: f(d, "temp_low_c"),
             temp_high_c: f(d, "temp_high_c"),
             precipitation_pct: f(d, "precipitation_pct"),
@@ -1434,6 +1479,29 @@ mod tests {
         assert!(plan.fit_offers[0].booked);
         assert!(!plan.fit_offers[1].booked);
         assert_eq!(plan.offer.as_ref().map(|o| o.source_id.as_str()), Some("liontravel"));
+    }
+
+    #[test]
+    fn attach_weather_providers_resolves_day_then_session_source() {
+        let provs = vec![row(&[
+            ("provider_id", json!("open_meteo")),
+            ("name_zh", json!("Open-Meteo")),
+            ("name_en", json!("Open-Meteo")),
+            ("attribution_url", json!("https://open-meteo.com/")),
+            ("license", json!("CC BY 4.0")),
+        ])];
+        let sess = vec![row(&[("day_number", json!("2")), ("source", json!("open_meteo"))])];
+        let mut days = vec![
+            Day { day_number: 1, weather_source_id: "open_meteo".into(), ..Default::default() },
+            Day { day_number: 2, ..Default::default() }, // id only via session row
+            Day { day_number: 3, weather_source_id: "unknown_src".into(), ..Default::default() },
+            Day { day_number: 4, ..Default::default() },
+        ];
+        attach_weather_providers(&mut days, &provs, &sess);
+        assert_eq!(days[0].weather_provider.as_ref().unwrap().license, "CC BY 4.0");
+        assert_eq!(days[1].weather_provider.as_ref().unwrap().provider_id, "open_meteo");
+        assert!(days[2].weather_provider.is_none(), "unknown id renders nothing");
+        assert!(days[3].weather_provider.is_none());
     }
 
     #[test]

@@ -401,6 +401,10 @@ async fn load_days(
     Ok(out)
 }
 
+/// `weather_providers.provider_id` of the Open-Meteo forecast source; stored in
+/// `days.weather_source_id` and `day_weather_sessions.source`.
+const PROVIDER_ID: &str = "open_meteo";
+
 /// Look up coordinates + timezone from destination_config (fail loud — the TS
 /// service throws when coordinates are missing).
 async fn read_coords(conn: &Connection, dest: &str) -> Result<(f64, f64, String), String> {
@@ -419,7 +423,11 @@ async fn read_coords(conn: &Connection, dest: &str) -> Result<(f64, f64, String)
         let lat: Option<f64> = row.get(0).unwrap_or(None);
         let lon: Option<f64> = row.get(1).unwrap_or(None);
         let tz: String = row.get(2).unwrap_or_default();
-        let tz = if tz.is_empty() { "Asia/Tokyo".to_string() } else { tz };
+        if tz.trim().is_empty() {
+            return Err(format!(
+                "No timezone configured for {dest}. Set destination_config.timezone in Turso (e.g. Asia/Tokyo)."
+            ));
+        }
         match (lat, lon) {
             (Some(la), Some(lo)) => Ok((la, lo, tz)),
             _ => Err(format!(
@@ -592,6 +600,7 @@ async fn write_day_weather(
         f.feels_like_high_c,
         f.precipitation_pct,
         f.weather_code,
+        PROVIDER_ID,
         sourced_at,
         &now_db,
     )
@@ -609,7 +618,7 @@ async fn write_day_weather(
             precip_prob_max: a.precip_prob_max,
         })
         .collect();
-    travel_db::repo::day_weather_sessions::replace_day(conn, plan_id, dest, day_number, &rows, "open_meteo", sourced_at)
+    travel_db::repo::day_weather_sessions::replace_day(conn, plan_id, dest, day_number, &rows, PROVIDER_ID, sourced_at)
         .await?;
 
     // Emit weather_updated event (dest_process + timeline), like setDayWeather.
@@ -618,10 +627,10 @@ async fn write_day_weather(
     let tl_so = next_timeline_sort_order(conn, plan_id).await?;
     insert_event(conn, plan_id, "dest_process", dest, "process_5_daily_itinerary", dp_so, "weather_updated", &now_iso).await?;
     insert_kv(conn, plan_id, "dest_process", dest, "process_5_daily_itinerary", dp_so,
-        &[("day_number", day_number.to_string()), ("source_id", "open_meteo".to_string())]).await?;
+        &[("day_number", day_number.to_string()), ("source_id", PROVIDER_ID.to_string())]).await?;
     insert_event(conn, plan_id, "timeline", "", "process_5_daily_itinerary", tl_so, "weather_updated", &now_iso).await?;
     insert_kv(conn, plan_id, "timeline", "", "process_5_daily_itinerary", tl_so,
-        &[("day_number", day_number.to_string()), ("source_id", "open_meteo".to_string())]).await?;
+        &[("day_number", day_number.to_string()), ("source_id", PROVIDER_ID.to_string())]).await?;
 
     let _ = &f.date; // date is informational; days rows are matched by day_number
     Ok(())

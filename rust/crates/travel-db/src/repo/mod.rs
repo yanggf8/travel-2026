@@ -3,6 +3,7 @@ pub mod bookings;
 pub mod captures;
 pub mod clothing_tips;
 pub mod day_weather_sessions;
+pub mod weather_providers;
 pub mod days;
 pub mod destination_ref;
 pub mod flight_legs;

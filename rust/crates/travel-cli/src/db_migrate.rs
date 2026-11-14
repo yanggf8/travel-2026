@@ -1603,6 +1603,17 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     .await;
     exec_lenient(
         &conn,
+        r#"CREATE TABLE IF NOT EXISTS weather_providers (
+  provider_id TEXT PRIMARY KEY,
+  name_zh TEXT,
+  name_en TEXT,
+  attribution_url TEXT,
+  license TEXT
+);"#,
+    )
+    .await;
+    exec_lenient(
+        &conn,
         r#"CREATE TABLE IF NOT EXISTS destination_transit (
   slug TEXT,
   pair_key TEXT,

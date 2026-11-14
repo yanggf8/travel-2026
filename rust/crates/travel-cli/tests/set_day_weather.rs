@@ -116,6 +116,7 @@ async fn set_day_weather_repo_deterministic() {
         feels_like_high_c,
         precipitation_pct,
         weather_code,
+        "open_meteo",
         sourced_at,
         now_db,
     )

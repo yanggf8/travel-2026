@@ -13,7 +13,7 @@
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
 -- Generated: 2026-11-14
--- Tables: 145 | Indexes: 28
+-- Tables: 146 | Indexes: 28
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -1352,6 +1352,14 @@ CREATE TABLE transportation_extras (
   source TEXT, populated_from TEXT, research_notes TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, home_to_airport_status TEXT, airport_to_hotel_status TEXT,
   PRIMARY KEY (plan_id, destination)
+);
+
+CREATE TABLE weather_providers (
+  provider_id TEXT PRIMARY KEY,
+  name_zh TEXT,
+  name_en TEXT,
+  attribution_url TEXT,
+  license TEXT
 );
 
 -- ---------------------------------------------------------------------------

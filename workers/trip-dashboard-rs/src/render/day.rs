@@ -220,6 +220,31 @@ pub fn session_weather_line(day: &Day, lang: &str) -> String {
     format!("<div class=\"weather-sessions\">{}</div>", parts.join(t("labelJoin", lang)))
 }
 
+/// Attribution under the day's weather, e.g. 「天氣資料：Open-Meteo（CC BY 4.0）」,
+/// linked to the provider's attribution URL when it is http(s). The provider row is
+/// content (Turso `weather_providers`); only the label words are chrome. Empty when
+/// the day has no resolved provider (unknown id / no source).
+pub fn weather_attribution_line(day: &Day, lang: &str) -> String {
+    let Some(p) = &day.weather_provider else { return String::new() };
+    let name = if lang == "en" { &p.name_en } else { &p.name_zh };
+    let name = if name.is_empty() { &p.provider_id } else { name };
+    let linked = if p.attribution_url.starts_with("https://") || p.attribution_url.starts_with("http://") {
+        format!(
+            "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a>",
+            esc(&p.attribution_url),
+            esc(name)
+        )
+    } else {
+        esc(name)
+    };
+    let lic = if p.license.is_empty() {
+        String::new()
+    } else {
+        t("wxLicense", lang).replace("{lic}", &esc(&p.license))
+    };
+    format!("<div class=\"weather-attribution\">{}{}{}</div>", t("wxDataBy", lang), linked, lic)
+}
+
 /// Render the per-day weather strip: icon + description + temp range +
 /// feels-like + rain%, followed by the clothing tips. Each piece is shown only
 /// when present. The icon comes from the WMO code (`i18n::wmo_emoji`, a neutral
@@ -561,6 +586,7 @@ fn render_content(
     if option_label.is_none() {
         h.push_str(&weather_strip(day, clothing_tips, lang));
         h.push_str(&session_weather_line(day, lang));
+        h.push_str(&weather_attribution_line(day, lang));
     }
     h.push_str("<div class=\"day-map-stack\">");
     let map_version = map_status
@@ -1300,6 +1326,31 @@ mod tests {
         assert_eq!(session_weather_line(&odd, "zh"), "");
     }
 
+
+    #[test]
+    fn weather_attribution_line_renders_escaped_link_and_tolerates_unknown() {
+        let day = Day {
+            weather_provider: Some(crate::model::WeatherProvider {
+                provider_id: "open_meteo".into(),
+                name_zh: "Open-Meteo".into(),
+                name_en: "Open<Meteo>".into(),
+                attribution_url: "https://open-meteo.com/?a=1&b=2".into(),
+                license: "CC BY 4.0".into(),
+            }),
+            ..Default::default()
+        };
+        let zh = weather_attribution_line(&day, "zh");
+        assert!(zh.contains("天氣資料：<a href=\"https://open-meteo.com/?a=1&amp;b=2\""), "{zh}");
+        assert!(zh.contains(">Open-Meteo</a>（CC BY 4.0）</div>"), "{zh}");
+        let en = weather_attribution_line(&day, "en");
+        assert!(en.contains("Weather data: <a") && en.contains("Open&lt;Meteo&gt;</a> (CC BY 4.0)"), "{en}");
+        // unknown provider id (no row) -> nothing, no panic
+        assert_eq!(weather_attribution_line(&Day::default(), "zh"), "");
+        // non-http url -> plain text, never a link
+        let mut bad = day;
+        bad.weather_provider.as_mut().unwrap().attribution_url = "javascript:alert(1)".into();
+        assert!(!weather_attribution_line(&bad, "zh").contains("<a "));
+    }
 
     // ---- weather strip ----
     #[test]

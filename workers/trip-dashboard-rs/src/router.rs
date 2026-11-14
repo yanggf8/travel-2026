@@ -859,7 +859,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         format!(
             "SELECT day_number, date, day_type, theme, theme_zh, weather_label, weather_code, \
-             temp_low_c, temp_high_c, precipitation_pct, feels_like_low_c, feels_like_high_c, \
+             weather_source_id, temp_low_c, temp_high_c, precipitation_pct, feels_like_low_c, feels_like_high_c, \
              variant_of, variant_label, variant_label_zh \
              FROM days WHERE plan_id = '{slug}' ORDER BY day_number"
         ),
@@ -1033,16 +1033,19 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
             .to_string(),
         // [27] per-session weather (day_weather_sessions, `travel fetch-weather`).
         format!(
-            "SELECT day_number, session, weather_code, precip_mm, precip_max_mm_h \
+            "SELECT day_number, session, weather_code, precip_mm, precip_max_mm_h, source \
              FROM day_weather_sessions WHERE plan_id = '{slug}' \
              ORDER BY day_number, CASE session WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 \
                                                WHEN 'afternoon' THEN 2 ELSE 3 END"
         ),
+        // [28] weather attribution providers (GLOBAL, `travel set-weather-provider`).
+        "SELECT provider_id, name_zh, name_en, attribution_url, license FROM weather_providers"
+            .to_string(),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 28 {
+    if r.len() < 29 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 28 results".into(),
+            "Turso pipeline returned fewer than 29 results".into(),
         ));
     }
     let mut plan = model::assemble(
@@ -1052,6 +1055,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
     plan.clothing_tips = model::clothing_tips(&r[23], &r[26]);
     plan.documents = model::plan_documents(&r[24], &r[25]);
     model::attach_session_weather(&mut plan.days, &r[27]);
+    model::attach_weather_providers(&mut plan.days, &r[28], &r[27]);
     Ok(plan)
 }
 
