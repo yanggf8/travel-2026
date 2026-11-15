@@ -303,6 +303,8 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         // weather attribution line (render/day.rs weather_attribution_line)
         ("wxDataBy", false) => "Weather data: ",
         ("wxDataBy", true) => "天氣資料：",
+        ("wxUpdated", false) => " · updated {time}",
+        ("wxUpdated", true) => " · 更新 {time}",
         ("wxLicense", false) => " ({lic})",
         ("wxLicense", true) => "（{lic}）",
         // ---- map captions (render/map.rs) — {day} = day number ----

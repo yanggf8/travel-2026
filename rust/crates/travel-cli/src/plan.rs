@@ -204,6 +204,9 @@ pub struct DayWeather {
     pub weather_code: i64,
     pub source_id: String,
     pub sourced_at: String,
+    /// `sourced_at` (UTC ISO) converted to the destination's timezone,
+    /// "YYYY-MM-DD HH:MM <abbr>"; empty when `sourced_at` is empty.
+    pub sourced_local: String,
 }
 
 #[derive(Debug, Clone)]
@@ -280,6 +283,53 @@ pub fn assert_dest_matches(dest_opt: Option<&str>, active_destination: &str) -> 
         }
     }
     Ok(())
+}
+
+/// Convert a UTC/offset ISO-8601 timestamp (`2026-11-14T23:39:12.000Z`) to the
+/// IANA timezone `tz`, formatted "YYYY-MM-DD HH:MM <abbr>". Uses the system
+/// zoneinfo via `date(1)` (no tz table is hardcoded). Fails loud on an
+/// unparseable timestamp or an unknown timezone.
+pub fn format_in_tz(iso: &str, tz: &str) -> Result<String, String> {
+    let epoch = chrono::DateTime::parse_from_rfc3339(iso)
+        .map_err(|e| format!("cannot parse timestamp \"{iso}\" as RFC 3339: {e}"))?
+        .timestamp();
+    if tz.is_empty()
+        || tz.contains("..")
+        || tz.starts_with('/')
+        || !std::path::Path::new("/usr/share/zoneinfo").join(tz).is_file()
+    {
+        return Err(format!("unknown timezone \"{tz}\" (destination_config.timezone)"));
+    }
+    let out = std::process::Command::new("date")
+        .env("TZ", tz)
+        .args(["-d", &format!("@{epoch}"), "+%Y-%m-%d %H:%M %Z"])
+        .output()
+        .map_err(|e| format!("failed to run date(1): {e}"))?;
+    if !out.status.success() {
+        return Err(format!("cannot parse timestamp \"{iso}\": {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[cfg(test)]
+mod tz_tests {
+    use super::format_in_tz;
+
+    #[test]
+    fn converts_utc_to_destination_tz() {
+        // 2026-11-14 23:39 UTC is 08:39 on 11/15 in Tokyo (the bug: date was cut to 11-14).
+        assert_eq!(format_in_tz("2026-11-14T23:39:12.000Z", "Asia/Tokyo").unwrap(), "2026-11-15 08:39 JST");
+        assert_eq!(format_in_tz("2026-11-14T23:39:12.000Z", "UTC").unwrap(), "2026-11-14 23:39 UTC");
+    }
+
+    #[test]
+    fn fails_loud_on_bad_input() {
+        assert!(format_in_tz("garbage", "Asia/Tokyo").is_err());
+        assert!(format_in_tz("2026-11-14", "Asia/Tokyo").is_err());
+        assert!(format_in_tz("2026-11-14T23:39:12", "Asia/Tokyo").is_err()); // naive
+        assert!(format_in_tz("2026-11-14T23:39:12Z junk", "Asia/Tokyo").is_err());
+        assert!(format_in_tz("2026-11-14T23:39:12Z", "Not/AZone").is_err());
+    }
 }
 
 pub async fn load(plan_id: &str) -> Result<PlanView, String> {
@@ -437,11 +487,32 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
 
     // 12. days.
     let session_weather = travel_db::repo::day_weather_sessions::list(&conn, plan_id, dest).await?;
+    // Destination timezone is loaded lazily: only a day with a fetch timestamp needs it
+    // (then a missing config row / timezone fails loud).
+    let mut timezone: Option<String> = None;
     for d in repo::days(&conn, plan_id, dest).await? {
         let weather = if d.weather_label.is_empty() {
             None
         } else {
+            let sourced_local = if d.weather_sourced_at.is_empty() {
+                String::new()
+            } else {
+                if timezone.is_none() {
+                    let (_, tz, _) = travel_db::repo::destination_ref::config_scalars(&conn, dest)
+                        .await?
+                        .ok_or_else(|| format!("destination_config has no row for {dest} (needed for weather_sourced_at)"))?;
+                    if tz.is_empty() {
+                        return Err(format!(
+                            "No timezone configured for {dest}. Set destination_config.timezone in Turso (e.g. Asia/Tokyo)."
+                        ));
+                    }
+                    timezone = Some(tz);
+                }
+                format_in_tz(&d.weather_sourced_at, timezone.as_deref().unwrap_or_default())
+                    .map_err(|e| format!("day {} weather_sourced_at: {e}", d.day_number))?
+            };
             Some(DayWeather {
+                sourced_local,
                 weather_label: d.weather_label,
                 temp_low_c: d.temp_low_c,
                 temp_high_c: d.temp_high_c,

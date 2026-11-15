@@ -242,7 +242,13 @@ pub fn weather_attribution_line(day: &Day, lang: &str) -> String {
     } else {
         t("wxLicense", lang).replace("{lic}", &esc(&p.license))
     };
-    format!("<div class=\"weather-attribution\">{}{}{}</div>", t("wxDataBy", lang), linked, lic)
+    // Fetch time in the destination's timezone (pre-formatted by the router); omitted when empty.
+    let updated = if day.weather_updated.is_empty() {
+        String::new()
+    } else {
+        t("wxUpdated", lang).replace("{time}", &esc(&day.weather_updated))
+    };
+    format!("<div class=\"weather-attribution\">{}{}{}{}</div>", t("wxDataBy", lang), linked, lic, updated)
 }
 
 /// Render the per-day weather strip: icon + description + temp range +
@@ -1344,6 +1350,17 @@ mod tests {
         assert!(zh.contains(">Open-Meteo</a>（CC BY 4.0）</div>"), "{zh}");
         let en = weather_attribution_line(&day, "en");
         assert!(en.contains("Weather data: <a") && en.contains("Open&lt;Meteo&gt;</a> (CC BY 4.0)"), "{en}");
+        // fetch time from the router-formatted stamp; empty -> time omitted
+        let mut stamped = Day { weather_provider: day.weather_provider, ..Default::default() };
+        stamped.weather_updated = "11/15 08:39".into();
+        let zh = weather_attribution_line(&stamped, "zh");
+        assert!(zh.ends_with("（CC BY 4.0） · 更新 11/15 08:39</div>"), "{zh}");
+        let en = weather_attribution_line(&stamped, "en");
+        assert!(en.ends_with("(CC BY 4.0) · updated 11/15 08:39</div>"), "{en}");
+        stamped.weather_updated = String::new();
+        assert!(!weather_attribution_line(&stamped, "en").contains("updated"));
+        assert!(!weather_attribution_line(&stamped, "zh").contains("更新"));
+        let day = stamped;
         // unknown provider id (no row) -> nothing, no panic
         assert_eq!(weather_attribution_line(&Day::default(), "zh"), "");
         // non-http url -> plain text, never a link

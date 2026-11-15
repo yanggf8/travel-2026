@@ -135,6 +135,11 @@ pub struct Day {
     pub weather_code: Option<i64>,
     /// `days.weather_source_id` (the provider that wrote the forecast); "" when NULL.
     pub weather_source_id: String,
+    /// `days.weather_sourced_at` (UTC ISO fetch time); "" when NULL.
+    pub weather_sourced_at: String,
+    /// `weather_sourced_at` formatted "MM/DD HH:MM" in the destination's timezone
+    /// (router, `tzfmt`); "" when unavailable — the attribution then omits the time.
+    pub weather_updated: String,
     /// Provider resolved from `weather_providers` for the attribution line.
     pub weather_provider: Option<WeatherProvider>,
     pub temp_low_c: Option<f64>,
@@ -768,6 +773,8 @@ pub fn assemble(
             weather_label: s(d, "weather_label"),
             weather_code: opt_i(d, "weather_code"),
             weather_source_id: s(d, "weather_source_id"),
+            weather_sourced_at: s(d, "weather_sourced_at"),
+            weather_updated: String::new(),
             weather_provider: None,
             temp_low_c: f(d, "temp_low_c"),
             temp_high_c: f(d, "temp_high_c"),

@@ -20,6 +20,7 @@ mod render;
 mod router;
 mod styles;
 mod turso;
+mod tzfmt;
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {

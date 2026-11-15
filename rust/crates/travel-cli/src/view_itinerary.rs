@@ -487,12 +487,8 @@ fn render_weather_line(w: &plan::DayWeather) -> String {
     } else {
         "☀️"
     };
-    // Source date = first 10 chars of sourced_at (YYYY-MM-DD), or empty.
-    let src_date = if w.sourced_at.len() >= 10 {
-        &w.sourced_at[..10]
-    } else {
-        ""
-    };
+    // Fetch time in the destination's timezone (resolved at load; empty if never stamped).
+    let src_date = w.sourced_local.as_str();
     // Rust's f64 Display uses the shortest round-trip representation
     // (1.2 → "1.2", 16.0 → "16", 1.23 → "1.23") — matches JS's
     // `Number.toString()` byte-for-byte, so we can interpolate the

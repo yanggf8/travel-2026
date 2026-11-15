@@ -3,7 +3,7 @@
 //! exception — it's a pure R2 passthrough with no auth (map images are low-stakes
 //! and the page already links to them; gating them would just add latency).
 
-use crate::{auth, d1_compare, model, render, turso};
+use crate::{auth, d1_compare, model, render, turso, tzfmt};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -860,7 +860,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         format!(
             "SELECT day_number, date, day_type, theme, theme_zh, weather_label, weather_code, \
              weather_source_id, temp_low_c, temp_high_c, precipitation_pct, feels_like_low_c, feels_like_high_c, \
-             variant_of, variant_label, variant_label_zh \
+             variant_of, variant_label, variant_label_zh, weather_sourced_at \
              FROM days WHERE plan_id = '{slug}' ORDER BY day_number"
         ),
         format!(
@@ -1041,11 +1041,13 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         // [28] weather attribution providers (GLOBAL, `travel set-weather-provider`).
         "SELECT provider_id, name_zh, name_en, attribution_url, license FROM weather_providers"
             .to_string(),
+        // [29] destination timezone (IANA) for the weather "updated" stamp.
+        format!("SELECT timezone FROM destination_config WHERE slug = {dest_expr}"),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
-    if r.len() < 29 {
+    if r.len() < 30 {
         return Err(Error::RustError(
-            "Turso pipeline returned fewer than 29 results".into(),
+            "Turso pipeline returned fewer than 30 results".into(),
         ));
     }
     let mut plan = model::assemble(
@@ -1056,6 +1058,16 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
     plan.documents = model::plan_documents(&r[24], &r[25]);
     model::attach_session_weather(&mut plan.days, &r[27]);
     model::attach_weather_providers(&mut plan.days, &r[28], &r[27]);
+    // Destination-aware "updated" stamp; missing tz / unsupported zone / bad time -> omitted.
+    let tz = r[29]
+        .first()
+        .and_then(|row| row.get("timezone"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    for d in plan.days.iter_mut() {
+        d.weather_updated = tzfmt::format_in_tz(&d.weather_sourced_at, &tz).unwrap_or_default();
+    }
     Ok(plan)
 }
 
