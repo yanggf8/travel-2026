@@ -179,7 +179,8 @@
   - `:305-326` `update_destination_weather`
   - `:347-368` 刪除 `read_active_destination`
   - `:582-656` `write_day_weather`／`finalize`
-- Test: 同檔 tests（in-memory libsql，比照 `db_migrate.rs:2846` 的 `mem_conn`）
+- Test: 同檔 tests（in-memory libsql，比照 `db_migrate.rs:2846` 的 `mem_conn`）——驗交易邊界的快速單元測試
+- Test: `rust/crates/travel-cli/tests/fetch_weather_all.rs`（新，真 Turso，跑 binary）——驗實際指令行為
 
 **Interfaces:**
 - Consumes: T2 的 `parse_forecasts`。
@@ -225,7 +226,14 @@
 }
 ```
 
+- [ ] **Step 1b: 寫失敗的真 Turso 整合測試** `fetch_weather_all.rs::all_partial_failure_commits_good_dest_and_exits_nonzero`
+  - seed：`zz_test_<nanos>` plan，兩個 `zz_test_<nanos>_a`／`_b` 目的地（`destination_config` 全域列，在 `teardown_plan` 之前本地刪除）；綁定 plan-id 後立刻 arm `Guard`。
+  - `_a` 用真實座標（京都）；`_b` 用 Open-Meteo 會回 HTTP 400 的座標（緯度 `95`）——走真正的失敗路徑，不加任何測試專用旗標或環境變數。如果 seed 或抓取前的驗證就擋下這個座標，回報整合者另找失敗方式，不准自行加旗標。
+  - 跑 `./bin/travel fetch-weather --plan-id <p> --all`。
+  - 斷言：exit 非 0；stderr 含 `_b` 與 `HTTP 400`；`_a` 的 `days.weather_*` 已寫入；`_b` 的天氣列和執行前相同；`plans.version` 恰好 +1；`operation_runs` 恰好 1 列、`summary` 是 `_a`。
+  - 如果 `_a` 本身因網路類錯誤（逾時、TLS）失敗，測試印出原因後 skip，不算 FAIL（Open-Meteo 卡住正是這份計畫要處理的狀況，不能讓它把整套測試弄紅）。
 - [ ] **Step 2: 執行測試，確認失敗**
+  - 整合測試在背景跑：`cargo test -j 2 -p travel-cli --test fetch_weather_all`
   - 指令：`cargo test -j 2 -p travel-cli weather::tests::write_is_atomic`
   - 預期：FAIL（函式未定義）。如果 `schema.sql` 在 in-memory SQLite 載入失敗，`test_db` 改成只執行 `schema.sql` 裡這六張表的 `CREATE TABLE` 段：`plans`、`days`、`day_weather_sessions`、`plan_events`、`plan_event_data`、`operation_runs`。不可手寫欄位。
 - [ ] **Step 3: 實作**
@@ -234,7 +242,7 @@
   - **抓取失敗**：印出 `kept_data_note`（讀 `MAX(days.weather_sourced_at)`，限定該目的地）。
   - 刪除 `read_active_destination`。
 - [ ] **Step 4: 執行 `cargo test -j 2 -p travel-cli weather::`**，預期 PASS。
-  - 接著在背景跑 `cargo test -j 2 -p travel-cli --test reject_flags_bookings_weather --test dest_override_validated`，預期 PASS；如果斷言的是舊訊息，就依新行為更新。
+  - 接著在背景跑 `cargo test -j 2 -p travel-cli --test fetch_weather_all --test reject_flags_bookings_weather --test dest_override_validated`，預期 PASS；如果斷言的是舊訊息，就依新行為更新。
 - [ ] **Step 5: 整合者 commit**：`fix(fetch-weather): one transaction per destination, non-zero exit when --all has a failure`
 
 ### Task 4: `validate data` 時區 WARN；`weather_providers.license_url`
@@ -258,7 +266,7 @@
     - 用 Guard 刪掉這一列（這是全域列，不屬 `teardown_plan` 範圍）。
   - validate：inline 純函式 `fn empty_timezone_warnings(rows: &[(String, Option<String>)]) -> Vec<String>`：輸入 `("kyoto_2026", None)` 與 `("x", Some(""))`，要產生兩行，每行都含 slug 與 `destination_config.timezone`。
 - [ ] **Step 2: 執行，確認失敗**
-  - inline：`cargo test -j 2 -p travel-cli weather_providers:: validate::`
+  - inline：`cargo test -j 2 -p travel-cli weather_providers::`，再跑一次 `cargo test -j 2 -p travel-cli validate::`（cargo 的 TESTNAME 只收一個 filter）
   - 整合測試在背景跑：`cargo test -j 2 -p travel-cli --test set_weather_provider`
 - [ ] **Step 3: 實作**：`validate data` 只查 `SELECT slug, timezone FROM destination_config`，交給 `empty_timezone_warnings`，結果以 WARN 印出。
 - [ ] **Step 4: 執行，確認通過**
@@ -311,7 +319,7 @@
 ```
 
 - [ ] **Step 2: 執行測試，確認失敗**
-  - 指令：`cd workers/trip-dashboard-rs && cargo test -j 2 tzfmt:: render::now:: render::tests::no_clock`
+  - 指令：`cd workers/trip-dashboard-rs && cargo test -j 2 -- tzfmt:: render::now:: render::tests::no_clock`（多個 filter 要放在 `--` 之後交給 libtest）
   - 預期：FAIL。
 - [ ] **Step 3: 實作**
   - 依 Interfaces 實作。
@@ -385,6 +393,20 @@ assert_eq!(s.matches("<script").count(), 1);   // 仍只有一段 inline script
 - [ ] **Step 3**：`./bin/travel set-weather-provider open_meteo --name-zh <現值> --name-en <現值> --url <現值> --license <現值> --license-url https://creativecommons.org/licenses/by/4.0/`。現值先用 `./bin/travel weather-providers` 讀出來。
 - [ ] **Step 4**：build worker 後部署：`cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy`。
 - [ ] **Step 5**：`./bin/travel verify-site --plan-id kyoto-nov-2026 --at "$(TZ=Asia/Tokyo date '+%Y-%m-%dT%H:%M')"`，預期全部 PASS（基準 195）。
-  - 另外找一個台北時區的 plan，不帶 `?at=` 用 curl 抓頁面，確認 `data-now-tz="Asia/Taipei"`；在行程期間外的話，確認頁面沒有 now 卡。
+  - **時區線上驗證**（`now_clock_in_tz` 的 host 版回 `None` 是因為 `Intl` 只在 wasm 裡有；換算邏輯由 `clock_from_parts` 純函式測試涵蓋，線上分兩段補）：
+    - 釘選：找一個台北時區的 plan，用它行程日期內的 `?at=` 抓頁面，確認有 now 卡、`data-now-tz="Asia/Taipei"`、標示的時段正確。
+    - 未釘選：同一個 plan 不帶 `?at=`；在行程期間外時，確認頁面沒有 now 卡、日卡全開（無時鐘路徑不出錯）。
+    - 實際時鐘：下一趟行程第一天，整合者不帶 `?at=` 打開網站，核對 now 卡的「現在」與目的地當地時間一致，且每分鐘重標正常；結果記在該趟的 `docs/trips/` 紀錄。這一步不擋部署。
 - [ ] **Step 6**：`./bin/travel fetch-weather --plan-id kyoto-nov-2026` 實跑一次，確認 stdout 和 audit 只有一筆 `operation_runs`。
 - [ ] **Step 7: 整合者 commit**：`docs: destination-local time wording for the now card and verify-site`
+
+
+## 審查核對紀錄（2026-11-16 計畫審查）
+
+審查者：Codex（block，整體）、K3.1 Pro（block，整體）。
+
+| 發現（審查者） | 處理 | 理由 |
+|---|---|---|
+| T3 只用 in-memory DB 與純函式，沒有真 Turso 驗 `--all` 部分失敗（Codex、K3） | 採納 | 新增 `fetch_weather_all.rs`：真 Turso、跑 binary、唯一 fixture、立刻 arm Guard；用 Open-Meteo 會回 400 的座標走真實失敗路徑，不加測試旗標；`_a` 遇網路類錯誤 skip，避免外部服務卡住弄紅測試 |
+| host 測試時鐘回 `None`、線上台北 plan 可能不在行程期間，證明不了時區修正（Codex） | 部分採納 | `Intl` 只在 wasm，host 回 `None` 是設計；換算由 `clock_from_parts` 測。線上補「釘選 `?at=` 驗 SSR 與 `data-now-tz`」與「下一趟行程第一天實測未釘選時鐘」，後者不擋部署 |
+| `cargo test` 多個 filter 會報錯（K3） | 採納 | T4 拆成兩次；T5 改用 `--` 後多 filter |

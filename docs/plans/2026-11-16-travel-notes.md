@@ -54,14 +54,18 @@
   - 分享連結不設期限、可撤回，並提供一鍵停止所有分享。
   - 分享頁的日期只顯示到「日」。
 - **不加** CHECK、JSON 欄位、feature flag；介面文字放 `i18n.rs`；SSR、無 JS 也能用（不加任何新 script）。
-- 派出去的 AI 不跑 git、不派 subagent；commit 由整合者做；測試不得上傳到正式 bucket（CLI 用 `TRAVEL_NOTES_DRY_R2=1`，比照 `plan_documents.rs:209` 的 `TRAVEL_DOCUMENTS_DRY_R2`）。
+- 派出去的 AI 不跑 git、不派 subagent；commit 由整合者做。
+- **R2 寫入一律帶 `--remote`**（比照 `plan_documents.rs:214-216` 的 put、`:269` 的 delete、`map_objects.rs:37`）。沒有 `--remote` 時 wrangler 寫的是本機模擬 bucket，網站讀不到。
+- **`cargo test` 的整合測試不得上傳到正式 bucket**（CLI 用 `TRAVEL_NOTES_DRY_R2=1`，比照 `plan_documents.rs:209` 的 `TRAVEL_DOCUMENTS_DRY_R2`）。唯一例外是 T8 的 `verify-site` 線上驗證：它必須打正式網站與正式 bucket 才有意義（另開 bucket 就要另一個 binding 和部署，驗到的不是使用者用的那條路徑）。規則：暫時筆記的 `created_by='verify-site'`；清理放在每一條離開路徑（成功、FAIL、錯誤都要跑）；每次開跑前先掃除上一次殘留的 `created_by='verify-site'` 筆記與其 R2 物件。
+- **R2 與 DB 的刪除順序**（CLI 與 worker 相同）：先從 DB 讀出 `r2_key` → 刪 R2（物件不存在視為成功）→ 再用一筆交易刪 DB 列並寫 `note_events`。R2 刪除失敗就不動 DB，key 留在 DB 裡，下次重試；絕不先刪 DB 列。
+- **每個寫入都要確認真的改到列**：CLI 端 repo 回傳 `bool`／列數，呼叫端為 0 時報錯、不寫 `note_events`。worker 端同一個 pipeline 裡，`note_events` 用 `INSERT ... SELECT ... WHERE changes() = 1`，pipeline 結束後檢查這一句的 `affected_row_count`，為 0 時回 404（筆記不存在或已刪除）。
 
 ## Review Focus
 
 1. **只有 EXIF、沒有 JFIF 的 iPhone JPEG，而且照片是直拍（Orientation=6）**：清理後要保留 Orientation=6，GPS 和 MakerNote 不能留下任何一個位元組（T2 fixture `iphone_portrait_gps.jpg`）。
 2. **APP1 是 XMP 而不是 EXIF，或同時有多個 APP1／APP13（IPTC）**：要全部丟掉（T2 測試 `drops_xmp_and_iptc`）。
 3. **PNG 的 `eXIf` chunk 放在 `IDAT` 之後**：也要丟掉，而且清理後的 CRC 要保持正確（T2 測試 `png_late_exif_dropped`）。
-4. **擁有者的 session 過期（8 小時）後送出表單**：已輸入的標題和內文要回填，不能消失（T6 測試 `expired_session_refills_form`）。
+4. **擁有者的 session 過期（8 小時）後送出表單**：已輸入的標題和內文要出現在「登入已過期」頁的唯讀框裡，可以複製後重新登入再貼上（T6 `precheck_expired_refill_*`、`expired_refill_echoes_only_submitted_text`，T8 線上驗證）。
 5. **分享頁內文含 `<script>`、`https://` 網址或 emoji**：要經 `esc()` 原樣顯示，不能自動轉成連結，emoji 往返不能壞（T1、T5 測試）。
 
 ---
@@ -96,7 +100,7 @@
   - **T6**（擁有者寫入頁面）依賴 T5。
   - **T7**（照片寫入、分享流程、行程頁入口）依賴 T6。
   - T6、T7 都改 worker 的 `notes.rs`、`render/notes.rs`，**必須依序做**，同一家實作比較好。
-- **T8**（verify-site）依賴 T4 的 CLI 寫入（用來建立測試筆記）和 T5；可以和 T6、T7 並行。
+- **T8**（verify-site）：程式碼依賴 T4、T5，可以和 T6、T7 並行撰寫；**線上執行**要等 T9 建好 bucket 並部署 T5–T7 之後，在 T9 Step 4 跑。
 - **T9** 由整合者在全部合併後做（部署、文件），其中建立 R2 bucket 要先經 Yang 確認（spec §11.3）。
 - **跨計畫**：與天氣、行程紀錄計畫互不相依，三份計畫可以同時進行。唯一共用的檔案是 `db_migrate.rs`、`main.rs`、`i18n.rs`、`router.rs`，誰後合併誰 rebase。
 
@@ -215,7 +219,8 @@ pub async fn soft_delete_note(conn, id: &str, actor: &str, now: &str) -> Result<
 pub async fn get_note(conn, id: &str) -> Result<Option<NoteRow>, String>;
 pub async fn list_notes(conn, plan: Option<&str>, day: Option<i64>) -> Result<Vec<NoteRow>, String>; // 不含已刪除
 pub async fn insert_image(conn, note_id: &str, img: &ImageRow, actor: &str, now: &str) -> Result<(), String>; // sort_order = MAX+1
-pub async fn delete_image(conn, note_id: &str, image_id: &str) -> Result<Option<String /*r2_key*/>, String>;
+pub async fn get_image_key(conn, note_id: &str, image_id: &str) -> Result<Option<String /*r2_key*/>, String>;
+pub async fn delete_image_row(conn, note_id: &str, image_id: &str) -> Result<bool, String>; // 呼叫端先刪 R2 成功後才呼叫
 pub async fn list_images(conn, note_id: &str) -> Result<Vec<ImageRow>, String>;
 pub async fn insert_share_token(conn, note_id: &str, token: &str, actor: &str, now: &str) -> Result<(), String>;
 pub async fn deactivate_share_tokens(conn, prefixes: &[&str], actor: &str, now: &str) -> Result<u64, String>;
@@ -230,7 +235,8 @@ pub async fn insert_event(conn, note_id: &str, action: &str, actor: &str, detail
   - `insert_get_roundtrip_unicode`：標題 `GODIVA ✈️ 'quote'; --`，取回後完全相同。
   - `list_filters_plan_day_and_excludes_deleted`。
   - `image_sort_order_appends`。
-  - `delete_image_returns_r2_key_from_db`。
+  - `get_image_key_reads_db`、`delete_image_row_false_when_missing`。
+  - `update_note_missing_or_deleted_returns_false`：不存在、已軟刪除的筆記，`update_note`／`soft_delete_note` 回 `false`。
   - `clear_share_tokens_all_vs_one`。
   - `deleted_before_cutoff`。
   - `migrate_idempotent`：連跑兩次 `db migrate`。
@@ -272,10 +278,13 @@ travel note-share <id> [--show | --show-full] | deactivate <prefix...> | clear [
   - `add-image` 的流程：
     1. 讀檔，經 `note_core::scrub` 清理；失敗就拒收，exit 1。
     2. 把清理後的位元組寫到 `std::env::temp_dir()` 下的暫存檔。
-    3. 執行 `wrangler r2 object put trip-dashboard-notes/<r2_key> --file <tmp> --content-type <ct>`，方式比照 `plan_documents.rs:208-220` 的 `wrangler_command()`。
-    4. DB 寫入失敗時，再執行 `wrangler r2 object delete` 補償。
+    3. 執行 `wrangler r2 object put trip-dashboard-notes/<r2_key> --file <tmp> --content-type <ct> --remote`，方式比照 `plan_documents.rs:208-220` 的 `wrangler_command()`。
+    4. DB 寫入失敗時，再執行 `wrangler r2 object delete trip-dashboard-notes/<r2_key> --remote` 補償。
     5. 刪除暫存檔。
     - `TRAVEL_NOTES_DRY_R2=1` 時，只印 `dry-run: would upload <key>`。
+  - `delete-image`：`get_image_key` → `wrangler r2 object delete ... --remote`（not found 視為成功）→ 交易內 `delete_image_row` + `note_events`。R2 失敗就 exit 1、DB 不動。
+  - `purge-deleted`：逐則筆記先刪完它所有 R2 物件，全部成功才在交易內 `purge_note` + 事件；任一張失敗就跳過這則（列保留，下次重試），最後非零退出並列出跳過的筆記。
+  - `update`／`delete`：repo 回 `false` 時 exit 1（「筆記不存在或已刪除」），不寫事件。
   - `--dest` 沒給時，用 `resolve_active_destination` 推出目的地。
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -285,6 +294,8 @@ travel note-share <id> [--show | --show-full] | deactivate <prefix...> | clear [
   - `notes_day_without_plan_errors`。
   - `note_share_clear_all`：清除所有筆記的分享 token，plan 的分享 token 不受影響。
   - `purge_requires_days_flag`。
+  - `update_missing_note_fails_no_event`：不存在的 id → exit 非 0，`note_events` 沒有新列。
+  - `wrangler_args_include_remote`：把組 wrangler 參數抽成純函式 `r2_put_args`／`r2_delete_args`，斷言都含 `--remote`。
 - [ ] **Step 2: 執行**（背景）：`cargo test -j 2 -p travel-cli --test notes_cli`，預期 FAIL。
 - [ ] **Step 3: 實作**。
 - [ ] **Step 4: 執行，確認 PASS**；`--test cli_help_parity` 綠燈。
@@ -337,7 +348,7 @@ pub fn render_share_page(note: &PublicNote, images: &[(String /*image_id*/)], to
   - `share_page_escapes_and_no_autolink`：`<script>` 被跳脫；`https://x` 不包成 `<a`。
   - `share_page_noindex_meta`。
   - `headers_set`：用 `Headers::new()` 呼叫 `note_response_headers`，斷言四個標頭都在。
-- [ ] **Step 2: 執行**：`cargo test -j 2 notes:: render::notes::`，預期 FAIL。
+- [ ] **Step 2: 執行**：`cargo test -j 2 notes::`（這個 filter 同時涵蓋 `notes::` 與 `render::notes::`），預期 FAIL。
 - [ ] **Step 3: 實作**：`router.rs` 只加 early-return 那一段，其他邏輯全部放在 `notes.rs`。
 - [ ] **Step 4: 驗證**：`cargo test -j 2` PASS，build 成功；`git diff --stat` 顯示 `router.rs` 只增加少量行數。
 - [ ] **Step 5: 整合者 commit**：`feat(notes): isolated note routes, share page and authenticated photo route`
@@ -362,9 +373,13 @@ impl NoteCsrf {
     pub fn verify(&self, expected: &str, got: &str) -> bool;          // 常數時間比較
 }
 pub enum PostOutcome { Redirect(String), Refill { form: NoteForm, error_key: &'static str }, Status(u16) }
-/// 純函式：前置檢查順序 owner → method → Content-Length → (form) → CSRF。
-pub fn precheck(is_owner: bool, method_is_post: bool, content_length: Option<u64>, max: u64) -> Result<(), u16>; // 404/405/413
-pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_valid: bool) -> PostOutcome;
+pub enum Precheck { Owner, ExpiredRefill, Reject(u16) }
+/// 純函式。順序：owner → method → Content-Length → CSRF。
+/// 非 owner 時：只有「POST + 帶著 session cookie（存在但驗證失敗，多半是 8 小時過期）+ 文字表單 action（create/update，不含照片上傳）+ Content-Length ≤ TEXT_FORM_MAX（64 KiB）」回 ExpiredRefill；其他一律 Reject(404)。
+pub fn precheck(is_owner: bool, has_session_cookie: bool, action: &str, method_is_post: bool, content_length: Option<u64>, max: u64) -> Precheck;
+pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool) -> PostOutcome;
+/// ExpiredRefill 頁：只把「這次 POST 送來的」標題與內文用 esc() 放進唯讀 textarea，附重新登入連結；不讀 DB、不寫 DB；帶 no-store、noindex 標頭。
+pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
 ```
 
   - 表單欄位：title、body、purpose、place_name、taken_on、`attached_plan_id`／`attached_destination`／`attached_day_number`，以及一次性的 `form_nonce`，用來防止重複送出。nonce 在 `note_events.detail` 裡記錄並查重。
@@ -373,8 +388,10 @@ pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_va
 
 - [ ] **Step 1: 寫失敗的測試**
   - `precheck_order`：非擁有者回 404，不是 413；GET 回 405；`Content-Length` 超過上限回 413。
+  - `precheck_expired_refill_only_for_text_post_with_cookie`：沒有 cookie → 404；有 cookie 但是照片上傳 → 404；有 cookie、文字表單、超過 64 KiB → 404；有 cookie、文字表單、大小合格 → ExpiredRefill。
   - `csrf_bound_to_action_note_session`：建立時的 token 不能用在編輯；另一則筆記的 token 不能用；另一個 session 不能用。
-  - `expired_session_refills_form`：`session_valid=false` 時回 `Refill`，form 的內文原樣保留。
+  - `expired_refill_echoes_only_submitted_text`：輸出含送出的標題與內文（`<script>` 被跳脫），不含任何 DB 內容（函式簽名就拿不到 DB）。
+  - 實際路由由 T8 的 `verify-site` 線上驗證（專案沒有 worker HTTP 測試框架，spec §13 已決定不建）。
   - `create_redirects_to_edit`。
 - [ ] **Step 2: 執行，確認 FAIL**。
 - [ ] **Step 3: 實作**。
@@ -392,7 +409,8 @@ pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_va
 - Consumes: T2 的 `scrub`；T6 的 `NoteCsrf`、`precheck`。
 - Produces:
   - 上傳流程：`precheck` → `form_data()` → 取第一個 file → `note_core::scrub` → 失敗回 Refill 和錯誤訊息 → R2 `NOTES.put(r2_key, bytes)` → `pipeline_args` 寫 `note_images` 與 `note_events` → DB 失敗時 `NOTES.delete(r2_key)` 補償。
-  - 刪除照片：從 DB 取 `r2_key`，刪 R2，再刪列。
+  - 刪除照片：從 DB 取 `r2_key` → `NOTES.delete` → 交易內刪列並寫事件（順序見 Global Constraints）；R2 失敗就回錯誤頁、列保留。
+  - 上傳的 `<input type="file">` 必須帶 `accept="image/jpeg,image/png"`：iPhone Safari 從相簿選 HEIC 照片時，會自動轉成 JPEG 再送出；沒有這個屬性就會送 HEIC，被 scrub 拒收，手機上等於不能用。
   - 上移／下移：交換相鄰兩列的 `sort_order`，在同一個交易內完成。
   - 分享：
     - `POST share-preview` 回傳預覽頁，內容等同 `render_share_page`，再加一個確認按鈕。
@@ -407,6 +425,7 @@ pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_va
   - `move_up_first_is_noop`。
   - `share_preview_equals_share_page`：預覽頁中的筆記主體，和 `render_share_page` 的輸出相同。
   - `viewer_plan_page_has_no_notes_block`：非擁有者的 render 不含筆記區塊的標記。
+  - `upload_input_accepts_jpeg_png_only`：上傳表單的 file input 含 `accept="image/jpeg,image/png"`。
 - [ ] **Step 2: 執行，確認 FAIL**。
 - [ ] **Step 3: 實作**。
 - [ ] **Step 4: 執行，確認 PASS**；build 成功。
@@ -420,7 +439,7 @@ pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_va
 - Test: `rust/crates/travel-cli/tests/verify_site_live.rs`（既有；新增一個 case）
 
 **Interfaces:**
-- Consumes: T3 的 repo（建立暫時筆記與 token）、T4 的清理流程。測試照片用 `note-core` 測試 fixture 的 PNG 經 scrub 後的結果，以 CLI 的上傳路徑寫入正式 bucket，key 前綴是 `note_` 加 16 hex，跑完立刻刪除。
+- Consumes: T3 的 repo（建立暫時筆記與 token）、T4 的上傳與清理流程。測試照片用 `note-core` 測試 fixture 的 PNG 經 scrub 後的結果，以 CLI 的上傳路徑寫入正式 bucket（Global Constraints 的唯一例外，含開跑前掃除與每條離開路徑的清理）。
 - Produces（每一項都是一行 PASS/FAIL）：
   - 無 session 用 `?token=<note-token>` 打 `/?plan=<plan>`：不能是 200 的 plan 頁。
   - 用 `?token=<note-token>` 打 `/voucher/<plan>/<file>`：不能是 200。
@@ -429,12 +448,14 @@ pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_va
   - plan 分享 token 用 `?t=` 打筆記：404。
   - 筆記與照片的四個回應標頭都正確。
   - 撤回 token 後，照片立即回 404；軟刪除筆記後，照片立即回 404。
-  - 結束時刪除暫時筆記的 R2 物件、所有列、token。
+  - 帶一個偽造（驗證不過）的 session cookie，POST 文字表單到 `/notes/new`：回應含送出的標題（已跳脫），DB 沒有新筆記列；不帶 cookie 的同一個 POST 回 404。
+  - CLI 上傳後，擁有者路由讀得到這張照片（證明 `--remote` 寫到網站讀的 bucket）。
+  - 結束時刪除暫時筆記的 R2 物件、所有列、token；中途失敗也要跑。
 
 - [ ] **Step 1: 寫失敗的 case**：在 `verify_site_live.rs` 新增 `notes_anti_goals_pass`，斷言輸出含 `notes:` 開頭的各行，而且沒有 FAIL。
 - [ ] **Step 2: 執行**（背景），預期 FAIL。
 - [ ] **Step 3: 實作**。
-- [ ] **Step 4**：部署 T5–T7 之後，執行 `./bin/travel verify-site --plan-id kyoto-nov-2026 --at "$(TZ=Asia/Tokyo date '+%Y-%m-%dT%H:%M')"`，要全部 PASS，包括新的 notes 各行。
+- [ ] **Step 4**：線上執行移到 T9 Step 4（要等 bucket 建好、T5–T7 部署之後）。這個任務只交付程式碼與 `cargo build`。
 - [ ] **Step 5: 整合者 commit**：`test(verify-site): live anti-goal checks for note sharing`
 
 ### Task 9: 部署與文件（整合者）
@@ -443,6 +464,7 @@ pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_va
 - [ ] **Step 2（人工關卡）**：先問 Yang 確認，再執行 `unset CLOUDFLARE_API_TOKEN && npx wrangler r2 bucket create trip-dashboard-notes`；不設公開網域。
 - [ ] **Step 3**：build worker，然後 `cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy`。
 - [ ] **Step 4**：`verify-site`，要全部 PASS。
+- [ ] **Step 5a（手機網頁驗收，整合者）**：用 Playwright 的 iPhone 機型模擬（viewport、touch、UA），以擁有者身分走一次：新增筆記 → 上傳 JPEG 與 PNG 各一張 → 直拍照片方向正確 → 上下移 → 分享預覽 → 建立連結 → 無痕開啟 → 撤回 → 照片 404。實機（iPhone 從相簿選 HEIC 照片）由 Yang 回國後順手試一次即可，不擋上線。
 - [ ] **Step 5**：實際測試：
   - 用 CLI 把 GODIVA 標註卡（`/tmp/claude-1000/-home-yanggf-b-travel-2026/443f38dc-308b-4e9a-88fd-e0b939c7c4fd/scratchpad/godiva/godiva-dessert-notes.png`）寫成一則筆記，掛在 kyoto-nov-2026 Day 4。
   - 用 `note-share` 產生連結。
@@ -453,3 +475,18 @@ pub fn decide_note_post(action: &str, form: &NoteForm, csrf_ok: bool, session_va
   - `docs/reference/dashboard.md`：路由、分享。
   - `docs/reference/CLI.md`：所有 `note*` 指令。
 - [ ] **Step 7: 整合者 commit**：`docs(notes): routes, sharing and CLI reference`
+
+
+## 審查核對紀錄（2026-11-16 計畫審查）
+
+審查者：Codex（block）、K3.1 Pro（block）。
+
+| 發現（審查者） | 處理 | 理由 |
+|---|---|---|
+| CLI 的 `wrangler r2 object put/delete` 少 `--remote`（Codex blocker） | 採納 | `plan_documents.rs:214-216,269` 都帶；沒帶會寫到本機模擬 bucket。加入 Global Constraints、T4 指令、`wrangler_args_include_remote` 測試、T8 線上確認網站讀得到 |
+| 過期 session 的回填被 owner 404 擋住，純函式測不到路由（Codex、K3 blocker） | 採納 | 改成：非 owner 但帶 session cookie 的文字表單 POST → 「登入已過期」頁，只回顯本次送出的文字（唯讀、不讀不寫 DB）；其他仍 404。路由由 T8 線上驗證；不建 worker HTTP 測試框架（spec §13 已決定） |
+| T8 寫正式 bucket 與「測試不上傳正式 bucket」衝突；並行與部署順序錯（Codex、K3 blocker） | 採納順序；不採納另開 bucket | 另開 bucket 要另一個 binding 與部署，驗到的不是真正路徑。改成明文例外：開跑前掃除殘留、每條離開路徑都清理；線上執行移到 T9 部署後 |
+| CLI 刪圖／purge 的 R2 與 DB 失敗順序未定，可能留下孤兒物件（K3） | 採納 | 統一為「讀 key → 刪 R2（不存在視為成功）→ 交易刪列＋事件」；purge 逐則處理、失敗跳過並非零退出 |
+| 寫入沒有檢查真的改到列（K3） | 採納 | CLI 看 repo 回傳值；worker 用 `WHERE changes() = 1` 的事件 INSERT 判斷，0 列回 404 |
+| 手機網頁沒有端到端驗收（K3） | 部分採納 | T9 加 Playwright iPhone 模擬全流程；實機 HEIC 由 Yang 回國後順手試，不擋上線。另加 file input 的 `accept`，讓 iPhone 自動把 HEIC 轉 JPEG（可行性關鍵） |
+| `cargo test` 多個 filter 會報錯（K3） | 採納 | 改成單一共同 filter |

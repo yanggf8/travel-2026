@@ -130,7 +130,8 @@ pub async fn set_activity_record(conn, plan_id, dest, id: &str, st: Option<Recor
 pub async fn set_meal_record(conn, plan_id, dest, day, session, sort_order: i64, st: Option<RecordStatus>, note: Option<Option<&str>>) -> Result<bool, String>;
 pub async fn set_leg_record(conn, plan_id, dest, day, sort_order: i64, st: Option<RecordStatus>, note: Option<Option<&str>>) -> Result<bool, String>;
 pub async fn set_session_summary(conn, plan_id, dest, day, session, zh: Option<&str>) -> Result<bool, String>;
-/// 範圍內有任何 record_status IS NOT NULL 的列就 Err，訊息列出這些列（表名、day、session、title/meal/from→to）。
+/// 範圍內有任何 record_status IS NOT NULL 的列，或任何 timesofday.record_summary_zh 非空的時段，就 Err；訊息列出這些列（表名、day、session、title/meal/from→to／時段摘要）。
+/// 時段摘要的涵蓋：ActivitiesOfDay、LegsOfDay 以外的「整日」範圍（delete_day_content、swap、Destination）都要查該日（或全目的地）的 record_summary_zh；MealsOfSession 只查列狀態。
 pub enum RecordScope<'a> {
     Activity { id: &'a str },
     ActivitiesOfDay { day: i64 },
@@ -217,7 +218,7 @@ travel clear-record    activity|meal|leg <day> ... <key>
   - `remove-day-variant`：在 `delete_day_content` 擋。
 
 - [ ] **Step 1: 寫失敗的測試**
-  - 每條路徑一個測試，共 8 個，另加 `move_activity_cross_day_rejected`、`move_activity_same_day_ok`、`swap_days_rejected_when_either_day_recorded`、`copy_plan_carries_records`（`copy-plan` 之後，新 plan 的 `record_status` 相同）。
+  - 每條路徑一個測試，共 8 個，另加 `summary_only_session_blocks_scaffold_force_and_remove_variant_and_swap`（只寫 `record-session` 摘要、沒有標任何列，三個指令都要被擋）、`move_activity_cross_day_rejected`、`move_activity_same_day_ok`、`swap_days_rejected_when_either_day_recorded`、`copy_plan_carries_records`（`copy-plan` 之後，新 plan 的 `record_status` 相同）。
   - 每個「被拒」測試都要斷言：exit 非 0；stderr 含被擋的列；`plans.version`、目標表的列數、`plan_events` 列數都和執行前一樣。
   - 測試時直接跑 binary 執行該指令，例如 `set-meals <day> <session> ...`。
 - [ ] **Step 2: 執行**（背景）：`cargo test -j 2 -p travel-cli --test record_guard`，預期 FAIL。
@@ -230,7 +231,7 @@ travel clear-record    activity|meal|leg <day> ... <key>
 **Files:**
 - Modify: `rust/crates/travel-cli/src/set_tod.rs`：新增 `run_add_meal`、`run_set_meal`，放在 `:418` `run_meals` 旁邊。
 - Modify: `rust/crates/travel-cli/src/set_activity.rs`：新增 `run_set_notes`。
-- Modify: `rust/crates/travel-db/src/repo/itinerary.rs`：新增 `append_session_meal`、`update_session_meal_text`。`set-activity-notes` 沿用 `update_activity_field`（`:368`）。
+- Modify: `rust/crates/travel-db/src/repo/itinerary.rs`：新增 `append_session_meal`、`update_session_meal_text`。`set-activity-notes` 沿用 `update_activity_field`（`:368`），但先在函式開頭加欄位白名單 `match`（仿 `:166` timesofday 的寫法：`start_time`、`end_time`、`is_fixed_time`、`booking_status`、`booking_ref`、`book_by`、`booking_required`、`notes`），其他欄名回 Err；目前它直接把呼叫端給的欄名插進 SQL。
 - Modify: `rust/crates/travel-cli/src/main.rs`：3 個 arm。
 - Modify: `rust/crates/travel-cli/src/validate.rs`：新增 `fn record_marker_hits(text: &str) -> bool` 與一個 WARN check。
 - Test: `rust/crates/travel-cli/tests/record_edit_cmds.rs`（新）、`validate.rs` inline
@@ -251,6 +252,7 @@ travel set-meal <day> <session> <text-match> --meal "<t>"
 - [ ] **Step 1: 寫失敗的測試**
   - `add_meal_appends_not_replaces`：原有 2 筆，加 1 筆後共 3 筆，前 2 筆內容不變。
   - `set_activity_notes_keeps_id_and_poi`：`id`、`poi_id` 不變，`notes` 改成新值。
+  - inline：`update_activity_field_rejects_unknown_column`。
   - `set_meal_ambiguous_fails`。
   - lint 單元測試：`record_marker_hits("✅ 實際行程：東福寺")`、`("⏭ 未前往")`、`("實際用餐")` 都是 true；`("visited Toji")`、`("skipped")` 都是 false。
 - [ ] **Step 2: 執行**：binary 測試在背景跑 `--test record_edit_cmds`；lint 跑 `cargo test -j 2 -p travel-cli validate::`。預期 FAIL。
@@ -280,7 +282,8 @@ travel set-meal <day> <session> <text-match> --meal "<t>"
     - `clock` 是 None 時回 false。
     - day 的日期早於 clock 的日期時回 true。
     - 同一天時比較 `time_end`，空的話以 `DAY_END` 計，`<= clock.minutes` 就是已過。
-  - `pub fn main_meal(meals: &[Meal]) -> Option<&Meal>`：回傳第一筆 `record_status != "skipped"` 的餐點。
+  - `pub fn split_meals(meals: &[Meal]) -> (Option<&Meal> /*主選*/, Vec<&Meal> /*備選*/, Vec<&Meal> /*skipped*/)`：主選是第一筆非 `skipped`；備選是其餘非 `skipped`（不含主選）；`skipped` 另列。用餐總覽（`render/day.rs:435` 目前用 `meals[1..]`）、now 卡（`render/now.rs:210` 目前用 `meals.get(1)`）、時段內的餐點列表三處都改用它，不再用索引。已過時段的 skipped 餐點和活動一樣收進時段最後的 `recSkippedLine`。
+  - 路線段（spec §6 的地圖規則延伸到網頁，避免地圖和網頁說法不一）：`render_route_block`（`render/day.rs:491`）與 now 卡的「接下來」（`render/now.rs` `leg_slot` 一帶）都濾掉 `skipped` 的段；已過時段的 `done` 段附 `recDone`，`record_note` 用 `esc()` 附在後面。
   - `render_unit` 多一個參數 `past: bool`，所有呼叫端都要更新。
     - 已過時，`done` 的活動加上 `recDone` 標章。
     - `skipped` 的活動不在列表中出現，收到時段最後一行 `recSkippedLine`。
@@ -293,7 +296,10 @@ travel set-meal <day> <session> <text-match> --meal "<t>"
   - `past_done_renders_actual`、`past_null_renders_unrecorded`、`skipped_collapsed_to_one_grey_line`。
   - `future_session_output_unchanged`：同一個 Session，`past=false` 時的輸出要和改動前的 snapshot 字串相同。
   - `summary_replaces_focus_when_past`。
-  - `main_meal_skips_skipped`、`all_meals_skipped_shows_none`：用餐總覽和 now 卡都不出現主選。
+  - `split_meals_first_skipped`：第一家 skipped → 第二家成主選，備選不含第二家也不含第一家。
+  - `split_meals_middle_skipped`：中間一家 skipped → 主選不變，備選不含它。
+  - `all_meals_skipped_shows_none`：用餐總覽和 now 卡都不出現主選或備選。
+  - `skipped_leg_hidden_in_route_block_and_now_next`、`past_done_leg_has_badge_and_note`。
   - `skipped_activity_no_pending_alert`。
   - `session_is_past_taipei_clock`：`Clock{date:"2026-11-16",minutes:600}`，時段 09:00–09:30 是 true，10:30–12:00 是 false。
 - [ ] **Step 2: 執行**：`cd workers/trip-dashboard-rs && cargo test -j 2`，預期 FAIL。
@@ -323,7 +329,12 @@ travel set-meal <day> <session> <text-match> --meal "<t>"
 - [ ] **Step 1**：`make build`；`./bin/travel db migrate` 連跑兩次；確認 `scripts/schema.sql` 已重產。
 - [ ] **Step 2**：用唯讀 SELECT 盤點 kyoto-nov-2026 Day 4–5 所有含標記的標題、餐點、路線 notes、focus、活動 notes，整理成清單。
 - [ ] **Step 3（人工關卡，Yang §11 Q3「列給你確認」）**：把盤點結果，以及沒有標記的列（Day 4 路線段 0–4、Day 5 中午與晚上）一起列給 Yang。Yang 確認後才往下做。
-- [ ] **Step 4**：照 spec §7 的對照表，用 `record-activity`、`record-meal`、`record-leg`、`record-session` 逐列標記：
+- [ ] **Step 4**：照 Yang 在 Step 3 的回答處理沒有標記的列：
+  - Yang 說「標 done」的列 → `record-activity`／`record-meal`／`record-leg ... done`。
+  - Yang 說「沒去」的列 → `... skipped`（可附 `--note`）。
+  - Yang 說「維持原樣」或沒提到的列 → 不動（`record_status` 保持 NULL，網站顯示「計畫・未紀錄」）。
+  - 完成後用唯讀 SELECT 列出 Day 4–5 每一列的 `record_status`，與 Yang 的回答逐列對照，結果附在回報裡。
+  接著照 spec §7 的對照表，把含文字標記的列用 `record-activity`、`record-meal`、`record-leg`、`record-session` 逐列標記：
   - `✅`、已參觀、實際行程、實際用餐 → `done`
   - `⏭`、未前往 → `skipped`
   - 說明文字放進 `--note`
@@ -338,3 +349,16 @@ travel set-meal <day> <session> <text-match> --meal "<t>"
   - `docs/reference/dashboard.md`：紀錄的呈現方式。
   - `docs/reference/routing.md`：「旅途中改變行程：改時間用既有指令，標結果用 `record-*`，不改標題、不刪除重建」。
 - [ ] **Step 9: 整合者 commit**：`docs(record): trip-record commands and in-trip routing`
+
+
+## 審查核對紀錄（2026-11-16 計畫審查）
+
+審查者：Codex（block，整體；本計畫只有 1 項 minor）、K3.1 Pro（block，整體）。
+
+| 發現（審查者） | 處理 | 理由 |
+|---|---|---|
+| `ensure_unrecorded` 不看時段摘要，只寫摘要的時段仍會被 scaffold／remove-day-variant／swap 洗掉（K3） | 採納 | 整日與全目的地範圍也查 `record_summary_zh`；加 summary-only 測試 |
+| 只處理主選，備選仍用 `meals[1..]`／`get(1)`，skipped 店會留在備選（K3） | 採納 | 已核 `render/day.rs:435`、`render/now.rs:210`。改用 `split_meals` 三處共用，補第一家／中間一家／全部 skipped 測試 |
+| 路線的 `record_status/note` 有讀進 model 卻沒人呈現，skipped 段仍在網頁（K3） | 採納 | 網頁濾掉 skipped 段、done 加標章，和地圖規則一致；否則 `record-leg` 在網站上沒有作用 |
+| `update_activity_field` 沒有欄位白名單、欄名由呼叫端插入（Codex minor） | 採納 | 已核 `itinerary.rs:368-383`；加 `match` 白名單（含 `notes`）與測試 |
+| 人工關卡後「標 done／維持 NULL」各自怎麼做沒寫（K3 minor） | 採納 | T8 Step 4 補三個分支與完成後逐列對照 |
