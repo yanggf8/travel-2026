@@ -58,7 +58,11 @@
 - **R2 寫入一律帶 `--remote`**（比照 `plan_documents.rs:214-216` 的 put、`:269` 的 delete、`map_objects.rs:37`）。沒有 `--remote` 時 wrangler 寫的是本機模擬 bucket，網站讀不到。
 - **`cargo test` 的整合測試不得上傳到正式 bucket**（CLI 用 `TRAVEL_NOTES_DRY_R2=1`，比照 `plan_documents.rs:209` 的 `TRAVEL_DOCUMENTS_DRY_R2`）。唯一例外是 T8 的 `verify-site` 線上驗證：它必須打正式網站與正式 bucket 才有意義（另開 bucket 就要另一個 binding 和部署，驗到的不是使用者用的那條路徑）。規則：暫時筆記的 `created_by='verify-site'`；清理放在每一條離開路徑（成功、FAIL、錯誤都要跑）；每次開跑前先掃除上一次殘留的 `created_by='verify-site'` 筆記與其 R2 物件。
 - **R2 與 DB 的刪除順序**（CLI 與 worker 相同）：先從 DB 讀出 `r2_key` → 刪 R2（物件不存在視為成功）→ 再用一筆交易刪 DB 列並寫 `note_events`。R2 刪除失敗就不動 DB，key 留在 DB 裡，下次重試；絕不先刪 DB 列。
-- **每個寫入都要確認真的改到列**：CLI 端 repo 回傳 `bool`／列數，呼叫端為 0 時報錯、不寫 `note_events`。worker 端同一個 pipeline 裡，`note_events` 用 `INSERT ... SELECT ... WHERE changes() = 1`，pipeline 結束後檢查這一句的 `affected_row_count`，為 0 時回 404（筆記不存在或已刪除）。
+- **每個寫入都要確認真的改到列**：CLI 端 repo 回傳 `bool`／列數，呼叫端為 0 時報錯、不寫 `note_events`。worker 端**逐句**檢查：`changes()` 只反映前一句，多句寫入（例如照片上下移的兩個 UPDATE）不能只靠事件 INSERT 判斷。做法是兩段式交易（T1 `pipeline_txn`）：
+  1. 第一次請求：`BEGIN` ＋ 所有內容語句，**不送 `close`**，從回應取得 `baton` 與每一句的 `affected_row_count`。
+  2. 每句和呼叫端給的預期列數比對（例：上下移兩句各 1、更新筆記 1、上傳 INSERT 1）；內容語句的 WHERE 一律帶 `deleted_at IS NULL`，所以不存在或已刪除的筆記會得到 0 列。
+  3. 全部符合 → 第二次請求帶 `baton` 送 `note_events` INSERT、`COMMIT`、`close`；任何一句不符或出錯 → 帶 `baton` 送 `ROLLBACK`、`close`，回 404（不存在／已刪除）或錯誤頁，不寫事件。
+  CLI 端 repo 在同一個交易內逐句檢查列數，不符就 ROLLBACK（比照 `omiyage.rs:6-7,225` 的 BEGIN 寫法）。
 
 ## Review Focus
 
@@ -123,6 +127,12 @@ pub struct StmtResult { pub rows: Vec<Row>, pub affected: u64 }
 pub fn encode_pipeline_args(stmts: &[Stmt]) -> serde_json::Value;
 pub fn decode_pipeline_results(json: &Value, n: usize) -> Result<Vec<StmtResult>, String>; // 讀 affected_row_count
 pub async fn pipeline_args(turso_url: &str, token: &str, stmts: &[Stmt]) -> Result<Vec<StmtResult>>;
+/// 兩段式交易：BEGIN＋content（不 close，取 baton）→ check_expected → 帶 baton 送 tail＋COMMIT＋close，或 ROLLBACK＋close。
+pub enum TxnError { RowMismatch { index: usize, expected: u64, got: u64 }, Db(String) }
+pub fn check_expected(results: &[StmtResult], expected: &[u64]) -> Result<(), TxnError>; // 純函式
+pub fn decode_baton(json: &Value) -> Result<String, String>; // 沒有 baton 就 Err（fail loud）
+pub fn encode_continuation(baton: &str, stmts: &[Stmt], commit: bool) -> serde_json::Value; // commit=false → ROLLBACK
+pub async fn pipeline_txn(turso_url: &str, token: &str, content: &[Stmt], expected: &[u64], tail: &[Stmt]) -> std::result::Result<Vec<StmtResult>, TxnError>;
 ```
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -130,6 +140,14 @@ pub async fn pipeline_args(turso_url: &str, token: &str, stmts: &[Stmt]) -> Resu
   - `encode_text_roundtrip_quotes_emoji`：`"O'Brien; DROP TABLE x; ✈️"` 原樣出現在 `value` 裡，`sql` 字串裡沒有這段文字。
   - `encode_null`。
   - `decode_reads_affected_row_count`。
+  - `check_expected_missing_note`：預期 1、實得 0（筆記不存在）→ `RowMismatch{index:0}`。
+  - `check_expected_deleted_note`：WHERE 帶 `deleted_at IS NULL` 的更新對已刪除筆記得 0 → `RowMismatch`。
+  - `check_expected_partial_reorder`：上下移兩句預期 `[1,1]`、實得 `[0,1]` → `RowMismatch{index:0}`（`changes()` 單句檢查會漏掉的情況）。
+  - `check_expected_zero_row_update`：同值更新以外的 0 列一律視為不符。
+  - `continuation_rollback_on_mismatch`：`encode_continuation(baton, tail, false)` 只含 `ROLLBACK` 與 `close`，不含 tail 的事件 INSERT。
+  - `continuation_commit_carries_baton`：`commit=true` 時 body 的 `baton` 等於輸入、順序是 tail → `COMMIT` → `close`。
+  - `decode_baton_missing_fails_loud`。
+  - Hrana `baton` 的欄位格式由實作者對照 Hrana over HTTP v2 規格確認，並在 T8 線上驗證（編輯不存在的筆記回 404，且沒有新增 `note_events`）。
   - `decode_error_entry_fails_loud`：沿用 `decode_pipeline` 的錯誤語意。
   - 最後一個 request 一定是 `{"type":"close"}`。
 - [ ] **Step 2: 執行**：`cd workers/trip-dashboard-rs && cargo test -j 2 turso::`，預期 FAIL。
@@ -383,7 +401,7 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
 ```
 
   - 表單欄位：title、body、purpose、place_name、taken_on、`attached_plan_id`／`attached_destination`／`attached_day_number`，以及一次性的 `form_nonce`，用來防止重複送出。nonce 在 `note_events.detail` 裡記錄並查重。
-  - 寫入時用 `pipeline_args`，在同一個 pipeline 裡依序送 `BEGIN`、內容寫入、`note_events`、`COMMIT`。
+  - 寫入時用 T1 的 `pipeline_txn`：內容語句與預期列數先送，逐句檢查通過才送 `note_events` 與 `COMMIT`；不符就 ROLLBACK 並回 404。
   - 刪除是軟刪除。
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -411,7 +429,7 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
   - 上傳流程：`precheck` → `form_data()` → 取第一個 file → `note_core::scrub` → 失敗回 Refill 和錯誤訊息 → R2 `NOTES.put(r2_key, bytes)` → `pipeline_args` 寫 `note_images` 與 `note_events` → DB 失敗時 `NOTES.delete(r2_key)` 補償。
   - 刪除照片：從 DB 取 `r2_key` → `NOTES.delete` → 交易內刪列並寫事件（順序見 Global Constraints）；R2 失敗就回錯誤頁、列保留。
   - 上傳的 `<input type="file">` 必須帶 `accept="image/jpeg,image/png"`：iPhone Safari 從相簿選 HEIC 照片時，會自動轉成 JPEG 再送出；沒有這個屬性就會送 HEIC，被 scrub 拒收，手機上等於不能用。
-  - 上移／下移：交換相鄰兩列的 `sort_order`，在同一個交易內完成。
+  - 上移／下移：交換相鄰兩列的 `sort_order`，用 `pipeline_txn`，兩個 UPDATE 預期列數 `[1,1]`；任一句 0 列就整筆 ROLLBACK，不會留下半套排序。
   - 分享：
     - `POST share-preview` 回傳預覽頁，內容等同 `render_share_page`，再加一個確認按鈕。
     - `POST share-create` 鑄造 token，顯示可複製的連結（純文字 input，不加 JS）。
@@ -423,6 +441,7 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
   - `upload_rejects_unscrubbable`：scrub 失敗時不會走到 R2 put。用純函式 `plan_upload(bytes) -> Result<UploadPlan, &'static str>` 測試。
   - `upload_plan_key_from_ids`。
   - `move_up_first_is_noop`。
+  - `reorder_expects_one_row_each`：上下移產生的 `expected` 是 `[1,1]`；刪照片、更新筆記、上傳各為 `[1]`。
   - `share_preview_equals_share_page`：預覽頁中的筆記主體，和 `render_share_page` 的輸出相同。
   - `viewer_plan_page_has_no_notes_block`：非擁有者的 render 不含筆記區塊的標記。
   - `upload_input_accepts_jpeg_png_only`：上傳表單的 file input 含 `accept="image/jpeg,image/png"`。
@@ -450,6 +469,7 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
   - 撤回 token 後，照片立即回 404；軟刪除筆記後，照片立即回 404。
   - 帶一個偽造（驗證不過）的 session cookie，POST 文字表單到 `/notes/new`：回應含送出的標題（已跳脫），DB 沒有新筆記列；不帶 cookie 的同一個 POST 回 404。
   - CLI 上傳後，擁有者路由讀得到這張照片（證明 `--remote` 寫到網站讀的 bucket）。
+  - 擁有者對不存在、已刪除的筆記送編輯與照片上下移：回 404，`note_events` 列數不變，其他照片的 `sort_order` 不變（驗證 `pipeline_txn` 的 baton 與 ROLLBACK 在正式 Turso 上可用）。
   - 結束時刪除暫時筆記的 R2 物件、所有列、token；中途失敗也要跑。
 
 - [ ] **Step 1: 寫失敗的 case**：在 `verify_site_live.rs` 新增 `notes_anti_goals_pass`，斷言輸出含 `notes:` 開頭的各行，而且沒有 FAIL。
@@ -464,7 +484,14 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
 - [ ] **Step 2（人工關卡）**：先問 Yang 確認，再執行 `unset CLOUDFLARE_API_TOKEN && npx wrangler r2 bucket create trip-dashboard-notes`；不設公開網域。
 - [ ] **Step 3**：build worker，然後 `cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy`。
 - [ ] **Step 4**：`verify-site`，要全部 PASS。
-- [ ] **Step 5a（手機網頁驗收，整合者）**：用 Playwright 的 iPhone 機型模擬（viewport、touch、UA），以擁有者身分走一次：新增筆記 → 上傳 JPEG 與 PNG 各一張 → 直拍照片方向正確 → 上下移 → 分享預覽 → 建立連結 → 無痕開啟 → 撤回 → 照片 404。實機（iPhone 從相簿選 HEIC 照片）由 Yang 回國後順手試一次即可，不擋上線。
+- [ ] **Step 5a（手機網頁驗收，整合者）**：用 Playwright 的 iPhone 機型模擬（viewport、touch、UA），以擁有者身分走一次：新增筆記 → 上傳 JPEG 與 PNG 各一張 → 直拍照片方向正確 → 上下移 → 分享預覽 → 建立連結 → 無痕開啟 → 撤回 → 照片 404。**這只驗版面與流程**：模擬器不經過 iOS 相簿，也不會做 HEIC→JPEG 轉換，證明不了實機能上傳。
+- [ ] **Step 5b（人工關卡：Yang 實機驗收，上線前必過）**：比照 Step 2 的 bucket 關卡，整合者準備好後請 Yang 用自己的 iPhone：
+  1. 在擁有者頁面新增一則測試筆記，從相簿選一張**HEIC 直拍、有定位**的照片上傳，要成功。
+  2. 在網頁上看照片方向是正的。
+  3. 整合者下載該張 R2 物件，確認沒有 GPS／MakerNote（`note-core` 的檢查函式），Orientation 保留。
+  4. 建立分享連結，用另一個瀏覽器開得到照片；Yang 撤回後，同一個照片網址回 404。
+  5. 測試筆記刪除、R2 物件清掉。
+  任何一步不過，就不算上線，回到 T7 修正。結果寫進 T9 commit 訊息。
 - [ ] **Step 5**：實際測試：
   - 用 CLI 把 GODIVA 標註卡（`/tmp/claude-1000/-home-yanggf-b-travel-2026/443f38dc-308b-4e9a-88fd-e0b939c7c4fd/scratchpad/godiva/godiva-dessert-notes.png`）寫成一則筆記，掛在 kyoto-nov-2026 Day 4。
   - 用 `note-share` 產生連結。
@@ -489,4 +516,6 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
 | CLI 刪圖／purge 的 R2 與 DB 失敗順序未定，可能留下孤兒物件（K3） | 採納 | 統一為「讀 key → 刪 R2（不存在視為成功）→ 交易刪列＋事件」；purge 逐則處理、失敗跳過並非零退出 |
 | 寫入沒有檢查真的改到列（K3） | 採納 | CLI 看 repo 回傳值；worker 用 `WHERE changes() = 1` 的事件 INSERT 判斷，0 列回 404 |
 | 手機網頁沒有端到端驗收（K3） | 部分採納 | T9 加 Playwright iPhone 模擬全流程；實機 HEIC 由 Yang 回國後順手試，不擋上線。另加 file input 的 `accept`，讓 iPhone 自動把 HEIC 轉 JPEG（可行性關鍵） |
+| 核對輪（K3 verify）：`changes()` 只看前一句，多句寫入（照片上下移兩個 UPDATE）第一句 0 列仍會 COMMIT；worker 缺不存在／已刪除／零列測試 | 採納 | 已核 `turso.rs:53-110`：現有 `pipeline` 每次都送 `close`、不處理 baton。改成 T1 `pipeline_txn` 兩段式交易，逐句比對預期列數，不符就 ROLLBACK、不寫事件；補 `check_expected_*`、`continuation_*` 測試，T8 線上驗證 |
+| 核對輪（K3 verify）：Playwright iPhone 模擬不經過相簿與 HEIC 轉換，`accept` 也不保證所有 iOS 版本都轉 | 採納 | 實機驗收改為上線前人工關卡（T9 Step 5b，Yang 用 iPhone：HEIC 直拍有定位照片 → 方向、metadata、撤回後 404）；推翻上一輪「不擋上線」 |
 | `cargo test` 多個 filter 會報錯（K3） | 採納 | 改成單一共同 filter |

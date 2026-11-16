@@ -131,9 +131,11 @@ pub async fn set_meal_record(conn, plan_id, dest, day, session, sort_order: i64,
 pub async fn set_leg_record(conn, plan_id, dest, day, sort_order: i64, st: Option<RecordStatus>, note: Option<Option<&str>>) -> Result<bool, String>;
 pub async fn set_session_summary(conn, plan_id, dest, day, session, zh: Option<&str>) -> Result<bool, String>;
 /// 範圍內有任何 record_status IS NOT NULL 的列，或任何 timesofday.record_summary_zh 非空的時段，就 Err；訊息列出這些列（表名、day、session、title/meal/from→to／時段摘要）。
-/// 時段摘要的涵蓋：ActivitiesOfDay、LegsOfDay 以外的「整日」範圍（delete_day_content、swap、Destination）都要查該日（或全目的地）的 record_summary_zh；MealsOfSession 只查列狀態。
+/// 時段摘要的涵蓋：只有 `Day` 與 `Destination` 查 record_summary_zh（該日／全目的地）；ActivitiesOfDay、LegsOfDay、MealsOfSession 等窄範圍只查列狀態。
+/// `Day { day }` = 該日（主日，不含變體）的 activities + meals + route_segments 的 record_status，再加該日所有時段的 record_summary_zh；整日刪除／換日一律用它。
 pub enum RecordScope<'a> {
     Activity { id: &'a str },
+    Day { day: i64 },
     ActivitiesOfDay { day: i64 },
     MealsOfSession { day: i64, session: &'a str },
     LegsOfDay { day: i64 },
@@ -150,6 +152,7 @@ pub async fn ensure_unrecorded(conn, plan_id, dest, scope: RecordScope<'_>) -> R
   - `match_is_literal_not_like`：標題 `100%_ok` 用 needle `%` 比對只回這一筆；needle `_` 同理。
   - `set_record_same_value_returns_false`：連設兩次 `done`，第二次回 `false`。
   - `ensure_unrecorded_lists_rows`：標一筆活動 `done` 後，`ActivitiesOfDay` 要 Err 並含該標題；`MealsOfSession` 要 Ok。
+  - `day_scope_covers_summary_only`：只寫某日一個時段的 `record_summary_zh`、不標任何列，`Day { day }` 要 Err 且訊息含該時段摘要；`ActivitiesOfDay`、`LegsOfDay` 要 Ok；另一天的 `Day` 要 Ok。
 - [ ] **Step 2: 執行**（背景）：`cargo test -j 2 -p travel-cli --test record_repo`，預期 FAIL。
 - [ ] **Step 3: 實作**
   - 全部用綁定參數。
@@ -204,8 +207,8 @@ travel clear-record    activity|meal|leg <day> ... <key>
   - `:287` `delete_session_meals`、`:311` `replace_session_meals`（`MealsOfSession`）
   - `:445` `delete_activity`（`Activity`）
   - `:482` `move_activity`：只在 `to_day` 和原本的 day 不同時檢查 `Activity`
-  - `:1184` `swap_session_day_numbers`：對 `day_a`、`day_b` 各檢查 `ActivitiesOfDay`、`LegsOfDay`，並檢查每個時段的 `MealsOfSession`
-- Modify: `rust/crates/travel-db/src/repo/days.rs:450`（`delete_day_content`：檢查該日所有範圍）
+  - `:1184` `swap_session_day_numbers`：對 `day_a`、`day_b` 各檢查 `Day { day }`（一次涵蓋活動、餐點、路線與時段摘要）
+- Modify: `rust/crates/travel-db/src/repo/days.rs:450`（`delete_day_content`：檢查 `Day { day }`）
 - Test: `rust/crates/travel-cli/tests/record_guard.rs`（新）
 
 **Interfaces:**
@@ -218,7 +221,7 @@ travel clear-record    activity|meal|leg <day> ... <key>
   - `remove-day-variant`：在 `delete_day_content` 擋。
 
 - [ ] **Step 1: 寫失敗的測試**
-  - 每條路徑一個測試，共 8 個，另加 `summary_only_session_blocks_scaffold_force_and_remove_variant_and_swap`（只寫 `record-session` 摘要、沒有標任何列，三個指令都要被擋）、`move_activity_cross_day_rejected`、`move_activity_same_day_ok`、`swap_days_rejected_when_either_day_recorded`、`copy_plan_carries_records`（`copy-plan` 之後，新 plan 的 `record_status` 相同）。
+  - 每條路徑一個測試，共 8 個，另加 `summary_only_session_blocks_scaffold_force_and_remove_variant_and_swap`（只寫 `record-session` 摘要、沒有標任何列，三個指令都要被擋；swap 分別測摘要在 `day_a`、在 `day_b` 兩種）、`summary_only_day_blocks_delete_day_content`（直接呼叫刪除整日內容的指令路徑，摘要列與該日列數不變）、`move_activity_cross_day_rejected`、`move_activity_same_day_ok`、`swap_days_rejected_when_either_day_recorded`、`copy_plan_carries_records`（`copy-plan` 之後，新 plan 的 `record_status` 相同）。
   - 每個「被拒」測試都要斷言：exit 非 0；stderr 含被擋的列；`plans.version`、目標表的列數、`plan_events` 列數都和執行前一樣。
   - 測試時直接跑 binary 執行該指令，例如 `set-meals <day> <session> ...`。
 - [ ] **Step 2: 執行**（背景）：`cargo test -j 2 -p travel-cli --test record_guard`，預期 FAIL。
@@ -362,3 +365,4 @@ travel set-meal <day> <session> <text-match> --meal "<t>"
 | 路線的 `record_status/note` 有讀進 model 卻沒人呈現，skipped 段仍在網頁（K3） | 採納 | 網頁濾掉 skipped 段、done 加標章，和地圖規則一致；否則 `record-leg` 在網站上沒有作用 |
 | `update_activity_field` 沒有欄位白名單、欄名由呼叫端插入（Codex minor） | 採納 | 已核 `itinerary.rs:368-383`；加 `match` 白名單（含 `notes`）與測試 |
 | 人工關卡後「標 done／維持 NULL」各自怎麼做沒寫（K3 minor） | 採納 | T8 Step 4 補三個分支與完成後逐列對照 |
+| 核對輪（K3 verify）：summary-only 守門缺單日範圍，`ActivitiesOfDay`／`LegsOfDay` 明定不查摘要、`Destination` 又過度阻擋 | 採納 | 新增 `RecordScope::Day { day }`（列狀態＋該日時段摘要），`swap_session_day_numbers` 與 `delete_day_content` 改用它；窄範圍保留不變；補 `day_scope_covers_summary_only`、swap 兩側與整日刪除的 summary-only 測試 |
