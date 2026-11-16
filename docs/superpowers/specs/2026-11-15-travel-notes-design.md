@@ -159,7 +159,7 @@ note_events                     -- 單表 append-only 紀錄，網頁和 CLI 共
   - PNG：丟 `eXIf`、`tEXt`、`iTXt`、`zTXt`、`tIME`。
   - 解析失敗、格式不認得：**拒收**，回錯誤訊息。不保存未清理的原檔。
 - 純位元組處理，不解碼影像，不做縮圖。顯示用 `<img loading=lazy>` 加 CSS。
-- 清理邏輯放在 worker 內。v1 只有網頁上傳（§9），沒有繞過的上傳路徑。
+- 清理邏輯放在 CLI 與 worker 共用的 crate（計畫中稱 `note-core`）；網頁上傳與 CLI `note add-image` 兩條路徑都必須先經過它，沒有繞過的上傳路徑（§9，Yang 2026-11-16 決定 v1 含 CLI 寫入）。
 - 刪除照片時同步刪 R2 物件；筆記軟刪除時照片保留到最終清理（§12 Q4）。
 
 ### 8.6 與其他功能的關係
