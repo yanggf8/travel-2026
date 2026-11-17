@@ -48,6 +48,62 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("noteLogin", true) => "重新登入",
         ("notePhoto", false) => "Note photo",
         ("notePhoto", true) => "筆記照片",
+        // ── T7: photo upload/delete/reorder, share flow, plan-page entry ──
+        ("notePhotos", false) => "Photos",
+        ("notePhotos", true) => "照片",
+        ("noteNoPhotos", false) => "No photos yet.",
+        ("noteNoPhotos", true) => "還沒有照片。",
+        ("noteAddPhoto", false) => "Add photo",
+        ("noteAddPhoto", true) => "新增照片",
+        ("notePhotoRequired", false) => "Choose a photo to upload.",
+        ("notePhotoRequired", true) => "請選擇一張照片再送出。",
+        ("noteUnsupportedImage", false) => "Only JPEG and PNG photos are accepted (location and other metadata is removed before storing). On iPhone: pick the photo from the photo picker (Safari converts it to JPEG), or set Settings > Camera > Formats > Most Compatible.",
+        ("noteUnsupportedImage", true) => "只接受 JPEG 與 PNG 照片（儲存前會先清除定位等詮釋資料）。在 iPhone 上請從照片選擇器挑照片（Safari 會轉成 JPEG），或到「設定 › 相機 › 格式」改選「最相容」。",
+        ("noteImageMalformed", false) => "The photo file could not be parsed and was rejected.",
+        ("noteImageMalformed", true) => "照片檔案無法解析，已拒收。",
+        // Rejected-request error page (Codex review MED: the 413/400 answers
+        // were bare English text with no way back) — title, per-cause messages
+        // and the back-link label.
+        ("noteRequestRejected", false) => "Request not sent",
+        ("noteRequestRejected", true) => "無法送出",
+        ("notePhotoTooLarge", false) => "The photo is over the 12 MiB limit - shrink it and upload again.",
+        ("notePhotoTooLarge", true) => "照片超過 12 MiB 上限，請縮小後再上傳。",
+        ("noteTooLarge", false) => "The submitted text is over the size limit - shorten it and try again.",
+        ("noteTooLarge", true) => "送出的內容超過大小限制，請縮短後再試一次。",
+        ("noteFormExpired", false) => "This form expired or your sign-in changed - go back, reload the page and send it again.",
+        ("noteFormExpired", true) => "表單已過期或登入狀態改變，請回筆記頁重新整理後再送一次。",
+        ("noteBadRequest", false) => "The request was not valid - go back and try again.",
+        ("noteBadRequest", true) => "請求內容無效，請回上一頁再試一次。",
+        ("noteBack", false) => "Back",
+        ("noteBack", true) => "返回",
+        ("noteMoveUp", false) => "Move up",
+        ("noteMoveUp", true) => "上移",
+        ("noteMoveDown", false) => "Move down",
+        ("noteMoveDown", true) => "下移",
+        ("noteDeletePhoto", false) => "Delete photo",
+        ("noteDeletePhoto", true) => "刪除照片",
+        ("noteShare", false) => "Share",
+        ("noteShare", true) => "分享",
+        ("noteShareLinks", false) => "Active share links",
+        ("noteShareLinks", true) => "有效的分享連結",
+        ("noteSharePreview", false) => "Share preview",
+        ("noteSharePreview", true) => "分享預覽",
+        ("noteSharePreviewHelp", false) => "This is exactly what the recipient will see. The link is created only after you confirm.",
+        ("noteSharePreviewHelp", true) => "對方看到的就是這個頁面；確認後才會建立連結。",
+        ("noteShareCreate", false) => "Create share link",
+        ("noteShareCreate", true) => "建立分享連結",
+        ("noteShareBack", false) => "Back to the note",
+        ("noteShareBack", true) => "返回筆記",
+        ("noteShareLink", false) => "Share link",
+        ("noteShareLink", true) => "分享連結",
+        ("noteShareLinkHelp", false) => "Copy this link and send it to the reader. You can stop sharing at any time.",
+        ("noteShareLinkHelp", true) => "複製這條連結傳給對方；隨時可以停止分享。",
+        ("noteShareStop", false) => "Stop sharing this note",
+        ("noteShareStop", true) => "停止這則筆記的分享",
+        ("noteShareStopAll", false) => "Stop sharing ALL notes",
+        ("noteShareStopAll", true) => "停止所有筆記的分享",
+        ("noteDayNotes", false) => "Notes",
+        ("noteDayNotes", true) => "筆記",
         ("notePlace", false) => "Place",
         ("notePlace", true) => "地點",
         ("noteDate", false) => "Date",
@@ -593,6 +649,11 @@ mod tests {
             "notesTitle", "noteNew", "noteEdit", "noteTitle", "noteBody", "notePurpose",
             "notePlan", "noteDestination", "noteDay", "noteSave", "noteDelete",
             "noteRequired", "noteInvalidDay", "noteExpired", "noteExpiredHelp", "noteLogin",
+            "notePhotos", "noteAddPhoto", "notePhotoRequired", "noteUnsupportedImage", "noteImageMalformed",
+            "noteMoveUp", "noteMoveDown", "noteDeletePhoto", "noteShare", "noteShareLinks",
+            "noteSharePreview", "noteSharePreviewHelp", "noteShareCreate", "noteShareBack",
+            "noteShareLink", "noteShareLinkHelp", "noteShareStop", "noteShareStopAll",
+            "noteDayNotes", "noteNoPhotos",
         ] {
             let (en, zh) = (t(key, "en"), t(key, "zh"));
             assert!(!en.is_empty() && !zh.is_empty(), "{key} missing a language");
@@ -605,6 +666,32 @@ mod tests {
     #[test]
     fn unknown_key_is_empty() {
         assert_eq!(t("nope", "en"), "");
+    }
+    #[test]
+    fn upload_error_keys_are_bilingual() {
+        // The rejected-request error page keys (Codex review: bare English text
+        // had no way back) — all ZH/EN pairs, EN ASCII like the other note keys.
+        for key in [
+            "noteRequestRejected", "notePhotoTooLarge", "noteTooLarge", "noteBadRequest", "noteBack", "noteFormExpired",
+        ] {
+            let (en, zh) = (t(key, "en"), t(key, "zh"));
+            assert!(!en.is_empty() && !zh.is_empty(), "{key} missing a language");
+            assert!(en.chars().all(|c| c.is_ascii()), "{key} EN must be ASCII: {en}");
+            assert!(!zh.is_ascii(), "{key} ZH must be Chinese: {zh}");
+        }
+    }
+    #[test]
+    fn unsupported_image_message_is_actionable_in_both_languages() {
+        // A rejected HEIC must tell an iPhone user the two ways through: the
+        // photo picker (Safari converts to JPEG) or Settings > Camera > Formats >
+        // Most Compatible — in BOTH languages, not just "JPEG/PNG only".
+        let en = t("noteUnsupportedImage", "en");
+        let zh = t("noteUnsupportedImage", "zh");
+        assert!(en.contains("photo picker"), "{en}");
+        assert!(en.contains("Most Compatible"), "{en}");
+        assert!(zh.contains("照片選擇器"), "{zh}");
+        assert!(zh.contains("設定"), "{zh}");
+        assert!(zh.contains("最相容"), "{zh}");
     }
     #[test]
     fn page_navigation_keys_are_bilingual() {

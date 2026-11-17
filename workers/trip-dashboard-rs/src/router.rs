@@ -339,13 +339,22 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         if clock.is_none() {
             console_error!("no clock: destination timezone '{}' for {}", plan.timezone, slug);
         }
-        return html_no_store(render::render_plan_at(
+        // The day's travel notes (T7): owner-only, queried SEPARATELY — never
+        // part of load_plan's viewer pipeline (spec §8.1, Yang §10 Q3: a plan
+        // share link never reveals notes).
+        let day_notes = if is_owner_session {
+            Some(notes::load_day_notes(&turso_url, &turso_token, slug).await?)
+        } else {
+            None
+        };
+        return html_no_store(render::render_plan_at_with_notes(
             &plan,
             lang,
             token,
             &map_status,
             &owner_chrome,
             clock.as_ref(),
+            day_notes.as_ref(),
         ));
     }
 

@@ -90,6 +90,9 @@ pub fn render_plan(
 /// `token` is the access token the page was loaded with — threaded into the
 /// auth-gated voucher links so a click carries the same token (else 403).
 /// `owner_chrome` is the logged-in owner top bar (copy share link); empty for viewers.
+// Test/legacy signature: the router renders through `render_plan_at_with_notes`
+// (owner day-notes); every remaining caller of the bare form is a test.
+#[cfg(test)]
 pub fn render_plan_at(
     plan: &Plan,
     lang: &str,
@@ -97,6 +100,24 @@ pub fn render_plan_at(
     map_status: &map::MapStatus,
     owner_chrome: &str,
     clock: Option<&now::Clock>,
+) -> String {
+    render_plan_at_with_notes(plan, lang, token, map_status, owner_chrome, clock, None)
+}
+
+/// [`render_plan_at`] plus the owner-only per-day travel-note entry (spec §8.1,
+/// Yang §10 Q3): `owner_day_notes` maps a day number to that day's (note id,
+/// title) pairs. The router only queries it for an owner session — it is NOT
+/// part of load_plan's viewer pipeline — and the render additionally gates the
+/// block on the owner chrome, so a viewer page never shows it even if a caller
+/// passed the map by mistake.
+pub fn render_plan_at_with_notes(
+    plan: &Plan,
+    lang: &str,
+    token: Option<&str>,
+    map_status: &map::MapStatus,
+    owner_chrome: &str,
+    clock: Option<&now::Clock>,
+    owner_day_notes: Option<&std::collections::BTreeMap<i64, Vec<(String, String)>>>,
 ) -> String {
     let mut body = String::new();
     if !owner_chrome.is_empty() {
@@ -150,6 +171,14 @@ pub fn render_plan_at(
             open,
             clock,
         ));
+        // The day's notes, owner-only: rendered right at the day they attach to.
+        if !owner_chrome.is_empty() {
+            if let Some(day_list) = owner_day_notes.and_then(|m| m.get(&d.day_number)) {
+                if !day_list.is_empty() {
+                    body.push_str(&notes::owner_day_notes_block(day_list, lang));
+                }
+            }
+        }
     }
     // Meal pending-booking alerts right after the day cards (mirror render.ts:1393).
     body.push_str(&alerts::render_pending_alerts(plan, lang, true));
