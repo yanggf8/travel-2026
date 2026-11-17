@@ -38,6 +38,10 @@ bucket_name = "trip-dashboard-maps"
 binding = "VOUCHERS"
 bucket_name = "trip-dashboard-vouchers"
 
+[[r2_buckets]]
+binding = "NOTES"
+bucket_name = "trip-dashboard-notes"
+
 # ── Cutover env (SUPERSEDED — DO NOT DEPLOY) ──
 # name="trip-dashboard" is now owned by workers/trip-dashboard-redirect (301 → -rs,
 # per CLAUDE.md). Deploying this env clobbers the redirect and re-breaks the old URL —

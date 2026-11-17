@@ -5,6 +5,7 @@ pub mod day;
 pub mod index;
 pub mod map;
 pub mod now;
+pub mod notes;
 pub mod session;
 pub mod share;
 pub mod summary;

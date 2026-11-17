@@ -3,7 +3,7 @@
 //! exception — it's a pure R2 passthrough with no auth (map images are low-stakes
 //! and the page already links to them; gating them would just add latency).
 
-use crate::{auth, d1_compare, model, render, turso, tzfmt};
+use crate::{auth, d1_compare, model, notes, render, turso, tzfmt};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -179,6 +179,10 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
             owner_login,
         )
         .await;
+    }
+
+    if notes::is_note_path(&path) {
+        return notes::handle(req, env, &path, &query, is_owner_session, session_login.as_deref(), lang).await;
     }
 
     // Load grant tokens (one query; small table). DESC so the current-token map

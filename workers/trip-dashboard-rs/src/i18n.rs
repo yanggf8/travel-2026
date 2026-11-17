@@ -8,6 +8,12 @@
 pub fn t(key: &str, lang: &str) -> &'static str {
     let zh = lang != "en";
     match (key, zh) {
+        ("notePhoto", false) => "Note photo",
+        ("notePhoto", true) => "筆記照片",
+        ("notePlace", false) => "Place",
+        ("notePlace", true) => "地點",
+        ("noteDate", false) => "Date",
+        ("noteDate", true) => "日期",
         ("flights", false) => "Flights",
         ("flights", true) => "航班",
         ("hotel", false) => "Hotel",
