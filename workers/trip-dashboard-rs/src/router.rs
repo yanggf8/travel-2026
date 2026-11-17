@@ -3,7 +3,7 @@
 //! exception — it's a pure R2 passthrough with no auth (map images are low-stakes
 //! and the page already links to them; gating them would just add latency).
 
-use crate::{auth, d1_compare, model, notes, render, turso, tzfmt};
+use crate::{auth, d1_compare, model, notes, render, sw, turso, tzfmt};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -72,6 +72,19 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         }
         // R2 miss, no body, or invalid/garbage PNG → placeholder, not a broken-image icon.
         return serve_placeholder();
+    }
+
+    // /sw.js — the offline service worker (same-origin; the one approved
+    // exception to the single-inline-script rule, Yang 2026-11-17). No auth, no
+    // Turso read: the script is a compiled-in string with the miss-page text
+    // filled from i18n. Rollback (plan Task 7 Step 4) is serving
+    // sw::KILL_SWITCH here instead and redeploying — no feature flag.
+    if path == "/sw.js" {
+        let h = Headers::new();
+        for (k, v) in sw::sw_headers() {
+            h.set(k, v)?;
+        }
+        return Ok(Response::from_bytes(sw::script().into_bytes())?.with_headers(h));
     }
 
     let public_origin = request_origin(&url);

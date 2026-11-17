@@ -20,6 +20,7 @@ mod notes;
 mod render;
 mod router;
 mod styles;
+mod sw;
 mod turso;
 mod tzfmt;
 
