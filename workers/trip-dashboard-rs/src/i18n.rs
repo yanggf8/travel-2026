@@ -300,9 +300,11 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("wxSessMm", true) => "{mm}mm",
         ("wxSessMax", false) => " (max {max}mm/h)",
         ("wxSessMax", true) => "（最大 {max}mm/h）",
-        // weather attribution line (render/day.rs weather_attribution_line)
-        ("wxDataBy", false) => "Weather data: ",
-        ("wxDataBy", true) => "天氣資料：",
+        // weather attribution line (render/day.rs weather_attribution_line).
+        // 「經時段彙整」 names the modification CC BY 4.0 requires: the four
+        // session windows are aggregated from the provider's hourly forecast.
+        ("wxAggregated", false) => "Weather data (aggregated): ",
+        ("wxAggregated", true) => "天氣資料（經時段彙整）：",
         ("wxUpdated", false) => " · updated {time}",
         ("wxUpdated", true) => " · 更新 {time}",
         ("wxLicense", false) => " ({lic})",

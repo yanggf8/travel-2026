@@ -321,20 +321,27 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         } else {
             String::new()
         };
-        // JST "now" for the 現在・接下來 card; `?at=YYYY-MM-DDTHH:MM` (strict,
-        // invalid → ignored) pins it for tests / verify-site. The page is served
-        // `private, no-store`, so a pinned render is never cached for others.
-        let clock = query
-            .get("at")
-            .and_then(|at| render::now::parse_at(at))
-            .unwrap_or_else(|| render::now::jst_from_ms(worker::Date::now().as_millis() as i64));
+        // Destination-local "now" for the 現在・接下來 card. A strict
+        // `?at=YYYY-MM-DDTHH:MM` (invalid → ignored) pins the wall clock first
+        // (tests / verify-site — pinning needs no timezone data); otherwise the
+        // live clock is the destination's IANA zone via `Intl`. No usable clock
+        // → the page renders without a now card and day cards all open; the
+        // console error names the destination. Never a fallback zone. The page
+        // is served `private, no-store`, so a pinned render is never cached.
+        let clock = render::now::decide_clock(
+            query.get("at").map(|s| s.as_str()),
+            tzfmt::now_clock_in_tz(worker::Date::now().as_millis() as f64, &plan.timezone),
+        );
+        if clock.is_none() {
+            console_error!("no clock: destination timezone '{}' for {}", plan.timezone, slug);
+        }
         return html_no_store(render::render_plan_at(
             &plan,
             lang,
             token,
             &map_status,
             &owner_chrome,
-            Some(&clock),
+            clock.as_ref(),
         ));
     }
 
@@ -1039,7 +1046,9 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
                                                WHEN 'afternoon' THEN 2 ELSE 3 END"
         ),
         // [28] weather attribution providers (GLOBAL, `travel set-weather-provider`).
-        "SELECT provider_id, name_zh, name_en, attribution_url, license FROM weather_providers"
+        // `license_url` is added by the 2026-11 weather plan's migrate — deploy
+        // order: migrate first, or this explicit column list fails the page loudly.
+        "SELECT provider_id, name_zh, name_en, attribution_url, license, license_url FROM weather_providers"
             .to_string(),
         // [29] destination timezone (IANA) for the weather "updated" stamp.
         format!("SELECT timezone FROM destination_config WHERE slug = {dest_expr}"),
@@ -1058,13 +1067,17 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
     plan.documents = model::plan_documents(&r[24], &r[25]);
     model::attach_session_weather(&mut plan.days, &r[27]);
     model::attach_weather_providers(&mut plan.days, &r[28], &r[27]);
-    // Destination-aware "updated" stamp; missing tz / unsupported zone / bad time -> omitted.
+    // Destination-aware "updated" stamp and now-clock timezone; missing tz /
+    // unsupported zone / bad time -> stamp omitted, no live now card.
     let tz = r[29]
         .first()
         .and_then(|row| row.get("timezone"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
+        .trim()
         .to_string();
+    // Trimmed once here so SSR and the browser's Intl (data-now-tz) see the same zone.
+    plan.timezone = tz.clone();
     for d in plan.days.iter_mut() {
         d.weather_updated = tzfmt::format_in_tz(&d.weather_sourced_at, &tz).unwrap_or_default();
     }

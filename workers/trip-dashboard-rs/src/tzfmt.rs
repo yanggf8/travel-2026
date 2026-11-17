@@ -1,8 +1,10 @@
-//! Format a UTC ISO-8601 instant in an IANA timezone ("MM/DD HH:MM") for the weather
-//! "updated" stamp. The timezone is `destination_config.timezone` (content, never
-//! hardcoded). The parse is pure and host-tested; the zone conversion uses the Workers
-//! runtime's `Intl.DateTimeFormat` (wasm only) and is verified on deploy. Anything
-//! missing, unparseable or unsupported yields None — callers omit the stamp, no fallback.
+//! Convert instants into the DESTINATION's wall clock ("MM/DD HH:MM" for the
+//! weather "updated" stamp; date + minutes since midnight for the 現在・接下來
+//! card's now clock). The timezone is `destination_config.timezone` (content,
+//! never hardcoded). The part-assembling parses are pure and host-tested; the
+//! zone conversion uses the Workers runtime's `Intl.DateTimeFormat` (wasm only)
+//! and is verified on deploy. Anything missing, unparseable or unsupported
+//! yields None — callers omit the stamp / now card, no fallback.
 
 /// `2026-11-14T23:39:12.000Z` (or `±hh:mm` offset) -> Unix epoch milliseconds.
 pub fn iso_to_epoch_ms(iso: &str) -> Option<f64> {
@@ -19,7 +21,7 @@ pub fn iso_to_epoch_ms(iso: &str) -> Option<f64> {
         }
     };
     let (y, mo, d, h, mi) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?);
-    if !(1..=12).contains(&mo) || d < 1 || d > crate::render::now::days_in_month(y, mo) || h > 23 || mi > 59 {
+    if !(1..=12).contains(&mo) || d < 1 || d > crate::render::now::days_in_month(y, mo) || !(0..=23).contains(&h) || !(0..=59).contains(&mi) {
         return None;
     }
     let mut i = 16;
@@ -52,30 +54,39 @@ pub fn stamp_from_parts(parts: &[(String, String)]) -> Option<String> {
     Some(format!("{}/{} {}:{}", get("month")?, get("day")?, hour, get("minute")?))
 }
 
-/// The UTC ISO instant in IANA zone `tz`, "MM/DD HH:MM". None when `tz` is empty,
-/// the instant does not parse, or the runtime rejects the zone.
-#[cfg(target_arch = "wasm32")]
-pub fn format_in_tz(iso: &str, tz: &str) -> Option<String> {
-    use worker::js_sys::{Array, Date, Function, Object, Reflect};
-    use worker::wasm_bindgen::{JsCast, JsValue};
-    if tz.trim().is_empty() {
+/// Assemble the wall-clock date "YYYY-MM-DD" and minutes since midnight from
+/// `Intl` parts (type, value) — the host-testable half of [`now_clock_in_tz`].
+/// An hour of "24" (midnight under some engines' 'h23') counts as 00 of the
+/// SAME date. None when a part is missing or not a real clock value.
+pub fn clock_from_parts(parts: &[(String, String)]) -> Option<(String, i64)> {
+    let get = |k: &str| parts.iter().find(|(t, _)| t == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
+    let y: i64 = get("year")?.parse().ok()?;
+    let mo: i64 = get("month")?.parse().ok()?;
+    let d: i64 = get("day")?.parse().ok()?;
+    let hour = get("hour")?;
+    let h: i64 = if hour == "24" { 0 } else { hour.parse().ok()? };
+    let mi: i64 = get("minute")?.parse().ok()?;
+    if !(1..=12).contains(&mo) || d < 1 || d > crate::render::now::days_in_month(y, mo) || !(0..=23).contains(&h) || !(0..=59).contains(&mi) {
         return None;
     }
-    let ms = iso_to_epoch_ms(iso)?;
-    let opts = Object::new();
-    for (k, v) in [
-        ("timeZone", tz.trim()),
-        ("hourCycle", "h23"),
-        ("month", "2-digit"),
-        ("day", "2-digit"),
-        ("hour", "2-digit"),
-        ("minute", "2-digit"),
-    ] {
-        Reflect::set(&opts, &JsValue::from_str(k), &JsValue::from_str(v)).ok()?;
+    Some((format!("{y:04}-{mo:02}-{d:02}"), h * 60 + mi))
+}
+
+/// Build an `Intl.DateTimeFormat` for `locale` with `opts` (timeZone included)
+/// and return its `formatToParts` for instant `ms` as (type, value) pairs —
+/// the formatter route shared by [`format_in_tz`] and [`now_clock_in_tz`].
+/// None on any step, including the runtime rejecting the zone.
+#[cfg(target_arch = "wasm32")]
+fn intl_parts(ms: f64, locale: &str, opts: &[(&str, &str)]) -> Option<Vec<(String, String)>> {
+    use worker::js_sys::{Array, Date, Function, Object, Reflect};
+    use worker::wasm_bindgen::{JsCast, JsValue};
+    let o = Object::new();
+    for (k, v) in opts {
+        Reflect::set(&o, &JsValue::from_str(k), &JsValue::from_str(v)).ok()?;
     }
     let intl = Reflect::get(&worker::js_sys::global(), &JsValue::from_str("Intl")).ok()?;
     let ctor: Function = Reflect::get(&intl, &JsValue::from_str("DateTimeFormat")).ok()?.dyn_into().ok()?;
-    let args = Array::of2(&JsValue::from_str("en-US"), &opts);
+    let args = Array::of2(&JsValue::from_str(locale), &o);
     // Reflect::construct returns Err on a RangeError (unknown zone) instead of trapping.
     let fmt = Reflect::construct(&ctor, &args).ok()?;
     let f: Function = Reflect::get(&fmt, &JsValue::from_str("formatToParts")).ok()?.dyn_into().ok()?;
@@ -87,12 +98,71 @@ pub fn format_in_tz(iso: &str, tz: &str) -> Option<String> {
         let v = Reflect::get(&p, &JsValue::from_str("value")).ok()?.as_string()?;
         out.push((t, v));
     }
-    stamp_from_parts(&out)
+    Some(out)
+}
+
+/// The UTC ISO instant in IANA zone `tz`, "MM/DD HH:MM". None when `tz` is empty,
+/// the instant does not parse, or the runtime rejects the zone.
+#[cfg(target_arch = "wasm32")]
+pub fn format_in_tz(iso: &str, tz: &str) -> Option<String> {
+    if tz.trim().is_empty() {
+        return None;
+    }
+    let ms = iso_to_epoch_ms(iso)?;
+    let parts = intl_parts(
+        ms,
+        "en-US",
+        &[
+            ("timeZone", tz.trim()),
+            ("hourCycle", "h23"),
+            ("month", "2-digit"),
+            ("day", "2-digit"),
+            ("hour", "2-digit"),
+            ("minute", "2-digit"),
+        ],
+    )?;
+    stamp_from_parts(&parts)
 }
 
 /// Host builds (tests, native check) have no `Intl`: no stamp.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn format_in_tz(_iso: &str, _tz: &str) -> Option<String> {
+    None
+}
+
+/// The destination-local wall clock for a Unix epoch time in milliseconds (the
+/// worker's `Date::now()`): the 現在・接下來 card's "now". Same `Intl` route as
+/// [`format_in_tz`] (locale en-CA + `year` so the date assembles as
+/// YYYY-MM-DD); the parts → clock conversion is the host-tested
+/// [`clock_from_parts`]. None when `tz` is empty or the runtime rejects it —
+/// the caller then serves the page without a now card, never a fallback zone.
+#[cfg(target_arch = "wasm32")]
+pub fn now_clock_in_tz(ms: f64, tz: &str) -> Option<crate::render::now::Clock> {
+    if tz.trim().is_empty() {
+        return None;
+    }
+    let parts = intl_parts(
+        ms,
+        "en-CA",
+        &[
+            ("timeZone", tz.trim()),
+            ("hourCycle", "h23"),
+            ("year", "numeric"),
+            ("month", "2-digit"),
+            ("day", "2-digit"),
+            ("hour", "2-digit"),
+            ("minute", "2-digit"),
+        ],
+    )?;
+    let (date, minutes) = clock_from_parts(&parts)?;
+    Some(crate::render::now::Clock { date, minutes, pinned: false })
+}
+
+/// Host builds (tests, native check) have no `Intl`: no live clock. The
+/// parts → clock conversion is covered by [`clock_from_parts`] tests; the
+/// live path is verified on deploy.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn now_clock_in_tz(_ms: f64, _tz: &str) -> Option<crate::render::now::Clock> {
     None
 }
 
@@ -128,5 +198,38 @@ mod tests {
     #[test]
     fn host_has_no_intl_so_no_stamp() {
         assert_eq!(format_in_tz("2026-11-14T23:39:12.000Z", "Asia/Tokyo"), None);
+    }
+
+    #[test]
+    fn clock_parts_reject_negative_hour_or_minute() {
+        let parts = |h: &str, mi: &str| -> Vec<(String, String)> {
+            vec![("year", "2026"), ("month", "11"), ("day", "16"), ("hour", h), ("minute", mi)]
+                .into_iter()
+                .map(|(t, v)| (t.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(clock_from_parts(&parts("-1", "30")), None);
+        assert_eq!(clock_from_parts(&parts("10", "-5")), None);
+        assert_eq!(clock_from_parts(&parts("10", "05")), Some(("2026-11-16".to_string(), 605)));
+    }
+
+    #[test]
+    fn clock_parts_taipei_and_tokyo() {
+        let p = |y: &str, m: &str, d: &str, h: &str, mi: &str| {
+            vec![("year", y), ("month", m), ("day", d), ("hour", h), ("minute", mi)]
+                .into_iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(clock_from_parts(&p("2026", "11", "16", "14", "05")), Some(("2026-11-16".into(), 845)));
+        // Midnight rendered as hour "24" by some engines under hourCycle 'h23':
+        // the date is unchanged and the minutes count from zero.
+        assert_eq!(clock_from_parts(&p("2026", "11", "17", "24", "10")), Some(("2026-11-17".into(), 10)));
+        assert_eq!(clock_from_parts(&p("2026", "11", "17", "xx", "10")), None);
+    }
+
+    #[test]
+    fn host_now_clock_is_none() {
+        assert!(now_clock_in_tz(0.0, "Asia/Taipei").is_none());
     }
 }

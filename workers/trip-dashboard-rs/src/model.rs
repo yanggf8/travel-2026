@@ -45,8 +45,9 @@ pub struct Activity {
 pub struct Session {
     pub session_type: String, // morning|noon|afternoon|evening
     pub focus_zh: String,
-    /// `timesofday.time_range_start` / `_end` ("HH:MM", JST wall clock); empty
-    /// when unset. Drive the plan page's 現在・接下來 timeline (render/now.rs).
+    /// `timesofday.time_range_start` / `_end` ("HH:MM", destination wall
+    /// clock); empty when unset. Drive the plan page's 現在・接下來 timeline
+    /// (render/now.rs).
     pub time_start: String,
     pub time_end: String,
     pub transit_zh: String,
@@ -74,6 +75,10 @@ pub struct WeatherProvider {
     pub name_en: String,
     pub attribution_url: String,
     pub license: String,
+    /// `weather_providers.license_url` — where the licence's terms live
+    /// (`set-weather-provider --license-url`). Empty → the licence renders as
+    /// plain text, never a link.
+    pub license_url: String,
 }
 
 /// Resolve each main day's weather provider: `days.weather_source_id` first, else
@@ -100,6 +105,7 @@ pub fn attach_weather_providers(days: &mut [Day], provider_rows: &[Row], session
             name_en: s(r, "name_en"),
             attribution_url: s(r, "attribution_url"),
             license: s(r, "license"),
+            license_url: s(r, "license_url"),
         });
     }
 }
@@ -360,6 +366,11 @@ pub struct Plan {
     pub display_name: String,
     pub start_date: String,
     pub end_date: String,
+    /// Destination IANA timezone (`destination_config.timezone`), the wall
+    /// clock the 現在・接下來 card and the weather "updated" stamp run on.
+    /// Empty when unset — then no live clock and no now card (never a
+    /// hardcoded zone).
+    pub timezone: String,
     pub days: Vec<Day>,
     pub flights: Vec<Row>,
     pub hotel: Option<Row>,

@@ -76,7 +76,7 @@ pub fn render_plan(
     render_plan_at(plan, lang, token, map_status, owner_chrome, None)
 }
 
-/// Render a full plan page at `clock` (JST now, or the `?at=` pin).
+/// Render a full plan page at `clock` (destination-local now, or the `?at=` pin).
 ///
 /// Page order (user request 2026-11-12 — mid-trip on a phone the reader could
 /// not find things): 目錄 (+ search) → 現在・接下來 (during the trip only) →
@@ -84,7 +84,7 @@ pub fn render_plan(
 /// plan maps, companion options, 預訂總表, 文件, 天氣總覽, 用餐總覽, meal
 /// alerts, transit cheat-sheet.
 ///
-/// "During the trip" = the clock's JST date is a main day's date. Then today's
+/// "During the trip" = the clock's date is a main day's date. Then today's
 /// day card is served open (and `data-today`), every other day collapsed.
 /// `token` is the access token the page was loaded with — threaded into the
 /// auth-gated voucher links so a click carries the same token (else 403).
@@ -320,11 +320,13 @@ fn page_toc(plan: &Plan, lang: &str, blocks: &TocBlocks) -> String {
 ///    textContent — never innerHTML); a tap opens every ancestor <details>,
 ///    scrolls to the unit and flashes it. Case-insensitive; full-width ASCII
 ///    folds to half-width. Escape / the clear button resets.
-/// 3. **Now re-marking** (user request 2026-11-12): while the page's JST date
+/// 3. **Now re-marking** (user request 2026-11-12): while the page's local date
 ///    (`#sec-now[data-now-date]`) is today and the clock is not pinned by
 ///    `?at=`, re-marks 現在 / 接下來 on the timeline every minute (and when the
-///    tab becomes visible) from `data-start` / `data-end` / `data-at` (JST
-///    minutes), opens the new 現在 / 接下來 items and closes the ones it auto-opened before (`data-auto`; a user's own toggle clears the flag and is never undone), and shows the 明天 entry once the day's last session has ended.
+///    tab becomes visible) from `data-start` / `data-end` / `data-at`
+///    (destination-local minutes — the card's `data-now-tz` zone converted via
+///    `Intl`, never a hardcoded offset; any failure keeps the server-side
+///    marking), opens the new 現在 / 接下來 items and closes the ones it auto-opened before (`data-auto`; a user's own toggle clears the flag and is never undone), and shows the 明天 entry once the day's last session has ended.
 const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
 (function(){
   var d=document,de=d.documentElement,k='trip-blocks:'+(d.body.getAttribute('data-plan-id')||''),st={},els=[],ls=null,i;
@@ -368,9 +370,11 @@ const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
   var nc=d.getElementById('sec-now');
   if(nc&&!nc.hasAttribute('data-now-pinned')){
     var mkb=function(el,c,txt,first){var s=d.createElement('span');s.className='now-badge now-badge--'+c;s.textContent=txt;if(first)el.insertBefore(s,el.firstChild);else el.appendChild(s);};
-    var remark=function(){var n=new Date(Date.now()+324e5),m=n.getUTCHours()*60+n.getUTCMinutes(),j;
+    var remark=function(){var m,j;try{var tz=nc.getAttribute('data-now-tz'),ps=new Intl.DateTimeFormat('en-CA',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(new Date()),Y='',Mo='',Dy='',H=0,Mi=0,k;
+      for(k=0;k<ps.length;k++){var pt=ps[k].type;if(pt==='year')Y=ps[k].value;else if(pt==='month')Mo=ps[k].value;else if(pt==='day')Dy=ps[k].value;else if(pt==='hour')H=+ps[k].value;else if(pt==='minute')Mi=+ps[k].value;}
+      m=(H%24)*60+Mi;
+      if(Y+'-'+Mo+'-'+Dy!==nc.getAttribute('data-now-date')){m=1e9;}}catch(e){return;}
       var old=nc.querySelectorAll('.now-badge');for(j=old.length-1;j>=0;j--)if(!old[j].hasAttribute('data-fixed'))old[j].parentNode.removeChild(old[j]);
-      if(n.toISOString().slice(0,10)!==nc.getAttribute('data-now-date')){m=1e9;}
       var it=nc.querySelectorAll('.now-item[data-start]'),cur=-1,nx=-1;
       for(j=0;j<it.length;j++){var s=+it[j].getAttribute('data-start'),e=+it[j].getAttribute('data-end');if(s<=m&&m<e)cur=j;if(nx<0&&s>m)nx=j;}
       for(j=0;j<it.length;j++){var c=it[j].classList,h=it[j].querySelector('.now-head');c.toggle('is-now',j===cur);c.toggle('is-next',j!==cur&&j===nx);c.toggle('is-past',+it[j].getAttribute('data-end')<=m);
@@ -957,6 +961,7 @@ mod tests {
         Plan {
             plan_id: "kyoto-nov-2026".into(),
             display_name: "Kyoto".into(),
+            timezone: "Asia/Tokyo".into(),
             documents: vec![PlanDocument {
                 doc_key: "flight".into(),
                 kind: "flight_eticket".into(),
@@ -1138,6 +1143,20 @@ mod tests {
     }
 
     #[test]
+    fn no_clock_page_has_no_now_card_and_all_days_open() {
+        // A destination with no usable timezone (missing / empty / rejected by
+        // Intl) degrades to a clock-less page: no now card, no 今天 marker, every
+        // day card served open — never a fallback to a hardcoded zone.
+        let mut plan = full_nav_plan();
+        plan.timezone.clear();
+        let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
+        assert!(!html.contains("id=\"sec-now\""), "{html}");
+        assert!(!html.contains(" data-today"), "{html}");
+        assert!(html.contains("<details data-block=\"day-1\" open>"), "{html}");
+        assert!(html.contains("<details data-block=\"day-2\" open>"), "{html}");
+    }
+
+    #[test]
     fn toc_lists_only_blocks_that_render() {
         use crate::model::{Day, Plan};
         let plan = Plan {
@@ -1229,6 +1248,13 @@ mod tests {
         assert!(!BLOCK_MEMORY_SCRIPT.contains("insertAdjacentHTML"));
         let during = render_plan_at(&plan, "zh", None, &status, "", Some(&now::parse_at("2026-11-14T09:00").unwrap()));
         assert_eq!(during.matches("<script>").count(), 1, "{during}");
+        // The per-minute re-mark reads the card's destination timezone (the
+        // now card's data-now-tz) via Intl — no hardcoded offset anywhere.
+        assert!(!during.contains("324e5"), "{during}");
+        assert!(during.contains("data-now-tz"), "{during}");
+        assert!(during.contains("hourCycle:'h23'"), "{during}");
+        assert!(during.contains("%24"), "{during}"); // hour normalisation, minified (no space)
+        assert!(during.contains("try{") && during.contains("catch(e){return;}"), "{during}");
         // Pages other than the plan page carry no script.
         assert!(!page("t", "x", "zh").contains("<script"));
     }

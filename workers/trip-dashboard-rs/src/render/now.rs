@@ -6,15 +6,18 @@
 //!   timeline — each session with its time range, focus line, timed route legs,
 //!   main + backup meal — with the CURRENT session badged 現在 and the next
 //!   session / leg 接下來; after the last session, tomorrow's first session as
-//!   明天. Rendered only while today's JST date is a main day's date.
+//!   明天. Rendered only while the clock's date is a main day's date.
 //! - **常用資訊 / Quick info** ([`quick_info`]): outbound / return flights and
 //!   the booked hotel's name, address, phone and stay — always, when data exists.
 //!
-//! "Now" is Japan time (Asia/Tokyo, UTC+9, no DST) at request time ([`jst_from_ms`]),
-//! or the strictly validated `?at=YYYY-MM-DDTHH:MM` override ([`parse_at`]) that
-//! tests and `travel verify-site` use to pin the clock. Marking is server-side;
-//! the plan page's inline script re-marks every minute from the `data-start` /
-//! `data-end` (JST minutes) attributes (render/mod.rs `BLOCK_MEMORY_SCRIPT`).
+//! "Now" is the DESTINATION's wall clock (`destination_config.timezone` via
+//! `Intl`, `tzfmt::now_clock_in_tz`) at request time, or the strictly validated
+//! `?at=YYYY-MM-DDTHH:MM` override ([`parse_at`]) that tests and
+//! `travel verify-site` use to pin the clock — [`decide_clock`] picks between
+//! them; no usable clock means no now card (never a hardcoded zone). Marking is
+//! server-side; the plan page's inline script re-marks every minute from the
+//! `data-start` / `data-end` (destination-local minutes) attributes and the
+//! card's `data-now-tz` timezone (render/mod.rs `BLOCK_MEMORY_SCRIPT`).
 
 use super::{esc, esc_url_attr, urlencode};
 use crate::i18n::{t, tf};
@@ -27,11 +30,10 @@ pub const BLOCK_QUICK: &str = "sec-quick";
 
 /// Minutes in a day: the open end of a session with no later start.
 const DAY_END: i64 = 24 * 60;
-/// Japan Standard Time: UTC+9 all year.
-const JST_OFFSET_MS: i64 = 9 * 3_600_000;
 
-/// A JST wall-clock instant: the date and minutes since midnight. `pinned` is
-/// set when it came from `?at=` — the inline script then never re-marks.
+/// A wall-clock instant in the DESTINATION's timezone: the date and minutes
+/// since midnight. `pinned` is set when it came from `?at=` — the inline
+/// script then never re-marks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Clock {
     pub date: String,
@@ -39,14 +41,14 @@ pub struct Clock {
     pub pinned: bool,
 }
 
-/// The JST clock for a Unix epoch time in milliseconds (the worker's `Date::now()`).
-pub fn jst_from_ms(ms: i64) -> Clock {
-    let jst = ms + JST_OFFSET_MS;
-    Clock {
-        date: super::index::today_from_ms(jst),
-        minutes: jst.rem_euclid(86_400_000) / 60_000,
-        pinned: false,
-    }
+/// Clock precedence (spec 2026-11-16 §6.1): a parseable `?at=` pin wins —
+/// pinning the wall clock needs no timezone data, so tests and `verify-site`
+/// are immune to a destination's missing/broken zone. Otherwise the live
+/// destination clock (`tzfmt::now_clock_in_tz`, wasm only). None when neither
+/// exists: the page renders without a now card and every day card open —
+/// never a fallback to a hardcoded zone.
+pub fn decide_clock(at: Option<&str>, live: Option<Clock>) -> Option<Clock> {
+    at.and_then(parse_at).or(live)
 }
 
 pub(crate) fn days_in_month(y: i64, m: i64) -> i64 {
@@ -59,8 +61,9 @@ pub(crate) fn days_in_month(y: i64, m: i64) -> i64 {
     }
 }
 
-/// Strict `?at=YYYY-MM-DDTHH:MM` (JST): exactly that shape, a real calendar
-/// date, 00:00–23:59. Anything else is None (the caller ignores it).
+/// Strict `?at=YYYY-MM-DDTHH:MM` (the destination's wall clock): exactly that
+/// shape, a real calendar date, 00:00–23:59. Anything else is None (the caller
+/// ignores it).
 pub fn parse_at(s: &str) -> Option<Clock> {
     let b = s.as_bytes();
     if b.len() != 16 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' {
@@ -108,7 +111,7 @@ fn next_main_day<'a>(days: &'a [Day], today: &Day) -> Option<&'a Day> {
         .min_by(|a, b| a.date.cmp(&b.date))
 }
 
-/// A shown session with its effective window `[start, end)` in JST minutes.
+/// A shown session with its effective window `[start, end)` in destination-local minutes.
 /// A missing start is the previous session's end (0 for the first); a missing
 /// end is the next explicit start among the later sessions (end of day when
 /// none) — e.g. a flight 「中午」 with no times spans morning-end → afternoon-start.
@@ -321,8 +324,17 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
 
     let date = super::summary::date_with_weekday(&today.date, lang).unwrap_or_else(|| today.date.clone());
     let pinned = if clock.pinned { " data-now-pinned" } else { "" };
+    // The card's timezone (content from destination_config): what the inline
+    // script's per-minute re-mark reads via Intl. Omitted when unset — a live
+    // (unpinned) clock only exists with a valid zone, and a pinned card is
+    // never re-marked.
+    let tz = if plan.timezone.is_empty() {
+        String::new()
+    } else {
+        format!(" data-now-tz=\"{}\"", esc(&plan.timezone))
+    };
     let mut h = format!(
-        "<section class=\"now-card\" id=\"{BLOCK_NOW}\" data-now-date=\"{}\" data-now-min=\"{now}\"{pinned} \
+        "<section class=\"now-card\" id=\"{BLOCK_NOW}\" data-now-date=\"{}\" data-now-min=\"{now}\"{tz}{pinned} \
          data-l-now=\"{}\" data-l-next=\"{}\"><details data-block=\"{BLOCK_NOW}\" open><summary><h2>{}</h2></summary>\
          <div class=\"now-body\">",
         esc(&today.date),
@@ -651,6 +663,7 @@ mod tests {
             plan_id: "kyoto-nov-2026".into(),
             start_date: "2026-11-12".into(),
             end_date: "2026-11-16".into(),
+            timezone: "Asia/Tokyo".into(),
             days: vec![first_day(), last_day()],
             documents: vec![PlanDocument {
                 doc_key: "flight".into(),
@@ -662,16 +675,6 @@ mod tests {
             }],
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn jst_now_is_utc_plus_nine_across_midnight() {
-        let midnight_utc = crate::render::summary::civil_days(2026, 11, 12) * 86_400_000;
-        let c = jst_from_ms(midnight_utc + 30 * 60_000);
-        assert_eq!(c, Clock { date: "2026-11-12".into(), minutes: 9 * 60 + 30, pinned: false });
-        // 15:30 UTC is 00:30 the next JST day.
-        let c = jst_from_ms(midnight_utc + (15 * 60 + 30) * 60_000);
-        assert_eq!((c.date.as_str(), c.minutes), ("2026-11-13", 30));
     }
 
     #[test]
@@ -695,6 +698,34 @@ mod tests {
         for bad in ["", "24:01", "7:5", "07:60", "0750", "a7:50", "107:50"] {
             assert_eq!(parse_hhmm(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn pinned_at_wins_without_timezone() {
+        let c = decide_clock(Some("2026-11-16T07:00"), None).unwrap();
+        assert!(c.pinned);
+        assert_eq!(c.minutes, 420);
+    }
+
+    #[test]
+    fn no_tz_no_pin_means_no_clock() {
+        assert!(decide_clock(None, None).is_none());
+    }
+
+    #[test]
+    fn bad_at_falls_to_live() {
+        // An unparseable ?at= is ignored — the live destination clock wins.
+        let live = Clock { date: "2026-11-16".into(), minutes: 300, pinned: false };
+        assert_eq!(decide_clock(Some("nope"), Some(live.clone())), Some(live));
+        assert!(decide_clock(Some("nope"), None).is_none());
+    }
+
+    #[test]
+    fn now_card_carries_tz_attr() {
+        let mut plan = trip();
+        plan.timezone = "Asia/Taipei".into();
+        let html = now_card(&plan, &plan.days[1], &clock("2026-11-16", "07:00"), "zh", None);
+        assert!(html.contains(" data-now-tz=\"Asia/Taipei\""), "{html}");
     }
 
     #[test]
@@ -757,7 +788,7 @@ mod tests {
         let today = &plan.days[1];
         let html = now_card(&plan, today, &clock("2026-11-16", "07:00"), "zh", Some("tok"));
         assert!(html.starts_with(
-            "<section class=\"now-card\" id=\"sec-now\" data-now-date=\"2026-11-16\" data-now-min=\"420\" data-now-pinned \
+            "<section class=\"now-card\" id=\"sec-now\" data-now-date=\"2026-11-16\" data-now-min=\"420\" data-now-tz=\"Asia/Tokyo\" data-now-pinned \
              data-l-now=\"現在\" data-l-next=\"接下來\"><details data-block=\"sec-now\" open><summary><h2>現在・接下來 · 11/16（一）</h2></summary>"
         ), "{html}");
         assert!(html.contains(
@@ -787,7 +818,7 @@ mod tests {
         assert!(!html.contains("now-tomorrow"), "{html}");
         assert!(html.contains("<a class=\"now-more\" href=\"#day-5\">第 5 天完整內容 ↓</a>"), "{html}");
         // An unpinned clock lets the script re-mark.
-        let live = now_card(&plan, today, &jst_from_ms(0), "zh", None);
+        let live = now_card(&plan, today, &Clock { date: "1970-01-01".into(), minutes: 0, pinned: false }, "zh", None);
         assert!(!live.contains("data-now-pinned"), "{live}");
     }
 

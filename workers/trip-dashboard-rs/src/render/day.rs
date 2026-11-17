@@ -220,10 +220,12 @@ pub fn session_weather_line(day: &Day, lang: &str) -> String {
     format!("<div class=\"weather-sessions\">{}</div>", parts.join(t("labelJoin", lang)))
 }
 
-/// Attribution under the day's weather, e.g. 「天氣資料：Open-Meteo（CC BY 4.0）」,
-/// linked to the provider's attribution URL when it is http(s). The provider row is
-/// content (Turso `weather_providers`); only the label words are chrome. Empty when
-/// the day has no resolved provider (unknown id / no source).
+/// Attribution under the day's weather, e.g.
+/// 「天氣資料（經時段彙整）：Open-Meteo（CC BY 4.0）」 — the aggregation note is
+/// the modification credit CC BY 4.0 asks for. The provider name links to its
+/// attribution URL and the licence to the licence's terms URL, each only when
+/// http(s) (content from Turso `weather_providers`); the label words are
+/// chrome. Empty when the day has no resolved provider (unknown id / no source).
 pub fn weather_attribution_line(day: &Day, lang: &str) -> String {
     let Some(p) = &day.weather_provider else { return String::new() };
     let name = if lang == "en" { &p.name_en } else { &p.name_zh };
@@ -240,7 +242,16 @@ pub fn weather_attribution_line(day: &Day, lang: &str) -> String {
     let lic = if p.license.is_empty() {
         String::new()
     } else {
-        t("wxLicense", lang).replace("{lic}", &esc(&p.license))
+        let lic_html = if p.license_url.starts_with("https://") || p.license_url.starts_with("http://") {
+            format!(
+                "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a>",
+                esc(&p.license_url),
+                esc(&p.license)
+            )
+        } else {
+            esc(&p.license)
+        };
+        t("wxLicense", lang).replace("{lic}", &lic_html)
     };
     // Fetch time in the destination's timezone (pre-formatted by the router); omitted when empty.
     let updated = if day.weather_updated.is_empty() {
@@ -248,7 +259,7 @@ pub fn weather_attribution_line(day: &Day, lang: &str) -> String {
     } else {
         t("wxUpdated", lang).replace("{time}", &esc(&day.weather_updated))
     };
-    format!("<div class=\"weather-attribution\">{}{}{}{}</div>", t("wxDataBy", lang), linked, lic, updated)
+    format!("<div class=\"weather-attribution\">{}{}{}{}</div>", t("wxAggregated", lang), linked, lic, updated)
 }
 
 /// Render the per-day weather strip: icon + description + temp range +
@@ -1342,14 +1353,15 @@ mod tests {
                 name_en: "Open<Meteo>".into(),
                 attribution_url: "https://open-meteo.com/?a=1&b=2".into(),
                 license: "CC BY 4.0".into(),
+                license_url: String::new(),
             }),
             ..Default::default()
         };
         let zh = weather_attribution_line(&day, "zh");
-        assert!(zh.contains("天氣資料：<a href=\"https://open-meteo.com/?a=1&amp;b=2\""), "{zh}");
+        assert!(zh.contains("天氣資料（經時段彙整）：<a href=\"https://open-meteo.com/?a=1&amp;b=2\""), "{zh}");
         assert!(zh.contains(">Open-Meteo</a>（CC BY 4.0）</div>"), "{zh}");
         let en = weather_attribution_line(&day, "en");
-        assert!(en.contains("Weather data: <a") && en.contains("Open&lt;Meteo&gt;</a> (CC BY 4.0)"), "{en}");
+        assert!(en.contains("Weather data (aggregated): <a") && en.contains("Open&lt;Meteo&gt;</a> (CC BY 4.0)"), "{en}");
         // fetch time from the router-formatted stamp; empty -> time omitted
         let mut stamped = Day { weather_provider: day.weather_provider, ..Default::default() };
         stamped.weather_updated = "11/15 08:39".into();
@@ -1367,6 +1379,52 @@ mod tests {
         let mut bad = day;
         bad.weather_provider.as_mut().unwrap().attribution_url = "javascript:alert(1)".into();
         assert!(!weather_attribution_line(&bad, "zh").contains("<a "));
+    }
+
+    #[test]
+    fn provider_line_links_license_when_url_present() {
+        // CC BY 4.0 requires naming the modification — the prefix says aggregated,
+        // and the licence itself links to its terms when the provider row has one.
+        let day = Day {
+            weather_provider: Some(crate::model::WeatherProvider {
+                provider_id: "open_meteo".into(),
+                name_zh: "Open-Meteo".into(),
+                name_en: "Open-Meteo".into(),
+                attribution_url: "https://open-meteo.com/".into(),
+                license: "CC BY 4.0".into(),
+                license_url: "https://creativecommons.org/licenses/by/4.0/".into(),
+            }),
+            ..Default::default()
+        };
+        let zh = weather_attribution_line(&day, "zh");
+        assert!(zh.contains("經時段彙整"), "{zh}");
+        assert!(zh.contains("<a href=\"https://creativecommons.org/licenses/by/4.0/\""), "{zh}");
+        assert!(zh.contains(">CC BY 4.0</a>"), "{zh}");
+        let en = weather_attribution_line(&day, "en");
+        assert!(en.contains("Weather data (aggregated): "), "{en}");
+        assert!(en.contains(">CC BY 4.0</a>"), "{en}");
+    }
+
+    #[test]
+    fn provider_line_plain_license_when_url_empty() {
+        let day = Day {
+            weather_provider: Some(crate::model::WeatherProvider {
+                provider_id: "open_meteo".into(),
+                name_zh: "Open-Meteo".into(),
+                name_en: "Open-Meteo".into(),
+                attribution_url: "https://open-meteo.com/".into(),
+                license: "CC BY 4.0".into(),
+                license_url: String::new(),
+            }),
+            ..Default::default()
+        };
+        let zh = weather_attribution_line(&day, "zh");
+        assert!(zh.contains("（CC BY 4.0）"), "{zh}");
+        assert!(!zh.contains(">CC BY 4.0</a>"), "{zh}");
+        // A non-http(s) licence URL is data noise, never a link.
+        let mut bad = day;
+        bad.weather_provider.as_mut().unwrap().license_url = "javascript:alert(1)".into();
+        assert!(!weather_attribution_line(&bad, "zh").contains("<a href=\"javascript"), "{bad:?}");
     }
 
     // ---- weather strip ----
