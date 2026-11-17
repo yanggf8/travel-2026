@@ -124,6 +124,12 @@ The trip dashboard is a Cloudflare Worker (`workers/trip-dashboard-rs/`, **Rust*
 ./bin/travel share-token deactivate <t1> [t2 ...] # deactivate one or more tokens: full 32-hex or a unique >=6-char prefix (the --show fingerprint head); flags such as --plan-id may sit before or between the tokens
 ./bin/travel share-token clear --plan-id <id>     # remove EVERY token row of the plan (active and deactivated): every share link of it, and any verify token a crashed verify-site left, stops working; prints per-plan active/deactivated counts. Idempotent ("nothing to clear"). Scope must be explicit — no resolver fallback
 ./bin/travel share-token clear --all-plans        # the same for every plan (stop sharing everything in one step)
+./bin/travel notes [--plan-id <id>] [--day <n>]     # travel notes, plain-text table (all notes incl. unattached when no selector; --day needs a plan; soft-deleted hidden)
+./bin/travel note show|add|update|delete <id> ...  # note CRUD (spec docs/superpowers/specs/2026-11-15-travel-notes-design.md); add/update take --title/--body|--body-file -/--purpose/--place/--taken-on/--plan-id --day [--dest]; delete is soft. Every write appends note_events (notes are not plan-scoped: no plan audit triad)
+./bin/travel note add-image <id> <path> [--caption] # JPEG/PNG only; note-core whitelist-scrubs metadata (keeps orientation, drops GPS/EXIF/XMP/thumbnail, refuses what it cannot parse) BEFORE `wrangler r2 object put --remote`; fails before upload if the note is missing or soft-deleted; DB failure deletes the uploaded object
+./bin/travel note delete-image <id> <image_id>      # R2 delete first (only NoSuchKey/10007 counts as already gone), then the row; refused for soft-deleted notes
+./bin/travel note purge-deleted --older-than-days <n> # hard-delete notes soft-deleted more than n days ago with their photos (n required, no default); zero rows writes no event
+./bin/travel note-share <id> [--show|--show-full] | deactivate <prefix> | clear <id> | clear --all   # per-note share links (separate from plan share-token); clear --all stops every note share at once
 #   URL host defaults to trip-dashboard-rs.yanggf.workers.dev; override with TRAVEL_DASHBOARD_HOST (e.g. after the primary-URL cutover)
 #   After minting: logged-in owner can also copy the viewer URL from the dashboard/plan page UI (Copy share link button).
 #   Recipients open the copied link logged-out — no GitHub login. Plan: docs/plans/2026-06-25-dashboard-share-link-copy.md

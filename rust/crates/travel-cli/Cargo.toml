@@ -13,6 +13,7 @@ bridge-core = { path = "../../../../gwebcdb/crates/bridge-core" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 getrandom = "0.2"
 libsql = "0.6"
+note-core = { path = "../note-core" }
 png = "0.17"
 regex = "1"
 # verify-site layer 1: a real HTML parser + CSS selectors for the live viewer page.

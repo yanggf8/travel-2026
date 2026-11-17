@@ -25,6 +25,7 @@ mod plan;
 mod promote_offers;
 mod plan_resolver;
 mod plan_documents;
+mod notes; // travel notes (independent of plans; audited by note_events only)
 mod plans;
 mod scrape_parser;
 mod set_ota_catalog; // set-ota-source/coverage/region/workflow/url-param catalog mutations
@@ -709,6 +710,21 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             plan_documents::run_list(rest, plan_id).await
         }
+        [cmd, rest @ ..] if cmd == "notes" => {
+            if wants_help(rest, notes::USAGE_NOTES) { return Ok(()); }
+            notes::run_notes(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "note" => {
+            if rest.is_empty() || rest.iter().any(|a| a == "--help" || a == "-h") {
+                println!("Usage:\n  {}", notes::USAGE_NOTE);
+                return Ok(());
+            }
+            notes::run_note(rest).await
+        }
+        [cmd, rest @ ..] if cmd == "note-share" => {
+            if wants_help(rest, notes::USAGE_SHARE) { return Ok(()); }
+            notes::run_share(rest).await
+        }
         [cmd, rest @ ..] if cmd == "bookings" => view_bookings::run(rest).await,
         [cmd, rest @ ..] if cmd == "itinerary" => view_itinerary::run(rest).await,
         [cmd, rest @ ..] if cmd == "transport" => view_transport::run(rest).await,
@@ -1119,6 +1135,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   create-plan <plan_id> --dest <slug> --start <d> --end <d> --airport <IATA> [--region ..] [--nights N]  Create a fast-path plan\n\
   set-dates <start> <end> [reason]\n\
   add-document <doc_key> --kind K --label EN --label-zh ZH --file PATH [--day N]... | remove-document <doc_key>\n\
+  notes [--plan-id P [--day N]] | note show|add|update|delete|add-image|delete-image|purge-deleted | note-share <id>|deactivate|clear   Travel notes (independent of plans; see `note --help`)\n\
   set-day-theme <day> [theme] [--zh \"<zh>\"]\n\
   scaffold-itinerary | populate-itinerary | swap-days <dayA> <dayB> | add-day-variant | set-day-variant-label | remove-day-variant\n\
   add-activity <day> <session> <title> [--after <id|title>] [--zh \"<zh>\"] [...]\n\

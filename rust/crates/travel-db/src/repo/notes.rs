@@ -414,6 +414,28 @@ pub async fn list_share_tokens(
     Ok(out)
 }
 
+/// `(note_id, token, status)` of every note share token, any note, any status. Lets the CLI find
+/// the owning note of a token prefix (to write its `share_deactivate` event) and the notes a
+/// `clear --all` touches (one `share_clear` event each).
+pub async fn list_all_share_tokens(
+    conn: &Connection,
+) -> Result<Vec<(String, String, String)>, String> {
+    let mut rows = conn
+        .query("SELECT note_id, token, status FROM note_share_tokens ORDER BY note_id, token", ())
+        .await
+        .map_err(|e| db_err("list_all_share_tokens", e))?;
+    let g = |e: libsql::Error| db_err("list_all_share_tokens", e);
+    let mut out = Vec::new();
+    while let Some(r) = rows.next().await.map_err(g)? {
+        out.push((
+            r.get::<String>(0).map_err(g)?,
+            r.get::<String>(1).map_err(g)?,
+            r.get::<Option<String>>(2).map_err(g)?.unwrap_or_default(),
+        ));
+    }
+    Ok(out)
+}
+
 // ── purge / events ─────────────────────────────────────────────────────────
 
 /// Soft-deleted notes with `deleted_at < cutoff` and their R2 keys (for the 30-day purge).
@@ -448,18 +470,24 @@ pub async fn deleted_before(
 
 /// Hard-delete a note with its image rows and share tokens. `note_events` is kept; the caller
 /// writes the `purge` event. Call only after the R2 objects are gone; wrap in a transaction
-/// together with that event.
-pub async fn purge_note(conn: &Connection, id: &str) -> Result<(), String> {
+/// together with that event. Returns how many `notes` rows were deleted (0 = no such note:
+/// the caller must then write NO purge event).
+pub async fn purge_note(conn: &Connection, id: &str) -> Result<u64, String> {
+    let mut notes_deleted = 0;
     for sql in [
         "DELETE FROM note_images WHERE note_id = ?1",
         "DELETE FROM note_share_tokens WHERE note_id = ?1",
         "DELETE FROM notes WHERE id = ?1",
     ] {
-        conn.execute(sql, params![id.to_string()])
+        let n = conn
+            .execute(sql, params![id.to_string()])
             .await
             .map_err(|e| db_err("purge_note", e))?;
+        if sql.starts_with("DELETE FROM notes ") {
+            notes_deleted = n;
+        }
     }
-    Ok(())
+    Ok(notes_deleted)
 }
 
 /// Append one `note_events` row (random UUID-shaped `event_id`).

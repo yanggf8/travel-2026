@@ -335,7 +335,8 @@ async fn deleted_before_cutoff_and_purge() {
 
     // purge hard-deletes notes + images + tokens, but keeps note_events history.
     notes::insert_event(&conn, &old, "purge", "cli", "purged", NOW).await.unwrap();
-    notes::purge_note(&conn, &old).await.unwrap();
+    assert_eq!(notes::purge_note(&conn, &old).await.unwrap(), 1, "one notes row deleted");
+    assert_eq!(notes::purge_note(&conn, &old).await.unwrap(), 0, "second purge: nothing left, 0 rows");
     assert!(notes::get_note(&conn, &old).await.unwrap().is_none());
     assert!(notes::list_images(&conn, &old).await.unwrap().is_empty());
     assert!(notes::list_share_tokens(&conn, &old).await.unwrap().is_empty());

@@ -13,7 +13,7 @@ fn run(args: &[&str]) -> (bool, String, String) {
 
 #[test]
 fn help_prints_usage_for_query_commands() {
-    for cmd in ["query-offers", "query-destination-ref", "query-bookings", "check-freshness"] {
+    for cmd in ["query-offers", "query-destination-ref", "query-bookings", "check-freshness", "notes", "note", "note-share"] {
         for flag in ["--help", "-h"] {
             let (ok, stdout, stderr) = run(&[cmd, flag]);
             let combined = format!("{stdout}{stderr}");
