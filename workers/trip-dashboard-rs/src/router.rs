@@ -876,16 +876,16 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         format!(
             "SELECT day_number, session_type, focus_zh, transit_notes_zh, \
-             time_range_start, time_range_end \
+             time_range_start, time_range_end, record_summary_zh \
              FROM timesofday WHERE plan_id = '{slug}'"
         ),
         format!(
             "SELECT day_number, session_type, title, poi_id, \
-             book_by, booking_status, booking_url, source \
+             book_by, booking_status, booking_url, source, record_status, record_note \
              FROM activities WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
         ),
         format!(
-            "SELECT day_number, session_type, meal, source \
+            "SELECT day_number, session_type, meal, source, record_status, record_note \
              FROM session_meals WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
         ),
         format!(
@@ -908,7 +908,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              FROM destination_pois WHERE slug = {dest_expr}"
         ),
         format!(
-            "SELECT day_number, from_place, to_place, mode, duration_min, notes, start_time, source \
+            "SELECT day_number, from_place, to_place, mode, duration_min, notes, start_time, source, record_status, record_note \
              FROM day_route_segments WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
         ),
         // [10] transit cheat-sheet key lines (feature #4), keyed dest:lang at render time.

@@ -195,7 +195,7 @@ fn render_pending_alerts_with<F: FnMut() -> f64>(
         for day in std::iter::once(main_day).chain(main_day.variants.iter()) {
             for sess in &day.sessions {
                 for a in &sess.activities {
-                    if a.booking_status != "pending" {
+                    if a.booking_status != "pending" || a.record_status == "skipped" {
                         continue;
                     }
                     if is_meal_title(&a.title) != meal_only {
@@ -479,6 +479,14 @@ mod tests {
             !html.contains("Booked thing"),
             "non-pending must be excluded; got: {html}"
         );
+    }
+
+    #[test]
+    fn trip_record_skipped_activity_no_pending_alert() {
+        let mut skipped = pending("Skipped temple", "2026-12-01", "");
+        skipped.record_status = "skipped".into();
+        let html = render_pending_alerts_with(&plan_with(vec![skipped]), "en", false, || 0.0);
+        assert!(!html.contains("Skipped temple"));
     }
 
     // ---- urgent past vs future class/icon ----

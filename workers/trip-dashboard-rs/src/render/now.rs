@@ -222,12 +222,15 @@ fn meal_line(sess: &Session, lang: &str) -> String {
 }
 
 /// The focus line (the activities when there is no focus).
-fn focus_html(sess: &Session) -> String {
+fn focus_html(sess: &Session, past: bool) -> String {
     let mut h = String::new();
-    if !sess.focus_zh.is_empty() {
-        h.push_str(&format!("<div class=\"now-focus\">{}</div>", esc(&sess.focus_zh)));
-    } else {
-        for a in &sess.activities {
+    let focus = if past && !sess.record_summary_zh.is_empty() { &sess.record_summary_zh } else { &sess.focus_zh };
+    if !focus.is_empty() {
+        h.push_str(&format!("<div class=\"now-focus\">{}</div>", esc(focus)));
+    } else if !past {
+        // A past session lists its activities (with record badges) in expand_body;
+        // repeating them here would show every activity twice.
+        for a in sess.activities.iter() {
             h.push_str(&format!("<div class=\"now-focus\">{}</div>", super::render_activity_text(&a.title)));
         }
     }
@@ -242,16 +245,16 @@ fn transit_html(sess: &Session) -> String {
     format!("<div class=\"now-transit\">🚃 {}</div>", super::render_activity_text(&sess.transit_zh))
 }
 
-fn legs_html(legs: &[(&RouteSegment, i64, bool)], lang: &str) -> String {
-    if legs.is_empty() {
+fn legs_html(legs: &[(&RouteSegment, i64, bool)], lang: &str, past: bool) -> String {
+    if legs.iter().all(|(seg, _, _)| seg.record_status == "skipped") {
         return String::new();
     }
     let mut h = String::from("<ul class=\"now-legs\">");
-    for (seg, at, is_next) in legs {
+    for (seg, at, is_next) in legs.iter().filter(|(seg, _, _)| seg.record_status != "skipped") {
         let next = if *is_next { badge("next", lang) } else { String::new() };
         h.push_str(&format!(
             "<li class=\"now-leg\" data-at=\"{at}\">{next}{}</li>",
-            super::day::route_seg_inner(seg, lang)
+            super::day::route_seg_inner(seg, lang, past)
         ));
     }
     h.push_str("</ul>");
@@ -261,17 +264,32 @@ fn legs_html(legs: &[(&RouteSegment, i64, bool)], lang: &str) -> String {
 /// What a timeline entry unfolds to: transit, the session's timed legs, every
 /// meal as the day card renders it, the activities (when the focus line is not
 /// already them) and a link to the session on the day card.
-fn expand_body(sess: &Session, legs: &[(&RouteSegment, i64, bool)], day_number: i64, tomorrow: bool, lang: &str) -> String {
+fn expand_body(sess: &Session, legs: &[(&RouteSegment, i64, bool)], day_number: i64, tomorrow: bool, lang: &str, past: bool) -> String {
     let mut h = String::from("<div class=\"now-expand\">");
     h.push_str(&transit_html(sess));
-    h.push_str(&legs_html(legs, lang));
-    if !sess.focus_zh.is_empty() {
+    h.push_str(&legs_html(legs, lang, past));
+    let mut skipped = Vec::new();
+    if past || !sess.focus_zh.is_empty() {
         for a in &sess.activities {
-            h.push_str(&format!("<div class=\"now-act\">{}</div>", super::render_activity_text(&a.title)));
+            if past && a.record_status == "skipped" {
+                skipped.push(esc(&a.title));
+                continue;
+            }
+            h.push_str(&format!("<div class=\"now-act\">{}", super::render_activity_text(&a.title)));
+            if past {
+                h.push_str(&super::session::record_badge(&a.record_status, &a.record_note, lang));
+            }
+            h.push_str("</div>");
         }
     }
-    for m in &sess.meals {
-        h.push_str(&super::session::render_meal(m, lang));
+    if past {
+        let (main, backups, skipped_meals) = super::session::split_meals(&sess.meals);
+        if let Some(m) = main { h.push_str(&super::session::render_past_meal(m, lang)); }
+        for m in backups { h.push_str(&super::session::render_past_meal(m, lang)); }
+        skipped.extend(skipped_meals.iter().map(|m| esc(&m.text)));
+        h.push_str(&super::session::render_skipped_line(&skipped, lang));
+    } else {
+        for m in &sess.meals { h.push_str(&super::session::render_meal(m, lang)); }
     }
     // Today's day card is served open, so its session anchor is visible without
     // JS; tomorrow's card is collapsed, so link to the day card itself.
@@ -309,12 +327,13 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
     let next_at = today
         .route_segments
         .iter()
+        .filter(|seg| seg.record_status != "skipped")
         .filter_map(|seg| parse_hhmm(&seg.start_time))
         .filter(|at| *at >= now)
         .min();
     let mut per_slot: Vec<Vec<(&RouteSegment, i64, bool)>> = vec![Vec::new(); slots.len()];
     let mut next_leg_marked = false;
-    for seg in &today.route_segments {
+    for seg in today.route_segments.iter().filter(|seg| seg.record_status != "skipped") {
         let Some(at) = parse_hhmm(&seg.start_time) else { continue };
         let Some(i) = leg_slot(&windows, at) else { continue };
         let is_next = !next_leg_marked && Some(at) == next_at;
@@ -389,8 +408,8 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
             slot.start,
             slot.end,
             esc(super::session::session_label(&slot.sess.session_type, lang)),
-            focus_html(slot.sess),
-            expand_body(slot.sess, &per_slot[i], today.day_number, false, lang),
+            focus_html(slot.sess, slot.end <= now),
+            expand_body(slot.sess, &per_slot[i], today.day_number, false, lang, slot.end <= now),
         ));
     }
     // 明天: tomorrow's first session, shown once today is done (the script
@@ -415,18 +434,18 @@ pub fn now_card(plan: &Plan, today: &Day, clock: &Clock, lang: &str, token: Opti
                  <span class=\"now-name\">{}</span>{time}</div>{}{}</summary>{}</details></li>",
                 badge("tomorrow", lang),
                 esc(&name),
-                focus_html(first),
+                focus_html(first, false),
                 now_wx_html(tomorrow, &first.session_type, lang),
-                expand_body(first, &[], tomorrow.day_number, true, lang),
+                expand_body(first, &[], tomorrow.day_number, true, lang, false),
             ));
         }
     }
     h.push_str("</ol>");
-    if !today.route_segments.is_empty() {
+    if today.route_segments.iter().any(|s| s.record_status != "skipped") {
         h.push_str(&format!(
             "<details class=\"now-route\"><summary>{}</summary>{}</details>",
             esc(t("nowFullRoute", lang)),
-            super::day::render_route_block(&today.route_segments, lang, None)
+            super::day::render_route_block_at(&today.route_segments, lang, None, &today.date, Some(clock))
         ));
     }
     h.push_str(&format!(
@@ -589,6 +608,98 @@ mod tests {
     use crate::model::{Meal, PlanDocument};
     use serde_json::json;
 
+    #[test]
+    fn trip_record_now_all_meals_skipped_shows_none() {
+        let sess = Session { meals: vec![Meal { text: "Skipped cafe".into(), record_status: "skipped".into(), ..Default::default() }], ..Default::default() };
+        let html = expand_body(&sess, &[], 1, false, "en", true);
+        assert!(!html.contains("Main pick"), "{html}");
+        assert!(html.contains("Skipped: Skipped cafe"), "{html}");
+    }
+    #[test]
+    fn trip_record_now_card_all_meals_skipped_has_no_main_pick() {
+        let day = Day { day_number: 1, date: "2026-11-16".into(), sessions: vec![Session { session_type: "noon".into(), time_start: "12:00".into(), time_end: "13:00".into(), meals: vec![Meal { text: "Skipped cafe".into(), record_status: "skipped".into(), ..Default::default() }], ..Default::default() }], ..Default::default() };
+        let plan = Plan { days: vec![day], ..Default::default() };
+        let html = now_card(&plan, &plan.days[0], &clock("2026-11-16", "13:30"), "en", None);
+        assert!(!html.contains("Main pick"), "{html}");
+        assert!(html.contains("Skipped: Skipped cafe"), "{html}");
+    }
+    #[test]
+    fn trip_record_future_now_card_byte_identical_to_master() {
+        // Master's exact output for a still-future session (clock 11:00 before
+        // the 12:00–13:00 noon): the whole card, hand-assembled from master's
+        // format strings and i18n — record rendering must not alter a byte of
+        // it, and neither may record DATA on a future session (meal_line stays
+        // unwired, expand_body renders meals as the day card does).
+        let master = "<section class=\"now-card\" id=\"sec-now\" data-now-date=\"2026-11-16\" data-now-min=\"660\" data-now-pinned data-l-now=\"Now\" data-l-next=\"Next\">\
+             <details data-block=\"sec-now\" open><summary><h2>Now &amp; next · Mon 11/16</h2></summary>\
+             <div class=\"now-body\"><ol class=\"now-timeline\">\
+             <li class=\"now-item now-s-noon is-next\" data-start=\"720\" data-end=\"780\"><details class=\"now-box\" open data-auto><summary>\
+             <div class=\"now-head\"><span class=\"now-name\">Noon</span><span class=\"now-time\">12:00\u{2013}13:00</span>\
+             <span class=\"now-badge now-badge--next\">Next</span></div><div class=\"now-focus\">Lunch plan</div></summary>\
+             <div class=\"now-expand\"><div class=\"meal\">🍽️ Cafe</div>\
+             <a class=\"now-detail\" href=\"#day-1-noon\">Full details for this block →</a></div>\
+             </details></li></ol><a class=\"now-more\" href=\"#day-1\">Day 1 in full ↓</a></div></details></section>";
+        let day = Day { day_number: 1, date: "2026-11-16".into(), sessions: vec![Session { session_type: "noon".into(), time_start: "12:00".into(), time_end: "13:00".into(), focus_zh: "Lunch plan".into(), meals: vec![Meal { text: "Cafe".into(), ..Default::default() }], ..Default::default() }], ..Default::default() };
+        let plan = Plan { days: vec![day], ..Default::default() };
+        assert_eq!(now_card(&plan, &plan.days[0], &clock("2026-11-16", "11:00"), "en", None), master);
+        // The same future session carrying record data (a summary and a done
+        // meal with a note) still renders byte-identically: records only
+        // surface on PAST sessions.
+        let recorded_sess = Session {
+            session_type: "noon".into(),
+            time_start: "12:00".into(),
+            time_end: "13:00".into(),
+            focus_zh: "Lunch plan".into(),
+            record_summary_zh: "Actual summary".into(),
+            meals: vec![Meal { text: "Cafe".into(), record_status: "done".into(), record_note: "note".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let plan2 = Plan { days: vec![Day { day_number: 1, date: "2026-11-16".into(), sessions: vec![recorded_sess], ..Default::default() }], ..Default::default() };
+        assert_eq!(now_card(&plan2, &plan2.days[0], &clock("2026-11-16", "11:00"), "en", None), master);
+    }
+    #[test]
+    fn trip_record_past_now_mixed_statuses_and_focus_fallback() {
+        let sess = Session { session_type: "noon".into(), time_start: "12:00".into(), time_end: "13:00".into(), focus_zh: "Original focus".into(), activities: vec![
+            crate::model::Activity { title: "Done stop".into(), record_status: "done".into(), record_note: "<note>".into(), ..Default::default() },
+            crate::model::Activity { title: "Unrecorded stop".into(), ..Default::default() },
+            crate::model::Activity { title: "Skipped stop".into(), record_status: "skipped".into(), ..Default::default() },
+        ], meals: vec![
+            Meal { text: "Done cafe".into(), record_status: "done".into(), record_note: "<meal note>".into(), ..Default::default() },
+            Meal { text: "Skipped cafe".into(), record_status: "skipped".into(), ..Default::default() },
+        ], ..Default::default() };
+        assert!(focus_html(&sess, true).contains("Original focus"));
+        let html = expand_body(&sess, &[], 1, false, "en", true);
+        assert!(html.contains("Done stop") && html.contains("Unrecorded stop"), "{html}");
+        assert!(html.contains("Actual") && html.contains("Planned · not recorded"), "{html}");
+        assert!(html.contains("Done cafe") && html.contains("&lt;meal note&gt;"), "{html}");
+        assert!(html.contains("&lt;note&gt;"), "{html}");
+        assert!(html.contains("Skipped: Skipped stop、Skipped cafe"), "{html}");
+        assert!(!html.contains("style="), "{html}");
+        let day = Day { day_number: 1, date: "2026-11-16".into(), sessions: vec![sess], ..Default::default() };
+        let plan = Plan { days: vec![day], ..Default::default() };
+        let card = now_card(&plan, &plan.days[0], &clock("2026-11-16", "13:30"), "en", None);
+        assert!(card.contains("Original focus") && card.contains("Unrecorded stop"), "{card}");
+        assert!(card.contains("Done cafe") && card.contains("&lt;meal note&gt;"), "{card}");
+        assert!(card.contains("Skipped: Skipped stop、Skipped cafe"), "{card}");
+    }
+    #[test]
+    fn trip_record_past_session_without_focus_lists_activities_once() {
+        let sess = Session { session_type: "noon".into(), time_start: "12:00".into(), time_end: "13:00".into(), activities: vec![
+            crate::model::Activity { title: "Only once stop".into(), record_status: "done".into(), ..Default::default() },
+        ], ..Default::default() };
+        assert_eq!(focus_html(&sess, true), "");
+        assert!(focus_html(&sess, false).contains("Only once stop"));
+        let day = Day { day_number: 1, date: "2026-11-16".into(), sessions: vec![sess], ..Default::default() };
+        let plan = Plan { days: vec![day], ..Default::default() };
+        let card = now_card(&plan, &plan.days[0], &clock("2026-11-16", "13:30"), "en", None);
+        assert_eq!(card.matches("Only once stop").count(), 1, "{card}");
+    }
+    #[test]
+    fn trip_record_now_next_hides_skipped_leg() {
+        let skipped = RouteSegment { from_place: "Hidden".into(), record_status: "skipped".into(), ..Default::default() };
+        assert_eq!(legs_html(&[(&skipped, 600, true)], "en", false), "");
+    }
+
     fn sess(kind: &str, start: &str, end: &str, focus: &str) -> Session {
         Session {
             session_type: kind.into(),
@@ -617,8 +728,8 @@ mod tests {
     fn last_day() -> Day {
         let mut morning = sess("morning", "06:30", "08:15", "拉麵早餐後退房");
         morning.meals = vec![
-            Meal { text: "主選：京都醬油拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into() },
-            Meal { text: "備選：京都黑醬油拉麵｜新福菜館 本店：第一旭隔壁".into(), source: "confirmed".into() },
+            Meal { text: "主選：京都醬油拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into(), ..Default::default() },
+            Meal { text: "備選：京都黑醬油拉麵｜新福菜館 本店：第一旭隔壁".into(), source: "confirmed".into(), ..Default::default() },
         ];
         Day {
             day_number: 5,
@@ -899,8 +1010,8 @@ mod tests {
         morning.transit_zh = "JR奈良線 京都→東福寺".into();
         morning.activities = vec![crate::model::Activity { title: "楓葉散步".into(), ..Default::default() }];
         morning.meals = vec![
-            Meal { text: "主選：拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into() },
-            Meal { text: "備選：黑醬油拉麵｜新福菜館".into(), source: "confirmed".into() },
+            Meal { text: "主選：拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into(), ..Default::default() },
+            Meal { text: "備選：黑醬油拉麵｜新福菜館".into(), source: "confirmed".into(), ..Default::default() },
         ];
         plan.days[0].sessions[0] = morning;
         plan.days[0].route_segments = vec![leg("飯店", "東福寺", "08:10")];
@@ -920,7 +1031,7 @@ mod tests {
             assert!(body.contains(want), "{want}: {m}");
         }
         // The anchor exists on the day card.
-        let card = crate::render::session::render_unit(&plan.days[0].sessions[0], "zh", None, Some("day-4-morning"));
+        let card = crate::render::session::render_unit(&plan.days[0].sessions[0], "zh", None, Some("day-4-morning"), false);
         assert!(card.contains("id=\"day-4-morning\""), "{card}");
         let en = now_card(&plan, &plan.days[0], &clock("2026-11-15", "09:00"), "en", None);
         assert!(en.contains("Full details for this block →"), "{en}");

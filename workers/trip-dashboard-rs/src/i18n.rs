@@ -8,6 +8,12 @@
 pub fn t(key: &str, lang: &str) -> &'static str {
     let zh = lang != "en";
     match (key, zh) {
+        ("recDone", false) => "Actual",
+        ("recDone", true) => "實際",
+        ("recSkippedLine", false) => "Skipped: {list}",
+        ("recSkippedLine", true) => "未前往：{list}",
+        ("recUnrecorded", false) => "Planned · not recorded",
+        ("recUnrecorded", true) => "計畫・未紀錄",
         ("notesTitle", false) => "Travel notes",
         ("notesTitle", true) => "旅行筆記",
         ("noteNew", false) => "New note",

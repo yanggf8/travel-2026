@@ -139,7 +139,7 @@ pub fn render_plan_at(
             Some(t) if t.day_number == d.day_number => day::CardOpen::Today,
             Some(_) => day::CardOpen::Collapsed,
         };
-        body.push_str(&day::render_with_documents(
+        body.push_str(&day::render_with_documents_at(
             d,
             &plan.plan_id,
             lang,
@@ -148,6 +148,7 @@ pub fn render_plan_at(
             &plan.documents,
             token,
             open,
+            clock,
         ));
     }
     // Meal pending-booking alerts right after the day cards (mirror render.ts:1393).
@@ -890,7 +891,7 @@ mod tests {
         use crate::model::{Day, Meal, Plan, Session};
         let noon = |text: &str| Session {
             session_type: "noon".into(),
-            meals: vec![Meal { text: text.into(), source: "confirmed".into() }],
+            meals: vec![Meal { text: text.into(), source: "confirmed".into(), ..Default::default() }],
             ..Default::default()
         };
         let plan = Plan {
@@ -956,7 +957,7 @@ mod tests {
         use crate::model::{Day, Meal, Plan, PlanDocument, Session};
         let noon = Session {
             session_type: "noon".into(),
-            meals: vec![Meal { text: "湯豆腐".into(), source: "confirmed".into() }],
+            meals: vec![Meal { text: "湯豆腐".into(), source: "confirmed".into(), ..Default::default() }],
             ..Default::default()
         };
         Plan {

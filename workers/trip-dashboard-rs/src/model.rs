@@ -21,12 +21,16 @@ pub struct RouteSegment {
     pub notes: String,
     pub start_time: String,
     pub source: String,
+    pub record_status: String,
+    pub record_note: String,
 }
 
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Meal {
     pub text: String,
     pub source: String,
+    pub record_status: String,
+    pub record_note: String,
 }
 
 /// One itinerary activity row, carrying the booking fields the pending-alert
@@ -39,6 +43,8 @@ pub struct Activity {
     pub book_by: String,
     pub booking_url: String,
     pub source: String,
+    pub record_status: String,
+    pub record_note: String,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -54,6 +60,7 @@ pub struct Session {
     pub activities: Vec<Activity>,
     pub meals: Vec<Meal>,
     pub stops: Vec<Stop>,
+    pub record_summary_zh: String,
 }
 
 /// One `day_weather_sessions` row: a session's representative WMO code and rain.
@@ -210,6 +217,8 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
                     book_by: s(r, "book_by"),
                     booking_url: s(r, "booking_url"),
                     source: s(r, "source"),
+                    record_status: s(r, "record_status"),
+                    record_note: s(r, "record_note"),
                 })
                 .collect(),
             meals: meals
@@ -218,6 +227,8 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
                 .map(|r| Meal {
                     text: s(r, "meal"),
                     source: s(r, "source"),
+                    record_status: s(r, "record_status"),
+                    record_note: s(r, "record_note"),
                 })
                 .collect(),
             ..Default::default()
@@ -773,6 +784,8 @@ pub fn assemble(
                 notes: s(r, "notes"),
                 start_time: s(r, "start_time"),
                 source: s(r, "source"),
+                record_status: s(r, "record_status"),
+                record_note: s(r, "record_note"),
             })
             .collect();
         all_days.push(Day {
@@ -830,6 +843,7 @@ fn merge_session_meta(sessions: &mut [Session], session_rows: &[Row], day_number
             .find(|r| i(r, "day_number") == day_number && s(r, "session_type") == sess.session_type)
         {
             sess.focus_zh = s(r, "focus_zh");
+            sess.record_summary_zh = s(r, "record_summary_zh");
             sess.transit_zh = s(r, "transit_notes_zh");
             sess.time_start = s(r, "time_range_start").trim().to_string();
             sess.time_end = s(r, "time_range_end").trim().to_string();
@@ -1109,6 +1123,7 @@ mod tests {
             vec![Meal {
                 text: "Lunch: Makishi".to_string(),
                 source: "confirmed".to_string(),
+                ..Default::default()
             }]
         );
     }

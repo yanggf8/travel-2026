@@ -1,3 +1,4 @@
+use super::now::{parse_hhmm, Clock};
 use super::{esc, esc_url_attr, render_activity_text, urlencode};
 use crate::i18n::t;
 use crate::model::{Meal, Session};
@@ -44,6 +45,31 @@ pub fn render_meal(meal: &Meal, lang: &str) -> String {
             badge
         ),
     }
+}
+
+/// The trailing badge (+ note) of a recorded row on a PAST session: 實際 for
+/// `done`, 計畫・未紀錄 for anything else (NULL status). Shared by the day
+/// card's activity and meal lines and the now card's expand body.
+pub(crate) fn record_badge(status: &str, note: &str, lang: &str) -> String {
+    let key = if status == "done" { "recDone" } else { "recUnrecorded" };
+    let class = if status == "done" { "record-badge record-badge--actual" } else { "record-badge" };
+    let mut h = format!(" <span class=\"{class}\">{}</span>", esc(t(key, lang)));
+    if !note.is_empty() {
+        h.push_str(&format!(" <span class=\"record-note\">{}</span>", esc(note)));
+    }
+    h
+}
+
+pub(crate) fn render_past_meal(meal: &Meal, lang: &str) -> String {
+    let mut html = render_meal(meal, lang);
+    html.push_str(&record_badge(&meal.record_status, &meal.record_note, lang));
+    html
+}
+
+pub(crate) fn render_skipped_line(names: &[String], lang: &str) -> String {
+    if names.is_empty() { return String::new(); }
+    let line = crate::i18n::tf("recSkippedLine", lang, &[("list", &names.join("、"))]);
+    format!("<div class=\"record-skipped\">{line}</div>")
 }
 
 /// Parse `"<label>｜map:<query>[｜<trailing>]"`. Returns
@@ -168,7 +194,7 @@ pub fn session_label(session_type: &str, lang: &str) -> &'static str {
 /// True when a session has anything to show (focus, activities or meals) —
 /// the day card skips the rest, and so does the 現在・接下來 timeline.
 pub fn has_content(sess: &Session) -> bool {
-    !(sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty())
+    !(sess.activities.is_empty() && sess.meals.is_empty() && sess.focus_zh.is_empty() && sess.record_summary_zh.is_empty())
 }
 
 /// Stable element id of a session block on its day card (`day-2-morning`); the
@@ -177,15 +203,44 @@ pub fn session_anchor(day_number: i64, session_type: &str) -> String {
     format!("day-{day_number}-{session_type}")
 }
 
+pub fn session_is_past(day_date: &str, sess: &Session, clock: Option<&Clock>) -> bool {
+    let Some(clock) = clock else { return false };
+    (!day_date.is_empty() && day_date < clock.date.as_str())
+        || (day_date == clock.date
+            && parse_hhmm(&sess.time_end).unwrap_or(24 * 60) <= clock.minutes)
+}
+
+pub fn split_meals(meals: &[Meal]) -> (Option<&Meal>, Vec<&Meal>, Vec<&Meal>) {
+    let mut main = None;
+    let mut backups = Vec::new();
+    let mut skipped = Vec::new();
+    for meal in meals {
+        if meal.record_status == "skipped" {
+            skipped.push(meal);
+        } else if main.is_none() {
+            main = Some(meal);
+        } else {
+            backups.push(meal);
+        }
+    }
+    (main, backups, skipped)
+}
+
 /// Render one session block. Empty sessions are caller-skipped (see day.rs).
 #[cfg(test)]
 pub fn render(sess: &Session, lang: &str) -> String {
-    render_unit(sess, lang, None, None)
+    render_unit(sess, lang, None, None, false)
 }
 
 /// [`render`] as a search unit (`data-search-unit` + `data-search-label`) when
 /// `search_label` is given — the day cards pass 「11/15（日）· 中午」.
-pub fn render_unit(sess: &Session, lang: &str, search_label: Option<&str>, anchor: Option<&str>) -> String {
+pub fn render_unit(
+    sess: &Session,
+    lang: &str,
+    search_label: Option<&str>,
+    anchor: Option<&str>,
+    past: bool,
+) -> String {
     let label = session_label(&sess.session_type, lang);
     // The session's own time range next to its name (「上午 08:00–11:15」) — shown
     // on the day card and part of the search unit's text, so a search for a
@@ -204,25 +259,51 @@ pub fn render_unit(sess: &Session, lang: &str, search_label: Option<&str>, ancho
         super::day::search_unit_attrs(search_label),
         label
     ));
-    if !sess.focus_zh.is_empty() {
+    let focus = if past && !sess.record_summary_zh.is_empty() {
+        &sess.record_summary_zh
+    } else {
+        &sess.focus_zh
+    };
+    if !focus.is_empty() {
         h.push_str(&format!(
             "<div class=\"session-focus\">{}</div>",
-            esc(&sess.focus_zh)
+            esc(focus)
         ));
     }
+    let mut skipped = Vec::new();
     for a in &sess.activities {
+        if past && a.record_status == "skipped" {
+            skipped.push(esc(&a.title));
+            continue;
+        }
         // render_activity_text (port of the JS worker's renderActivityText):
         // escapes, turns \n into <br>, and renders an embedded "Google Maps：<url>"
         // tail as a short labeled link instead of dumping the giant URL inline.
         h.push_str(&format!(
-            "<div class=\"activity\">{}{}</div>",
+            "<div class=\"activity\">{}{}",
             render_activity_text(&a.title),
             super::ai_rec_badge(&a.source, lang)
         ));
+        if past {
+            h.push_str(&record_badge(&a.record_status, &a.record_note, lang));
+        }
+        h.push_str("</div>");
     }
-    for m in &sess.meals {
-        h.push_str(&render_meal(m, lang));
+    let (main, backups, skipped_meals) = split_meals(&sess.meals);
+    if past {
+        if let Some(m) = main {
+            h.push_str(&render_past_meal(m, lang));
+        }
+        for m in backups {
+            h.push_str(&render_past_meal(m, lang));
+        }
+        skipped.extend(skipped_meals.iter().map(|m| esc(&m.text)));
+    } else {
+        for m in &sess.meals {
+            h.push_str(&render_meal(m, lang));
+        }
     }
+    if past { h.push_str(&render_skipped_line(&skipped, lang)); }
     if !sess.transit_zh.is_empty() {
         h.push_str(&format!(
             "<div class=\"transit\">🚃 {}</div>",
@@ -237,6 +318,115 @@ pub fn render_unit(sess: &Session, lang: &str, search_label: Option<&str>, ancho
 mod tests {
     use super::*;
     use crate::model::{Activity, Meal, Session};
+    #[test]
+    fn trip_record_past_done_renders_actual() {
+        let sess = Session {
+            session_type: "morning".into(),
+            activities: vec![Activity {
+                title: "Temple".into(),
+                record_status: "done".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(render_unit(&sess, "en", None, None, true).contains("Actual"));
+    }
+    #[test]
+    fn trip_record_past_null_renders_unrecorded() {
+        let sess = Session {
+            activities: vec![Activity {
+                title: "Temple".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(render_unit(&sess, "en", None, None, true).contains("Planned · not recorded"));
+    }
+    #[test]
+    fn trip_record_skipped_collapsed_to_one_grey_line() {
+        let sess = Session {
+            activities: vec![Activity {
+                title: "Temple".into(),
+                record_status: "skipped".into(),
+                ..Default::default()
+            }],
+            meals: vec![Meal {
+                text: "Cafe".into(),
+                record_status: "skipped".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render_unit(&sess, "en", None, None, true);
+        assert!(html.contains("Skipped: Temple、Cafe"));
+        assert!(!html.contains("class=\"activity\""));
+        assert!(!html.contains("class=\"meal\""));
+    }
+    #[test]
+    fn trip_record_future_session_output_unchanged() {
+        let sess = Session {
+            session_type: "morning".into(),
+            focus_zh: "Plan".into(),
+            record_summary_zh: "Actual".into(),
+            activities: vec![Activity {
+                title: "Temple".into(),
+                record_status: "skipped".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(render_unit(&sess, "en", None, None, false), "<div class=\"session session-morning\"><div class=\"session-label\">Morning</div><div class=\"session-focus\">Plan</div><div class=\"activity\">Temple</div></div>");
+    }
+    #[test]
+    fn trip_record_summary_replaces_focus_when_past() {
+        let sess = Session {
+            focus_zh: "Plan".into(),
+            record_summary_zh: "Actual day".into(),
+            ..Default::default()
+        };
+        let html = render_unit(&sess, "en", None, None, true);
+        assert!(html.contains("Actual day"));
+        assert!(!html.contains("Plan"));
+    }
+    #[test]
+    fn trip_record_split_meals_first_and_middle_skipped() {
+        let meal = |text: &str, status: &str| Meal {
+            text: text.into(),
+            record_status: status.into(),
+            ..Default::default()
+        };
+        let first = vec![meal("A", "skipped"), meal("B", ""), meal("C", "")];
+        let (main, backup, skipped) = split_meals(&first);
+        assert_eq!(main.unwrap().text, "B");
+        assert_eq!(backup.len(), 1);
+        assert_eq!(backup[0].text, "C");
+        assert_eq!(skipped[0].text, "A");
+        let middle = vec![meal("A", ""), meal("B", "skipped"), meal("C", "")];
+        let (main, backup, skipped) = split_meals(&middle);
+        assert_eq!(main.unwrap().text, "A");
+        assert_eq!(backup[0].text, "C");
+        assert_eq!(skipped[0].text, "B");
+    }
+    #[test]
+    fn trip_record_session_is_past_taipei_clock() {
+        let clock = Clock {
+            date: "2026-11-16".into(),
+            minutes: 600,
+            pinned: true,
+        };
+        let early = Session {
+            time_end: "09:30".into(),
+            ..Default::default()
+        };
+        let late = Session {
+            time_end: "12:00".into(),
+            ..Default::default()
+        };
+        assert!(session_is_past("2026-11-16", &early, Some(&clock)));
+        assert!(!session_is_past("2026-11-16", &late, Some(&clock)));
+        assert!(!session_is_past("2026-11-16", &early, None));
+        assert!(session_is_past("2026-11-15", &late, Some(&clock)));
+    }
     /// Build an Activity carrying only a display title (the common test case).
     fn act(title: &str) -> Activity {
         Activity {
@@ -245,10 +435,7 @@ mod tests {
         }
     }
     fn meal(text: &str) -> Meal {
-        Meal {
-            text: text.into(),
-            source: "confirmed".into(),
-        }
+        Meal { text: text.into(), source: "confirmed".into(), ..Default::default() }
     }
     #[test]
     fn noon_meal_renders() {
@@ -439,26 +626,14 @@ mod tests {
 
     #[test]
     fn ai_recommended_meal_renders_badge_en() {
-        let html = render_meal(
-            &Meal {
-                text: "Lunch".into(),
-                source: "ai_recommended".into(),
-            },
-            "en",
-        );
+        let html = render_meal(&Meal { text: "Lunch".into(), source: "ai_recommended".into(), ..Default::default() }, "en");
         assert!(html.contains("ai-rec-badge"), "got: {html}");
         assert!(html.contains("🤖 AI-recommended (unconfirmed)"), "got: {html}");
     }
 
     #[test]
     fn confirmed_meal_has_no_badge() {
-        let html = render_meal(
-            &Meal {
-                text: "Lunch".into(),
-                source: "confirmed".into(),
-            },
-            "en",
-        );
+        let html = render_meal(&Meal { text: "Lunch".into(), source: "confirmed".into(), ..Default::default() }, "en");
         assert!(!html.contains("ai-rec-badge"), "got: {html}");
     }
 

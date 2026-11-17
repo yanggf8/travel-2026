@@ -443,7 +443,8 @@ pub fn meal_overview(days: &[Day], lang: &str) -> String {
                 ""
             };
             for sess in day.sessions.iter().filter(|s| !s.meals.is_empty()) {
-                let backups: Vec<String> = sess.meals[1..].iter().map(meal_cell).collect();
+                let (main_meal, backup_meals, _) = session::split_meals(&sess.meals);
+                let backups: Vec<String> = backup_meals.into_iter().map(meal_cell).collect();
                 let backup = if backups.is_empty() {
                     DASH.to_string()
                 } else {
@@ -468,7 +469,7 @@ pub fn meal_overview(days: &[Day], lang: &str) -> String {
                      <td class=\"ml-backup\" data-label=\"{backup_label}\">{backup}</td></tr>",
                     esc(&date),
                     esc(session_name),
-                    meal_cell(&sess.meals[0]),
+                    main_meal.map(meal_cell).unwrap_or_else(|| DASH.to_string()),
                 ));
             }
         }
@@ -499,16 +500,21 @@ fn mode_icon(mode: &str) -> &'static str {
 /// Render the per-day "今日路線" (today's route) block from door-to-door segments.
 /// With `search_label`, each leg is a search unit (`data-search-unit`) under
 /// that label; the now card's copy passes None so search never lists a leg twice.
-pub(crate) fn render_route_block(segments: &[RouteSegment], lang: &str, search_label: Option<&str>) -> String {
+/// `skipped` legs are omitted (the map drops them too); a `done` leg on a past
+/// day — or earlier today than `clock` — carries the 實際 badge and its note.
+pub(crate) fn render_route_block_at(segments: &[RouteSegment], lang: &str, search_label: Option<&str>, day_date: &str, clock: Option<&super::now::Clock>) -> String {
+    if segments.iter().all(|s| s.record_status == "skipped") { return String::new(); }
     let heading = t("todaysRoute", lang);
     let mut h = String::new();
     h.push_str(&format!(
         "<div class=\"route-block\"><div class=\"route-heading\">{heading}</div>"
     ));
     let unit = search_unit_attrs(search_label);
-    for seg in segments {
+    for seg in segments.iter().filter(|s| s.record_status != "skipped") {
         h.push_str(&format!("<div class=\"route-seg\"{unit}>"));
-        h.push_str(&route_seg_inner(seg, lang));
+        let past = clock.is_some_and(|c| day_date < c.date.as_str()
+            || (day_date == c.date && super::now::parse_hhmm(&seg.start_time).is_some_and(|at| at < c.minutes)));
+        h.push_str(&route_seg_inner(seg, lang, past));
         h.push_str("</div>");
     }
     h.push_str("</div>");
@@ -526,7 +532,7 @@ pub(crate) fn search_unit_attrs(label: Option<&str>) -> String {
 
 /// One route leg's content (mode icon, from → to, start time, duration, notes,
 /// AI badge) — shared by the day card's 今日路線 and the 現在・接下來 card.
-pub(crate) fn route_seg_inner(seg: &RouteSegment, lang: &str) -> String {
+pub(crate) fn route_seg_inner(seg: &RouteSegment, lang: &str, past: bool) -> String {
     let mut h = String::new();
     h.push_str(&format!(
         "<span class=\"route-mode\">{}</span> ",
@@ -551,6 +557,8 @@ pub(crate) fn route_seg_inner(seg: &RouteSegment, lang: &str) -> String {
         h.push_str(&format!(" · {}", render_activity_text(&seg.notes)));
     }
     h.push_str(&super::ai_rec_badge(&seg.source, lang));
+    if past && seg.record_status == "done" { h.push_str(&format!(" <span class=\"record-badge\">{}</span>", esc(t("recDone", lang)))); }
+    if past && !seg.record_note.is_empty() { h.push_str(&format!(" · {}", esc(&seg.record_note))); }
     h
 }
 
@@ -598,6 +606,7 @@ fn render_content(
     map_status: &super::map::MapStatus,
     clothing_tips: &[ClothingTip],
     option_label: Option<&str>,
+    clock: Option<&super::now::Clock>,
 ) -> String {
     let mut h = format!("<div class=\"theme\">{}</div>", esc(day_theme(day, lang)));
     if option_label.is_none() {
@@ -679,7 +688,7 @@ fn render_content(
     let with_option = option_label.is_some() || !day.variants.is_empty();
     if !day.route_segments.is_empty() {
         let label = day_search_label(day, with_option, t("todaysRoute", lang), lang);
-        h.push_str(&render_route_block(&day.route_segments, lang, Some(&label)));
+        h.push_str(&render_route_block_at(&day.route_segments, lang, Some(&label), &day.date, clock));
     }
     for sess in &day.sessions {
         // skip wholly-empty sessions to avoid 4 empty boxes on a light day
@@ -687,7 +696,7 @@ fn render_content(
             continue;
         }
         let label = day_search_label(day, with_option, session::session_label(&sess.session_type, lang), lang);
-        h.push_str(&session::render_unit(sess, lang, Some(&label), Some(&session::session_anchor(day.day_number, &sess.session_type))));
+        h.push_str(&session::render_unit(sess, lang, Some(&label), Some(&session::session_anchor(day.day_number, &sess.session_type)), session::session_is_past(&day.date, sess, clock)));
         h.push_str(&super::map::stop_list(&sess.stops));
     }
     h
@@ -726,6 +735,15 @@ pub fn render_with_documents(
     documents: &[crate::model::PlanDocument],
     token: Option<&str>,
     open: CardOpen,
+) -> String {
+    render_with_documents_at(day, plan_id, lang, map_status, clothing_tips, documents, token, open, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn render_with_documents_at(
+    day: &Day, plan_id: &str, lang: &str, map_status: &super::map::MapStatus,
+    clothing_tips: &[ClothingTip], documents: &[crate::model::PlanDocument],
+    token: Option<&str>, open: CardOpen, clock: Option<&super::now::Clock>,
 ) -> String {
     let mut h = String::new();
     // The card is one collapsible block (native <details open>): the heading is
@@ -769,6 +787,7 @@ pub fn render_with_documents(
         map_status,
         clothing_tips,
         None,
+        clock,
     ));
     // Each variant is a native `<details>` that starts COLLAPSED (no `open`):
     // the main plan reads first, the alternative is one tap away.
@@ -794,6 +813,7 @@ pub fn render_with_documents(
             map_status,
             clothing_tips,
             Some(&option_label),
+            None,
         ));
         h.push_str("</div></details>");
     }
@@ -1097,6 +1117,7 @@ mod tests {
                 meals: vec![Meal {
                     text: "Lunch".into(),
                     source: "confirmed".into(),
+                    ..Default::default()
                 }],
                 ..Default::default()
             }],
@@ -1775,9 +1796,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn trip_record_all_meals_skipped_shows_none() {
+        let meal = Meal { text: "Skipped cafe".into(), record_status: "skipped".into(), ..Default::default() };
+        let day = Day { date: "2026-11-16".into(), sessions: vec![Session { session_type: "noon".into(), meals: vec![meal], ..Default::default() }], ..Default::default() };
+        let html = meal_overview(&[day], "en");
+        assert!(html.contains("class=\"ml-main\" data-label=\"Main pick\">—"), "{html}");
+        assert!(!html.contains("Skipped cafe"));
+    }
+    #[test]
+    fn trip_record_skipped_leg_hidden_and_done_has_badge_and_note() {
+        let skipped = RouteSegment { from_place: "Hidden".into(), record_status: "skipped".into(), ..Default::default() };
+        let done = RouteSegment { from_place: "Seen".into(), start_time: "09:00".into(), record_status: "done".into(), record_note: "<safe>".into(), ..Default::default() };
+        let segments = [skipped, done];
+        let clock = crate::render::now::Clock { date: "2026-11-16".into(), minutes: 600, pinned: true };
+        let html = render_route_block_at(&segments, "en", None, "2026-11-16", Some(&clock));
+        assert!(!html.contains("Hidden"));
+        assert!(html.contains("Actual"));
+        assert!(html.contains("&lt;safe&gt;"));
+        let future = render_route_block_at(&segments, "en", None, "2026-11-17", Some(&clock));
+        assert!(!future.contains("Actual"), "{future}");
+    }
+
     // ---- meal overview ----
     fn ml(text: &str, source: &str) -> Meal {
-        Meal { text: text.into(), source: source.into() }
+        Meal { text: text.into(), source: source.into(), ..Default::default() }
     }
 
     /// The four canonical sessions; `meals` maps a session type to its meals.
