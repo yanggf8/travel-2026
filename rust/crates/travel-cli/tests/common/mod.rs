@@ -244,6 +244,32 @@ pub fn teardown_offers(ids: &[&str]) {
     let _ = db_exec_teardown(&sql);
 }
 
+/// Delete the notes family rows (`note_events`, `note_share_tokens`, `note_images`, `notes`) of
+/// test notes. These tables key on `note_id`/`id` (NOT `plan_id`), so `teardown_plan` never
+/// reaches them. Best-effort, never panics; ids must be `note_` + hex (anything else is skipped
+/// rather than interpolated into SQL).
+pub fn teardown_notes(ids: &[&str]) {
+    let ids: Vec<&&str> = ids
+        .iter()
+        .filter(|id| id.starts_with("note_") && id[5..].chars().all(|c| c.is_ascii_hexdigit()))
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let mut sql = String::new();
+    for (table, col) in [
+        ("note_events", "note_id"),
+        ("note_share_tokens", "note_id"),
+        ("note_images", "note_id"),
+        ("notes", "id"),
+    ] {
+        for id in &ids {
+            sql.push_str(&format!("DELETE FROM {table} WHERE {col} = {}; ", sql_lit(id)));
+        }
+    }
+    let _ = db_exec_teardown(&sql);
+}
+
 /// RAII teardown guard: runs the wrapped closure on `Drop` — i.e. on BOTH normal
 /// return AND panic-unwind.
 ///

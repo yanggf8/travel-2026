@@ -11,6 +11,7 @@ pub mod freshness;
 pub mod geocodes;
 pub mod hotels;
 pub mod itinerary;
+pub mod notes;
 pub mod observations;
 pub mod offers;
 pub mod omiyage;

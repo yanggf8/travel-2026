@@ -762,6 +762,12 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         exec_create(&conn, sql).await;
     }
 
+    // Travel notes (spec 2026-11-15-travel-notes-design.md §7): schema only, no content.
+    // Idempotent CREATE ... IF NOT EXISTS; no CHECK / NOT NULL constraints by design.
+    for sql in NOTES_TABLES {
+        exec_create(&conn, sql).await;
+    }
+
     // Phase 1b. Grant-token management columns for the dashboard. Existing
     // plan_share_tokens rows default to active; dashboard mutation routes write
     // created_by/deactivated_* for owner-visible history.
@@ -2770,6 +2776,57 @@ const PHASE1_TABLES: &[&str] = &[
   updated_at TEXT,
   booked INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (plan_id, destination, offer_id)
+)"#,
+];
+
+/// Travel notes family. `attached_plan_id` is deliberately NOT `plan_id`: the dynamic
+/// `plan_id` table scans (copy-plan, db cleanup-deleted, teardown_plan) must not see notes.
+const NOTES_TABLES: &[&str] = &[
+    r#"CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  attached_plan_id TEXT,
+  attached_destination TEXT,
+  attached_day_number INTEGER,
+  title TEXT,
+  body TEXT,
+  purpose TEXT,
+  place_name TEXT,
+  taken_on TEXT,
+  created_at TEXT,
+  created_by TEXT,
+  updated_at TEXT,
+  updated_by TEXT,
+  deleted_at TEXT,
+  deleted_by TEXT
+)"#,
+    r#"CREATE TABLE IF NOT EXISTS note_images (
+  note_id TEXT,
+  image_id TEXT,
+  sort_order INTEGER,
+  r2_key TEXT,
+  content_type TEXT,
+  size_bytes INTEGER,
+  caption TEXT,
+  created_at TEXT,
+  created_by TEXT,
+  PRIMARY KEY (note_id, image_id)
+)"#,
+    r#"CREATE TABLE IF NOT EXISTS note_share_tokens (
+  token TEXT PRIMARY KEY,
+  note_id TEXT,
+  status TEXT DEFAULT 'active',
+  created_at TEXT,
+  created_by TEXT,
+  deactivated_at TEXT,
+  deactivated_by TEXT
+)"#,
+    r#"CREATE TABLE IF NOT EXISTS note_events (
+  event_id TEXT PRIMARY KEY,
+  note_id TEXT,
+  action TEXT,
+  actor TEXT,
+  detail TEXT,
+  at TEXT
 )"#,
 ];
 
