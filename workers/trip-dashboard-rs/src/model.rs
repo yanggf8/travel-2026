@@ -346,6 +346,10 @@ pub struct PlanDocument {
     pub label_zh: String,
     pub sort_order: i64,
     pub r2_key: String,
+    /// Content hash of the stored PDF (`plan_documents.sha256`) — the voucher
+    /// link version key (`?v=<first 12>`), so a re-uploaded PDF gets a new
+    /// URL instead of a stale cache hit. Empty when unset → unversioned link.
+    pub sha256: String,
     pub days: Vec<i64>,
 }
 
@@ -359,6 +363,7 @@ pub fn plan_documents(document_rows: &[Row], day_rows: &[Row]) -> Vec<PlanDocume
             label_zh: s(row, "label_zh"),
             sort_order: i(row, "sort_order"),
             r2_key: s(row, "r2_key"),
+            sha256: s(row, "sha256"),
             days: Vec::new(),
         })
         .collect();
@@ -1100,6 +1105,25 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect()
+    }
+
+    #[test]
+    fn plan_documents_decodes_sha256() {
+        let documents = plan_documents(
+            &[row(&[
+                ("doc_key", json!("flight")),
+                ("kind", json!("flight_eticket")),
+                ("label", json!("Flight e-ticket")),
+                ("label_zh", json!("電子機票")),
+                ("sort_order", json!(0)),
+                ("r2_key", json!("p-1/doc-flight.pdf")),
+                ("sha256", json!("0123456789abcdef0123456789abcdef")),
+            ])],
+            &[],
+        );
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].sha256, "0123456789abcdef0123456789abcdef");
+        assert_eq!(documents[0].r2_key, "p-1/doc-flight.pdf");
     }
 
     #[test]

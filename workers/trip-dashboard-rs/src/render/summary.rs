@@ -631,16 +631,45 @@ fn trim_num(v: f64) -> String {
     }
 }
 
+/// 本機 /voucher/ 連結的唯一產生點。path 以 "/voucher/" 開頭時：
+/// 去掉前綴後等於某筆 documents[i].r2_key，且該筆 sha256 長度 ≥ 12 → 加 "v=<sha256[..12]>"；
+/// 接著若 token 非空 → 加 "token=<t>"（v 在前、token 在後；第一個參數用 '?'，其後用 '&'）。
+/// path 不以 "/voucher/" 開頭（外部 URL）→ 原樣回傳，不加 v 也不加 token。
+pub(crate) fn voucher_href(
+    path: &str,
+    documents: &[crate::model::PlanDocument],
+    token: Option<&str>,
+) -> String {
+    if !path.starts_with("/voucher/") {
+        return path.to_string();
+    }
+    let mut href = path.to_string();
+    let key = &path["/voucher/".len()..];
+    if let Some(document) = documents.iter().find(|document| document.r2_key == key) {
+        // `get` instead of slicing: a malformed (non-ASCII) sha must drop the
+        // version, never panic the whole page.
+        if let Some(version) = document.sha256.get(..12) {
+            href.push_str("?v=");
+            href.push_str(version);
+        }
+    }
+    if let Some(token) = token.filter(|token| !token.is_empty()) {
+        href.push_str(if href.contains('?') { "&token=" } else { "?token=" });
+        href.push_str(token);
+    }
+    href
+}
+
 pub(crate) fn document_link(
     document: &crate::model::PlanDocument,
     lang: &str,
     token: Option<&str>,
 ) -> String {
-    let mut href = format!("/voucher/{}", document.r2_key);
-    if let Some(token) = token.filter(|token| !token.is_empty()) {
-        href.push_str("?token=");
-        href.push_str(token);
-    }
+    let href = voucher_href(
+        &format!("/voucher/{}", document.r2_key),
+        std::slice::from_ref(document),
+        token,
+    );
     let label = if lang == "en" { &document.label } else { &document.label_zh };
     format!(
         "<a class=\"doc-link\" data-doc=\"{}\" href=\"{}\" target=\"_blank\" rel=\"noopener\">📄 {}</a>",
@@ -1077,15 +1106,12 @@ pub fn booking_summary(plan: &Plan, lang: &str, token: Option<&str>) -> String {
         // Voucher PDF link (own /voucher/* R2 route). 404s until the PDF is uploaded.
         // The /voucher/* route is auth-gated (same scope as the plan view), so a
         // tokenless link would 403 on click. Thread the page's token onto local
-        // voucher links so the click carries the SAME token the page loaded with.
+        // voucher links so the click carries the SAME token the page loaded with —
+        // via voucher_href, the single /voucher/ link producer (adds ?v=<sha>
+        // when the hotel PDF matches a plan_documents row; external URLs pass
+        // through unchanged).
         if !voucher_url.is_empty() {
-            let mut href = voucher_url.clone();
-            if voucher_url.starts_with("/voucher/") {
-                if let Some(tok) = token.filter(|t| !t.is_empty()) {
-                    href.push_str("?token=");
-                    href.push_str(tok);
-                }
-            }
+            let href = voucher_href(&voucher_url, &plan.documents, token);
             h.push_str(&format!(
                 "<a class=\"voucher-link\" href=\"{}\" target=\"_blank\" rel=\"noopener\">📄 {}</a>",
                 esc_url_attr(&href), esc(t("voucher", lang))
@@ -2423,6 +2449,104 @@ mod tests {
         assert!(!html.contains("voucher-link"));
     }
 
+    fn sha_doc(r2_key: &str, sha256: &str) -> crate::model::PlanDocument {
+        crate::model::PlanDocument {
+            doc_key: "flight".into(),
+            kind: "flight_eticket".into(),
+            label: "Flight e-ticket".into(),
+            label_zh: "電子機票".into(),
+            sort_order: 0,
+            r2_key: r2_key.into(),
+            days: vec![],
+            sha256: sha256.into(),
+        }
+    }
+
+    #[test]
+    fn voucher_href_versions_matching_document() {
+        // r2_key matches after stripping "/voucher/" and sha256 >= 12 chars →
+        // v=<first 12> FIRST, token after it ('?' then '&').
+        let documents = vec![sha_doc("p-1/doc-flight.pdf", "0123456789abcdef")];
+        assert_eq!(
+            super::voucher_href("/voucher/p-1/doc-flight.pdf", &documents, Some("t0k")),
+            "/voucher/p-1/doc-flight.pdf?v=0123456789ab&token=t0k"
+        );
+        // Without a token → only v; empty-string token counts as no token.
+        assert_eq!(
+            super::voucher_href("/voucher/p-1/doc-flight.pdf", &documents, None),
+            "/voucher/p-1/doc-flight.pdf?v=0123456789ab"
+        );
+        assert_eq!(
+            super::voucher_href("/voucher/p-1/doc-flight.pdf", &documents, Some("")),
+            "/voucher/p-1/doc-flight.pdf?v=0123456789ab"
+        );
+    }
+
+    #[test]
+    fn voucher_href_unmatched_hotel_has_no_v() {
+        // Hotel voucher_url that matches no plan_documents row → no v, token still carried.
+        assert_eq!(
+            super::voucher_href("/voucher/okinawa-2026/azat-voucher.pdf", &[], Some("t")),
+            "/voucher/okinawa-2026/azat-voucher.pdf?token=t"
+        );
+    }
+
+    #[test]
+    fn voucher_href_short_or_empty_sha_has_no_v() {
+        // "01234567890é": byte 12 falls inside 'é' — must drop v, not panic.
+        for sha in ["", "abc", "01234567890é"] {
+            let documents = vec![sha_doc("p-1/doc-flight.pdf", sha)];
+            let href =
+                super::voucher_href("/voucher/p-1/doc-flight.pdf", &documents, Some("t0k"));
+            assert!(!href.contains("v="), "sha={sha:?} produced {href}");
+            assert_eq!(href, "/voucher/p-1/doc-flight.pdf?token=t0k");
+        }
+    }
+
+    #[test]
+    fn voucher_href_external_unchanged() {
+        // External (non-/voucher/) URLs are returned verbatim: no v, no token.
+        let documents = vec![sha_doc("p-1/doc-flight.pdf", "0123456789abcdef")];
+        assert_eq!(
+            super::voucher_href("https://example.com/x.pdf", &documents, Some("t0k")),
+            "https://example.com/x.pdf"
+        );
+    }
+
+    #[test]
+    fn hotel_and_document_links_share_versioning() {
+        // Same r2_key as a plan document AND as the hotel voucher_url → both
+        // hrefs identical and versioned. In the HTML the separator is a RAW '&':
+        // esc_url_attr deliberately preserves '&' (pinned by
+        // esc_url_attr_preserves_ampersand_neutralizes_quotes) — see SDD ledger
+        // ruling for plan Review Focus 1.
+        let mut hotel = Row::new();
+        hotel.insert("name".into(), serde_json::json!("HOTEL AZAT NAHA"));
+        hotel.insert(
+            "voucher_url".into(),
+            serde_json::json!("/voucher/p-1/doc-flight.pdf"),
+        );
+        let plan = Plan {
+            hotel: Some(hotel),
+            documents: vec![sha_doc("p-1/doc-flight.pdf", "0123456789abcdef")],
+            ..Default::default()
+        };
+        let html = render(&plan, "zh", Some("t0k"));
+        let href_of = |html: &str, class: &str| -> String {
+            let start = html.find(&format!("class=\"{class}\"")).expect(class);
+            let seg = &html[start..];
+            let hs = seg.find("href=\"").expect("href") + "href=\"".len();
+            let rest = &seg[hs..];
+            let he = rest.find('"').expect("closing quote");
+            rest[..he].to_string()
+        };
+        let doc_href = href_of(&html, "doc-link");
+        let hotel_href = href_of(&html, "voucher-link");
+        assert_eq!(doc_href, hotel_href);
+        assert_eq!(doc_href, "/voucher/p-1/doc-flight.pdf?v=0123456789ab&token=t0k");
+        assert_eq!(html.matches("?v=0123456789ab&token=t0k").count(), 2);
+    }
+
     fn document(key: &str, kind: &str, sort_order: i64) -> crate::model::PlanDocument {
         crate::model::PlanDocument {
             doc_key: key.into(),
@@ -2431,6 +2555,7 @@ mod tests {
             label_zh: "電子機票".into(),
             sort_order,
             r2_key: format!("p-1/doc-{key}.pdf"),
+            sha256: String::new(),
             days: vec![1, 5],
         }
     }

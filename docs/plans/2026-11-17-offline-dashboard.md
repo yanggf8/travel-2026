@@ -32,7 +32,7 @@
 
 ## Review Focus
 
-1. **`&amp;` 跳脫過的票券連結**：`esc_url_attr` 會把 `?v=…&token=…` 輸出成 `&amp;token=`。SW 從 HTML 擷取資產時必須先還原，否則資產會存在錯的鍵下，離線時票券打不開（T3 測試 `extracts_assets_unescaping_amp`）。
+1. **票券連結的 `&`**：`esc_url_attr` 保留原始 `&`（既有測試 `esc_url_attr_preserves_ampersand_neutralizes_quotes` 釘住），SSR 實際輸出 `?v=…&token=…`。SW 擷取資產時也把 `&amp;` 還原成 `&`，兩種寫法都存到頁面會請求的同一個鍵（T3 測試 `save_keys_amp_escaped_voucher_link_like_raw`）。
 2. **筆記上傳、grant 表單、OAuth、跨來源圖片**：非 GET 請求和清單外的路由（含 notes 分支的 `/notes*`、`/n/*` multipart POST），以及 ArcGIS 小圖、候選照片這類跨來源請求，都必須原樣直通。SW 不可以 `respondWith`，也不可以存不透明回應（不透明回應會吃掉配額）（T3 測試 `non_plan_requests_pass_through`）。
 3. **沒有版本鍵的資產**：地圖 etag 是空的時候，`cache_bust` 不會加 `?v=`（`render/map.rs:498-506`）；飯店 `voucher_url` 也可能對不到 `plan_documents`。這兩種資產每次 SAVE 都要重抓；讀取時改用 network-first，不能 cache-first 永遠回舊檔（T3 測試 `unversioned_assets_refetched_and_network_first`）。
 4. **線上但伺服器回 5xx**（Turso 掛掉、Cloudflare 錯誤頁）：旅途中有訊號、網站卻壞了，有副本就要給副本並顯示橫幅，不能只給錯誤頁。這是本計畫對 spec 未明說處的決定（T3 測試 `server_error_falls_back_to_cache`）。
@@ -120,7 +120,7 @@ pub(crate) fn voucher_href(path: &str, documents: &[crate::model::PlanDocument],
   - `voucher_href_unmatched_hotel_has_no_v`：`/voucher/okinawa-2026/azat-voucher.pdf`，documents 是空的，token `t` → `…/azat-voucher.pdf?token=t`。
   - `voucher_href_short_or_empty_sha_has_no_v`：sha 是 `""` 或 `"abc"` → 不加 `v`。
   - `voucher_href_external_unchanged`：`https://example.com/x.pdf` 加 token → 原樣回傳。
-  - `hotel_and_document_links_share_versioning`：同一個 `r2_key` 同時當 `plan_documents` 與飯店 `voucher_url`，兩個 href 完全相同，而且 HTML 裡都是 `?v=0123456789ab&amp;token=t0k`。
+  - `hotel_and_document_links_share_versioning`：同一個 `r2_key` 同時當 `plan_documents` 與飯店 `voucher_url`，兩個 href 完全相同，而且 HTML 裡都是 `?v=0123456789ab&token=t0k`（原始 `&`，見 Review Focus 1）。
   - 既有測試 `hotel_voucher_link_*`（`summary.rs:2353-2424`）、`day.rs:926`、`now.rs:816` 不改，照樣通過（它們的 sha 是空的）。
 - [ ] **Step 2: 執行**：`cd workers/trip-dashboard-rs && cargo test -j 2 voucher_href`，預期 FAIL（找不到函式）。
 - [ ] **Step 3: 實作** `voucher_href`，並讓 `model.rs`、`router.rs:1025`、兩種連結都改用它。

@@ -83,9 +83,9 @@ function extractRenderedAt(html) {
   return m ? Number(m[1]) : 0;
 }
 
-// Every /map/ and /voucher/ link in the page, as absolute cache keys. The HTML
-// escapes '&' as '&amp;' (esc_url_attr), so the separator is restored BEFORE
-// keying — otherwise the asset lands under a key nothing will ever request.
+// Every /map/ and /voucher/ link in the page, as absolute cache keys. The SSR
+// writes a raw '&' (esc_url_attr keeps it); an '&amp;' form is also folded to
+// '&' BEFORE keying, so either shape lands under the key the page requests.
 function extractAssets(html) {
   var out = [];
   var re = /(?:href|src)="([^"]*)"/g;

@@ -36,8 +36,9 @@ const voucherUrl = (doc, sha, token) => {
   return `${ORIGIN}/voucher/p1/${doc}.pdf${parts.length ? '?' + parts.join('&') : ''}`;
 };
 
-// HTML fixtures mirroring what T1/T2 render: versioned local links with
-// &amp;-escaped separators, data-view/data-rendered-at/data-served on body.
+// HTML fixtures mirroring what T1/T2 render: versioned local links with the
+// raw '&' separator esc_url_attr keeps (an '&amp;' form is tested separately),
+// data-view/data-rendered-at/data-served on body.
 function planHtml({ view = 'viewer', renderedAt = T1, hrefs = [] } = {}) {
   return (
     `<html><body data-plan-id="p1" data-view="${view}" data-rendered-at="${renderedAt}"` +
@@ -47,9 +48,9 @@ function planHtml({ view = 'viewer', renderedAt = T1, hrefs = [] } = {}) {
 function mapImg(etag) {
   return `<img src="/map/p1/day1.png${etag ? '?v=' + etag : ''}">`;
 }
-function voucherLink(doc, sha, token) {
+function voucherLink(doc, sha, token, amp = '&') {
   let q = '';
-  if (sha && token) q = `?v=${sha}&amp;token=${token}`;
+  if (sha && token) q = `?v=${sha}${amp}token=${token}`;
   else if (sha) q = `?v=${sha}`;
   else if (token) q = `?token=${token}`;
   return `<a class="doc-link" href="/voucher/p1/${doc}.pdf${q}">${doc}</a>`;
@@ -68,6 +69,23 @@ function resolverFor(pages, assets = new Map()) {
   for (const [url, f] of assets) map.set(url, f);
   return mapResolver(map);
 }
+
+test('save_keys_amp_escaped_voucher_link_like_raw', async () => {
+  const key = viewerUrl('t1');
+  const v = voucherUrl('doc-a', '0123456789ab', 't1');
+  const html = planHtml({ hrefs: [voucherLink('doc-a', '0123456789ab', 't1', '&amp;')] });
+  const { sw, caches } = await setup({
+    fetchResolver: resolverFor(new Map([[key, { html }]]), new Map([
+      [v, () => assetResponse('%PDF-a', 'application/pdf')],
+    ])),
+  });
+
+  const reply = await sw.save(key);
+
+  assert.equal(reply.status, 'saved');
+  assert.equal(reply.pdfs, 1);
+  assert.ok(caches.log.some((e) => e.op === 'put' && e.key === v), 'voucher cached under the raw-& key');
+});
 
 test('save_writes_assets_manifest_html_index_in_order', async () => {
   const key = viewerUrl('t1');

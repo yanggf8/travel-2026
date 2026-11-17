@@ -1078,7 +1078,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
          ORDER BY sort_order, tip_id"
             .to_string(),
         format!(
-            "SELECT doc_key, kind, label, label_zh, sort_order, r2_key FROM plan_documents \
+            "SELECT doc_key, kind, label, label_zh, sort_order, r2_key, sha256 FROM plan_documents \
              WHERE plan_id = '{slug}' \
              ORDER BY CASE kind WHEN 'flight_eticket' THEN 0 WHEN 'hotel_voucher' THEN 1 \
                                 WHEN 'rail_ticket' THEN 2 WHEN 'tour_voucher' THEN 3 ELSE 4 END, \
