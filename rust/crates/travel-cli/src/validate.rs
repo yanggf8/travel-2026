@@ -42,6 +42,66 @@ enum Severity {
     Info,
 }
 
+/// Trip-record in-text markers (spec §5 lint): the emoji/Chinese markers agents
+/// used to write into titles/notes before the record_* columns existed. English
+/// words ("visited"/"skipped") are deliberately NOT matched — they false-positive
+/// on legitimate English content (Fable#15). Keyword list is CODE (the allowed
+/// "keywords matched against data" class), never i18n chrome.
+pub(crate) fn record_marker_hits(text: &str) -> bool {
+    const MARKERS: &[&str] = &["✅", "⏭", "實際行程", "實際用餐", "未前往"];
+    MARKERS.iter().any(|m| text.contains(m))
+}
+
+/// WARN when trip-record markers are still written as TEXT in itinerary
+/// content (titles, meal texts, route notes, session focus, activity notes).
+/// The record is data (record_status / record_note / record_summary_zh), not
+/// prose — the lint points at every row that should become a `record-*` call.
+async fn validate_record_markers(issues: &mut Vec<Issue>) {
+    const QUERY: &str = "\
+        SELECT 'activities.title' AS src, plan_id, day_number, session_type, title AS text \
+        FROM activities WHERE title IS NOT NULL \
+        UNION ALL SELECT 'activities.notes', plan_id, day_number, session_type, notes \
+        FROM activities WHERE notes IS NOT NULL \
+        UNION ALL SELECT 'session_meals.meal', plan_id, day_number, session_type, meal \
+        FROM session_meals WHERE meal IS NOT NULL \
+        UNION ALL SELECT 'day_route_segments.notes', plan_id, day_number, NULL, notes \
+        FROM day_route_segments WHERE notes IS NOT NULL \
+        UNION ALL SELECT 'timesofday.focus', plan_id, day_number, session_type, focus \
+        FROM timesofday WHERE focus IS NOT NULL \
+        UNION ALL SELECT 'timesofday.focus_zh', plan_id, day_number, session_type, focus_zh \
+        FROM timesofday WHERE focus_zh IS NOT NULL";
+    let Ok(conn) = db::connect_read().await else {
+        return; // no creds: the other checks already report the connection problem
+    };
+    let Ok(mut rows) = conn.query(QUERY, params![]).await else {
+        return; // record columns not migrated yet — nothing to lint against
+    };
+    let mut seen: Vec<(String, String, String, String)> = Vec::new();
+    while let Ok(Some(row)) = rows.next().await {
+        let src: String = row.get(0).unwrap_or_default();
+        let plan_id: String = row.get(1).unwrap_or_default();
+        let day: i64 = row.get(2).unwrap_or(0);
+        let session: Option<String> = row.get(3).ok().flatten();
+        let text: String = row.get(4).unwrap_or_default();
+        if record_marker_hits(&text) {
+            seen.push((src, plan_id, day.to_string(), session.unwrap_or_default()));
+        }
+    }
+    for (src, plan_id, day, session) in seen {
+        issues.push(Issue {
+            category: "record-markers".to_string(),
+            severity: Severity::Warning,
+            message: format!(
+                "{src} still carries an in-text trip-record marker (✅/⏭/實際行程/實際用餐/未前往) — \
+                 move it to the record columns (record-activity/record-meal/record-leg/record-session) \
+                 [plan {plan_id} day {day} {session}]"
+            ),
+            file: None,
+            line: None,
+        });
+    }
+}
+
 pub async fn run(mode: Mode) -> Result<(), String> {
     if let Mode::Publish { plan_id, dest } = mode {
         return run_publish(&plan_id, dest.as_deref()).await;
@@ -70,6 +130,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_destination_timezones(&mut issues).await;
     validate_reference_tables(&mut issues).await;
     validate_booking_integrity(&mut issues).await;
+    validate_record_markers(&mut issues).await;
     validate_day_variants(&mut issues).await;
     validate_plan_documents(&mut issues).await;
     validate_fit_booking(&mut issues).await;
@@ -145,6 +206,27 @@ mod timezone_tests {
         assert_eq!(got.len(), 2);
         assert!(got[0].contains("kyoto_2026") && got[0].contains("destination_config.timezone"));
         assert!(got[1].contains("x") && got[1].contains("destination_config.timezone"));
+    }
+}
+
+#[cfg(test)]
+mod record_marker_tests {
+    use super::record_marker_hits;
+
+    #[test]
+    fn hits_emoji_and_chinese_markers() {
+        assert!(record_marker_hits("✅ 實際行程：東福寺"));
+        assert!(record_marker_hits("⏭ 未前往"));
+        assert!(record_marker_hits("中午 ✅ 實際用餐"));
+        assert!(record_marker_hits("未前往：京極スタンド"));
+    }
+
+    #[test]
+    fn english_words_do_not_hit() {
+        assert!(!record_marker_hits("visited Toji"));
+        assert!(!record_marker_hits("skipped"));
+        assert!(!record_marker_hits("Actual: ramen"));
+        assert!(!record_marker_hits(""));
     }
 }
 

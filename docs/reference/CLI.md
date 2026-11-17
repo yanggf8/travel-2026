@@ -263,6 +263,17 @@ Only activities linked to a POI with lat/lon appear on the maps; non-place lines
 ./bin/travel fetch-weather [--dest slug] [--all]    # Open-Meteo daily (provider id = `PROVIDER_ID` in weather.rs; destination_config.timezone is required — an empty one now fails loud naming the destination, no Asia/Tokyo default) (unchanged: `days.weather_*`) + hourly in the SAME request, aggregated per day into 4 itinerary sessions in `day_weather_sessions` (key plan,destination,day_number,session): morning 09-12, noon 12-14, afternoon 14-18, evening 18-22 destination local time (hour by start time; other hours ignored; constants `SESSION_WINDOWS` in weather.rs). Open-Meteo's hourly precipitation / probability at stamp T cover the PRECEDING hour, so mm, max mm/h and probability use the stamps from+1 ..= to (morning 10-12, noon 13-14, afternoon 15-18, evening 19-22) while the code uses the start-hour stamps (9-11, 12-13, 14-17, 18-21). Per session: representative WMO code = MOST FREQUENT code of its hours (tie -> the higher/more severe code; never the max, so one stormy hour cannot label a dry session), total mm, max mm/h (both rounded to 0.1), max precipitation probability %. A re-run replaces the day's rows. Variant days are skipped like the daily row. `itinerary` prints a `Sessions:` line under the day's weather line. Failure keeps every existing row untouched: curl reports the HTTP status (`-w %{http_code}`); connect/timeout/TLS and HTTP 429/5xx retry, other 4xx and an empty 200 body fail at once; the error says the previous forecast was kept and when it was fetched. A day missing max/min temperature or weather code is skipped with a stderr note (never written as 0 °C / clear). Each destination is one transaction (weather rows + audit triad); zero usable days writes nothing. `--all` runs every destination and exits 1 if any failed.
 ```
 
+## Trip record (what actually happened)
+Spec `docs/superpowers/specs/2026-11-16-trip-record-design.md`. Every command is audited (plan_events `record_marked` / `record_cleared`, plans.version, operation_runs). Matching must be unique — an ambiguous or missing target fails loud.
+```bash
+./bin/travel record-activity <day> <session> <id|title> done|skipped [--note "<t>"]   # mark one activity
+./bin/travel record-meal <day> <session> <text-match> done|skipped [--note "<t>"]    # mark one meal
+./bin/travel record-leg <day> <sort_order> done|skipped [--note "<t>"]               # mark one route segment (touches the day so snapshot-maps sees it stale)
+./bin/travel record-session <day> <session> --zh "<t>" | --clear                     # session ZH actual summary; --clear emits record_cleared
+./bin/travel clear-record activity|meal|leg <day> ... <key>                          # reset record_status + record_note to NULL
+```
+Overwrite guard: set-meals, clear-meals, set-route-segment (single and bulk), derive-routes, delete-activity, scaffold-itinerary --force and remove-day-variant REFUSE when a target row already carries a record — clear the record first.
+
 ## Operation tracking
 ```bash
 ./bin/travel run-status [run-id]

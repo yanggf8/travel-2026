@@ -1,4 +1,5 @@
 mod bookings;
+mod record;
 mod cascade;
 mod catalog_audit; // catalog_runs audit helper for global OTA-catalog mutations
 mod checks; // shared lint predicates (single source of truth) — see checks.rs
@@ -433,6 +434,36 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             set_day_theme::run(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "record-activity" => {
+            if wants_help(rest, record::ACTIVITY_USAGE) { return Ok(()); }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            record::run_activity(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "record-meal" => {
+            if wants_help(rest, record::MEAL_USAGE) { return Ok(()); }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            record::run_meal(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "record-leg" => {
+            if wants_help(rest, record::LEG_USAGE) { return Ok(()); }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            record::run_leg(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "record-session" => {
+            if wants_help(rest, record::SESSION_USAGE) { return Ok(()); }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            record::run_session(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "clear-record" => {
+            if wants_help(rest, record::CLEAR_USAGE) { return Ok(()); }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            record::run_clear(rest, plan_id).await?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "set-hotel" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
                 println!("Usage:\n  travel set-hotel [--dest slug] [--name \"Hotel Name\"] [--check-in YYYY-MM-DD] [--access \"route1 | route2\"] [--note \"...\"] [--source <provenance>] [--address \"<text>\"] [--phone \"<text>\"]\n  --address / --phone: the booked hotel's address and phone, shown on the dashboard 常用資訊 card (arrival card / customs form; phone as a tel: link). Needs `travel db migrate` once (hotels.address / hotels.phone).");
@@ -630,6 +661,39 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_tod::run_meals(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "add-meal" => {
+            if wants_help(
+                rest,
+                "travel add-meal <day> <session> --meal \"<text>\" [--recommended] [--dest <slug>]\n  (append one meal; nothing is replaced — audited)",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_tod::run_add_meal(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-meal" => {
+            if wants_help(
+                rest,
+                "travel set-meal <day> <session> <text-match> --meal \"<new text>\" [--dest <slug>]\n  (change ONE meal in place by unique text match; ambiguous fails — audited)",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_tod::run_set_meal(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-activity-notes" => {
+            if wants_help(
+                rest,
+                "travel set-activity-notes <day> <session> <id|title> --notes \"<text>\" | --clear [--dest <slug>]\n  (change one activity's notes in place; id and poi_id preserved — audited)",
+            ) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_activity::run_set_notes(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "clear-meals" => {
@@ -1144,7 +1208,15 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   reorder-activities <day> <session> <id|title> ...\n\
   move-activity <day> <from-session> <to-session> <id|title> [--to-day N]\n\
   set-meals <day> <session> --meal \"<text>\" [--meal ...] [--zh \"<zh>\" ...]\n\
+  add-meal <day> <session> --meal \"<text>\" [--recommended]  Append one meal, nothing replaced (audited)\n\
+  set-meal <day> <session> <text-match> --meal \"<new text>\"  Change ONE meal in place (audited)\n\
+  set-activity-notes <day> <session> <id|title> --notes \"<t>\" | --clear  Edit notes in place; id/poi_id kept (audited)\n\
   clear-meals <day> <session> [--dest <slug>]  Delete every meal of one session (audited)\n\
+  record-activity <day> <session> <id|title> done|skipped [--note \"<t>\"]  Mark what actually happened (audited)\n\
+  record-meal <day> <session> <text-match> done|skipped [--note \"<t>\"]  Mark one meal (audited)\n\
+  record-leg <day> <sort_order> done|skipped [--note \"<t>\"]  Mark one route segment (audited)\n\
+  record-session <day> <session> --zh \"<t>\" | --clear  Session ZH actual summary (audited)\n\
+  clear-record activity|meal|leg <day> ... <key>  Reset record_status + record_note to NULL (audited)\n\
   confirm-recommendations [--day N] [--session s] [--kind activity|meal|route]  Flip AI-recommended → confirmed\n\
   derive-routes [--day N] [--dest <slug>]  Derive ai_recommended transit route segments from activity stations\n\
   set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\

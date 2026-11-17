@@ -11,6 +11,7 @@
 //! populate → swap), each byte-identical to the inline SQL it replaces and gated by a
 //! committed behavior-lock test.
 
+use crate::repo::records::{ensure_unrecorded, RecordScope};
 use libsql::Connection;
 
 /// One day of the scaffolded skeleton. `morning_transit`/`evening_transit` are the derived
@@ -35,6 +36,9 @@ pub async fn replace_skeleton(
     days: &[SkeletonDay],
     now: &str,
 ) -> Result<(), String> {
+    // Trip-record guard (spec X3): scaffold --force wipes the whole destination —
+    // refuse while ANY row (or session summary) of it is recorded.
+    ensure_unrecorded(conn, plan_id, destination, RecordScope::Destination).await?;
     // Stale child rows first (FK-free, so order is just for cleanliness).
     conn.execute(
         "DELETE FROM activity_tags WHERE activity_id IN \
@@ -284,6 +288,7 @@ pub async fn replace_session_activities_zh(
 }
 
 /// DELETE every `session_meals` row of a `(plan, dest, day, session)`; returns the number removed.
+/// Refuses first when any of those meals carries a trip record (spec X3).
 pub async fn delete_session_meals(
     conn: &Connection,
     plan_id: &str,
@@ -291,6 +296,13 @@ pub async fn delete_session_meals(
     day: i64,
     session: &str,
 ) -> Result<u64, String> {
+    ensure_unrecorded(
+        conn,
+        plan_id,
+        destination,
+        RecordScope::MealsOfSession { day, session },
+    )
+    .await?;
     conn.execute(
         "DELETE FROM session_meals \
          WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
@@ -317,6 +329,15 @@ pub async fn replace_session_meals(
     meals: &[String],
     source: &str,
 ) -> Result<(), String> {
+    // Trip-record guard (spec X3): set-meals replaces the whole session — refuse
+    // while any current meal of the session is recorded.
+    ensure_unrecorded(
+        conn,
+        plan_id,
+        destination,
+        RecordScope::MealsOfSession { day, session },
+    )
+    .await?;
     conn.execute(
         "DELETE FROM session_meals \
          WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
@@ -376,8 +397,22 @@ pub async fn update_activity_field(
     value: Option<String>,
     now: &str,
 ) -> Result<(), String> {
+    // Column whitelist (trip-record Task 5 review finding): the `{field}` name is
+    // interpolated into the SQL, so it must be one of these fixed names — never
+    // a caller-supplied free string. Mirrors `update_tod_field`'s guard above.
+    let column = match field {
+        "start_time" => "start_time",
+        "end_time" => "end_time",
+        "is_fixed_time" => "is_fixed_time",
+        "booking_status" => "booking_status",
+        "booking_ref" => "booking_ref",
+        "book_by" => "book_by",
+        "booking_required" => "booking_required",
+        "notes" => "notes",
+        _ => return Err(format!("unsupported activities field: {field}")),
+    };
     let sql = format!(
-        "UPDATE activities SET {field} = ?1, updated_at = ?2 \
+        "UPDATE activities SET {column} = ?1, updated_at = ?2 \
          WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
            AND session_type = ?6 AND id = ?7"
     );
@@ -395,6 +430,180 @@ pub async fn update_activity_field(
     )
     .await
     .map_err(|e| format!("activities UPDATE {field} failed: {e}"))?;
+    Ok(())
+}
+
+/// Column whitelist for [`update_activity_field`]: the `{field}` interpolated into
+/// the SQL must be one of these fixed names (the audit finding behind Task 5 —
+/// the caller's field name used to reach the SQL unvalidated).
+#[cfg(test)]
+mod update_activity_field_whitelist_tests {
+    use super::*;
+
+    async fn mem_conn() -> Connection {
+        libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .expect("in-memory db")
+            .connect()
+            .expect("connect")
+    }
+
+    async fn seed_activity(conn: &Connection) {
+        conn.execute(
+            "CREATE TABLE activities (id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, \
+             destination TEXT NOT NULL, day_number INTEGER NOT NULL, session_type TEXT NOT NULL, \
+             sort_order INTEGER NOT NULL DEFAULT 0, title TEXT NOT NULL, notes TEXT, \
+             start_time TEXT, end_time TEXT, is_fixed_time INTEGER, booking_status TEXT, \
+             booking_ref TEXT, book_by TEXT, booking_required INTEGER, \
+             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO activities (id, plan_id, destination, day_number, session_type, sort_order, title) \
+             VALUES ('a1', 'p', 'd', 1, 'noon', 0, '東寺')",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_activity_field_rejects_unknown_column() {
+        let conn = mem_conn().await;
+        seed_activity(&conn).await;
+        // An attacker-typo'd / invented field must be refused BEFORE any SQL runs.
+        let err = update_activity_field(
+            &conn, "p", "d", 1, "noon", "a1", "haxor; DROP TABLE activities", None, "2026-01-01 00:00:00",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("unsupported activities field"),
+            "must reject unknown fields: {err}"
+        );
+        // The row survives.
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM activities", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_activity_field_accepts_whitelisted_notes() {
+        let conn = mem_conn().await;
+        seed_activity(&conn).await;
+        update_activity_field(
+            &conn, "p", "d", 1, "noon", "a1", "notes", Some("新備註".to_string()), "2026-01-01 00:00:00",
+        )
+        .await
+        .expect("notes is whitelisted");
+        let mut rows = conn
+            .query("SELECT notes FROM activities WHERE id = 'a1'", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<String>(0).unwrap(), "新備註");
+    }
+}
+
+/// APPEND one `session_meals` row at `MAX(sort_order)+1` (the `add-meal` path —
+/// append, never replace). The MAX+1 read MUST run inside the caller's
+/// transaction so a concurrent append can't take the same slot. Returns the
+/// assigned `sort_order`. Caller passes `now` for `updated_at`.
+#[allow(clippy::too_many_arguments)]
+pub async fn append_session_meal(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    meal: &str,
+    source: &str,
+    now: &str,
+) -> Result<i64, String> {
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(sort_order), -1) AS m FROM session_meals \
+             WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND session_type = ?4",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("session_meals MAX(sort_order) query failed: {e}"))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| format!("session_meals MAX(sort_order) row read failed: {e}"))?
+        .ok_or("session_meals MAX(sort_order) returned no row")?;
+    let max_so: i64 = row
+        .get(0)
+        .map_err(|e| format!("session_meals MAX(sort_order) col read failed: {e}"))?;
+    let sort_order: i64 = max_so + 1;
+    conn.execute(
+        "INSERT INTO session_meals \
+            (plan_id, destination, day_number, session_type, sort_order, meal, source, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        libsql::params![
+            plan_id.to_string(),
+            destination.to_string(),
+            day,
+            session.to_string(),
+            sort_order,
+            meal.to_string(),
+            source.to_string(),
+            now.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| format!("session_meals APPEND failed: {e}"))?;
+    Ok(sort_order)
+}
+
+/// UPDATE one meal's text IN PLACE (the `set-meal` path — keyed by
+/// day/session/sort_order, so the row's identity/slot never changes). Fails
+/// loud when the slot does not exist. Caller passes `now` for `updated_at`.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_session_meal_text(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    sort_order: i64,
+    meal: &str,
+    now: &str,
+) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE session_meals SET meal = ?1, updated_at = ?2 \
+             WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+               AND session_type = ?6 AND sort_order = ?7",
+            libsql::params![
+                meal.to_string(),
+                now.to_string(),
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string(),
+                sort_order
+            ],
+        )
+        .await
+        .map_err(|e| format!("session_meals UPDATE failed: {e}"))?;
+    if n != 1 {
+        return Err(format!(
+            "no meal at day {day} {session} sort_order {sort_order} of plan {plan_id} ({destination})"
+        ));
+    }
     Ok(())
 }
 
@@ -450,6 +659,14 @@ pub async fn delete_activity(
     session: &str,
     activity_id: &str,
 ) -> Result<(), String> {
+    // Trip-record guard (spec X3): a recorded activity is history — refuse.
+    ensure_unrecorded(
+        conn,
+        plan_id,
+        destination,
+        RecordScope::Activity { id: activity_id },
+    )
+    .await?;
     conn.execute(
         "DELETE FROM activities \
          WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 \
@@ -488,6 +705,40 @@ pub async fn move_activity(
     to_session: &str,
     new_sort: i64,
 ) -> Result<(), String> {
+    // Trip-record guard (spec X4): a recorded activity may move WITHIN its day
+    // (re-sessioning keeps the record with its day), but never ACROSS days —
+    // the record belongs to the day it happened on.
+    let current_day: i64 = {
+        let mut rows = conn
+            .query(
+                "SELECT day_number FROM activities \
+                 WHERE plan_id = ?1 AND destination = ?2 AND id = ?3",
+                libsql::params![
+                    plan_id.to_string(),
+                    destination.to_string(),
+                    activity_id.to_string()
+                ],
+            )
+            .await
+            .map_err(|e| format!("activities day read failed: {e}"))?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                format!("activity {activity_id} not found in plan {plan_id} ({destination})")
+            })?;
+        row.get(0).map_err(|e| format!("activities day col read failed: {e}"))?
+    };
+    if current_day != to_day {
+        ensure_unrecorded(
+            conn,
+            plan_id,
+            destination,
+            RecordScope::Activity { id: activity_id },
+        )
+        .await?;
+    }
     // Re-key the row by id; every other column (poi_id, booking_*, tags via the
     // separate activity_tags table keyed on activity_id) is preserved untouched.
     conn.execute(
@@ -1188,6 +1439,10 @@ pub async fn swap_session_day_numbers(
     day_a: i64,
     day_b: i64,
 ) -> Result<(), String> {
+    // Trip-record guard (spec X4): swapping re-keys BOTH days' content — refuse
+    // while either day holds any record (rows or session summaries).
+    ensure_unrecorded(conn, plan_id, destination, RecordScope::Day { day: day_a }).await?;
+    ensure_unrecorded(conn, plan_id, destination, RecordScope::Day { day: day_b }).await?;
     const SESSION_TABLES: &[&str] = &[
         "timesofday",
         "activities",

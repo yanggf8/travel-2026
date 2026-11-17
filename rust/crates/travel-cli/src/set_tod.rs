@@ -486,6 +486,232 @@ pub async fn run_meals(args: &[String], plan_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// `add-meal <day> <session> --meal "<t>" [--recommended] [--dest slug]` —
+/// APPEND one meal (sort_order = MAX+1 read inside the transaction), the edit
+/// that used to force a delete-all-and-recreate via set-meals. Audited.
+pub async fn run_add_meal(args: &[String], plan_id: String) -> Result<(), String> {
+    const USAGE: &str = "travel add-meal <day> <session> --meal \"<text>\" [--recommended] [--dest <slug>]";
+    let mut dest: Option<String> = None;
+    let mut meal: Option<String> = None;
+    let mut recommended = false;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                dest = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --dest".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--meal" => {
+                meal = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --meal".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--recommended" => {
+                recommended = true;
+                i += 1;
+            }
+            f if crate::plan_resolver::is_resolver_flag(f) => i += 2,
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}. Usage:\n{USAGE}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() != 2 {
+        return Err(format!("Usage:\n{USAGE}"));
+    }
+    let day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| format!("<day> must be a positive integer. Usage:\n{USAGE}"))?;
+    if day < 1 {
+        return Err(format!("<day> must be a positive integer. Usage:\n{USAGE}"));
+    }
+    let session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    let Some(meal) = meal else {
+        return Err(format!("at least one --meal \"<text>\" is required. Usage:\n{USAGE}"));
+    };
+    if let Err(reason) = crate::checks::check_title_map_url(&meal) {
+        return Err(format!("meal \"{meal}\" has a {reason}"));
+    }
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &dest).await?;
+    require_session(&conn, &plan_id, &destination, day, &session).await?;
+
+    println!(
+        "\n🍜 Adding meal:\n   Destination: {destination}, Day {day}, {session} — {meal}{}",
+        if recommended { " (ai_recommended)" } else { "" }
+    );
+
+    let source = if recommended { "ai_recommended" } else { "confirmed" };
+    let outcome = async {
+        crate::cascade::common::begin_immediate(&conn, "add-meal").await?;
+        let version_before = read_version(&conn, &plan_id).await?;
+        let sort_order = itinerary::append_session_meal(
+            &conn,
+            &plan_id,
+            &destination,
+            day,
+            &session,
+            &meal,
+            source,
+            &now_db_datetime(),
+        )
+        .await?;
+        touch_day(&conn, &plan_id, &destination, day).await?;
+        crate::record::emit_record_event(
+            &conn,
+            &plan_id,
+            &destination,
+            "itinerary_session_meal_added",
+            &[
+                ("day_number", day.to_string()),
+                ("session", session.clone()),
+                ("sort_order", sort_order.to_string()),
+                ("meal", meal.clone()),
+                ("recommended", recommended.to_string()),
+            ],
+            version_before,
+            "add-meal",
+            &format!("D{day}/{session}: +{meal}"),
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    crate::cascade::common::finish_tx(&conn, "add-meal", outcome).await?;
+    println!("✅ Meal added");
+    Ok(())
+}
+
+/// `set-meal <day> <session> <text-match> --meal "<t>" [--dest slug]` — change
+/// ONE meal's text in place (unique text match; ambiguous → Err with the
+/// candidates). Works on variant days too (editing alternatives is normal
+/// planning; only recording refuses variants). Audited.
+pub async fn run_set_meal(args: &[String], plan_id: String) -> Result<(), String> {
+    const USAGE: &str =
+        "travel set-meal <day> <session> <text-match> --meal \"<new text>\" [--dest <slug>]";
+    let mut dest: Option<String> = None;
+    let mut new_meal: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                dest = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --dest".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--meal" => {
+                new_meal = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --meal".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            f if crate::plan_resolver::is_resolver_flag(f) => i += 2,
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}. Usage:\n{USAGE}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() != 3 {
+        return Err(format!("Usage:\n{USAGE}"));
+    }
+    let day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| format!("<day> must be a positive integer. Usage:\n{USAGE}"))?;
+    if day < 1 {
+        return Err(format!("<day> must be a positive integer. Usage:\n{USAGE}"));
+    }
+    let session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    let needle = positional[2].clone();
+    let Some(new_meal) = new_meal else {
+        return Err(format!("--meal \"<new text>\" is required. Usage:\n{USAGE}"));
+    };
+    if let Err(reason) = crate::checks::check_title_map_url(&new_meal) {
+        return Err(format!("meal \"{new_meal}\" has a {reason}"));
+    }
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &dest).await?;
+    require_session(&conn, &plan_id, &destination, day, &session).await?;
+    let sort_order = travel_db::repo::records::match_meal_unique(
+        &conn, &plan_id, &destination, day, &session, &needle,
+    )
+    .await?;
+
+    println!(
+        "\n🍽️  Setting meal:\n   Destination: {destination}, Day {day}, {session} #{sort_order} → {new_meal}"
+    );
+
+    let outcome = async {
+        crate::cascade::common::begin_immediate(&conn, "set-meal").await?;
+        let version_before = read_version(&conn, &plan_id).await?;
+        itinerary::update_session_meal_text(
+            &conn,
+            &plan_id,
+            &destination,
+            day,
+            &session,
+            sort_order,
+            &new_meal,
+            &now_db_datetime(),
+        )
+        .await?;
+        touch_day(&conn, &plan_id, &destination, day).await?;
+        crate::record::emit_record_event(
+            &conn,
+            &plan_id,
+            &destination,
+            "itinerary_session_meal_updated",
+            &[
+                ("day_number", day.to_string()),
+                ("session", session.clone()),
+                ("sort_order", sort_order.to_string()),
+                ("match", needle.clone()),
+                ("meal", new_meal.clone()),
+            ],
+            version_before,
+            "set-meal",
+            &format!("D{day}/{session} #{sort_order}: {needle} → {new_meal}"),
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    crate::cascade::common::finish_tx(&conn, "set-meal", outcome).await?;
+    println!("✅ Meal updated");
+    Ok(())
+}
+
 /// `clear-meals <day> <session> [--dest slug]`: remove every meal of one session.
 /// Nothing to clear -> one-line note, no write, no version bump.
 pub async fn run_clear_meals(args: &[String], plan_id: String) -> Result<(), String> {

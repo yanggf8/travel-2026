@@ -1046,6 +1046,129 @@ struct ActivityAdd {
 // session) by id OR case-insensitive title substring, then DELETE the
 // row (mirrors the `remove_activity` dispatch) and emit an
 // `activity_removed` plan_event.
+/// `set-activity-notes <day> <session> <id|title> --notes "<t>" | --clear [--dest slug]`
+/// — change one activity's notes IN PLACE (id, poi_id and every other column
+/// untouched). Unique text/id match (ambiguous → Err listing candidates);
+/// works on variant days too (editing alternatives is normal planning).
+/// The edit that used to force delete-and-recreate, churning activity ids.
+pub async fn run_set_notes(args: &[String], plan_id: String) -> Result<(), String> {
+    const USAGE: &str =
+        "travel set-activity-notes <day> <session> <id|title> --notes \"<text>\" | --clear [--dest <slug>]";
+    let mut dest: Option<String> = None;
+    let mut notes: Option<String> = None;
+    let mut clear = false;
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                dest = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --dest".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--notes" => {
+                notes = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| "missing value for --notes".to_string())?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--clear" => {
+                clear = true;
+                i += 1;
+            }
+            f if crate::plan_resolver::is_resolver_flag(f) => i += 2,
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}. Usage:\n{USAGE}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() != 3 {
+        return Err(format!("Usage:\n{USAGE}"));
+    }
+    let day = positional[0]
+        .parse::<i64>()
+        .map_err(|_| format!("<day> must be a positive integer. Usage:\n{USAGE}"))?;
+    if day < 1 {
+        return Err(format!("<day> must be a positive integer. Usage:\n{USAGE}"));
+    }
+    let session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    if notes.is_none() && !clear {
+        return Err(format!("pass --notes \"<text>\" or --clear. Usage:\n{USAGE}"));
+    }
+    if notes.is_some() && clear {
+        return Err(format!("--notes and --clear are mutually exclusive. Usage:\n{USAGE}"));
+    }
+    let key = positional[2].clone();
+    let value = if clear { None } else { notes.clone() };
+
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &dest).await?;
+    let activity_id = travel_db::repo::records::match_activity_unique(
+        &conn, &plan_id, &destination, day, &session, &key,
+    )
+    .await?;
+
+    println!(
+        "\n📝 Setting activity notes: D{day}/{session} {key} → {}",
+        if clear { "(clear)".to_string() } else { value.clone().unwrap_or_default() }
+    );
+
+    let outcome = async {
+        crate::cascade::common::begin_immediate(&conn, "set-activity-notes").await?;
+        let version_before = read_version(&conn, &plan_id).await?;
+        itinerary::update_activity_field(
+            &conn,
+            &plan_id,
+            &destination,
+            day,
+            &session,
+            &activity_id,
+            "notes",
+            value.clone(),
+            &now_db_datetime(),
+        )
+        .await?;
+        touch_day(&conn, &plan_id, &destination, day).await?;
+        crate::record::emit_record_event(
+            &conn,
+            &plan_id,
+            &destination,
+            "activity_notes_set",
+            &[
+                ("activity_id", activity_id.clone()),
+                ("day_number", day.to_string()),
+                ("session", session.clone()),
+                (
+                    "notes",
+                    value.clone().unwrap_or_else(|| "undefined".to_string()),
+                ),
+            ],
+            version_before,
+            "set-activity-notes",
+            &format!("D{day}/{session} {activity_id} notes set"),
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    crate::cascade::common::finish_tx(&conn, "set-activity-notes", outcome).await?;
+    println!("✅ Notes updated (id preserved: {activity_id})");
+    Ok(())
+}
+
 pub async fn run_delete(args: &[String], plan_id: String) -> Result<(), String> {
     let parsed = parse_delete(args)?;
 

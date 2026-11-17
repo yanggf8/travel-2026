@@ -447,12 +447,21 @@ pub async fn insert_variant_day(
 }
 
 /// Delete one day row and every child row it owns (activity_tags first, `days` last).
+/// Refuses first when the day holds any trip record — row statuses OR a written
+/// session summary (spec X3; `Day` scope covers both).
 pub async fn delete_day_content(
     conn: &Connection,
     plan_id: &str,
     destination: &str,
     day: i64,
 ) -> Result<(), String> {
+    crate::repo::records::ensure_unrecorded(
+        conn,
+        plan_id,
+        destination,
+        crate::repo::records::RecordScope::Day { day },
+    )
+    .await?;
     conn.execute(
         "DELETE FROM activity_tags WHERE activity_id IN \
             (SELECT id FROM activities WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3)",

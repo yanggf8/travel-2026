@@ -4,6 +4,7 @@
 //! touch + the day-exists guard). The audit triad (`plan_events`/`plan_event_data`/`operation_runs`/
 //! `plans.version`) stays in `travel-cli` (`cascade::common`) — this module never touches it.
 
+use crate::repo::records::{ensure_unrecorded, RecordScope};
 use libsql::Connection;
 
 /// One route segment to write (the typed payload for an INSERT row).
@@ -29,6 +30,7 @@ pub async fn day_exists(
 }
 
 /// Delete the segment at one `(day, sort_order)` slot (single-segment path).
+/// Refuses first when the slot carries a trip record (spec X3).
 pub async fn delete_slot(
     conn: &Connection,
     plan_id: &str,
@@ -36,6 +38,13 @@ pub async fn delete_slot(
     day: i64,
     sort_order: i64,
 ) -> Result<(), String> {
+    ensure_unrecorded(
+        conn,
+        plan_id,
+        destination,
+        RecordScope::LegSlot { day, sort_order },
+    )
+    .await?;
     conn.execute(
         "DELETE FROM day_route_segments \
          WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND sort_order = ?4",
@@ -47,12 +56,20 @@ pub async fn delete_slot(
 }
 
 /// Delete every `ai_recommended` segment for one day (derive-routes stale cleanup).
+/// Refuses first when any of those legs carries a trip record (spec X3).
 pub async fn delete_ai_recommended_for_day(
     conn: &Connection,
     plan_id: &str,
     destination: &str,
     day: i64,
 ) -> Result<u64, String> {
+    ensure_unrecorded(
+        conn,
+        plan_id,
+        destination,
+        RecordScope::LegsAiRecommendedOfDay { day },
+    )
+    .await?;
     conn.execute(
         "DELETE FROM day_route_segments WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3 AND source = 'ai_recommended'",
         libsql::params![plan_id.to_string(), destination.to_string(), day],
@@ -62,12 +79,14 @@ pub async fn delete_ai_recommended_for_day(
 }
 
 /// Delete every segment for `(day)` (bulk-replace path).
+/// Refuses first when any leg of the day carries a trip record (spec X3).
 pub async fn delete_all_for_day(
     conn: &Connection,
     plan_id: &str,
     destination: &str,
     day: i64,
 ) -> Result<(), String> {
+    ensure_unrecorded(conn, plan_id, destination, RecordScope::LegsOfDay { day }).await?;
     conn.execute(
         "DELETE FROM day_route_segments \
          WHERE plan_id = ?1 AND destination = ?2 AND day_number = ?3",

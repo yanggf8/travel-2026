@@ -49,7 +49,7 @@ CREATE TABLE activities (
     notes TEXT,
     priority TEXT NOT NULL DEFAULT 'want' CHECK(priority IN ('must','want','optional')),
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  , poi_id TEXT, source TEXT NOT NULL DEFAULT 'confirmed');
+  , poi_id TEXT, source TEXT NOT NULL DEFAULT 'confirmed', record_status TEXT, record_note TEXT);
 
 CREATE TABLE activity_tags (
   activity_id TEXT NOT NULL, tag TEXT NOT NULL,
@@ -281,7 +281,7 @@ CREATE TABLE day_route_segments (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
   day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
   from_place TEXT NOT NULL, to_place TEXT NOT NULL,
-  mode TEXT NOT NULL, duration_min INTEGER, notes TEXT, start_time TEXT, source TEXT NOT NULL DEFAULT 'confirmed',
+  mode TEXT NOT NULL, duration_min INTEGER, notes TEXT, start_time TEXT, source TEXT NOT NULL DEFAULT 'confirmed', record_status TEXT, record_note TEXT,
   PRIMARY KEY (plan_id, destination, day_number, sort_order)
 );
 
@@ -1197,7 +1197,7 @@ CREATE TABLE session_meals (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL,
   day_number INTEGER NOT NULL, session_type TEXT NOT NULL,
   sort_order INTEGER NOT NULL, meal TEXT NOT NULL,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, source TEXT NOT NULL DEFAULT 'confirmed',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, source TEXT NOT NULL DEFAULT 'confirmed', record_status TEXT, record_note TEXT,
   PRIMARY KEY (plan_id, destination, day_number, session_type, sort_order)
 );
 
@@ -1358,7 +1358,7 @@ CREATE TABLE "timesofday" (
     time_range_end TEXT,
     focus_zh TEXT,
     transit_notes_zh TEXT,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, record_summary_zh TEXT,
     PRIMARY KEY (plan_id, destination, day_number, session_type)
   );
 

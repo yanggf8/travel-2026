@@ -113,6 +113,24 @@ fn day_weather_sessions_ddl(name: &str) -> String {
     )
 }
 
+/// Trip-record schema (2026-11-16-trip-record-design §4): `record_status` +
+/// `record_note` on the three itinerary row tables, `record_summary_zh` on
+/// timesofday. Idempotent ADD COLUMN (duplicate-column tolerated by
+/// [`add_column`]); run at the end of the migrator's ADD COLUMN section.
+async fn add_record_columns(conn: &libsql::Connection) {
+    for ddl in [
+        "ALTER TABLE activities ADD COLUMN record_status TEXT;",
+        "ALTER TABLE activities ADD COLUMN record_note TEXT;",
+        "ALTER TABLE session_meals ADD COLUMN record_status TEXT;",
+        "ALTER TABLE session_meals ADD COLUMN record_note TEXT;",
+        "ALTER TABLE day_route_segments ADD COLUMN record_status TEXT;",
+        "ALTER TABLE day_route_segments ADD COLUMN record_note TEXT;",
+        "ALTER TABLE timesofday ADD COLUMN record_summary_zh TEXT;",
+    ] {
+        add_column(conn, ddl).await;
+    }
+}
+
 /// Widen `ota_job_params.param_key` CHECK to include `destination` (idempotent table-rebuild).
 async fn migrate_ota_job_params_destination(conn: &libsql::Connection) -> Result<(), String> {
     if !table_exists(conn, "ota_job_params").await {
@@ -1746,6 +1764,12 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     ] {
         add_column(&conn, ddl).await;
     }
+    // Trip-record columns (docs/superpowers/specs/2026-11-16-trip-record-design.md §4):
+    // a per-row done/skipped status + one-line note on activities / session_meals /
+    // day_route_segments, and a per-session ZH actual summary on timesofday. All
+    // nullable, no CHECK, no default — the legal values are validated in Rust by
+    // travel_db::repo::records::RecordStatus. Schema only; rows come from the CLI.
+    add_record_columns(&conn).await;
     // Guest ratings: one row per REVIEW SOURCE, because the scales differ
     // (Booking.com is /10, Google is /5) and averaging them would invent a number.
     // Normalized child table — never a "9.0/10 (266)" string in one column.
@@ -3133,5 +3157,73 @@ mod offers_dedup_backfill_tests {
             count(&conn, "SELECT COUNT(*) FROM offers WHERE dedup_key IS NOT NULL").await,
             stamped
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! In-memory tests for the trip-record schema columns (Task 1 of
+    //! docs/plans/2026-11-16-trip-record.md). Never touches the shared Turso DB.
+
+    use super::*;
+
+    async fn mem_conn() -> libsql::Connection {
+        libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .expect("in-memory db")
+            .connect()
+            .expect("connect")
+    }
+
+    /// Minimal PRE-migration schema of the four record tables, taken from
+    /// scripts/schema.sql — the record columns are deliberately absent.
+    async fn create_record_tables(conn: &libsql::Connection) {
+        for ddl in [
+            "CREATE TABLE activities (id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, \
+             destination TEXT NOT NULL, day_number INTEGER NOT NULL, session_type TEXT NOT NULL, \
+             sort_order INTEGER NOT NULL DEFAULT 0, title TEXT NOT NULL, area TEXT, notes TEXT, \
+             priority TEXT NOT NULL DEFAULT 'want', \
+             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE session_meals (plan_id TEXT NOT NULL, destination TEXT NOT NULL, \
+             day_number INTEGER NOT NULL, session_type TEXT NOT NULL, sort_order INTEGER NOT NULL, \
+             meal TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, \
+             PRIMARY KEY (plan_id, destination, day_number, session_type, sort_order))",
+            "CREATE TABLE day_route_segments (plan_id TEXT NOT NULL, destination TEXT NOT NULL, \
+             day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL, from_place TEXT NOT NULL, \
+             to_place TEXT NOT NULL, mode TEXT NOT NULL, duration_min INTEGER, notes TEXT, \
+             PRIMARY KEY (plan_id, destination, day_number, sort_order))",
+            "CREATE TABLE timesofday (plan_id TEXT NOT NULL, destination TEXT NOT NULL, \
+             day_number INTEGER NOT NULL, session_type TEXT NOT NULL, focus TEXT, focus_zh TEXT, \
+             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, \
+             PRIMARY KEY (plan_id, destination, day_number, session_type))",
+        ] {
+            conn.execute(ddl, ()).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn record_columns_added_idempotently() {
+        let conn = mem_conn().await;
+        create_record_tables(&conn).await;
+
+        add_record_columns(&conn).await;
+        // Re-run must not error: duplicate-column is tolerated (idempotent migrate).
+        add_record_columns(&conn).await;
+
+        for (table, col) in [
+            ("activities", "record_status"),
+            ("activities", "record_note"),
+            ("session_meals", "record_status"),
+            ("session_meals", "record_note"),
+            ("day_route_segments", "record_status"),
+            ("day_route_segments", "record_note"),
+            ("timesofday", "record_summary_zh"),
+        ] {
+            assert!(
+                has_column(&conn, table, col).await,
+                "{table}.{col} must exist after add_record_columns"
+            );
+        }
     }
 }
