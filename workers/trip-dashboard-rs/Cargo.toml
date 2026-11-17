@@ -21,6 +21,7 @@ hmac = "0.12"
 sha2 = "0.10"
 # join_all for the concurrent R2 map HEADs (already in the tree via `worker`).
 futures-util = "0.3"
+note-core = { path = "../../rust/crates/note-core" }
 
 [profile.release]
 opt-level = "s"
