@@ -66,7 +66,7 @@ use crate::verify_site_render as render;
 use crate::verify_site_sheet::{self as sheet, SheetCell};
 
 pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>] [--render <dir>] [--at YYYY-MM-DDTHH:MM]\n  \
---at pins the dashboard clock (JST) instead of the day before the trip, so the during-trip page \
+--at pins the dashboard clock (destination local time) instead of the day before the trip, so the during-trip page \
 (現在・接下來 card, today-only open day cards) is the one checked and rendered.\n  \
 Read-only check of the LIVE dashboard: each map key's live bytes vs map_artifacts \
 (sha256 + size; skipped keys must serve the worker placeholder), input-hash freshness \
@@ -753,7 +753,7 @@ pub(crate) struct Args {
     pub(crate) plan: Option<String>,
     pub(crate) contact_sheet: Option<PathBuf>,
     pub(crate) render: Option<PathBuf>,
-    /// `--at YYYY-MM-DDTHH:MM`: the JST clock the dashboard is pinned to
+    /// `--at YYYY-MM-DDTHH:MM`: the destination-local clock the dashboard is pinned to
     /// (default: noon the day before the first main day — outside the trip).
     pub(crate) at: Option<String>,
 }
@@ -810,7 +810,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--at" => {
                 let v = value(i, "--at")?;
                 if !valid_at(&v) {
-                    return Err(format!("--at must be YYYY-MM-DDTHH:MM (JST), got {v:?}"));
+                    return Err(format!("--at must be YYYY-MM-DDTHH:MM (destination local time), got {v:?}"));
                 }
                 out.at = Some(v);
                 i += 2;

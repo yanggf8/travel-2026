@@ -562,7 +562,7 @@ pub(crate) fn toc_checks(doc: &PageDoc) -> Vec<(&'static str, Check)> {
     vec![("toc", check)]
 }
 
-/// The `?at=` clock pin for the page checks: noon JST on the day before the
+/// The `?at=` clock pin for the page checks: noon destination local time on the day before the
 /// plan's first main day — outside the trip window, so the page is served in its
 /// deterministic all-open shape. None when the date does not parse.
 pub(crate) fn outside_trip_pin(first_main_day: &str) -> Option<String> {
