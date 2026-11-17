@@ -533,6 +533,33 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("stayDateOneNight", true) => "{m}/{d}（{wd}）{n} 晚",
         ("stayDateNights", false) => "{wd} {m}/{d} · {n} nights",
         ("stayDateNights", true) => "{m}/{d}（{wd}）{n} 晚",
+        // ---- offline save status / banner (render/offline.rs, plan page) ----
+        // The captions are pre-filled server-side; {maps}/{pdfs}/{n}/{time}
+        // stay literal placeholders — the inline script (plan Task 4) fills
+        // them at runtime. ZH copy is spec §7 verbatim; offlineKeptOld comes
+        // from spec §6 step 5 (the plan adds it to the §7 list).
+        ("offlineSaving", false) => "Saving to this device...",
+        ("offlineSaving", true) => "正在存到本機…",
+        ("offlineSaved", false) => "Saved - you can read it offline (maps {maps}, vouchers {pdfs})",
+        ("offlineSaved", true) => "已存好，可離線查看（地圖 {maps}、票券 {pdfs}）",
+        ("offlinePartial", false) => "Saved, but {n} item(s) not saved:",
+        ("offlinePartial", true) => "已存，但 {n} 項未存：",
+        ("offlineRetry", false) => "Retry",
+        ("offlineRetry", true) => "重試",
+        ("offlineFailed", false) => "Not saved - this page will not open offline",
+        ("offlineFailed", true) => "沒存好，離線時看不到這一頁",
+        ("offlineCopy", false) => "Offline copy - saved {time}, may not be up to date",
+        ("offlineCopy", true) => "離線副本 · {time} 儲存，可能不是最新",
+        ("offlineRelogin", false) => "Offline copy - sign in again to update",
+        ("offlineRelogin", true) => "離線副本 · 需要重新登入才能更新",
+        ("offlineUnsupported", false) => "This browser cannot save for offline use - open it in Safari/Chrome",
+        ("offlineUnsupported", true) => "這個瀏覽器不能離線保存，請用 Safari／Chrome 開啟",
+        // offlineMiss: the SW's offline fallback page copy, filled into /sw.js
+        // at serve time (render/sw.rs) — never a CJK literal in the JS source.
+        ("offlineMiss", false) => "This page has not been saved on this phone yet. Open it while online; once you see the Saved notice, you can read it offline.",
+        ("offlineMiss", true) => "這一頁還沒存到這支手機。連上網路後打開，看到『已存好』之後就能離線看。",
+        ("offlineKeptOld", false) => "This update was not fully saved - offline you will see the {time} version",
+        ("offlineKeptOld", true) => "這次更新沒存完，離線時會看到 {time} 的版本",
         _ => "",
     }
 }

@@ -365,12 +365,12 @@ mod tests {
         // Viewer (empty owner chrome): the day-notes data never renders, even if
         // the caller passed Some — the block is owner-chrome-gated in the render.
         let viewer = crate::render::render_plan_at_with_notes(
-            &plan, "zh", None, &crate::render::map::MapStatus::default(), "", None, Some(&notes),
+            &plan, "zh", None, &crate::render::map::MapStatus::default(), "", None, Some(&notes), 0,
         );
         assert!(!viewer.contains("day-notes"), "{viewer}");
         // Owner: the block renders at that day, linking to the note editor.
         let owner = crate::render::render_plan_at_with_notes(
-            &plan, "zh", None, &crate::render::map::MapStatus::default(), "owner-chrome", None, Some(&notes),
+            &plan, "zh", None, &crate::render::map::MapStatus::default(), "owner-chrome", None, Some(&notes), 0,
         );
         assert!(owner.contains("class=\"day-notes\""), "{owner}");
         assert!(owner.contains("href=\"/notes/note_0123456789abcdef/edit\""));

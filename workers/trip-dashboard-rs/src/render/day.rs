@@ -755,8 +755,16 @@ pub fn render_with_documents_at(
         CardOpen::Today => " data-today open",
         CardOpen::Collapsed => "",
     };
+    // The calendar date rides on the day card (spec §6 現在卡片小改): the
+    // inline script finds "today's" card by date on a stale offline copy, where
+    // `data-day` alone cannot say which day is now. Empty date → no attribute.
+    let date_attr = if day.date.is_empty() {
+        String::new()
+    } else {
+        format!(" data-date=\"{}\"", esc(&day.date))
+    };
     h.push_str(&format!(
-        "<section class=\"day day-{}\" data-day=\"{}\" id=\"{block}\"><details data-block=\"{block}\"{open_attr}>",
+        "<section class=\"day day-{}\" data-day=\"{}\"{date_attr} id=\"{block}\"><details data-block=\"{block}\"{open_attr}>",
         esc(&day.day_type),
         day.day_number
     ));
@@ -834,6 +842,42 @@ mod tests {
     }
 
     #[test]
+    fn day_card_carries_data_date() {
+        // data-date (the calendar date, not the day number) is how the inline
+        // script finds "today's" card on a stale offline copy (spec §6 現在卡片小改).
+        let day = Day {
+            day_number: 2,
+            date: "2026-11-14".into(),
+            day_type: "full".into(),
+            ..Default::default()
+        };
+        let html = render_with_documents(
+            &day,
+            "p-1",
+            "zh",
+            &super::super::map::MapStatus::default(),
+            &[],
+            &[],
+            None,
+            CardOpen::Open,
+        );
+        assert!(html.contains("data-day=\"2\" data-date=\"2026-11-14\""), "{html}");
+        // No date → the attribute is omitted entirely.
+        let undated = Day { day_number: 2, day_type: "full".into(), ..Default::default() };
+        let html2 = render_with_documents(
+            &undated,
+            "p-1",
+            "zh",
+            &super::super::map::MapStatus::default(),
+            &[],
+            &[],
+            None,
+            CardOpen::Open,
+        );
+        assert!(!html2.contains("data-date"), "{html2}");
+    }
+
+    #[test]
     fn no_variant_plan_html() {
         let day = Day {
             day_number: 2,
@@ -891,7 +935,7 @@ mod tests {
         );
         assert_eq!(
             html,
-            "<section class=\"day day-full\" data-day=\"2\" id=\"day-2\"><details data-block=\"day-2\" open><summary><h2>第 2 天 · 2026-11-14</h2></summary><div class=\"day-body\"><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\" data-search-unit data-search-label=\"11/14（六）· 今日路線\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\" id=\"day-2-morning\" data-search-unit data-search-label=\"11/14（六）· 上午\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></div></details></section>"
+            "<section class=\"day day-full\" data-day=\"2\" data-date=\"2026-11-14\" id=\"day-2\"><details data-block=\"day-2\" open><summary><h2>第 2 天 · 2026-11-14</h2></summary><div class=\"day-body\"><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\" data-search-unit data-search-label=\"11/14（六）· 今日路線\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\" id=\"day-2-morning\" data-search-unit data-search-label=\"11/14（六）· 上午\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></div></details></section>"
         );
     }
 

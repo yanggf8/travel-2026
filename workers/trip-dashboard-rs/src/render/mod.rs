@@ -6,6 +6,7 @@ pub mod index;
 pub mod map;
 pub mod now;
 pub mod notes;
+pub mod offline;
 pub mod session;
 pub mod share;
 pub mod summary;
@@ -59,9 +60,22 @@ fn page_with_body_attrs(title: &str, body: &str, lang: &str, body_attrs: &str) -
 /// it rendered the owner view (owner chrome present — only an owner session
 /// gets it) or the token viewer view. Read by `travel verify-site` to confirm
 /// it is looking at the right plan through the viewer's eyes.
-fn plan_body_attrs(plan_id: &str, owner_chrome: &str) -> String {
-    let view = if owner_chrome.is_empty() { "viewer" } else { "owner" };
-    format!(" data-plan-id=\"{}\" data-view=\"{view}\"", esc(plan_id))
+/// Offline markers (plan Task 2): `data-rendered-at` (UTC epoch ms — the SW's
+/// save timestamp and the banner's "saved {time}"), `data-served="net"` (the
+/// SW rewrites it to "cache"/"cache-relogin" when serving a copy), and
+/// `data-tz` (the destination zone the banner formats the save time in —
+/// omitted when the destination has none; never a guessed zone).
+fn plan_body_attrs(plan_id: &str, owner_chrome: &str, rendered_at_ms: i64, tz: &str) -> String {
+    let view = offline::view_of(owner_chrome);
+    let tz_attr = if tz.is_empty() {
+        String::new()
+    } else {
+        format!(" data-tz=\"{}\"", esc(tz))
+    };
+    format!(
+        " data-plan-id=\"{}\" data-view=\"{view}\" data-rendered-at=\"{rendered_at_ms}\" data-served=\"net\"{tz_attr}",
+        esc(plan_id)
+    )
 }
 
 /// Render a full plan page with no clock: the page outside any trip window
@@ -74,7 +88,7 @@ pub fn render_plan(
     map_status: &map::MapStatus,
     owner_chrome: &str,
 ) -> String {
-    render_plan_at(plan, lang, token, map_status, owner_chrome, None)
+    render_plan_at(plan, lang, token, map_status, owner_chrome, None, 0)
 }
 
 /// Render a full plan page at `clock` (destination-local now, or the `?at=` pin).
@@ -100,8 +114,9 @@ pub fn render_plan_at(
     map_status: &map::MapStatus,
     owner_chrome: &str,
     clock: Option<&now::Clock>,
+    rendered_at_ms: i64,
 ) -> String {
-    render_plan_at_with_notes(plan, lang, token, map_status, owner_chrome, clock, None)
+    render_plan_at_with_notes(plan, lang, token, map_status, owner_chrome, clock, None, rendered_at_ms)
 }
 
 /// [`render_plan_at`] plus the owner-only per-day travel-note entry (spec §8.1,
@@ -118,12 +133,17 @@ pub fn render_plan_at_with_notes(
     owner_chrome: &str,
     clock: Option<&now::Clock>,
     owner_day_notes: Option<&std::collections::BTreeMap<i64, Vec<(String, String)>>>,
+    rendered_at_ms: i64,
 ) -> String {
     let mut body = String::new();
     if !owner_chrome.is_empty() {
         body.push_str(owner_chrome);
         body.push_str(&share::copy_script());
     }
+    // The hidden offline save-status bar + banner, before the 目錄 — the first
+    // thing in the page body, all `hidden` until the inline script (Task 4)
+    // unhides what applies. No-JS readers never see it (SSR-first constraint).
+    body.push_str(&offline::status_bar(lang));
     let today = clock.and_then(|c| now::trip_today(&plan.days, c));
     let now_card = match (today, clock) {
         (Some(day), Some(c)) => now::now_card(plan, day, c, lang, token),
@@ -238,7 +258,12 @@ pub fn render_plan_at_with_notes(
     // Last in <body>: every block it restores/wires already exists. Viewer and
     // owner pages alike; the page works fully without it.
     body.push_str(BLOCK_MEMORY_SCRIPT);
-    page_with_body_attrs(&plan.display_name, &body, lang, &plan_body_attrs(&plan.plan_id, owner_chrome))
+    page_with_body_attrs(
+        &plan.display_name,
+        &body,
+        lang,
+        &plan_body_attrs(&plan.plan_id, owner_chrome, rendered_at_ms, &plan.timezone),
+    )
 }
 
 /// Which optional blocks rendered (the 目錄 lists only those) and which main
@@ -1038,8 +1063,20 @@ mod tests {
     fn toc_tops_the_page_and_links_every_rendered_block_in_page_order() {
         let html = render_plan(&full_nav_plan(), "zh", None, &map::MapStatus::default(), "");
         let toc = html.find("<nav class=\"page-toc\" id=\"toc\" aria-label=\"目錄\">").expect("toc");
-        // First thing in <body>, above the plan map and the booking summary.
-        assert!(html.contains("<body data-plan-id=\"kyoto-nov-2026\" data-view=\"viewer\"><nav class=\"page-toc\""), "{html}");
+        // First things in <body>: the hidden offline status/banner (render_plan
+        // stamps rendered_at 0), then the TOC — above the plan map and the
+        // booking summary.
+        assert!(
+            html.contains(
+                "<body data-plan-id=\"kyoto-nov-2026\" data-view=\"viewer\" data-rendered-at=\"0\" data-served=\"net\" data-tz=\"Asia/Tokyo\">\
+                 <div class=\"offline-status\" id=\"offline-status\" hidden"
+            ),
+            "{html}"
+        );
+        assert!(
+            html.find("id=\"offline-status\"").unwrap() < toc,
+            "offline status must precede the TOC: {html}"
+        );
         let summary = html.find("id=\"sec-summary\"").expect("summary");
         let weather = html.find("<details class=\"weather-overview\" id=\"sec-weather\"").expect("weather");
         assert!(toc < summary && summary < weather, "{html}");
@@ -1100,7 +1137,7 @@ mod tests {
     fn during_the_trip_now_and_quick_info_lead_and_only_today_is_open() {
         let plan = trip_nav_plan();
         let at = now::parse_at("2026-11-14T12:00").unwrap();
-        let html = render_plan_at(&plan, "zh", None, &map::MapStatus::default(), "", Some(&at));
+        let html = render_plan_at(&plan, "zh", None, &map::MapStatus::default(), "", Some(&at), 0);
         let toc = html.find("<nav class=\"page-toc\"").expect("toc");
         let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
         let hrefs: Vec<&str> = nav.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
@@ -1130,7 +1167,7 @@ mod tests {
         // Outside the trip (before / after / a gap day): no now card, all open — today's page.
         for outside in ["2026-11-13T12:00", "2026-11-16T08:00"] {
             let at = now::parse_at(outside).unwrap();
-            let html = render_plan_at(&plan, "zh", None, &map::MapStatus::default(), "", Some(&at));
+            let html = render_plan_at(&plan, "zh", None, &map::MapStatus::default(), "", Some(&at), 0);
             assert!(!html.contains("<section class=\"now-card\""), "{outside}: {html}");
             assert!(!html.contains(" data-today open"), "{outside}");
             assert!(html.contains("<details data-block=\"day-1\" open>") && html.contains("<details data-block=\"day-2\" open>"), "{outside}");
@@ -1148,6 +1185,7 @@ mod tests {
             &map::MapStatus::default(),
             "",
             Some(&now::parse_at("2026-11-14T12:00").unwrap()),
+            0,
         );
         let toc = html.find("<nav class=\"page-toc\"").expect("toc");
         let nav = &html[toc..html[toc..].find("</nav>").unwrap() + toc];
@@ -1211,8 +1249,8 @@ mod tests {
         for (outer, key) in [
             ("<section class=\"plan-documents summary-box\" id=\"sec-docs\">", "sec-docs"),
             ("<section class=\"booking-summary summary-box\" id=\"sec-summary\">", "sec-summary"),
-            ("<section class=\"day day-full\" data-day=\"1\" id=\"day-1\">", "day-1"),
-            ("<section class=\"day day-departure\" data-day=\"2\" id=\"day-2\">", "day-2"),
+            ("<section class=\"day day-full\" data-day=\"1\" data-date=\"2026-11-14\" id=\"day-1\">", "day-1"),
+            ("<section class=\"day day-departure\" data-day=\"2\" data-date=\"2026-11-15\" id=\"day-2\">", "day-2"),
         ] {
             assert!(
                 html.contains(&format!("{outer}<details data-block=\"{key}\" open><summary><h2>")),
@@ -1277,7 +1315,7 @@ mod tests {
         // Page text only ever reaches the DOM through textContent.
         assert!(!BLOCK_MEMORY_SCRIPT.contains("innerHTML"));
         assert!(!BLOCK_MEMORY_SCRIPT.contains("insertAdjacentHTML"));
-        let during = render_plan_at(&plan, "zh", None, &status, "", Some(&now::parse_at("2026-11-14T09:00").unwrap()));
+        let during = render_plan_at(&plan, "zh", None, &status, "", Some(&now::parse_at("2026-11-14T09:00").unwrap()), 0);
         assert_eq!(during.matches("<script>").count(), 1, "{during}");
         // The per-minute re-mark reads the card's destination timezone (the
         // now card's data-now-tz) via Intl — no hardcoded offset anywhere.
@@ -1290,6 +1328,86 @@ mod tests {
         assert!(!page("t", "x", "zh").contains("<script"));
     }
 
+    /// Extract one double-quoted attribute's value from an HTML string.
+    fn attr_of(html: &str, attr: &str) -> String {
+        let needle = format!("{attr}=\"");
+        let i = html.find(&needle).unwrap_or_else(|| panic!("{attr} missing: {html}"));
+        let rest = &html[i + needle.len()..];
+        rest[..rest.find('"').expect("unterminated attribute")].to_string()
+    }
+
+    #[test]
+    fn plan_view_header_matches_body_data_view() {
+        // The X-TD-View header and the body's data-view must come from the SAME
+        // classifier — the SW's save gate cross-checks them (spec §5) and would
+        // refuse to store (or store under the wrong role) if they diverged.
+        let plan = full_nav_plan();
+        let status = map::MapStatus::default();
+        for chrome in ["", "<div class=\"owner-chrome\"></div>"] {
+            let view = offline::view_of(chrome);
+            assert_eq!(offline::plan_page_headers(view)[1].1, view, "{chrome}");
+            let html = render_plan(&plan, "zh", None, &status, chrome);
+            let body_view = attr_of(&html, "data-view");
+            assert_eq!(body_view, view, "{chrome}: {html}");
+        }
+    }
+
+    #[test]
+    fn plan_body_carries_offline_markers() {
+        // The render timestamp (UTC epoch ms) and served marker the SW rewrites
+        // ("net" → "cache"/"cache-relogin") and Task 4's script reads. The
+        // destination timezone rides on the body too — the save-time banner needs
+        // it outside the trip window, where no now card exists (spec §7).
+        let plan = full_nav_plan(); // timezone "Asia/Tokyo"
+        let at = now::parse_at("2026-11-14T09:00").unwrap();
+        let html = render_plan_at(
+            &plan,
+            "zh",
+            None,
+            &map::MapStatus::default(),
+            "",
+            Some(&at),
+            1731800000000,
+        );
+        assert!(html.contains(" data-rendered-at=\"1731800000000\" data-served=\"net\""), "{html}");
+        assert!(html.contains(" data-tz=\"Asia/Tokyo\""), "{html}");
+        // Empty timezone → the attribute is omitted entirely; never guess one.
+        let mut bare = full_nav_plan();
+        bare.timezone.clear();
+        let html2 = render_plan_at(&bare, "zh", None, &map::MapStatus::default(), "", Some(&at), 0);
+        assert!(html2.contains(" data-rendered-at=\"0\" data-served=\"net\""), "{html2}");
+        assert!(!html2.contains("data-tz="), "{html2}");
+    }
+
+    #[test]
+    fn offline_status_served_hidden_with_templates() {
+        // Both languages serve the hidden status bar + banner (before the 目錄),
+        // with every caption pre-filled and the placeholders kept literal.
+        let plan = full_nav_plan();
+        let status = map::MapStatus::default();
+        for lang in ["zh", "en"] {
+            let html = render_plan(&plan, lang, Some("tok"), &status, "");
+            assert!(html.contains("id=\"offline-status\" hidden"), "{lang}");
+            assert!(html.contains("id=\"offline-banner\" hidden"), "{lang}");
+            let saved = attr_of(&html, "data-l-saved");
+            assert!(saved.contains("{maps}") && saved.contains("{pdfs}"), "{lang}: {saved}");
+            // The status bar is the first thing in the body, above the TOC.
+            assert!(
+                html.find("id=\"offline-status\"").unwrap() < html.find("<nav class=\"page-toc\"").unwrap(),
+                "{lang}: status bar must precede the TOC"
+            );
+        }
+        let zh = render_plan(&plan, "zh", Some("tok"), &status, "");
+        assert!(zh.contains("已存好，可離線查看"), "{zh}");
+        // The EN status/banner fragment carries no CJK (trip content is data
+        // and may stay ZH; the offline chrome must be pure English).
+        let en = render_plan(&plan, "en", Some("tok"), &status, "");
+        let start = en.find("<div class=\"offline-status\"").unwrap();
+        let end = en.find("<nav class=\"page-toc\"").unwrap();
+        let frag = &en[start..end];
+        assert!(frag.chars().all(|c| !('\u{4E00}'..='\u{9FFF}').contains(&c)), "{frag}");
+    }
+
     #[test]
     fn render_plan_marks_its_plan_and_view_on_body() {
         use crate::model::Plan;
@@ -1300,11 +1418,22 @@ mod tests {
         };
         let status = map::MapStatus::default();
         let viewer = render_plan(&plan, "zh", Some("tok"), &status, "");
-        assert!(viewer.contains("<body data-plan-id=\"jiufen-2026\" data-view=\"viewer\">"), "{viewer}");
+        assert!(
+            viewer.contains("<body data-plan-id=\"jiufen-2026\" data-view=\"viewer\" data-rendered-at=\"0\" data-served=\"net\">"),
+            "{viewer}"
+        );
         let owner = render_plan(&plan, "zh", None, &status, "<div class=\"owner-chrome\"></div>");
-        assert!(owner.contains("<body data-plan-id=\"jiufen-2026\" data-view=\"owner\">"), "{owner}");
+        assert!(
+            owner.contains("<body data-plan-id=\"jiufen-2026\" data-view=\"owner\" data-rendered-at=\"0\" data-served=\"net\">"),
+            "{owner}"
+        );
+        // No timezone on this plan → no data-tz (never a guessed zone).
+        assert!(!viewer.contains("data-tz="), "{viewer}");
         // The value is escaped like any attribute; other pages keep a bare <body>.
-        assert_eq!(plan_body_attrs("a\"b", ""), " data-plan-id=\"a&quot;b\" data-view=\"viewer\"");
+        assert_eq!(
+            plan_body_attrs("a\"b", "", 1731800000000, "Asia/Tokyo"),
+            " data-plan-id=\"a&quot;b\" data-view=\"viewer\" data-rendered-at=\"1731800000000\" data-served=\"net\" data-tz=\"Asia/Tokyo\""
+        );
         assert!(page("t", "x", "zh").contains("</head><body>x</body>"));
     }
 
@@ -1541,7 +1670,7 @@ mod tests {
         };
         let html = render_plan(&plan, "zh", None, &map::MapStatus::default(), "");
         assert_eq!(html.matches("<section class=\"day ").count(), 2, "{html}");
-        let day1_open = "<section class=\"day day-full\" data-day=\"1\" id=\"day-1\">";
+        let day1_open = "<section class=\"day day-full\" data-day=\"1\" data-date=\"2026-11-14\" id=\"day-1\">";
         let day1_start = html.find(day1_open).expect("day 1 card");
         let day1_end = day1_start
             + html[day1_start..]
@@ -1561,7 +1690,7 @@ mod tests {
         assert!(day1.find("車站周邊").unwrap() < details_at, "{day1}");
         for section in html.split("<section class=\"day ").skip(1) {
             let section = section.split("</section>").next().expect("day section end");
-            if !section.starts_with("day-full\" data-day=\"1\" id=\"day-1\">") {
+            if !section.starts_with("day-full\" data-day=\"1\" data-date=\"2026-11-14\" id=\"day-1\">") {
                 assert!(!section.contains("data-variant-of="), "{section}");
             }
         }

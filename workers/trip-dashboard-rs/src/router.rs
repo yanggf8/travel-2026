@@ -343,11 +343,14 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         // (tests / verify-site — pinning needs no timezone data); otherwise the
         // live clock is the destination's IANA zone via `Intl`. No usable clock
         // → the page renders without a now card and day cards all open; the
-        // console error names the destination. Never a fallback zone. The page
-        // is served `private, no-store`, so a pinned render is never cached.
+        // console error names the destination. Never a fallback zone. `no-store`
+        // only constrains the HTTP cache — a `?at=` page is not saved offline
+        // because the service worker explicitly skips it (sw.js), not because
+        // of this header (spec §4).
+        let now_ms = worker::Date::now().as_millis() as i64;
         let clock = render::now::decide_clock(
             query.get("at").map(|s| s.as_str()),
-            tzfmt::now_clock_in_tz(worker::Date::now().as_millis() as f64, &plan.timezone),
+            tzfmt::now_clock_in_tz(now_ms as f64, &plan.timezone),
         );
         if clock.is_none() {
             console_error!("no clock: destination timezone '{}' for {}", plan.timezone, slug);
@@ -360,15 +363,23 @@ pub async fn handle(mut req: Request, env: Env) -> Result<Response> {
         } else {
             None
         };
-        return html_no_store(render::render_plan_at_with_notes(
-            &plan,
-            lang,
-            token,
-            &map_status,
-            &owner_chrome,
-            clock.as_ref(),
-            day_notes.as_ref(),
-        ));
+        // The plan page goes out through html_plan_page: no-store PLUS the
+        // X-TD-View header (render::offline::plan_page_headers) — the service
+        // worker's save gate reads it and cross-checks the body's data-view
+        // (spec §5). The same view classifier decides both, by construction.
+        return html_plan_page(
+            render::render_plan_at_with_notes(
+                &plan,
+                lang,
+                token,
+                &map_status,
+                &owner_chrome,
+                clock.as_ref(),
+                day_notes.as_ref(),
+                now_ms,
+            ),
+            render::offline::view_of(&owner_chrome),
+        );
     }
 
     html_no_store(render::auth::sign_in_page(lang))
@@ -839,9 +850,28 @@ fn serve_placeholder() -> Result<Response> {
     Ok(Response::from_bytes(PLACEHOLDER_PNG.to_vec())?.with_headers(h))
 }
 
+/// The headers every non-plan HTML page carries: `private, no-store` only —
+/// `X-TD-View` is the plan page's alone (`no_store_page_has_no_view_header`).
+fn no_store_headers() -> [(&'static str, &'static str); 1] {
+    [("Cache-Control", "private, no-store")]
+}
+
 fn html_no_store(body: String) -> Result<Response> {
     let h = Headers::new();
-    h.set("Cache-Control", "private, no-store")?;
+    for (k, v) in no_store_headers() {
+        h.set(k, v)?;
+    }
+    Ok(Response::from_html(body)?.with_headers(h))
+}
+
+/// The plan page's HTML response: `private, no-store` (the Cache API is not
+/// bound by it — the SW stores by explicit rule, spec §4) plus `X-TD-View`,
+/// carrying the same view the body's `data-view` marker has.
+fn html_plan_page(body: String, view: &str) -> Result<Response> {
+    let h = Headers::new();
+    for (k, v) in render::offline::plan_page_headers(view) {
+        h.set(k, v.as_str())?;
+    }
     Ok(Response::from_html(body)?.with_headers(h))
 }
 
@@ -1113,6 +1143,14 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_store_page_has_no_view_header() {
+        // Only the plan page carries X-TD-View (the SW's save gate, spec §5);
+        // every other HTML page keeps the bare no-store header set.
+        assert_eq!(no_store_headers(), [("Cache-Control", "private, no-store")]);
+        assert!(!no_store_headers().iter().any(|(k, _)| *k == "X-TD-View"));
+    }
 
     #[test]
     fn batch_deactivate_decision_paths() {
