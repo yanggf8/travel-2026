@@ -7,11 +7,11 @@
 
 use travel_db::repo::weather_providers::{self, WeatherProvider};
 
-const VALUE_FLAGS: [&str; 4] = ["--name-zh", "--name-en", "--url", "--license"];
+const VALUE_FLAGS: [&str; 5] = ["--name-zh", "--name-en", "--url", "--license", "--license-url"];
 
 fn usage() -> &'static str {
     "Usage:\n  travel set-weather-provider <provider_id> --name-zh <text> --name-en <text> \
-     --url <http(s)://...> --license <text>\n  travel weather-providers\n  \
+     --url <http(s)://...> --license <text> [--license-url <http(s)://...>]\n  travel weather-providers\n  \
      (GLOBAL reference data — no --plan-id; insert-or-replace by provider_id, the value stored in \
      days.weather_source_id / day_weather_sessions.source)"
 }
@@ -21,7 +21,7 @@ fn parse_set(args: &[String]) -> Result<WeatherProvider, String> {
         return Err("set-weather-provider is global reference data and takes no --plan-id".to_string());
     }
     crate::plan_resolver::reject_unknown_flags(args, &VALUE_FLAGS, &[])?;
-    let (mut zh, mut en, mut url, mut lic) = (None, None, None, None);
+    let (mut zh, mut en, mut url, mut lic, mut lic_url) = (None, None, None, None, None);
     let mut positional: Vec<&String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -32,6 +32,7 @@ fn parse_set(args: &[String]) -> Result<WeatherProvider, String> {
                 "--name-zh" => zh = Some(v),
                 "--name-en" => en = Some(v),
                 "--url" => url = Some(v),
+                "--license-url" => lic_url = Some(v),
                 _ => lic = Some(v),
             }
             i += 2;
@@ -54,21 +55,28 @@ fn parse_set(args: &[String]) -> Result<WeatherProvider, String> {
     if !(attribution_url.starts_with("https://") || attribution_url.starts_with("http://")) {
         return Err(format!("--url must start with http:// or https:// (got '{attribution_url}')"));
     }
+    let license_url = lic_url.map(|s: String| s.trim().to_string());
+    if let Some(ref license_url) = license_url {
+        if !(license_url.starts_with("https://") || license_url.starts_with("http://")) {
+            return Err(format!("--license-url must start with http:// or https:// (got '{license_url}')"));
+        }
+    }
     Ok(WeatherProvider {
         provider_id,
         name_zh: need(zh, "--name-zh")?,
         name_en: need(en, "--name-en")?,
         attribution_url,
         license: need(lic, "--license")?,
+        license_url,
     })
 }
 
 async fn print_all(conn: &libsql::Connection) -> Result<(), String> {
     let all = weather_providers::list(conn).await?;
     println!("weather_providers ({}):", all.len());
-    println!("  provider_id\tname_zh\tname_en\tlicense\turl");
+    println!("  provider_id\tname_zh\tname_en\tlicense\turl\tlicense_url");
     for p in all {
-        println!("  {}\t{}\t{}\t{}\t{}", p.provider_id, p.name_zh, p.name_en, p.license, p.attribution_url);
+        println!("  {}\t{}\t{}\t{}\t{}\t{}", p.provider_id, p.name_zh, p.name_en, p.license, p.attribution_url, p.license_url.as_deref().unwrap_or(""));
     }
     Ok(())
 }
@@ -109,6 +117,16 @@ mod tests {
         let p = parse_set(&a(&["x", "--name-zh", "甲", "--name-en", "X", "--url", "https://x.test/", "--license", "CC"])).unwrap();
         assert_eq!(p.provider_id, "x");
         assert_eq!(p.license, "CC");
+    }
+    #[test]
+    fn parses_license_url_optional() {
+        let base = ["x", "--name-zh", "甲", "--name-en", "X", "--url", "https://x.test/", "--license", "CC"];
+        assert_eq!(parse_set(&a(&base)).unwrap().license_url, None);
+        let mut with_url = base.to_vec();
+        with_url.extend(["--license-url", "https://creativecommons.org/licenses/by/4.0/"]);
+        assert_eq!(parse_set(&a(&with_url)).unwrap().license_url.as_deref(), Some("https://creativecommons.org/licenses/by/4.0/"));
+        *with_url.last_mut().unwrap() = "ftp://x";
+        assert!(parse_set(&a(&with_url)).is_err());
     }
     #[test]
     fn rejects_missing_and_bad_url() {

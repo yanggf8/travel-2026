@@ -67,6 +67,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_omiyage(&mut issues).await;
     validate_domestic_accommodations(&mut issues).await;
     validate_clothing_tips(&mut issues).await;
+    validate_destination_timezones(&mut issues).await;
     validate_reference_tables(&mut issues).await;
     validate_booking_integrity(&mut issues).await;
     validate_day_variants(&mut issues).await;
@@ -97,6 +98,54 @@ pub async fn run(mode: Mode) -> Result<(), String> {
 
     emit_report(&issues);
     Ok(())
+}
+
+fn empty_timezone_warnings(rows: &[(String, Option<String>)]) -> Vec<String> {
+    rows.iter().filter(|(_, tz)| tz.as_deref().is_none_or(|tz| tz.trim().is_empty()))
+        .map(|(slug, _)| format!("{slug}: destination_config.timezone is empty"))
+        .collect()
+}
+
+async fn validate_destination_timezones(issues: &mut Vec<Issue>) {
+    let Ok(conn) = db::connect_read().await else { return; };
+    let mut rows = match conn.query("SELECT slug, timezone FROM destination_config", ()).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            issues.push(Issue { category: "destination-timezone".into(), severity: Severity::Error,
+                message: format!("failed to query destination_config.timezone: {e}"),
+                file: Some("turso:destination_config".into()), line: None });
+            return;
+        }
+    };
+    let mut timezones = Vec::new();
+    loop {
+        match rows.next().await {
+            Ok(Some(row)) => timezones.push((row.get::<String>(0).unwrap_or_default(), row.get::<Option<String>>(1).unwrap_or(None))),
+            Ok(None) => break,
+            Err(e) => {
+                issues.push(Issue { category: "destination-timezone".into(), severity: Severity::Error,
+                    message: format!("failed to read destination_config.timezone: {e}"),
+                    file: Some("turso:destination_config".into()), line: None });
+                return;
+            }
+        }
+    }
+    for message in empty_timezone_warnings(&timezones) {
+        issues.push(Issue { category: "destination-timezone".into(), severity: Severity::Warning,
+            message, file: Some("turso:destination_config".into()), line: None });
+    }
+}
+
+#[cfg(test)]
+mod timezone_tests {
+    use super::*;
+    #[test]
+    fn empty_timezone_warnings_include_slug_and_column() {
+        let got = empty_timezone_warnings(&[("kyoto_2026".into(), None), ("x".into(), Some("".into())), ("ok".into(), Some("Asia/Taipei".into()))]);
+        assert_eq!(got.len(), 2);
+        assert!(got[0].contains("kyoto_2026") && got[0].contains("destination_config.timezone"));
+        assert!(got[1].contains("x") && got[1].contains("destination_config.timezone"));
+    }
 }
 
 /// [bookings] drift between the plans' normalized tables and `bookings_current`

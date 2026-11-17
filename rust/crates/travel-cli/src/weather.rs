@@ -52,7 +52,7 @@ const WMO_LABELS: &[(i64, &str)] = &[
 ];
 
 /// The ONE place the session windows live: (itinerary session key, first hour,
-/// end hour exclusive), JST wall clock. An hour belongs to a window by its START
+/// end hour exclusive), destination local wall clock. An hour belongs to a window by its START
 /// time (12:00 -> noon, 14:00 -> afternoon); hours outside 09-22 are ignored.
 /// CAVEAT: Open-Meteo's hourly `precipitation` / `precipitation_probability` at
 /// stamp T cover the PRECEDING hour (T-1 .. T), so those two use the stamps
@@ -202,6 +202,11 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         println!("Usage:\n  travel fetch-weather [--dest <slug>] [--all]");
         return Ok(());
     }
+    crate::plan_resolver::reject_unknown_flags(
+        args,
+        &["--dest", "--plan-id", "--plan-path", "--travel-date", "--travel-start", "--travel-end"],
+        &["--all"],
+    )?;
 
     let mut dest_opt: Option<String> = None;
     let mut all = false;
@@ -210,7 +215,8 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
         match args[i].as_str() {
             "--dest" => {
                 i += 1;
-                dest_opt = args.get(i).cloned();
+                dest_opt = Some(args.get(i).filter(|s| !s.starts_with("--")).cloned()
+                    .ok_or_else(|| "--dest needs a value".to_string())?);
             }
             "--all" => all = true,
             _ => {}
@@ -228,27 +234,24 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
 
     if all {
         let destinations = list_destinations(&conn, &plan_id).await?;
-        let mut total_updated = 0usize;
+        let mut results = Vec::new();
         for d in &destinations {
-            match update_destination_weather(&conn, &plan_id, d).await {
-                Ok(0) => println!("  {d}: outside 16-day window"),
-                Ok(n) => {
-                    println!("  {d}: updated {n} day(s)");
-                    total_updated += n;
-                }
+            let result = update_destination_weather(&conn, &plan_id, d).await;
+            match &result {
+                Ok(0) => println!("  {d}: no usable forecast days (outside the 16-day window or every day missing required fields; previous data kept)"),
+                Ok(n) => println!("  {d}: updated {n} day(s)"),
                 Err(e) => eprintln!("  {d}: failed — {e}"),
             }
+            results.push((d.clone(), result));
         }
-        if total_updated > 0 {
-            finalize(&conn, &plan_id, "all destinations").await?;
+        if let Err(summary) = all_destinations_exit(&results) {
+            eprintln!("{summary}");
+            std::process::exit(1);
         }
         return Ok(());
     }
 
-    let dest = match &dest_opt {
-        Some(d) => d.clone(),
-        None => read_active_destination(&conn, &plan_id).await?,
-    };
+    let dest = crate::cascade::common::resolve_active_destination(&conn, &plan_id, dest_opt.as_deref()).await?;
 
     let days = load_days(&conn, &plan_id, &dest).await?;
     if days.is_empty() {
@@ -259,19 +262,22 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let first_date = days.first().map(|d| d.1.clone()).unwrap_or_default();
     let last_date = days.last().map(|d| d.1.clone()).unwrap_or_default();
 
-    let forecasts = fetch_weather(&conn, &first_date, &last_date, &dest).await?;
+    let forecasts = match fetch_weather(&conn, &first_date, &last_date, &dest).await {
+        Ok(v) => v,
+        Err(e) => return Err(format!("{e} {}", previous_forecast_note(&conn, &plan_id, &dest).await)),
+    };
     if forecasts.is_empty() {
-        println!("No forecast data available (dates may be outside 16-day window).");
+        println!("No usable forecast days (outside the 16-day window or every day missing required fields); previous data kept.");
         return Ok(());
     }
 
     let sourced_at = now_rfc3339();
     let assigned = assign_forecasts(&days, &forecasts);
-    for (day_number, f) in &assigned {
-        write_day_weather(&conn, &plan_id, &dest, *day_number, f, &sourced_at).await?;
+    if assigned.is_empty() {
+        println!("No forecast data available for itinerary dates.");
+        return Ok(());
     }
-
-    finalize(&conn, &plan_id, &dest).await?;
+    write_destination_weather(&conn, &plan_id, &dest, &assigned, &sourced_at).await?;
 
     println!("✅ Weather updated for {} day(s) in {dest}:", assigned.len());
     for (day_number, f) in &assigned {
@@ -313,16 +319,49 @@ async fn update_destination_weather(
     }
     let first_date = days.first().map(|d| d.1.clone()).unwrap_or_default();
     let last_date = days.last().map(|d| d.1.clone()).unwrap_or_default();
-    let forecasts = fetch_weather(conn, &first_date, &last_date, dest).await?;
+    let forecasts = match fetch_weather(conn, &first_date, &last_date, dest).await {
+        Ok(v) => v,
+        Err(e) => return Err(format!("{e} {}", previous_forecast_note(conn, plan_id, dest).await)),
+    };
     if forecasts.is_empty() {
         return Ok(0);
     }
     let sourced_at = now_rfc3339();
     let assigned = assign_forecasts(&days, &forecasts);
-    for (day_number, f) in &assigned {
-        write_day_weather(conn, plan_id, dest, *day_number, f, &sourced_at).await?;
+    write_destination_weather(conn, plan_id, dest, &assigned, &sourced_at).await
+}
+
+async fn write_destination_weather(conn: &Connection, plan_id: &str, dest: &str, assigned: &[(i64, &Forecast)], sourced_at: &str) -> Result<usize, String> {
+    if assigned.is_empty() { return Ok(0); }
+    crate::cascade::common::begin_immediate(conn, "fetch-weather").await?;
+    let outcome = async {
+        for (day_number, f) in assigned {
+            write_day_weather(conn, plan_id, dest, *day_number, f, sourced_at).await?;
+        }
+        finalize(conn, plan_id, dest).await?;
+        Ok(assigned.len())
+    }.await;
+    crate::cascade::common::finish_tx(conn, "fetch-weather", outcome).await
+}
+
+fn all_destinations_exit(results: &[(String, Result<usize, String>)]) -> Result<(), String> {
+    let failed: Vec<String> = results.iter().filter_map(|(dest, result)| result.as_ref().err().map(|e| format!("{dest}: {e}"))).collect();
+    if failed.is_empty() { Ok(()) } else { Err(format!("fetch-weather --all failed: {}", failed.join("; "))) }
+}
+
+fn kept_data_note(last_sourced_at: Option<&str>) -> String {
+    match last_sourced_at {
+        Some(ts) => format!("Previous forecast kept (updated {ts}); retry in a few minutes."),
+        None => "No previous forecast for this destination; retry in a few minutes.".to_string(),
     }
-    Ok(assigned.len())
+}
+
+async fn previous_forecast_note(conn: &Connection, plan_id: &str, dest: &str) -> String {
+    let stamp = async {
+        let mut rows = conn.query("SELECT MAX(weather_sourced_at) FROM days WHERE plan_id = ?1 AND destination = ?2", libsql::params![plan_id.to_string(), dest.to_string()]).await.ok()?;
+        rows.next().await.ok()??.get::<Option<String>>(0).ok()?
+    }.await;
+    kept_data_note(stamp.as_deref())
 }
 
 async fn list_destinations(conn: &Connection, plan_id: &str) -> Result<Vec<String>, String> {
@@ -342,27 +381,6 @@ async fn list_destinations(conn: &Connection, plan_id: &str) -> Result<Vec<Strin
         out.push(row.get::<String>(0).unwrap_or_default());
     }
     Ok(out)
-}
-
-async fn read_active_destination(conn: &Connection, plan_id: &str) -> Result<String, String> {
-    let mut rows = conn
-        .query(
-            "SELECT active_destination FROM plan_metadata WHERE plan_id = ?1",
-            libsql::params![plan_id.to_string()],
-        )
-        .await
-        .map_err(|e| format!("plan_metadata query failed: {e}"))?;
-    if let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| format!("plan_metadata row read failed: {e}"))?
-    {
-        let dest: String = row.get(0).unwrap_or_default();
-        if !dest.is_empty() {
-            return Ok(dest);
-        }
-    }
-    Err(format!("plan_metadata.active_destination missing for plan_id={plan_id}"))
 }
 
 /// Pair each forecast with the trip day whose date equals the forecast date.
@@ -448,24 +466,45 @@ const OPEN_METEO_RETRY_DELAY_SECS: u64 = 2;
 
 /// curl arguments for one Open-Meteo attempt (bounded connect and total time).
 fn open_meteo_curl_args(url: &str) -> Vec<String> {
-    ["-sf", "--connect-timeout", "10", "--max-time", "20", url]
+    ["-sS", "-w", "\n%{http_code}", "--connect-timeout", "10", "--max-time", "20", url]
         .iter()
         .map(|s| s.to_string())
         .collect()
 }
 
-/// Transient curl failures worth another attempt: 28 timeout, 7 cannot
-/// connect, 35 TLS handshake, 22 HTTP error under `-f` (retried always).
-fn is_transient_curl_exit(code: Option<i32>) -> bool {
-    matches!(code, Some(28) | Some(7) | Some(35) | Some(22))
+/// Split curl's trailing write-out status from the response body.
+fn split_http_status(stdout: &[u8]) -> (Option<u16>, &[u8]) {
+    let Some(i) = stdout.iter().rposition(|b| *b == b'\n') else { return (None, stdout) };
+    let http = std::str::from_utf8(&stdout[i + 1..]).ok().and_then(|s| s.trim().parse::<u16>().ok());
+    match http { Some(code) => (Some(code), &stdout[..i]), None => (None, stdout) }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AttemptClass { Ok, Retry, Fail }
+
+fn classify_attempt(curl_exit: Option<i32>, http: Option<u16>, body: &[u8]) -> AttemptClass {
+    if curl_exit != Some(0) {
+        return if matches!(curl_exit, Some(7 | 28 | 35)) { AttemptClass::Retry } else { AttemptClass::Fail };
+    }
+    match http {
+        Some(200..=299) if !body.iter().all(u8::is_ascii_whitespace) => AttemptClass::Ok,
+        Some(429 | 500..=599) => AttemptClass::Retry,
+        _ => AttemptClass::Fail,
+    }
 }
 
 /// Final error after the attempts are exhausted (or a non-transient exit).
 /// The fetch happens before any write for this destination, so nothing from
 /// this fetch was saved; in an all-destinations run, earlier destinations may
 /// already have been written.
-fn open_meteo_failure_message(code: Option<i32>, attempts: u32) -> String {
+fn open_meteo_failure_message(code: Option<i32>, http: Option<u16>, attempts: u32) -> String {
     let tail = "Nothing was written for this fetch (in an all-destinations run, destinations finished earlier were already saved).";
+    if let Some(http) = http.filter(|_| code == Some(0)) {
+        if (200..=299).contains(&http) {
+            return format!("Open-Meteo response HTTP {http} was empty after {attempts} attempt(s). {tail}");
+        }
+        return format!("Open-Meteo request error HTTP {http} after {attempts} attempt(s). {tail}");
+    }
     match code {
         Some(28) => format!(
             "Open-Meteo did not respond (curl exit 28: connection/TLS handshake timed out) after {attempts} attempt(s). The API host is intermittently unresponsive for a few minutes at a time - retry in ~5 minutes. {tail}"
@@ -475,9 +514,6 @@ fn open_meteo_failure_message(code: Option<i32>, attempts: u32) -> String {
         ),
         Some(6) => format!(
             "Could not resolve the Open-Meteo host name (curl exit 6: DNS failure) after {attempts} attempt(s). Check DNS/network. {tail}"
-        ),
-        Some(22) => format!(
-            "Open-Meteo returned an HTTP error (curl exit 22) after {attempts} attempt(s), e.g. 429 rate limit (the free tier allows limited calls per minute/hour/day) or a server error. Wait a few minutes and retry, and avoid repeated runs. {tail}"
         ),
         Some(c) => format!(
             "Open-Meteo API request failed: curl exit {c} after {attempts} attempt(s). {tail}"
@@ -515,26 +551,31 @@ async fn fetch_weather(
     let url = open_meteo_url(lat, lon, &tz, start_date, end_date);
 
     let mut attempt = 0;
-    let output = loop {
+    let body = loop {
         attempt += 1;
         let out = Command::new("curl")
             .args(open_meteo_curl_args(&url))
             .output()
             .map_err(|e| format!("Open-Meteo API request failed: {e}"))?;
-        if out.status.success() {
-            break out;
-        }
         let code = out.status.code();
-        if attempt < OPEN_METEO_MAX_ATTEMPTS && is_transient_curl_exit(code) {
-            tokio::time::sleep(std::time::Duration::from_secs(OPEN_METEO_RETRY_DELAY_SECS)).await;
-            continue;
+        let (http, body) = split_http_status(&out.stdout);
+        match classify_attempt(code, http, body) {
+            AttemptClass::Ok => break body.to_vec(),
+            AttemptClass::Retry if attempt < OPEN_METEO_MAX_ATTEMPTS => {
+                tokio::time::sleep(std::time::Duration::from_secs(OPEN_METEO_RETRY_DELAY_SECS)).await;
+            }
+            _ => return Err(open_meteo_failure_message(code, http, attempt)),
         }
-        return Err(open_meteo_failure_message(code, attempt));
     };
-    let body = String::from_utf8_lossy(&output.stdout);
+    let body = String::from_utf8_lossy(&body);
     let data: Value =
         serde_json::from_str(&body).map_err(|e| format!("Open-Meteo response parse failed: {e}"))?;
+    let (forecasts, messages) = parse_forecasts(&data)?;
+    for message in messages { eprintln!("{message}"); }
+    Ok(forecasts)
+}
 
+fn parse_forecasts(data: &Value) -> Result<(Vec<Forecast>, Vec<String>), String> {
     let daily = data
         .get("daily")
         .ok_or_else(|| "No daily forecast data in Open-Meteo response".to_string())?;
@@ -559,14 +600,24 @@ async fn fetch_weather(
 
     let hourly = group_hourly(&data);
     let mut out = Vec::new();
+    let mut messages = Vec::new();
     for idx in 0..times.len() {
         let date = times[idx].as_str().unwrap_or_default().to_string();
+        let required = [
+            ("temperature_2m_max", t_max.get(idx).and_then(Value::as_f64).is_some()),
+            ("temperature_2m_min", t_min.get(idx).and_then(Value::as_f64).is_some()),
+            ("weather_code", codes.get(idx).and_then(Value::as_i64).is_some()),
+        ];
+        if let Some((field, _)) = required.iter().find(|(_, present)| !present) {
+            messages.push(format!("{date}: Open-Meteo returned no {field} — kept previous data"));
+            continue;
+        }
         let sessions = hourly.get(&date).map(|h| aggregate_sessions(h)).unwrap_or_default();
-        let code = codes.get(idx).and_then(|v| v.as_i64()).unwrap_or(0);
+        let code = codes[idx].as_i64().expect("checked above");
         out.push(Forecast {
             date,
-            temp_high_c: t_max.get(idx).and_then(|v| v.as_f64()).unwrap_or(0.0),
-            temp_low_c: t_min.get(idx).and_then(|v| v.as_f64()).unwrap_or(0.0),
+            temp_high_c: t_max[idx].as_f64().expect("checked above"),
+            temp_low_c: t_min[idx].as_f64().expect("checked above"),
             feels_like_high_c: a_max.get(idx).and_then(|v| v.as_f64()),
             feels_like_low_c: a_min.get(idx).and_then(|v| v.as_f64()),
             precipitation_pct: precip.get(idx).and_then(|v| v.as_f64()),
@@ -575,7 +626,7 @@ async fn fetch_weather(
             sessions,
         });
     }
-    Ok(out)
+    Ok((out, messages))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -785,6 +836,143 @@ fn now_db_datetime() -> String {
 mod tests {
     use super::*;
 
+    async fn test_db() -> Connection {
+        let conn = libsql::Builder::new_local(":memory:").build().await.unwrap().connect().unwrap();
+        conn.execute_batch(include_str!("../../../../scripts/schema.sql")).await.unwrap();
+        conn.execute("INSERT INTO plans (plan_id, schema_version, version) VALUES ('p', '4.2.0', 5)", ()).await.unwrap();
+        for (number, date) in [(1, "2026-11-20"), (2, "2026-11-21")] {
+            conn.execute("INSERT INTO days (plan_id, destination, day_number, date, day_type, weather_label) VALUES ('p', 'd', ?1, ?2, 'full', 'old')", libsql::params![number, date]).await.unwrap();
+        }
+        conn.execute("INSERT INTO day_weather_sessions (plan_id,destination,day_number,session,weather_code,precip_mm,precip_max_mm_h,source,fetched_at) VALUES ('p','d',1,'morning',3,0,0,'old','t')", ()).await.unwrap();
+        conn
+    }
+
+    async fn scalar(conn: &Connection, sql: &str) -> String {
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        match row.get_value(0).unwrap() {
+            libsql::Value::Text(s) => s,
+            libsql::Value::Integer(n) => n.to_string(),
+            value => panic!("unexpected scalar value: {value:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_is_atomic_per_destination() {
+        let conn = test_db().await;
+        let mut good = fc("2026-11-20");
+        good.sessions.push(SessionAgg { session: "morning", weather_code: 3, precip_mm: 0.0, precip_max_mm_h: 0.0, precip_prob_max: None });
+        let mut bad = fc("2026-11-21");
+        bad.sessions.push(SessionAgg { session: "bogus", weather_code: 3, precip_mm: 0.0, precip_max_mm_h: 0.0, precip_prob_max: None });
+        assert!(write_destination_weather(&conn, "p", "d", &[(1, &good), (2, &bad)], "2026-11-16T00:00:00Z").await.is_err());
+        assert_eq!(scalar(&conn, "SELECT weather_label FROM days WHERE day_number=1").await, "old");
+        assert_eq!(scalar(&conn, "SELECT count(*) FROM day_weather_sessions WHERE day_number=1").await, "1");
+        assert_eq!(scalar(&conn, "SELECT version FROM plans WHERE plan_id='p'").await, "5");
+        assert_eq!(scalar(&conn, "SELECT count(*) FROM plan_events WHERE plan_id='p'").await, "0");
+        assert_eq!(scalar(&conn, "SELECT count(*) FROM operation_runs WHERE plan_id='p'").await, "0");
+    }
+
+    #[tokio::test]
+    async fn zero_days_does_not_bump() {
+        let conn = test_db().await;
+        assert_eq!(write_destination_weather(&conn, "p", "d", &[], "t").await.unwrap(), 0);
+        assert_eq!(scalar(&conn, "SELECT version FROM plans WHERE plan_id='p'").await, "5");
+        assert_eq!(scalar(&conn, "SELECT count(*) FROM operation_runs WHERE plan_id='p'").await, "0");
+    }
+
+    #[tokio::test]
+    async fn success_writes_one_operation_run() {
+        let conn = test_db().await;
+        let f1 = fc("2026-11-20");
+        let f2 = fc("2026-11-21");
+        assert_eq!(write_destination_weather(&conn, "p", "d", &[(1, &f1), (2, &f2)], "t").await.unwrap(), 2);
+        assert_eq!(scalar(&conn, "SELECT version FROM plans WHERE plan_id='p'").await, "6");
+        assert_eq!(scalar(&conn, "SELECT count(*) FROM operation_runs WHERE plan_id='p'").await, "1");
+    }
+
+    #[test]
+    fn all_summary_nonzero_when_any_failed() {
+        let r = vec![("a".into(), Ok(3)), ("b".into(), Err("HTTP 503".into()))];
+        let e = all_destinations_exit(&r).unwrap_err();
+        assert!(e.contains("b") && e.contains("HTTP 503"));
+        assert!(all_destinations_exit(&[("a".into(), Ok(0))]).is_ok());
+    }
+
+    #[test]
+    fn kept_note_mentions_previous_stamp() {
+        assert!(kept_data_note(Some("2026-11-15T09:00:00Z")).contains("2026-11-15T09:00:00Z"));
+    }
+
+    fn two_day_data() -> Value {
+        serde_json::json!({"daily":{"time":["2026-11-20","2026-11-21"],
+            "temperature_2m_max":[14.0,15.0],"temperature_2m_min":[8.0,9.0],"weather_code":[3,61],
+            "apparent_temperature_max":[null,1.0],"apparent_temperature_min":[null,1.0],
+            "precipitation_probability_max":[10,80]},"hourly":{"time":[]}})
+    }
+
+    #[test]
+    fn day_missing_tmax_is_skipped_with_message() {
+        let mut data = two_day_data();
+        data["daily"]["temperature_2m_max"][0] = Value::Null;
+        let (f, msgs) = parse_forecasts(&data).unwrap();
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].date, "2026-11-21");
+        assert_eq!(msgs, vec!["2026-11-20: Open-Meteo returned no temperature_2m_max — kept previous data"]);
+    }
+
+    #[test]
+    fn day_missing_weather_code_is_skipped() {
+        let mut data = two_day_data();
+        data["daily"]["weather_code"][0] = Value::Null;
+        let (f, msgs) = parse_forecasts(&data).unwrap();
+        assert_eq!(f.len(), 1);
+        assert!(msgs[0].contains("weather_code"));
+    }
+
+    #[test]
+    fn optional_fields_stay_none() {
+        let (f, msgs) = parse_forecasts(&two_day_data()).unwrap();
+        assert!(msgs.is_empty());
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].feels_like_high_c, None);
+        assert_eq!(f[0].feels_like_low_c, None);
+    }
+
+    #[test]
+    fn curl_args_no_fail_flag_and_write_out_status() {
+        let a = open_meteo_curl_args("https://x");
+        assert!(!a.iter().any(|s| s == "-sf" || s == "-f"));
+        assert!(a.windows(2).any(|w| w[0] == "-w" && w[1] == "\n%{http_code}"));
+        assert_eq!(a.last().unwrap(), "https://x");
+    }
+
+    #[test]
+    fn split_status_parses_trailing_code() {
+        assert_eq!(split_http_status(b"{\"a\":1}\n200"), (Some(200), &b"{\"a\":1}"[..]));
+        assert_eq!(split_http_status(b"garbage"), (None, &b"garbage"[..]));
+    }
+
+    #[test]
+    fn classify_matrix() {
+        use AttemptClass::*;
+        assert_eq!(classify_attempt(Some(0), Some(200), b"{}"), Ok);
+        for http in [429, 503] { assert_eq!(classify_attempt(Some(0), Some(http), b""), Retry); }
+        for code in [28, 35, 7] { assert_eq!(classify_attempt(Some(code), None, b""), Retry); }
+        for http in [400, 403] { assert_eq!(classify_attempt(Some(0), Some(http), b""), Fail); }
+        assert_eq!(classify_attempt(Some(0), None, b""), Fail);
+    }
+
+    #[test]
+    fn classify_200_empty_body_is_fail() {
+        assert_eq!(classify_attempt(Some(0), Some(200), b""), AttemptClass::Fail);
+    }
+
+    #[test]
+    fn failure_message_names_http_code() {
+        let m = open_meteo_failure_message(Some(0), Some(403), 1);
+        assert!(m.contains("request error HTTP 403") && m.contains("Nothing was written"), "{m}");
+    }
+
     #[test]
     fn curl_args_have_timeouts_no_curl_retry_and_url_last() {
         let a = open_meteo_curl_args("https://x.test/f?a=1");
@@ -799,27 +987,26 @@ mod tests {
 
     #[test]
     fn failure_message_per_exit_code() {
-        let m = open_meteo_failure_message(Some(28), 3);
+        let m = open_meteo_failure_message(Some(28), None, 3);
         assert!(m.contains("did not respond") && m.contains("exit 28") && m.contains("3 attempt"));
         assert!(m.contains("retry in ~5 minutes") && m.contains("Nothing was written"));
-        assert!(open_meteo_failure_message(Some(22), 3).contains("429"));
-        assert!(open_meteo_failure_message(Some(22), 3).contains("free tier"));
-        assert!(open_meteo_failure_message(Some(7), 3).contains("Could not connect"));
-        assert!(open_meteo_failure_message(Some(6), 1).contains("DNS"));
-        let o = open_meteo_failure_message(Some(56), 1);
+        assert!(open_meteo_failure_message(Some(0), Some(429), 3).contains("HTTP 429"));
+        assert!(open_meteo_failure_message(Some(7), None, 3).contains("Could not connect"));
+        assert!(open_meteo_failure_message(Some(6), None, 1).contains("DNS"));
+        let o = open_meteo_failure_message(Some(56), None, 1);
         assert!(o.contains("curl exit 56 ") && o.contains("Nothing was written"));
-        assert!(open_meteo_failure_message(None, 1).contains("signal"));
+        assert!(open_meteo_failure_message(None, None, 1).contains("signal"));
     }
 
     #[test]
-    fn transient_curl_exits_retry_others_do_not() {
-        for c in [28, 7, 35, 22] {
-            assert!(is_transient_curl_exit(Some(c)), "exit {c} should retry");
+    fn transient_attempts_retry_others_do_not() {
+        for c in [28, 7, 35] {
+            assert_eq!(classify_attempt(Some(c), None, b""), AttemptClass::Retry);
         }
         for c in [6, 1, 3, 0] {
-            assert!(!is_transient_curl_exit(Some(c)), "exit {c} should not retry");
+            assert_eq!(classify_attempt(Some(c), None, b""), AttemptClass::Fail);
         }
-        assert!(!is_transient_curl_exit(None));
+        assert_eq!(classify_attempt(None, None, b""), AttemptClass::Fail);
     }
 
     #[test]

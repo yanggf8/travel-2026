@@ -58,3 +58,18 @@ fn set_weather_provider_upserts_and_lists() {
         .output().expect("run");
     assert!(!bad.status.success());
 }
+
+#[test]
+fn license_url_roundtrip() {
+    let id = format!("zz_test_{}_wp", nanos());
+    let _g = Guard::new({
+        let id = id.clone();
+        move || { let _ = db_exec_teardown(&format!("DELETE FROM weather_providers WHERE provider_id = '{id}'")); }
+    });
+    let Some(out) = run_cmd(&["set-weather-provider", &id, "--name-zh", "測試", "--name-en", "Test",
+        "--url", "https://example.test/", "--license", "CC BY 4.0",
+        "--license-url", "https://creativecommons.org/licenses/by/4.0/"]) else { return };
+    assert!(out.contains("https://creativecommons.org/licenses/by/4.0/"));
+    let rows = db_exec(&format!("SELECT license_url FROM weather_providers WHERE provider_id = '{id}'")).expect("select");
+    assert_eq!(rows.scalar().as_deref(), Some("https://creativecommons.org/licenses/by/4.0/"));
+}

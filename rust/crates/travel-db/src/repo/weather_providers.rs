@@ -13,22 +13,24 @@ pub struct WeatherProvider {
     pub name_en: String,
     pub attribution_url: String,
     pub license: String,
+    pub license_url: Option<String>,
 }
 
 /// Insert or replace one provider (keyed by `provider_id`). Returns affected rows.
 pub async fn upsert(conn: &Connection, p: &WeatherProvider) -> Result<u64, String> {
     conn.execute(
-        "INSERT INTO weather_providers (provider_id, name_zh, name_en, attribution_url, license) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
+        "INSERT INTO weather_providers (provider_id, name_zh, name_en, attribution_url, license, license_url) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
          ON CONFLICT(provider_id) DO UPDATE SET name_zh = excluded.name_zh, \
             name_en = excluded.name_en, attribution_url = excluded.attribution_url, \
-            license = excluded.license",
+            license = excluded.license, license_url = excluded.license_url",
         libsql::params![
             p.provider_id.clone(),
             p.name_zh.clone(),
             p.name_en.clone(),
             p.attribution_url.clone(),
-            p.license.clone()
+            p.license.clone(),
+            p.license_url.clone()
         ],
     )
     .await
@@ -39,7 +41,7 @@ pub async fn upsert(conn: &Connection, p: &WeatherProvider) -> Result<u64, Strin
 pub async fn list(conn: &Connection) -> Result<Vec<WeatherProvider>, String> {
     let mut rows = conn
         .query(
-            "SELECT provider_id, name_zh, name_en, attribution_url, license \
+            "SELECT provider_id, name_zh, name_en, attribution_url, license, license_url \
              FROM weather_providers ORDER BY provider_id",
             (),
         )
@@ -57,6 +59,7 @@ pub async fn list(conn: &Connection) -> Result<Vec<WeatherProvider>, String> {
             name_en: r.get(2).unwrap_or_default(),
             attribution_url: r.get(3).unwrap_or_default(),
             license: r.get(4).unwrap_or_default(),
+            license_url: r.get(5).unwrap_or(None),
         });
     }
     Ok(out)

@@ -1612,6 +1612,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 );"#,
     )
     .await;
+    add_column(&conn, "ALTER TABLE weather_providers ADD COLUMN license_url TEXT").await;
     exec_lenient(
         &conn,
         r#"CREATE TABLE IF NOT EXISTS destination_transit (
