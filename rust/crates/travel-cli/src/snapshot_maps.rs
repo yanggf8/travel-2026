@@ -113,6 +113,8 @@ struct Segment {
     to: String,
     mode: String,
     duration_min: Option<i64>,
+    /// `record_status = 'skipped'`: the leg was not travelled, so it is not drawn.
+    skipped: bool,
 }
 
 /// Straight-line km a leg of `mode` could plausibly cover in `duration_min`, plus
@@ -217,6 +219,8 @@ pub(crate) struct MapSource {
     excursion: HashSet<i64>,
     segments: Vec<Segment>,
     pois: Vec<(i64, String, f64, f64)>,
+    /// Skipped activities' (day, lat, lon): their pin and the legs touching it are not drawn.
+    skipped_pois: Vec<(i64, f64, f64)>,
     dest_pois: Vec<PoiRow>,
     hotel_names: Vec<String>,
     flights: Vec<FlightRow>,
@@ -257,6 +261,7 @@ impl MapSource {
             excursion,
             segments: query_segments(read, plan_id, dest).await?,
             pois: query_pois(read, plan_id, dest).await?,
+            skipped_pois: query_skipped_pois(read, plan_id, dest).await?,
             dest_pois: query_destination_pois(read, dest).await?,
             hotel_names: query_hotel_names(read, plan_id, dest).await?,
             flights: query_flight_rows(read, plan_id, dest).await?,
@@ -579,6 +584,11 @@ impl HubGate {
         None
     }
 
+    /// The already-gated off-area pin at this coordinate, if any.
+    fn away_pin(&self, lat: f64, lon: f64) -> Option<Point> {
+        self.away.iter().find(|p| coord_key(p.lat, p.lon) == coord_key(lat, lon)).cloned()
+    }
+
     /// Off-area stops and pins gated since the last call.
     fn take(&mut self) -> (Vec<OffAreaStop>, Vec<Point>) {
         (std::mem::take(&mut self.off_area), std::mem::take(&mut self.away))
@@ -591,6 +601,26 @@ impl HubGate {
 /// the excursion inset, the airport-day inset and the hotel/airport map. Shared
 /// by snapshot-maps (renders + uploads) and verify-site (recomputes the input
 /// hash read-only).
+/// Road lines for one day's stops. A day with no skipped record keeps the
+/// chained route through `points` (output unchanged). A day with skips draws
+/// each live leg on its own: chaining the surviving stops would invent legs
+/// (A→C past a skipped B) and bridge skipped ones.
+async fn day_routes<R: MapResolver>(
+    net: &mut R,
+    points: &[Point],
+    legs: Option<&Vec<(Point, Point)>>,
+) -> Result<Vec<RouteLine>, String> {
+    let Some(legs) = legs else {
+        return net.routes(points).await;
+    };
+    let on_map = |p: &Point| points.iter().any(|q| coord_key(q.lat, q.lon) == coord_key(p.lat, p.lon));
+    let mut out = Vec::new();
+    for (a, b) in legs.iter().filter(|(a, b)| on_map(a) && on_map(b)) {
+        out.extend(net.routes(&[a.clone(), b.clone()]).await?);
+    }
+    Ok(out)
+}
+
 pub(crate) async fn assemble_maps<R: MapResolver>(
     src: &MapSource,
     net: &mut R,
@@ -620,6 +650,11 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
     // so a city leg between two airport legs is never drawn as if it were one.
     let mut day_airport_legs = HashMap::<i64, Vec<(Point, Point)>>::new();
 
+    // Days with route segments and a skipped record: drawn leg by leg (see `day_routes`).
+    let mut day_legs = HashMap::<i64, Vec<(Point, Point)>>::new();
+    let mut day_away_legs = HashMap::<i64, Vec<(Point, Point)>>::new();
+    // Per day: the coordinate pairs a skipped route segment joins (either direction).
+    let mut day_skipped_pairs = HashMap::<i64, HashSet<(String, String)>>::new();
     for day in days {
         let color = DAY_COLORS[(*day as usize - 1) % DAY_COLORS.len()];
         let mut points = Vec::new();
@@ -628,8 +663,42 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         let mut airport_leg_stops = HashSet::new();
         let mut other_leg_stops = HashSet::new();
         let mut airport_legs: Vec<(Point, Point)> = Vec::new();
-        for seg in src.segments.iter().filter(|s| s.day == *day) {
+        // A skipped activity's pin goes (unless another, unskipped activity of
+        // the day sits on the same spot); so do the legs that touch it.
+        let skipped_here: HashSet<String> = src
+            .skipped_pois
+            .iter()
+            .filter(|s| s.0 == *day)
+            .filter(|s| !src.pois.iter().any(|p| p.0 == *day && coord_key(p.2, p.3) == coord_key(s.1, s.2)))
+            .map(|s| coord_key(s.1, s.2))
+            .collect();
+        let day_segs = src.segments.iter().filter(|s| s.day == *day).count();
+        let leg_mode = day_segs > 0
+            && (!skipped_here.is_empty() || src.segments.iter().any(|s| s.day == *day && s.skipped));
+        let mut skipped_pairs = HashSet::<(String, String)>::new();
+        for seg in src.segments.iter().filter(|s| s.day == *day && s.skipped) {
+            let mut keys = Vec::new();
+            for label in [&seg.from, &seg.to] {
+                if label.trim().is_empty() {
+                    continue;
+                }
+                if let Some((lat, lon, _)) =
+                    resolve_segment_label(net, label, &src.dest_pois, &src.hotel_names).await?
+                {
+                    keys.push(coord_key(lat, lon));
+                }
+            }
+            if let [a, b] = &keys[..] {
+                skipped_pairs.insert((a.clone(), b.clone()));
+                skipped_pairs.insert((b.clone(), a.clone()));
+            }
+        }
+        day_skipped_pairs.insert(*day, skipped_pairs);
+        let mut legs: Vec<(Point, Point)> = Vec::new();
+        let mut away_legs: Vec<(Point, Point)> = Vec::new();
+        for seg in src.segments.iter().filter(|s| s.day == *day && !s.skipped) {
             let mut ends: [Option<Point>; 2] = [None, None];
+            let mut away_ends: [Option<Point>; 2] = [None, None];
             for (end, label) in [&seg.from, &seg.to].into_iter().enumerate() {
                 if label.trim().is_empty() {
                     continue;
@@ -654,6 +723,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                     );
                 }
                 if let Some((lat, lon, kind)) = resolved
+                    && !skipped_here.contains(&coord_key(lat, lon))
                     && let Some(point) = gate.point(
                         display_label(label, &src.hotel_names),
                         (lat, lon),
@@ -666,7 +736,29 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                         points.push(point.clone());
                     }
                     ends[end] = Some(point);
+                } else if leg_mode
+                    && let Some((lat, lon, _)) = resolved
+                    && !skipped_here.contains(&coord_key(lat, lon))
+                {
+                    away_ends[end] = gate.away_pin(lat, lon);
                 }
+            }
+            if leg_mode
+                && let [Some(a), Some(b)] = &away_ends
+                && coord_key(a.lat, a.lon) != coord_key(b.lat, b.lon)
+                && !away_legs.iter().any(|(x, y)| same_place(x, a) && same_place(y, b))
+            {
+                away_legs.push((a.clone(), b.clone()));
+            }
+            if leg_mode
+                && let [Some(a), Some(b)] = &ends
+                && coord_key(a.lat, a.lon) != coord_key(b.lat, b.lon)
+                && !legs.iter().any(|(x, y)| {
+                    coord_key(x.lat, x.lon) == coord_key(a.lat, a.lon)
+                        && coord_key(y.lat, y.lon) == coord_key(b.lat, b.lon)
+                })
+            {
+                legs.push((a.clone(), b.clone()));
             }
             let is_airport_leg = ends.iter().flatten().any(|e| e.kind == Kind::Airport);
             let leg_stops = if is_airport_leg { &mut airport_leg_stops } else { &mut other_leg_stops };
@@ -702,6 +794,12 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 }
             }
         }
+        if leg_mode {
+            day_legs.insert(*day, legs);
+            day_away_legs.insert(*day, away_legs);
+        }
+        // POI fallback is for a day that has no route at all; a day whose legs
+        // were all skipped keeps its pins but must not re-link them.
         if points.is_empty() {
             for p in src.pois.iter().filter(|p| p.0 == *day) {
                 if let Some(point) = gate.point(p.1.clone(), (p.2, p.3), color, Kind::Sightseeing, Some(*day as u32))
@@ -793,7 +891,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 off_area_of(day),
             ));
         } else {
-            let routes = net.routes(&local_pts).await?;
+            let routes = day_routes(net, &local_pts, day_legs.get(day)).await?;
             maps.push(PlannedMap::render_titled(
                 &key,
                 day_title(&key, day),
@@ -808,7 +906,12 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         // compact map draws the commute chain — the hotel round trip, with the
         // airport terminal as gateway on arrival/departure days (a pure
         // hotel↔airport transfer day renders as its single hop).
-        let (log_points, legs) = day_logistics_legs(&all_pts);
+        let (log_points, mut legs) = day_logistics_legs(&all_pts);
+        // Every derived commute leg is kept except one a skipped segment covers
+        // (a skipped activity's pin is already gone from `all_pts`).
+        if let Some(skipped) = day_skipped_pairs.get(day) {
+            legs.retain(|(a, b)| !skipped.contains(&(coord_key(a.lat, a.lon), coord_key(b.lat, b.lon))));
+        }
         if !legs.is_empty() {
             let mut routes = Vec::new();
             for (a, b) in &legs {
@@ -877,7 +980,17 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         if points.is_empty() {
             maps.push(PlannedMap::skip(&key, "no off-area stops", None, misses_of(day), Vec::new()));
         } else {
-            let routes = net.routes(&points).await?;
+            let routes = match day_away_legs.get(day) {
+                // A skip day draws only live legs between off-area pins.
+                Some(legs) => {
+                    let mut out = Vec::new();
+                    for (a, b) in legs {
+                        out.extend(net.routes(&[a.clone(), b.clone()]).await?);
+                    }
+                    out
+                }
+                None => net.routes(&points).await?,
+            };
             maps.push(PlannedMap::render_titled(
                 &key,
                 day_title(&key, day),
@@ -963,7 +1076,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         for day in days.iter().filter(|d| on_overview(d)) {
             let points = overview_day_points(day);
             if points.len() > 1 {
-                routes.extend(net.routes(&points).await?);
+                routes.extend(day_routes(net, &points, day_legs.get(day)).await?);
             }
         }
         maps.push(PlannedMap::render(
@@ -997,7 +1110,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 .cloned()
                 .collect::<Vec<_>>();
             if points.len() > 1 {
-                routes.extend(net.routes(&points).await?);
+                routes.extend(day_routes(net, &points, day_legs.get(day)).await?);
             }
         }
         maps.push(PlannedMap::render(
@@ -2615,7 +2728,7 @@ async fn cached_routes(
 }
 
 async fn query_segments(c: &Connection, p: &str, d: &str) -> Result<Vec<Segment>, String> {
-    let mut r=c.query("SELECT day_number, from_place, to_place, mode, duration_min FROM day_route_segments WHERE plan_id=?1 AND destination=?2 ORDER BY day_number, sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("route segments query"))?;
+    let mut r=c.query("SELECT day_number, from_place, to_place, mode, duration_min, COALESCE(record_status='skipped',0) FROM day_route_segments WHERE plan_id=?1 AND destination=?2 ORDER BY day_number, sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("route segments query"))?;
     let mut v = Vec::new();
     while let Some(x) = r.next().await.map_err(err("route segments read"))? {
         v.push(Segment {
@@ -2636,6 +2749,7 @@ async fn query_segments(c: &Connection, p: &str, d: &str) -> Result<Vec<Segment>
                 .flatten()
                 .unwrap_or_default(),
             duration_min: x.get::<Option<i64>>(4).ok().flatten(),
+            skipped: x.get::<i64>(5).unwrap_or(0) != 0,
         });
     }
     Ok(v)
@@ -2645,7 +2759,7 @@ async fn query_pois(
     p: &str,
     d: &str,
 ) -> Result<Vec<(i64, String, f64, f64)>, String> {
-    let mut r=c.query("SELECT a.day_number, p.title, p.lat, p.lon FROM activities a JOIN destination_pois p ON (p.poi_id=a.poi_id OR (a.poi_id IS NULL AND p.title=a.title)) AND p.slug=?2 WHERE a.plan_id=?1 AND p.lat IS NOT NULL AND p.lon IS NOT NULL ORDER BY a.day_number, a.sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("itinerary POI query"))?;
+    let mut r=c.query("SELECT a.day_number, p.title, p.lat, p.lon FROM activities a JOIN destination_pois p ON (p.poi_id=a.poi_id OR (a.poi_id IS NULL AND p.title=a.title)) AND p.slug=?2 WHERE a.plan_id=?1 AND (a.record_status IS NULL OR a.record_status <> 'skipped') AND p.lat IS NOT NULL AND p.lon IS NOT NULL ORDER BY a.day_number, a.sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("itinerary POI query"))?;
     let mut v = Vec::new();
     while let Some(x) = r.next().await.map_err(err("itinerary POI read"))? {
         let (Ok(day), Ok(title), Ok(lat), Ok(lon)) = (x.get(0), x.get(1), x.get(2), x.get(3))
@@ -2653,6 +2767,17 @@ async fn query_pois(
             continue;
         };
         v.push((day, title, lat, lon));
+    }
+    Ok(v)
+}
+/// Skipped activities resolved through the same POI join as `query_pois`.
+async fn query_skipped_pois(c: &Connection, p: &str, d: &str) -> Result<Vec<(i64, f64, f64)>, String> {
+    let mut r=c.query("SELECT a.day_number, p.lat, p.lon FROM activities a JOIN destination_pois p ON (p.poi_id=a.poi_id OR (a.poi_id IS NULL AND p.title=a.title)) AND p.slug=?2 WHERE a.plan_id=?1 AND a.record_status = 'skipped' AND p.lat IS NOT NULL AND p.lon IS NOT NULL",params![p.to_string(),d.to_string()]).await.map_err(err("skipped POI query"))?;
+    let mut v = Vec::new();
+    while let Some(x) = r.next().await.map_err(err("skipped POI read"))? {
+        if let (Ok(day), Ok(lat), Ok(lon)) = (x.get(0), x.get(1), x.get(2)) {
+            v.push((day, lat, lon));
+        }
     }
     Ok(v)
 }
@@ -3175,6 +3300,7 @@ async fn query_flight_rows(c: &Connection, p: &str, d: &str) -> Result<Vec<Fligh
 /// Every non-NULL `day_route_segments` endpoint, in the query's own row order.
 async fn query_route_endpoints(c: &Connection, p: &str, d: &str) -> Result<Vec<String>, String> {
     let mut r=c.query("SELECT from_place,to_place FROM day_route_segments WHERE plan_id=?1 AND destination=?2 \
+         AND (record_status IS NULL OR record_status <> 'skipped') \
          AND day_number NOT IN (SELECT day_number FROM days WHERE plan_id=?1 AND destination=?2 AND variant_of IS NOT NULL)",params![p.to_string(),d.to_string()]).await.map_err(err("logistics route query"))?;
     let mut out = Vec::new();
     while let Some(x) = r.next().await.map_err(err("logistics route read"))? {
@@ -3595,6 +3721,7 @@ mod tests {
             to: to.into(),
             mode: "transit".into(),
             duration_min: None,
+            skipped: false,
         }
     }
 
@@ -3611,6 +3738,7 @@ mod tests {
                 seg(2, "hotel", "Fushimi Inari"),
             ],
             pois: Vec::new(),
+            skipped_pois: Vec::new(),
             dest_pois: vec![
                 poi("kinkakuji", "Kinkakuji", KINKAKU.0, KINKAKU.1),
                 poi("kiyomizu", "Kiyomizu", KIYOMIZU.0, KIYOMIZU.1),
@@ -5048,5 +5176,291 @@ mod tests {
         moved[0].lat = 35.01;
         let c = map_input_sha256("Day 1 route", MapKind::Day, &moved, &routes);
         assert_ne!(a, c);
+    }
+    /// In-memory SQLite with only the columns the three map-input queries read:
+    /// the real SQL runs, no Turso, nothing to tear down.
+    async fn record_fixture_db() -> Connection {
+        let c = libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap();
+        c.execute_batch(
+            "CREATE TABLE days (plan_id TEXT, destination TEXT, day_number INTEGER, variant_of INTEGER);
+             CREATE TABLE day_route_segments (plan_id TEXT, destination TEXT, day_number INTEGER, sort_order INTEGER,
+               from_place TEXT, to_place TEXT, mode TEXT, duration_min INTEGER, record_status TEXT);
+             CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, day_number INTEGER, sort_order INTEGER,
+               title TEXT, poi_id TEXT, record_status TEXT);
+             CREATE TABLE destination_pois (slug TEXT, poi_id TEXT, title TEXT, lat REAL, lon REAL);
+             INSERT INTO days VALUES ('p','d',1,NULL);
+             INSERT INTO destination_pois VALUES ('d','kinkakuji','Kinkakuji',35.0394,135.7292);
+             INSERT INTO destination_pois VALUES ('d','kiyomizu','Kiyomizu',34.9949,135.7850);
+             INSERT INTO day_route_segments VALUES ('p','d',1,0,'hotel','Kinkakuji','transit',NULL,NULL);
+             INSERT INTO day_route_segments VALUES ('p','d',1,1,'Kinkakuji','Kiyomizu','transit',NULL,NULL);
+             INSERT INTO activities VALUES ('a1','p','d',1,0,'Kinkakuji','kinkakuji',NULL);
+             INSERT INTO activities VALUES ('a2','p','d',1,1,'Kiyomizu','kiyomizu',NULL);",
+        )
+        .await
+        .unwrap();
+        c
+    }
+
+    /// Map inputs exactly as `MapSource::load` reads them, assembled.
+    async fn map_inputs(c: &Connection) -> (MapSource, HashMap<String, PlannedMap>) {
+        let mut src = fixture_source("Kiyomizu");
+        src.days = vec![1];
+        src.segments = query_segments(c, "p", "d").await.unwrap();
+        src.pois = query_pois(c, "p", "d").await.unwrap();
+        src.skipped_pois = query_skipped_pois(c, "p", "d").await.unwrap();
+        src.route_endpoints = query_route_endpoints(c, "p", "d").await.unwrap();
+        let maps = assembled(&src, &mut fake_net()).await;
+        (src, maps)
+    }
+
+    /// (pin labels, line count) a map draws; None when the map is skipped.
+    fn drawn_in(maps: &HashMap<String, PlannedMap>, key: &str) -> Option<(Vec<String>, usize)> {
+        match &maps[key].plan {
+            MapPlan::Render { points, routes, .. } => {
+                Some((points.iter().map(|p| p.label.clone()).collect(), routes.len()))
+            }
+            MapPlan::Skip { .. } => None,
+        }
+    }
+
+    fn pins(v: &[&str], lines: usize) -> Option<(Vec<String>, usize)> {
+        Some((v.iter().map(|s| s.to_string()).collect(), lines))
+    }
+
+    async fn set(c: &Connection, sql: &str) {
+        c.execute_batch(sql).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn skipped_leg_and_activity_not_in_map_inputs() {
+        let c = record_fixture_db().await;
+        let (src0, maps0) = map_inputs(&c).await;
+        assert_eq!((src0.segments.len(), src0.pois.len(), src0.route_endpoints.len()), (2, 2, 4));
+
+        // done and NULL stay in; only 'skipped' drops out.
+        set(&c, "UPDATE day_route_segments SET record_status='done' WHERE sort_order=0;
+                 UPDATE activities SET record_status='done' WHERE id='a1';").await;
+        let (src_done, maps_done) = map_inputs(&c).await;
+        assert_eq!((src_done.pois.len(), src_done.skipped_pois.len(), src_done.route_endpoints.len()), (2, 0, 4));
+        assert_eq!(drawn_in(&maps_done, "day-1.png"), drawn_in(&maps0, "day-1.png"));
+        assert_eq!(drawn_in(&maps_done, "plan.png"), drawn_in(&maps0, "plan.png"));
+
+        set(&c, "UPDATE day_route_segments SET record_status='skipped' WHERE sort_order=1;
+                 UPDATE activities SET record_status='skipped' WHERE id='a2';").await;
+        let (src, maps1) = map_inputs(&c).await;
+        assert_eq!(src.pois.len(), 1);
+        assert_eq!(src.pois[0].1, "Kinkakuji");
+        assert_eq!(src.route_endpoints, ["hotel", "Kinkakuji"], "logistics endpoints drop the skipped leg");
+        assert_ne!(maps0["day-1.png"].input_sha256(), maps1["day-1.png"].input_sha256());
+    }
+
+    #[tokio::test]
+    async fn skipped_activity_that_is_a_route_end_leaves_day_and_plan_maps() {
+        let c = record_fixture_db().await;
+        let (_, maps0) = map_inputs(&c).await;
+        assert_eq!(drawn_in(&maps0, "day-1.png"), pins(&["Kinkakuji", "Kiyomizu"], 1));
+        // Only the activity is skipped; the route segments are untouched.
+        set(&c, "UPDATE activities SET record_status='skipped' WHERE id='a2';").await;
+        let (src, maps1) = map_inputs(&c).await;
+        assert!(src.segments.iter().all(|s| !s.skipped));
+        for key in ["day-1.png", "plan.png"] {
+            let (labels, lines) = drawn_in(&maps1, key).unwrap();
+            assert!(!labels.iter().any(|l| l == "Kiyomizu"), "{key} still pins the skipped stop: {labels:?}");
+            assert_eq!(lines, 0, "{key} still draws a leg to the skipped stop");
+            assert_ne!(maps0[key].input_sha256(), maps1[key].input_sha256(), "{key} hash");
+        }
+        // done keeps the pin.
+        set(&c, "UPDATE activities SET record_status='done' WHERE id='a2';").await;
+        let (_, maps2) = map_inputs(&c).await;
+        assert_eq!(maps2["day-1.png"].input_sha256(), maps0["day-1.png"].input_sha256());
+        assert_eq!(maps2["plan.png"].input_sha256(), maps0["plan.png"].input_sha256());
+    }
+
+    #[tokio::test]
+    async fn all_legs_skipped_does_not_relink_through_poi_fallback() {
+        let c = record_fixture_db().await;
+        // Day 1 has a single leg; activities are unrecorded.
+        set(&c, "DELETE FROM day_route_segments WHERE sort_order=1;").await;
+        let (_, maps0) = map_inputs(&c).await;
+        assert_eq!(drawn_in(&maps0, "day-1.png"), pins(&["Kinkakuji"], 0));
+        set(&c, "UPDATE day_route_segments SET record_status='skipped';").await;
+        let (_, maps1) = map_inputs(&c).await;
+        // Both unrecorded activities still pin, but nothing connects them.
+        assert_eq!(drawn_in(&maps1, "day-1.png"), pins(&["Kinkakuji", "Kiyomizu"], 0));
+        assert_eq!(drawn_in(&maps1, "plan.png").unwrap().1, 0, "plan.png must not re-link");
+        assert_ne!(maps0["day-1.png"].input_sha256(), maps1["day-1.png"].input_sha256());
+        assert_ne!(maps0["plan.png"].input_sha256(), maps1["plan.png"].input_sha256());
+        // A day with no segments at all still falls back and links its POIs.
+        set(&c, "DELETE FROM day_route_segments;").await;
+        let (_, maps2) = map_inputs(&c).await;
+        assert_eq!(drawn_in(&maps2, "day-1.png"), pins(&["Kinkakuji", "Kiyomizu"], 1));
+    }
+    /// Day 1 = A → B, B → C, C → D (four POIs); `mid_skipped` marks B → C.
+    fn chain_source(mid_skipped: bool, excursion: bool) -> MapSource {
+        let mut src = fixture_source("Kiyomizu");
+        src.days = vec![1];
+        src.dest_pois = vec![
+            poi("a", "Alpha", 35.040, 135.730),
+            poi("b", "Bravo", 35.030, 135.760),
+            poi("c", "Charlie", 35.020, 135.790),
+            poi("d", "Delta", 35.010, 135.820),
+        ];
+        src.segments = vec![seg(1, "Alpha", "Bravo"), seg(1, "Bravo", "Charlie"), seg(1, "Charlie", "Delta")];
+        src.segments[1].skipped = mid_skipped;
+        src.excursion = if excursion { HashSet::from([1]) } else { HashSet::new() };
+        src
+    }
+
+    fn lines_of(maps: &HashMap<String, PlannedMap>, key: &str) -> Vec<Vec<(f64, f64)>> {
+        match &maps[key].plan {
+            MapPlan::Render { routes, .. } => routes.iter().map(|r| r.points.clone()).collect(),
+            MapPlan::Skip { .. } => panic!("{key} skipped"),
+        }
+    }
+
+    #[tokio::test]
+    async fn skipped_middle_leg_is_not_bridged_on_day_plan_and_excursion_maps() {
+        let at = |lat: f64, lon: f64| (lat, lon);
+        let ab = vec![at(35.040, 135.730), at(35.030, 135.760)];
+        let cd = vec![at(35.020, 135.790), at(35.010, 135.820)];
+        for (excursion, plan_key) in [(false, "plan.png"), (true, "plan-excursion.png")] {
+            let full = assembled(&chain_source(false, excursion), &mut fake_net()).await;
+            let cut = assembled(&chain_source(true, excursion), &mut fake_net()).await;
+            assert_eq!(lines_of(&full, "day-1.png").len(), 3);
+            for key in ["day-1.png", plan_key] {
+                let lines = lines_of(&cut, key);
+                assert_eq!(lines, vec![ab.clone(), cd.clone()], "{key} (excursion={excursion}) keeps A-B and C-D only");
+                assert_ne!(full[key].input_sha256(), cut[key].input_sha256(), "{key} hash must change");
+            }
+            // The pins are all still there: the stops were visited, only the leg was not.
+            assert_eq!(drawn_in(&cut, "day-1.png").unwrap().0.len(), 4);
+        }
+        // done / NULL legs: identical to the unmarked day.
+        let a = assembled(&chain_source(false, false), &mut fake_net()).await;
+        let b = assembled(&chain_source(false, false), &mut fake_net()).await;
+        assert_eq!(a["plan.png"].input_sha256(), b["plan.png"].input_sha256());
+    }
+    /// Five stops A..E on day 1 with the given legs; `pin_skipped` lists skipped activity stops.
+    fn legs_source(legs: &[(&str, &str, bool)], pin_skipped: &[(f64, f64)], excursion: bool) -> MapSource {
+        let mut src = chain_source(false, excursion);
+        src.dest_pois.push(poi("e", "Echo", 35.000, 135.850));
+        src.segments = legs
+            .iter()
+            .map(|(a, b, skipped)| {
+                let mut s = seg(1, a, b);
+                s.skipped = *skipped;
+                s
+            })
+            .collect();
+        src.skipped_pois = pin_skipped.iter().map(|(la, lo)| (1, *la, *lo)).collect();
+        src
+    }
+
+    const PA: (f64, f64) = (35.040, 135.730);
+    const PB: (f64, f64) = (35.030, 135.760);
+    const PC: (f64, f64) = (35.020, 135.790);
+    const PD: (f64, f64) = (35.010, 135.820);
+    const PE: (f64, f64) = (35.000, 135.850);
+
+    #[tokio::test]
+    async fn skip_days_draw_only_live_legs_never_invented_ones() {
+        for (excursion, plan_key) in [(false, "plan.png"), (true, "plan-excursion.png")] {
+            // 1: B's activity skipped, all legs live -> no A→C bridge; only C→D survives.
+            let legs = [("Alpha", "Bravo", false), ("Bravo", "Charlie", false), ("Charlie", "Delta", false)];
+            let full = assembled(&legs_source(&legs, &[], excursion), &mut fake_net()).await;
+            let cut = assembled(&legs_source(&legs, &[PB], excursion), &mut fake_net()).await;
+            for key in ["day-1.png", plan_key] {
+                assert_eq!(lines_of(&cut, key), vec![vec![PC, PD]], "{key} excursion={excursion}");
+                assert_ne!(full[key].input_sha256(), cut[key].input_sha256(), "{key} hash");
+            }
+            // 2: live A→B, skipped B→C, live B→D, live C→E -> no D→C, no B→C.
+            let legs = [("Alpha", "Bravo", false), ("Bravo", "Charlie", true), ("Bravo", "Delta", false), ("Charlie", "Echo", false)];
+            let unmarked = [("Alpha", "Bravo", false), ("Bravo", "Charlie", false), ("Bravo", "Delta", false), ("Charlie", "Echo", false)];
+            let base = assembled(&legs_source(&unmarked, &[], excursion), &mut fake_net()).await;
+            let cut = assembled(&legs_source(&legs, &[], excursion), &mut fake_net()).await;
+            for key in ["day-1.png", plan_key] {
+                assert_eq!(
+                    lines_of(&cut, key),
+                    vec![vec![PA, PB], vec![PB, PD], vec![PC, PE]],
+                    "{key} excursion={excursion}"
+                );
+                assert_ne!(base[key].input_sha256(), cut[key].input_sha256(), "{key} hash");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn day_without_skips_still_chains_its_points() {
+        let legs = [("Alpha", "Bravo", false), ("Bravo", "Charlie", false), ("Charlie", "Delta", false)];
+        let maps = assembled(&legs_source(&legs, &[], false), &mut fake_net()).await;
+        let chain = vec![vec![PA, PB], vec![PB, PC], vec![PC, PD]];
+        assert_eq!(lines_of(&maps, "day-1.png"), chain);
+        assert_eq!(lines_of(&maps, "plan.png"), chain);
+    }
+    /// Hotel legs: the day and plan maps never draw them (sightseeing stops only,
+    /// with or without a skip); the commute map keeps the hotel→first-stop leg on
+    /// a skip day. A skip must not change which kinds of stop each map draws.
+    #[tokio::test]
+    async fn hotel_legs_on_skip_day_match_the_unmarked_day() {
+        let hotel_legs = [("hotel", "Alpha", false), ("Alpha", "Bravo", false), ("Bravo", "Charlie", false), ("Charlie", "hotel", false)];
+        let plain = assembled(&legs_source(&hotel_legs, &[], false), &mut fake_net()).await;
+        let skip = assembled(&legs_source(&hotel_legs, &[PC], false), &mut fake_net()).await;
+        for key in ["day-1.png", "plan.png"] {
+            for m in [&plain, &skip] {
+                assert!(lines_of(m, key).iter().all(|l| !l.contains(&HOTEL)), "{key} draws hotel lines");
+                assert!(!drawn_in(m, key).unwrap().0.iter().any(|l| l == "APA Hotel"), "{key} pins the hotel");
+            }
+        }
+        // Unmarked: A→B→C. Skip C: only A→B; the live hotel→A leg stays on the commute map.
+        assert_eq!(lines_of(&plain, "day-1.png"), vec![vec![PA, PB], vec![PB, PC]]);
+        assert_eq!(lines_of(&skip, "day-1.png"), vec![vec![PA, PB]]);
+        assert_eq!(lines_of(&skip, "plan.png"), vec![vec![PA, PB]]);
+        assert!(
+            lines_of(&skip, "day-1-logistics.png").iter().any(|l| l.contains(&HOTEL) && l.contains(&PA)),
+            "hotel→A leg missing from the skip day's commute map"
+        );
+    }
+    #[tokio::test]
+    async fn skipped_leg_is_not_redrawn_on_commute_or_away_maps() {
+        // Commute map: hotel→Alpha skipped; C→hotel is derived (no such segment).
+        let marked = |first_skipped: bool| {
+            [("hotel", "Alpha", first_skipped), ("Alpha", "Bravo", false), ("Bravo", "Charlie", false), ("hotel", "Bravo", false)]
+        };
+        let plain = assembled(&legs_source(&marked(false), &[], false), &mut fake_net()).await;
+        let skip = assembled(&legs_source(&marked(true), &[], false), &mut fake_net()).await;
+        let key = "day-1-logistics.png";
+        assert_eq!(lines_of(&plain, key), vec![vec![HOTEL, PA], vec![PC, HOTEL]]);
+        assert_eq!(lines_of(&skip, key), vec![vec![PC, HOTEL]], "skipped hotel→A is redrawn, or derived C→hotel lost");
+        assert_ne!(plain[key].input_sha256(), skip[key].input_sha256());
+
+        // Away map: Seoul→Daegu live, Daegu→Busan skipped, Busan→Gimhae live.
+        const SEOUL: (f64, f64) = (37.5665, 126.9780);
+        const DAEGU: (f64, f64) = (35.8714, 128.6014);
+        let away_src = |mid_skipped: bool| {
+            let mut src = fixture_source("Kiyomizu");
+            let mut mid = seg(1, "Daegu", "Busan");
+            mid.skipped = mid_skipped;
+            src.segments.splice(0..0, [seg(1, "Seoul", "Daegu"), mid, seg(1, "Busan", "Gimhae Airport")]);
+            let mut net = fake_net();
+            net.coords.extend([("Seoul", SEOUL), ("Daegu", DAEGU), ("Busan", BUSAN), ("Gimhae Airport", GIMHAE)]);
+            (src, net)
+        };
+        let (src, mut net) = away_src(false);
+        let plain = assembled(&src, &mut net).await;
+        let (src, mut net) = away_src(true);
+        let skip = assembled(&src, &mut net).await;
+        let key = "day-1-away.png";
+        assert_eq!(lines_of(&plain, key).len(), 3);
+        assert_eq!(
+            lines_of(&skip, key),
+            vec![vec![SEOUL, DAEGU], vec![BUSAN, GIMHAE]],
+            "skipped Daegu→Busan is chained back"
+        );
+        assert_ne!(plain[key].input_sha256(), skip[key].input_sha256());
     }
 }
