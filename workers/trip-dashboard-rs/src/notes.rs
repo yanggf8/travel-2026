@@ -490,6 +490,10 @@ pub struct ImageSwap {
 /// Pure: which row does `target` swap with when moved `up`? `None` = no-op
 /// (first row up / last row down / unknown id) — the caller redirects without
 /// touching the DB.
+pub fn image_is_listed(images: &[ImageOrder], target: &str) -> bool {
+    images.iter().any(|i| i.image_id == target)
+}
+
 pub fn plan_image_move(images: &[ImageOrder], target: &str, up: bool) -> Option<ImageSwap> {
     let idx = images.iter().position(|i| i.image_id == target)?;
     let neighbor = if up { idx.checked_sub(1)? } else { idx.checked_add(1)? };
@@ -1040,7 +1044,12 @@ async fn image_flow(
         }
         up_down => {
             let up = up_down == ImageOp::Up;
-            // First row up / last row down / unknown id: redirect without a write.
+            // Unknown image (or a missing/deleted note, whose image list is empty): the
+            // same 404 as every other bad note URL. First row up / last row down: a
+            // no-op redirect without a write.
+            if !image_is_listed(&images, image_id) {
+                return not_found();
+            }
             let Some(swap) = plan_image_move(&images, image_id, up) else {
                 return redirect_to(&edit_location);
             };
@@ -1788,6 +1797,13 @@ mod tests {
         vec![io("0123456789abcdef", 1), io("1111111111111111", 2), io("2222222222222222", 3)]
     }
 
+    #[test]
+    fn move_on_unknown_image_or_missing_note_is_not_listed() {
+        let imgs = three_images();
+        assert!(image_is_listed(&imgs, "0123456789abcdef"));
+        assert!(!image_is_listed(&imgs, "9999999999999999"));
+        assert!(!image_is_listed(&[], "0123456789abcdef"));
+    }
     #[test]
     fn move_up_first_is_noop() {
         let imgs = three_images();
