@@ -113,6 +113,7 @@ mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapsho
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 mod snapshot_maps;      // snapshot-maps (Turso → Rust PNG renderer → R2)
 mod verify_site;        // verify-site live dashboard checks and temporary verification fixtures
+mod verify_site_offline; // verify-site disposable-context offline checks
 mod verify_site_notes;  // verify-site temporary note fixtures and live anti-goal checks
 mod verify_site_page;   // verify-site layer 1: viewer-page HTML judgements (pure)
 mod verify_site_sheet;  // verify-site layer 4: --contact-sheet thumbnail grid

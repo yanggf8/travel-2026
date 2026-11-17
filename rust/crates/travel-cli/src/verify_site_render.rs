@@ -559,6 +559,13 @@ pub(crate) async fn render_plan(plan: &str, targets: &[(&str, String)], token: &
             return report;
         }
     };
+    let before = match browser.browser_context_count().await {
+        Ok(n) => n,
+        Err(e) => {
+            report.checks.push(("cleanup".into(), failure_check("count contexts before render", &e.to_string(), token)));
+            return report;
+        }
+    };
 
     let mut written = 0;
     let shots_ready = match prepare_shot_dir(&shot_dir) {
@@ -576,7 +583,7 @@ pub(crate) async fn render_plan(plan: &str, targets: &[(&str, String)], token: &
     for (lang, url) in targets {
         for vp in VIEWPORTS {
             let key = format!("{lang}-{}", vp.name);
-            let page = match tokio::time::timeout(NEW_TAB_TIMEOUT, browser.new_blank_page()).await {
+            let isolated = match tokio::time::timeout(NEW_TAB_TIMEOUT, browser.new_isolated_page()).await {
                 Ok(Ok(p)) => p,
                 Ok(Err(e)) => {
                     report.checks.push((key, failure_check("new tab", &e.to_string(), token)));
@@ -588,9 +595,8 @@ pub(crate) async fn render_plan(plan: &str, targets: &[(&str, String)], token: &
                     continue;
                 }
             };
-            // Everything that touches the tab runs here, so the close below
-            // happens on every path (a measure timeout included).
-            match tokio::time::timeout(MEASURE_DEADLINE, measure(&page, url, vp)).await {
+            let page = isolated.page();
+            match tokio::time::timeout(MEASURE_DEADLINE, measure(page, url, vp)).await {
                 Ok(Ok(m)) => {
                     let m = scrub_metrics(m, token);
                     for c in render_checks(&m) {
@@ -622,14 +628,19 @@ pub(crate) async fn render_plan(plan: &str, targets: &[(&str, String)], token: &
                     report.checks.push((key.clone(), failure_check("measure (deadline)", &e, token)));
                 }
             }
-            let closed = match tokio::time::timeout(CLOSE_TIMEOUT, page.close()).await {
-                Ok(r) => r.map_err(|e| e.to_string()),
-                Err(_) => Err(format!("timed out after {}s", CLOSE_TIMEOUT.as_secs())),
+            let context_id = isolated.context_id().to_string();
+            let disposed = match tokio::time::timeout(CLOSE_TIMEOUT, isolated.dispose()).await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => browser.dispose_context(&e.context_id).await.map_err(|retry| format!("{e}; retry: {retry}")),
+                Err(_) => browser.dispose_context(&context_id).await.map_err(|retry| format!("dispose timeout; retry: {retry}")),
             };
-            if let Err(e) = closed {
-                report.checks.push((key, Check::warn(format!("could not close the render tab: {}", scrub(&e, token)), None)));
-            }
+            if let Err(e) = disposed { report.checks.push((key, Check::fail(format!("context cleanup failed: {}", scrub(&e, token)), None))); }
         }
+    }
+    match browser.browser_context_count().await {
+        Ok(after) if after == before => report.checks.push(("cleanup".into(), Check::pass(format!("browser contexts restored to {before}")))),
+        Ok(after) => report.checks.push(("cleanup".into(), Check::fail(format!("browser context count changed: before={before}, after={after}"), None))),
+        Err(e) => report.checks.push(("cleanup".into(), failure_check("count contexts after render", &e.to_string(), token))),
     }
     report.shots = Some(written);
     report

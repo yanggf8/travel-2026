@@ -43,6 +43,11 @@
 //! edge (clipped); WARN on unloaded fonts. No CDP Chrome = one FAIL per plan, never
 //! a silent skip. Each summary box and day card is also saved as
 //! `<dir>/<plan>/<lang>-<viewport>-NN.png` (advisory, never a verdict).
+//! Every render page uses a disposable browser context. The offline pass saves
+//! a fresh copy, disconnects, checks local PDFs and maps, tests a partial SAVE,
+//! multiple tokens and languages, revocation, a late 403, and a stale-day clock
+//! transition. Its extra verify tokens are deleted before this plan's original
+//! token is deleted.
 //!
 //! Apart from its own temporary plan token and note fixtures: no other Turso writes, no
 //! Nominatim/OSRM/Overpass calls. The note owner checks use an explicitly
@@ -64,6 +69,7 @@ use url::Url;
 use crate::snapshot_maps as maps;
 use crate::verify_site_page::{self as page, Lang, LegendRow, SlotFacts};
 use crate::verify_site_render as render;
+use crate::verify_site_offline as offline;
 use crate::verify_site_sheet::{self as sheet, SheetCell};
 
 pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>] [--render <dir>] [--at YYYY-MM-DDTHH:MM]\n  \
@@ -82,14 +88,17 @@ check, then a summary; exits 1 on any FAIL. --contact-sheet <dir> also writes \
 default 9222) in zh/en at 390px and 1280px and FAILs on sideways overflow, broken \
 images, hidden doc links/variants/map images, text left of its card's title (inset) \
 or cut at a day card's edge (clipped); no Chrome is a FAIL. It saves each summary box \
-and day card as <dir>/<plan>/<lang>-<viewport>-NN.png (advisory). The \
+and day card as <dir>/<plan>/<lang>-<viewport>-NN.png (advisory). It also runs \
+disposable-context offline checks: first save/reopen, partial-save retention, \
+ZH/EN with two tokens, revocation, delayed 403 cleanup, and yesterday-to-today \
+reopening. A context cleanup failure is a FAIL. The \
 viewer page is opened with a verify token minted for this run and deleted right after \
 (fingerprints only). Optional owner checks use TRAVEL_VERIFY_SITE_OWNER_COOKIE \
 (one-time cookie value from a signed-in browser; never store it). \
 Host: TRAVEL_DASHBOARD_HOST (as share-token).";
 
 /// `plan_share_tokens.created_by` of the verify token.
-const VERIFY_CREATED_BY: &str = "verify-site";
+pub(crate) const VERIFY_CREATED_BY: &str = "verify-site";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Level {
@@ -228,14 +237,14 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 }
 
 #[derive(Default)]
-struct Tally {
+pub(crate) struct Tally {
     pass: usize,
     warn: usize,
     fail: usize,
 }
 
 impl Tally {
-    fn emit(&mut self, plan: &str, layer: &str, key: &str, check: &Check) {
+    pub(crate) fn emit(&mut self, plan: &str, layer: &str, key: &str, check: &Check) {
         match check.level {
             Level::Pass => self.pass += 1,
             Level::Warn => self.warn += 1,
@@ -389,7 +398,7 @@ fn write_contact_sheet(dir: &Path, plan: &str, cells: &[SheetCell]) -> Result<Pa
 
 /// DELETE verify-site token rows: one token (`token`), or every leftover one
 /// (`None`). Returns rows removed. Share-token ('cli') rows are never touched.
-async fn remove_verify_tokens(conn: &Connection, token: Option<&str>) -> Result<u64, String> {
+pub(crate) async fn remove_verify_tokens(conn: &Connection, token: Option<&str>) -> Result<u64, String> {
     conn.execute(
         "DELETE FROM plan_share_tokens WHERE created_by = ?1 AND (?2 IS NULL OR token = ?2)",
         libsql::params![VERIFY_CREATED_BY, token.map(str::to_string)],
@@ -666,6 +675,7 @@ async fn viewer_page_checks(
                 report.shot_dir.display()
             );
         }
+        offline::run(conn, plan, host, token, &documents, tally).await;
     }
     Ok(())
 }
