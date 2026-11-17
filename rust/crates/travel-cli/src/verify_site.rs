@@ -44,8 +44,9 @@
 //! a silent skip. Each summary box and day card is also saved as
 //! `<dir>/<plan>/<lang>-<viewport>-NN.png` (advisory, never a verdict).
 //!
-//! Read-only apart from the run's own verify token rows: no other Turso writes, no
-//! Nominatim/OSRM/Overpass calls, no cookies. Plain-text verdict lines; exits
+//! Apart from its own temporary plan token and note fixtures: no other Turso writes, no
+//! Nominatim/OSRM/Overpass calls. The note owner checks use an explicitly
+//! supplied session cookie. Plain-text verdict lines; exits
 //! non-zero iff any FAIL.
 
 use std::{
@@ -68,7 +69,7 @@ use crate::verify_site_sheet::{self as sheet, SheetCell};
 pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <dir>] [--render <dir>] [--at YYYY-MM-DDTHH:MM]\n  \
 --at pins the dashboard clock (destination local time) instead of the day before the trip, so the during-trip page \
 (現在・接下來 card, today-only open day cards) is the one checked and rendered.\n  \
-Read-only check of the LIVE dashboard: each map key's live bytes vs map_artifacts \
+Check the LIVE dashboard: each map key's live bytes vs map_artifacts \
 (sha256 + size; skipped keys must serve the worker placeholder), input-hash freshness \
 (recomputed from cached geocodes/road legs only), image content (size, geographic \
 background, title + credit), and the viewer page in zh \
@@ -83,7 +84,9 @@ images, hidden doc links/variants/map images, text left of its card's title (ins
 or cut at a day card's edge (clipped); no Chrome is a FAIL. It saves each summary box \
 and day card as <dir>/<plan>/<lang>-<viewport>-NN.png (advisory). The \
 viewer page is opened with a verify token minted for this run and deleted right after \
-(fingerprints only). Host: TRAVEL_DASHBOARD_HOST (as share-token).";
+(fingerprints only). Optional owner checks use TRAVEL_VERIFY_SITE_OWNER_COOKIE \
+(one-time cookie value from a signed-in browser; never store it). \
+Host: TRAVEL_DASHBOARD_HOST (as share-token).";
 
 /// `plan_share_tokens.created_by` of the verify token.
 const VERIFY_CREATED_BY: &str = "verify-site";
@@ -180,18 +183,19 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         }
         None => live_plans,
     };
+    // A run killed between mint and delete leaves its verify token behind:
+    // nothing may stay shared, so the next run removes every such row first.
+    let leftover = remove_verify_tokens(&conn, None).await?;
+    crate::verify_site_notes::sweep(&conn).await?;
+    if leftover > 0 {
+        println!("note: removed {leftover} leftover verify token(s) of an interrupted run");
+    }
+
     let Some(first_plan) = plan_ids.first().cloned() else {
         println!("No plans to check.");
         println!("summary: 0 plan(s) · 0 PASS · 0 WARN · 0 FAIL");
         return Ok(());
     };
-
-    // A run killed between mint and delete leaves its verify token behind:
-    // nothing may stay shared, so the next run removes every such row first.
-    let leftover = remove_verify_tokens(&conn, None).await?;
-    if leftover > 0 {
-        println!("note: removed {leftover} leftover verify token(s) of an interrupted run");
-    }
 
     let host = crate::share_token::dashboard_host();
     let nonce = nonce()?;
@@ -346,6 +350,9 @@ async fn verify_plans(
         }
 
         verify_viewer_page(conn, plan, host, tmp, &manifest, &placeholder, render_dir, &mut tally).await?;
+        for (key, check) in crate::verify_site_notes::check(conn, plan, host).await? {
+            tally.emit(plan, "notes:", &key, &check);
+        }
 
         if let Some(dir) = sheet_dir {
             let path = write_contact_sheet(dir, plan, &cells)?;

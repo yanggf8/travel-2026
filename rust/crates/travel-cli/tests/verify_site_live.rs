@@ -1,8 +1,8 @@
 //! Live smoke test for `travel verify-site`: runs the real command against the
-//! real dashboard and real Turso. It reaches the network (HTTP GETs to the
+//! real dashboard and real Turso. It reaches the network (HTTP requests to the
 //! dashboard worker), so it runs ONLY when TRAVEL_VERIFY_SITE_LIVE=1 and skips
-//! otherwise — never part of an ordinary `make test`. Read-only: verify-site
-//! writes nothing, so there is no fixture and no teardown.
+//! otherwise — never part of an ordinary `make test`. The command owns its
+//! temporary note fixtures and tokens and removes them before returning.
 
 use std::process::Command;
 
@@ -37,11 +37,13 @@ fn verify_site_runs_against_the_live_dashboard() {
             "non-verdict line: {line}"
         );
     }
+    let notes: Vec<_> = stdout.lines().filter(|line| line.contains(" notes:")).collect();
+    assert!(!notes.is_empty(), "no notes verdicts:\n{stdout}");
+    assert!(notes.iter().all(|line| !line.starts_with("FAIL ")), "notes failures:\n{}", notes.join("\n"));
     // Exit status tracks FAIL lines: non-zero iff any FAIL was printed.
     let fails = stdout.lines().filter(|l| l.starts_with("FAIL ")).count();
     assert_eq!(out.status.success(), fails == 0, "exit {:?} with {fails} FAIL line(s)", out.status);
 }
-
 #[test]
 fn verify_site_rejects_unknown_flags_without_network() {
     let out = Command::new(bin())

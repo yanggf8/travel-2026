@@ -112,7 +112,8 @@ mod db_cleanup_deleted; // db cleanup-deleted (batched hard-wipe of soft-deleted
 mod mark_maps_snapshotted; // mark-maps-snapshotted (stamp dashboard map snapshot time)
 mod check_maps_fresh;   // check-maps-fresh (map-snapshot staleness lint)
 mod snapshot_maps;      // snapshot-maps (Turso → Rust PNG renderer → R2)
-mod verify_site;        // verify-site (read-only check of the LIVE dashboard maps vs Turso)
+mod verify_site;        // verify-site live dashboard checks and temporary verification fixtures
+mod verify_site_notes;  // verify-site temporary note fixtures and live anti-goal checks
 mod verify_site_page;   // verify-site layer 1: viewer-page HTML judgements (pure)
 mod verify_site_sheet;  // verify-site layer 4: --contact-sheet thumbnail grid
 mod verify_site_render; // verify-site layer 5: --render rendered-page checks (CDP Chrome)

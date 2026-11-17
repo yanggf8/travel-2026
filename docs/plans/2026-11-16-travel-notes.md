@@ -469,7 +469,7 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
   - 撤回 token 後，照片立即回 404；軟刪除筆記後，照片立即回 404。
   - 帶一個偽造（驗證不過）的 session cookie，POST 文字表單到 `/notes/new`：回應含送出的標題（已跳脫），DB 沒有新筆記列；不帶 cookie 的同一個 POST 回 404。
   - CLI 上傳後，擁有者路由讀得到這張照片（證明 `--remote` 寫到網站讀的 bucket）。
-  - 擁有者對不存在、已刪除的筆記送編輯與照片上下移：回 404，`note_events` 列數不變，其他照片的 `sort_order` 不變（驗證 `pipeline_txn` 的 baton 與 ROLLBACK 在正式 Turso 上可用）。
+  - 擁有者對不存在、已刪除的筆記送編輯，以及對壞筆記／壞照片送照片上下移：回 404，`note_events` 列數不變，其他照片的 `sort_order` 不變。這些路由會在交易前拒絕壞照片，不宣稱驗證 ROLLBACK；逐句列數與 ROLLBACK 由 worker 的 `build_image_move`、`pipeline_txn` 單元測試覆蓋。
   - 結束時刪除暫時筆記的 R2 物件、所有列、token；中途失敗也要跑。
 
 - [ ] **Step 1: 寫失敗的 case**：在 `verify_site_live.rs` 新增 `notes_anti_goals_pass`，斷言輸出含 `notes:` 開頭的各行，而且沒有 FAIL。
@@ -483,7 +483,7 @@ pub fn render_expired_refill(form: &NoteForm, lang: &str) -> String;
 - [ ] **Step 1**：`make build && ./bin/travel db migrate`，連跑兩次；重產 `scripts/schema.sql`。
 - [ ] **Step 2（人工關卡）**：先問 Yang 確認，再執行 `unset CLOUDFLARE_API_TOKEN && npx wrangler r2 bucket create trip-dashboard-notes`；不設公開網域。
 - [ ] **Step 3**：build worker，然後 `cd workers/trip-dashboard-rs && unset CLOUDFLARE_API_TOKEN && npx wrangler deploy`。
-- [ ] **Step 4**：`verify-site`，要全部 PASS。
+- [ ] **Step 4**：`verify-site`，要全部 PASS。擁有者檢查需一次性設定 `TRAVEL_VERIFY_SITE_OWNER_COOKIE`（從已登入瀏覽器複製 cookie 值，不保存）；未設定時輸出一行 WARN 並略過擁有者檢查。
 - [ ] **Step 5a（手機網頁驗收，整合者）**：用 Playwright 的 iPhone 機型模擬（viewport、touch、UA），以擁有者身分走一次：新增筆記 → 上傳 JPEG 與 PNG 各一張 → 直拍照片方向正確 → 上下移 → 分享預覽 → 建立連結 → 無痕開啟 → 撤回 → 照片 404。**這只驗版面與流程**：模擬器不經過 iOS 相簿，也不會做 HEIC→JPEG 轉換，證明不了實機能上傳。
 - [ ] **Step 5b（人工關卡：Yang 實機驗收，上線前必過）**：比照 Step 2 的 bucket 關卡，整合者準備好後請 Yang 用自己的 iPhone：
   1. 在擁有者頁面新增一則測試筆記，從相簿選一張**HEIC 直拍、有定位**的照片上傳，要成功。
