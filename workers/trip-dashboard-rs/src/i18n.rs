@@ -8,6 +8,38 @@
 pub fn t(key: &str, lang: &str) -> &'static str {
     let zh = lang != "en";
     match (key, zh) {
+        ("notesTitle", false) => "Travel notes",
+        ("notesTitle", true) => "旅行筆記",
+        ("noteNew", false) => "New note",
+        ("noteNew", true) => "新增筆記",
+        ("noteEdit", false) => "Edit note",
+        ("noteEdit", true) => "編輯筆記",
+        ("noteTitle", false) => "Title",
+        ("noteTitle", true) => "標題",
+        ("noteBody", false) => "Body",
+        ("noteBody", true) => "內文",
+        ("notePurpose", false) => "Purpose / reader",
+        ("notePurpose", true) => "用途／讀者",
+        ("notePlan", false) => "Attached plan ID",
+        ("notePlan", true) => "掛載行程 ID",
+        ("noteDestination", false) => "Attached destination",
+        ("noteDestination", true) => "掛載目的地",
+        ("noteDay", false) => "Attached day",
+        ("noteDay", true) => "掛載天數",
+        ("noteSave", false) => "Save",
+        ("noteSave", true) => "儲存",
+        ("noteDelete", false) => "Delete note",
+        ("noteDelete", true) => "刪除筆記",
+        ("noteRequired", false) => "Title and form token are required.",
+        ("noteRequired", true) => "請填標題，並重新載入表單。",
+        ("noteInvalidDay", false) => "That plan/day is not in the trip - check the plan ID, destination and day.",
+        ("noteInvalidDay", true) => "行程裡沒有這一天的資料，請確認行程 ID、目的地與天數。",
+        ("noteExpired", false) => "Session expired",
+        ("noteExpired", true) => "登入已過期",
+        ("noteExpiredHelp", false) => "Copy your text, sign in again, then paste it into the form.",
+        ("noteExpiredHelp", true) => "請複製文字，重新登入後貼回表單。",
+        ("noteLogin", false) => "Sign in again",
+        ("noteLogin", true) => "重新登入",
         ("notePhoto", false) => "Note photo",
         ("notePhoto", true) => "筆記照片",
         ("notePlace", false) => "Place",
@@ -548,6 +580,21 @@ mod tests {
         assert_eq!(fill("{ unclosed", &[]), "{ unclosed");
         assert_eq!(tf("dayLabel", "zh", &[("day", "3")]), "第 3 天");
         assert_eq!(tf("dayLabel", "en", &[("day", "3")]), "Day 3");
+    }
+    #[test]
+    fn note_owner_keys_are_bilingual() {
+        for key in [
+            "notesTitle", "noteNew", "noteEdit", "noteTitle", "noteBody", "notePurpose",
+            "notePlan", "noteDestination", "noteDay", "noteSave", "noteDelete",
+            "noteRequired", "noteInvalidDay", "noteExpired", "noteExpiredHelp", "noteLogin",
+        ] {
+            let (en, zh) = (t(key, "en"), t(key, "zh"));
+            assert!(!en.is_empty() && !zh.is_empty(), "{key} missing a language");
+            assert!(en.chars().all(|c| c.is_ascii()), "{key} EN must be ASCII: {en}");
+            assert!(!zh.is_ascii(), "{key} ZH must be Chinese: {zh}");
+        }
+        assert_eq!(t("noteInvalidDay", "zh"), "行程裡沒有這一天的資料，請確認行程 ID、目的地與天數。");
+        assert_eq!(t("noteInvalidDay", "en"), "That plan/day is not in the trip - check the plan ID, destination and day.");
     }
     #[test]
     fn unknown_key_is_empty() {
