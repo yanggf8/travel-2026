@@ -18,6 +18,13 @@
 var KEY_PARAMS=['plan','lang','token'];
 var CACHE_NAMES=['td-viewer','td-owner','td-index'];
 var NET_TIMEOUT_MS=4000;
+// Per-asset deadline inside SAVE's serialized write section. Must stay BELOW
+// the page's TD_SAVE_TIMEOUT_MS (60 s, render/mod.rs BLOCK_MEMORY_SCRIPT): a
+// timed-out asset becomes a failed asset (partial path) so the reply can still
+// reach the page inside its own wait, and the serialization chain is never
+// held hostage by one hung request. 45 s still lets a 10 MiB voucher PDF
+// (~40 s at 2 Mbps) finish instead of being falsely counted as failed.
+var ASSET_TIMEOUT_MS=45000;
 var MISS_ZH='{tdMissZh}';
 var MISS_EN='{tdMissEn}';
 
@@ -185,8 +192,17 @@ async function clearOwner() {
     await idx.delete(ikeys[j]);
     // A viewer copy is stored under exactly its own index key (handleSave:
     // key === indexKey for viewer saves), so the match below is that copy.
+    // Its manifest supplies renderedAt so the never-repoint-to-older guard
+    // (saveCopy) keeps working across a logout; a torn copy without one
+    // records 0 — same as a pre-renderedAt-era entry.
     if (await viewer.match(ikeys[j])) {
-      await idx.put(ikeys[j], jsonRes({ role: 'viewer', key: ikeys[j], savedAt: Date.now() }));
+      var vm = await readJson(viewer, manifestKey(ikeys[j]));
+      await idx.put(ikeys[j], jsonRes({
+        role: 'viewer',
+        key: ikeys[j],
+        savedAt: Date.now(),
+        renderedAt: vm && vm.renderedAt ? vm.renderedAt : 0,
+      }));
     }
   }
 }
@@ -229,7 +245,39 @@ function missPage(lang) {
 //   partial-kept {failed, keptRenderedAt} | failed
 // A full set of assets replaces the copy (then sweep); a partial set replaces
 // nothing when a complete copy exists, and writes an incomplete copy otherwise.
-async function handleSave(url, reply) {
+//
+// Concurrency (reviews R3+R4): the HTML fetch + validation run unserialized
+// (they only READ), then the whole write phase — asset fetches included — is
+// queued on promise chains keyed by indexKey AND storage key: owner and viewer
+// saves of the same URL write different storage keys but share the indexKey
+// (R4), while owner saves of different token URLs share the token-less owner
+// storage key (R3) — so any two saves that can touch the same copy or the same
+// index entry run one after another instead of interleaving their
+// manifest/HTML/index writes. Two guards then make a late-finishing OLDER save
+// harmless: one per storage key (a save whose data-rendered-at is older than
+// the stored copy's writes nothing at all), and one on the index entry (never
+// repoint the URL to a copy whose renderedAt is older than the one it routes
+// to now; entries recorded before renderedAt existed count as 0). Asset
+// fetches inside the serialized section are deadline-bound (ASSET_TIMEOUT_MS)
+// so one hung request cannot block every later save of the key.
+var saveTails = {};
+
+// settled() turns a tail's rejection into plain completion: a predecessor
+// save's error already surfaced to its own caller, and must neither wedge the
+// chain for the next save nor start that save's write early (Promise.all
+// rejects on the FIRST rejection — both tails have to be rejection-proof).
+function settled(p) {
+  return p.then(function () {}, function () {});
+}
+
+async function handleSave(url, replyFn) {
+  // The reply fires exactly once even if a post-reply step (sweep) throws.
+  var replied = false;
+  var reply = function (msg) {
+    if (replied) return;
+    replied = true;
+    replyFn(msg);
+  };
   try {
     var u = new URL(url);
     if (u.searchParams.has('at')) return reply({ status: 'failed' });
@@ -248,62 +296,114 @@ async function handleSave(url, reply) {
     var role = view;
     var key = normKey(url, role === 'owner');
     var indexKey = normKey(url, false);
-    var cache = await cacheFor(role);
-    var oldManifest = await readJson(cache, manifestKey(key));
-    var hadComplete = !!(oldManifest && oldManifest.complete);
     var renderedAt = extractRenderedAt(html);
-
     var assets = extractAssets(html);
-    var saved = [];
-    var failed = [];
-    // Assets first (put order is assets -> manifest -> HTML -> index). A
-    // versioned URL already in cache is skipped; an unversioned one (no sha /
-    // no etag) is re-fetched every SAVE so a re-upload cannot stay stale.
-    for (var i = 0; i < assets.length; i++) {
-      var a = assets[i];
-      var versioned = new URL(a).searchParams.has('v');
-      if (versioned && (await cache.match(a))) {
-        saved.push(a);
-        continue;
-      }
-      try {
-        var ares = await self.fetch(a);
-        if (ares.ok) {
-          await cache.put(a, ares);
-          saved.push(a);
-        } else {
-          failed.push(a);
-        }
-      } catch (e) {
-        failed.push(a);
-      }
-    }
-    var maps = 0;
-    var pdfs = 0;
-    for (var j = 0; j < saved.length; j++) {
-      if (saved[j].indexOf('/map/') !== -1) maps++;
-      else pdfs++;
-    }
-
-    if (failed.length === 0) {
-      await cache.put(manifestKey(key), jsonRes({ assets: saved, complete: true, renderedAt: renderedAt }));
-      await cache.put(key, new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
-      await (await indexCache()).put(indexKey, jsonRes({ role: role, key: key, savedAt: Date.now() }));
-      await sweep(cache);
-      return reply({ status: 'saved', maps: maps, pdfs: pdfs });
-    }
-    if (hadComplete) {
-      // The old complete copy stays exactly as it was (its assets too, which
-      // is why there is no sweep here); newly fetched assets remain cached.
-      return reply({ status: 'partial-kept', failed: failed, keptRenderedAt: oldManifest.renderedAt });
-    }
-    await cache.put(manifestKey(key), jsonRes({ assets: saved, complete: false, renderedAt: renderedAt }));
-    await cache.put(key, new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
-    await (await indexCache()).put(indexKey, jsonRes({ role: role, key: key, savedAt: Date.now() }));
-    return reply({ status: 'partial-new', maps: maps, pdfs: pdfs, failed: failed });
+    var write = function () {
+      return saveCopy(role, key, indexKey, html, renderedAt, assets, reply);
+    };
+    // Both tails are pointed at THIS save's write, and this save waits for
+    // both previous tails — the union of the two chains is the serialization
+    // set. (For viewer saves key === indexKey; the two assignments coincide.)
+    var next = Promise.all([
+      settled(saveTails[indexKey] || Promise.resolve()),
+      settled(saveTails[key] || Promise.resolve()),
+    ]).then(write);
+    saveTails[indexKey] = next;
+    saveTails[key] = next;
+    await next;
   } catch (e) {
     reply({ status: 'failed' });
   }
+}
+
+// The serialized half of SAVE — runs one save per URL (indexKey) at a time.
+async function saveCopy(role, key, indexKey, html, renderedAt, assets, reply) {
+  var cache = await cacheFor(role);
+  var idx = await indexCache();
+  var oldManifest = await readJson(cache, manifestKey(key));
+  var hadComplete = !!(oldManifest && oldManifest.complete);
+  // The stored copy's renderedAt: the manifest carries it, but fall back to
+  // the stored HTML itself when the manifest is missing (torn legacy write).
+  var oldAt = oldManifest ? oldManifest.renderedAt : 0;
+  if (!oldAt) {
+    var oldRes = await cache.match(key);
+    if (oldRes) oldAt = extractRenderedAt(await oldRes.text());
+  }
+  if (oldAt && oldAt > renderedAt) {
+    // This save is OLDER than what is already stored (its page fetch resolved
+    // after a newer save finished — the page-side timeout retried, then the
+    // first attempt finally delivered). Never replace a newer copy. The page
+    // ignores this reply by attempt id; its retry button stays harmless.
+    return reply({ status: 'failed' });
+  }
+  // The index may route this URL to ANOTHER ROLE's copy: owner and viewer
+  // saves of the same token URL write different storage keys but share this
+  // indexKey, so the per-key guard above cannot see that copy. Never repoint
+  // the index to a copy older than the one it routes to now — a delayed older
+  // cross-role save must not steal the URL back. Entries written before
+  // renderedAt was recorded have none: treated as 0, they never block.
+  var curEntry = await readJson(idx, indexKey);
+  var curAt = curEntry && curEntry.renderedAt ? curEntry.renderedAt : 0;
+  if (curAt > renderedAt) {
+    return reply({ status: 'failed' });
+  }
+
+  var saved = [];
+  var failed = [];
+  // Assets first (put order is assets -> manifest -> HTML -> index). A
+  // versioned URL already in cache is skipped; an unversioned one (no sha /
+  // no etag) is re-fetched every SAVE so a re-upload cannot stay stale.
+  for (var i = 0; i < assets.length; i++) {
+    var a = assets[i];
+    var versioned = new URL(a).searchParams.has('v');
+    if (versioned && (await cache.match(a))) {
+      saved.push(a);
+      continue;
+    }
+    // Deadline-bound: this loop runs inside the serialized section, so a
+    // never-settling fetch would block every later SAVE of this key. An
+    // aborted fetch rejects and counts as a failed asset (partial path).
+    var ctrl = new AbortController();
+    var timer = setTimeout(function (c) {
+      c.abort();
+    }, ASSET_TIMEOUT_MS, ctrl);
+    try {
+      var ares = await self.fetch(a, { signal: ctrl.signal });
+      if (ares.ok) {
+        await cache.put(a, ares);
+        saved.push(a);
+      } else {
+        failed.push(a);
+      }
+    } catch (e) {
+      failed.push(a);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  var maps = 0;
+  var pdfs = 0;
+  for (var j = 0; j < saved.length; j++) {
+    if (saved[j].indexOf('/map/') !== -1) maps++;
+    else pdfs++;
+  }
+
+  if (failed.length === 0) {
+    await cache.put(manifestKey(key), jsonRes({ assets: saved, complete: true, renderedAt: renderedAt }));
+    await cache.put(key, new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+    await idx.put(indexKey, jsonRes({ role: role, key: key, savedAt: Date.now(), renderedAt: renderedAt }));
+    await sweep(cache);
+    return reply({ status: 'saved', maps: maps, pdfs: pdfs });
+  }
+  if (hadComplete) {
+    // The old complete copy stays exactly as it was (its assets too, which
+    // is why there is no sweep here); newly fetched assets remain cached.
+    return reply({ status: 'partial-kept', failed: failed, keptRenderedAt: oldManifest.renderedAt });
+  }
+  await cache.put(manifestKey(key), jsonRes({ assets: saved, complete: false, renderedAt: renderedAt }));
+  await cache.put(key, new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+  await idx.put(indexKey, jsonRes({ role: role, key: key, savedAt: Date.now(), renderedAt: renderedAt }));
+  return reply({ status: 'partial-new', maps: maps, pdfs: pdfs, failed: failed });
 }
 
 // Race helper: never lets a network rejection escape the race — it becomes a

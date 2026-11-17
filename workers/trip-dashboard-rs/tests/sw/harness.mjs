@@ -99,16 +99,32 @@ export function makeCaches() {
 }
 
 // A fetch whose resolver can be swapped between test phases (seed online, then
-// go offline / return 500 / stall). Every URL requested is logged.
+// go offline / return 500 / stall). Every URL requested is logged. The second
+// argument is honored like the real platform's: an aborted signal rejects the
+// pending promise with AbortError — sw.js's per-asset ASSET_TIMEOUT_MS relies
+// on exactly that contract, so a stalled resolver is abortable here too.
 export function switchableFetch(initial) {
   let resolver = initial;
   const log = [];
-  const f = async (input) => {
+  const f = (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
     log.push(url);
-    const v = resolver(url, input);
-    if (v instanceof Error) throw v;
-    return v;
+    const signal = init && init.signal;
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+      if (signal) {
+        if (signal.aborted) return abort();
+        signal.addEventListener('abort', abort, { once: true });
+      }
+      Promise.resolve()
+        .then(() => resolver(url, input))
+        .then(
+          // Resolvers signal a network failure by RETURNING an Error value
+          // (mapResolver/offline) — reject with it, like a real fetch would.
+          (v) => (v instanceof Error ? reject(v) : resolve(v)),
+          reject
+        );
+    });
   };
   f.set = (r) => {
     resolver = r;

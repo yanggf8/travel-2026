@@ -257,7 +257,7 @@ pub fn render_plan_at_with_notes(
     body.push_str(&alerts::render_transit_summary(plan, lang));
     // Last in <body>: every block it restores/wires already exists. Viewer and
     // owner pages alike; the page works fully without it.
-    body.push_str(BLOCK_MEMORY_SCRIPT);
+    body.push_str(&block_memory_script(lang));
     page_with_body_attrs(
         &plan.display_name,
         &body,
@@ -383,6 +383,53 @@ fn page_toc(plan: &Plan, lang: &str, blocks: &TocBlocks) -> String {
 ///    (destination-local minutes — the card's `data-now-tz` zone converted via
 ///    `Intl`, never a hardcoded offset; any failure keeps the server-side
 ///    marking), opens the new 現在 / 接下來 items and closes the ones it auto-opened before (`data-auto`; a user's own toggle clears the flag and is never undone), and shows the 明天 entry once the day's last session has ended.
+/// 4. **Offline save status / banner** (offline plan Task 4, user request
+///    2026-11-17): feature-detects and registers the same-origin `/sw.js`
+///    (Yang's approved 2026-11-17 exception — the page itself still carries
+///    exactly ONE inline script). On every online open (`data-served="net"`,
+///    no `?at=`) it reveals `#offline-status` (`data-state` `saving` →
+///    `saved` / `partial` / `kept` / `failed`; `unsupported` when the browser
+///    has no service worker or the registration rejects — never UA-sniffed),
+///    calls `navigator.storage.persist()` when present (result ignored), and
+///    after `serviceWorker.ready` sends `{type:'SAVE', url: location.href}`
+///    over a `MessageChannel` (T3's protocol), filling the reply's copy.
+///    The wait is bounded (`TD_SAVE_TIMEOUT_MS`, 60 s — the SW's SAVE has no
+///    internal timeout, so a reply that never comes must surface `failed` +
+///    retry rather than park at `saving`; a full save legitimately moves
+///    every map and PDF, so it cannot share the read path's 4 s budget) and
+///    it STARTS BEFORE `register()`: a registration that never settles also
+///    ends in `failed` + retry (R3), with `saving` already visible while the
+///    registration is pending. Each attempt carries an id (`osSeq`): a late
+///    reply from an older attempt never overwrites a newer attempt's state
+///    (and on the SW side a late older SAVE never replaces a newer copy —
+///    serialized per cache key there, `src/sw.js`). Failed assets are
+///    listed by looking the URL up among the page's `a[href]` (textContent)
+///    / `img[src]` (alt) — textContent only, never innerHTML; `partial-*`
+///    and `failed` un-hide the retry button, which re-sends SAVE. A
+///    cache-served page (`data-served="cache"` / `"cache-relogin"`) sends
+///    nothing and only reveals `#offline-banner`, its `{time}` filled from
+///    the body's `data-rendered-at` formatted in `data-tz` via
+///    `Intl.DateTimeFormat` — no zone is ever guessed; no `data-tz` → the
+///    `{time}`-less copy.
+/// 5. **Stale/today handling** (offline plan Task 4): "today" in the
+///    destination zone comes from the BODY's `data-tz` (falling back to the
+///    now card's `data-now-tz`; neither → do nothing, never guess), built
+///    from `Intl.DateTimeFormat` **formatToParts** — `format()`'s output
+///    shape is unspecified and is never compared to the SSR's strict ISO
+///    `data-date`/`data-now-date` (R3). This does NOT depend on `#sec-now`
+///    existing: trip day 1 re-opened offline after a pre-trip save has no
+///    now card and no markers at all, and today is still marked. A stale
+///    `#sec-now` (unpinned, its `data-now-date` before today) is hidden;
+///    today's day card (`section[data-date="…"] > details[data-block]`),
+///    when it lacks the markers, receives EVERY today marker the SSR emits
+///    (`data-today` on the day card, `is-today` + the `.toc-today` label on
+///    its TOC entry — the label is CREATED from the page-language
+///    `TD_TODAY` fill when no old one moves) and is opened, so exactly one
+///    `[data-today]` remains (T6's stale-day case), and the per-minute
+///    re-marking is never registered. No day card for today → only the now
+///    card is hidden, no marker is touched. When the per-minute re-marking
+///    crosses destination midnight, the whole stale/today handling re-runs
+///    instead of only treating every slot as past (`m=1e9`, R3).
 const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
 (function(){
   var d=document,de=d.documentElement,k='trip-blocks:'+(d.body.getAttribute('data-plan-id')||''),st={},els=[],ls=null,i;
@@ -423,13 +470,56 @@ const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
     q.addEventListener('keydown',function(e){if(e.key==='Escape'||e.keyCode===27){reset();}});
     clr.addEventListener('click',function(){reset();q.focus();});
   }
-  var nc=d.getElementById('sec-now');
-  if(nc&&!nc.hasAttribute('data-now-pinned')){
+  var bd=d.body,nc=d.getElementById('sec-now');
+  var TD_TODAY='{tdToday}';
+  // "Today" in a destination timezone, in the SSR's own shape: data-now-date
+  // is assembled by tzfmt.rs clock_from_parts and a day card's data-date is
+  // the plan_days date — both strict YYYY-MM-DD. Built from formatToParts
+  // (whose parts ARE specified), never from format(), whose output shape no
+  // spec guarantees. Any failure yields '' (the callers then do nothing).
+  function tdDate(tz){try{var ps=new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),Y='',Mo='',Dy='',k;
+    for(k=0;k<ps.length;k++){var pt=ps[k].type;if(pt==='year')Y=ps[k].value;else if(pt==='month')Mo=ps[k].value;else if(pt==='day')Dy=ps[k].value;}
+    return (Y&&Mo&&Dy)?Y+'-'+Mo+'-'+Dy:'';}catch(e){return '';}}
+  // Stale/today handling (offline plan Task 4). "Today" comes from the body's
+  // data-tz (falling back to the now card's data-now-tz; neither → nothing is
+  // ever guessed) — NOT from #sec-now existing: trip day 1 re-opened offline
+  // after a pre-trip save has no now card and no markers at all, and today
+  // must still be marked. A stale #sec-now (its data-now-date before today)
+  // is hidden. The day card whose data-date IS today — when it lacks the
+  // markers — receives every today marker the SSR emits (data-today,
+  // is-today, the .toc-today label — created from the page-language label
+  // when no old one moves) and is opened, so exactly one [data-today]
+  // remains (T6 stale-day). Runs at load and again when the per-minute
+  // remark crosses destination midnight.
+  function tdApply(){var tz=bd?bd.getAttribute('data-tz'):'';
+    if(!tz&&nc)tz=nc.getAttribute('data-now-tz');
+    if(!tz)return;
+    var tdy=tdDate(tz);if(!tdy)return;
+    if(nc&&!nc.hasAttribute('data-now-pinned')){var nDt=nc.getAttribute('data-now-date');if(nDt&&nDt<tdy)nc.hidden=true;}
+    var tSec=d.querySelector('section[data-date="'+tdy+'"]');
+    if(!tSec)return;
+    var tBlk=tSec.querySelector('details[data-block]');
+    if(!tBlk||tBlk.hasAttribute('data-today'))return;
+    tBlk.open=true;
+    try{
+      var mi,mo,mv=null,tl,nw;
+      mo=d.querySelectorAll('[data-today]');for(mi=0;mi<mo.length;mi++)mo[mi].removeAttribute('data-today');
+      mo=d.querySelectorAll('.is-today');for(mi=0;mi<mo.length;mi++)mo[mi].classList.remove('is-today');
+      mo=d.querySelectorAll('.toc-today');for(mi=0;mi<mo.length;mi++){if(!mv)mv=mo[mi];mo[mi].parentNode.removeChild(mo[mi]);}
+      if(!mv){mv=d.createElement('span');mv.className='toc-today';mv.textContent=TD_TODAY;}
+      tBlk.setAttribute('data-today','');
+      tl=d.querySelector("a.toc-day[href='#"+tSec.id+"']");
+      if(tl){tl.classList.add('is-today');nw=tl.querySelector('.toc-day-n');
+        if(nw)nw.insertBefore(mv,nw.firstChild);else tl.insertBefore(mv,tl.firstChild);}
+    }catch(e){}
+  }
+  tdApply();
+  if(nc&&!nc.hasAttribute('data-now-pinned')&&!nc.hidden){
     var mkb=function(el,c,txt,first){var s=d.createElement('span');s.className='now-badge now-badge--'+c;s.textContent=txt;if(first)el.insertBefore(s,el.firstChild);else el.appendChild(s);};
     var remark=function(){var m,j;try{var tz=nc.getAttribute('data-now-tz'),ps=new Intl.DateTimeFormat('en-CA',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).formatToParts(new Date()),Y='',Mo='',Dy='',H=0,Mi=0,k;
       for(k=0;k<ps.length;k++){var pt=ps[k].type;if(pt==='year')Y=ps[k].value;else if(pt==='month')Mo=ps[k].value;else if(pt==='day')Dy=ps[k].value;else if(pt==='hour')H=+ps[k].value;else if(pt==='minute')Mi=+ps[k].value;}
       m=(H%24)*60+Mi;
-      if(Y+'-'+Mo+'-'+Dy!==nc.getAttribute('data-now-date')){m=1e9;}}catch(e){return;}
+      if(Y+'-'+Mo+'-'+Dy!==nc.getAttribute('data-now-date')){m=1e9;tdApply();}}catch(e){return;}
       var old=nc.querySelectorAll('.now-badge');for(j=old.length-1;j>=0;j--)if(!old[j].hasAttribute('data-fixed'))old[j].parentNode.removeChild(old[j]);
       var it=nc.querySelectorAll('.now-item[data-start]'),cur=-1,nx=-1;
       for(j=0;j<it.length;j++){var s=+it[j].getAttribute('data-start'),e=+it[j].getAttribute('data-end');if(s<=m&&m<e)cur=j;if(nx<0&&s>m)nx=j;}
@@ -443,8 +533,80 @@ const BLOCK_MEMORY_SCRIPT: &str = r#"<script>
     d.addEventListener('visibilitychange',function(){if(!d.hidden)remark();});
     window.addEventListener('pageshow',function(e){if(e.persisted)remark();});
   }
+  var os=d.getElementById('offline-status'),bn=d.getElementById('offline-banner'),rt=os?os.querySelector('.offline-retry'):null;
+  function tdTime(ms){var tz=bd?bd.getAttribute('data-tz'):'';if(!ms||!tz)return '';
+    try{return new Intl.DateTimeFormat(d.documentElement.lang||undefined,{timeZone:tz,hourCycle:'h23',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(ms));}catch(e){return '';}}
+  function tdFill(el,attr,ms){var s=el&&el.getAttribute?el.getAttribute(attr):'';s=s||'';return s.indexOf('{time}')<0?s:s.split('{time}').join(tdTime(ms));}
+  function osSet(st,msg){if(!os)return;os.setAttribute('data-state',st);os.hidden=false;var m=os.querySelector('.offline-msg');if(m)m.textContent=msg||'';}
+  function osFail(){if(!os)return;osSet('failed',os.getAttribute('data-l-failed')||'');if(rt)rt.hidden=false;}
+  function osName(u){var i,as=d.querySelectorAll('a[href]');
+    for(i=0;i<as.length;i++)if(as[i].href===u)return String(as[i].textContent||'').replace(/\s+/g,' ').replace(/^ | $/g,'');
+    var im=d.querySelectorAll('img[src]');
+    for(i=0;i<im.length;i++)if(im[i].src===u)return im[i].alt||u;
+    return u;}
+  function osList(f){if(!os)return;var ul=os.querySelector('.offline-failed');if(!ul)return;
+    while(ul.firstChild)ul.removeChild(ul.firstChild);
+    for(var i=0;i<f.length;i++){var li=d.createElement('li');li.textContent=osName(f[i]);ul.appendChild(li);}
+    ul.hidden=!f.length;}
+  function osReply(m){if(!os)return;
+    if(m.status==='saved'){osSet('saved',(os.getAttribute('data-l-saved')||'').split('{maps}').join(String(m.maps||0)).split('{pdfs}').join(String(m.pdfs||0)));if(rt)rt.hidden=true;}
+    else if(m.status==='partial-new'||m.status==='partial-kept'){
+      if(m.status==='partial-kept')osSet('kept',tdFill(os,'data-l-kept',m.keptRenderedAt));
+      else osSet('partial',(os.getAttribute('data-l-partial')||'').split('{n}').join(String((m.failed||[]).length)));
+      osList(m.failed||[]);if(rt)rt.hidden=false;}
+    else osFail();}
+  var TD_SAVE_TIMEOUT_MS=60000,osSeq=0;
+  function osSend(){if(!os)return;
+    var my=++osSeq;
+    osSet('saving',os.getAttribute('data-l-saving')||'');osList([]);if(rt)rt.hidden=true;
+    var to=setTimeout(function(){if(my===osSeq)osFail();},TD_SAVE_TIMEOUT_MS);
+    try{navigator.serviceWorker.ready.then(function(reg){
+      if(!reg||!reg.active){clearTimeout(to);osFail();return;}
+      var mc=new MessageChannel();
+      mc.port1.onmessage=function(ev){if(my!==osSeq)return;clearTimeout(to);osReply(ev.data||{});};
+      try{reg.active.postMessage({type:'SAVE',url:location.href},[mc.port2]);}catch(e){clearTimeout(to);osFail();}
+    },function(){clearTimeout(to);osFail();});}catch(e){clearTimeout(to);osFail();}}
+  if(rt)rt.addEventListener('click',function(){osSend();});
+  if(bn&&bd){var sv=bd.getAttribute('data-served');
+    if(sv==='cache'||sv==='cache-relogin'){
+      if(sv==='cache-relogin')bn.textContent=bn.getAttribute('data-l-relogin')||'';
+      else{var ra=bd.getAttribute('data-rendered-at');bn.textContent=tdFill(bn,'data-l-copy',ra?+ra:0);}
+      bn.hidden=false;}}
+  if(os){
+    if(!('serviceWorker' in navigator)){osSet('unsupported',os.getAttribute('data-l-unsupported')||'');}
+    else{
+      var wantSave=!!(bd&&bd.getAttribute('data-served')==='net'&&!/[?&]at=/.test(location.search)),rgTo=null;
+      if(wantSave){
+        osSet('saving',os.getAttribute('data-l-saving')||'');
+        rgTo=setTimeout(function(){osFail();},TD_SAVE_TIMEOUT_MS);
+      }
+      try{
+        navigator.serviceWorker.register('/sw.js').then(function(){
+          if(rgTo){clearTimeout(rgTo);rgTo=null;}
+          if(wantSave){
+            try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e2){}
+            osSend();
+          }
+        },function(){if(rgTo){clearTimeout(rgTo);rgTo=null;}osSet('unsupported',os.getAttribute('data-l-unsupported')||'');});
+      }catch(e){if(rgTo){clearTimeout(rgTo);rgTo=null;}osSet('unsupported',os.getAttribute('data-l-unsupported')||'');}
+    }
+  }
 })();
 </script>"#;
+
+/// [`BLOCK_MEMORY_SCRIPT`] with its one fill-in: the today label, in the
+/// page's language. The stale/today handling ADDS a `.toc-today` label when
+/// the saved page carried none (trip day 1 opened offline after a pre-trip
+/// save — the SSR only marks days during the trip), and that text is UI
+/// chrome: it lives in i18n.rs (`today`), filled here with the same
+/// JS-string escaping sw.rs applies to its miss-page copy, so no CJK literal
+/// ever lands in the script source and no language is guessed at runtime.
+fn block_memory_script(lang: &str) -> String {
+    crate::i18n::fill(
+        BLOCK_MEMORY_SCRIPT,
+        &[("tdToday", &crate::sw::js_str_escape(t("today", lang)))],
+    )
+}
 
 /// Render an explicit companion-options block from the temporary, unconfirmed
 /// itinerary note. This keeps alternatives visually separate from the official
@@ -1269,6 +1431,8 @@ mod tests {
 
     #[test]
     fn block_memory_script_is_emitted_once_on_viewer_and_owner_pages() {
+        // 頁面仍只有一段 inline script；`/sw.js` 是 Yang 2026-11-17 核可的
+        // 同源例外（註冊它不算引入第二段頁面腳本——spec §11 Q1）。
         let plan = full_nav_plan();
         let status = map::MapStatus::default();
         let viewer = render_plan(&plan, "zh", Some("tok"), &status, "");
@@ -1326,6 +1490,191 @@ mod tests {
         assert!(during.contains("try{") && during.contains("catch(e){return;}"), "{during}");
         // Pages other than the plan page carry no script.
         assert!(!page("t", "x", "zh").contains("<script"));
+    }
+
+    /// Task 4: SW support is FEATURE-DETECTED (`'serviceWorker' in navigator`),
+    /// never UA-sniffed (spec §4), and the registration target is the
+    /// same-origin `/sw.js` the worker itself serves (src/sw.rs).
+    #[test]
+    fn script_registers_sw_feature_detected() {
+        assert!(BLOCK_MEMORY_SCRIPT.contains("'serviceWorker' in navigator"), "feature detect");
+        assert!(BLOCK_MEMORY_SCRIPT.contains("register('/sw.js')"), "same-origin sw.js");
+        // A registration rejection degrades to `unsupported`, not a thrown error.
+        assert!(BLOCK_MEMORY_SCRIPT.contains("'unsupported'"), "unsupported state exists");
+    }
+
+    /// Task 4: SAVE is sent only for a network-served page without an `?at=`
+    /// pin (a pinned page must never be saved — spec §6), over a
+    /// MessageChannel once `serviceWorker.ready` resolves, with the T3
+    /// protocol's exact `{type:'SAVE', url}` shape.
+    #[test]
+    fn script_sends_save_only_when_net_and_unpinned() {
+        for hook in [
+            "getAttribute('data-served')",
+            "navigator.serviceWorker.ready",
+            "type:'SAVE'",
+            "url:location.href",
+            "MessageChannel",
+            "/[?&]at=/",
+        ] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");
+        }
+    }
+
+    /// Task 4: `#offline-status` cycles `data-state` through exactly the six
+    /// states T6's probe judges (`saving` → `saved` | `partial` | `kept` |
+    /// `failed`; `unsupported` when the browser cannot do SW at all), and the
+    /// persist hint is attempted when the API exists (result ignored).
+    #[test]
+    fn script_sets_status_states() {
+        assert!(BLOCK_MEMORY_SCRIPT.contains("setAttribute('data-state'"), "data-state is set");
+        for state in ["'saving'", "'saved'", "'partial'", "'kept'", "'failed'", "'unsupported'"] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(state), "{state}");
+        }
+        assert!(BLOCK_MEMORY_SCRIPT.contains("storage.persist"), "persist attempted");
+        // Failed items reach the DOM only as text.
+        assert!(BLOCK_MEMORY_SCRIPT.contains("createElement('li')"), "failed list is built as li");
+    }
+
+    /// Task 4: the banner's {time} comes from the body's `data-rendered-at`
+    /// formatted in `data-tz` via `Intl.DateTimeFormat` — never a hardcoded
+    /// offset (the existing no-guess rule, applied to the offline banner).
+    #[test]
+    fn script_banner_uses_rendered_at_and_tz_no_guess() {
+        for hook in ["data-rendered-at", "data-tz", "Intl.DateTimeFormat"] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");
+        }
+        for bad in ["324e5", "+08", "+09"] {
+            assert!(!BLOCK_MEMORY_SCRIPT.contains(bad), "hardcoded offset: {bad}");
+        }
+    }
+
+    /// Task 4 (stale now card): when the now card's `data-now-date` (in its
+    /// own `data-now-tz`) is before today, hide the card and open today's day
+    /// card by its `data-date` instead; no today card → still hide the card.
+    /// (`nc.hidden=true` — the now card's own hide; a bare `.hidden=true`
+    /// would also match the retry button's re-hide and not bite.)
+    ///
+    /// R2 (K3.1 Pro review, high): every today marker the SSR emits —
+    /// `data-today` on the day card's details, `is-today` + the `.toc-today`
+    /// label on its TOC entry — MOVES to the computed today, so exactly one
+    /// `[data-today]` remains (T6 stale-day asserts it, plan
+    /// 2026-11-17-offline-dashboard.md:399-403); yesterday's copy must not
+    /// pose as today. Behavior is executed and asserted in
+    /// tests/sw/inline_script.test.mjs.
+    #[test]
+    fn script_hides_stale_now_card_and_opens_today() {
+        for hook in [
+            "data-now-date",
+            "section[data-date=\"",
+            "nc.hidden=true",
+            "removeAttribute('data-today')",
+            "classList.remove('is-today')",
+            "querySelectorAll('.toc-today')",
+            "setAttribute('data-today','')",
+            "classList.add('is-today')",
+            "a.toc-day[href='#",
+        ] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");
+        }
+    }
+
+    /// R3 (K3.1 Pro verify, high): the stale/today handling must not depend
+    /// on `#sec-now` — trip day 1 opened offline, saved before the trip
+    /// began, has neither a now card nor any marker, and today is still
+    /// marked. "Today" comes from the BODY's `data-tz` (the now card's
+    /// `data-now-tz` is only the fallback; neither → nothing is guessed),
+    /// built by `tdDate` from `formatToParts` (never `format()`, whose shape
+    /// is unspecified), applied by `tdApply` at load AND when the per-minute
+    /// remark crosses destination midnight (`m=1e9;tdApply();`). A missing
+    /// `.toc-today` label is CREATED from the `TD_TODAY` fill. Executed
+    /// behavior is locked in tests/sw/inline_script.test.mjs.
+    #[test]
+    fn script_today_handling_independent_of_now_card() {
+        for hook in [
+            "getAttribute('data-tz')",
+            "getAttribute('data-now-tz')",
+            "function tdDate(",
+            "function tdApply(",
+            "tdApply();",
+            "m=1e9;tdApply();",
+            "TD_TODAY='{tdToday}'",
+        ] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");
+        }
+        // The fallback order is body-first: data-tz is read before the now
+        // card's zone appears as the fallback on the same expression.
+        let src = BLOCK_MEMORY_SCRIPT;
+        let i = src.find("var tz=bd?bd.getAttribute('data-tz'):'';").expect("body tz read");
+        let j = src[i..].find("nc.getAttribute('data-now-tz')").expect("now-tz fallback");
+        assert!(j > 0, "fallback must follow the body read");
+    }
+
+    /// R3 (K3.1 Pro verify, medium): the SAVE wait starts BEFORE
+    /// `register()` — a registration that never settles also surfaces
+    /// `failed` + the retry button instead of parking invisible, with
+    /// `saving` already shown while the registration is pending. Executed
+    /// behavior is locked in tests/sw/inline_script.test.mjs
+    /// (register_never_settles_times_out_to_failed_and_retry).
+    #[test]
+    fn script_save_timeout_starts_before_registration() {
+        for hook in [
+            "wantSave",
+            "rgTo=setTimeout(function(){osFail();},TD_SAVE_TIMEOUT_MS)",
+            "if(rgTo){clearTimeout(rgTo);rgTo=null;}",
+        ] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");
+        }
+        // The pre-registration timeout is armed before register() is called.
+        let src = BLOCK_MEMORY_SCRIPT;
+        let arm = src.find("rgTo=setTimeout").expect("timeout arm");
+        let reg = src.find("register('/sw.js')").expect("register call");
+        assert!(arm < reg, "the timeout must start before register()");
+    }
+
+    /// R3: the script's one fill-in — the today label — comes from i18n per
+    /// page language (UI chrome lives in i18n.rs; the ADD-a-label path needs
+    /// localized text the DOM may not carry). The template itself stays
+    /// placeholder-only and CJK-free.
+    #[test]
+    fn block_memory_script_fills_today_label_per_lang() {
+        assert!(BLOCK_MEMORY_SCRIPT.contains("{tdToday}"), "placeholder present");
+        assert!(
+            !BLOCK_MEMORY_SCRIPT.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)),
+            "no CJK literal in the template"
+        );
+        assert!(block_memory_script("zh").contains("TD_TODAY='今天';"));
+        assert!(block_memory_script("en").contains("TD_TODAY='Today';"));
+        // The emitted pages carry their own language's label.
+        let plan = full_nav_plan();
+        let status = map::MapStatus::default();
+        let zh = render_plan(&plan, "zh", Some("tok"), &status, "");
+        let en = render_plan(&plan, "en", Some("tok"), &status, "");
+        assert!(zh.contains("TD_TODAY='今天';"), "{zh}");
+        assert!(en.contains("TD_TODAY='Today';"), "{en}");
+        assert!(!zh.contains("{tdToday}"), "no unfilled placeholder ships");
+    }
+
+    /// R2 (K3.1 Pro review, medium): the SAVE wait is bounded. The SW's
+    /// `handleSave` has no internal timeout (each fetch is a bare await), so
+    /// a reply that never comes — SW killed mid-save, a fetch stuck in
+    /// limbo, `serviceWorker.ready` never resolving — must surface `failed`
+    /// plus the retry button instead of parking at `saving` forever; and a
+    /// late reply from an older attempt must never overwrite a newer
+    /// attempt's state (attempt id). The spec states only the read-path
+    /// 4000 ms; the SAVE timeout is this script's own constant — see
+    /// `TD_SAVE_TIMEOUT_MS` in the script. Executed behavior is locked in
+    /// tests/sw/inline_script.test.mjs.
+    #[test]
+    fn script_save_reply_times_out_and_guards_stale_replies() {
+        for hook in [
+            "TD_SAVE_TIMEOUT_MS",
+            "++osSeq",
+            "if(my!==osSeq)return;",
+            "clearTimeout(to)",
+        ] {
+            assert!(BLOCK_MEMORY_SCRIPT.contains(hook), "{hook}");
+        }
     }
 
     /// Extract one double-quoted attribute's value from an HTML string.

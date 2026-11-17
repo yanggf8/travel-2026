@@ -248,6 +248,217 @@ test('save_message_promise_registered_via_waitUntil', async () => {
   await ev._waiters[0]; // it is the real save promise: it settles
 });
 
+// R3 item 2: two concurrent SAVEs for the same key run ONE AFTER ANOTHER —
+// save 1's whole write set (assets → manifest → HTML → index) is complete
+// before save 2 writes anything. Unserialized, the two interleave at every
+// await (asset put of save 2 lands before save 1's manifest), which is how a
+// retry racing its own timed-out first attempt corrupts a copy.
+test('concurrent_saves_to_same_key_run_one_after_another', async () => {
+  const key = viewerUrl('t1');
+  const m1 = mapUrl('e1');
+  const m2 = mapUrl('e2');
+  let pageCalls = 0;
+  const { sw, caches } = await setup({
+    // Each SAVE re-fetches the page: the first save sees the older HTML, the
+    // second the newer one (distinguishable assets + renderedAt).
+    fetchResolver: (url) => {
+      if (url === key) {
+        pageCalls += 1;
+        return htmlResponse(planHtml({
+          renderedAt: pageCalls === 1 ? T1 : T2,
+          hrefs: [pageCalls === 1 ? mapImg('e1') : mapImg('e2')],
+        }));
+      }
+      if (url === m1 || url === m2) return assetResponse('M-' + new URL(url).searchParams.get('v'));
+      return new TypeError('Failed to fetch: ' + url);
+    },
+  });
+
+  const [r1, r2] = await Promise.all([sw.save(key), sw.save(key)]);
+  assert.equal(r1.status, 'saved');
+  assert.equal(r2.status, 'saved');
+
+  const puts = caches.log.filter((e) => e.op === 'put');
+  const idxOf = (pred, desc) => {
+    const i = puts.findIndex(pred);
+    assert.ok(i >= 0, 'missing put: ' + desc);
+    return i;
+  };
+  const firstIndexPut = idxOf((e) => e.cache === INDEX_CACHE, 'index');
+  const m2Put = idxOf((e) => e.key === m2, 'save-2 asset');
+  // Save 2's first write is AFTER save 1's last write: nothing interleaved.
+  assert.ok(m2Put > firstIndexPut, `save 2 interleaved with save 1: asset@${m2Put} vs index@${firstIndexPut}`);
+});
+
+// R3 item 2: an older SAVE whose HTML fetch resolves late (the page already
+// timed it out and retried) must NOT replace the newer copy the retry wrote
+// — not even partially: no HTML, no manifest, no index write, and none of the
+// older save's assets are fetched after the guard refuses.
+test('late_older_save_does_not_replace_newer_copy', async () => {
+  const key = viewerUrl('t1');
+  const mNew = mapUrl('e2');
+  const mOld = mapUrl('e1');
+  const late = deferred(); // save A's page fetch stalls until B is done
+  let pageCalls = 0;
+  const { sw, caches, f } = await setup({
+    fetchResolver: (url) => {
+      if (url === key) {
+        pageCalls += 1;
+        if (pageCalls === 1) return late.promise; // the older save (T1)
+        return htmlResponse(planHtml({ renderedAt: T2, hrefs: [mapImg('e2')] }));
+      }
+      if (url === mNew) return assetResponse('M-NEW');
+      if (url === mOld) return assetResponse('M-OLD');
+      return new TypeError('Failed to fetch: ' + url);
+    },
+  });
+
+  const older = sw.save(key); // starts, stalls on its page fetch
+  await new Promise((r) => setImmediate(r));
+  const newer = await sw.save(key); // retry: completes with the T2 copy
+  assert.equal(newer.status, 'saved');
+  const viewer = await caches.open(VIEWER_CACHE);
+  assert.ok((await (await viewer.match(key)).text()).includes(String(T2)), 'newer copy written');
+
+  late.resolve(htmlResponse(planHtml({ renderedAt: T1, hrefs: [mapImg('e1')] })));
+  const lateReply = await older;
+  assert.equal(lateReply.status, 'failed', 'a stale save reports failed (the page ignores it by attempt id)');
+
+  // The newer copy is exactly what it was, and the older save wrote nothing.
+  const html = await (await viewer.match(key)).text();
+  assert.ok(html.includes(String(T2)), 'newer HTML kept');
+  assert.ok(!html.includes(String(T1)), 'older HTML not written');
+  const manifest = JSON.parse(await (await viewer.match(manifestKey(key))).text());
+  assert.equal(manifest.renderedAt, T2);
+  const idx = await caches.open(INDEX_CACHE);
+  const entry = JSON.parse(await (await idx.match(key)).text());
+  assert.equal(entry.key, key);
+  // The refused save fetched none of its own assets either.
+  assert.equal(f.log.includes(mOld), false, 'older asset never fetched after the guard');
+  assert.equal(await viewer.match(mOld), undefined);
+});
+
+// R4 item 1: serialization and the rendered-at guard used to be per STORAGE
+// key, but owner and viewer saves of the same URL write different storage keys
+// while sharing the indexKey — an older viewer SAVE whose page fetch resolved
+// after a newer owner SAVE repointed td-index at the older viewer copy, and
+// the offline read served that older page. The write section must serialize
+// per indexKey, and the index must never be repointed to a copy whose
+// renderedAt is older than the one it routes to now.
+test('late_older_viewer_save_cannot_repoint_index_off_newer_owner_copy', async () => {
+  const url = viewerUrl('t1');
+  const mOld = mapUrl('e1');
+  const mNew = mapUrl('e2');
+  const late = deferred(); // the viewer save's page fetch stalls until the owner save is done
+  let pageCalls = 0;
+  const { sw, caches, f } = await setup({
+    fetchResolver: (u) => {
+      if (u === url) {
+        pageCalls += 1;
+        if (pageCalls === 1) return late.promise; // the older save (viewer, T1)
+        return htmlResponse(planHtml({ view: 'owner', renderedAt: T2, hrefs: [mapImg('e2')] }), { view: 'owner' });
+      }
+      if (u === mNew) return assetResponse('M-NEW');
+      if (u === mOld) return assetResponse('M-OLD');
+      return new TypeError('Failed to fetch: ' + u);
+    },
+  });
+
+  const older = sw.save(url); // viewer attempt: stalls on its page fetch
+  await new Promise((r) => setImmediate(r));
+  const newer = await sw.save(url); // owner attempt: completes with the T2 copy
+  assert.equal(newer.status, 'saved');
+  const idx = await caches.open(INDEX_CACHE);
+  const ownerEntry = JSON.parse(await (await idx.match(url)).text());
+  assert.equal(ownerEntry.role, 'owner');
+
+  late.resolve(htmlResponse(planHtml({ renderedAt: T1, hrefs: [mapImg('e1')] })));
+  const lateReply = await older;
+  assert.equal(lateReply.status, 'failed', 'the older save reports failed');
+
+  const entry = JSON.parse(await (await idx.match(url)).text());
+  assert.equal(entry.role, 'owner', 'index still routes this URL to the owner copy');
+  assert.equal(entry.key, ownerUrl);
+  assert.equal(entry.renderedAt, T2);
+  // The refused save wrote nothing of its own and fetched none of its assets.
+  assert.equal(f.log.includes(mOld), false, 'older asset never fetched after the guard');
+  const viewer = await caches.open(VIEWER_CACHE);
+  assert.equal(await viewer.match(url), undefined, 'older viewer copy not written');
+
+  // Offline, the same URL serves the newer OWNER copy.
+  f.set(offline());
+  const body = await (await sw.fetchEvent(req(url)).response).text();
+  assert.match(body, /data-served="cache"/);
+  assert.ok(body.includes(String(T2)), 'the owner copy is served');
+  assert.ok(!body.includes(String(T1)), 'not the older viewer render');
+});
+
+// R4 item 1 compat: index entries written before renderedAt was recorded (an
+// older SW build) have no renderedAt — they must behave as 0 and never block a
+// newer save from repointing.
+test('index_entry_without_rendered_at_is_treated_as_zero', async () => {
+  const key = viewerUrl('t1');
+  const m = mapUrl('e1');
+  const { sw, caches } = await setup({
+    fetchResolver: resolverFor(
+      new Map([[key, { html: planHtml({ renderedAt: T2, hrefs: [mapImg('e1')] }) }]]),
+      new Map([[m, () => assetResponse('M1')]]),
+    ),
+  });
+  const idx = await caches.open(INDEX_CACHE);
+  await idx.put(
+    key,
+    new Response(JSON.stringify({ role: 'viewer', key: key, savedAt: 1 }), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
+
+  const reply = await sw.save(key);
+
+  assert.equal(reply.status, 'saved', 'a missing renderedAt must not block the save');
+  const entry = JSON.parse(await (await idx.match(key)).text());
+  assert.equal(entry.renderedAt, T2, "entry refreshed with the saved copy's renderedAt");
+  const viewer = await caches.open(VIEWER_CACHE);
+  assert.ok((await (await viewer.match(key)).text()).includes(String(T2)), 'new copy written');
+});
+
+// R4 item 2: the serialized write section includes the asset fetches — one
+// never-settling fetch used to block every later SAVE of the key (and the
+// page's retry) forever. Each asset fetch is deadline-bound via
+// AbortController; a timed-out asset counts as a failed asset (partial path)
+// and the chain moves on. 45001 must stay ASSET_TIMEOUT_MS + 1.
+test('hung_asset_fetch_times_out_and_next_save_of_key_completes', async (t) => {
+  const key = viewerUrl('t1');
+  const m = mapUrl(''); // unversioned: fetched on every SAVE
+  const hang = deferred();
+  const { sw, caches, f } = await setup({
+    fetchResolver: resolverFor(
+      new Map([[key, { html: planHtml({ hrefs: [mapImg('')] }) }]]),
+      new Map([[m, () => hang.promise]]),
+    ),
+  });
+
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const first = sw.save(key);
+  await new Promise((r) => setImmediate(r)); // let the save reach its asset fetch
+  t.mock.timers.tick(45001); // ASSET_TIMEOUT_MS elapses → the hung fetch aborts
+
+  const reply1 = await first;
+  assert.equal(reply1.status, 'partial-new');
+  assert.deepEqual(reply1.failed, [m], 'the timed-out asset counts as failed');
+  const viewer = await caches.open(VIEWER_CACHE);
+  assert.equal(await viewer.match(m), undefined, 'nothing cached for the hung asset');
+
+  // The chain is free: a second SAVE of the same key completes.
+  f.set(resolverFor(
+    new Map([[key, { html: planHtml({ renderedAt: T2, hrefs: [mapImg('')] }) }]]),
+    new Map([[m, () => assetResponse('M2')]]),
+  ));
+  const reply2 = await sw.save(key);
+  assert.equal(reply2.status, 'saved');
+  assert.equal(await (await viewer.match(m)).text(), 'M2');
+});
+
 test('unversioned_assets_refetched_and_network_first', async () => {
   const key = viewerUrl('t1');
   const u = mapUrl(''); // no ?v= (empty etag — render/map.rs cache_bust skips it)
@@ -515,6 +726,9 @@ test('logout_repoints_index_to_surviving_viewer_copy', async () => {
   const entry = JSON.parse(await (await idx.match(url)).text());
   assert.equal(entry.role, 'viewer');
   assert.equal(entry.key, url);
+  // R4 item 1: the re-pointed entry carries the surviving copy's renderedAt,
+  // so the never-repoint-to-older guard keeps working across a logout.
+  assert.equal(entry.renderedAt, T1, "the re-pointed entry carries the viewer copy's renderedAt");
 });
 
 test('at_param_bypassed', async () => {

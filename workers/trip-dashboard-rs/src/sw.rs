@@ -29,11 +29,18 @@ mod consts {
     /// Network-first timeout for plan-page HTML (spec §6 資源策略).
     pub const NET_TIMEOUT_MS: u32 = 4000;
 
+    /// Per-asset fetch deadline inside SAVE's serialized write section (review
+    /// R4): a timed-out asset counts as a failed asset so the chain always
+    /// moves on. Deliberately below the page's `TD_SAVE_TIMEOUT_MS` (60 s, in
+    /// `render/mod.rs` `BLOCK_MEMORY_SCRIPT`) — the reply naming the failed
+    /// asset must still be able to reach the page inside its own wait.
+    pub const ASSET_TIMEOUT_MS: u32 = 45000;
+
     /// The rollback script served at `/sw.js` during a kill-switch deploy.
     pub const KILL_SWITCH: &str = include_str!("sw_kill.js");
 }
 #[allow(unused_imports)] // re-export consumed by tests only (see module note)
-pub use consts::{CACHE_NAMES, KEY_PARAMS, KILL_SWITCH, NET_TIMEOUT_MS};
+pub use consts::{ASSET_TIMEOUT_MS, CACHE_NAMES, KEY_PARAMS, KILL_SWITCH, NET_TIMEOUT_MS};
 
 /// The SW script with the offline-miss text filled in for both languages (the
 /// SW picks by URL `lang` at runtime). Escaping happens BEFORE the fill, so
@@ -116,6 +123,7 @@ mod tests {
         let s = script();
         assert!(s.contains(&format!("var KEY_PARAMS=['{}'];", KEY_PARAMS.join("','"))));
         assert!(s.contains(&format!("var NET_TIMEOUT_MS={};", NET_TIMEOUT_MS)));
+        assert!(s.contains(&format!("var ASSET_TIMEOUT_MS={};", ASSET_TIMEOUT_MS)));
         assert!(s.contains(&format!("var CACHE_NAMES=['{}'];", CACHE_NAMES.join("','"))));
     }
 
