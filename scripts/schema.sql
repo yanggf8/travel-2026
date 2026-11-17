@@ -12,8 +12,8 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-11-14
--- Tables: 146 | Indexes: 28
+-- Generated: 2026-11-17
+-- Tables: 150 | Indexes: 28
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -652,6 +652,56 @@ CREATE TABLE map_legend_stops (
   lat REAL NOT NULL,
   lon REAL NOT NULL, day_number INTEGER, pin_no INTEGER, color TEXT,
   PRIMARY KEY (plan_id, map_key, seq)
+);
+
+CREATE TABLE note_events (
+  event_id TEXT PRIMARY KEY,
+  note_id TEXT,
+  action TEXT,
+  actor TEXT,
+  detail TEXT,
+  at TEXT
+);
+
+CREATE TABLE note_images (
+  note_id TEXT,
+  image_id TEXT,
+  sort_order INTEGER,
+  r2_key TEXT,
+  content_type TEXT,
+  size_bytes INTEGER,
+  caption TEXT,
+  created_at TEXT,
+  created_by TEXT,
+  PRIMARY KEY (note_id, image_id)
+);
+
+CREATE TABLE note_share_tokens (
+  token TEXT PRIMARY KEY,
+  note_id TEXT,
+  status TEXT DEFAULT 'active',
+  created_at TEXT,
+  created_by TEXT,
+  deactivated_at TEXT,
+  deactivated_by TEXT
+);
+
+CREATE TABLE notes (
+  id TEXT PRIMARY KEY,
+  attached_plan_id TEXT,
+  attached_destination TEXT,
+  attached_day_number INTEGER,
+  title TEXT,
+  body TEXT,
+  purpose TEXT,
+  place_name TEXT,
+  taken_on TEXT,
+  created_at TEXT,
+  created_by TEXT,
+  updated_at TEXT,
+  updated_by TEXT,
+  deleted_at TEXT,
+  deleted_by TEXT
 );
 
 CREATE TABLE "offers" (id TEXT NOT NULL, source_id TEXT NOT NULL, type TEXT CHECK(type IN ('package', 'flight', 'hotel')), name TEXT, price_per_person INTEGER, currency TEXT DEFAULT 'TWD', region TEXT, destination TEXT, departure_date TEXT, return_date TEXT, nights INTEGER, availability TEXT CHECK(availability IN ('available', 'sold_out', 'limited')), hotel_name TEXT, hotel_area TEXT, airline TEXT, flight_outbound TEXT, flight_return TEXT, includes TEXT, scraped_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, source_file TEXT, capture_id TEXT, produced_by_job_id TEXT, produced_by_attempt_id TEXT, parser_method TEXT CHECK (parser_method IS NULL OR parser_method IN ('agent_parse', 'regex')), capture_checksum TEXT, parser_rule_checksum TEXT, normalizer_version TEXT, offer_key TEXT, dedup_key TEXT, last_seen_at TEXT, PRIMARY KEY (id, scraped_at));
@@ -1360,7 +1410,7 @@ CREATE TABLE weather_providers (
   name_en TEXT,
   attribution_url TEXT,
   license TEXT
-);
+, license_url TEXT);
 
 -- ---------------------------------------------------------------------------
 -- INDEXES
