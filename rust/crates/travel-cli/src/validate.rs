@@ -102,6 +102,191 @@ async fn validate_record_markers(issues: &mut Vec<Issue>) {
     }
 }
 
+/// Audit H2 (data half): `validate data` rules over the trip-record columns
+/// (spec 2026-11-16-trip-record-design.md §4/§5). Row-level records
+/// (`record_status`) and session summary records (`record_summary_zh`, a
+/// complete record on its own) are both checked.
+/// - Rule 1 (ERROR): `record_status` must be NULL | 'done' | 'skipped'. The CLI
+///   guards its own writes with the `RecordStatus` enum; raw `db exec` does not,
+///   so the lint is the only net under the whole table family.
+/// - Rule 2 (NOT IMPLEMENTED, deliberately): `record_summary_zh` set on a
+///   session with no row-level records is NOT warned — spec §5 `record-session`
+///   writes the summary ALONE as a complete session-level record (with its own
+///   audit triad), so a summary without row statuses is valid data.
+/// - Rule 2b (WARN): a record — status row or summary — on a VARIANT day
+///   (`days.variant_of`): alternatives are not recorded (spec §5), so any such
+///   row is stray content.
+/// - Rule 3 (WARN): a record — status row or summary — whose day is dated after
+///   the destination-local today is future content marked as actual. The CLI
+///   refuses future days (record.rs); raw `db exec` does not. "Today" comes
+///   from the shared `record::destination_today` helper (spec K3#9) — never
+///   the UTC `today_iso`.
+async fn validate_record_columns(issues: &mut Vec<Issue>) {
+    let push = |issues: &mut Vec<Issue>, severity: Severity, message: String| {
+        issues.push(Issue {
+            category: "record-columns".to_string(),
+            severity,
+            message,
+            file: None,
+            line: None,
+        });
+    };
+    let Ok(conn) = db::connect_read().await else {
+        return; // no creds: the other checks already report the connection problem
+    };
+    let rows = match travel_db::repo::records::recorded_rows(&conn).await {
+        Ok(rows) => rows,
+        Err(e) if e.contains("no such column") => {
+            push(
+                issues,
+                Severity::Error,
+                format!(
+                    "cannot check record columns: record_status/record_note are missing — \
+                     run ./bin/travel db migrate ({e})"
+                ),
+            );
+            return;
+        }
+        Err(e) => {
+            push(issues, Severity::Error, format!("cannot check record columns: {e}"));
+            return;
+        }
+    };
+    // Rule 1 — illegal status values (pure rule, applies to every destination).
+    for message in invalid_record_status_lines(&rows) {
+        push(issues, Severity::Error, message);
+    }
+    // Rule 1b — records on variant days (spec §5: alternatives are not recorded).
+    for message in variant_recorded_lines(&rows) {
+        push(issues, Severity::Warning, message);
+    }
+    // Rule 3 — future-dated records, one destination-local today per destination
+    // (first-seen order keeps the report deterministic). A destination whose
+    // local today cannot be computed is an ERROR, not a silent skip — matches
+    // the fail-loud precedent of validate_booking_integrity.
+    let mut dest_order: Vec<String> = Vec::new();
+    for r in &rows {
+        if !dest_order.contains(&r.destination) {
+            dest_order.push(r.destination.clone());
+        }
+    }
+    for dest in &dest_order {
+        match crate::record::destination_today(&conn, dest).await {
+            Ok(today) => {
+                for message in future_recorded_lines(&rows, dest, &today) {
+                    push(issues, Severity::Warning, message);
+                }
+            }
+            Err(e) => push(
+                issues,
+                Severity::Error,
+                format!("cannot check future-dated records for destination {dest}: {e}"),
+            ),
+        }
+    }
+}
+
+/// Pure rule (audit H2, rule 1): every non-NULL `record_status` must be exactly
+/// 'done' or 'skipped' (case-sensitive — the CLI enum writes only these). One
+/// ERROR line per offending row, naming plan/day/session/row. Summary rows
+/// (`timesofday`, no `record_status`) are out of scope here.
+fn invalid_record_status_lines(rows: &[travel_db::repo::records::RecordLintRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|r| r.status.as_deref().is_some_and(|s| s != "done" && s != "skipped"))
+        .map(|r| {
+            record_row_at(r)
+                + &format!(
+                    ": {} 「{}」 has record_status '{}' — legal values are done | skipped | NULL \
+                     (fix the row, or clear it with travel clear-record)",
+                    r.table,
+                    r.row_text,
+                    r.status.as_deref().unwrap_or_default()
+                )
+        })
+        .collect()
+}
+
+/// Pure rule (audit H2, rule 3): a record dated after the destination-local
+/// `today` — row-level records AND session summaries (a summary alone is a
+/// complete record, spec §5) — is future content marked as actual: one WARN
+/// line per row. Only rows of `destination` are evaluated (each destination has
+/// its own local today). A row with no day date (missing/blank `days.date`)
+/// also warns: the date check cannot run on it, and a silent skip would hide it.
+fn future_recorded_lines(
+    rows: &[travel_db::repo::records::RecordLintRow],
+    destination: &str,
+    today: &str,
+) -> Vec<String> {
+    rows.iter()
+        .filter(|r| r.destination == destination)
+        .filter_map(|r| {
+            let at = record_row_at(r);
+            let date = r.date.as_deref().map(str::trim).filter(|d| !d.is_empty());
+            match date {
+                // Same comparison as record.rs's day guard: ISO string compare.
+                Some(date) if date > today => Some(format!(
+                    "{at}: {} is recorded but its day is dated {date}, after the \
+                     destination-local today {today} — records are for what already happened",
+                    record_what(r)
+                )),
+                None => Some(format!(
+                    "{at}: {} is recorded but its day has no date (no matching days row) \
+                     — cannot check that it is not in the future",
+                    record_what(r)
+                )),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Pure rule (audit H2, spec §5): a record — row-level status or session
+/// summary — sitting on a VARIANT day (`days.variant_of` set) cannot be an
+/// actual-trip record: alternatives are not recorded (`record-*` refuses them,
+/// spec §5), so any such row is stray content from raw `db exec`. One WARN line
+/// per row, naming plan/day/session/row and the variant_of link.
+fn variant_recorded_lines(rows: &[travel_db::repo::records::RecordLintRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|r| r.variant_of.is_some())
+        .map(|r| {
+            record_row_at(r)
+                + &format!(
+                    ": {} is recorded but day {} is a variant day (variant_of {}) — \
+                     alternatives are not recorded; clear the record or drop the variant day",
+                    record_what(r),
+                    r.day,
+                    r.variant_of.unwrap_or_default()
+                )
+        })
+        .collect()
+}
+
+/// The "what was recorded" clause shared by the record-column issue lines:
+/// `activities 「東福寺」` for row-level records, `session summary 「…」` for
+/// `timesofday.record_summary_zh` records.
+fn record_what(r: &travel_db::repo::records::RecordLintRow) -> String {
+    if r.is_summary {
+        format!("session summary 「{}」", r.row_text)
+    } else {
+        format!("{} 「{}」", r.table, r.row_text)
+    }
+}
+
+/// The `plan <id> (<dest>) day <n> <session>` locator shared by the
+/// record-column issue lines.
+fn record_row_at(r: &travel_db::repo::records::RecordLintRow) -> String {
+    format!(
+        "plan {} ({}) day {}{}",
+        r.plan_id,
+        r.destination,
+        r.day,
+        r.session
+            .as_deref()
+            .map(|s| format!(" {s}"))
+            .unwrap_or_default()
+    )
+}
+
 pub async fn run(mode: Mode) -> Result<(), String> {
     if let Mode::Publish { plan_id, dest } = mode {
         return run_publish(&plan_id, dest.as_deref()).await;
@@ -131,6 +316,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_reference_tables(&mut issues).await;
     validate_booking_integrity(&mut issues).await;
     validate_record_markers(&mut issues).await;
+    validate_record_columns(&mut issues).await;
     validate_day_variants(&mut issues).await;
     validate_plan_documents(&mut issues).await;
     validate_fit_booking(&mut issues).await;
@@ -2577,6 +2763,63 @@ fn variant_label_problems(at: &str, who: &str, en: Option<&str>, zh: Option<&str
     out
 }
 
+/// One `plan_documents` (plan_id, doc_key, sha256) row for the M2 data rule.
+#[derive(Debug, Clone)]
+struct PlanDocSha {
+    plan_id: String,
+    doc_key: String,
+    sha256: Option<String>,
+}
+
+/// The sha256 prefix length the voucher `?v=` link keys on: the worker's
+/// offline/dashboard voucher links are built as `?v=<sha256 first 12>` —
+/// `workers/trip-dashboard-rs/src/render/summary.rs` `document.sha256.get(..12)`
+/// — so a shorter hash yields no version key at all.
+const VOUCHER_SHA_KEY_LEN: usize = 12;
+
+/// Pure rule (audit M2, data half): WARN when a document's sha256 cannot give
+/// the voucher `?v=` link its 12-char key — the cached/local PDF then never
+/// carries a stable version key. Mirrors the worker exactly
+/// (`workers/trip-dashboard-rs/src/render/summary.rs`
+/// `document.sha256.get(..12)`): the trimmed sha must slice at byte 12
+/// (a non-ASCII char before that boundary makes the worker's `get` return
+/// None — no `?v=` at all) and the first 12 chars must be hex (only then can
+/// the value come from a real sha256). NULL/empty are warned too. One line per
+/// offending document.
+fn short_sha256_lines(docs: &[PlanDocSha]) -> Vec<String> {
+    docs.iter()
+        .filter_map(|d| {
+            // The worker slices the RAW value (`sha256.get(..12)`, no trim), so
+            // padding is judged as stored; only an all-blank value counts as empty.
+            let trimmed = d.sha256.as_deref().filter(|s| !s.trim().is_empty());
+            let problem = match trimmed {
+                Some(sha) if sha.len() < VOUCHER_SHA_KEY_LEN => {
+                    format!("'{sha}' ({} chars)", sha.len())
+                }
+                Some(sha) => match sha.get(..VOUCHER_SHA_KEY_LEN) {
+                    // Same byte-slice as the worker's `?v=` key build.
+                    None => format!(
+                        "'{sha}' — its first {VOUCHER_SHA_KEY_LEN} bytes do not end on a \
+                         character boundary (non-ASCII inside)"
+                    ),
+                    Some(key) if !key.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                        format!("'{sha}' — its first {VOUCHER_SHA_KEY_LEN} chars are not hex")
+                    }
+                    Some(_) => return None,
+                },
+                None if d.sha256.is_none() => "NULL".to_string(),
+                None => "empty".to_string(),
+            };
+            Some(format!(
+                "{} document {}: sha256 is {problem} — the voucher ?v= link keys on the \
+                 first {VOUCHER_SHA_KEY_LEN} hex chars, so this document's cached PDF never gets \
+                 a stable version; re-upload the document",
+                d.plan_id, d.doc_key
+            ))
+        })
+        .collect()
+}
+
 async fn validate_plan_documents(issues: &mut Vec<Issue>) {
     let conn = match db::connect_read().await {
         Ok(c) => c,
@@ -2632,24 +2875,42 @@ async fn validate_plan_documents(issues: &mut Vec<Issue>) {
                 });
             }
         }
-        let mut rows = conn.query(
-            "SELECT plan_id, doc_key, r2_key FROM plan_documents ORDER BY plan_id, doc_key",
-            (),
-        ).await.map_err(|e| format!("plan document r2_key query failed: {e}"))?;
-        while let Some(row) = rows.next().await.map_err(|e| format!("plan document r2_key row failed: {e}"))? {
-            let plan: String = row.get(0).map_err(|e| e.to_string())?;
-            let key: String = row.get(1).map_err(|e| e.to_string())?;
-            let actual: String = row.get(2).map_err(|e| e.to_string())?;
-            let expected = format!("{plan}/doc-{key}.pdf");
-            if actual != expected {
+        // r2_key shape rule + audit M2 sha256 rule share ONE targeted SELECT
+        // through the travel-db repo reader (DAL boundary) — rules in Rust.
+        let docs = travel_db::repo::plan_documents::list_key_rows(&conn)
+            .await
+            .map_err(|e| format!("plan document key rows failed: {e}"))?;
+        for d in &docs {
+            let expected = format!("{}/doc-{}.pdf", d.plan_id, d.doc_key);
+            if d.r2_key != expected {
                 issues.push(Issue {
                     category: "plan-documents".to_string(),
                     severity: Severity::Error,
-                    message: format!("{plan} document {key}: r2_key {actual:?} must be {expected:?}"),
+                    message: format!(
+                        "{} document {}: r2_key {:?} must be {:?}",
+                        d.plan_id, d.doc_key, d.r2_key, expected
+                    ),
                     file: Some("turso:plan_documents".to_string()),
                     line: None,
                 });
             }
+        }
+        let sha_docs: Vec<PlanDocSha> = docs
+            .iter()
+            .map(|d| PlanDocSha {
+                plan_id: d.plan_id.clone(),
+                doc_key: d.doc_key.clone(),
+                sha256: d.sha256.clone(),
+            })
+            .collect();
+        for message in short_sha256_lines(&sha_docs) {
+            issues.push(Issue {
+                category: "plan-documents".to_string(),
+                severity: Severity::Warning,
+                message,
+                file: Some("turso:plan_documents".to_string()),
+                line: None,
+            });
         }
         Ok::<(), String>(())
     }.await;
@@ -3211,6 +3472,215 @@ pub fn validate_date_range(start: &str, end: &str) -> Result<u32, String> {
 // NOTE: validate_iso_date now lives in crate::checks (single source of truth);
 // validate_date_range calls crate::checks::validate_iso_date. The error strings
 // are unchanged (still byte-identical to the TS originals).
+
+#[cfg(test)]
+mod record_columns_tests {
+    use super::*;
+    use travel_db::repo::records::RecordLintRow;
+
+    fn rrow(
+        table: &str,
+        plan: &str,
+        dest: &str,
+        day: i64,
+        session: Option<&str>,
+        text: &str,
+        status: Option<&str>,
+        date: Option<&str>,
+    ) -> RecordLintRow {
+        RecordLintRow {
+            table: table.to_string(),
+            plan_id: plan.to_string(),
+            destination: dest.to_string(),
+            day,
+            session: session.map(str::to_string),
+            row_text: text.to_string(),
+            status: status.map(str::to_string),
+            // a status None in fixtures means a summary row (timesofday)
+            is_summary: status.is_none(),
+            date: date.map(str::to_string),
+            variant_of: None,
+        }
+    }
+
+    #[test]
+    fn off_ladder_record_status_values_error_with_full_row_identity() {
+        let rows = vec![
+            rrow("activities", "kyoto-nov-2026", "kyoto_nov_2026", 4, Some("morning"), "東福寺", Some("cancelled"), Some("2026-11-19")),
+            rrow("session_meals", "kyoto-nov-2026", "kyoto_nov_2026", 5, Some("noon"), "京極スタンド", Some("done but drifted"), None),
+            rrow("day_route_segments", "kyoto-nov-2026", "kyoto_nov_2026", 5, None, "東寺 → 京極スタンド", Some("DONE"), Some("2026-11-20")),
+        ];
+        let lines = invalid_record_status_lines(&rows);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        // every line names plan / day / session / row
+        assert!(lines[0].contains("kyoto-nov-2026") && lines[0].contains("day 4") && lines[0].contains("morning"));
+        assert!(lines[0].contains("activities") && lines[0].contains("東福寺") && lines[0].contains("'cancelled'"));
+        assert!(lines[1].contains("session_meals") && lines[1].contains("京極スタンド") && lines[1].contains("'done but drifted'"));
+        assert!(lines[2].contains("day_route_segments") && lines[2].contains("東寺 → 京極スタンド") && lines[2].contains("'DONE'"));
+    }
+
+    #[test]
+    fn done_and_skipped_are_the_only_legal_non_null_statuses() {
+        let rows = vec![
+            rrow("activities", "p", "d", 1, Some("morning"), "東寺", Some("done"), Some("2026-11-01")),
+            rrow("session_meals", "p", "d", 1, Some("noon"), "蕎麥", Some("skipped"), None),
+            rrow("day_route_segments", "p", "d", 2, None, "A → B", Some("done"), Some("2026-11-02")),
+        ];
+        assert!(invalid_record_status_lines(&rows).is_empty());
+    }
+
+    #[test]
+    fn future_recorded_days_warn_but_today_and_past_do_not() {
+        let rows = vec![
+            rrow("activities", "kyoto-nov-2026", "kyoto_nov_2026", 4, Some("morning"), "東福寺", Some("done"), Some("2026-11-19")),
+            rrow("day_route_segments", "kyoto-nov-2026", "kyoto_nov_2026", 5, None, "A → B", Some("skipped"), Some("2026-11-18")),
+            rrow("session_meals", "kyoto-nov-2026", "kyoto_nov_2026", 3, Some("noon"), "丼", Some("done"), Some("2026-11-17")),
+        ];
+        let lines = future_recorded_lines(&rows, "kyoto_nov_2026", "2026-11-18");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("day 4") && lines[0].contains("morning") && lines[0].contains("2026-11-19"));
+        assert!(lines[0].contains("after the destination-local today 2026-11-18"));
+    }
+
+    #[test]
+    fn future_rule_is_scoped_to_the_named_destination() {
+        let rows = vec![
+            rrow("activities", "p", "kyoto_nov_2026", 4, Some("morning"), "東福寺", Some("done"), Some("2026-11-19")),
+            rrow("activities", "p", "taipei_2026", 1, Some("morning"), "故宮", Some("done"), Some("2026-11-19")),
+        ];
+        let lines = future_recorded_lines(&rows, "taipei_2026", "2026-11-18");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("taipei_2026") && lines[0].contains("故宮"));
+    }
+
+    #[test]
+    fn recorded_row_without_a_day_date_warns_it_cannot_be_date_checked() {
+        let rows = vec![
+            rrow("activities", "p", "d", 9, Some("evening"), "夜訪", Some("done"), None),
+            rrow("activities", "p", "d", 10, Some("morning"), "早市", Some("skipped"), Some("")),
+        ];
+        let lines = future_recorded_lines(&rows, "d", "2026-11-18");
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("day 9") && lines[0].contains("no date"));
+        assert!(lines[1].contains("day 10") && lines[1].contains("no date"));
+    }
+
+    // Round 2 (K3.1 review #1): a session summary (timesofday.record_summary_zh,
+    // a complete record on its own — spec §5 record-session) on a future day is
+    // future content marked as actual and must WARN like any recorded row.
+    #[test]
+    fn session_summary_on_a_future_day_warns() {
+        let rows = vec![
+            rrow("timesofday", "kyoto-nov-2026", "kyoto_nov_2026", 6, Some("morning"),
+                 "人多到走不動，改成先去南禪寺", None, Some("2026-11-20")),
+            rrow("timesofday", "kyoto-nov-2026", "kyoto_nov_2026", 5, Some("evening"),
+                 "夜訪當天結束得早", None, Some("2026-11-19")),
+        ];
+        let lines = future_recorded_lines(&rows, "kyoto_nov_2026", "2026-11-19");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("day 6") && lines[0].contains("morning"));
+        assert!(lines[0].contains("session summary") && lines[0].contains("人多到走不動"));
+        assert!(lines[0].contains("2026-11-20") && lines[0].contains("2026-11-19"));
+    }
+
+    // Round 2 (K3.1 review #3): spec §5 — alternatives (variant days) are not
+    // recorded; a done/skipped row OR a summary on a variant day is a WARN.
+    #[test]
+    fn recorded_row_or_summary_on_a_variant_day_warns() {
+        let mut status_row = rrow(
+            "activities", "kyoto-nov-2026", "kyoto_nov_2026", 5, Some("morning"),
+            "雨備上常寂光寺", Some("done"), Some("2026-11-16"),
+        );
+        status_row.variant_of = Some(3);
+        let mut summary_row = rrow(
+            "timesofday", "kyoto-nov-2026", "kyoto_nov_2026", 5, Some("noon"),
+            "當天中午下雨，改成博物館", None, Some("2026-11-16"),
+        );
+        summary_row.variant_of = Some(3);
+        let main_day_row = rrow(
+            "activities", "kyoto-nov-2026", "kyoto_nov_2026", 3, Some("morning"),
+            "東寺", Some("done"), Some("2026-11-14"),
+        ); // variant_of stays None — a real trip day, no warning
+        let lines = variant_recorded_lines(&[status_row, summary_row, main_day_row]);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("day 5") && lines[0].contains("morning"));
+        assert!(lines[0].contains("雨備上常寂光寺") && lines[0].contains("variant_of 3"));
+        assert!(lines[1].contains("day 5") && lines[1].contains("noon"));
+        assert!(lines[1].contains("session summary") && lines[1].contains("當天中午下雨"));
+    }
+}
+
+#[cfg(test)]
+mod plan_document_sha_tests {
+    use super::*;
+
+    fn doc(plan: &str, key: &str, sha: Option<&str>) -> PlanDocSha {
+        PlanDocSha {
+            plan_id: plan.to_string(),
+            doc_key: key.to_string(),
+            sha256: sha.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn null_empty_and_short_sha256_warn() {
+        let docs = vec![
+            doc("kyoto-nov-2026", "doc-flight", None),
+            doc("kyoto-nov-2026", "doc-hotel", Some("")),
+            doc("okinawa-2026", "doc-tour", Some("abc12345678")),
+        ];
+        let lines = short_sha256_lines(&docs);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].contains("kyoto-nov-2026") && lines[0].contains("doc-flight") && lines[0].contains("NULL"));
+        assert!(lines[1].contains("doc-hotel") && lines[1].contains("empty"));
+        assert!(lines[2].contains("okinawa-2026") && lines[2].contains("doc-tour") && lines[2].contains("abc12345678"));
+        assert!(lines.iter().all(|l| l.contains("12")));
+    }
+
+    #[test]
+    fn twelve_char_sha_is_the_minimum_key() {
+        let docs = vec![
+            doc("p", "d1", Some("0123456789ab")),
+            doc("p", "d2", Some("0123456789abcdef0123456789abcdef")),
+        ];
+        assert!(short_sha256_lines(&docs).is_empty());
+    }
+
+    #[test]
+    fn padded_sha_warns_because_the_worker_slices_the_raw_value() {
+        // " 0123456789ab " → the worker's get(..12) is " 0123456789a" (not hex).
+        let docs = vec![doc("p", "d3", Some(" 0123456789ab "))];
+        assert_eq!(short_sha256_lines(&docs).len(), 1);
+    }
+
+    // Round 2 (K3.1 review #2): match the worker's `sha256.get(..12)` exactly.
+    // "01234567890é" is 12 chars / 13 bytes — byte 12 is inside the é, so the
+    // worker's get(..12) returns None and the voucher link gets NO ?v= key; the
+    // old `len() < 12` check stayed silent about it.
+    #[test]
+    fn non_ascii_sha_13_bytes_long_warns_though_len_is_13() {
+        let docs = vec![doc("kyoto-nov-2026", "doc-flight", Some("01234567890é"))];
+        let lines = short_sha256_lines(&docs);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("kyoto-nov-2026") && lines[0].contains("doc-flight"));
+        assert!(lines[0].contains("01234567890é"));
+    }
+
+    // Round 2 (K3.1 review #2): the ?v= key must be hex — a non-hex 12+ char
+    // string slices fine but can never come from a real sha256.
+    #[test]
+    fn non_hex_sha_warns_even_when_12_chars_are_sliceable() {
+        let docs = vec![
+            doc("p", "d1", Some("zzzzzzzzzzzzzzzz")), // sliceable, not hex
+            doc("p", "d2", Some("ABCDEF0123456789")), // uppercase hex is still hex
+            doc("p", "d3", Some("01234567890z")), // 12 chars, 12 bytes, one non-hex char
+        ];
+        let lines = short_sha256_lines(&docs);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("d1") && lines[0].contains("not hex"));
+        assert!(lines[1].contains("d3") && lines[1].contains("not hex"));
+    }
+}
 
 #[cfg(test)]
 mod okinawa_provenance_tests {

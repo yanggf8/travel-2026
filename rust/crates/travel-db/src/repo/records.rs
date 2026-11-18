@@ -21,6 +21,101 @@
 
 use libsql::Connection;
 
+/// One row the `validate data` record-column lint (audit H2) sees. Two kinds:
+/// - a row-level record: `record_status IS NOT NULL` on `activities` /
+///   `session_meals` / `day_route_segments` (`status` is `Some`, `is_summary`
+///   false);
+/// - a session summary record: `timesofday.record_summary_zh` non-empty
+///   (`status` is `None`, `is_summary` true, `row_text` is the summary text —
+///   a summary alone is a complete record, spec §5 `record-session`).
+/// Both carry the day's `date` and `variant_of` (NULL when the `days` row is
+/// missing). The rule decisions (legal status values, future dates, variant
+/// days) live in the validator's pure functions, not here.
+#[derive(Debug, Clone)]
+pub struct RecordLintRow {
+    /// Source table: 'activities' | 'session_meals' | 'day_route_segments' |
+    /// 'timesofday' (summary rows).
+    pub table: String,
+    pub plan_id: String,
+    pub destination: String,
+    pub day: i64,
+    /// Session type; legs have none.
+    pub session: Option<String>,
+    /// Identifying text: title / meal / from_place → to_place / the summary.
+    pub row_text: String,
+    /// The row's `record_status`; `None` on summary rows.
+    pub status: Option<String>,
+    /// True when this row is a `timesofday.record_summary_zh` record.
+    pub is_summary: bool,
+    /// The row's day date (`days.date`), NULL when the day row is missing.
+    pub date: Option<String>,
+    /// The day's `days.variant_of`; Some = a variant (alternative) day.
+    pub variant_of: Option<i64>,
+}
+
+/// The `validate data` record-column reader (audit H2): every row-level record
+/// (`record_status IS NOT NULL` on `activities` / `session_meals` /
+/// `day_route_segments`) plus every session summary record (non-empty
+/// `timesofday.record_summary_zh`), LEFT JOINed with the day's date and
+/// `variant_of` — ONE targeted SELECT (UNION ALL) whose result set is exactly
+/// what the audit-H2 rules (illegal status values; future-dated records;
+/// records on variant days) evaluate. The ORDER BY carries each branch's
+/// `sort_order` and (for activities) `id`, so same-day same-table rows keep a
+/// stable issue order.
+pub async fn recorded_rows(conn: &Connection) -> Result<Vec<RecordLintRow>, String> {
+    const QUERY: &str = "\
+        SELECT 'activities', a.plan_id, a.destination, a.day_number, a.session_type, \
+               a.title, a.record_status, 0, d.date, d.variant_of, a.sort_order, a.id \
+        FROM activities a LEFT JOIN days d \
+          ON d.plan_id = a.plan_id AND d.destination = a.destination \
+             AND d.day_number = a.day_number \
+        WHERE a.record_status IS NOT NULL \
+        UNION ALL \
+        SELECT 'session_meals', m.plan_id, m.destination, m.day_number, m.session_type, \
+               m.meal, m.record_status, 0, d.date, d.variant_of, m.sort_order, '' \
+        FROM session_meals m LEFT JOIN days d \
+          ON d.plan_id = m.plan_id AND d.destination = m.destination \
+             AND d.day_number = m.day_number \
+        WHERE m.record_status IS NOT NULL \
+        UNION ALL \
+        SELECT 'day_route_segments', r.plan_id, r.destination, r.day_number, NULL, \
+               r.from_place || ' → ' || r.to_place, r.record_status, 0, \
+               d.date, d.variant_of, r.sort_order, '' \
+        FROM day_route_segments r LEFT JOIN days d \
+          ON d.plan_id = r.plan_id AND d.destination = r.destination \
+             AND d.day_number = r.day_number \
+        WHERE r.record_status IS NOT NULL \
+        UNION ALL \
+        SELECT 'timesofday', t.plan_id, t.destination, t.day_number, t.session_type, \
+               t.record_summary_zh, NULL, 1, d.date, d.variant_of, 0, '' \
+        FROM timesofday t LEFT JOIN days d \
+          ON d.plan_id = t.plan_id AND d.destination = t.destination \
+             AND d.day_number = t.day_number \
+        WHERE t.record_summary_zh IS NOT NULL AND TRIM(t.record_summary_zh) <> '' \
+        ORDER BY 2, 3, 4, 1, 5, 11, 12";
+    let mut rows = conn
+        .query(QUERY, ())
+        .await
+        .map_err(|e| format!("record lint rows query failed: {e}"))?;
+    let mut out: Vec<RecordLintRow> = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        let g = |e: libsql::Error| format!("record lint row decode failed: {e}");
+        out.push(RecordLintRow {
+            table: row.get(0).map_err(g)?,
+            plan_id: row.get(1).map_err(g)?,
+            destination: row.get(2).map_err(g)?,
+            day: row.get(3).map_err(g)?,
+            session: row.get::<Option<String>>(4).map_err(g)?,
+            row_text: row.get(5).map_err(g)?,
+            status: row.get(6).map_err(g)?,
+            is_summary: row.get::<i64>(7).map_err(g)? != 0,
+            date: row.get(8).map_err(g)?,
+            variant_of: row.get(9).map_err(g)?,
+        });
+    }
+    Ok(out)
+}
+
 /// A row's actual-trip status. NULL (the column default) means unrecorded; the
 /// legal values live only here (no DB CHECK, project rule).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1183,5 +1278,47 @@ mod tests {
         assert!(list_plan_records(&conn, "p", "nowhere").await.unwrap().is_empty());
         let fresh = db().await;
         assert!(list_plan_records(&fresh, "p", "kyoto").await.unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod recorded_rows_tests {
+    use super::recorded_rows;
+
+    // In-memory tables with only the columns `recorded_rows` reads (no Turso).
+    async fn fixture() -> libsql::Connection {
+        let db = libsql::Builder::new_local(":memory:").build().await.unwrap();
+        let c = db.connect().unwrap();
+        c.execute_batch(
+            "CREATE TABLE days (plan_id TEXT, destination TEXT, day_number INTEGER, date TEXT, variant_of INTEGER);
+             CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, day_number INTEGER, session_type TEXT, title TEXT, record_status TEXT, sort_order INTEGER);
+             CREATE TABLE session_meals (plan_id TEXT, destination TEXT, day_number INTEGER, session_type TEXT, meal TEXT, record_status TEXT, sort_order INTEGER);
+             CREATE TABLE day_route_segments (plan_id TEXT, destination TEXT, day_number INTEGER, from_place TEXT, to_place TEXT, record_status TEXT, sort_order INTEGER);
+             CREATE TABLE timesofday (plan_id TEXT, destination TEXT, day_number INTEGER, session_type TEXT, record_summary_zh TEXT);
+             INSERT INTO days VALUES ('p','d',1,'2026-11-01',NULL),('p','d',2,'2026-11-02',3);
+             INSERT INTO activities VALUES ('a-z','p','d',1,'morning','B','done',2),('a-a','p','d',1,'morning','A','done',1),('a-n','p','d',1,'morning','none',NULL,3);
+             INSERT INTO timesofday VALUES ('p','d',1,'morning','摘要'),('p','d',1,'noon','  '),('p','d',2,'noon','變體摘要');",
+        )
+        .await
+        .unwrap();
+        c
+    }
+
+    #[tokio::test]
+    async fn rows_include_summaries_and_variant_of_and_skip_unrecorded() {
+        let rows = recorded_rows(&fixture().await).await.unwrap();
+        let texts: Vec<_> = rows.iter().map(|r| r.row_text.as_str()).collect();
+        assert_eq!(texts, ["A", "B", "摘要", "變體摘要"], "{texts:?}");
+        assert!(rows[2].is_summary && rows[2].status.is_none());
+        assert_eq!(rows[3].variant_of, Some(3));
+        assert_eq!(rows[0].variant_of, None);
+    }
+
+    #[tokio::test]
+    async fn same_day_same_table_rows_order_by_sort_order_not_insert_order() {
+        let rows = recorded_rows(&fixture().await).await.unwrap();
+        // inserted B (sort 2) before A (sort 1): stable order puts A first
+        assert_eq!(rows[0].row_text, "A");
+        assert_eq!(rows[1].row_text, "B");
     }
 }

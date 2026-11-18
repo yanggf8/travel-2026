@@ -118,6 +118,49 @@ pub async fn get(
     Ok(documents.pop())
 }
 
+/// One `plan_documents` key row for the `validate data` document checks
+/// (audit M2): identity plus the two columns the lints read — `r2_key` (shape
+/// rule) and `sha256` (voucher `?v=` key rule). ONE targeted SELECT shared by
+/// both checks; the rule decisions live in the validator, not here.
+/// `sha256` is NOT NULL in the schema but read as `Option` so a pathological
+/// NULL reaches the rule as data instead of failing the decode.
+#[derive(Debug, Clone)]
+pub struct PlanDocumentKeyRow {
+    pub plan_id: String,
+    pub doc_key: String,
+    pub r2_key: String,
+    pub sha256: Option<String>,
+}
+
+/// Every `plan_documents` row's key identity, sorted (plan_id, doc_key) — the
+/// single reader behind `validate data`'s r2_key and sha256 rules (one query
+/// instead of two over the same table).
+pub async fn list_key_rows(conn: &Connection) -> Result<Vec<PlanDocumentKeyRow>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT plan_id, doc_key, r2_key, sha256 FROM plan_documents \
+             ORDER BY plan_id, doc_key",
+            (),
+        )
+        .await
+        .map_err(|e| format!("plan_documents key rows query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("plan_documents key row read failed: {e}"))?
+    {
+        let g = |e: libsql::Error| format!("plan_documents key row decode failed: {e}");
+        out.push(PlanDocumentKeyRow {
+            plan_id: row.get(0).map_err(g)?,
+            doc_key: row.get(1).map_err(g)?,
+            r2_key: row.get(2).map_err(g)?,
+            sha256: row.get(3).map_err(g)?,
+        });
+    }
+    Ok(out)
+}
+
 pub async fn upsert(
     conn: &Connection,
     document: &PlanDocument,
