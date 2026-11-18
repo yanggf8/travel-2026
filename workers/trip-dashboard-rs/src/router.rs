@@ -1107,7 +1107,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         "SELECT provider_id, name_zh, name_en, attribution_url, license, license_url FROM weather_providers"
             .to_string(),
         // [29] destination timezone (IANA) for the weather "updated" stamp.
-        format!("SELECT timezone FROM destination_config WHERE slug = {dest_expr}"),
+        format!("SELECT timezone, lat, lon FROM destination_config WHERE slug = {dest_expr}"),
     ];
     let r = turso::pipeline(turso_url, token, &sqls).await?;
     if r.len() < 30 {
@@ -1134,15 +1134,43 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         .to_string();
     // Trimmed once here so SSR and the browser's Intl (data-now-tz) see the same zone.
     plan.timezone = tz.clone();
+    plan.dest_center = dest_center(&r[29]);
     for d in plan.days.iter_mut() {
         d.weather_updated = tzfmt::format_in_tz(&d.weather_sourced_at, &tz).unwrap_or_default();
     }
     Ok(plan)
 }
 
+/// `destination_config.lat/lon` of the first row; None unless both are present.
+fn dest_center(rows: &[turso::Row]) -> Option<(f64, f64)> {
+    let row = rows.first()?;
+    Some((
+        model::json_f64(row.get("lat")?)?,
+        model::json_f64(row.get("lon")?)?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dest_center_needs_both_coordinates() {
+        let row = |lat: serde_json::Value, lon: serde_json::Value| {
+            let mut r = turso::Row::new();
+            r.insert("lat".into(), lat);
+            r.insert("lon".into(), lon);
+            vec![r]
+        };
+        let s = |v: &str| serde_json::Value::String(v.into());
+        assert_eq!(
+            dest_center(&row(s("24.8592"), s("121.8233"))),
+            Some((24.8592, 121.8233))
+        );
+        assert_eq!(dest_center(&row(serde_json::Value::Null, s("121.8"))), None);
+        assert_eq!(dest_center(&row(s("24.8"), serde_json::Value::Null)), None);
+        assert_eq!(dest_center(&[]), None);
+    }
 
     #[test]
     fn no_store_page_has_no_view_header() {
