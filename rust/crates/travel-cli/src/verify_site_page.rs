@@ -1022,16 +1022,41 @@ fn document_identity_error(
         return Some(format!("unknown data-doc {:?}", link.key));
     };
     let base = Url::parse("https://dashboard.invalid/").expect("static base url");
-    let path = match base.join(&link.href) {
-        Ok(url) => url.path().to_string(),
+    let url = match base.join(&link.href) {
+        Ok(url) => url,
         Err(error) => return Some(format!("data-doc {} has an invalid href: {error}", link.key)),
     };
     let expected_path = format!("/voucher/{}", document.r2_key);
-    if path != expected_path {
+    if url.path() != expected_path {
         return Some(format!(
-            "data-doc {} has href path {path}, expected {expected_path}",
-            link.key
+            "data-doc {} has href path {}, expected {expected_path}",
+            link.key,
+            url.path()
         ));
+    }
+    // M2: the worker versions every local voucher link with the document's own
+    // sha256 prefix (render/summary.rs voucher_href appends `?v=<sha256[..12]>`
+    // when the sha is long enough) so the SW can cache PDFs by content. The
+    // same slice here: a missing or wrong `v` means a viewer may load a
+    // network-first unversioned URL (or a stale cached PDF after a re-upload).
+    if let Some(want) = document.sha256.get(..12) {
+        let versions: Vec<String> = url
+            .query_pairs()
+            .filter(|(k, _)| k == "v")
+            .map(|(_, v)| v.into_owned())
+            .collect();
+        if versions.len() != 1 || versions[0] != want {
+            return Some(match versions.first() {
+                None => format!(
+                    "data-doc {} link carries no ?v= version key (expected v={}, the plan_documents.sha256 prefix)",
+                    link.key, want
+                ),
+                Some(v) => format!(
+                    "data-doc {} link v={v}, expected {want} (the plan_documents.sha256 prefix)",
+                    link.key
+                ),
+            });
+        }
     }
     None
 }
@@ -1974,6 +1999,76 @@ mod tests {
         );
         let checks = document_placement_checks(&parse_page(&html), &expected);
         assert!(checks.iter().any(|(key, check)| key == "variants" && check.level == Level::Fail), "{checks:?}");
+    }
+
+    /// Two documents with distinct sha256 lengths: A long enough to require a
+    /// `?v=` version key, B too short (the worker's voucher_href drops v then).
+    fn sha_documents() -> Vec<travel_db::repo::plan_documents::PlanDocument> {
+        vec![
+            travel_db::repo::plan_documents::PlanDocument {
+                doc_key: "A".into(),
+                r2_key: "p-1/doc-a.pdf".into(),
+                sha256: "a1b2c3d4e5f6789deadbeef".into(),
+                days: vec![1],
+                ..Default::default()
+            },
+            travel_db::repo::plan_documents::PlanDocument {
+                doc_key: "B".into(),
+                r2_key: "p-1/doc-b.pdf".into(),
+                sha256: "0123456789a".into(),
+                days: vec![2],
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// The plan page with A's summary link carrying `a_v` (None = no ?v=) and
+    /// B's never carrying one (its sha256 is too short to require it).
+    fn sha_page(a_v: Option<&str>) -> String {
+        let a_href = match a_v {
+            Some(v) => format!("/voucher/p-1/doc-a.pdf?v={v}&token=abc"),
+            None => "/voucher/p-1/doc-a.pdf?token=abc".to_string(),
+        };
+        viewer_page(&format!(
+            "<section class=\"plan-documents\">\
+             <a class=\"doc-link\" data-doc=\"A\" href=\"{a_href}\"></a>\
+             <a class=\"doc-link\" data-doc=\"B\" href=\"/voucher/p-1/doc-b.pdf?token=abc\"></a></section> \
+             <section class=\"day\" data-day=\"1\"><a class=\"doc-link\" data-doc=\"A\" href=\"{a_href}\"></a></section>\
+             <section class=\"day\" data-day=\"2\"><a class=\"doc-link\" data-doc=\"B\" href=\"/voucher/p-1/doc-b.pdf?token=abc\"></a></section>",
+        ))
+    }
+
+    #[test]
+    fn document_identity_requires_the_v_key_to_be_the_sha256_prefix() {
+        let expected = sha_documents();
+        // Correct prefix on every A link → no identity FAIL at all.
+        let checks = document_placement_checks(&parse_page(&sha_page(Some("a1b2c3d4e5f6"))), &expected);
+        assert!(checks.iter().all(|(_, c)| c.level == Level::Pass), "{checks:?}");
+
+        // A link with no ?v= at all (a viewer would load it network-first, and a
+        // cached old PDF could survive a re-upload): identity FAIL.
+        let checks = document_placement_checks(&parse_page(&sha_page(None)), &expected);
+        let identity = checks.iter().filter(|(k, _)| k.starts_with("identity-")).collect::<Vec<_>>();
+        assert_eq!(identity.len(), 2, "{checks:?}"); // summary + day link
+        for (_, c) in &identity {
+            assert_eq!(c.level, Level::Fail, "{c:?}");
+            assert!(c.detail.contains("no ?v=") && c.detail.contains("a1b2c3d4e5f6"), "{c:?}");
+        }
+        // valid_document_hrefs must drop the identity-broken link too.
+        assert_eq!(valid_document_hrefs(&parse_page(&sha_page(None)), &expected).len(), 1);
+
+        // Wrong prefix: FAIL naming what it should be.
+        let checks = document_placement_checks(&parse_page(&sha_page(Some("deadbeefdead"))), &expected);
+        assert!(
+            checks.iter().any(|(k, c)| k.starts_with("identity-")
+                && c.level == Level::Fail
+                && c.detail.contains("deadbeefdead")
+                && c.detail.contains("a1b2c3d4e5f6")),
+            "{checks:?}"
+        );
+
+        // B's sha256 is too short for a version key: its bare link stays valid.
+        assert!(checks.iter().all(|(k, c)| !k.starts_with("identity-") || c.detail.contains("data-doc A")), "{checks:?}");
     }
 
     #[test]

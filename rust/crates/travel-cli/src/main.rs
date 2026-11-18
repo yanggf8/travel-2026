@@ -116,6 +116,7 @@ mod verify_site;        // verify-site live dashboard checks and temporary verif
 mod verify_site_offline; // verify-site disposable-context offline checks
 mod verify_site_notes;  // verify-site temporary note fixtures and live anti-goal checks
 mod verify_site_page;   // verify-site layer 1: viewer-page HTML judgements (pure)
+mod verify_site_record; // verify-site record layer: trip-record rows vs the live page
 mod verify_site_sheet;  // verify-site layer 4: --contact-sheet thumbnail grid
 mod verify_site_render; // verify-site layer 5: --render rendered-page checks (CDP Chrome)
 mod road_leg;           // road-leg list|refetch — OSRM road-geometry cache management

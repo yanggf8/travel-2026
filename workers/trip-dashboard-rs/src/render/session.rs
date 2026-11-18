@@ -22,11 +22,14 @@ use crate::model::{Meal, Session};
 /// `<div class="meal">🍽️ <meal></div>` form.
 pub fn render_meal(meal: &Meal, lang: &str) -> String {
     let badge = super::ai_rec_badge(&meal.source, lang);
+    // `data-meal-order` (session_meals.sort_order) is the row's stable identity:
+    // `travel verify-site`'s record layer matches DB rows to markup by it.
     match split_meal_pin(&meal.text) {
         Some((label, query, trailing)) => {
             let url = format!("https://www.google.com/maps/search/{}", urlencode(&query));
             let mut h = format!(
-                "<a class=\"meal\" href=\"{}\" target=\"_blank\" rel=\"noopener\">🍽️ {} 🗺️</a>",
+                "<a class=\"meal\" data-meal-order=\"{}\" href=\"{}\" target=\"_blank\" rel=\"noopener\">🍽️ {} 🗺️</a>",
+                meal.sort_order,
                 esc_url_attr(&url),
                 esc(&label),
             );
@@ -40,7 +43,8 @@ pub fn render_meal(meal: &Meal, lang: &str) -> String {
             h
         }
         None => format!(
-            "<div class=\"meal\">🍽️ {}{}</div>",
+            "<div class=\"meal\" data-meal-order=\"{}\">🍽️ {}{}</div>",
+            meal.sort_order,
             render_activity_text(&meal.text),
             badge
         ),
@@ -279,8 +283,15 @@ pub fn render_unit(
         // render_activity_text (port of the JS worker's renderActivityText):
         // escapes, turns \n into <br>, and renders an embedded "Google Maps：<url>"
         // tail as a short labeled link instead of dumping the giant URL inline.
+        // `data-activity-id` (activities.id) is the row's stable identity for
+        // `travel verify-site`'s record layer; omitted when the row has no id.
+        let activity_id = if a.id.is_empty() {
+            String::new()
+        } else {
+            format!(" data-activity-id=\"{}\"", esc(&a.id))
+        };
         h.push_str(&format!(
-            "<div class=\"activity\">{}{}",
+            "<div class=\"activity\"{activity_id}>{}{}",
             render_activity_text(&a.title),
             super::ai_rec_badge(&a.source, lang)
         ));
@@ -408,6 +419,59 @@ mod tests {
         assert_eq!(skipped[0].text, "B");
     }
     #[test]
+    fn recorded_rows_carry_stable_identifiers() {
+        // `travel verify-site`'s record layer matches DB rows to page markup by
+        // these attributes (activities.id, session_meals.sort_order) — stable
+        // across title edits, unlike the visible text.
+        let sess = Session {
+            session_type: "noon".into(),
+            activities: vec![Activity {
+                title: "東寺".into(),
+                id: "p1_act_1".into(),
+                record_status: "done".into(),
+                record_note: "很棒".into(),
+                ..Default::default()
+            }],
+            meals: vec![Meal {
+                text: "拉麵".into(),
+                sort_order: 0,
+                record_status: "done".into(),
+                record_note: "好吃".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let html = render_unit(&sess, "zh", None, None, true);
+        assert!(html.contains("<div class=\"activity\" data-activity-id=\"p1_act_1\">"), "{html}");
+        assert!(html.contains("<div class=\"meal\" data-meal-order=\"0\">"), "{html}");
+        // A pinned meal link carries it too (either element form).
+        let pinned = render_unit(
+            &Session {
+                session_type: "noon".into(),
+                meals: vec![Meal { text: "晚餐：A｜map:A 那覇".into(), sort_order: 2, ..Default::default() }],
+                ..Default::default()
+            },
+            "zh",
+            None,
+            None,
+            false,
+        );
+        assert!(pinned.contains("<a class=\"meal\" data-meal-order=\"2\" href="), "{pinned}");
+        // An activity with no id (legacy fixture rows) omits the attribute.
+        let bare = render_unit(
+            &Session {
+                session_type: "noon".into(),
+                activities: vec![Activity { title: "x".into(), ..Default::default() }],
+                ..Default::default()
+            },
+            "zh",
+            None,
+            None,
+            false,
+        );
+        assert!(bare.contains("<div class=\"activity\">x</div>"), "{bare}");
+    }
+    #[test]
     fn trip_record_session_is_past_taipei_clock() {
         let clock = Clock {
             date: "2026-11-16".into(),
@@ -515,7 +579,7 @@ mod tests {
     #[test]
     fn meal_pin_renders_clickable_label_not_raw_query() {
         let out = render_meal(&meal("晚餐：ステーキ88｜map:ステーキ88 那覇"), "zh");
-        assert!(out.contains("<a class=\"meal\" href=\""), "got: {out}");
+        assert!(out.contains("<a class=\"meal\" data-meal-order=\"0\" href=\""), "got: {out}");
         assert!(out.contains("maps/search/"), "got: {out}");
         // Visible clickable text is the LABEL (no raw "map:" / the query blob).
         assert!(out.contains("🍽️ 晚餐：ステーキ88 🗺️"), "got: {out}");
@@ -535,7 +599,7 @@ mod tests {
     fn meal_pin_trailing_alt_is_not_swallowed_into_query() {
         let out = render_meal(&meal("晚餐：A｜map:A 那覇 ｜備案：B"), "zh");
         // Link present, label clickable.
-        assert!(out.contains("<a class=\"meal\" href=\""), "got: {out}");
+        assert!(out.contains("<a class=\"meal\" data-meal-order=\"0\" href=\""), "got: {out}");
         assert!(out.contains("🍽️ 晚餐：A 🗺️"), "got: {out}");
         // The query is "A 那覇" only — encoded as "A%20" + 那覇 — and does NOT
         // contain the 備案 backup text nor a second encoded pipe.
@@ -559,7 +623,7 @@ mod tests {
     #[test]
     fn meal_without_pin_is_plain_pill() {
         let out = render_meal(&meal("Hotel breakfast"), "zh");
-        assert_eq!(out, "<div class=\"meal\">🍽️ Hotel breakfast</div>");
+        assert_eq!(out, "<div class=\"meal\" data-meal-order=\"0\">🍽️ Hotel breakfast</div>");
         assert!(!out.contains("<a "), "got: {out}");
     }
 
@@ -598,7 +662,7 @@ mod tests {
         // href present and well-formed (esc_url_attr neutralizes < > " but the
         // query was percent-encoded first, so the place name survives).
         assert!(
-            out.contains("<a class=\"meal\" href=\"https://www.google.com/maps/search/"),
+            out.contains("<a class=\"meal\" data-meal-order=\"0\" href=\"https://www.google.com/maps/search/"),
             "got: {out}"
         );
         // The ampersand in the query was percent-encoded (%26), not left raw.
@@ -619,7 +683,7 @@ mod tests {
             ..Default::default()
         };
         let html = render(&sess, "zh");
-        assert!(html.contains("<a class=\"meal\" href=\""), "got: {html}");
+        assert!(html.contains("<a class=\"meal\" data-meal-order=\"0\" href=\""), "got: {html}");
         assert!(html.contains("maps/search/"), "got: {html}");
         assert!(!html.contains("｜map:"), "got: {html}");
     }

@@ -23,6 +23,9 @@ pub struct RouteSegment {
     pub source: String,
     pub record_status: String,
     pub record_note: String,
+    /// `day_route_segments.sort_order` — the row's stable identity for
+    /// `data-seg-order` (the table has no id column).
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -31,6 +34,9 @@ pub struct Meal {
     pub source: String,
     pub record_status: String,
     pub record_note: String,
+    /// `session_meals.sort_order` — the row's stable identity for
+    /// `data-meal-order` (the table has no id column).
+    pub sort_order: i64,
 }
 
 /// One itinerary activity row, carrying the booking fields the pending-alert
@@ -45,6 +51,8 @@ pub struct Activity {
     pub source: String,
     pub record_status: String,
     pub record_note: String,
+    /// `activities.id` — the row's stable identity for `data-activity-id`.
+    pub id: String,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -219,6 +227,7 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
                     source: s(r, "source"),
                     record_status: s(r, "record_status"),
                     record_note: s(r, "record_note"),
+                    id: s(r, "id"),
                 })
                 .collect(),
             meals: meals
@@ -229,6 +238,7 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
                     source: s(r, "source"),
                     record_status: s(r, "record_status"),
                     record_note: s(r, "record_note"),
+                    sort_order: i(r, "sort_order"),
                 })
                 .collect(),
             ..Default::default()
@@ -791,6 +801,7 @@ pub fn assemble(
                 source: s(r, "source"),
                 record_status: s(r, "record_status"),
                 record_note: s(r, "record_note"),
+                sort_order: i(r, "sort_order"),
             })
             .collect();
         all_days.push(Day {

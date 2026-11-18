@@ -909,3 +909,279 @@ pub async fn ensure_unrecorded(
         hits.join("; ")
     ))
 }
+
+// ---------------------------------------------------------------------------
+// Reading a plan's record rows (verify-site's record layer, audit H1)
+// ---------------------------------------------------------------------------
+
+/// One recorded `activities` row (see [`list_plan_records`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActivityRecord {
+    /// `activities.id` — the row's stable identity (`data-activity-id`).
+    pub id: String,
+    pub day: i64,
+    pub session: String,
+    pub title: String,
+    pub status: Option<String>,
+    pub note: Option<String>,
+}
+
+/// One recorded `session_meals` row; `sort_order` is the row's identity
+/// (`data-meal-order`) — the table has no id column.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MealRecord {
+    pub day: i64,
+    pub session: String,
+    pub sort_order: i64,
+    pub text: String,
+    pub status: Option<String>,
+    pub note: Option<String>,
+}
+
+/// One recorded `day_route_segments` row; `sort_order` is the row's identity
+/// (`data-seg-order`) — the table has no id column.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegRecord {
+    pub day: i64,
+    pub sort_order: i64,
+    pub from_place: String,
+    pub to_place: String,
+    pub status: Option<String>,
+    pub note: Option<String>,
+}
+
+/// One non-empty `timesofday.record_summary_zh`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionSummaryRecord {
+    pub day: i64,
+    pub session: String,
+    pub summary_zh: String,
+}
+
+/// A plan's recorded rows, in table render order (day, then sort_order). Only
+/// rows with something recorded are listed: a row counts when its status or
+/// note is a non-empty value (the worker renders empty strings as unset), and
+/// a summary when its text is non-empty.
+#[derive(Debug, Default, PartialEq)]
+pub struct PlanRecords {
+    pub activities: Vec<ActivityRecord>,
+    pub meals: Vec<MealRecord>,
+    pub legs: Vec<LegRecord>,
+    pub summaries: Vec<SessionSummaryRecord>,
+}
+
+impl PlanRecords {
+    pub fn is_empty(&self) -> bool {
+        self.activities.is_empty()
+            && self.meals.is_empty()
+            && self.legs.is_empty()
+            && self.summaries.is_empty()
+    }
+}
+
+/// Read every record row of one (plan, destination) — the single Turso read
+/// verify-site's record layer runs per plan (one targeted SELECT per table).
+pub async fn list_plan_records(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<PlanRecords, String> {
+    let recorded = "(record_status IS NOT NULL AND record_status <> '') \
+                    OR (record_note IS NOT NULL AND record_note <> '')";
+    let mut out = PlanRecords::default();
+
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT id, day_number, session_type, title, record_status, record_note \
+                 FROM activities \
+                 WHERE plan_id = ?1 AND destination = ?2 AND ({recorded}) \
+                 ORDER BY day_number, sort_order"
+            ),
+            libsql::params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("activities record-list query failed: {e}"))?;
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.activities.push(ActivityRecord {
+            id: row.get(0).map_err(|e| e.to_string())?,
+            day: row.get(1).map_err(|e| e.to_string())?,
+            session: row.get(2).map_err(|e| e.to_string())?,
+            title: row.get(3).map_err(|e| e.to_string())?,
+            status: row.get(4).map_err(|e| e.to_string())?,
+            note: row.get(5).map_err(|e| e.to_string())?,
+        });
+    }
+
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT day_number, session_type, sort_order, meal, record_status, record_note \
+                 FROM session_meals \
+                 WHERE plan_id = ?1 AND destination = ?2 AND ({recorded}) \
+                 ORDER BY day_number, session_type, sort_order"
+            ),
+            libsql::params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("session_meals record-list query failed: {e}"))?;
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.meals.push(MealRecord {
+            day: row.get(0).map_err(|e| e.to_string())?,
+            session: row.get(1).map_err(|e| e.to_string())?,
+            sort_order: row.get(2).map_err(|e| e.to_string())?,
+            text: row.get(3).map_err(|e| e.to_string())?,
+            status: row.get(4).map_err(|e| e.to_string())?,
+            note: row.get(5).map_err(|e| e.to_string())?,
+        });
+    }
+
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT day_number, sort_order, from_place, to_place, record_status, record_note \
+                 FROM day_route_segments \
+                 WHERE plan_id = ?1 AND destination = ?2 AND ({recorded}) \
+                 ORDER BY day_number, sort_order"
+            ),
+            libsql::params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("day_route_segments record-list query failed: {e}"))?;
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.legs.push(LegRecord {
+            day: row.get(0).map_err(|e| e.to_string())?,
+            sort_order: row.get(1).map_err(|e| e.to_string())?,
+            from_place: row.get(2).map_err(|e| e.to_string())?,
+            to_place: row.get(3).map_err(|e| e.to_string())?,
+            status: row.get(4).map_err(|e| e.to_string())?,
+            note: row.get(5).map_err(|e| e.to_string())?,
+        });
+    }
+
+    let mut rows = conn
+        .query(
+            "SELECT day_number, session_type, record_summary_zh FROM timesofday \
+             WHERE plan_id = ?1 AND destination = ?2 \
+               AND record_summary_zh IS NOT NULL AND record_summary_zh <> '' \
+             ORDER BY day_number, session_type",
+            libsql::params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("timesofday summary-list query failed: {e}"))?;
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.summaries.push(SessionSummaryRecord {
+            day: row.get(0).map_err(|e| e.to_string())?,
+            session: row.get(1).map_err(|e| e.to_string())?,
+            summary_zh: row.get(2).map_err(|e| e.to_string())?,
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal in-memory schema of the four recorded tables (only the columns
+    /// `list_plan_records` reads).
+    async fn db() -> Connection {
+        let db = libsql::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        for sql in [
+            "CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, day_number INTEGER, \
+             session_type TEXT, sort_order INTEGER, title TEXT, record_status TEXT, record_note TEXT)",
+            "CREATE TABLE session_meals (plan_id TEXT, destination TEXT, day_number INTEGER, \
+             session_type TEXT, sort_order INTEGER, meal TEXT, record_status TEXT, record_note TEXT)",
+            "CREATE TABLE day_route_segments (plan_id TEXT, destination TEXT, day_number INTEGER, \
+             sort_order INTEGER, from_place TEXT, to_place TEXT, record_status TEXT, record_note TEXT)",
+            "CREATE TABLE timesofday (plan_id TEXT, destination TEXT, day_number INTEGER, \
+             session_type TEXT, record_summary_zh TEXT)",
+        ] {
+            conn.execute(sql, ()).await.unwrap();
+        }
+        conn
+    }
+
+    #[tokio::test]
+    async fn list_plan_records_returns_only_recorded_rows_in_order() {
+        let conn = db().await;
+        for sql in [
+            // recorded (done, skipped, note-only) + unrecorded (NULL, empty strings) rows,
+            // deliberately inserted OUT of sort_order so the ordering is the query's.
+            "INSERT INTO activities VALUES \
+             ('a2','p','kyoto',2,'noon',1,'未前往店','skipped',NULL), \
+             ('a4','p','kyoto',2,'noon',3,'空字串列','',''), \
+             ('a1','p','kyoto',2,'noon',0,'東寺','done','很棒'), \
+             ('a3','p','kyoto',2,'noon',2,'未標記店',NULL,NULL), \
+             ('a5','p','kyoto',2,'noon',4,'只有備註',NULL,'備註一句'), \
+             ('a9','p','other',1,'noon',0,'別的目的地','done',NULL)",
+        ] {
+            conn.execute(sql, ()).await.unwrap();
+        }
+        conn.execute(
+            "INSERT INTO session_meals VALUES \
+             ('p','kyoto',2,'noon',1,'備選店','skipped','排隊太長'), \
+             ('p','kyoto',2,'noon',0,'主選店','done',NULL), \
+             ('p','kyoto',2,'noon',2,'未標記餐',NULL,NULL)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO day_route_segments VALUES \
+             ('p','kyoto',2,1,'B','C','skipped',NULL), \
+             ('p','kyoto',2,0,'A','B','done','走路10分'), \
+             ('p','kyoto',2,2,'C','D',NULL,NULL)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO timesofday VALUES \
+             ('p','kyoto',2,'noon','實際去了東寺，改吃隔壁'), \
+             ('p','kyoto',2,'evening',''), \
+             ('p','kyoto',3,'noon',NULL)",
+            (),
+        )
+        .await
+        .unwrap();
+
+        let records = list_plan_records(&conn, "p", "kyoto").await.unwrap();
+        assert!(!records.is_empty());
+        // Activities: only the recorded ones, in (day, sort_order); note-only rows count.
+        let ids: Vec<&str> = records.activities.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["a1", "a2", "a5"], "{:?}", records.activities);
+        assert_eq!(
+            records.activities[0],
+            ActivityRecord {
+                id: "a1".into(),
+                day: 2,
+                session: "noon".into(),
+                title: "東寺".into(),
+                status: Some("done".into()),
+                note: Some("很棒".into()),
+            }
+        );
+        // Meals and legs: same rule, keyed by sort_order.
+        assert_eq!(records.meals.len(), 2);
+        assert_eq!((records.meals[0].sort_order, records.meals[0].text.as_str()), (0, "主選店"));
+        assert_eq!(records.meals[1].status.as_deref(), Some("skipped"));
+        assert_eq!(records.meals[1].note.as_deref(), Some("排隊太長"));
+        assert_eq!(records.legs.len(), 2);
+        assert_eq!((records.legs[0].sort_order, records.legs[0].from_place.as_str()), (0, "A"));
+        assert_eq!(records.legs[1].status.as_deref(), Some("skipped"));
+        // Summaries: empty strings and NULL stay out.
+        assert_eq!(records.summaries.len(), 1);
+        assert_eq!(records.summaries[0].summary_zh, "實際去了東寺，改吃隔壁");
+
+        // Destination scoping: the 'other' destination sees only its own row.
+        let other = list_plan_records(&conn, "p", "other").await.unwrap();
+        assert_eq!(other.activities.len(), 1);
+        assert_eq!(other.activities[0].id, "a9");
+        // Nothing recorded anywhere → empty (the layer's one-PASS case).
+        assert!(list_plan_records(&conn, "p", "nowhere").await.unwrap().is_empty());
+        let fresh = db().await;
+        assert!(list_plan_records(&fresh, "p", "kyoto").await.unwrap().is_empty());
+    }
+}

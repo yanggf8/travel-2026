@@ -636,7 +636,7 @@ mod tests {
              <li class=\"now-item now-s-noon is-next\" data-start=\"720\" data-end=\"780\"><details class=\"now-box\" open data-auto><summary>\
              <div class=\"now-head\"><span class=\"now-name\">Noon</span><span class=\"now-time\">12:00\u{2013}13:00</span>\
              <span class=\"now-badge now-badge--next\">Next</span></div><div class=\"now-focus\">Lunch plan</div></summary>\
-             <div class=\"now-expand\"><div class=\"meal\">🍽️ Cafe</div>\
+             <div class=\"now-expand\"><div class=\"meal\" data-meal-order=\"0\">🍽️ Cafe</div>\
              <a class=\"now-detail\" href=\"#day-1-noon\">Full details for this block →</a></div>\
              </details></li></ol><a class=\"now-more\" href=\"#day-1\">Day 1 in full ↓</a></div></details></section>";
         let day = Day { day_number: 1, date: "2026-11-16".into(), sessions: vec![Session { session_type: "noon".into(), time_start: "12:00".into(), time_end: "13:00".into(), focus_zh: "Lunch plan".into(), meals: vec![Meal { text: "Cafe".into(), ..Default::default() }], ..Default::default() }], ..Default::default() };
@@ -710,6 +710,9 @@ mod tests {
         }
     }
     fn leg(from: &str, to: &str, at: &str) -> RouteSegment {
+        leg_at(from, to, at, 0)
+    }
+    fn leg_at(from: &str, to: &str, at: &str, sort_order: i64) -> RouteSegment {
         RouteSegment {
             from_place: from.into(),
             to_place: to.into(),
@@ -717,6 +720,7 @@ mod tests {
             duration_min: 7,
             start_time: at.into(),
             source: "confirmed".into(),
+            sort_order,
             ..Default::default()
         }
     }
@@ -728,8 +732,8 @@ mod tests {
     fn last_day() -> Day {
         let mut morning = sess("morning", "06:30", "08:15", "拉麵早餐後退房");
         morning.meals = vec![
-            Meal { text: "主選：京都醬油拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into(), ..Default::default() },
-            Meal { text: "備選：京都黑醬油拉麵｜新福菜館 本店：第一旭隔壁".into(), source: "confirmed".into(), ..Default::default() },
+            Meal { text: "主選：京都醬油拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into(), sort_order: 0, ..Default::default() },
+            Meal { text: "備選：京都黑醬油拉麵｜新福菜館 本店：第一旭隔壁".into(), source: "confirmed".into(), sort_order: 1, ..Default::default() },
         ];
         Day {
             day_number: 5,
@@ -742,10 +746,10 @@ mod tests {
                 sess("evening", "", "", "樂桃MM027 17:55抵達桃園；取車回家"),
             ],
             route_segments: vec![
-                leg("飯店", "本家 第一旭", "08:15"),
-                leg("本家 第一旭", "飯店", ""),
-                leg("飯店", "京都車站", "10:00"),
-                leg("桃園第一航廈", "停車場", "18:45"),
+                leg_at("飯店", "本家 第一旭", "08:15", 0),
+                leg_at("本家 第一旭", "飯店", "", 1),
+                leg_at("飯店", "京都車站", "10:00", 2),
+                leg_at("桃園第一航廈", "停車場", "18:45", 3),
             ],
             ..Default::default()
         }
@@ -919,9 +923,9 @@ mod tests {
         // Main meal (map link) + backup, short forms.
         // The meals unfold with the day card's rendering (main linked to its map pin, backup plain).
         assert!(html.contains(
-            "<a class=\"meal\" href=\"https://www.google.com/maps/search/%E6%9C%AC%E5%AE%B6%20%E7%AC%AC%E4%B8%80%E6%97%AD\" \
+            "<a class=\"meal\" data-meal-order=\"0\" href=\"https://www.google.com/maps/search/%E6%9C%AC%E5%AE%B6%20%E7%AC%AC%E4%B8%80%E6%97%AD\" \
              target=\"_blank\" rel=\"noopener\">🍽️ 主選：京都醬油拉麵｜本家 第一旭：京都站東側 🗺️</a>\
-             <div class=\"meal\">🍽️ 備選：京都黑醬油拉麵｜新福菜館 本店：第一旭隔壁</div>"
+             <div class=\"meal\" data-meal-order=\"1\">🍽️ 備選：京都黑醬油拉麵｜新福菜館 本店：第一旭隔壁</div>"
         ), "{html}");
         // Today's documents, same voucher links as the day card.
         assert!(html.contains("<div class=\"day-documents\"><a class=\"doc-link\" data-doc=\"flight\" href=\"/voucher/kyoto-nov-2026/doc-flight.pdf?token=tok\""), "{html}");
@@ -1010,11 +1014,11 @@ mod tests {
         morning.transit_zh = "JR奈良線 京都→東福寺".into();
         morning.activities = vec![crate::model::Activity { title: "楓葉散步".into(), ..Default::default() }];
         morning.meals = vec![
-            Meal { text: "主選：拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into(), ..Default::default() },
-            Meal { text: "備選：黑醬油拉麵｜新福菜館".into(), source: "confirmed".into(), ..Default::default() },
+            Meal { text: "主選：拉麵｜本家 第一旭：京都站東側｜map:本家 第一旭".into(), source: "confirmed".into(), sort_order: 0, ..Default::default() },
+            Meal { text: "備選：黑醬油拉麵｜新福菜館".into(), source: "confirmed".into(), sort_order: 1, ..Default::default() },
         ];
         plan.days[0].sessions[0] = morning;
-        plan.days[0].route_segments = vec![leg("飯店", "東福寺", "08:10")];
+        plan.days[0].route_segments = vec![leg_at("飯店", "東福寺", "08:10", 0)];
         let html = now_card(&plan, &plan.days[0], &clock("2026-11-15", "09:00"), "zh", None);
         let m = item(&html, "now-s-morning");
         let (summary, body) = m.split_once("</summary>").expect("details/summary");

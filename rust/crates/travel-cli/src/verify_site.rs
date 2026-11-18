@@ -31,6 +31,14 @@
 //! token-bearing URL reaches curl through `-K -` (stdin), never argv; only
 //! token fingerprints are ever printed.
 //!
+//! Two more default-run checks: GET `/sw.js` once per run (M3 — 200
+//! javascript, `Cache-Control: no-cache`, the offlineMiss text filled for both
+//! languages, no template placeholder left), and the `record` layer
+//! (`verify_site_record`, audit H1) per plan: the trip-record rows read once
+//! from Turso, then the viewer page fetched again pinned AFTER the trip
+//! (records render on past sessions only), each row checked against what the
+//! live page shows.
+//!
 //! Layer 4 (`--contact-sheet <dir>`): one thumbnail-grid PNG per plan
 //! (`verify_site_sheet`); advisory, never a verdict.
 //!
@@ -78,10 +86,21 @@ pub const USAGE: &str = "travel verify-site [--plan-id <id>] [--contact-sheet <d
 Check the LIVE dashboard: each map key's live bytes vs map_artifacts \
 (sha256 + size; skipped keys must serve the worker placeholder), input-hash freshness \
 (recomputed from cached geocodes/road legs only), image content (size, geographic \
-background, title + credit), and the viewer page in zh \
+background, title + credit), the viewer page in zh \
 and en (page, language, no owner chrome, data-plan-id/data-view, map slots vs \
 map_artifacts via data-map-key, the ?v= map URL bytes, legends vs map_legend_stops, \
-companion/stay images, voucher PDFs, and plan-document PDFs (day/summary placement + sha256)). All live plans by default. One verdict line per \
+companion/stay images, voucher PDFs, and plan-document PDFs (day/summary placement + sha256; \
+every local voucher link's ?v= must equal the first 12 chars of its plan_documents.sha256)), \
+GET /sw.js (200 javascript, Cache-Control no-cache, the offlineMiss text filled for zh+en, \
+no template placeholder left), and — per plan — the record layer: the trip-record rows \
+(record_status/record_note on activities, session_meals, day_route_segments; \
+record_summary_zh on sessions) read once from Turso, then the viewer page fetched again \
+in zh and en with ?at= pinned to noon the day AFTER the last dated main day (every \
+session past), where each done row must show its 實際 badge, each skipped row its \
+未前往 line (or, for legs, no line at all), each record_note its text and each \
+record_summary_zh the session focus; no record rows → one PASS. Rows are matched by the \
+worker's stable identifiers (data-activity-id, data-meal-order, data-seg-order, the \
+session anchor). All live plans by default. One verdict line per \
 check, then a summary; exits 1 on any FAIL. --contact-sheet <dir> also writes \
 <dir>/<plan>.png, a labelled thumbnail grid of the plan's live maps (advisory). \
 --render <dir> also opens the viewer page in a CDP Chrome (gwebcdb; GWEBCDB_CDP_PORT, \
@@ -93,8 +112,10 @@ disposable-context offline checks: first save/reopen, partial-save retention, \
 ZH/EN with two tokens, revocation, delayed 403 cleanup, and yesterday-to-today \
 reopening. A context cleanup failure is a FAIL. The \
 viewer page is opened with a verify token minted for this run and deleted right after \
-(fingerprints only). Optional owner checks use TRAVEL_VERIFY_SITE_OWNER_COOKIE \
-(one-time cookie value from a signed-in browser; never store it). \
+(fingerprints only). The notes:* layer checks the plan notes (viewer and owner pages); \
+its owner checks need TRAVEL_VERIFY_SITE_OWNER_COOKIE (one-time cookie value from a \
+signed-in browser; never store it) — when unset, one WARN is printed and the owner \
+checks are skipped. \
 Host: TRAVEL_DASHBOARD_HOST (as share-token).";
 
 /// `plan_share_tokens.created_by` of the verify token.
@@ -303,6 +324,15 @@ async fn verify_plans(
     if let Some(defect) = placeholder_defect {
         tally.emit("*", "asset", "placeholder", &defect);
     }
+    // M3: /sw.js once per run (plan-independent, no token) — the offline
+    // service worker every plan page registers must be served fresh and filled.
+    let hdr = tmp.with_extension("hdr");
+    let sw = match http_fetch(&format!("https://{host}/sw.js"), tmp, false, Some(&hdr)) {
+        Ok((live, headers)) => sw_verdict(&live, &cache_control_value(&headers)),
+        Err(e) => Check::fail(format!("fetch failed: {e}"), None),
+    };
+    let _ = fs::remove_file(&hdr);
+    tally.emit("*", "sw", "sw.js", &sw);
     for plan in plan_ids {
         let expected = crate::check_maps_fresh::expected_keys_for_plan(conn, plan).await?;
         let variants = travel_db::repo::days::variant_map(conn, plan, None).await?;
@@ -663,6 +693,10 @@ async fn viewer_page_checks(
         extended_checks(&doc, plan, &base, token, tmp, tally, &documents);
     }
 
+    // The record layer (audit H1): fetches its own after-trip-pinned pages
+    // through the same token (no records → one PASS, no fetch).
+    crate::verify_site_record::run(conn, plan, token, tmp, tally).await;
+
     if let Some(dir) = render_dir {
         let targets = [("zh", plan_url.clone()), ("en", format!("{plan_url}&lang=en"))];
         let report = render::render_plan(plan, &targets, token, dir).await;
@@ -693,8 +727,8 @@ fn extended_checks(
     let external = |key: String, src: &str, tally: &mut Tally| {
         let check = match base.join(src) {
             Err(e) => Check::fail(format!("image src does not parse as a URL ({e})"), None),
-            Ok(url) => match http_fetch(url.as_str(), tmp, true) {
-                Ok(live) => {
+            Ok(url) => match http_fetch(url.as_str(), tmp, true, None) {
+                Ok((live, _)) => {
                     let c = page::external_image_verdict(live.http, &live.content_type, live.body.len());
                     Check { detail: format!("{}: {}", url.host_str().unwrap_or("?"), c.detail), ..c }
                 }
@@ -847,8 +881,8 @@ fn nonce() -> Result<String, String> {
 }
 
 /// GET one URL with curl, no redirects (the dashboard worker answers directly).
-fn http_get(url: &str, body_path: &Path) -> Result<Live, String> {
-    http_fetch(url, body_path, false)
+pub(crate) fn http_get(url: &str, body_path: &Path) -> Result<Live, String> {
+    http_fetch(url, body_path, false, None).map(|(live, _)| live)
 }
 
 /// The curl config line that hands `url` to curl on stdin (`-K -`), so a
@@ -864,14 +898,20 @@ pub(crate) fn curl_config_url(url: &str) -> Result<String, String> {
 /// GET one URL with curl. `-q` (first) ignores ~/.curlrc and no cookie options
 /// are passed, so no session cookie can ever turn this into an owner request.
 /// The URL travels on stdin (`-K -`). `follow` allows https-only redirects
-/// (external images, as a browser would follow them).
-fn http_fetch(url: &str, body_path: &Path, follow: bool) -> Result<Live, String> {
+/// (external images, as a browser would follow them). `headers_out`, when
+/// given, receives the response headers (lowercased) for the checks that need
+/// them (/sw.js's Cache-Control).
+fn http_fetch(url: &str, body_path: &Path, follow: bool, headers_out: Option<&Path>) -> Result<(Live, String), String> {
     // A response with no body leaves no file: never read a previous fetch's bytes.
     let _ = fs::remove_file(body_path);
     let mut cmd = Command::new("curl");
     cmd.args(["-q", "-sS", "--max-time", "30", "--proto", "=https", "-K", "-", "-o"])
         .arg(body_path)
         .args(["-w", "%{http_code}\t%{content_type}"]);
+    if let Some(hdr) = headers_out {
+        let _ = fs::remove_file(hdr);
+        cmd.arg("-D").arg(hdr);
+    }
     if follow {
         cmd.args(["-L", "--max-redirs", "5", "--proto-redir", "=https"]);
     }
@@ -904,12 +944,16 @@ fn http_fetch(url: &str, body_path: &Path, follow: bool) -> Result<Live, String>
         .trim()
         .parse::<u16>()
         .map_err(|_| format!("curl reported no HTTP status ({meta:?})"))?;
+    let headers = match headers_out {
+        Some(hdr) => fs::read_to_string(hdr).map_err(|e| format!("cannot read {}: {e}", hdr.display()))?.to_lowercase(),
+        None => String::new(),
+    };
     let body = match fs::read(body_path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(format!("cannot read {}: {e}", body_path.display())),
     };
-    Ok(Live { http, content_type: content_type.trim().to_string(), body })
+    Ok((Live { http, content_type: content_type.trim().to_string(), body }, headers))
 }
 
 /// The placeholder probe must be identifiable as the worker's 1×1 PNG
@@ -980,6 +1024,96 @@ fn png_dims(bytes: &[u8]) -> Option<(u32, u32)> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+// ---------------------------------------------------------------------------
+// The /sw.js layer (M3): the offline service worker the plan page registers
+// ---------------------------------------------------------------------------
+
+/// The offlineMiss copy the worker fills into /sw.js at serve time — this pair
+/// must equal `offlineMiss` in workers/trip-dashboard-rs/src/i18n.rs (the slot
+/// rules below are locked to the worker the same way). A copy change on the
+/// worker side turns this layer red until the pair here is updated with it.
+const SW_MISS_ZH: &str = "這一頁還沒存到這支手機。連上網路後打開，看到『已存好』之後就能離線看。";
+const SW_MISS_EN: &str = "This page has not been saved on this phone yet. Open it while online; once you see the Saved notice, you can read it offline.";
+
+/// sw.rs `js_str_escape` — the exact form the texts take inside the served
+/// script (backslash, quote, `<`, newline, CR), so the containment check below
+/// tests what the worker actually serves, not the raw i18n string.
+fn sw_js_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '<' => out.push_str("\\u003c"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The `Cache-Control` value of a curl `-D` header block (status line +
+/// response headers): every occurrence of the header joined with ", " the way
+/// HTTP combines repeated ones, "" when the block has none. The header NAME
+/// matches case-insensitively ([`http_fetch`] lowercases the block; the parser
+/// stays case-insensitive either way). The judge must never be fed the whole
+/// block — no comma-separated piece of a full header block equals a directive,
+/// so a healthy `/sw.js` would always FAIL. Pure.
+pub(crate) fn cache_control_value(header_block: &str) -> String {
+    header_block
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(name, _)| name.trim().eq_ignore_ascii_case("cache-control"))
+        .map(|(_, value)| value.trim().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// M3 judge for one GET /sw.js: HTTP 200, a javascript content type,
+/// `Cache-Control: no-cache` (a cacheable SW freezes offline fixes), and the
+/// offlineMiss text FILLED for both languages — no `{tdMiss*}` placeholder
+/// left (an unfilled SW would show raw template text as the offline page).
+/// `cache_control` is the header VALUE (comma-separated directives, ""
+/// when absent — [`cache_control_value`] extracts it). Pure.
+pub(crate) fn sw_verdict(live: &Live, cache_control: &str) -> Check {
+    if live.http != 200 {
+        return Check::fail(format!("HTTP {} (expected 200)", live.http), None);
+    }
+    let mime = live.content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    if !mime.contains("javascript") {
+        return Check::fail(
+            format!("content-type {:?} (expected application/javascript)", live.content_type),
+            Some(Next::Deploy),
+        );
+    }
+    if !cache_control.split(',').any(|d| d.trim().eq_ignore_ascii_case("no-cache")) {
+        return Check::fail(
+            format!(
+                "Cache-Control {} (expected no-cache — browsers would hold a stale service worker)",
+                if cache_control.is_empty() { "absent".to_string() } else { format!("{cache_control:?}") }
+            ),
+            Some(Next::Deploy),
+        );
+    }
+    let body = String::from_utf8_lossy(&live.body);
+    let unfilled: Vec<&str> = [("zh", SW_MISS_ZH), ("en", SW_MISS_EN)]
+        .into_iter()
+        .filter(|(_, text)| !body.contains(&sw_js_escape(text)))
+        .map(|(lang, _)| lang)
+        .collect();
+    if !unfilled.is_empty() {
+        return Check::fail(
+            format!("offlineMiss text not filled for {} — the SW would show something else offline", unfilled.join("+")),
+            Some(Next::Deploy),
+        );
+    }
+    if body.contains("{tdMiss") {
+        return Check::fail("unfilled {tdMiss*} placeholder left in the served script", Some(Next::Deploy));
+    }
+    Check::pass(format!("{} bytes, javascript, no-cache, offlineMiss filled (zh+en)", live.body.len()))
 }
 
 fn short(sha: &str) -> &str {
@@ -1801,6 +1935,99 @@ mod tests {
         assert_eq!(sheet_note(&row("skipped", b""), &live(200, &ph), &ph), ("skipped".into(), false));
         assert_eq!(sheet_note(&row("skipped", b""), &live(200, &map), &ph), ("skipped but served".into(), true));
         assert_eq!(sheet_note(&row("failed", b""), &live(200, &ph), &ph), ("failed".into(), false));
+    }
+
+    // ---- the /sw.js layer (M3) ----
+
+    fn sw_live(content_type: &str, body: &str) -> Live {
+        Live { http: 200, content_type: content_type.into(), body: body.as_bytes().to_vec() }
+    }
+
+    /// A served-and-filled /sw.js as the worker writes it (sw.rs `script()`).
+    fn sw_body() -> String {
+        format!(
+            "var KEY_PARAMS=['plan','lang','token'];var MISS_ZH='{}';var MISS_EN='{}';",
+            sw_js_escape(SW_MISS_ZH),
+            sw_js_escape(SW_MISS_EN)
+        )
+    }
+
+    #[test]
+    fn sw_verdict_passes_a_served_filled_script() {
+        let good = "no-cache";
+        assert_eq!(sw_verdict(&sw_live("application/javascript; charset=utf-8", &sw_body()), good).level, Level::Pass);
+        // The directive may sit among others and in any case.
+        assert_eq!(sw_verdict(&sw_live("application/javascript", &sw_body()), "public, NO-CACHE, max-age=0").level, Level::Pass);
+    }
+
+    #[test]
+    fn cache_control_value_extracts_the_header_from_a_full_header_block() {
+        // A real curl -D block: status line + several headers, CRLF line ends,
+        // mixed-case header names, a date whose value itself holds commas and
+        // a second colon.
+        let block = "HTTP/2 200\r\n\
+                     content-type: application/javascript; charset=utf-8\r\n\
+                     Cache-Control: no-cache\r\n\
+                     content-length: 1234\r\n\
+                     date: Wed, 18 Nov 2026 02:03:04 GMT\r\n\
+                     vary: accept-encoding\r\n";
+        assert_eq!(cache_control_value(block), "no-cache");
+        // Repeated headers combine; directives inside the value stay verbatim
+        // for sw_verdict's comma split.
+        let multi = "HTTP/2 200\r\ncache-control: public\r\ncache-control: max-age=0, no-cache\r\n";
+        assert_eq!(cache_control_value(multi), "public, max-age=0, no-cache");
+        // Absent → "" (the judge's "absent" branch).
+        assert_eq!(cache_control_value("HTTP/2 200\r\ncontent-type: text/html\r\n"), "");
+        assert_eq!(cache_control_value(""), "");
+    }
+
+    #[test]
+    fn sw_verdict_judges_the_parsed_value_not_the_whole_block() {
+        // Round-1 wiring handed sw_verdict the ENTIRE header block, so a
+        // healthy /sw.js (cache-control: no-cache) always FAILed: no comma
+        // piece of a whole header block equals a directive. The judge must
+        // receive cache_control_value's extraction…
+        let block = "HTTP/2 200\r\ncontent-type: application/javascript; charset=utf-8\r\n\
+                     cache-control: no-cache\r\ncontent-length: 1234\r\n";
+        assert_eq!(
+            sw_verdict(&sw_live("application/javascript", &sw_body()), &cache_control_value(block)).level,
+            Level::Pass
+        );
+        // …and the whole block (the old input) still cannot pass — the
+        // regression guard for exactly this wiring.
+        assert_eq!(sw_verdict(&sw_live("application/javascript", &sw_body()), block).level, Level::Fail);
+    }
+
+    #[test]
+    fn sw_verdict_fails_every_defect() {
+        let good = "no-cache";
+        let body = sw_body();
+        // Not JS.
+        let c = sw_verdict(&sw_live("text/html", &body), good);
+        assert!(c.level == Level::Fail && c.detail.contains("content-type"), "{c:?}");
+        // Not 200.
+        let mut gone = sw_live("application/javascript", &body);
+        gone.http = 404;
+        assert_eq!(sw_verdict(&gone, good).level, Level::Fail);
+        // Cacheable SW: browsers would hold a stale one.
+        let c = sw_verdict(&sw_live("application/javascript", &body), "max-age=86400");
+        assert!(c.level == Level::Fail && c.detail.contains("no-cache"), "{c:?}");
+        // Unfilled template placeholders.
+        let raw = "var MISS_ZH='{tdMissZh}';var MISS_EN='{tdMissEn}';";
+        let c = sw_verdict(&sw_live("application/javascript", raw), good);
+        assert!(c.level == Level::Fail && c.detail.contains("offlineMiss"), "{c:?}");
+        // One language filled with the wrong copy.
+        let half = format!("var MISS_ZH='{}';var MISS_EN='wrong copy';", sw_js_escape(SW_MISS_ZH));
+        assert_eq!(sw_verdict(&sw_live("application/javascript", &half), good).level, Level::Fail);
+    }
+
+    #[test]
+    fn sw_js_escape_matches_the_worker() {
+        // sw.rs `js_str_escape`: quote, backslash, `<` (as <), newline, CR.
+        assert_eq!(sw_js_escape("a'b\\c<d\ne\r'"), "a\\'b\\\\c\\u003cd\\ne\\r\\'");
+        // The live offlineMiss copy contains none of those, so escaped == raw.
+        assert_eq!(sw_js_escape(SW_MISS_ZH), SW_MISS_ZH);
+        assert_eq!(sw_js_escape(SW_MISS_EN), SW_MISS_EN);
     }
 
     /// Live smoke (TRAVEL_VERIFY_SITE_LIVE=1 only): the real worker's

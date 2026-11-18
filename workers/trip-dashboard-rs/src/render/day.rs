@@ -511,7 +511,9 @@ pub(crate) fn render_route_block_at(segments: &[RouteSegment], lang: &str, searc
     ));
     let unit = search_unit_attrs(search_label);
     for seg in segments.iter().filter(|s| s.record_status != "skipped") {
-        h.push_str(&format!("<div class=\"route-seg\"{unit}>"));
+        // `data-seg-order` (day_route_segments.sort_order) is the leg's stable
+        // identity for `travel verify-site`'s record layer (no id column).
+        h.push_str(&format!("<div class=\"route-seg\" data-seg-order=\"{}\"{unit}>", seg.sort_order));
         let past = clock.is_some_and(|c| day_date < c.date.as_str()
             || (day_date == c.date && super::now::parse_hhmm(&seg.start_time).is_some_and(|at| at < c.minutes)));
         h.push_str(&route_seg_inner(seg, lang, past));
@@ -558,7 +560,7 @@ pub(crate) fn route_seg_inner(seg: &RouteSegment, lang: &str, past: bool) -> Str
     }
     h.push_str(&super::ai_rec_badge(&seg.source, lang));
     if past && seg.record_status == "done" { h.push_str(&format!(" <span class=\"record-badge\">{}</span>", esc(t("recDone", lang)))); }
-    if past && !seg.record_note.is_empty() { h.push_str(&format!(" · {}", esc(&seg.record_note))); }
+    if past && !seg.record_note.is_empty() { h.push_str(&format!(" · <span class=\"record-note\">{}</span>", esc(&seg.record_note))); }
     h
 }
 
@@ -935,7 +937,7 @@ mod tests {
         );
         assert_eq!(
             html,
-            "<section class=\"day day-full\" data-day=\"2\" data-date=\"2026-11-14\" id=\"day-2\"><details data-block=\"day-2\" open><summary><h2>第 2 天 · 2026-11-14</h2></summary><div class=\"day-body\"><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\" data-search-unit data-search-label=\"11/14（六）· 今日路線\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\" id=\"day-2-morning\" data-search-unit data-search-label=\"11/14（六）· 上午\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></div></details></section>"
+            "<section class=\"day day-full\" data-day=\"2\" data-date=\"2026-11-14\" id=\"day-2\"><details data-block=\"day-2\" open><summary><h2>第 2 天 · 2026-11-14</h2></summary><div class=\"day-body\"><div class=\"theme\">京都巡禮</div><div class=\"weather\">☀️ 晴 · 12–20°C · 💧10%</div><div class=\"weather-clothing\">👕 舒適20°C——長短袖皆可，早晚帶薄外套</div><div class=\"day-map-stack\"><figure class=\"map-frame\" data-map-key=\"day-2.png\"><img class=\"daymap\" alt=\"第 2 天路線\" src=\"/map/kyoto-nov-2026/day-2.png?v=dayv1\"><figcaption>第 2 天路線 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics\" data-map-key=\"day-2-logistics.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・旅社來回\" src=\"/map/kyoto-nov-2026/day-2-logistics.png?v=logv1\"><figcaption>第 2 天・旅社來回 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure><figure class=\"map-frame map-frame--day-logistics map-frame--day-away\" data-map-key=\"day-2-away.png\"><img class=\"planmap planmap--inset\" alt=\"第 2 天・本區以外的行程\" src=\"/map/kyoto-nov-2026/day-2-away.png?v=awayv1\"><figcaption>第 2 天・本區以外的行程 <span class=\"map-attribution\">© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap contributors</a></span></figcaption><ol class=\"map-legend\"><li><span class=\"leg-num\">1</span><a href=\"https://www.google.com/maps?q=35.0394,135.7292\" target=\"_blank\" rel=\"noopener\">金閣寺</a></li></ol></figure></div><div class=\"day-landmarks\"><div class=\"landmarks-heading\">地圖景點</div><ul><li>金閣寺</li></ul></div><div class=\"route-block\"><div class=\"route-heading\">今日路線</div><div class=\"route-seg\" data-seg-order=\"0\" data-search-unit data-search-label=\"11/14（六）· 今日路線\"><span class=\"route-mode\">🚌</span> 旅社 → 金閣寺 · 約 25 分鐘</div></div><div class=\"session session-morning\" id=\"day-2-morning\" data-search-unit data-search-label=\"11/14（六）· 上午\"><div class=\"session-label\">上午</div><div class=\"session-focus\">寺院散策</div><div class=\"activity\">金閣寺參觀</div></div></div></details></section>"
         );
     }
 
@@ -1858,8 +1860,23 @@ mod tests {
         assert!(!html.contains("Hidden"));
         assert!(html.contains("Actual"));
         assert!(html.contains("&lt;safe&gt;"));
+        // verify-site's record layer finds the leg's record note in its own element.
+        assert!(html.contains("<span class=\"record-note\">&lt;safe&gt;</span>"), "{html}");
         let future = render_route_block_at(&segments, "en", None, "2026-11-17", Some(&clock));
         assert!(!future.contains("Actual"), "{future}");
+    }
+
+    #[test]
+    fn route_legs_carry_their_sort_order() {
+        // `travel verify-site`'s record layer matches day_route_segments rows to
+        // the route block by data-seg-order (the table has no id column).
+        let segments = [
+            RouteSegment { from_place: "A".into(), to_place: "B".into(), sort_order: 0, ..Default::default() },
+            RouteSegment { from_place: "B".into(), to_place: "C".into(), sort_order: 3, ..Default::default() },
+        ];
+        let html = render_route_block_at(&segments, "en", Some("x · route"), "2026-11-16", None);
+        assert!(html.contains("<div class=\"route-seg\" data-seg-order=\"0\" data-search-unit"), "{html}");
+        assert!(html.contains("data-seg-order=\"3\""), "{html}");
     }
 
     // ---- meal overview ----
