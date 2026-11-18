@@ -1940,6 +1940,9 @@ const DESTINATIONS: &[DestSeed] = &[
     DestSeed { slug: "osaka_2026", display_name: "Osaka", ref_id: "osaka", timezone: "Asia/Tokyo", currency: "JPY", markets: &["TW", "JP"], primary_airports: &["KIX", "ITM"], language: "ja", origin: "taiwan", lat: 34.6937, lon: 135.5023 },
     DestSeed { slug: "osaka_kyoto_2026", display_name: "Osaka + Kyoto", ref_id: "osaka_kyoto", timezone: "Asia/Tokyo", currency: "JPY", markets: &["TW", "JP"], primary_airports: &["KIX", "ITM"], language: "ja", origin: "taiwan", lat: 34.6937, lon: 135.5023 },
     DestSeed { slug: "kyoto_2026", display_name: "Kyoto", ref_id: "kyoto", timezone: "Asia/Tokyo", currency: "JPY", markets: &["TW", "JP"], primary_airports: &["KIX"], language: "ja", origin: "taiwan", lat: 35.0116, lon: 135.7681 },
+    // Domestic self-drive (Yilan coast Toucheng–Su'ao + New Taipei north coast).
+    // Weather point: Toucheng township centre (Nominatim 2026-11-18).
+    DestSeed { slug: "ne_coast", display_name: "宜蘭・北海岸", ref_id: "ne_coast", timezone: "Asia/Taipei", currency: "TWD", markets: &["TW"], primary_airports: &[], language: "zh-TW", origin: "taiwan", lat: 24.8592, lon: 121.8233 },
 ];
 
 async fn backfill_destination_config(conn: &libsql::Connection) {
