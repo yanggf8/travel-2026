@@ -169,7 +169,7 @@ async fn probe(p: &IsolatedPage) -> Result<OfflineProbe, String> {
     p.page().evaluate_json(OFFLINE_PROBE_JS).await.map_err(|e| e.to_string())?;
     p.page().wait_for_function("window.__tdProbe !== null && window.__tdProbe !== undefined", Duration::from_secs(20))
         .await.map_err(|e| e.to_string())?;
-    let value = p.page().evaluate_json("window.__tdProbe").await.map_err(|e| e.to_string())?;
+    let value = eval_nullable(&p, "window.__tdProbe").await?;
     serde_json::from_value(value).map_err(|e| format!("offline probe decode: {e}"))
 }
 
@@ -218,6 +218,19 @@ fn purge_kinds(recorded: &[String]) -> &'static str {
     }
 }
 
+/// Evaluate a JS *expression* whose value may be null/undefined. chromiumoxide's
+/// `into_value` errors with "No value found" when the result is null (CDP sends
+/// `value: null`), so the value travels wrapped as `{v: ...}` and comes back as
+/// `Value::Null` instead of an error.
+fn wrap_nullable(expr: &str) -> String {
+    format!("({{v:(function(){{var r=({expr});return r===undefined?null:r;}})()}})")
+}
+
+async fn eval_nullable(p: &IsolatedPage, expr: &str) -> Result<serde_json::Value, String> {
+    let wrapped = p.page().evaluate_json(&wrap_nullable(expr)).await.map_err(|e| e.to_string())?;
+    Ok(wrapped.get("v").cloned().unwrap_or(serde_json::Value::Null))
+}
+
 /// Run an in-page script that parks its eventual result in a window variable
 /// (`flag_expr` turns true once the value is final) and read it back.
 /// evaluate_json does not await promises, so every Cache-API read needs this
@@ -225,7 +238,7 @@ fn purge_kinds(recorded: &[String]) -> &'static str {
 async fn window_value(p: &IsolatedPage, script: &str, flag_expr: &str, read_expr: &str) -> Result<serde_json::Value, String> {
     p.page().evaluate_json(script).await.map_err(|e| e.to_string())?;
     p.page().wait_for_function(flag_expr, Duration::from_secs(10)).await.map_err(|e| e.to_string())?;
-    p.page().evaluate_json(read_expr).await.map_err(|e| e.to_string())
+    eval_nullable(p, read_expr).await
 }
 
 /// List a Cache API cache's keys (as URL strings) from the page. evaluate_json
@@ -295,7 +308,7 @@ struct FaultTarget {
 }
 
 async fn pick_fault_target(p: &IsolatedPage) -> Result<Option<FaultTarget>, String> {
-    let v = p.page().evaluate_json(FAULT_TARGET_JS).await.map_err(|e| e.to_string())?;
+    let v = eval_nullable(&p, FAULT_TARGET_JS).await?;
     let obj = match v {
         serde_json::Value::Null => return Ok(None),
         serde_json::Value::Object(m) => m,
@@ -431,9 +444,9 @@ pub(crate) async fn run(conn: &Connection, plan: &str, _host: &str, token: &str,
             let removed = verify_site::remove_verify_tokens(conn, Some(&token2)).await?;
             if removed != 1 { return Err(format!("revoke token2 removed {removed} rows, expected 1")); }
             navigate(&p, &second_zh).await?;
-            p.page().evaluate_json(&format!("fetch({:?}).then(function(r){{window.__tdHttpStatus=r.status;}})", second_zh)).await.map_err(|e| e.to_string())?;
+            p.page().evaluate_json(&format!("fetch({:?}).then(function(r){{window.__tdHttpStatus=r.status;}});true", second_zh)).await.map_err(|e| e.to_string())?;
             p.page().wait_for_function("window.__tdHttpStatus !== undefined", Duration::from_secs(15)).await.map_err(|e| e.to_string())?;
-            let status = p.page().evaluate_json("window.__tdHttpStatus").await.map_err(|e| e.to_string())?;
+            let status = eval_nullable(&p, "window.__tdHttpStatus").await?;
             emit(tally, plan, "revoke-403", if status.as_i64() == Some(403) {
                 Check::pass("revoked token returned HTTP 403 online; the SW runs its cache purge before delivering that response")
             } else { Check::fail(format!("revoked token returned HTTP {status}, expected 403"), None) }, &tokens);
@@ -484,7 +497,7 @@ pub(crate) async fn run(conn: &Connection, plan: &str, _host: &str, token: &str,
                 if removed != 1 { return Err(format!("revoke token3 removed {removed} rows, expected 1")); }
                 p.set_latency_ms(6000).await.map_err(|e| e.to_string())?;
                 navigate(&p, &u).await?;
-                let early = p.page().evaluate_json("document.body.getAttribute('data-served')").await.map_err(|e| e.to_string())?;
+                let early = eval_nullable(&p, "document.body.getAttribute('data-served')").await?;
                 if early.as_str() != Some("cache") { return Err(format!("late-403 timeout did not serve cache: {early}")); }
                 emit(tally, plan, "late-403-cache", Check::pass("6000ms latency applied before the reload; the 4000ms timeout served the cached page while the 403 was still pending (offline-only proof for this same page is asserted in late-403)"), &[token, &token2, t3]);
                 tokio::time::sleep(Duration::from_secs(7)).await;
@@ -732,6 +745,15 @@ pub(crate) fn judge_stale_day(p: &OfflineProbe) -> Check {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wrap_nullable_carries_null_inside_an_object() {
+        // The live run died on "evaluate decode: No value found" when a probe
+        // returned null; the wrapper must always yield an object.
+        let w = super::wrap_nullable("null");
+        assert!(w.starts_with("({v:"), "{w}");
+        assert!(w.contains("return r===undefined?null:r"), "{w}");
+        assert!(super::wrap_nullable("window.x").contains("var r=(window.x)"));
+    }
     use super::*;
 
     fn clean() -> OfflineProbe {
