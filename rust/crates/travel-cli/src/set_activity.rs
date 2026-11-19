@@ -228,6 +228,12 @@ pub async fn run_title(
     // copy-pasteable re-link command. An idempotent re-run (same title) — or a
     // row with no poi_id — clears nothing and is silent (prior behavior).
     let title_changed = parsed.new_title != previous_title;
+    // Shared with `update-activity --title`: a row that already carries a trip
+    // record keeps its title (the record would otherwise describe another place).
+    if title_changed {
+        travel_db::repo::records::ensure_title_editable(&conn, &plan_id, &destination, &activity_id)
+            .await?;
+    }
     let stale_poi: Option<String> = previous_poi_id
         .filter(|p| !p.is_empty())
         .filter(|_| title_changed);
@@ -241,6 +247,7 @@ pub async fn run_title(
         &activity_id,
         &parsed.new_title,
         stale_poi.is_some(),
+        title_changed,
         &now_db_datetime(),
     )
     .await?;
@@ -292,8 +299,8 @@ pub async fn run_title(
     // can restore it if the place is actually unchanged.
     if let Some(old_poi) = stale_poi {
         println!(
-            "note: cleared poi_id (was '{old_poi}') because the title changed — the POI link is no longer verified. If this is the same place, re-link with: travel set-activity-poi {} {} {old_poi}",
-            parsed.day, parsed.session
+            "note: cleared poi_id (was '{old_poi}') because the title changed — the POI link is no longer verified. If this is the same place, re-link with: {}",
+            relink_hint(parsed.day, &parsed.session, &old_poi, &parsed.new_title, &plan_id, &destination)
         );
     }
     Ok(())
@@ -1166,6 +1173,317 @@ pub async fn run_set_notes(args: &[String], plan_id: String) -> Result<(), Strin
     .await;
     crate::cascade::common::finish_tx(&conn, "set-activity-notes", outcome).await?;
     println!("✅ Notes updated (id preserved: {activity_id})");
+    Ok(())
+}
+
+// ── update-activity ────────────────────────────────────────────────
+pub(crate) const UPDATE_USAGE: &str = "travel update-activity <day> <session> <id|title> \
+[--title <t>] [--area <t>] [--station <t>] [--duration <min>] [--start HH:MM] [--end HH:MM] \
+[--fixed true|false] [--priority must|want|optional] [--notes <t>] \
+[--clear area,station,duration,start,end,notes] [--dest <slug>]\n  \
+(edit one activity in place by unique id/title match; only the given fields change, id/poi_id/\
+booking/record untouched; same values = no change, no version bump — audited)";
+
+#[derive(Debug)]
+struct ActivityUpdate {
+    day: i64,
+    session: String,
+    key: String,
+    patch: itinerary::ActivityPatch,
+    dest: Option<String>,
+}
+
+fn nonempty(flag: &str, v: String) -> Result<String, String> {
+    if v.trim().is_empty() {
+        return Err(format!(
+            "{flag} cannot be empty (use --clear to unset a nullable field)"
+        ));
+    }
+    Ok(v)
+}
+
+fn parse_update(args: &[String]) -> Result<ActivityUpdate, String> {
+    let mut patch = itinerary::ActivityPatch::default();
+    let mut dest: Option<String> = None;
+    let mut clear: Vec<String> = Vec::new();
+    let mut positional: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--dest" => {
+                dest = Some(arg_value(args, i, "--dest")?);
+                i += 2;
+            }
+            "--title" => {
+                patch.title = Some(nonempty("--title", arg_value(args, i, "--title")?)?);
+                i += 2;
+            }
+            "--area" => {
+                patch.area = Some(Some(nonempty("--area", arg_value(args, i, "--area")?)?));
+                i += 2;
+            }
+            "--station" => {
+                patch.nearest_station =
+                    Some(Some(nonempty("--station", arg_value(args, i, "--station")?)?));
+                i += 2;
+            }
+            "--duration" => {
+                let v = arg_value(args, i, "--duration")?;
+                let n = v
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| "--duration must be a positive integer (minutes)".to_string())?;
+                patch.duration_min = Some(Some(n));
+                i += 2;
+            }
+            "--start" => {
+                let v = arg_value(args, i, "--start")?;
+                crate::checks::validate_time_flag("--start", &v)?;
+                patch.start_time = Some(Some(v));
+                i += 2;
+            }
+            "--end" => {
+                let v = arg_value(args, i, "--end")?;
+                crate::checks::validate_time_flag("--end", &v)?;
+                patch.end_time = Some(Some(v));
+                i += 2;
+            }
+            "--fixed" => {
+                patch.is_fixed_time = Some(parse_bool(&arg_value(args, i, "--fixed")?)?);
+                i += 2;
+            }
+            "--priority" => {
+                let v = arg_value(args, i, "--priority")?;
+                if !["must", "want", "optional"].contains(&v.as_str()) {
+                    return Err(format!("Invalid --priority: {v} (use must|want|optional)"));
+                }
+                patch.priority = Some(v);
+                i += 2;
+            }
+            "--notes" => {
+                patch.notes = Some(Some(nonempty("--notes", arg_value(args, i, "--notes")?)?));
+                i += 2;
+            }
+            "--clear" => {
+                let v = arg_value(args, i, "--clear")?;
+                for f in v.split(',') {
+                    clear.push(f.trim().to_string());
+                }
+                i += 2;
+            }
+            f if crate::plan_resolver::is_resolver_flag(f) => i += 2,
+            other if other.starts_with("--") => {
+                return Err(format!("unknown argument: {other}. Usage:\n{UPDATE_USAGE}"));
+            }
+            _ => {
+                positional.push(a.clone());
+                i += 1;
+            }
+        }
+    }
+    if positional.len() != 3 {
+        return Err(format!("Usage:\n{UPDATE_USAGE}"));
+    }
+    let mut seen: Vec<&String> = Vec::new();
+    for f in &clear {
+        if seen.contains(&f) {
+            continue; // `--clear start,start` is one clear, not a conflict
+        }
+        seen.push(f);
+        // Only nullable columns can be cleared; a value flag for the same field conflicts.
+        let (given, slot) = match f.as_str() {
+            "area" => (patch.area.is_some(), &mut patch.area),
+            "station" => (patch.nearest_station.is_some(), &mut patch.nearest_station),
+            "start" => (patch.start_time.is_some(), &mut patch.start_time),
+            "end" => (patch.end_time.is_some(), &mut patch.end_time),
+            "notes" => (patch.notes.is_some(), &mut patch.notes),
+            "duration" => {
+                if patch.duration_min.is_some() {
+                    return Err("--duration and --clear duration conflict".to_string());
+                }
+                patch.duration_min = Some(None);
+                continue;
+            }
+            other => {
+                return Err(format!(
+                    "--clear accepts only area,station,duration,start,end,notes (got \"{other}\"; \
+                     title/priority/fixed cannot be NULL)"
+                ));
+            }
+        };
+        if given {
+            return Err(format!("--{f} and --clear {f} conflict"));
+        }
+        *slot = Some(None);
+    }
+    if patch.is_empty() {
+        return Err(format!(
+            "pass at least one field flag or --clear. Usage:\n{UPDATE_USAGE}"
+        ));
+    }
+    let day = positional[0]
+        .parse::<i64>()
+        .ok()
+        .filter(|d| *d >= 1)
+        .ok_or_else(|| format!("<day> must be a positive integer. Usage:\n{UPDATE_USAGE}"))?;
+    let session = positional[1].clone();
+    if !["morning", "noon", "afternoon", "evening"].contains(&session.as_str()) {
+        return Err("<session> must be one of: morning|noon|afternoon|evening".to_string());
+    }
+    Ok(ActivityUpdate {
+        day,
+        session,
+        key: positional[2].clone(),
+        patch,
+        dest,
+    })
+}
+
+/// Validation of the MERGED row (what the DB would hold after the patch). Only what the
+/// user touched is judged: a given title must be map-URL-clean, and when either time
+/// endpoint was given the pair must be valid HH:MM with `start <= end` — a dirty stored
+/// value on the other side fails loud instead of being skipped.
+fn check_merged_activity(
+    patch: &itinerary::ActivityPatch,
+    row: &itinerary::ActivityRow,
+) -> Result<(), String> {
+    if patch.title.is_some() {
+        crate::checks::check_title_map_url(&row.title)?;
+    }
+    let touched = matches!(patch.start_time, Some(Some(_))) || matches!(patch.end_time, Some(Some(_)));
+    if touched {
+        if let (Some(st), Some(en)) = (&row.start_time, &row.end_time) {
+            crate::checks::validate_time_flag("start_time (stored)", st)?;
+            crate::checks::validate_time_flag("end_time (stored)", en)?;
+            crate::checks::validate_start_le_end("start_time", st, "end_time", en)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy-pasteable re-link command: pins the row with `--match` (the CURRENT title —
+/// several activities may share the session) and names plan + destination.
+fn relink_hint(day: i64, session: &str, poi_id: &str, title: &str, plan_id: &str, dest: &str) -> String {
+    let q = title.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "travel set-activity-poi {day} {session} {poi_id} --match \"{q}\" --plan-id {plan_id} --dest {dest}"
+    )
+}
+
+fn shown(v: &Option<String>) -> String {
+    v.clone().unwrap_or_else(|| "(none)".to_string())
+}
+
+/// `update-activity` — edit one activity IN PLACE (spec 2026-11-19 §1).
+pub async fn run_update(args: &[String], plan_id: String) -> Result<(), String> {
+    let parsed = parse_update(args)?;
+    let conn = crate::db::connect_write().await?;
+    let destination = read_destination(&conn, &plan_id, &parsed.dest).await?;
+    let (day, session) = (parsed.day, parsed.session.clone());
+    let mut activity_id = String::new();
+
+    // Match, read, validate and write all happen INSIDE the write transaction, so a
+    // concurrent move/delete cannot slip between the match and the UPDATE.
+    let outcome = async {
+        crate::cascade::common::begin_immediate(&conn, "update-activity").await?;
+        activity_id = travel_db::repo::records::match_activity_unique(
+            &conn,
+            &plan_id,
+            &destination,
+            day,
+            &session,
+            &parsed.key,
+        )
+        .await?;
+        let before =
+            itinerary::read_activity_row(&conn, &plan_id, &destination, day, &session, &activity_id)
+                .await?
+                .ok_or_else(|| format!("activity {activity_id} not found"))?;
+        let mut after = parsed.patch.apply(&before);
+        let title_changed = after.title != before.title;
+        let stale_poi: Option<String> = before
+            .poi_id
+            .clone()
+            .filter(|p| !p.is_empty())
+            .filter(|_| title_changed);
+        if stale_poi.is_some() {
+            after.poi_id = None;
+        }
+        let diff = itinerary::activity_row_diff(&before, &after);
+        // Same values as stored: "No change" comes BEFORE any validation of the row.
+        if diff.is_empty() {
+            return Ok(None);
+        }
+        check_merged_activity(&parsed.patch, &after)?;
+        if title_changed {
+            travel_db::repo::records::ensure_title_editable(
+                &conn,
+                &plan_id,
+                &destination,
+                &activity_id,
+            )
+            .await?;
+        }
+        let version_before = read_version(&conn, &plan_id).await?;
+        itinerary::update_activity_fields(
+            &conn,
+            &plan_id,
+            &destination,
+            day,
+            &session,
+            &activity_id,
+            &after,
+            &now_db_datetime(),
+        )
+        .await?;
+        touch_day(&conn, &plan_id, &destination, day).await?;
+        let changed: Vec<&str> = diff.iter().map(|(c, _, _)| *c).collect();
+        let mut kv: Vec<(String, String)> = vec![
+            ("day_number".into(), day.to_string()),
+            ("session".into(), session.clone()),
+            ("activity_id".into(), activity_id.clone()),
+            ("title".into(), after.title.clone()),
+            ("changed".into(), changed.join(",")),
+        ];
+        let undef = |v: &Option<String>| v.clone().unwrap_or_else(|| "undefined".to_string());
+        for (col, from, to) in &diff {
+            kv.push((format!("from.{col}"), undef(from)));
+            kv.push((format!("to.{col}"), undef(to)));
+        }
+        let kv_ref: Vec<(&str, String)> = kv.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        crate::record::emit_record_event(
+            &conn,
+            &plan_id,
+            &destination,
+            "activity_updated",
+            &kv_ref,
+            version_before,
+            "update-activity",
+            &format!("D{day}/{session} {activity_id} updated: {}", changed.join(",")),
+        )
+        .await?;
+        Ok(Some((before.title.clone(), after.title.clone(), diff, stale_poi)))
+    }
+    .await;
+    let result = crate::cascade::common::finish_tx(&conn, "update-activity", outcome).await?;
+    match result {
+        None => println!("ℹ️ No change (id={activity_id})"),
+        Some((old_title, new_title, diff, stale_poi)) => {
+            println!("\n📝 Updating activity: D{day}/{session} {old_title}");
+            for (col, from, to) in &diff {
+                println!("   {col}: {} → {}", shown(from), shown(to));
+            }
+            println!("✅ Activity updated (id preserved: {activity_id})");
+            if let Some(old_poi) = stale_poi {
+                println!(
+                    "note: cleared poi_id (was '{old_poi}') because the title changed — the POI link is no longer verified. If this is the same place, re-link with: {}",
+                    relink_hint(day, &session, &old_poi, &new_title, &plan_id, &destination)
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2228,6 +2546,117 @@ async fn read_booking_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── update-activity parse / merge ──
+    fn upd(v: &[&str]) -> Result<ActivityUpdate, String> {
+        let mut a = vec!["2", "morning", "鼻頭角"];
+        a.extend_from_slice(v);
+        parse_update(&s(&a))
+    }
+
+    #[test]
+    fn parse_update_sets_only_given_fields() {
+        let u = upd(&["--duration", "45", "--area", "鼻頭", "--fixed", "true", "--plan-id", "p"]).unwrap();
+        assert_eq!(u.day, 2);
+        assert_eq!(u.key, "鼻頭角");
+        assert_eq!(u.patch.duration_min, Some(Some(45)));
+        assert_eq!(u.patch.area, Some(Some("鼻頭".to_string())));
+        assert_eq!(u.patch.is_fixed_time, Some(true));
+        assert_eq!(u.patch.notes, None);
+        assert_eq!(u.patch.start_time, None);
+        assert_eq!(u.patch.title, None);
+    }
+
+    #[test]
+    fn parse_update_clear_whitelist_and_nulls() {
+        let u = upd(&["--clear", "area, station,duration,start,end,notes"]).unwrap();
+        assert_eq!(u.patch.area, Some(None));
+        assert_eq!(u.patch.nearest_station, Some(None));
+        assert_eq!(u.patch.duration_min, Some(None));
+        assert_eq!(u.patch.start_time, Some(None));
+        assert_eq!(u.patch.end_time, Some(None));
+        assert_eq!(u.patch.notes, Some(None));
+        for bad in ["title", "priority", "fixed", "nonsense"] {
+            let e = upd(&["--clear", bad]).unwrap_err();
+            assert!(e.contains("--clear accepts only"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn parse_update_value_and_clear_same_field_conflict() {
+        assert!(upd(&["--area", "x", "--clear", "area"]).unwrap_err().contains("conflict"));
+        assert!(upd(&["--clear", "start", "--start", "09:00"]).unwrap_err().contains("conflict"));
+        assert!(upd(&["--duration", "5", "--clear", "duration"]).unwrap_err().contains("conflict"));
+    }
+
+    #[test]
+    fn parse_update_requires_a_field_and_valid_values() {
+        assert!(upd(&[]).unwrap_err().contains("at least one"));
+        assert!(upd(&["--duration", "0"]).unwrap_err().contains("positive"));
+        assert!(upd(&["--duration", "-5"]).unwrap_err().contains("positive"));
+        assert!(upd(&["--duration", "abc"]).unwrap_err().contains("positive"));
+        assert!(upd(&["--priority", "critical"]).unwrap_err().contains("must|want|optional"));
+        assert!(upd(&["--start", "9am"]).unwrap_err().contains("HH:MM"));
+        assert!(upd(&["--title", "  "]).unwrap_err().contains("cannot be empty"));
+        assert!(upd(&["--area", ""]).unwrap_err().contains("--clear"));
+        assert!(upd(&["--bogus", "x"]).unwrap_err().contains("unknown argument"));
+        assert!(parse_update(&s(&["0", "morning", "x", "--area", "a"])).is_err());
+        assert!(parse_update(&s(&["1", "dawn", "x", "--area", "a"])).is_err());
+        assert!(parse_update(&s(&["1", "morning", "--area", "a"])).is_err());
+    }
+
+    #[test]
+    fn merged_time_order_uses_stored_value_for_the_missing_side() {
+        let stored = itinerary::ActivityRow {
+            title: "t".into(),
+            area: None,
+            nearest_station: None,
+            duration_min: None,
+            start_time: Some("10:00".into()),
+            end_time: None,
+            is_fixed_time: false,
+            priority: "want".into(),
+            notes: None,
+            poi_id: None,
+        };
+        // only --end given, earlier than the stored start
+        let p = upd(&["--end", "09:00"]).unwrap().patch;
+        assert!(check_merged_activity(&p, &p.apply(&stored)).unwrap_err().contains("after"));
+        let p = upd(&["--end", "10:00"]).unwrap().patch;
+        assert!(check_merged_activity(&p, &p.apply(&stored)).is_ok());
+        // clearing start makes any end fine
+        let p = upd(&["--clear", "start", "--end", "09:00"]).unwrap().patch;
+        assert!(check_merged_activity(&p, &p.apply(&stored)).is_ok());
+        // a dirty STORED endpoint fails loud when the user touches the other one
+        let mut dirty = stored.clone();
+        dirty.start_time = Some("9am".into());
+        let p = upd(&["--end", "08:00"]).unwrap().patch;
+        assert!(check_merged_activity(&p, &p.apply(&dirty)).unwrap_err().contains("not a valid HH:MM"));
+        // ...but an untouched pair is not judged (duration-only edit on dirty data)
+        let p = upd(&["--duration", "5"]).unwrap().patch;
+        assert!(check_merged_activity(&p, &p.apply(&dirty)).is_ok());
+    }
+
+    #[test]
+    fn parse_update_clear_duplicates_are_one_clear() {
+        let u = upd(&["--clear", "start,start"]).unwrap();
+        assert_eq!(u.patch.start_time, Some(None));
+        let u = upd(&["--clear", "area", "--clear", "area,notes"]).unwrap();
+        assert_eq!(u.patch.area, Some(None));
+        assert_eq!(u.patch.notes, Some(None));
+        // a real value flag + clear is still a conflict
+        assert!(upd(&["--clear", "start,start", "--start", "09:00"]).unwrap_err().contains("conflict"));
+    }
+
+    #[test]
+    fn relink_hint_is_copy_pasteable() {
+        let h = relink_hint(2, "morning", "poi_x", "鼻頭角 \"北\"", "ne-coast-2026", "ne_coast_2026");
+        assert_eq!(
+            h,
+            "travel set-activity-poi 2 morning poi_x --match \"鼻頭角 \\\"北\\\"\" --plan-id ne-coast-2026 --dest ne_coast_2026"
+        );
+    }
+
 
     // ── HH:MM fail-loud validation (set-activity-time / add-activity) ──
     fn s(v: &[&str]) -> Vec<String> {

@@ -620,19 +620,28 @@ pub async fn update_activity_title(
     activity_id: &str,
     new_title: &str,
     clear_poi: bool,
+    require_unrecorded: bool,
     now: &str,
 ) -> Result<(), String> {
+    // `require_unrecorded` makes the trip-record guard atomic with the write: the UPDATE itself
+    // re-checks `record_status IS NULL`, so a record-activity landing between the caller's
+    // check and this write cannot be bypassed (0 rows -> fail loud, nothing written).
+    let guard = if require_unrecorded { " AND record_status IS NULL" } else { "" };
     let update_sql = if clear_poi {
-        "UPDATE activities SET title = ?1, poi_id = NULL, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-           AND session_type = ?6 AND id = ?7"
+        format!(
+            "UPDATE activities SET title = ?1, poi_id = NULL, updated_at = ?2 \
+             WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+               AND session_type = ?6 AND id = ?7{guard}"
+        )
     } else {
-        "UPDATE activities SET title = ?1, updated_at = ?2 \
-         WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
-           AND session_type = ?6 AND id = ?7"
+        format!(
+            "UPDATE activities SET title = ?1, updated_at = ?2 \
+             WHERE plan_id = ?3 AND destination = ?4 AND day_number = ?5 \
+               AND session_type = ?6 AND id = ?7{guard}"
+        )
     };
-    conn.execute(
-        update_sql,
+    let n = conn.execute(
+        &update_sql,
         libsql::params![
             new_title.to_string(),
             now.to_string(),
@@ -645,6 +654,205 @@ pub async fn update_activity_title(
     )
     .await
     .map_err(|e| format!("activities UPDATE title failed: {e}"))?;
+    if require_unrecorded && n == 0 {
+        return Err(format!(
+            "activity {activity_id} now carries a trip record (or moved); refusing to change its \
+             title — use `record-activity` to change the note, or `clear-record` first"
+        ));
+    }
+    Ok(())
+}
+
+/// The editable columns of one `activities` row (`update-activity`, spec 2026-11-19 §1).
+/// `id`, `sort_order`, `booking_*`, `record_*`, `source` and `cost_estimate` are deliberately
+/// absent: this command never touches them. `poi_id` is carried read-only so the caller can
+/// apply the title-change poi-clear rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityRow {
+    pub title: String,
+    pub area: Option<String>,
+    pub nearest_station: Option<String>,
+    pub duration_min: Option<i64>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub is_fixed_time: bool,
+    pub priority: String,
+    pub notes: Option<String>,
+    pub poi_id: Option<String>,
+}
+
+/// Partial update for [`ActivityRow`]. Outer `Option` = was the field given; inner `Option`
+/// (nullable columns only) = set a value (`Some`) or clear to NULL (`None`).
+/// `title`, `is_fixed_time` and `priority` are NOT NULL, so they cannot be cleared.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActivityPatch {
+    pub title: Option<String>,
+    pub area: Option<Option<String>>,
+    pub nearest_station: Option<Option<String>>,
+    pub duration_min: Option<Option<i64>>,
+    pub start_time: Option<Option<String>>,
+    pub end_time: Option<Option<String>>,
+    pub is_fixed_time: Option<bool>,
+    pub priority: Option<String>,
+    pub notes: Option<Option<String>>,
+}
+
+impl ActivityPatch {
+    /// True when no field was given.
+    pub fn is_empty(&self) -> bool {
+        *self == ActivityPatch::default()
+    }
+
+    /// The row as it would look after the patch (pure; `poi_id` is left as-is).
+    pub fn apply(&self, row: &ActivityRow) -> ActivityRow {
+        ActivityRow {
+            title: self.title.clone().unwrap_or_else(|| row.title.clone()),
+            area: self.area.clone().unwrap_or_else(|| row.area.clone()),
+            nearest_station: self
+                .nearest_station
+                .clone()
+                .unwrap_or_else(|| row.nearest_station.clone()),
+            duration_min: self.duration_min.unwrap_or(row.duration_min),
+            start_time: self.start_time.clone().unwrap_or_else(|| row.start_time.clone()),
+            end_time: self.end_time.clone().unwrap_or_else(|| row.end_time.clone()),
+            is_fixed_time: self.is_fixed_time.unwrap_or(row.is_fixed_time),
+            priority: self.priority.clone().unwrap_or_else(|| row.priority.clone()),
+            notes: self.notes.clone().unwrap_or_else(|| row.notes.clone()),
+            poi_id: row.poi_id.clone(),
+        }
+    }
+}
+
+/// Field-by-field differences `(column, from, to)` between two rows, with NULL rendered as
+/// `None`. Order is fixed (title, area, nearest_station, duration_min, start_time, end_time,
+/// is_fixed_time, priority, notes, poi_id). Empty = the patch is a no-op.
+pub fn activity_row_diff(
+    before: &ActivityRow,
+    after: &ActivityRow,
+) -> Vec<(&'static str, Option<String>, Option<String>)> {
+    let mut out = Vec::new();
+    let mut push = |col: &'static str, a: Option<String>, b: Option<String>| {
+        if a != b {
+            out.push((col, a, b));
+        }
+    };
+    push("title", Some(before.title.clone()), Some(after.title.clone()));
+    push("area", before.area.clone(), after.area.clone());
+    push(
+        "nearest_station",
+        before.nearest_station.clone(),
+        after.nearest_station.clone(),
+    );
+    push(
+        "duration_min",
+        before.duration_min.map(|d| d.to_string()),
+        after.duration_min.map(|d| d.to_string()),
+    );
+    push("start_time", before.start_time.clone(), after.start_time.clone());
+    push("end_time", before.end_time.clone(), after.end_time.clone());
+    push(
+        "is_fixed_time",
+        Some(before.is_fixed_time.to_string()),
+        Some(after.is_fixed_time.to_string()),
+    );
+    push("priority", Some(before.priority.clone()), Some(after.priority.clone()));
+    push("notes", before.notes.clone(), after.notes.clone());
+    push("poi_id", before.poi_id.clone(), after.poi_id.clone());
+    out
+}
+
+/// Read the editable columns of one activity, pinned to the (day, session) it was matched in.
+pub async fn read_activity_row(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+) -> Result<Option<ActivityRow>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT title, area, nearest_station, duration_min, start_time, end_time, \
+                    is_fixed_time, priority, notes, poi_id \
+             FROM activities WHERE plan_id = ?1 AND destination = ?2 AND id = ?3 \
+               AND day_number = ?4 AND session_type = ?5",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                activity_id.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities row read failed: {e}"))?;
+    let Some(row) = rows.next().await.map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let g = |e: libsql::Error| e.to_string();
+    Ok(Some(ActivityRow {
+        title: row.get::<String>(0).map_err(g)?,
+        area: row.get::<Option<String>>(1).map_err(g)?,
+        nearest_station: row.get::<Option<String>>(2).map_err(g)?,
+        duration_min: row.get::<Option<i64>>(3).map_err(g)?,
+        start_time: row.get::<Option<String>>(4).map_err(g)?,
+        end_time: row.get::<Option<String>>(5).map_err(g)?,
+        is_fixed_time: row.get::<i64>(6).map_err(g)? != 0,
+        priority: row.get::<String>(7).map_err(g)?,
+        notes: row.get::<Option<String>>(8).map_err(g)?,
+        poi_id: row.get::<Option<String>>(9).map_err(g)?,
+    }))
+}
+
+/// Write the merged `row` back with ONE UPDATE (fixed column names, every value bound,
+/// `poi_id` included so a title-change poi clear is part of the same write), bumping
+/// `updated_at`. Pinned to `(day, session, id)`: if the row moved since it was matched,
+/// 0 rows change and this fails loud instead of updating under a stale position.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_activity_fields(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+    row: &ActivityRow,
+    now: &str,
+) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE activities SET title = ?1, area = ?2, nearest_station = ?3, duration_min = ?4, \
+               start_time = ?5, end_time = ?6, is_fixed_time = ?7, priority = ?8, notes = ?9, \
+               poi_id = ?10, updated_at = ?11 \
+             WHERE plan_id = ?12 AND destination = ?13 AND day_number = ?14 \
+               AND session_type = ?15 AND id = ?16",
+            libsql::params![
+                row.title.clone(),
+                row.area.clone(),
+                row.nearest_station.clone(),
+                row.duration_min,
+                row.start_time.clone(),
+                row.end_time.clone(),
+                row.is_fixed_time as i64,
+                row.priority.clone(),
+                row.notes.clone(),
+                row.poi_id.clone(),
+                now.to_string(),
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string(),
+                activity_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities UPDATE failed: {e}"))?;
+    if n == 0 {
+        return Err(format!(
+            "activity {activity_id} not found in D{day}/{session} of plan {plan_id} ({destination}) \
+             (moved or deleted meanwhile?)"
+        ));
+    }
     Ok(())
 }
 
@@ -1535,4 +1743,173 @@ pub async fn set_day_weather(
     .await
     .map_err(|e| format!("days weather UPDATE failed: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod update_activity_fields_tests {
+    use super::*;
+
+    fn row() -> ActivityRow {
+        ActivityRow {
+            title: "鼻頭角".into(),
+            area: None,
+            nearest_station: Some("龍洞".into()),
+            duration_min: Some(60),
+            start_time: Some("09:00".into()),
+            end_time: None,
+            is_fixed_time: false,
+            priority: "want".into(),
+            notes: Some("n".into()),
+            poi_id: Some("poi1".into()),
+        }
+    }
+
+    #[test]
+    fn apply_only_changes_given_fields() {
+        let r = row();
+        let p = ActivityPatch {
+            duration_min: Some(Some(45)),
+            area: Some(Some("鼻頭".into())),
+            ..Default::default()
+        };
+        let a = p.apply(&r);
+        assert_eq!(a.duration_min, Some(45));
+        assert_eq!(a.area.as_deref(), Some("鼻頭"));
+        assert_eq!(a.nearest_station, r.nearest_station);
+        assert_eq!(a.start_time, r.start_time);
+        assert_eq!(a.poi_id, r.poi_id);
+    }
+
+    #[test]
+    fn apply_clear_sets_null_and_empty_patch_is_noop() {
+        let r = row();
+        let p = ActivityPatch {
+            start_time: Some(None),
+            notes: Some(None),
+            ..Default::default()
+        };
+        let a = p.apply(&r);
+        assert_eq!(a.start_time, None);
+        assert_eq!(a.notes, None);
+        assert!(ActivityPatch::default().is_empty());
+        assert!(!p.is_empty());
+        assert!(activity_row_diff(&r, &ActivityPatch::default().apply(&r)).is_empty());
+    }
+
+    #[test]
+    fn diff_reports_changed_columns_in_fixed_order() {
+        let r = row();
+        let a = ActivityPatch {
+            notes: Some(None),
+            duration_min: Some(Some(45)),
+            is_fixed_time: Some(true),
+            ..Default::default()
+        }
+        .apply(&r);
+        let d = activity_row_diff(&r, &a);
+        let cols: Vec<&str> = d.iter().map(|(c, _, _)| *c).collect();
+        assert_eq!(cols, ["duration_min", "is_fixed_time", "notes"]);
+        let mut with_poi = a.clone();
+        with_poi.poi_id = None;
+        let d2 = activity_row_diff(&r, &with_poi);
+        assert_eq!(d2.last().unwrap().0, "poi_id");
+        assert_eq!(d2.last().unwrap().1.as_deref(), Some("poi1"));
+        assert_eq!(d2.last().unwrap().2, None);
+        assert_eq!(d[0].1.as_deref(), Some("60"));
+        assert_eq!(d[0].2.as_deref(), Some("45"));
+        assert_eq!(d[2].2, None);
+    }
+
+    #[tokio::test]
+    async fn read_and_update_roundtrip_keeps_untouched_columns() {
+        let conn = libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, title TEXT, area TEXT, \
+             nearest_station TEXT, duration_min INTEGER, start_time TEXT, end_time TEXT, \
+             is_fixed_time INTEGER, priority TEXT, notes TEXT, poi_id TEXT, sort_order INTEGER, \
+             record_status TEXT, updated_at TEXT, day_number INTEGER, session_type TEXT)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO activities VALUES ('a','p','d','鼻頭角',NULL,'龍洞',60,'09:00',NULL,0,'want','n','poi1',7,'done','old',1,'morning')",
+            (),
+        )
+        .await
+        .unwrap();
+        let before = read_activity_row(&conn, "p", "d", 1, "morning", "a").await.unwrap().unwrap();
+        assert_eq!(before, row());
+        let after = ActivityPatch {
+            duration_min: Some(Some(45)),
+            start_time: Some(None),
+            ..Default::default()
+        }
+        .apply(&before);
+        update_activity_fields(&conn, "p", "d", 1, "morning", "a", &after, "now").await.unwrap();
+        let got = read_activity_row(&conn, "p", "d", 1, "morning", "a").await.unwrap().unwrap();
+        assert_eq!(got.duration_min, Some(45));
+        assert_eq!(got.start_time, None);
+        assert_eq!(got.poi_id.as_deref(), Some("poi1"));
+        // untouched columns outside the editable set
+        let mut r = conn.query("SELECT sort_order, record_status, updated_at FROM activities", ()).await.unwrap();
+        let x = r.next().await.unwrap().unwrap();
+        assert_eq!(x.get::<i64>(0).unwrap(), 7);
+        assert_eq!(x.get::<String>(1).unwrap(), "done");
+        assert_eq!(x.get::<String>(2).unwrap(), "now");
+        // poi_id is part of the same write
+        let mut no_poi = got.clone();
+        no_poi.poi_id = None;
+        update_activity_fields(&conn, "p", "d", 1, "morning", "a", &no_poi, "now2").await.unwrap();
+        assert_eq!(read_activity_row(&conn, "p", "d", 1, "morning", "a").await.unwrap().unwrap().poi_id, None);
+        // stale position (row moved to another session) or unknown id: fail loud, nothing written
+        assert!(update_activity_fields(&conn, "p", "d", 1, "noon", "a", &got, "n").await.is_err());
+        assert!(update_activity_fields(&conn, "p", "d", 2, "morning", "a", &got, "n").await.is_err());
+        assert!(update_activity_fields(&conn, "p", "d", 1, "morning", "zz", &got, "n").await.is_err());
+        assert!(read_activity_row(&conn, "p", "d", 1, "noon", "a").await.unwrap().is_none());
+        let after_fail = read_activity_row(&conn, "p", "d", 1, "morning", "a").await.unwrap().unwrap();
+        assert_eq!(after_fail.poi_id, None);
+        assert_eq!(after_fail.duration_min, Some(45));
+    }
+}
+
+#[cfg(test)]
+mod update_activity_title_guard_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn require_unrecorded_makes_the_record_guard_atomic_with_the_write() {
+        let conn = libsql::Builder::new_local(":memory:").build().await.unwrap().connect().unwrap();
+        conn.execute(
+            "CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, day_number INTEGER, \
+             session_type TEXT, title TEXT, poi_id TEXT, record_status TEXT, updated_at TEXT)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO activities VALUES ('rec','p','d',1,'noon','東寺','poi','done','x'), \
+             ('plain','p','d',1,'noon','鼻頭角','poi',NULL,'x')",
+            (),
+        )
+        .await
+        .unwrap();
+        // guard on a recorded row: Err and nothing changes (title AND poi_id)
+        let e = update_activity_title(&conn, "p", "d", 1, "noon", "rec", "別處", true, true, "n")
+            .await
+            .unwrap_err();
+        assert!(e.contains("record-activity"), "{e}");
+        let mut r = conn.query("SELECT title, poi_id FROM activities WHERE id='rec'", ()).await.unwrap();
+        let row = r.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<String>(0).unwrap(), "東寺");
+        assert_eq!(row.get::<String>(1).unwrap(), "poi");
+        // unrecorded row passes; unguarded same-title rewrite of a recorded row still works
+        update_activity_title(&conn, "p", "d", 1, "noon", "plain", "野柳", true, true, "n").await.unwrap();
+        update_activity_title(&conn, "p", "d", 1, "noon", "rec", "東寺", false, false, "n").await.unwrap();
+    }
 }

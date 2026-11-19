@@ -820,6 +820,33 @@ fn binds_pd_day(plan_id: &str, destination: &str, day: i64) -> Vec<libsql::Value
     b
 }
 
+/// Refuse a TITLE edit on an activity that already carries a trip record
+/// (`record_status IS NOT NULL`): `done 東寺` followed by a retitle to another place would
+/// make the record lie (spec 2026-11-19 §1.4). Shared by `update-activity --title` and
+/// `set-activity-title`. Callers invoke it only when the title would actually change.
+/// A missing row is an `Err` too.
+pub async fn ensure_title_editable(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    activity_id: &str,
+) -> Result<(), String> {
+    let Some((status, _)) = read_activity_record(conn, plan_id, destination, activity_id).await?
+    else {
+        return Err(format!(
+            "activity {activity_id} not found in plan {plan_id} ({destination})"
+        ));
+    };
+    match status {
+        Some(st) => Err(format!(
+            "activity {activity_id} already has a trip record ({st}); refusing to change its title \
+             (the record would describe a different place). Use `record-activity` to change the \
+             note, or `clear-record` first, then retitle"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Refuse to wash away trip records (spec X3/X4): `Err` (naming every offending
 /// row) when the scope contains any row with `record_status IS NOT NULL`, or —
 /// for the `Day` / `Destination` scopes only — any non-empty session summary.
@@ -1320,5 +1347,39 @@ mod recorded_rows_tests {
         // inserted B (sort 2) before A (sort 1): stable order puts A first
         assert_eq!(rows[0].row_text, "A");
         assert_eq!(rows[1].row_text, "B");
+    }
+}
+
+#[cfg(test)]
+mod title_editable_tests {
+    use super::*;
+
+    async fn db() -> Connection {
+        let db = libsql::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute(
+            "CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, title TEXT, \
+             record_status TEXT, record_note TEXT)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO activities VALUES \
+             ('a_rec','p','d','東寺','done','x'), ('a_plain','p','d','鼻頭角',NULL,NULL)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn
+    }
+
+    #[tokio::test]
+    async fn ensure_title_editable_refuses_recorded_row_only() {
+        let conn = db().await;
+        let err = ensure_title_editable(&conn, "p", "d", "a_rec").await.unwrap_err();
+        assert!(err.contains("record-activity") && err.contains("clear-record"), "{err}");
+        assert!(ensure_title_editable(&conn, "p", "d", "a_plain").await.is_ok());
+        assert!(ensure_title_editable(&conn, "p", "d", "nope").await.unwrap_err().contains("not found"));
     }
 }

@@ -699,6 +699,14 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             set_activity::run_set_notes(rest, plan_id).await?;
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "update-activity" => {
+            if wants_help(rest, set_activity::UPDATE_USAGE) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_activity::run_update(rest, plan_id).await?;
+            Ok(())
+        }
         [cmd, rest @ ..] if cmd == "clear-meals" => {
             if rest.iter().any(|a| a == "--help" || a == "-h") {
                 println!("Usage:\n  travel clear-meals <day> <session> [--dest <slug>]\n  (delete every meal of one session; audited. No meals -> note only, no version bump)");
@@ -1214,6 +1222,7 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   add-meal <day> <session> --meal \"<text>\" [--recommended]  Append one meal, nothing replaced (audited)\n\
   set-meal <day> <session> <text-match> --meal \"<new text>\"  Change ONE meal in place (audited)\n\
   set-activity-notes <day> <session> <id|title> --notes \"<t>\" | --clear  Edit notes in place; id/poi_id kept (audited)\n\
+  update-activity <day> <session> <id|title> [--title --area --station --duration --start --end --fixed --priority --notes] [--clear f,..]  Edit any activity field in place (audited)\n\
   clear-meals <day> <session> [--dest <slug>]  Delete every meal of one session (audited)\n\
   record-activity <day> <session> <id|title> done|skipped [--note \"<t>\"]  Mark what actually happened (audited)\n\
   record-meal <day> <session> <text-match> done|skipped [--note \"<t>\"]  Mark one meal (audited)\n\
