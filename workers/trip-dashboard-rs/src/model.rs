@@ -397,8 +397,9 @@ pub struct Plan {
     /// Empty when unset — then no live clock and no now card (never a
     /// hardcoded zone).
     pub timezone: String,
-    /// Destination center (`destination_config.lat/lon`, WGS84) — the hub
-    /// tie-break for the candidate minimap. None when either is NULL.
+    /// Destination center (`destination_config.lat/lon`, WGS84) — decides the
+    /// candidate minimap hub (the legend stop nearest it). None when either is
+    /// NULL, non-finite or out of range; the hub then uses the neighbor rule.
     pub dest_center: Option<(f64, f64)>,
     pub days: Vec<Day>,
     pub flights: Vec<Row>,

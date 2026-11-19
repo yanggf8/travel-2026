@@ -1141,13 +1141,15 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
     Ok(plan)
 }
 
-/// `destination_config.lat/lon` of the first row; None unless both are present.
+/// `destination_config.lat/lon` of the first row; None unless both are present,
+/// finite and in WGS84 range (|lat| <= 90, |lon| <= 180) — a bad center must
+/// not decide the minimap hub, so the neighbor rule applies instead.
 fn dest_center(rows: &[turso::Row]) -> Option<(f64, f64)> {
     let row = rows.first()?;
-    Some((
-        model::json_f64(row.get("lat")?)?,
-        model::json_f64(row.get("lon")?)?,
-    ))
+    let lat = model::json_f64(row.get("lat")?)?;
+    let lon = model::json_f64(row.get("lon")?)?;
+    (lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0)
+        .then_some((lat, lon))
 }
 
 #[cfg(test)]
@@ -1170,6 +1172,28 @@ mod tests {
         assert_eq!(dest_center(&row(serde_json::Value::Null, s("121.8"))), None);
         assert_eq!(dest_center(&row(s("24.8"), serde_json::Value::Null)), None);
         assert_eq!(dest_center(&[]), None);
+    }
+
+    #[test]
+    fn dest_center_rejects_non_finite_and_out_of_range() {
+        let row = |lat: &str, lon: &str| {
+            let mut r = turso::Row::new();
+            r.insert("lat".into(), serde_json::Value::String(lat.into()));
+            r.insert("lon".into(), serde_json::Value::String(lon.into()));
+            vec![r]
+        };
+        for (lat, lon) in [
+            ("NaN", "121.8"),
+            ("24.8", "inf"),
+            ("-inf", "121.8"),
+            ("90.5", "121.8"),
+            ("-91", "121.8"),
+            ("24.8", "180.5"),
+            ("24.8", "-181"),
+        ] {
+            assert_eq!(dest_center(&row(lat, lon)), None, "{lat},{lon}");
+        }
+        assert_eq!(dest_center(&row("90", "-180")), Some((90.0, -180.0)));
     }
 
     #[test]

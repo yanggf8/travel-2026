@@ -359,7 +359,8 @@ fn date_only(s: &str) -> &str {
 }
 
 /// Per-candidate location minimap: ArcGIS World Street Map static export,
-/// CENTERED on the trip's 旅遊地 (the itinerary's hub cluster, e.g. 九份) with
+/// CENTERED on the trip's 旅遊地 (the legend stop nearest the destination
+/// center, e.g. 九份; neighbor count only when there is no center) with
 /// the hub→stay distance spanning a THIRD of the frame (span = 3× the stay's
 /// dominant-axis offset; was 4×/quarter line — user request 2026-09-28: 二點
 /// 距離可以佔 1/3, a slightly tighter, larger-reading crop) so every card reads
@@ -593,13 +594,28 @@ pub(crate) fn civil_days(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-/// The trip's 旅遊地: the stop with the most neighbors within 5 km (tie →
-/// nearest the destination center, else earliest) — where the itinerary CONCENTRATES (the 九份 base for jiufen).
-/// Excursion stops (野柳/金山/淡水) must not drag the center off the base.
+/// The trip's 旅遊地: the legend stop NEAREST the destination center
+/// (`destination_config.lat/lon`; tie → earliest) — the center is what the
+/// destination registers as the trip's 旅遊地, so it decides. Neighbor counting
+/// is wrong for road trips (two adjacent lunch stops would outvote the stay
+/// town). Only when the destination has no center: the stop with the most
+/// neighbors within 5 km (tie → earliest) — where the itinerary concentrates.
 /// Returns its INDEX; the bbox is centered on the stop itself so the 🚩 sits
 /// exactly at the image center and the hub→stay distance spans a third of the
 /// frame.
 fn hub_stop(stops: &[crate::model::PoiStop], dest_center: Option<(f64, f64)>) -> usize {
+    if let Some((c_lat, c_lon)) = dest_center {
+        // min_by returns the FIRST minimum, so ties go to the earliest stop.
+        return stops
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                distance_km(c_lat, c_lon, a.lat, a.lon)
+                    .total_cmp(&distance_km(c_lat, c_lon, b.lat, b.lon))
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+    }
     let counts: Vec<usize> = stops
         .iter()
         .enumerate()
@@ -612,26 +628,7 @@ fn hub_stop(stops: &[crate::model::PoiStop], dest_center: Option<(f64, f64)>) ->
         })
         .collect();
     let best_cnt = counts.iter().copied().max().unwrap_or(0);
-    let mut tied = counts
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| **c == best_cnt)
-        .map(|(i, _)| i);
-    let earliest = tied.next().unwrap_or(0);
-    // Tie (incl. the all-zero spread-out trip, e.g. ne-coast: home / mountain /
-    // town): the stop nearest the destination center, not the earliest — the
-    // earliest is usually home. No center (NULL) -> earliest, the old behavior.
-    let Some((c_lat, c_lon)) = dest_center else {
-        return earliest;
-    };
-    std::iter::once(earliest)
-        .chain(tied)
-        .min_by(|&a, &b| {
-            let da = distance_km(c_lat, c_lon, stops[a].lat, stops[a].lon);
-            let db = distance_km(c_lat, c_lon, stops[b].lat, stops[b].lon);
-            da.total_cmp(&db)
-        })
-        .unwrap_or(earliest)
+    counts.iter().position(|c| *c == best_cnt).unwrap_or(0)
 }
 
 /// Equirectangular distance in km (fine at Taiwan scale — minimap geometry only).
@@ -2993,53 +2990,107 @@ mod tests {
     }
 
     #[test]
-    fn hub_stop_all_zero_counts_pick_stop_nearest_destination_center() {
-        // ne-coast-shaped: home far north, a mountain stop, the coast town at
-        // the destination center; no stop has a neighbor within 5 km.
+    fn hub_stop_ne_coast_shape_picks_stay_town_not_inland_lunch_pair() {
+        // ne-coast-2026: the two 坪林 stops are 0.4 km apart (1 neighbor each),
+        // yet the hub is 頭城 — the stop nearest the destination center.
         let stops = vec![
-            stop("home", 25.0800, 121.5700),
-            stop("mountain", 24.5000, 121.5300),
-            stop("town", 24.8590, 121.8230),
+            stop("紅樹林", 25.1670, 121.4590),
+            stop("長榮小吃", 25.1290, 121.8100),
+            stop("鼻頭角公園", 25.1280, 121.9160),
+            stop("頭城（住宿待定）", 24.8590, 121.8230),
+            stop("坪林廟口小吃", 24.9380, 121.7110),
+            stop("坪林茶業博物館", 24.9400, 121.7140),
         ];
-        assert_eq!(hub_stop(&stops, Some((24.8592, 121.8233))), 2);
+        assert_eq!(hub_stop(&stops, Some((24.8592, 121.8233))), 3);
     }
 
     #[test]
-    fn hub_stop_tie_prefers_nearest_center_over_earliest() {
-        // Two clusters of equal size (count 1 each); the earliest cluster is
-        // far from the center, the later one sits on it -> later wins.
+    fn hub_stop_jiufen_current_shape_picks_stop_nearest_center() {
+        // jiufen legend today: 紅樹林–淡水 are ~2.5 km apart (1 neighbor each)
+        // but ~40 km from 九份; 漫海聽風 is nearest the center.
+        let stops = vec![
+            stop("紅樹林", 25.1544087, 121.4588321),
+            stop("漫海聽風", 25.1219308, 121.8613979),
+            stop("野柳海洋世界", 25.2051456, 121.69138),
+            stop("金山老街", 25.221883, 121.6361852),
+            stop("淡水", 25.1727, 121.4377),
+        ];
+        assert_eq!(hub_stop(&stops, Some((25.109, 121.844))), 1);
+    }
+
+    #[test]
+    fn candidate_minimap_hub_flag_is_stop_nearest_plan_dest_center() {
+        use crate::model::DomesticCandidate;
+        // Two 坪林 stops outvote 頭城 on neighbor count; with dest_center on
+        // the plan the 🚩 must sit on 頭城, and without it on the cluster.
+        let mk = |center: Option<(f64, f64)>| Plan {
+            p4_status: "selecting".into(),
+            poi_stops: vec![
+                stop("紅樹林", 25.1544, 121.4588),
+                stop("坪林廟口", 24.9380, 121.7110),
+                stop("坪林茶博", 24.9400, 121.7140),
+                stop("頭城", 24.8590, 121.8230),
+            ],
+            dest_center: center,
+            candidates: vec![DomesticCandidate {
+                id: "c1".into(),
+                hotel_name: "海邊旅店".into(),
+                price_twd: 3000,
+                latitude: Some(24.8700),
+                longitude: Some(121.8300),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let with = render(&mk(Some((24.8592, 121.8233))), "zh", None);
+        assert!(with.contains("🚩<em class=\"cand-minimap-hub-label\">頭城"), "{with}");
+        let without = render(&mk(None), "zh", None);
+        assert!(without.contains("🚩<em class=\"cand-minimap-hub-label\">坪林廟口"), "{without}");
+    }
+
+    #[test]
+    fn hub_stop_center_beats_neighbor_count() {
+        // 3 stops cluster far from the center (2 neighbors each); a lone stop
+        // sits on the center -> the lone stop wins.
         let stops = vec![
             stop("far-a", 25.2000, 121.4000),
             stop("far-b", 25.2010, 121.4010),
-            stop("near-a", 24.8590, 121.8230),
-            stop("near-b", 24.8600, 121.8240),
+            stop("far-c", 25.2020, 121.4020),
+            stop("on-center", 24.8590, 121.8230),
         ];
-        assert_eq!(hub_stop(&stops, Some((24.8592, 121.8233))), 2);
+        assert_eq!(hub_stop(&stops, Some((24.8592, 121.8233))), 3);
     }
 
     #[test]
-    fn hub_stop_without_center_keeps_earliest() {
+    fn hub_stop_center_tie_goes_to_earliest() {
+        // Two stops equidistant from the center -> earliest.
+        let stops = vec![
+            stop("a", 25.5, 121.0),
+            stop("b", 24.5, 121.0),
+        ];
+        assert_eq!(hub_stop(&stops, Some((25.0, 121.0))), 0);
+    }
+
+    #[test]
+    fn hub_stop_without_center_keeps_neighbor_rule() {
+        // No center: most neighbors wins (九份老街 with 2), not the earliest.
+        let stops = vec![
+            stop("淡水", 25.1727, 121.4377),
+            stop("九份老街", 25.108719, 121.8435077),
+            stop("九份住宿", 25.1081276, 121.8383274),
+            stop("金瓜石", 25.1087, 121.8885),
+        ];
+        assert_eq!(hub_stop(&stops, None), 1);
+    }
+
+    #[test]
+    fn hub_stop_without_center_all_zero_keeps_earliest() {
         let stops = vec![
             stop("home", 25.0800, 121.5700),
             stop("mountain", 24.5000, 121.5300),
             stop("town", 24.8590, 121.8230),
         ];
         assert_eq!(hub_stop(&stops, None), 0);
-    }
-
-    #[test]
-    fn hub_stop_clear_winner_ignores_center() {
-        // jiufen-shaped: 九份老街 has the most neighbors within 5 km and wins
-        // even though a destination center is nearer another stop.
-        let stops = vec![
-            stop("淡水", 25.1727, 121.4377),
-            stop("九份老街", 25.108719, 121.8435077),
-            stop("九份住宿", 25.1081276, 121.8383274),
-            stop("金瓜石", 25.1087, 121.8885),
-            stop("金山老街", 25.221883, 121.6361852),
-        ];
-        // 九份老街 has 2 neighbors, 住宿 and 金瓜石 only 1 each (>5 km apart).
-        assert_eq!(hub_stop(&stops, Some((25.2219, 121.6362))), 1);
     }
 
     #[test]
