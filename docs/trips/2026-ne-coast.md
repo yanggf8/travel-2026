@@ -10,7 +10,7 @@
 - 使用者 2026-11-19 定案：**住宿全部未定，都不列，也不一定住**。候選列（Dancing Dates、晏京、開蘭行旅、遊龍戲鳳2館、愛之船、迎迎等）留在 `domestic_accommodations`，`ranking` 全部清空 → 零排名＝整個候選區不渲染（`ac5047b`：ranking 是顯示開關，沒有「全未排名就全部顯示」的回退）。恢復時依原順序 `--rank`：Dancing Dates 1、晏京 2、開蘭 3、遊龍戲鳳 4。
 - 行程中的夜間端點是佔位「頭城（住宿待定）」（頭城鎮中心座標），不是任何一家住宿。P4 為 `selecting`，未 `set-accommodation`（佔位慣例見 `routing.md` 國內行程；P4 一旦 booked，`validate data` 會 WARN 殘留的佔位文字）。
 - 條件（若之後要訂）：民宿＝浴缸＋海景＋免費停車；汽車旅館＝浴缸＋免費停車（同行者偏好汽車旅館，海景不要求）。浴缸必須有**房型層級**證據（房型說明或房型相簿照片）——OTA 浴缸篩選與設施勾選不算（九份那次訂到的房沒有浴缸）。
-- 價格比較注意口徑：Booking 顯示含稅總價，Agoda 顯示未稅房價（結帳另加約 15% 稅與服務費）。口徑現為結構化欄位 `price_basis`（2026-11-19，`update-accommodation --price-basis incl|excl`；卡片在價格來源後渲染 含稅／未稅，混合口徑列入排序時 `validate data` WARN）。回填（整合者執行，不猜測）：ne_coast 的 Booking.com 10 列＋晏京（Agoda（含稅及服務費））→ `incl`；jiufen 9 列依 Yang 2026-11-19 決定**不回填**（舊資料無口徑證據，留 NULL）。
+- 價格比較注意口徑：Booking 顯示含稅總價，Agoda 顯示未稅房價（結帳另加約 15% 稅與服務費）。口徑現為結構化欄位 `price_basis`（2026-11-19，`update-accommodation --price-basis incl|excl`；卡片在價格來源後渲染 含稅／未稅，混合口徑列入排序時 `validate data` WARN）。回填（2026-11-19 已完成，`update-accommodation --id … --price-basis incl`）：ne_coast 的 Booking.com 10 列＋晏京（Agoda（含稅及服務費））→ `incl`，共 11 列；jiufen 9 列依 Yang 2026-11-19 決定**不回填**（舊資料無口徑證據，留 NULL）。
 
 ## 行程（2026-11-19 版，「行程不要趕」）
 
@@ -23,3 +23,4 @@
 
 - 候選位置小圖的 🚩 hub 改為「離 destination center 最近的圖例站點」（commit `6dd297d`；先前的 5 km 鄰居數規則讓 hub 落在紅樹林、再落到坪林的一對午餐站，也讓 jiufen 的小圖偏到紅樹林／淡水）。
 - 2026-11-19 verify-site：ne-coast-2026 67 PASS / 1 WARN / 0 FAIL（WARN＝未設 owner cookie）。
+- 2026-11-19 價格口徑上線（`fd0d488`，worker `2bcf6b53`）後重跑 verify-site：ne-coast-2026 67 PASS / 1 WARN / 0 FAIL，jiufen-2026 69 / 3 / 0，與上線前相同。ne_coast 全未排名，卡片上的 含稅／未稅 目前在正式頁面看不到。
