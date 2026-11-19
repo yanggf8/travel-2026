@@ -1304,19 +1304,17 @@ pub fn booking_summary(plan: &Plan, lang: &str, token: Option<&str>) -> String {
     //   pending/selecting/empty → 「🏨 海景候選 · 正在選」 (candidates as primary, dashed frame)
     // Only RANKED candidates render — an unranked row is a ruled-out/backup
     // note that fails the trip's hard conditions (浴缸×海景 for jiufen), not a
-    // card to compare (user request 2026-09-28: 不合條件的不列出). An
-    // all-unranked set is data still being entered (nothing decided yet), so it
-    // still shows everything — an empty section would hide in-progress work.
-    let ranked: Vec<&crate::model::DomesticCandidate> = plan
+    // card to compare (user request 2026-09-28: 不合條件的不列出). Ranking is
+    // the publish switch: zero ranked → no candidate section at all (no
+    // heading, no empty frame; it has no TOC entry). The owner unranks every
+    // row on purpose to hide an undecided set (ne_coast, 2026-11-19), so there
+    // is deliberately no "show everything when nothing is ranked" fallback.
+    let show: Vec<&crate::model::DomesticCandidate> = plan
         .candidates
         .iter()
         .filter(|c| c.ranking.is_some())
         .collect();
-    let show: Vec<&crate::model::DomesticCandidate> = if ranked.is_empty() {
-        plan.candidates.iter().collect()
-    } else {
-        ranked.clone()
-    };
+    let ranked = &show;
     if !show.is_empty() {
         let (cand_title, cand_sub): (&str, Option<&str>) = if is_booked {
             (
@@ -1378,7 +1376,7 @@ pub fn booking_summary(plan: &Plan, lang: &str, token: Option<&str>) -> String {
                 "<div class=\"candidate-ranking\"><span class=\"candidate-ranking-title\">{}</span><ol>",
                 esc(t("recommendOrder", lang))
             ));
-            for c in &ranked {
+            for c in ranked {
                 let title = if c.room_type.is_empty() {
                     c.hotel_name.clone()
                 } else {
@@ -1403,8 +1401,7 @@ pub fn booking_summary(plan: &Plan, lang: &str, token: Option<&str>) -> String {
             h.push_str("</ol></div>");
         }
         h.push_str("<div class=\"candidate-grid\">");
-        // `show` is ranked-only (or everything when nothing is ranked yet) —
-        // unranked rows are 不合條件, not cards to compare. Booked state shows
+        // `show` is ranked-only — unranked rows are 不合條件, not cards to compare. Booked state shows
         // the same set flat (ranking is history then, not advice).
         for c in &show {
             let title = if c.room_type.is_empty() {
@@ -2688,6 +2685,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "海論".into(),
                 room_type: "海景雙人房".into(),
@@ -2717,6 +2715,7 @@ mod tests {
         let plan = Plan {
             p4_status: "booked".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "海論".into(),
                 room_type: "海景雙人房".into(),
@@ -2749,6 +2748,7 @@ mod tests {
                 ..Default::default()
             }],
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "漫海聽風".into(),
                 room_type: "海景四人房".into(),
@@ -2902,6 +2902,7 @@ mod tests {
             p4_status: "selecting".into(),
             poi_stops: stops.clone(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "魚礁十五號".into(),
                 room_type: "四人房－附浴缸".into(),
@@ -3033,6 +3034,7 @@ mod tests {
             ],
             dest_center: center,
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "海邊旅店".into(),
                 price_twd: 3000,
@@ -3099,6 +3101,7 @@ mod tests {
         let with_coords = |lat: Option<f64>, lon: Option<f64>| Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "魚礁十五號".into(),
                 room_type: "四人房－附浴缸".into(),
@@ -3136,6 +3139,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "95行館".into(),
                 room_type: "海景豪華雙人房".into(),
@@ -3198,6 +3202,7 @@ mod tests {
         let mk = |until: &str| Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "H".into(),
                 price_twd: 3710,
@@ -3223,6 +3228,7 @@ mod tests {
         let mk = |tub: Option<i64>| Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "H".into(),
                 price_twd: 1600,
@@ -3307,6 +3313,35 @@ mod tests {
     }
 
     #[test]
+    fn all_unranked_candidates_render_no_section() {
+        use crate::model::DomesticCandidate;
+        for state in ["selecting", "booked", ""] {
+            let plan = Plan {
+                p4_status: state.into(),
+                candidates: vec![DomesticCandidate {
+                    id: "c1".into(),
+                    hotel_name: "不列民宿".into(),
+                    room_type: "海景雙人房".into(),
+                    price_twd: 2351,
+                    ranking: None,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            for lang in ["zh", "en"] {
+                let html = render(&plan, lang, None);
+                assert!(!html.contains("不列民宿"), "{state}/{lang}: {html}");
+                for marker in ["candidate-grid", "candidate-sub", "cand-reference", "candidate-ranking"] {
+                    assert!(!html.contains(marker), "{state}/{lang} {marker}: {html}");
+                }
+                for key in ["candidatesSelecting", "otherSeaViewRefs"] {
+                    assert!(!html.contains(&format!("<h2>{}</h2>", t(key, lang))), "{state}/{lang} {key}: {html}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn criteria_dates_render_plan_anchor_dates_with_weekday() {
         use crate::model::DomesticCandidate;
         let plan = Plan {
@@ -3332,7 +3367,7 @@ mod tests {
     }
 
     #[test]
-    fn no_ranking_means_no_comparison_block_but_count_still_shown() {
+    fn ranked_without_notes_has_no_notes_block_but_count_shown() {
         use crate::model::DomesticCandidate;
         let plan = Plan {
             p4_status: "selecting".into(),
@@ -3340,14 +3375,13 @@ mod tests {
                 id: "c1".into(),
                 hotel_name: "H".into(),
                 price_twd: 1600,
-                ranking: None,
+                ranking: Some(1),
                 notes: String::new(),
                 ..Default::default()
             }],
             ..Default::default()
         };
         let html = render(&plan, "zh", None);
-        assert!(!html.contains("candidate-ranking"), "{html}");
         assert!(html.contains("1 間比較中"), "{html}");
         // No notes → no notes block (nothing to compare yet).
         assert!(!html.contains("candidate-notes"), "{html}");
@@ -3385,6 +3419,7 @@ mod tests {
         let mk = |bf: i64| Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "H".into(),
                 price_twd: 3300,
@@ -3413,6 +3448,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "H".into(),
                 price_twd: 3300,
@@ -3440,6 +3476,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "海論".into(),
                 price_twd: 5200,
@@ -3448,6 +3485,7 @@ mod tests {
             ..Default::default()
         };
         let html = render(&plan, "zh", None);
+        assert!(html.contains("海論"), "the card itself renders");
         assert!(!html.contains("candidate-ratings"), "no empty rating row");
         assert!(!html.contains("candidate-note"), "no empty provenance row");
         assert!(!html.contains("candidate-size"), "no empty size span");
@@ -3459,6 +3497,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "95".into(),
                 price_twd: 3300,
@@ -3491,6 +3530,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "H".into(),
                 price_twd: 3300,
@@ -3535,6 +3575,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "海論".into(),
                 room_type: "海景雙人房".into(),
@@ -3590,6 +3631,7 @@ mod tests {
         let plan = Plan {
             p4_status: "selecting".into(),
             candidates: vec![DomesticCandidate {
+                ranking: Some(1),
                 id: "c1".into(),
                 hotel_name: "CHLIV".into(),
                 room_type: "海景雙人房".into(),
@@ -3599,6 +3641,7 @@ mod tests {
             ..Default::default()
         };
         let html = render(&plan, "zh", None);
+        assert!(html.contains("CHLIV"), "the card itself renders");
         assert!(!html.contains("candidate-gallery"));
         assert!(!html.contains("candidate-link"));
     }
