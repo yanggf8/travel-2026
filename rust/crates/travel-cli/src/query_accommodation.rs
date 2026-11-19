@@ -158,10 +158,10 @@ fn print_table(
         println!("No accommodations found.");
         return;
     }
-    // Columns: hotel_name | room_type | sea_view | price_twd | breakfast | bathtub | rank | source
+    // Columns: hotel_name | room_type | sea_view | price_twd | breakfast | bathtub | rank | basis | source
     let header = format!(
-        "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {:<7} │ {:<4} │ {}",
-        "hotel_name", "room_type", "sea_view", "price_twd", "breakfast", "bathtub", "rank", "source"
+        "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {:<7} │ {:<4} │ {:<5} │ {}",
+        "hotel_name", "room_type", "sea_view", "price_twd", "breakfast", "bathtub", "rank", "basis", "source"
     );
     let bar = "─".repeat(header.chars().count());
     println!("{bar}");
@@ -181,11 +181,13 @@ fn print_table(
             Some(n) => n.to_string(),
             None => "-".to_string(),
         };
+        // price_basis: NULL = 未確認口徑（比價前要補 incl/excl）。
+        let basis = r.price_basis.as_deref().unwrap_or("-");
         let hotel: String = r.hotel_name.chars().take(16).collect();
         let room: String = r.room_type.chars().take(14).collect();
         let src = r.source.as_deref().unwrap_or("-");
         println!(
-            "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {:<7} │ {:<4} │ {}",
+            "{:<16} │ {:<14} │ {:<8} │ {:>10} │ {:<9} │ {:<7} │ {:<4} │ {:<5} │ {}",
             dash(&hotel),
             dash(&room),
             sea,
@@ -193,6 +195,7 @@ fn print_table(
             bf,
             tub,
             rank,
+            basis,
             dash(src)
         );
     }

@@ -320,6 +320,10 @@ pub struct DomesticCandidate {
     pub price_source: String,
     /// Date the rate was read — rendered so a stale published price is visible as stale.
     pub price_checked_at: String,
+    /// Tax basis of the published rate: "incl" / "excl" render a basis chip in
+    /// the price note; "" (NULL) and any other value are unknown and render
+    /// nothing (the gap is tracked by `validate data`, not the card).
+    pub price_basis: String,
     pub source: String,
 }
 
@@ -771,6 +775,7 @@ pub fn assemble(
                 longitude: f(r, "longitude"),
                 price_source: s(r, "price_source"),
                 price_checked_at: s(r, "price_checked_at"),
+                price_basis: s(r, "price_basis"),
                 source: s(r, "source"),
             }
         })

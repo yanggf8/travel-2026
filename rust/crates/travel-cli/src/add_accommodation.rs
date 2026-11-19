@@ -20,7 +20,7 @@
 // stable across runs and toolchains (unlike DefaultHasher), so re-adding the same
 // stay is idempotent.
 
-use travel_db::repo::domestic_accommodations::{NewDomesticAccommodation, insert};
+use travel_db::repo::domestic_accommodations::{NewDomesticAccommodation, PriceBasis, insert};
 use travel_db::repo::omiyage::config_slug_exists;
 
 #[derive(Debug)]
@@ -51,6 +51,9 @@ struct Args {
     /// Sourced from a Google Maps place search or OSM/Nominatim — never guessed.
     latitude: Option<f64>,
     longitude: Option<f64>,
+    /// Tax basis of the quoted rate: `incl`/`excl` (validated by
+    /// `PriceBasis::parse`); None = 未確認 (column stays NULL — no default data).
+    price_basis: Option<String>,
 }
 
 pub async fn run(raw: &[String]) -> Result<(), String> {
@@ -91,6 +94,7 @@ pub async fn run(raw: &[String]) -> Result<(), String> {
         notes: args.notes.clone(),
         latitude: args.latitude,
         longitude: args.longitude,
+        price_basis: args.price_basis.clone(),
     };
 
     let affected = insert(&conn, &row).await?;
@@ -110,6 +114,17 @@ pub async fn run(raw: &[String]) -> Result<(), String> {
     }
     if let Some(s) = &args.price_source {
         println!("  price source: {s} (checked {})", args.price_checked.as_deref().unwrap_or("?"));
+        // A rate without its tax basis is comparable only by luck (Booking 含稅
+        // vs Agoda 未稅) — nudge, don't fail: the basis can be verified later.
+        if args.price_basis.is_none() {
+            println!(
+                "tip: --price-basis incl|excl（Booking 多為含稅、Agoda 多為未稅，請以頁面結帳為準）— \
+                 `travel update-accommodation --id {id} --price-basis incl|excl`"
+            );
+        }
+    }
+    if let Some(b) = &args.price_basis {
+        println!("  price basis: {}", crate::update_accommodation::basis_label(b));
     }
     if let Some(d) = &args.free_cancel_until {
         println!("  free cancel until: {d}");
@@ -178,10 +193,13 @@ fn usage() -> &'static str {
     "Usage:\n  travel add-accommodation --dest <slug> --hotel <name> --room-type <type> --price <twd> \
      [--image-url <url>] [--booking-url <url>] [--sea-view] [--breakfast] \
      [--room-size <sqm>] [--rooms-left <n>] [--free-cancel-until <YYYY-MM-DD>] \
-     [--price-source <name>] [--price-checked <YYYY-MM-DD>] [--bathtub <yes|no>] \
+     [--price-source <name>] [--price-checked <YYYY-MM-DD>] [--price-basis <incl|excl>] \
+     [--bathtub <yes|no>] \
      [--rank <n>] [--notes \"<優劣比較與推薦理由>\"] [--lat <f> --lon <f>]\n  \
      (slug-keyed reference data — no --plan-id; idempotent on the same dest|hotel|room|price.\n  \
       --price-source without --price-checked stamps today, so a quoted rate always carries its read date.\n  \
+      --price-basis 是該價格的含稅口徑（incl=含稅及服務費、excl=未稅結帳另加）；\n  \
+      給 --price-source 而未給 --price-basis 時 CLI 會提示補上（不猜測、不預設）。\n  \
       --lat/--lon 是 WGS84 座標（Google Maps place search 或 OSM 查得，不可猜測），\n  \
       dashboard 會用它渲染每張候選卡的位置小圖。)\n  \
       --notes/--rank 是比較段落的內容來源；補齊前 CLI 會提醒。)"
@@ -208,6 +226,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut notes: Option<String> = None;
     let mut latitude: Option<f64> = None;
     let mut longitude: Option<f64> = None;
+    let mut price_basis: Option<String> = None;
     let mut i = 0;
     while i < raw.len() {
         let k = raw[i].as_str();
@@ -277,6 +296,18 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             }
             "--price-checked" | "--price-checked-at" => {
                 price_checked = Some(date(raw, i, k)?);
+                i += 2;
+            }
+            // Tax basis of the quoted rate — validated enum, never free text
+            // (free text is what made the Agoda 口徑 live inside price_source).
+            "--price-basis" => {
+                let v = val(raw, i, k)?;
+                price_basis = Some(
+                    PriceBasis::parse(&v)
+                        .map_err(|e| format!("--price-basis must be incl or excl ({e})"))?
+                        .as_str()
+                        .to_string(),
+                );
                 i += 2;
             }
             "--bathtub" => {
@@ -372,6 +403,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         notes,
         latitude,
         longitude,
+        price_basis,
     })
 }
 
@@ -631,5 +663,31 @@ mod tests {
         assert!(id1.starts_with("jiufen_"));
         let id3 = accommodation_id("jiufen", "海論", "海景雙人房", 5300);
         assert_ne!(id1, id3, "different price must give a different id");
+    }
+
+    #[test]
+    fn parses_price_basis_incl_and_excl() {
+        for v in ["incl", "excl"] {
+            let o = parse_args(&a(&[
+                "--dest", "jiufen", "--hotel", "H", "--room-type", "R", "--price", "1",
+                "--price-source", "Booking.com", "--price-basis", v,
+            ]))
+            .unwrap();
+            assert_eq!(o.price_basis.as_deref(), Some(v), "flag value must pass through");
+        }
+        // Omitted = NULL (口徑未確認), never a guessed default.
+        let o = parse_args(&a(&["--dest", "jiufen", "--hotel", "H", "--room-type", "R", "--price", "1"]))
+            .unwrap();
+        assert_eq!(o.price_basis, None);
+    }
+
+    #[test]
+    fn rejects_illegal_price_basis() {
+        let e = parse_args(&a(&[
+            "--dest", "d", "--hotel", "H", "--room-type", "R", "--price", "1",
+            "--price-basis", "tax-included",
+        ]))
+        .unwrap_err();
+        assert!(e.contains("--price-basis must be incl or excl"), "{e}");
     }
 }

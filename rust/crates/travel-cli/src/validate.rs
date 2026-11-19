@@ -311,6 +311,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_holiday_calendars(&mut issues).await;
     validate_omiyage(&mut issues).await;
     validate_domestic_accommodations(&mut issues).await;
+    validate_stay_placeholders(&mut issues).await;
     validate_clothing_tips(&mut issues).await;
     validate_destination_timezones(&mut issues).await;
     validate_reference_tables(&mut issues).await;
@@ -413,6 +414,275 @@ mod record_marker_tests {
         assert!(!record_marker_hits("skipped"));
         assert!(!record_marker_hits("Actual: ramen"));
         assert!(!record_marker_hits(""));
+    }
+}
+
+/// One text location scanned by the stay-placeholder lint (A3): a route-segment
+/// endpoint or an activity title, with the plan+destination's P4 status.
+#[derive(Debug, Clone)]
+pub(crate) struct StayPlaceholderRow {
+    pub src: &'static str,
+    pub plan_id: String,
+    pub day: i64,
+    pub session: Option<String>,
+    pub text: String,
+    /// P4 (process_4_accommodation) status; empty when the plan has no P4 row.
+    pub p4_status: String,
+}
+
+/// Stay-placeholder keywords (A3): the undecided-stay markers the convention
+/// (routing.md 國內行程) writes into overnight endpoints/titles while the stay
+/// is NOT yet decided. Keyword list is CODE (the allowed "keywords matched
+/// against data" class), same as [`record_marker_hits`].
+pub(crate) fn stay_placeholder_hits(text: &str) -> bool {
+    const MARKERS: &[&str] = &["住宿待定", "住宿未定"];
+    MARKERS.iter().any(|m| text.contains(m))
+}
+
+/// Pure rule behind the A3 WARN: only a plan whose P4 is booked/confirmed has a
+/// DECIDED stay — placeholder text there is stale (the booked pin renders
+/// beside the 頭城（住宿待定） stop). selecting/pending/no-P4 rows are the
+/// convention working as intended and emit nothing.
+pub(crate) fn stay_placeholder_lines(rows: &[StayPlaceholderRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|r| {
+            matches!(r.p4_status.as_str(), "booked" | "confirmed") && stay_placeholder_hits(&r.text)
+        })
+        .map(|r| {
+            format!(
+                "{src} still carries a stay placeholder (住宿待定/住宿未定) but P4 \
+                 (process_4_accommodation) is {p4} — the stay is decided; replace the \
+                 placeholder with the booked stay (set-route-segment / derive-routes for \
+                 segment endpoints, update-activity for activity titles) \
+                 [plan {plan} day {day} {session}]",
+                src = r.src,
+                p4 = r.p4_status,
+                plan = r.plan_id,
+                day = r.day,
+                session = r.session.as_deref().unwrap_or("-")
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod stay_placeholder_tests {
+    use super::*;
+
+    fn row(src: &'static str, text: &str, p4: &str) -> StayPlaceholderRow {
+        StayPlaceholderRow {
+            src,
+            plan_id: "zz-test-plan".into(),
+            day: 2,
+            session: None,
+            text: text.into(),
+            p4_status: p4.into(),
+        }
+    }
+
+    #[test]
+    fn hits_both_placeholder_markers_not_plain_stay_words() {
+        assert!(stay_placeholder_hits("頭城（住宿待定）"));
+        assert!(stay_placeholder_hits("抵達頭城（住宿未定，也可能當天回）"));
+        // A booked/normal stay mention is NOT a placeholder.
+        assert!(!stay_placeholder_hits("住宿：晏京"));
+        assert!(!stay_placeholder_hits("入住頭城飯店"));
+        assert!(!stay_placeholder_hits(""));
+    }
+
+    #[test]
+    fn warns_only_when_p4_is_booked_or_confirmed() {
+        let hit = |p4: &str| {
+            stay_placeholder_lines(&[row("day_route_segments.to_place", "頭城（住宿待定）", p4)]).len()
+        };
+        assert_eq!(hit("booked"), 1, "booked → WARN");
+        assert_eq!(hit("confirmed"), 1, "confirmed counts as booked");
+        assert_eq!(hit("selecting"), 0, "undecided stay → the convention, not a defect");
+        assert_eq!(hit("pending"), 0);
+        assert_eq!(hit(""), 0, "no P4 row yet → nothing to compare");
+    }
+
+    #[test]
+    fn message_names_location_and_fix_commands() {
+        let mut r = row("activities.title", "抵達頭城（住宿未定，也可能當天回）", "booked");
+        r.session = Some("afternoon".into());
+        let lines = stay_placeholder_lines(&[r]);
+        assert_eq!(lines.len(), 1);
+        let m = &lines[0];
+        assert!(m.contains("activities.title"), "{m}");
+        assert!(m.contains("zz-test-plan") && m.contains("day 2") && m.contains("afternoon"), "{m}");
+        assert!(m.contains("set-route-segment") && m.contains("update-activity"), "{m}");
+        // A non-placeholder text on a booked plan emits nothing.
+        assert!(stay_placeholder_lines(&[row("day_route_segments.from_place", "頭城", "booked")]).is_empty());
+    }
+}
+
+/// One domestic_accommodations row as seen by the price-basis lints (spec §3):
+/// destination + id + hotel + ranking + price_source + price_basis.
+#[derive(Debug, Clone)]
+pub(crate) struct AccommodationBasisRow {
+    pub destination: String,
+    pub id: String,
+    pub hotel: String,
+    pub ranking: Option<i64>,
+    pub price_source: Option<String>,
+    pub price_basis: Option<String>,
+}
+
+/// Pure rule: a basis value that is neither NULL nor incl/excl is dirty (the
+/// column has no CHECK — raw `db exec` or old code can write junk). One WARN
+/// per dirty row, naming the id and the value.
+pub(crate) fn invalid_basis_line(r: &AccommodationBasisRow) -> Option<String> {
+    match r.price_basis.as_deref() {
+        None => None,
+        Some("incl") | Some("excl") => None,
+        Some(v) => Some(format!(
+            "{dest}/{hotel} ({id}) price_basis '{v}' is not incl or excl — the column takes only \
+             incl (含稅) / excl (未稅); fix via update-accommodation --id {id} --price-basis incl|excl|clear",
+            dest = r.destination,
+            hotel = r.hotel,
+            id = r.id
+        )),
+    }
+}
+
+/// Pure rule: an INFO nudge for a RANKED row that publishes a price_source with
+/// no basis — unranked rows are 淘汰列 that nobody compares, so they stay quiet.
+pub(crate) fn missing_basis_info(r: &AccommodationBasisRow) -> Option<String> {
+    if r.ranking.is_some()
+        && r.price_basis.is_none()
+        && r.price_source.as_deref().is_some_and(|s| !s.trim().is_empty())
+    {
+        Some(format!(
+            "{dest}/{hotel} ({id}) has a price_source but no price_basis (incl=含稅 / excl=未稅) — \
+             set via update-accommodation --id {id} --price-basis incl|excl",
+            dest = r.destination,
+            hotel = r.hotel,
+            id = r.id
+        ))
+    } else {
+        None
+    }
+}
+
+/// Pure rule behind the mix WARN: within ONE destination's RANKED candidates,
+/// both incl and excl bases present means the ranking compares apples to
+/// oranges (Booking 含稅 vs Agoda 未稅). NULL/dirty bases do not count toward
+/// the mix (dirty gets its own WARN; NULL is 未確認, tracked by the INFO).
+pub(crate) fn basis_mix_issue(dest: &str, rows: &[AccommodationBasisRow]) -> Option<String> {
+    let incl: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.ranking.is_some() && r.price_basis.as_deref() == Some("incl"))
+        .map(|r| r.id.as_str())
+        .collect();
+    let excl: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.ranking.is_some() && r.price_basis.as_deref() == Some("excl"))
+        .map(|r| r.id.as_str())
+        .collect();
+    if incl.is_empty() || excl.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{dest} 排序中的候選混用價格口徑：含稅 {n} 列（{incl}）、未稅 {m} 列（{excl}）— \
+         排序比較不可信，請換算或補查同口徑價格",
+        n = incl.len(),
+        incl = incl.join(", "),
+        m = excl.len(),
+        excl = excl.join(", ")
+    ))
+}
+
+#[cfg(test)]
+mod price_basis_validate_tests {
+    use super::*;
+
+    fn row(dest: &str, id: &str, ranking: Option<i64>, source: Option<&str>, basis: Option<&str>) -> AccommodationBasisRow {
+        AccommodationBasisRow {
+            destination: dest.into(),
+            id: id.into(),
+            hotel: format!("H-{id}"),
+            ranking,
+            price_source: source.map(str::to_string),
+            price_basis: basis.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn mix_warns_when_one_destination_ranks_both_bases() {
+        let rows = vec![
+            row("ne_coast", "a1", Some(1), Some("Booking.com"), Some("incl")),
+            row("ne_coast", "a2", Some(2), Some("Agoda"), Some("excl")),
+        ];
+        let msg = basis_mix_issue("ne_coast", &rows).expect("mixed ranked bases → WARN");
+        assert!(msg.contains("ne_coast") && msg.contains("含稅 1 列") && msg.contains("未稅 1 列"), "{msg}");
+        assert!(msg.contains("a1") && msg.contains("a2"), "ids listed: {msg}");
+        assert!(msg.contains("排序比較不可信"), "{msg}");
+    }
+
+    #[test]
+    fn single_basis_no_mix() {
+        let rows = vec![
+            row("ne_coast", "a1", Some(1), Some("Booking.com"), Some("incl")),
+            row("ne_coast", "a2", Some(2), Some("Booking.com"), Some("incl")),
+        ];
+        assert!(basis_mix_issue("ne_coast", &rows).is_none());
+    }
+
+    #[test]
+    fn unranked_null_and_dirty_rows_do_not_count_toward_the_mix() {
+        // Unranked excl next to ranked incl → not a comparison, no WARN.
+        let unranked = vec![
+            row("d", "a1", Some(1), None, Some("incl")),
+            row("d", "a2", None, None, Some("excl")),
+        ];
+        assert!(basis_mix_issue("d", &unranked).is_none());
+        // NULL basis is 未確認, not a side of the mix.
+        let nulls = vec![
+            row("d", "a1", Some(1), None, Some("incl")),
+            row("d", "a2", Some(2), None, None),
+        ];
+        assert!(basis_mix_issue("d", &nulls).is_none());
+        // Dirty value gets its own WARN, never the mix.
+        let dirty = vec![
+            row("d", "a1", Some(1), None, Some("incl")),
+            row("d", "a2", Some(2), None, Some("weird")),
+        ];
+        assert!(basis_mix_issue("d", &dirty).is_none());
+        assert!(invalid_basis_line(&dirty[1]).is_some());
+    }
+
+    #[test]
+    fn destinations_do_not_leak_into_each_other() {
+        // Same ids shape across two dests, each single-basis → no WARN per dest.
+        let ne = vec![row("ne_coast", "a1", Some(1), None, Some("incl"))];
+        let jf = vec![row("jiufen", "j1", Some(1), None, Some("excl"))];
+        assert!(basis_mix_issue("ne_coast", &ne).is_none());
+        assert!(basis_mix_issue("jiufen", &jf).is_none());
+    }
+
+    #[test]
+    fn invalid_basis_names_id_and_value() {
+        assert!(invalid_basis_line(&row("d", "x9", Some(1), Some("Booking.com"), Some("tax-free")))
+            .unwrap()
+            .contains("price_basis 'tax-free' is not incl or excl"));
+        // Legal values and NULL pass.
+        assert!(invalid_basis_line(&row("d", "x9", None, None, Some("incl"))).is_none());
+        assert!(invalid_basis_line(&row("d", "x9", None, None, Some("excl"))).is_none());
+        assert!(invalid_basis_line(&row("d", "x9", None, None, None)).is_none());
+    }
+
+    #[test]
+    fn missing_basis_info_only_for_ranked_rows_with_a_source() {
+        // Ranked + source + no basis → INFO naming the fix.
+        let msg = missing_basis_info(&row("ne_coast", "a1", Some(1), Some("Booking.com"), None)).unwrap();
+        assert!(msg.contains("update-accommodation --id a1 --price-basis"), "{msg}");
+        // Unranked → quiet (淘汰列不比價).
+        assert!(missing_basis_info(&row("d", "a2", None, Some("Booking.com"), None)).is_none());
+        // Ranked but no source → nothing published, quiet.
+        assert!(missing_basis_info(&row("d", "a3", Some(1), None, None)).is_none());
+        // Ranked + source + basis already set → quiet.
+        assert!(missing_basis_info(&row("d", "a4", Some(1), Some("Agoda"), Some("excl"))).is_none());
     }
 }
 
@@ -1933,7 +2203,7 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
         .query(
             "SELECT id, destination, hotel_name, image_url, booking_url, price_source, price_checked_at, \
              CAST(julianday('now') - julianday(price_checked_at) AS INTEGER) AS price_age_days, \
-             ranking, notes \
+             ranking, notes, price_basis \
              FROM domestic_accommodations ORDER BY destination, id",
             (),
         )
@@ -1943,6 +2213,20 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
         Err(err) => {
             // Table may not exist on a pre-migrate DB — not a data error.
             if err.to_string().contains("no such table") {
+                return;
+            }
+            if err.to_string().contains("no such column") {
+                // price_basis is new (2026-11-19); a pre-migrate DB has no column.
+                issues.push(Issue {
+                    category: "domestic-accommodations".to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "cannot check domestic_accommodations price basis: column missing — \
+                         run ./bin/travel db migrate ({err})"
+                    ),
+                    file: Some("turso:domestic_accommodations".to_string()),
+                    line: None,
+                });
                 return;
             }
             issues.push(Issue {
@@ -1957,6 +2241,7 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
     };
 
     let mut stays: Vec<(String, String, String)> = Vec::new();
+    let mut basis_rows: Vec<AccommodationBasisRow> = Vec::new();
     while let Ok(Some(row)) = rows.next().await {
         let id: String = row.get(0).unwrap_or_default();
         let dest: String = row.get(1).unwrap_or_default();
@@ -2021,6 +2306,37 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
         let price_source: Option<String> = row.get(5).ok();
         let price_checked: Option<String> = row.get(6).ok();
         let age_days: Option<i64> = row.get(7).ok();
+        // Price-basis lints (spec §3, 2026-11-19): the column has no CHECK, so
+        // dirty values get a WARN; a ranked row publishing a source with no
+        // basis gets an INFO nudge (unranked rows are 淘汰列, not compared).
+        let price_basis: Option<String> = row.get(10).ok();
+        let basis_row = AccommodationBasisRow {
+            destination: dest.clone(),
+            id: id.clone(),
+            hotel: hotel.clone(),
+            ranking,
+            price_source: price_source.clone(),
+            price_basis,
+        };
+        if let Some(message) = invalid_basis_line(&basis_row) {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Warning,
+                message,
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+        }
+        if let Some(message) = missing_basis_info(&basis_row) {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Info,
+                message,
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+        }
+        basis_rows.push(basis_row);
         if price_source.as_deref().is_some_and(|s| !s.trim().is_empty()) {
             match (price_checked.as_deref(), age_days) {
                 (Some(c), Some(age)) if !c.trim().is_empty() && age > PRICE_STALE_DAYS => {
@@ -2049,6 +2365,29 @@ async fn validate_domestic_accommodations(issues: &mut Vec<Issue>) {
             }
         }
         stays.push((id, dest, hotel));
+    }
+
+    // Basis mix: one WARN per destination whose RANKED candidates carry BOTH
+    // incl and excl — the ranking then compares 含稅 vs 未稅 prices and cannot
+    // be trusted (the exact trap this column exists to catch).
+    let mut dest_order: Vec<String> = Vec::new();
+    for r in &basis_rows {
+        if !dest_order.contains(&r.destination) {
+            dest_order.push(r.destination.clone());
+        }
+    }
+    for dest in &dest_order {
+        let group: Vec<AccommodationBasisRow> =
+            basis_rows.iter().filter(|r| r.destination == *dest).cloned().collect();
+        if let Some(message) = basis_mix_issue(dest, &group) {
+            issues.push(Issue {
+                category: "domestic-accommodations".to_string(),
+                severity: Severity::Warning,
+                message,
+                file: Some("turso:domestic_accommodations".to_string()),
+                line: None,
+            });
+        }
     }
 
     // Gallery depth: one hero image per candidate is too little to choose from.
@@ -2103,6 +2442,102 @@ const GALLERY_MIN: i64 = 3;
 /// A published room rate older than this is flagged — OTA rates and "rooms left"
 /// move week to week, and the dashboard shows the date it was read.
 const PRICE_STALE_DAYS: i64 = 21;
+
+/// WARN when a plan whose P4 (process_4_accommodation) is booked/confirmed
+/// still carries an undecided-stay placeholder (住宿待定/住宿未定) in a route
+/// endpoint or activity title (spec §2 A3, 2026-11-19). While the stay is
+/// UNDECIDED the placeholder is the convention (routing.md 國內行程) — the lint
+/// only fires once the stay is decided, when `set-accommodation` adds the hotel
+/// pin and the placeholder text goes stale. One SELECT over the three text
+/// locations, joined to the plan+destination's P4 row; the rule itself lives in
+/// [`stay_placeholder_lines`].
+async fn validate_stay_placeholders(issues: &mut Vec<Issue>) {
+    let conn = match db::connect_read().await {
+        Ok(conn) => conn,
+        Err(err) => {
+            // A connection failure is never a pass: this check did not run.
+            issues.push(Issue {
+                category: "stay-placeholder".to_string(),
+                severity: Severity::Error,
+                message: format!("stay placeholder check could not connect: {err}"),
+                file: None,
+                line: None,
+            });
+            return;
+        }
+    };
+    let scanned = match travel_db::repo::stay_placeholders::scan(&conn).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| StayPlaceholderRow {
+                src: match r.src.as_str() {
+                    "day_route_segments.from_place" => "day_route_segments.from_place",
+                    "day_route_segments.to_place" => "day_route_segments.to_place",
+                    _ => "activities.title",
+                },
+                plan_id: r.plan_id,
+                day: r.day,
+                session: r.session,
+                text: r.text,
+                p4_status: r.p4_status,
+            })
+            .collect::<Vec<_>>(),
+        Err(err) => {
+            if let Some(message) = stay_scan_failure_message(&err) {
+                issues.push(Issue {
+                    category: "stay-placeholder".to_string(),
+                    severity: Severity::Error,
+                    message,
+                    file: None,
+                    line: None,
+                });
+            }
+            return;
+        }
+    };
+    for message in stay_placeholder_lines(&scanned) {
+        issues.push(Issue {
+            category: "stay-placeholder".to_string(),
+            severity: Severity::Warning,
+            message,
+            file: None,
+            line: None,
+        });
+    }
+}
+
+/// Pure rule for a failed A3 scan: ONLY an explicitly recognised missing-table
+/// error (a pre-migrate DB — the other checks report it) may skip silently
+/// (`None`); anything else (transient Turso error, bad row) is a validation
+/// ERROR so a truncated scan can never read as "no stale placeholders".
+pub(crate) fn stay_scan_failure_message(err: &str) -> Option<String> {
+    if err.contains("no such table") {
+        return None;
+    }
+    Some(format!("stay placeholder check could not complete: {err}"))
+}
+
+#[cfg(test)]
+mod stay_scan_failure_tests {
+    use super::stay_scan_failure_message;
+
+    #[test]
+    fn only_a_missing_table_skips_silently() {
+        assert!(stay_scan_failure_message("stay placeholder scan failed: SQL error: no such table: activities").is_none());
+    }
+
+    #[test]
+    fn any_other_failure_is_a_validation_error() {
+        for e in [
+            "stay placeholder scan failed: stream expired",
+            "stay placeholder scan row failed: connection reset",
+            "stay placeholder scan failed: no such column: x",
+        ] {
+            let m = stay_scan_failure_message(e).expect("must surface");
+            assert!(m.contains("could not complete") && m.contains(e), "{m}");
+        }
+    }
+}
 
 // --- DB check: reference tables ---
 

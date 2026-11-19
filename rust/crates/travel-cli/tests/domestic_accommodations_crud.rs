@@ -2,10 +2,11 @@
 //!
 //! Covers the slug-keyed reference-data CLI family (no --plan-id):
 //!   add-accommodation → list-accommodations → update-accommodation
-//!   (image_url + booking_url) → validate data flags → delete-accommodation.
+//!   (image_url + booking_url) → validate data flags → delete-accommodation,
+//!   plus the price_basis (tax-basis) flag family (spec 2026-11-19 §3).
 //!
 //! domestic_accommodations rows are NOT plan-keyed, so teardown_plan does NOT
-//! cover them — the Guard deletes by the unique per-run hotel name.
+//! cover them — the Guard deletes by the unique row id recorded right after each add.
 
 mod common;
 use common::{bin, db_exec, db_exec_teardown, is_credless, Guard};
@@ -40,20 +41,22 @@ fn accommodation_crud_roundtrip() {
 
     let n = common::nanos();
     let dest = "jiufen";
-    // Keep the name short: the list table truncates hotel_name at 16 chars, so a
-    // long unique suffix would break the full-name `contains` assertion below.
-    let hotel = format!("ZZ測試旅宿{:06}", n % 1_000_000);
+    // The main list table truncates hotel_name at 16 chars; the decision-facts
+    // block prints it in full, which is what the `contains` check reads.
+    let hotel = format!("zz_test_{n}_crud");
     let room = "測試雙人房";
 
     // Guard: non-plan-keyed rows MUST be torn down locally (teardown_plan only
-    // covers plan_id-column tables). Delete by the unique per-run hotel name.
+    // covers plan_id-column tables). Delete by the unique row id.
+    let ids: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
     let _g = Guard::new({
-        let hotel = hotel.clone();
+        let ids = ids.clone();
         move || {
-            let _ = db_exec_teardown(&format!(
-                "DELETE FROM domestic_accommodations WHERE hotel_name = '{}'",
-                hotel.replace('\'', "''")
-            ));
+            for id in ids.lock().unwrap().iter() {
+                let _ = db_exec_teardown(&format!(
+                    "DELETE FROM domestic_accommodations WHERE id = '{id}'"
+                ));
+            }
         }
     });
 
@@ -84,6 +87,7 @@ fn accommodation_crud_roundtrip() {
         .map(str::trim)
         .expect("add-accommodation must print the new id")
         .to_string();
+    ids.lock().unwrap().push(id.clone());
     assert!(id.starts_with("jiufen_"), "id should be dest-scoped: {id}");
 
     // The add-time facts must land in the row (no follow-up update needed).
@@ -194,4 +198,193 @@ fn accommodation_crud_roundtrip() {
         "SELECT COUNT(*) AS v FROM domestic_accommodations WHERE id = '{id}'"
     ));
     assert_eq!(count.as_deref(), Some("0"), "row must be gone after delete");
+}
+
+/// price_basis (tax basis) flag family, spec 2026-11-19 §3: add/update/clear,
+/// price_checked_at is NOT touched by a basis-only update, a real source change
+/// clears a recorded basis (with the note) while a same-value re-set does not,
+/// and `validate data` flags a dirty basis value written outside the CLI.
+#[test]
+fn accommodation_price_basis_roundtrip() {
+    // No `db migrate` here: the integrator owns migrations. The column must
+    // already exist; fail with a clear message instead of migrating Turso.
+    let Some(col) = db_exec(
+        "SELECT COUNT(*) AS v FROM pragma_table_info('domestic_accommodations') WHERE name = 'price_basis'",
+    ) else {
+        eprintln!("credless - skip");
+        return;
+    };
+    assert_eq!(
+        col.scalar().as_deref(),
+        Some("1"),
+        "domestic_accommodations.price_basis is missing - run `./bin/travel db migrate` (integrator step) before this test"
+    );
+
+    let n = common::nanos();
+    let dest = "jiufen";
+    let hotel = format!("zz_test_{n}_basis");
+    let room = "測試雙人房";
+
+    // Guard: non-plan-keyed rows are torn down locally, by unique row id.
+    let ids: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let _g = Guard::new({
+        let ids = ids.clone();
+        move || {
+            for id in ids.lock().unwrap().iter() {
+                let _ = db_exec_teardown(&format!(
+                    "DELETE FROM domestic_accommodations WHERE id = '{id}'"
+                ));
+            }
+        }
+    });
+
+    // 1. add with --price-source but NO --price-basis → tip on stdout, column
+    //    stays NULL (未確認 — the pre-existing-rows case: no default data).
+    let (ok, stdout, stderr) = run(&[
+        "add-accommodation",
+        "--dest", dest,
+        "--hotel", &hotel,
+        "--room-type", room,
+        "--price", "3900",
+        "--price-source", "Booking.com",
+    ]);
+    if is_credless(&stderr) {
+        eprintln!("credless on add-accommodation — skip");
+        return;
+    }
+    assert!(ok, "add-accommodation should succeed; stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("tip: --price-basis incl|excl"), "tip expected: {stdout}");
+    let id = stdout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("id: "))
+        .map(str::trim)
+        .expect("add-accommodation must print the new id")
+        .to_string();
+    ids.lock().unwrap().push(id.clone());
+    assert_eq!(
+        scalar(&format!(
+            "SELECT (price_basis IS NULL) AS v FROM domestic_accommodations WHERE id = '{id}'"
+        ))
+        .as_deref(),
+        Some("1"),
+        "no --price-basis → NULL"
+    );
+    let checked_before = scalar(&format!(
+        "SELECT price_checked_at AS v FROM domestic_accommodations WHERE id = '{id}'"
+    ))
+    .expect("price_checked_at stamped at add time");
+
+    // 2. update --price-basis incl → stored; price_checked_at UNTOUCHED (a
+    //    basis change is not a re-quote).
+    let (ok, stdout, stderr) = run(&["update-accommodation", "--id", &id, "--price-basis", "incl"]);
+    assert!(ok, "update --price-basis should succeed; stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("price_basis: incl"), "stdout: {stdout}");
+    assert_eq!(
+        scalar(&format!(
+            "SELECT price_basis AS v FROM domestic_accommodations WHERE id = '{id}'"
+        ))
+        .as_deref(),
+        Some("incl")
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT price_checked_at AS v FROM domestic_accommodations WHERE id = '{id}'"
+        )),
+        Some(checked_before),
+        "basis-only update must not re-stamp the read date"
+    );
+
+    // 3. --price-basis clear → back to NULL.
+    let (ok, _, stderr) = run(&["update-accommodation", "--id", &id, "--price-basis", "clear"]);
+    assert!(ok, "clear should succeed; stderr={stderr}");
+    assert_eq!(
+        scalar(&format!(
+            "SELECT (price_basis IS NULL) AS v FROM domestic_accommodations WHERE id = '{id}'"
+        ))
+        .as_deref(),
+        Some("1")
+    );
+
+    // 4. REAL source change without a basis flag → recorded basis is cleared
+    //    (old basis belongs to the old source) and the note says so.
+    let (ok, _, stderr) = run(&["update-accommodation", "--id", &id, "--price-basis", "incl"]);
+    assert!(ok, "re-set basis to incl should succeed; stderr={stderr}");
+    let (ok, stdout, stderr) = run(&["update-accommodation", "--id", &id, "--price-source", "Agoda"]);
+    assert!(ok, "source-only update should succeed; stdout={stdout} stderr={stderr}");
+    assert!(
+        stdout.contains("note: price_basis cleared (price source changed)"),
+        "note expected: {stdout}"
+    );
+    assert_eq!(
+        scalar(&format!(
+            "SELECT (price_basis IS NULL) AS v FROM domestic_accommodations WHERE id = '{id}'"
+        ))
+        .as_deref(),
+        Some("1"),
+        "source change clears the recorded basis"
+    );
+
+    // 5. Same-value source re-set → basis kept, no note.
+    let (ok, _, stderr) = run(&["update-accommodation", "--id", &id, "--price-basis", "excl"]);
+    assert!(ok, "re-set basis to excl should succeed; stderr={stderr}");
+    let (ok, stdout, stderr) = run(&["update-accommodation", "--id", &id, "--price-source", "Agoda"]);
+    assert!(ok, "same-source re-set should succeed; stderr={stderr}");
+    assert!(!stdout.contains("price_basis cleared"), "no note on same-source: {stdout}");
+    assert_eq!(
+        scalar(&format!(
+            "SELECT price_basis AS v FROM domestic_accommodations WHERE id = '{id}'"
+        ))
+        .as_deref(),
+        Some("excl"),
+        "same-source re-set keeps the basis"
+    );
+
+    // 6. Source + basis together → both land.
+    let (ok, stdout, stderr) = run(&[
+        "update-accommodation", "--id", &id, "--price-source", "Booking.com", "--price-basis", "incl",
+    ]);
+    assert!(ok, "source+basis should succeed; stdout={stdout} stderr={stderr}");
+    assert_eq!(
+        scalar(&format!(
+            "SELECT price_source || '/' || price_basis AS v FROM domestic_accommodations WHERE id = '{id}'"
+        ))
+        .as_deref(),
+        Some("Booking.com/incl")
+    );
+
+    // 7. Junk flag value fails loud, writes nothing.
+    let (ok, _, stderr) = run(&["update-accommodation", "--id", &id, "--price-basis", "taxable"]);
+    assert!(!ok, "junk --price-basis must fail");
+    assert!(stderr.contains("incl or excl"), "stderr: {stderr}");
+    assert_eq!(
+        scalar(&format!(
+            "SELECT price_basis AS v FROM domestic_accommodations WHERE id = '{id}'"
+        ))
+        .as_deref(),
+        Some("incl"),
+        "failed update writes nothing"
+    );
+
+    // 8. Dirty value written OUTSIDE the CLI (raw db exec) → validate data WARN
+    //    naming the id and the value (the column has no CHECK — this lint is
+    //    the net under it).
+    db_exec(&format!(
+        "UPDATE domestic_accommodations SET price_basis = '含稅價' WHERE id = '{id}'"
+    ))
+    .expect("seed dirty basis");
+    let (ok, stdout, stderr) = run(&["validate", "data"]);
+    assert!(ok, "dirty basis is a warning, not a failure; stderr={stderr}");
+    let hit = stdout.lines().any(|l| {
+        l.contains("[domestic-accommodations]") && l.contains(&id) && l.contains("not incl or excl")
+    });
+    assert!(hit, "validate data must WARN on the dirty basis; got:\n{}", stdout);
+
+    // 9. list-accommodations shows the basis in the decision-facts line.
+    let (ok, stdout, stderr) = run(&["list-accommodations", "--dest", dest, "--limit", "100"]);
+    assert!(ok, "list should succeed; stderr={stderr}");
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with(&format!("  {hotel}")))
+        .expect("decision-facts line for the fixture row");
+    assert!(line.contains("price_basis="), "line: {line}");
 }

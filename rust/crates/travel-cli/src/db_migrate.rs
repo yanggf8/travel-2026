@@ -1750,6 +1750,10 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // researched only from a hotel's own site legitimately has none of them.
     // `price_checked_at` is what keeps the published page honest — a room rate and
     // a "rooms left" count go stale, so the card renders the date they were read.
+    // `price_basis` is the rate's tax basis (incl=含稅及服務費 / excl=未稅結帳另加,
+    // NULL=未確認): Booking totals and Agoda pre-tax rates must not rank side by
+    // side unmarked. Schema only — no default, no backfill (spec 2026-11-19 §3;
+    // values come from update-accommodation --price-basis, validated in Rust).
     for ddl in [
         "ALTER TABLE domestic_accommodations ADD COLUMN room_size_sqm INTEGER;",
         "ALTER TABLE domestic_accommodations ADD COLUMN price_source TEXT;",
@@ -1761,6 +1765,7 @@ pub async fn run(args: &[String]) -> Result<(), String> {
         "ALTER TABLE domestic_accommodations ADD COLUMN notes TEXT;",
         "ALTER TABLE domestic_accommodations ADD COLUMN latitude REAL;",
         "ALTER TABLE domestic_accommodations ADD COLUMN longitude REAL;",
+        "ALTER TABLE domestic_accommodations ADD COLUMN price_basis TEXT;",
     ] {
         add_column(&conn, ddl).await;
     }

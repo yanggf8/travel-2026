@@ -5,6 +5,37 @@
 
 use libsql::Connection;
 
+/// The tax basis a published rate was recorded under (price_basis column).
+/// `incl` = the price is the tax-and-fees-inclusive total (Booking.com shows
+/// this); `excl` = pre-tax room rate, taxes/fees added at checkout (Agoda's
+/// default). NULL = 未確認 — never guessed, never derived from `price_source`
+/// text (no default data). Legal values live only in this enum (no DB CHECK,
+/// project rule) — mirror of `records::RecordStatus`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriceBasis {
+    Incl,
+    Excl,
+}
+
+impl PriceBasis {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "incl" => Ok(PriceBasis::Incl),
+            "excl" => Ok(PriceBasis::Excl),
+            other => Err(format!(
+                "invalid price basis \"{other}\" (legal values: incl | excl)"
+            )),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PriceBasis::Incl => "incl",
+            PriceBasis::Excl => "excl",
+        }
+    }
+}
+
 /// One domestic accommodation row selected by the query.
 #[derive(Debug, Clone)]
 pub struct DomesticAccommodationRow {
@@ -39,6 +70,8 @@ pub struct DomesticAccommodationRow {
     /// WGS84 coordinates for the dashboard's per-candidate location minimap.
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    /// Tax basis of the published rate (`PriceBasis`): NULL = 未確認.
+    pub price_basis: Option<String>,
     pub updated_at: String,
 }
 
@@ -108,8 +141,10 @@ pub async fn query(
     limit: i64,
 ) -> Result<Vec<DomesticAccommodationRow>, String> {
     let built = filter.build();
+    // `price_basis` is appended at the TAIL so existing column indices 0..=22
+    // (and every `row.get(n)` consumer) keep their meaning.
     let sql = format!(
-        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, has_bathtub, ranking, notes, latitude, longitude, updated_at \
+        "SELECT id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, has_bathtub, ranking, notes, latitude, longitude, updated_at, price_basis \
          FROM domestic_accommodations {} ORDER BY price_twd ASC, hotel_name ASC LIMIT {limit}",
         built.clause
     );
@@ -147,6 +182,7 @@ pub async fn query(
             latitude: row.get(20).ok(),
             longitude: row.get(21).ok(),
             updated_at: row.get(22).unwrap_or_default(),
+            price_basis: row.get(23).ok(),
         });
     }
     Ok(out)
@@ -186,6 +222,9 @@ pub struct NewDomesticAccommodation {
     /// OSM/Nominatim; the dashboard renders the location minimap from them.
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    /// Tax basis of the quoted rate (optional) — `incl`/`excl` as validated by
+    /// [`PriceBasis::parse`]; None leaves the column NULL (未確認).
+    pub price_basis: Option<String>,
 }
 
 /// INSERT OR IGNORE one row. Returns affected rows: 1 = inserted, 0 = id already
@@ -193,8 +232,8 @@ pub struct NewDomesticAccommodation {
 pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result<u64, String> {
     conn.execute(
         "INSERT OR IGNORE INTO domestic_accommodations \
-         (id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, has_bathtub, ranking, notes, latitude, longitude, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'TWD', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, datetime('now'))",
+         (id, destination, hotel_name, room_type, sea_view, max_occupancy, price_twd, currency, breakfast_included, source, image_url, booking_url, room_size_sqm, price_source, price_checked_at, free_cancel_until, rooms_left, has_bathtub, ranking, notes, latitude, longitude, price_basis, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'TWD', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, datetime('now'))",
         libsql::params![
             row.id.clone(),
             row.destination.clone(),
@@ -217,6 +256,7 @@ pub async fn insert(conn: &Connection, row: &NewDomesticAccommodation) -> Result
             row.notes.clone(),
             row.latitude,
             row.longitude,
+            row.price_basis.clone(),
         ],
     )
     .await
@@ -242,6 +282,77 @@ pub fn build_update(id: &str, sets: &[(&str, libsql::Value)]) -> (String, Vec<li
         params.len()
     );
     (sql, params)
+}
+
+/// Like [`build_update`], plus the atomic basis guard for a `--price-source`
+/// change: `price_basis` becomes NULL in the SAME statement when the stored
+/// source differs from `new_source` (SQLite evaluates every right-hand side
+/// against the OLD row), so a concurrent writer can never leave a basis that
+/// belongs to the previous source. Caller guarantees `sets` has no
+/// `price_basis` entry (an explicit basis wins and needs no guard).
+pub fn build_update_guarding_basis(
+    id: &str,
+    sets: &[(&str, libsql::Value)],
+    new_source: &str,
+) -> (String, Vec<libsql::Value>) {
+    let mut frags: Vec<String> = Vec::new();
+    let mut params: Vec<libsql::Value> = Vec::new();
+    for (col, val) in sets {
+        params.push(val.clone());
+        frags.push(format!("{col} = ?{}", params.len()));
+    }
+    params.push(libsql::Value::Text(new_source.to_string()));
+    frags.push(format!(
+        "price_basis = CASE WHEN price_source IS NOT ?{} THEN NULL ELSE price_basis END",
+        params.len()
+    ));
+    frags.push("updated_at = datetime('now')".to_string());
+    params.push(libsql::Value::Text(id.to_string()));
+    let sql = format!(
+        "UPDATE domestic_accommodations SET {} WHERE id = ?{}",
+        frags.join(", "),
+        params.len()
+    );
+    (sql, params)
+}
+
+/// UPDATE with the atomic source-change basis guard. Returns affected rows.
+pub async fn update_fields_guarding_basis(
+    conn: &Connection,
+    id: &str,
+    sets: &[(&str, libsql::Value)],
+    new_source: &str,
+) -> Result<u64, String> {
+    let (sql, params) = build_update_guarding_basis(id, sets, new_source);
+    conn.execute(&sql, params)
+        .await
+        .map_err(|e| format!("domestic_accommodations UPDATE failed: {e}"))
+}
+
+/// The stored `(price_source, price_basis)` of one row; `None` = unknown id.
+/// Used only to word the "basis cleared" note — the clear itself is atomic in
+/// [`update_fields_guarding_basis`].
+pub async fn price_source_and_basis(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<(Option<String>, Option<String>)>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT price_source, price_basis FROM domestic_accommodations WHERE id = ?1",
+            libsql::params![id.to_string()],
+        )
+        .await
+        .map_err(|e| format!("failed to read domestic_accommodations: {e}"))?;
+    let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| format!("failed to read domestic_accommodations row: {e}"))?
+    else {
+        return Ok(None);
+    };
+    let src = row.get::<Option<String>>(0).map_err(|e| format!("price_source: {e}"))?;
+    let basis = row.get::<Option<String>>(1).map_err(|e| format!("price_basis: {e}"))?;
+    Ok(Some((src, basis)))
 }
 
 /// UPDATE the given columns by id. Returns affected rows (0 = unknown id).
@@ -350,5 +461,49 @@ mod tests {
         assert!(matches!(params[0], libsql::Value::Integer(18)));
         assert!(matches!(&params[2], libsql::Value::Text(s) if s == "Booking.com"));
         assert!(matches!(&params[3], libsql::Value::Text(s) if s == "id3"));
+    }
+
+    #[test]
+    fn price_basis_parses_legal_values_and_rejects_junk() {
+        assert_eq!(PriceBasis::parse("incl").unwrap(), PriceBasis::Incl);
+        assert_eq!(PriceBasis::parse("excl").unwrap(), PriceBasis::Excl);
+        // Junk (dirty db-exec value, typo'd flag) fails loud naming the legal set.
+        for junk in ["", "incl ", "tax-free", "INCL", "含稅"] {
+            assert!(
+                PriceBasis::parse(junk)
+                    .unwrap_err()
+                    .contains("legal values: incl | excl"),
+                "junk {junk:?} must be rejected"
+            );
+        }
+        assert_eq!(PriceBasis::Incl.as_str(), "incl");
+        assert_eq!(PriceBasis::Excl.as_str(), "excl");
+    }
+
+    #[test]
+    fn guarded_update_clears_basis_in_the_same_statement() {
+        let (sql, params) = build_update_guarding_basis(
+            "idg",
+            &[("price_source", txt("Agoda"))],
+            "Agoda",
+        );
+        assert!(sql.contains(
+            "price_basis = CASE WHEN price_source IS NOT ?2 THEN NULL ELSE price_basis END"
+        ), "{sql}");
+        assert!(sql.ends_with("WHERE id = ?3"), "{sql}");
+        assert!(matches!(&params[1], libsql::Value::Text(s) if s == "Agoda"));
+        assert!(matches!(&params[2], libsql::Value::Text(s) if s == "idg"));
+    }
+
+    #[test]
+    fn build_update_carries_price_basis_text_and_null() {
+        // The generic UPDATE path carries the new column both ways: a validated
+        // value and the SQL NULL "clear" (update-accommodation --price-basis clear).
+        let (sql, params) = build_update("idb", &[("price_basis", txt("incl"))]);
+        assert!(sql.contains("price_basis = ?1"));
+        assert!(matches!(&params[0], libsql::Value::Text(s) if s == "incl"));
+        let (sql, params) = build_update("idb", &[("price_basis", libsql::Value::Null)]);
+        assert!(sql.contains("price_basis = ?1"));
+        assert!(matches!(params[0], libsql::Value::Null));
     }
 }

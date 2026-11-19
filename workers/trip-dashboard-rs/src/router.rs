@@ -1040,8 +1040,11 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
         ),
         // [17] domestic accommodation candidates (sea-view shortlist) — ranked
         // candidates first (ranking 1 = 首選), then price order for the unranked.
+        // price_basis (2026-11-19): deploy order is FIXED — `travel db migrate`
+        // (adds the column) BEFORE a worker deploy that selects it, else the
+        // whole plan page fails on the explicit column list.
         format!(
-            "SELECT id, hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, booking_url, room_size_sqm, rooms_left, free_cancel_until, has_bathtub, price_source, price_checked_at, source, ranking, notes, latitude, longitude FROM domestic_accommodations WHERE destination = {dest_expr} ORDER BY COALESCE(ranking, 999) ASC, price_twd ASC"
+            "SELECT id, hotel_name, room_type, price_twd, currency, sea_view, breakfast_included, image_url, booking_url, room_size_sqm, rooms_left, free_cancel_until, has_bathtub, price_source, price_checked_at, price_basis, source, ranking, notes, latitude, longitude FROM domestic_accommodations WHERE destination = {dest_expr} ORDER BY COALESCE(ranking, 999) ASC, price_twd ASC"
         ),
         // [18] P4 accommodation process status — drives booked vs selecting UI.
         format!(

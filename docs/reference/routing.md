@@ -63,7 +63,7 @@ User intent                          → Skill / Action
 "which FIT offers to compare" / "FIT 比較放哪幾筆" → ./bin/travel set-fit-offer <offer-id> | --remove | --list   (+ set-fit-note for the reasons / criteria paragraph)
 "day trip squashes the overview map" / "一日遊另一張圖" → ./bin/travel set-day-excursion <day> on → snapshot-maps
 "swap two days" / "對調兩天"           → ./bin/travel swap-days A B  (moves routes + landmarks too) → snapshot-maps
-"domestic stay" / "國內住宿" / "海景房候選"  → ./bin/travel list-accommodations --dest <slug>  (candidates + decision facts); add/update/delete-accommodation to edit; add-accommodation-image for the gallery; set-accommodation-rating per review source. All slug-keyed, NO --plan-id.
+"domestic stay" / "國內住宿" / "海景房候選"  → ./bin/travel list-accommodations --dest <slug>  (candidates + decision facts); add/update/delete-accommodation to edit; add-accommodation-image for the gallery; set-accommodation-rating per review source. All slug-keyed, NO --plan-id. Record each published rate's tax basis with --price-basis incl|excl (Booking 多為含稅、Agoda 多為未稅 — 以頁面結帳為準): ranked candidates mixing incl/excl trip a `validate data` WARN.
 "book the domestic stay" / "訂這間"   → ./bin/travel set-accommodation ... (P4 -> booked, audited) | clear-accommodation to cancel
 "plan the days" / "itinerary"        → /stage3-expand-itinerary   (populate activities → derive-routes cascades transit → agent authors AI-recommended meals, LABELED via --recommended)
 "is the drill/plan rich enough" / "compare depth to a real trip"  → ./bin/travel compare content-depth --plan-id <id> [--against okinawa-2026]  (read-only oracle; 3 depth axes + ZH completeness gate — NOT a 4th %-axis; loop-until-BETTER; web page is final gate)
@@ -81,6 +81,13 @@ User provides OTA URL                → /scrape-ota (see URL Routing below)
 User provides booking confirmation   → ./bin/travel set-activity-booking
 "deploy dashboard" / "publish trip"  → /stage4-publish-dashboard
 ```
+
+### 國內行程（自駕）慣例 — 住宿未定的過夜端點
+
+A domestic trip whose overnight stay is NOT yet decided represents the overnight point as an ordinary route endpoint with a placeholder label, NOT as structured per-night state:
+- **Label**: `<地名>（住宿待定）` — the label itself says the stay is undecided (「可能當天回」judgment calls go in the activity title/notes, e.g. D1 afternoon).
+- **Coordinates**: pin the town center via `travel set-place-geocode "<地名>（住宿待定）" --lat N --lon N --dest <slug>` (OSM/Nominatim — never guessed), so snapshot-maps geocodes it as a normal stop, plan.png shows it in the legend, and it anchors the candidate 位置小圖 🚩 hub. P4 stays `selecting`; candidates stay unranked (all `ranking` NULL → the dashboard renders no candidate section — unranking is the publish switch).
+- **When the stay IS decided**: `set-accommodation` (P4 → booked) merges the booked stay's pin into plan.png; then REPLACE the placeholder endpoint/title (set-route-segment / derive-routes for endpoints, update-activity for titles) — `validate data` WARNs any 住宿待定/住宿未定 text left on a plan whose P4 is booked/confirmed (2026-11-19 §2 A3). P4 `skipped` is reserved for a DECIDED no-overnight trip (當天來回已定案), never for "undecided".
 
 ### URL Routing
 **Do not use WebFetch for OTA sites** (they require JavaScript). **The Python scrapers are

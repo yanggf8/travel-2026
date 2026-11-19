@@ -499,6 +499,11 @@ pub fn t(key: &str, lang: &str) -> &'static str {
         ("reviewCount", true) => "{n} 則",
         ("priceSourceRate", false) => "{source} rate",
         ("priceSourceRate", true) => "{source} 房價",
+        // tax basis of the rate — Booking shows 含稅 totals, Agoda 未稅 + fees at checkout
+        ("priceBasisIncl", false) => "incl. tax",
+        ("priceBasisIncl", true) => "含稅",
+        ("priceBasisExcl", false) => "excl. tax (taxes added at checkout)",
+        ("priceBasisExcl", true) => "未稅（結帳另加稅費）",
         ("stockThen", false) => " ({n} left then)",
         ("stockThen", true) => "（當時剩 {n} 間）",
         ("priceChecked", false) => "checked {date}{stock}",
@@ -693,6 +698,20 @@ mod tests {
     #[test]
     fn unknown_key_is_empty() {
         assert_eq!(t("nope", "en"), "");
+    }
+    #[test]
+    fn price_basis_keys_are_bilingual() {
+        // The candidate price-note basis chips (2026-11-19 spec §3): ZH states
+        // the tax treatment, EN stays ASCII like the other price-note keys.
+        assert_eq!(t("priceBasisIncl", "zh"), "含稅");
+        assert_eq!(t("priceBasisIncl", "en"), "incl. tax");
+        assert_eq!(t("priceBasisExcl", "zh"), "未稅（結帳另加稅費）");
+        assert_eq!(t("priceBasisExcl", "en"), "excl. tax (taxes added at checkout)");
+        for key in ["priceBasisIncl", "priceBasisExcl"] {
+            let en = t(key, "en");
+            assert!(!en.is_empty() && en.chars().all(|c| c.is_ascii()), "{key} EN must be ASCII: {en}");
+            assert!(!t(key, "zh").is_ascii(), "{key} ZH must be Chinese");
+        }
     }
     #[test]
     fn upload_error_keys_are_bilingual() {

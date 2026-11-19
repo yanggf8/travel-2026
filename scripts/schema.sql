@@ -12,7 +12,7 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-11-17
+-- Generated: 2026-11-19
 -- Tables: 150 | Indexes: 28
 -- =============================================================================
 
@@ -501,7 +501,7 @@ CREATE TABLE domestic_accommodations (
   breakfast_included INTEGER NOT NULL CHECK(breakfast_included IN (0,1)),
   source TEXT,
   updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-, image_url TEXT, booking_url TEXT, link_url TEXT, room_size_sqm INTEGER, price_source TEXT, price_checked_at DATETIME, free_cancel_until TEXT, rooms_left INTEGER, has_bathtub INTEGER, ranking INTEGER, notes TEXT, latitude REAL, longitude REAL);
+, image_url TEXT, booking_url TEXT, link_url TEXT, room_size_sqm INTEGER, price_source TEXT, price_checked_at DATETIME, free_cancel_until TEXT, rooms_left INTEGER, has_bathtub INTEGER, ranking INTEGER, notes TEXT, latitude REAL, longitude REAL, price_basis TEXT);
 
 CREATE TABLE event_log_dest_processes (
   plan_id TEXT NOT NULL, destination TEXT NOT NULL, process_id TEXT NOT NULL,

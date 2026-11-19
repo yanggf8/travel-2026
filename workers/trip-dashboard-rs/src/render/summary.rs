@@ -314,12 +314,21 @@ fn ratings_row(ratings: &[crate::model::CandidateRating], lang: &str) -> String 
     h
 }
 
-/// "Booking.com 房價 · 2026-09-04 查 · 剩 1 間 · 9/28 前免費取消".
+/// "Booking.com 房價 · 含稅 · 2026-09-04 查 · 剩 1 間 · 9/28 前免費取消".
 /// Every part is optional; an empty result renders nothing.
 fn price_note(c: &crate::model::DomesticCandidate, lang: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !c.price_source.is_empty() {
         parts.push(tf("priceSourceRate", lang, &[("source", &c.price_source)]));
+    }
+    // Tax basis rides with the source (Booking 含稅 vs Agoda 未稅 must not sit
+    // side by side unmarked). Only the two legal values render; NULL and dirty
+    // values are unknown — no chip (validate data tracks the gap, the card
+    // stays quiet rather than publishing a guess).
+    match c.price_basis.as_str() {
+        "incl" => parts.push(t("priceBasisIncl", lang).to_string()),
+        "excl" => parts.push(t("priceBasisExcl", lang).to_string()),
+        _ => {}
     }
     // Stock is a SNAPSHOT, so it hangs off the check date instead of standing on its
     // own — "1 left" on its own reads as a live OTA counter.
@@ -3194,6 +3203,42 @@ mod tests {
         );
 
         assert!(html.contains("2026-09-28 前免費取消"));
+    }
+
+    #[test]
+    fn price_note_renders_tax_basis_after_the_source() {
+        use crate::model::DomesticCandidate;
+        let mk = |basis: &str| Plan {
+            p4_status: "selecting".into(),
+            candidates: vec![DomesticCandidate {
+                ranking: Some(1),
+                id: "c1".into(),
+                hotel_name: "H".into(),
+                price_twd: 3300,
+                price_source: "Booking.com".into(),
+                price_checked_at: "2026-09-04".into(),
+                price_basis: basis.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // incl (zh) — the basis rides right after the source, before the read
+        // date: 「Booking.com 房價 · 含稅 · 2026-09-04 查價」.
+        let zh = render(&mk("incl"), "zh", None);
+        assert!(zh.contains("Booking.com 房價 · 含稅 · 2026-09-04 查價"), "{zh}");
+        // excl (en) — the checkout-added-taxes wording, same slot.
+        let en = render(&mk("excl"), "en", None);
+        assert!(
+            en.contains("Booking.com rate · excl. tax (taxes added at checkout) · checked 2026-09-04"),
+            "{en}"
+        );
+        // NULL and any dirty value are UNKNOWN — render nothing (an「口徑未知」
+        // chip would be layout noise; validate data tracks the gap).
+        for basis in ["", "weird"] {
+            let zh = render(&mk(basis), "zh", None);
+            assert!(!zh.contains("· 含稅"), "basis {basis:?} must render no basis chip: {zh}");
+            assert!(!zh.contains("未稅"), "basis {basis:?} must render no basis chip: {zh}");
+        }
     }
 
     #[test]

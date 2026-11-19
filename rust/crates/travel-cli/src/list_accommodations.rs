@@ -146,12 +146,13 @@ fn print_table(
         println!("\nDecision facts (rendered on the dashboard card):");
         for r in rows.iter().filter(|r| has_decision_facts(r)) {
             println!(
-                "  {} — size={} rooms_left={} free_cancel_until={} price_source={} price_checked={} bathtub={} rank={}",
+                "  {} — size={} rooms_left={} free_cancel_until={} price_source={} price_basis={} price_checked={} bathtub={} rank={}",
                 r.hotel_name,
                 num(&r.room_size_sqm, "m²"),
                 num(&r.rooms_left, ""),
                 opt(&r.free_cancel_until),
                 opt(&r.price_source),
+                opt(&r.price_basis),
                 opt(&r.price_checked_at),
                 bathtub(&r.has_bathtub),
                 num(&r.ranking, ""),
@@ -179,6 +180,7 @@ fn has_decision_facts(
         || r.rooms_left.is_some()
         || r.free_cancel_until.is_some()
         || r.price_source.is_some()
+        || r.price_basis.is_some()
         || r.price_checked_at.is_some()
         || r.has_bathtub.is_some()
         || r.ranking.is_some()
