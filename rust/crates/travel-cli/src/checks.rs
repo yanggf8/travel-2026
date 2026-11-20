@@ -397,9 +397,59 @@ pub(crate) fn validate_start_le_end(
     Ok(())
 }
 
+// ── coordinate validation ────────────────────────────────────────────────
+
+/// Validate a WGS84 coordinate pair: both finite, lat in [-90,90], lon in
+/// [-180,180], and not null island (0,0). Shared by activity pins, route-segment
+/// via points and `update-accommodation`; returns the pair on success.
+#[allow(dead_code)] // consumed by L1/L2 lanes
+pub(crate) fn validate_coords(lat: f64, lon: f64) -> Result<(f64, f64), String> {
+    if !lat.is_finite() || !lon.is_finite() {
+        return Err(format!("coordinates must be finite numbers (got {lat},{lon})"));
+    }
+    if !(-90.0..=90.0).contains(&lat) {
+        return Err(format!("lat must be between -90 and 90 (got {lat})"));
+    }
+    if !(-180.0..=180.0).contains(&lon) {
+        return Err(format!("lon must be between -180 and 180 (got {lon})"));
+    }
+    if lat.abs() < 1e-9 && lon.abs() < 1e-9 {
+        return Err(
+            "--lat/--lon look like null island (0,0) — geocode a real place, never guess"
+                .to_string(),
+        );
+    }
+    Ok((lat, lon))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_coords_accepts_valid_and_boundaries() {
+        assert_eq!(validate_coords(25.2897, 121.5690), Ok((25.2897, 121.5690)));
+        assert!(validate_coords(90.0, 180.0).is_ok());
+        assert!(validate_coords(-90.0, -180.0).is_ok());
+        assert!(validate_coords(0.0, 121.0).is_ok());
+        assert!(validate_coords(25.0, 0.0).is_ok());
+    }
+
+    #[test]
+    fn validate_coords_rejects_out_of_range() {
+        assert!(validate_coords(90.0001, 121.0).is_err());
+        assert!(validate_coords(-90.0001, 121.0).is_err());
+        assert!(validate_coords(25.0, 180.0001).is_err());
+        assert!(validate_coords(25.0, -180.0001).is_err());
+    }
+
+    #[test]
+    fn validate_coords_rejects_null_island_and_nan() {
+        assert!(validate_coords(0.0, 0.0).unwrap_err().contains("null island"));
+        assert!(validate_coords(1e-10, -1e-10).is_err());
+        assert!(validate_coords(f64::NAN, 121.0).is_err());
+        assert!(validate_coords(25.0, f64::INFINITY).is_err());
+    }
 
     // ── clean_stop ────────────────────────────────────────────────────
     #[test]

@@ -37,4 +37,5 @@ pub mod domestic_accommodation_images;
 pub mod domestic_accommodation_ratings;
 pub mod domestic_accommodations;
 pub mod route_segments;
+pub mod text_merge;
 pub mod stay_placeholders;

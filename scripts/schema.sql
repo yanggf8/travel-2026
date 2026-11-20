@@ -12,8 +12,8 @@
 --     {"sql":"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL"}},
 --     {"type":"close"}]}'
 --   then emit each `sql` verbatim, tables before indexes.
--- Generated: 2026-11-19
--- Tables: 150 | Indexes: 28
+-- Generated: 2026-11-20
+-- Tables: 151 | Indexes: 28
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ CREATE TABLE activities (
     notes TEXT,
     priority TEXT NOT NULL DEFAULT 'want' CHECK(priority IN ('must','want','optional')),
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  , poi_id TEXT, source TEXT NOT NULL DEFAULT 'confirmed', record_status TEXT, record_note TEXT);
+  , poi_id TEXT, source TEXT NOT NULL DEFAULT 'confirmed', record_status TEXT, record_note TEXT, lat REAL, lon REAL, geo_source TEXT, requested_by TEXT);
 
 CREATE TABLE activity_tags (
   activity_id TEXT NOT NULL, tag TEXT NOT NULL,
@@ -275,6 +275,14 @@ CREATE TABLE day_landmarks (
   day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
   landmark TEXT NOT NULL,
   PRIMARY KEY (plan_id, destination, day_number, sort_order)
+);
+
+CREATE TABLE day_route_segment_via (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
+  via_order INTEGER NOT NULL,
+  lat REAL NOT NULL, lon REAL NOT NULL,
+  PRIMARY KEY (plan_id, destination, day_number, sort_order, via_order)
 );
 
 CREATE TABLE day_route_segments (

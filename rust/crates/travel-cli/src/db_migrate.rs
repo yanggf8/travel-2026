@@ -113,6 +113,31 @@ fn day_weather_sessions_ddl(name: &str) -> String {
     )
 }
 
+/// Itinerary-editing schema (spec 2026-11-20): nullable pin columns + requested_by
+/// on `activities`, and the normalized per-segment via table (no JSON). Structure
+/// only — no default, no backfill; values come from CLI commands.
+async fn add_itinerary_edit_schema(conn: &libsql::Connection) {
+    for ddl in [
+        "ALTER TABLE activities ADD COLUMN lat REAL;",
+        "ALTER TABLE activities ADD COLUMN lon REAL;",
+        "ALTER TABLE activities ADD COLUMN geo_source TEXT;",
+        "ALTER TABLE activities ADD COLUMN requested_by TEXT;",
+    ] {
+        add_column(conn, ddl).await;
+    }
+    exec_create(
+        conn,
+        r#"CREATE TABLE IF NOT EXISTS day_route_segment_via (
+  plan_id TEXT NOT NULL, destination TEXT NOT NULL,
+  day_number INTEGER NOT NULL, sort_order INTEGER NOT NULL,
+  via_order INTEGER NOT NULL,
+  lat REAL NOT NULL, lon REAL NOT NULL,
+  PRIMARY KEY (plan_id, destination, day_number, sort_order, via_order)
+)"#,
+    )
+    .await;
+}
+
 /// Trip-record schema (2026-11-16-trip-record-design §4): `record_status` +
 /// `record_note` on the three itinerary row tables, `record_summary_zh` on
 /// timesofday. Idempotent ADD COLUMN (duplicate-column tolerated by
@@ -1775,6 +1800,9 @@ pub async fn run(args: &[String]) -> Result<(), String> {
     // nullable, no CHECK, no default — the legal values are validated in Rust by
     // travel_db::repo::records::RecordStatus. Schema only; rows come from the CLI.
     add_record_columns(&conn).await;
+    // Itinerary-editing schema (spec 2026-11-20 §0 L0): activity pins, requested_by,
+    // per-segment via points. Structure only.
+    add_itinerary_edit_schema(&conn).await;
     // Guest ratings: one row per REVIEW SOURCE, because the scales differ
     // (Booking.com is /10, Google is /5) and averaging them would invent a number.
     // Normalized child table — never a "9.0/10 (266)" string in one column.
@@ -3233,5 +3261,43 @@ mod tests {
                 "{table}.{col} must exist after add_record_columns"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn itinerary_edit_schema_added_idempotently() {
+        let conn = mem_conn().await;
+        create_record_tables(&conn).await;
+
+        add_itinerary_edit_schema(&conn).await;
+        add_itinerary_edit_schema(&conn).await; // idempotent
+
+        for col in ["lat", "lon", "geo_source", "requested_by"] {
+            assert!(has_column(&conn, "activities", col).await, "activities.{col}");
+        }
+        for col in [
+            "plan_id", "destination", "day_number", "sort_order", "via_order", "lat", "lon",
+        ] {
+            assert!(
+                has_column(&conn, "day_route_segment_via", col).await,
+                "day_route_segment_via.{col}"
+            );
+        }
+        let ins = |vo: i64| {
+            format!("INSERT INTO day_route_segment_via VALUES ('p','d',1,1,{vo},25.0,121.0)")
+        };
+        conn.execute(&ins(0), ()).await.unwrap();
+        conn.execute(&ins(1), ()).await.unwrap();
+        assert!(conn.execute(&ins(1), ()).await.is_err(), "PK must reject duplicate via_order");
+        assert!(conn
+            .execute("INSERT INTO day_route_segment_via VALUES ('p','d',1,1,9,NULL,121.0)", ())
+            .await
+            .is_err());
+        conn.execute(
+            "INSERT INTO activities (id,plan_id,destination,day_number,session_type,title) \
+             VALUES ('a','p','d',1,'morning','t')",
+            (),
+        )
+        .await
+        .unwrap();
     }
 }
