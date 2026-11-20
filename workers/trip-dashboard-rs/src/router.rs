@@ -931,11 +931,7 @@ async fn load_plan(turso_url: &str, token: &str, slug: &str) -> Result<model::Pl
              time_range_start, time_range_end, record_summary_zh \
              FROM timesofday WHERE plan_id = '{slug}'"
         ),
-        format!(
-            "SELECT day_number, session_type, title, poi_id, \
-             book_by, booking_status, booking_url, source, record_status, record_note, id \
-             FROM activities WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
-        ),
+        activities_sql(slug),
         format!(
             "SELECT day_number, session_type, meal, source, record_status, record_note, sort_order \
              FROM session_meals WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
@@ -1155,8 +1151,29 @@ fn dest_center(rows: &[turso::Row]) -> Option<(f64, f64)> {
         .then_some((lat, lon))
 }
 
+/// The day-card activities query. `notes`/`lat`/`lon`/`requested_by` are the
+/// editing-lane columns (notes display, own map pin, 「誰指定」 chip).
+fn activities_sql(slug: &str) -> String {
+    format!(
+        "SELECT day_number, session_type, title, poi_id, \
+         book_by, booking_status, booking_url, source, record_status, record_note, id, \
+         notes, lat, lon, requested_by \
+         FROM activities WHERE plan_id = '{slug}' ORDER BY day_number, sort_order"
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn activities_select_carries_notes_pin_and_requester() {
+        let sql = super::activities_sql("p-1");
+        for col in ["notes", "lat", "lon", "requested_by"] {
+            assert!(sql.contains(&format!(" {col}")) || sql.contains(&format!("{col},")), "{col} missing: {sql}");
+        }
+        assert!(sql.contains("notes, lat, lon, requested_by"), "{sql}");
+        assert!(sql.contains("WHERE plan_id = 'p-1'"), "{sql}");
+    }
+
     use super::*;
 
     #[test]

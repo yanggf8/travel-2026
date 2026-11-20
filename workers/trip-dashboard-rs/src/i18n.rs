@@ -10,6 +10,8 @@ pub fn t(key: &str, lang: &str) -> &'static str {
     match (key, zh) {
         ("recDone", false) => "Actual",
         ("recDone", true) => "實際",
+        ("reqBy", false) => "Requested by {name}",
+        ("reqBy", true) => "{name} 指定",
         ("recSkippedLine", false) => "Skipped: {list}",
         ("recSkippedLine", true) => "未前往：{list}",
         ("recUnrecorded", false) => "Planned · not recorded",

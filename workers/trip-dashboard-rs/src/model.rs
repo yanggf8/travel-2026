@@ -53,6 +53,10 @@ pub struct Activity {
     pub record_note: String,
     /// `activities.id` — the row's stable identity for `data-activity-id`.
     pub id: String,
+    /// `activities.notes` — free-form agent/user supplement (hours, parking…).
+    pub notes: String,
+    /// `activities.requested_by` — who asked for this stop (data; empty = nobody).
+    pub requested_by: String,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -228,6 +232,8 @@ pub fn build_sessions(activities: &[Row], meals: &[Row]) -> Vec<Session> {
                     record_status: s(r, "record_status"),
                     record_note: s(r, "record_note"),
                     id: s(r, "id"),
+                    notes: s(r, "notes"),
+                    requested_by: s(r, "requested_by"),
                 })
                 .collect(),
             meals: meals
@@ -894,8 +900,19 @@ fn attach_stops(sessions: &mut [Session], acts: &[Row], poi_rows: &[Row]) {
                 let nt = norm_title(&title);
                 poi_rows.iter().find(|p| norm_title(&s(p, "title")) == nt)
             };
-            let lat = poi.and_then(|p| p.get("lat")).and_then(json_f64);
-            let lon = poi.and_then(|p| p.get("lon")).and_then(json_f64);
+            // Coordinate priority: the activity's OWN pin (activities.lat/lon,
+            // written by the CLI) > the linked POI's > none. Both halves or neither.
+            let own = match (a.get("lat").and_then(json_f64), a.get("lon").and_then(json_f64)) {
+                (Some(la), Some(lo)) => Some((la, lo)),
+                _ => None,
+            };
+            let (lat, lon) = match own {
+                Some((la, lo)) => (Some(la), Some(lo)),
+                None => (
+                    poi.and_then(|p| p.get("lat")).and_then(json_f64),
+                    poi.and_then(|p| p.get("lon")).and_then(json_f64),
+                ),
+            };
             let maps_link = match (lat, lon) {
                 // Clean coord link — always correct, leave untouched.
                 (Some(la), Some(lo)) => format!("https://www.google.com/maps?q={la},{lo}"),
@@ -1203,6 +1220,53 @@ mod tests {
             "https://www.google.com/maps?q=26.2156,127.6691"
         );
         assert_eq!(m.address, "Naha");
+    }
+
+    #[test]
+    fn build_sessions_fills_notes_and_requested_by() {
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Cafe")),
+            ("notes", json!("hours 9-17")),
+            ("requested_by", json!("Ping")),
+        ])];
+        let sessions = build_sessions(&acts, &[]);
+        let a = &sessions[0].activities[0];
+        assert_eq!(a.notes, "hours 9-17");
+        assert_eq!(a.requested_by, "Ping");
+    }
+
+    #[test]
+    fn activity_own_latlon_beats_poi_latlon() {
+        let acts = vec![row(&[
+            ("session_type", json!("morning")),
+            ("title", json!("Naminoue Shrine")),
+            ("lat", json!("26.1000")),
+            ("lon", json!("127.1000")),
+        ])];
+        let pois = vec![row(&[
+            ("title", json!("Naminoue Shrine")),
+            ("lat", json!("26.2156")),
+            ("lon", json!("127.6691")),
+        ])];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &pois);
+        let m = &sessions[0].stops[0];
+        assert_eq!(m.maps_link, "https://www.google.com/maps?q=26.1,127.1");
+        assert_eq!((m.lat, m.lon), (Some(26.1), Some(127.1)));
+    }
+
+    #[test]
+    fn activity_latlon_alone_gives_coord_link_and_half_pin_is_ignored() {
+        let acts = vec![
+            row(&[("session_type", json!("morning")), ("title", json!("Pin Only")), ("lat", json!(25.0)), ("lon", json!(121.5))]),
+            row(&[("session_type", json!("noon")), ("title", json!("Half Pin")), ("lat", json!(25.0)), ("lon", Value::Null)]),
+        ];
+        let mut sessions = build_sessions(&acts, &[]);
+        super::attach_stops(&mut sessions, &acts, &[]);
+        assert_eq!(sessions[0].stops[0].maps_link, "https://www.google.com/maps?q=25,121.5");
+        assert!(sessions[1].stops[0].lat.is_none());
+        assert!(sessions[1].stops[0].maps_link.contains("/maps/search/"));
     }
 
     #[test]

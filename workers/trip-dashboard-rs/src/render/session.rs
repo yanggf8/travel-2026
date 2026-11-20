@@ -51,6 +51,26 @@ pub fn render_meal(meal: &Meal, lang: &str) -> String {
     }
 }
 
+/// Per-activity extras shown under the title on the day card AND in the now
+/// card's expansion: the 「{name} 指定」 chip (the name is DATA, escaped before it
+/// is filled into the chrome string) and the activity's notes (via
+/// render_activity_text: escaped, `\n`→`<br>`, URLs linkified). Empty values
+/// emit no markup at all.
+pub(crate) fn activity_extras(a: &crate::model::Activity, lang: &str) -> String {
+    let mut h = String::new();
+    let who = a.requested_by.trim();
+    if !who.is_empty() {
+        h.push_str(&format!(
+            " <span class=\"req-chip\">{}</span>",
+            crate::i18n::tf("reqBy", lang, &[("name", &esc(who))])
+        ));
+    }
+    if !a.notes.trim().is_empty() {
+        h.push_str(&format!("<div class=\"act-notes\">{}</div>", render_activity_text(a.notes.trim())));
+    }
+    h
+}
+
 /// The trailing badge (+ note) of a recorded row on a PAST session: 實際 for
 /// `done`, 計畫・未紀錄 for anything else (NULL status). Shared by the day
 /// card's activity and meal lines and the now card's expand body.
@@ -295,6 +315,7 @@ pub fn render_unit(
             render_activity_text(&a.title),
             super::ai_rec_badge(&a.source, lang)
         ));
+        h.push_str(&activity_extras(a, lang));
         if past {
             h.push_str(&record_badge(&a.record_status, &a.record_note, lang));
         }
@@ -490,6 +511,43 @@ mod tests {
         assert!(!session_is_past("2026-11-16", &late, Some(&clock)));
         assert!(!session_is_past("2026-11-16", &early, None));
         assert!(session_is_past("2026-11-15", &late, Some(&clock)));
+    }
+    fn noted(notes: &str, who: &str) -> Activity {
+        Activity { title: "Cafe".into(), notes: notes.into(), requested_by: who.into(), ..Default::default() }
+    }
+    #[test]
+    fn activity_notes_render_escaped_with_br_and_links_zh_en() {
+        let sess = Session { session_type: "morning".into(), activities: vec![noted("營業 9-17 <b>x</b>\n停車 https://maps.example/p", "")], ..Default::default() };
+        for lang in ["zh", "en"] {
+            let h = render_unit(&sess, lang, None, None, false);
+            assert!(h.contains("<div class=\"act-notes\">營業 9-17 &lt;b&gt;x&lt;/b&gt;<br>停車 "), "{h}");
+            assert!(h.contains("href=\"https://maps.example/p\""), "{h}");
+            assert!(!h.contains("<b>x"), "{h}");
+            assert!(!h.contains("req-chip"), "{h}");
+        }
+    }
+    #[test]
+    fn activity_without_notes_or_requester_emits_no_extras() {
+        let sess = Session { session_type: "morning".into(), activities: vec![noted("  ", " ")], ..Default::default() };
+        let h = render_unit(&sess, "en", None, None, false);
+        assert!(!h.contains("act-notes") && !h.contains("req-chip"), "{h}");
+    }
+    #[test]
+    fn req_chip_zh_en_and_name_escaped() {
+        let sess = Session { session_type: "morning".into(), activities: vec![noted("", "Ping<b>")], ..Default::default() };
+        let zh = render_unit(&sess, "zh", None, None, false);
+        assert!(zh.contains("<span class=\"req-chip\">Ping&lt;b&gt; 指定</span>"), "{zh}");
+        let en = render_unit(&sess, "en", None, None, false);
+        assert!(en.contains("req-chip\">Requested by Ping&lt;b&gt;</span>"), "{en}");
+        assert!(!en.contains("Ping<b>"), "{en}");
+    }
+    #[test]
+    fn past_skipped_activity_carries_no_notes() {
+        let mut a = noted("secret-note", "Ping");
+        a.record_status = "skipped".into();
+        let sess = Session { session_type: "morning".into(), activities: vec![a], ..Default::default() };
+        let h = render_unit(&sess, "en", None, None, true);
+        assert!(!h.contains("secret-note") && !h.contains("req-chip"), "{h}");
     }
     /// Build an Activity carrying only a display title (the common test case).
     fn act(title: &str) -> Activity {

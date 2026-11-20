@@ -276,6 +276,7 @@ fn expand_body(sess: &Session, legs: &[(&RouteSegment, i64, bool)], day_number: 
                 continue;
             }
             h.push_str(&format!("<div class=\"now-act\">{}", super::render_activity_text(&a.title)));
+            h.push_str(&super::session::activity_extras(a, lang));
             if past {
                 h.push_str(&super::session::record_badge(&a.record_status, &a.record_note, lang));
             }
@@ -681,6 +682,20 @@ mod tests {
         assert!(card.contains("Original focus") && card.contains("Unrecorded stop"), "{card}");
         assert!(card.contains("Done cafe") && card.contains("&lt;meal note&gt;"), "{card}");
         assert!(card.contains("Skipped: Skipped stop、Skipped cafe"), "{card}");
+    }
+    #[test]
+    fn now_expand_shows_activity_notes_and_chip() {
+        let sess = Session { session_type: "noon".into(), time_start: "12:00".into(), time_end: "13:00".into(), focus_zh: "F".into(), activities: vec![
+            crate::model::Activity { title: "Cafe".into(), notes: "open <i>9</i>\nhttps://x.example/a".into(), requested_by: "Ping".into(), ..Default::default() },
+            crate::model::Activity { title: "Plain".into(), ..Default::default() },
+        ], ..Default::default() };
+        let html = expand_body(&sess, &[], 1, false, "en", false);
+        assert!(html.contains("<div class=\"act-notes\">open &lt;i&gt;9&lt;/i&gt;<br>"), "{html}");
+        assert!(html.contains("href=\"https://x.example/a\""), "{html}");
+        assert!(html.contains("Requested by Ping"), "{html}");
+        assert_eq!(html.matches("act-notes").count(), 1, "{html}");
+        let zh = expand_body(&sess, &[], 1, false, "zh", false);
+        assert!(zh.contains("Ping 指定"), "{zh}");
     }
     #[test]
     fn trip_record_past_session_without_focus_lists_activities_once() {
