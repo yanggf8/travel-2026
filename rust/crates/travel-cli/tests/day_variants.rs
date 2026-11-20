@@ -302,6 +302,8 @@ fn remove_deletes_all_variant_rows_and_clears_main_labels() {
            VALUES ('{plan_id}', '{dest}', 3, 'morning', 0, 'Z'); \
          INSERT INTO day_route_segments (plan_id, destination, day_number, sort_order, from_place, to_place, mode) \
            VALUES ('{plan_id}', '{dest}', 3, 0, 'a', 'b', 'walk'); \
+         INSERT INTO day_route_segment_via (plan_id, destination, day_number, sort_order, via_order, lat, lon) \
+           VALUES ('{plan_id}', '{dest}', 3, 0, 0, 25.0, 121.5); \
          INSERT INTO day_landmarks (plan_id, destination, day_number, sort_order, landmark) \
            VALUES ('{plan_id}', '{dest}', 3, 0, 'L');"
     ))
@@ -310,7 +312,7 @@ fn remove_deletes_all_variant_rows_and_clears_main_labels() {
     assert!(ok, "remove failed: {out}");
     for tbl in [
         "days", "timesofday", "activities", "session_meals", "session_activities_zh",
-        "day_route_segments", "day_landmarks",
+        "day_route_segments", "day_route_segment_via", "day_landmarks",
     ] {
         assert_eq!(
             scalar(&format!("SELECT COUNT(*) AS n FROM {tbl} WHERE plan_id='{plan_id}' AND day_number=3")),

@@ -474,6 +474,7 @@ pub async fn delete_day_content(
         "session_meals",
         "session_activities_zh",
         "timesofday",
+        "day_route_segment_via",
         "day_route_segments",
         "day_landmarks",
         "day_weather_sessions",

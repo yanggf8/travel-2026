@@ -366,6 +366,13 @@ pub async fn run_update(args: &[String], plan_id: String) -> Result<(), String> 
         .await?;
 
         let mut warnings = Vec::new();
+        if before.source == "ai_recommended" {
+            warnings.push(format!(
+                "note: D{day} S{so} is an ai_recommended segment — a later `derive-routes` run may rewrite the day \
+                 and drop this edit (and its via); freeze the day first with \
+                 `travel confirm-recommendations --day {day} --kind route`."
+            ));
+        }
         if !via_after.is_empty() {
             for (d2, s2) in route_segments::segments_with_endpoints(
                 &conn,

@@ -117,6 +117,7 @@ fn update_only_duration_keeps_source_and_other_fields() {
     assert!(ok, "{out}{err}");
     // bite: set-route-segment would have flipped source to confirmed; update must not.
     assert_eq!(rows(&fx), vec!["0|A|B|30|09:00|ai_recommended"]);
+    assert!(out.contains("confirm-recommendations --day 1 --kind route"), "ai_recommended edit must warn: {out}");
     assert_eq!(kv(&fx, "route_segment_patched", "changed"), vec!["duration_min"]);
     assert_eq!(kv(&fx, "route_segment_patched", "from.duration_min"), vec!["20"]);
     assert_eq!(audit_count(&fx, "update-route-segment"), 1);

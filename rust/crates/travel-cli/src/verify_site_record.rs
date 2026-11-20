@@ -255,10 +255,35 @@ fn missing_session(anc: &str) -> Check {
 
 /// The first line of `notes` as the page shows it: text before any URL (the
 /// worker may fold a URL into a short labeled link), whitespace collapsed.
+/// Map-link labels the worker rewrites into a 「🗺️ <label>」 anchor
+/// (workers/trip-dashboard-rs/src/render/activity_text.rs LABELS): the label's
+/// trailing 「：」 and URL vanish from the rendered text, so the probe stops
+/// before any of them.
+const MAP_LINK_LABELS: &[&str] = &["google maps", "directions", "地圖", "地图", "導航", "导航", "map"];
+
+/// The text a reader must find in the activity's `div.act-notes`: the first line
+/// whose plain-text head (before any URL or map-link label) is non-empty,
+/// whitespace-normalized. Notes that are only links give "" (the block itself
+/// must still render).
 fn notes_probe(notes: &str) -> String {
-    let first = notes.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let cut = first.find("http").map_or(first, |i| &first[..i]);
-    cut.split_whitespace().collect::<Vec<_>>().join(" ")
+    for line in notes.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let lower = line.to_lowercase();
+        let mut cut = lower.find("http").unwrap_or(line.len());
+        for label in MAP_LINK_LABELS {
+            if let Some(i) = lower.find(label) {
+                cut = cut.min(i);
+            }
+        }
+        // to_lowercase keeps byte offsets for the CJK/ASCII labels matched here,
+        // but guard the slice anyway.
+        let head = line.get(..cut).unwrap_or(line);
+        let head = head.trim_end_matches(|c: char| c.is_whitespace() || c == ':' || c == '：');
+        let probe = head.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !probe.is_empty() {
+            return probe;
+        }
+    }
+    String::new()
 }
 
 /// Notes check: every non-skipped activity with notes must render them inside
@@ -903,7 +928,11 @@ mod tests {
     #[test]
     fn notes_probe_cuts_at_url_and_takes_first_nonblank_line() {
         assert_eq!(notes_probe("\n  營業  9-17 \n停車"), "營業 9-17");
-        assert_eq!(notes_probe("地圖：https://x/y"), "地圖：");
+        // label + URL is rewritten to 「🗺️ 地圖」 by the worker: skip to the next line.
+        assert_eq!(notes_probe("地圖：https://x/y\n停車 50 元"), "停車 50 元");
+        assert_eq!(notes_probe("川岩 Google Maps：https://x/y"), "川岩");
+        assert_eq!(notes_probe("營業到 15:00 https://x"), "營業到 15:00");
+        assert_eq!(notes_probe("https://only/link"), "");
     }
     #[test]
     fn after_trip_pin_is_the_day_after_the_last_main_day() {
