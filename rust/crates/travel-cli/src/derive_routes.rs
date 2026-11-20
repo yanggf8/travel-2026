@@ -55,7 +55,13 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     // must not half-apply (a lost insert would also lose the old segments' via rows).
     crate::cascade::common::begin_immediate(&conn, "derive-routes").await?;
     let outcome = run_body(&conn, &plan_id, &destination, &opts).await;
-    crate::cascade::common::finish_tx(&conn, "derive-routes", outcome).await
+    let lines = crate::cascade::common::finish_tx(&conn, "derive-routes", outcome).await?;
+    // Printed only after COMMIT: a later day's failure rolls everything back, and
+    // "Day N: replaced …" lines printed earlier would claim writes that never happened.
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 async fn run_body(
@@ -63,8 +69,12 @@ async fn run_body(
     plan_id: &str,
     destination: &str,
     opts: &Opts,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let (conn, plan_id, destination) = (conn, plan_id.to_string(), destination.to_string());
+    let mut lines: Vec<String> = Vec::new();
+    macro_rules! say {
+        ($($a:tt)*) => { lines.push(format!($($a)*)) };
+    }
     let activities = load_activities(conn, &plan_id, &destination, opts.day).await?;
     let mut by_day: BTreeMap<i64, Vec<ActivityRow>> = BTreeMap::new();
     for row in activities {
@@ -87,12 +97,12 @@ async fn run_body(
 
         let confirmed = count_confirmed(&conn, &plan_id, &destination, *day).await?;
         if confirmed > 0 {
-            println!("Day {day}: skipped - confirmed route segment(s) exist");
+            say!("Day {day}: skipped - confirmed route segment(s) exist");
             skipped_confirmed += 1;
             continue;
         }
 
-        let desired = derive_legs(&conn, &destination, acts, *day).await?;
+        let desired = derive_legs(&conn, &destination, acts, *day, &mut lines).await?;
 
         // A metadata-less leg is written but won't count as a "real" route (the
         // depth oracle gates on duration_min>0) — collect it for the end report
@@ -110,7 +120,7 @@ async fn run_body(
 
         if desired == existing {
             if !desired.is_empty() {
-                println!(
+                say!(
                     "Day {day}: unchanged - existing ai_recommended route segment(s) already match"
                 );
             }
@@ -160,20 +170,20 @@ async fn run_body(
         )
         .await?;
         for line in route_segments::format_via_report(*day, &via_report) {
-            println!("{line}");
+            say!("{line}");
         }
         let now_db = now_db_datetime();
         route_segments::touch_day(&conn, &plan_id, &destination, *day, &now_db).await?;
 
         let inserted = desired.len() as i64;
         if deleted > 0 && inserted > 0 {
-            println!(
+            say!(
                 "Day {day}: replaced {deleted} stale ai_recommended route segment(s) with {inserted} derived segment(s)"
             );
         } else if inserted > 0 {
-            println!("Day {day}: inserted {inserted} ai_recommended route segment(s)");
+            say!("Day {day}: inserted {inserted} ai_recommended route segment(s)");
         } else if deleted > 0 {
-            println!("Day {day}: cleared {deleted} stale ai_recommended route segment(s)");
+            say!("Day {day}: cleared {deleted} stale ai_recommended route segment(s)");
         }
 
         inserted_total += inserted;
@@ -268,27 +278,27 @@ async fn run_body(
         .await?;
     }
 
-    println!(
+    say!(
         "Totals: days_scanned={days_scanned} days_written={days_written} inserted={inserted_total} deleted={deleted_total} skipped_confirmed={skipped_confirmed}"
     );
     if !missing_pairs.is_empty() {
-        println!(
+        say!(
             "⚠ {} station pair(s) missing destination_transit metadata (leg written with no transit time — will not count toward route depth). Add each with:",
             missing_pairs.len()
         );
         for (from, to) in &missing_pairs {
-            println!("    travel add-transit {destination} \"{from}\" \"{to}\" --minutes <N> [--line \"<line>\"] [--kind metro|rail|walk]");
+            say!("    travel add-transit {destination} \"{from}\" \"{to}\" --minutes <N> [--line \"<line>\"] [--kind metro|rail|walk]");
         }
-        println!("  then re-run: travel derive-routes --dest {destination} (or --day N)");
+        say!("  then re-run: travel derive-routes --dest {destination} (or --day N)");
     }
     if days_written > 0 {
-        println!(
+        say!(
             "✅ Derived ai_recommended route segments ({inserted_total} inserted, {deleted_total} deleted across {days_written} day(s))"
         );
     } else {
-        println!("✅ No route segment changes needed");
+        say!("✅ No route segment changes needed");
     }
-    Ok(())
+    Ok(lines)
 }
 
 fn parse(args: &[String]) -> Result<Opts, String> {
@@ -395,6 +405,7 @@ async fn derive_legs(
     destination: &str,
     acts: &[ActivityRow],
     day: i64,
+    lines: &mut Vec<String>,
 ) -> Result<Vec<RouteLeg>, String> {
     let mut desired = Vec::new();
     for pair in acts.windows(2) {
@@ -411,7 +422,7 @@ async fn derive_legs(
         let to_place = to_station.to_string();
         let mode = "transit".to_string();
         if let Err(reason) = crate::checks::guard_segment(&from_place, &to_place, &mode) {
-            println!("Day {day}: skipped leg {from_place}->{to_place} ({reason})");
+            lines.push(format!("Day {day}: skipped leg {from_place}->{to_place} ({reason})"));
             continue;
         }
         let (duration_min, notes) =

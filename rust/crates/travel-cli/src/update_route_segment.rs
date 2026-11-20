@@ -285,6 +285,45 @@ pub(crate) fn refetch_hint(day: i64, sort_order: i64, plan_id: &str, dest: &str)
     )
 }
 
+/// A route segment's neighbour as seen by the join hint (itinerary order, see
+/// `route_segments::neighbour_segment`).
+pub(crate) type Neighbour = route_segments::NeighbourSegment;
+
+/// Hints (never writes) for a `--from`/`--to` change that BREAKS a join: the previous
+/// segment used to end where this one started (`prev.to == old_from`) and no longer does
+/// (`prev.to != new_from`); the next segment used to start where this one ended and no
+/// longer does. A pair that was never joined (flight gap, overnight hop) stays silent.
+/// Each hint names the exact `update-route-segment` command (with --plan-id/--dest).
+pub(crate) fn join_hints(
+    old: (&str, &str),
+    new: (&str, &str),
+    prev: Option<&Neighbour>,
+    next: Option<&Neighbour>,
+    plan_id: &str,
+    dest: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(p) = prev {
+        if p.to_place == old.0 && p.to_place != new.0 {
+            out.push(format!(
+                "hint: D{d} S{s} ends at \"{to}\" but this segment now starts at \"{nf}\" — \
+                 join with: travel update-route-segment {d} {s} --to \"{nf}\" --plan-id {plan_id} --dest {dest}",
+                d = p.day, s = p.sort_order, to = p.to_place, nf = new.0
+            ));
+        }
+    }
+    if let Some(n) = next {
+        if n.from_place == old.1 && n.from_place != new.1 {
+            out.push(format!(
+                "hint: D{d} S{s} starts at \"{from}\" but this segment now ends at \"{nt}\" — \
+                 join with: travel update-route-segment {d} {s} --from \"{nt}\" --plan-id {plan_id} --dest {dest}",
+                d = n.day, s = n.sort_order, from = n.from_place, nt = new.1
+            ));
+        }
+    }
+    out
+}
+
 /// What `run_update` decided inside the transaction.
 struct UpdateOutcome {
     diff: Vec<(&'static str, Option<String>, Option<String>)>,
@@ -394,6 +433,20 @@ pub async fn run_update(args: &[String], plan_id: String) -> Result<(), String> 
                     ));
                 }
             }
+        }
+
+        // Join hints (read-only): neighbours in itinerary order, only for a from/to change.
+        if after.from_place != before.from_place || after.to_place != before.to_place {
+            let prev = route_segments::neighbour_segment(&conn, &plan_id, &destination, day, so, false).await?;
+            let next = route_segments::neighbour_segment(&conn, &plan_id, &destination, day, so, true).await?;
+            warnings.extend(join_hints(
+                (&before.from_place, &before.to_place),
+                (&after.from_place, &after.to_place),
+                prev.as_ref(),
+                next.as_ref(),
+                &plan_id,
+                &destination,
+            ));
         }
 
         let changed: Vec<&str> = diff.iter().map(|(c, _, _)| *c).collect();
@@ -606,6 +659,67 @@ mod tests {
         assert!(parse_via_list("25,181").unwrap_err().contains("lon"));
         let many = vec!["25.1,121.5"; MAX_VIA + 1].join(";");
         assert!(parse_via_list(&many).unwrap_err().contains("at most"));
+    }
+
+    fn nb(d: i64, s: i64, from: &str, to: &str) -> Neighbour {
+        Neighbour { day: d, sort_order: s, from_place: from.into(), to_place: to.into() }
+    }
+    const P: &str = "plan-x";
+    const D: &str = "dest_x";
+
+    #[test]
+    fn join_hint_prev_names_the_fixing_command_with_plan_and_dest() {
+        // prev ended at the old start 舊飯店; start changed to 新飯店 => broken join.
+        let prev = nb(2, 0, "X", "舊飯店");
+        let h = join_hints(("舊飯店", "B"), ("新飯店", "B"), Some(&prev), None, P, D);
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(h[0].contains("D2 S0 ends at \"舊飯店\""), "{h:?}");
+        assert!(
+            h[0].contains("travel update-route-segment 2 0 --to \"新飯店\" --plan-id plan-x --dest dest_x"),
+            "{h:?}"
+        );
+    }
+
+    #[test]
+    fn join_hint_next_day_first_segment() {
+        let next = nb(3, 1, "頭城（住宿待定）", "C");
+        let h = join_hints(("A", "頭城（住宿待定）"), ("A", "旅館"), None, Some(&next), P, D);
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(h[0].contains("D3 S1 starts at \"頭城（住宿待定）\""), "{h:?}");
+        assert!(
+            h[0].contains("travel update-route-segment 3 1 --from \"旅館\" --plan-id plan-x --dest dest_x"),
+            "{h:?}"
+        );
+    }
+
+    #[test]
+    fn join_hint_flight_gap_never_joined_is_silent() {
+        // KIX第一航廈→KIX第二航廈, next S3 starts at 桃園 (a flight gap): never joined.
+        let next = nb(5, 3, "桃園國際機場第一航廈", "家");
+        let h = join_hints(("A", "KIX第一航廈"), ("A", "KIX第二航廈"), None, Some(&next), P, D);
+        assert!(h.is_empty(), "{h:?}");
+        let prev = nb(5, 1, "X", "別處");
+        assert!(join_hints(("舊", "B"), ("新", "B"), Some(&prev), None, P, D).is_empty());
+    }
+
+    #[test]
+    fn join_hint_silent_when_still_joined_or_duration_only_edit() {
+        // endpoints unchanged (--duration edit): old == new, so neighbours never "break".
+        let prev = nb(1, 0, "x", "A");
+        let next = nb(1, 2, "B", "y");
+        assert!(join_hints(("A", "B"), ("A", "B"), Some(&prev), Some(&next), P, D).is_empty());
+        // start changed away from what prev ended at: that IS a break.
+        assert_eq!(join_hints(("Z", "B"), ("A", "B"), Some(&nb(1, 0, "x", "Z")), None, P, D).len(), 1);
+        let joined = nb(1, 0, "x", "Z");
+        assert!(join_hints(("Z", "B"), ("Z", "B"), Some(&joined), None, P, D).is_empty());
+    }
+
+    #[test]
+    fn join_hint_both_sides_two_lines() {
+        let prev = nb(1, 0, "x", "A");
+        let next = nb(1, 2, "B", "y");
+        let h = join_hints(("A", "B"), ("A2", "B2"), Some(&prev), Some(&next), P, D);
+        assert_eq!(h.len(), 2);
     }
 
     #[test]

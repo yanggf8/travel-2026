@@ -994,3 +994,52 @@ mod tests {
         assert!(e.apply(&row()).is_err());
     }
 }
+
+/// A route segment's position and endpoints, as a neighbour in itinerary order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NeighbourSegment {
+    pub day: i64,
+    pub sort_order: i64,
+    pub from_place: String,
+    pub to_place: String,
+}
+
+/// Neighbour by ORDER (not sort_order±1): `forward=false` = previous (same day with a lower
+/// sort_order, else the last segment of the previous NON-variant day with segments),
+/// `forward=true` = next (same day higher, else the first segment of the next non-variant day).
+/// A day whose `days.variant_of` is set is an alternative to another day, never a neighbour.
+pub async fn neighbour_segment(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    sort_order: i64,
+    forward: bool,
+) -> Result<Option<NeighbourSegment>, String> {
+    let (cmp_same, cmp_day, ord) = if forward { (">", ">", "ASC") } else { ("<", "<", "DESC") };
+    let sql = format!(
+        "SELECT s.day_number, s.sort_order, s.from_place, s.to_place FROM day_route_segments s \
+         WHERE s.plan_id = ?1 AND s.destination = ?2 \
+           AND ((s.day_number = ?3 AND s.sort_order {cmp_same} ?4) \
+             OR (s.day_number {cmp_day} ?3 AND NOT EXISTS (SELECT 1 FROM days d \
+                  WHERE d.plan_id = s.plan_id AND d.destination = s.destination \
+                    AND d.day_number = s.day_number AND d.variant_of IS NOT NULL))) \
+         ORDER BY s.day_number {ord}, s.sort_order {ord} LIMIT 1"
+    );
+    let mut rows = conn
+        .query(
+            &sql,
+            libsql::params![plan_id.to_string(), destination.to_string(), day, sort_order],
+        )
+        .await
+        .map_err(|e| format!("neighbour segment SELECT failed: {e}"))?;
+    let Some(r) = rows.next().await.map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    Ok(Some(NeighbourSegment {
+        day: r.get(0).map_err(|e| e.to_string())?,
+        sort_order: r.get(1).map_err(|e| e.to_string())?,
+        from_place: r.get(2).map_err(|e| e.to_string())?,
+        to_place: r.get(3).map_err(|e| e.to_string())?,
+    }))
+}

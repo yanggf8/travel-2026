@@ -561,7 +561,7 @@ fn merged_distinct<T: PartialEq>(lists: impl IntoIterator<Item = Vec<T>>) -> Vec
 /// crushing the destination's own stops and timing out the Overpass road web.
 /// In-destination outliers (Ishigaki, ~410 km from Naha) and ordinary day-trip
 /// excursions (≤ ~370 km) stay well inside.
-const MAX_HUB_DISTANCE_KM: f64 = 500.0;
+pub(crate) const MAX_HUB_DISTANCE_KM: f64 = 500.0;
 
 /// A resolved stop the hub gate kept off the area maps; `km` is its rounded
 /// great-circle distance from the hub.
@@ -2406,7 +2406,7 @@ async fn query_days(c: &Connection, p: &str) -> Result<Vec<i64>, String> {
 }
 
 /// Great-circle distance in metres (haversine, mean-earth radius).
-fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
+pub(crate) fn haversine_m(a: (f64, f64), b: (f64, f64)) -> f64 {
     let (lat1, lon1) = (a.0.to_radians(), a.1.to_radians());
     let (lat2, lon2) = (b.0.to_radians(), b.1.to_radians());
     let dlat = lat2 - lat1;

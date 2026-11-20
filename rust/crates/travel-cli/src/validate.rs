@@ -35,7 +35,7 @@ struct Issue {
     line: Option<usize>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Severity {
     Error,
     Warning,
@@ -312,6 +312,7 @@ pub async fn run(mode: Mode) -> Result<(), String> {
     validate_omiyage(&mut issues).await;
     validate_domestic_accommodations(&mut issues).await;
     validate_stay_placeholders(&mut issues).await;
+    validate_activity_geo(&mut issues).await;
     validate_clothing_tips(&mut issues).await;
     validate_destination_timezones(&mut issues).await;
     validate_reference_tables(&mut issues).await;
@@ -2503,6 +2504,300 @@ async fn validate_stay_placeholders(issues: &mut Vec<Issue>) {
             file: None,
             line: None,
         });
+    }
+}
+
+// ── activity geo / route via / requested_by lints (spec 2026-11-20 §5, §7.3) ──
+
+/// The requester keyword an activity title carried before `requested_by` existed.
+/// Keyword list is CODE (matched against data), like the stay markers.
+const REQUESTER_TITLE_KEYWORD: &str = "指定";
+/// `requested_by` length cap in characters (mirrors the CLI's 1–16 rule).
+const REQUESTED_BY_MAX_CHARS: usize = 16;
+
+fn hub_km(hub: Option<(f64, f64)>, lat: f64, lon: f64) -> Option<f64> {
+    hub.map(|h| crate::snapshot_maps::haversine_m(h, (lat, lon)) / 1000.0)
+}
+
+fn act_loc(r: &travel_db::repo::geo_lint::ActivityGeoRow) -> String {
+    format!("[plan {} day {} {}] 「{}」", r.plan_id, r.day, r.session, r.title)
+}
+
+/// Pure rule: activity pin sanity. ERROR on a half-set pair or an invalid
+/// coordinate (reuses `checks::validate_coords`), INFO beyond the hub gate
+/// (INFO — Japan trips legitimately carry Taiwan return-leg stops), INFO for two same-day activities pinned to the
+/// same point at 5 decimals.
+pub(crate) fn activity_geo_lines(
+    rows: &[travel_db::repo::geo_lint::ActivityGeoRow],
+) -> Vec<(Severity, String)> {
+    let mut out = Vec::new();
+    let mut by_point: std::collections::BTreeMap<(String, String, i64, String), Vec<String>> =
+        std::collections::BTreeMap::new();
+    for r in rows {
+        match (r.lat, r.lon) {
+            (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => out.push((
+                Severity::Error,
+                format!(
+                    "activity has only one of lat/lon set (lat={:?} lon={:?}) — set both with set-activity-geocode, or clear both {}",
+                    r.lat, r.lon, act_loc(r)
+                ),
+            )),
+            (Some(lat), Some(lon)) => match crate::checks::validate_coords(lat, lon) {
+                Err(e) => out.push((
+                    Severity::Error,
+                    format!("activity coordinates invalid ({e}) {}", act_loc(r)),
+                )),
+                Ok(_) => {
+                    if let Some(km) = hub_km(r.hub, lat, lon) {
+                        if km > crate::snapshot_maps::MAX_HUB_DISTANCE_KM {
+                            out.push((
+                                Severity::Info,
+                                format!(
+                                    "activity pin {lat},{lon} is far from the destination hub ({km:.0} km from {}; gate {:.0} km) — check the pin {}",
+                                    r.destination,
+                                    crate::snapshot_maps::MAX_HUB_DISTANCE_KM,
+                                    act_loc(r)
+                                ),
+                            ));
+                        }
+                    }
+                    by_point
+                        .entry((r.plan_id.clone(), r.destination.clone(), r.day, format!("{lat:.5},{lon:.5}")))
+                        .or_default()
+                        .push(r.title.clone());
+                }
+            },
+        }
+    }
+    for ((plan, _dest, day, pt), titles) in by_point {
+        if titles.len() > 1 {
+            out.push((
+                Severity::Info,
+                format!(
+                    "{} activities share the same pin {pt} [plan {plan} day {day}]: {}",
+                    titles.len(),
+                    titles.iter().map(|t| format!("「{t}」")).collect::<Vec<_>>().join("、")
+                ),
+            ));
+        }
+    }
+    out
+}
+
+/// Pure rule: `requested_by` hygiene. WARN over-long / multi-line (dirty
+/// `db exec` data); INFO a title still carrying 「指定」 with no `requested_by`.
+pub(crate) fn requested_by_lines(
+    rows: &[travel_db::repo::geo_lint::ActivityGeoRow],
+) -> Vec<(Severity, String)> {
+    let mut out = Vec::new();
+    for r in rows {
+        match &r.requested_by {
+            Some(v) => {
+                if v.chars().count() > REQUESTED_BY_MAX_CHARS || v.contains('\n') || v.contains('\r') {
+                    out.push((
+                        Severity::Warning,
+                        format!(
+                            "requested_by is longer than {REQUESTED_BY_MAX_CHARS} characters or contains a newline — fix with update-activity --requested-by <name> {}",
+                            act_loc(r)
+                        ),
+                    ));
+                }
+            }
+            None => {
+                // 指定席 = reserved seat (train ticket), not a requester.
+                if r.title.replace("指定席", "").contains(REQUESTER_TITLE_KEYWORD) {
+                    out.push((
+                        Severity::Info,
+                        format!(
+                            "title still carries 「{REQUESTER_TITLE_KEYWORD}」 but requested_by is empty — move it with update-activity --requested-by <name> {}",
+                            act_loc(r)
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Pure rule: stored via points. WARN a point whose segment row is gone
+/// (orphan, one line per segment) and a point beyond the hub gate.
+pub(crate) fn via_lines(rows: &[travel_db::repo::geo_lint::ViaGeoRow]) -> Vec<(Severity, String)> {
+    let mut out = Vec::new();
+    let mut orphans: std::collections::BTreeMap<(String, i64, i64), usize> = std::collections::BTreeMap::new();
+    for r in rows {
+        if !r.has_segment {
+            *orphans.entry((r.plan_id.clone(), r.day, r.sort_order)).or_default() += 1;
+        }
+        if let Some(km) = hub_km(r.hub, r.lat, r.lon) {
+            if km > crate::snapshot_maps::MAX_HUB_DISTANCE_KM {
+                out.push((
+                    Severity::Info,
+                    format!(
+                        "via point #{} {},{} is far from the destination hub ({km:.0} km from {}; gate {:.0} km) — check the pin [plan {} day {} segment {}]",
+                        r.via_order, r.lat, r.lon, r.destination,
+                        crate::snapshot_maps::MAX_HUB_DISTANCE_KM, r.plan_id, r.day, r.sort_order
+                    ),
+                ));
+            }
+        }
+    }
+    for ((plan, day, so), n) in orphans {
+        out.push((
+            Severity::Warning,
+            format!(
+                "{n} via point(s) have no matching day_route_segments row (orphan) [plan {plan} day {day} segment {so}] — clear with a segment rewrite or remove the rows"
+            ),
+        ));
+    }
+    out
+}
+
+async fn validate_activity_geo(issues: &mut Vec<Issue>) {
+    let fail = |issues: &mut Vec<Issue>, cat: &str, msg: String| {
+        issues.push(Issue {
+            category: cat.to_string(),
+            severity: Severity::Error,
+            message: msg,
+            file: None,
+            line: None,
+        });
+    };
+    let conn = match db::connect_read().await {
+        Ok(c) => c,
+        Err(err) => return fail(issues, "activity-geo", format!("activity geo check could not connect: {err}")),
+    };
+    let push = |issues: &mut Vec<Issue>, cat: &str, lines: Vec<(Severity, String)>| {
+        for (severity, message) in lines {
+            issues.push(Issue { category: cat.to_string(), severity, message, file: None, line: None });
+        }
+    };
+    // A pre-migrate DB (columns/table missing) is reported by the other checks.
+    match travel_db::repo::geo_lint::scan_activities(&conn, REQUESTER_TITLE_KEYWORD).await {
+        Ok(rows) => {
+            push(issues, "activity-geo", activity_geo_lines(&rows));
+            push(issues, "requested-by", requested_by_lines(&rows));
+        }
+        Err(e) if e.contains("no such column") || e.contains("no such table") => {}
+        Err(e) => fail(issues, "activity-geo", e),
+    }
+    match travel_db::repo::geo_lint::scan_via(&conn).await {
+        Ok(rows) => push(issues, "route-via", via_lines(&rows)),
+        Err(e) if e.contains("no such table") => {}
+        Err(e) => fail(issues, "route-via", e),
+    }
+}
+
+#[cfg(test)]
+mod geo_lint_tests {
+    use super::*;
+    use travel_db::repo::geo_lint::{ActivityGeoRow, ViaGeoRow};
+
+    const HUB: Option<(f64, f64)> = Some((24.86, 121.82)); // 頭城-ish
+
+    fn act(title: &str, lat: Option<f64>, lon: Option<f64>, rb: Option<&str>) -> ActivityGeoRow {
+        ActivityGeoRow {
+            plan_id: "p".into(),
+            destination: "d".into(),
+            day: 1,
+            session: "morning".into(),
+            title: title.into(),
+            lat,
+            lon,
+            requested_by: rb.map(|s| s.to_string()),
+            hub: HUB,
+        }
+    }
+    fn via(has_segment: bool, lat: f64, lon: f64) -> ViaGeoRow {
+        ViaGeoRow {
+            plan_id: "p".into(),
+            destination: "d".into(),
+            day: 2,
+            sort_order: 1,
+            via_order: 0,
+            lat,
+            lon,
+            has_segment,
+            hub: HUB,
+        }
+    }
+    fn sev(v: &[(Severity, String)], s: Severity) -> usize {
+        v.iter().filter(|(x, _)| *x == s).count()
+    }
+
+    #[test]
+    fn half_set_pair_is_error() {
+        let v = activity_geo_lines(&[act("a", Some(24.8), None, None), act("b", None, Some(121.8), None)]);
+        assert_eq!(sev(&v, Severity::Error), 2, "{v:?}");
+        assert!(activity_geo_lines(&[act("a", None, None, None)]).is_empty());
+    }
+
+    #[test]
+    fn invalid_coords_are_errors_incl_null_island() {
+        let v = activity_geo_lines(&[act("a", Some(95.0), Some(121.8), None), act("b", Some(0.0), Some(0.0), None)]);
+        assert_eq!(sev(&v, Severity::Error), 2, "{v:?}");
+        assert!(v[1].1.contains("null island"), "{v:?}");
+    }
+
+    #[test]
+    fn far_from_hub_warns_and_swapped_pair_is_caught() {
+        // swapped lat/lon of a Taiwan point lands in the Indian Ocean / far away
+        let v = activity_geo_lines(&[act("swap", Some(121.8), Some(24.8), None)]);
+        assert_eq!(sev(&v, Severity::Error), 1, "lat 121 is out of range: {v:?}");
+        let v = activity_geo_lines(&[act("far", Some(35.0), Some(139.7), None)]);
+        assert_eq!((sev(&v, Severity::Info), v.len()), (1, 1), "{v:?}");
+        assert!(v[0].1.contains("far from the destination hub") && !v[0].1.contains("swapped"), "{v:?}");
+        // inside the gate: silent; no hub: silent
+        assert!(activity_geo_lines(&[act("near", Some(24.9), Some(121.8), None)]).is_empty());
+        let mut r = act("nohub", Some(35.0), Some(139.7), None);
+        r.hub = None;
+        assert!(activity_geo_lines(&[r]).is_empty());
+    }
+
+    #[test]
+    fn same_day_identical_coords_is_info_but_other_day_is_not() {
+        let a = act("a", Some(24.90001), Some(121.80001), None);
+        let b = act("b", Some(24.90001), Some(121.80001), None);
+        let v = activity_geo_lines(&[a.clone(), b.clone()]);
+        assert_eq!((sev(&v, Severity::Info), v.len()), (1, 1), "{v:?}");
+        assert!(v[0].1.contains("share the same pin") && !v[0].1.contains("mis-pinned"), "{v:?}");
+        // 0.0001 deg apart (~11 m) is a different 5-decimal point.
+        let near = act("n", Some(24.90011), Some(121.80001), None);
+        assert!(activity_geo_lines(&[a.clone(), near]).is_empty());
+        let mut c = b;
+        c.day = 2;
+        assert!(activity_geo_lines(&[a, c]).is_empty());
+    }
+
+    #[test]
+    fn requested_by_length_and_newline_warn_cjk_counts_chars() {
+        let ok16 = "指".repeat(16);
+        let bad17 = "指".repeat(17);
+        assert!(requested_by_lines(&[act("a", None, None, Some(&ok16))]).is_empty());
+        let v = requested_by_lines(&[act("a", None, None, Some(&bad17)), act("b", None, None, Some("x\ny"))]);
+        assert_eq!(sev(&v, Severity::Warning), 2, "{v:?}");
+    }
+
+    #[test]
+    fn title_keyword_without_requested_by_is_info_only_when_null() {
+        let v = requested_by_lines(&[act("Ping 指定咖啡", None, None, None)]);
+        assert_eq!(sev(&v, Severity::Info), 1, "{v:?}");
+        assert!(v[0].1.contains("update-activity --requested-by"), "{v:?}");
+        assert!(requested_by_lines(&[act("Ping 指定咖啡", None, None, Some("Ping"))]).is_empty());
+        assert!(requested_by_lines(&[act("咖啡", None, None, None)]).is_empty());
+        assert!(requested_by_lines(&[act("HARUKA指定席", None, None, None)]).is_empty());
+    }
+
+    #[test]
+    fn via_orphan_and_far_points_warn() {
+        let v = via_lines(&[via(false, 24.9, 121.8), via(false, 24.91, 121.81), via(true, 24.9, 121.8)]);
+        assert_eq!((sev(&v, Severity::Warning), v.len()), (1, 1), "one line per orphan segment: {v:?}");
+        assert!(v[0].1.contains("2 via point(s)") && v[0].1.contains("orphan"), "{v:?}");
+        let v = via_lines(&[via(true, 35.0, 139.7)]);
+        assert_eq!((sev(&v, Severity::Info), v.len()), (1, 1), "{v:?}");
+        assert!(!v[0].1.contains("swapped"), "{v:?}");
+        assert!(via_lines(&[via(true, 24.9, 121.8)]).is_empty());
     }
 }
 

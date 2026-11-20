@@ -39,3 +39,4 @@ pub mod domestic_accommodations;
 pub mod route_segments;
 pub mod text_merge;
 pub mod stay_placeholders;
+pub mod geo_lint;

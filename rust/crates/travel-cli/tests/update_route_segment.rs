@@ -328,3 +328,104 @@ fn road_leg_refetch_segment_missing_slot_errors_before_any_network() {
     let (ok, _, err) = run(&fx, &["road-leg", "refetch", "--segment", "1", "5"]);
     assert!(!ok && err.contains("no route segment at day 1 sort_order 5"), "{err}");
 }
+
+fn seg_d(fx: &Fx, day: i64, so: i64, from: &str, to: &str) {
+    db_exec(&format!(
+        "INSERT INTO day_route_segments (plan_id, destination, day_number, sort_order, from_place, to_place, mode, duration_min, source) \
+         VALUES ('{}', '{}', {day}, {so}, '{from}', '{to}', 'driving', 10, 'confirmed');",
+        fx.plan, fx.dest
+    ))
+    .unwrap();
+}
+
+fn day_row(fx: &Fx, day: i64, variant_of: Option<i64>) {
+    db_exec(&format!(
+        "INSERT INTO days (plan_id, destination, day_number, date, day_type, variant_of) \
+         VALUES ('{}', '{}', {day}, '2026-06-{:02}', 'full', {});",
+        fx.plan,
+        fx.dest,
+        12 + day,
+        variant_of.map(|v| v.to_string()).unwrap_or_else(|| "NULL".into())
+    ))
+    .unwrap();
+}
+
+#[test]
+fn join_hint_follows_order_not_numbering_and_crosses_days_both_ways() {
+    let Some((fx, _g)) = setup("joinhint") else { return };
+    // jiufen-style: no S0 anywhere; D1 only S1, D2 S1..S3.
+    seg_d(&fx, 1, 1, "A", "旅館");
+    seg_d(&fx, 2, 1, "旅館", "C");
+    seg_d(&fx, 2, 2, "C", "D");
+    seg_d(&fx, 2, 3, "D", "E");
+    let (ok, out, err) = run(&fx, &["update-route-segment", "1", "1", "--to", "新旅館"]);
+    assert!(ok, "{out}{err}");
+    assert!(
+        out.contains("hint: D2 S1 starts at \"旅館\"")
+            && out.contains(&format!(
+                "travel update-route-segment 2 1 --from \"新旅館\" --plan-id {} --dest {}",
+                fx.plan, fx.dest
+            )),
+        "{out}"
+    );
+    // Hint only: nothing else moved.
+    assert_eq!(col(&format!("SELECT from_place FROM day_route_segments WHERE plan_id='{}' AND day_number=2 AND sort_order=1", fx.plan)), vec!["旅館"]);
+    // Reverse direction across the day boundary: first re-join D2 S1 to the new
+    // hotel (as the hint says), then break it — prev = D1's LAST segment.
+    let (ok, out, err) = run(&fx, &["update-route-segment", "2", "1", "--from", "新旅館"]);
+    assert!(ok && !out.contains("hint:"), "re-joining must not hint: {out}{err}");
+    let (ok, out, err) = run(&fx, &["update-route-segment", "2", "1", "--from", "別處"]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("hint: D1 S1 ends at \"新旅館\"") && out.contains("update-route-segment 1 1 --to \"別處\""), "{out}");
+    // Duration-only edit: endpoints unchanged => no hint.
+    let (ok, out, _) = run(&fx, &["update-route-segment", "2", "2", "--duration", "33"]);
+    assert!(ok && !out.contains("hint:"), "{out}");
+}
+
+#[test]
+fn join_hint_skips_variant_days_and_flight_gaps() {
+    let Some((fx, _g)) = setup("joinvar") else { return };
+    day_row(&fx, 2, Some(1)); // D2 is a variant (alternative) — never a neighbour
+    day_row(&fx, 3, None);
+    seg_d(&fx, 1, 0, "A", "B");
+    seg_d(&fx, 2, 0, "B", "VARIANT");
+    seg_d(&fx, 3, 0, "B", "D");
+    let (ok, out, err) = run(&fx, &["update-route-segment", "1", "0", "--to", "H"]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("hint: D3 S0 starts at \"B\""), "next must skip the variant day: {out}");
+    assert!(!out.contains("D2 S0"), "{out}");
+    // Flight gap: S1 starts at an airport that S0 never ended at => never joined => silent.
+    seg_d(&fx, 3, 1, "桃園機場", "家");
+    let (ok, out, _) = run(&fx, &["update-route-segment", "3", "0", "--to", "KIX2"]);
+    assert!(ok && !out.contains("hint:"), "{out}");
+}
+
+#[test]
+fn update_to_hints_next_day_first_segment_without_writing() {
+    let Some((fx, _g)) = setup("joinhint") else { return };
+    seg(&fx, 0, "A", "頭城（住宿待定）", "confirmed", 20);
+    // Day 2's first segment starts at an undecided-stay placeholder.
+    db_exec(&format!(
+        "INSERT INTO day_route_segments (plan_id, destination, day_number, sort_order, from_place, to_place, mode, duration_min, source) \
+         VALUES ('{}', '{}', 2, 0, '頭城（住宿待定）', 'C', 'driving', 10, 'confirmed');",
+        fx.plan, fx.dest
+    ))
+    .unwrap();
+    let (ok, out, err) = run(&fx, &["update-route-segment", "1", "0", "--to", "旅館"]);
+    assert!(ok, "{out}{err}");
+    assert!(
+        out.contains("hint: D2 S0 starts at \"頭城（住宿待定）\"")
+            && out.contains("travel update-route-segment 2 0 --from \"旅館\" --plan-id"),
+        "{out}"
+    );
+    // Hint only: day 2 untouched.
+    let d2 = col(&format!(
+        "SELECT from_place FROM day_route_segments WHERE plan_id='{}' AND day_number=2",
+        fx.plan
+    ));
+    assert_eq!(d2, vec!["頭城（住宿待定）"]);
+    // A joined chain stays silent.
+    let (ok, out, _) = run(&fx, &["update-route-segment", "2", "0", "--from", "旅館"]);
+    // D2 S0 now starts at 旅館 == D1 S0 end: nothing joined is broken by THIS edit.
+    assert!(ok && !out.contains("hint: D1"), "{out}");
+}
