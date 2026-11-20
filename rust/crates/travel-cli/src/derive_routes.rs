@@ -51,8 +51,21 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
     let conn = crate::db::connect_write().await?;
     let destination =
         resolve_active_destination(&conn, &plan_id, opts.dest.as_deref()).await?;
+    // One transaction around the whole rewrite: a day's delete + re-insert + via carry
+    // must not half-apply (a lost insert would also lose the old segments' via rows).
+    crate::cascade::common::begin_immediate(&conn, "derive-routes").await?;
+    let outcome = run_body(&conn, &plan_id, &destination, &opts).await;
+    crate::cascade::common::finish_tx(&conn, "derive-routes", outcome).await
+}
 
-    let activities = load_activities(&conn, &plan_id, &destination, opts.day).await?;
+async fn run_body(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    opts: &Opts,
+) -> Result<(), String> {
+    let (conn, plan_id, destination) = (conn, plan_id.to_string(), destination.to_string());
+    let activities = load_activities(conn, &plan_id, &destination, opts.day).await?;
     let mut by_day: BTreeMap<i64, Vec<ActivityRow>> = BTreeMap::new();
     for row in activities {
         by_day.entry(row.day_number).or_default().push(row);
@@ -104,6 +117,14 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
             continue;
         }
 
+        let old_snap = route_segments::snapshot_segments(
+            &conn,
+            &plan_id,
+            &destination,
+            *day,
+            route_segments::SnapScope::AiRecommended,
+        )
+        .await?;
         let deleted = route_segments::delete_ai_recommended_for_day(
             &conn,
             &plan_id,
@@ -123,6 +144,23 @@ pub async fn run(args: &[String], plan_id: String) -> Result<(), String> {
                 &format!("[{i}]"),
             )
             .await?;
+        }
+        let new_labels: Vec<(i64, String, String)> = desired
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (i as i64, l.from_place.clone(), l.to_place.clone()))
+            .collect();
+        let via_report = route_segments::carry_via_over(
+            &conn,
+            &plan_id,
+            &destination,
+            *day,
+            &old_snap,
+            &new_labels,
+        )
+        .await?;
+        for line in route_segments::format_via_report(*day, &via_report) {
+            println!("{line}");
         }
         let now_db = now_db_datetime();
         route_segments::touch_day(&conn, &plan_id, &destination, *day, &now_db).await?;

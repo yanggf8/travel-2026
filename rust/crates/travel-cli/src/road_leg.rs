@@ -32,11 +32,14 @@ pub async fn run(args: &[String]) -> Result<(), String> {
 fn usage() -> &'static str {
     "Usage:\n  \
       travel road-leg list\n  \
-      travel road-leg refetch --from <place|lat,lon> --to <place|lat,lon> [--via <a;b;c>] [--dest <slug>]\n\
+      travel road-leg refetch --from <place|lat,lon> --to <place|lat,lon> [--via <a;b;c>] [--dest <slug>]\n  \
+      travel road-leg refetch --segment <day> <sort_order> [--plan-id <id>] [--dest <slug>]\n\
       road-leg manages the OSRM road-geometry cache snapshot-maps draws. `refetch` re-fetches\n\
       a leg from OSRM; --via waypoints (place names or lat,lon, semicolon-separated) force a\n\
       specific road (e.g. 石門洞;三芝 for the 台2 coastal route) — without them OSRM returns\n\
-      the same fastest path. Run `snapshot-maps` afterwards to re-render the map."
+      the same fastest path. `--segment D S` takes the endpoints from that route segment's\n\
+      from/to labels and the waypoints stored by `update-route-segment --via` (exclusive with\n\
+      --from/--to/--via). Run `snapshot-maps` afterwards to re-render the map."
 }
 
 /// `road-leg list` — every cached leg with its fetch state, newest first.
@@ -93,6 +96,8 @@ struct RefetchArgs {
     to: Option<String>,
     via: Vec<String>,
     dest: Option<String>,
+    /// `--segment <day> <sort_order>`: endpoints + via come from a stored route segment.
+    segment: Option<(i64, i64)>,
 }
 
 fn parse_refetch(args: &[String]) -> Result<RefetchArgs, String> {
@@ -117,12 +122,38 @@ fn parse_refetch(args: &[String]) -> Result<RefetchArgs, String> {
                 p.dest = Some(args.get(i + 1).ok_or("--dest requires a value")?.clone());
                 i += 2
             }
+            "--segment" => {
+                let d = args.get(i + 1).ok_or("--segment requires <day> <sort_order>")?;
+                let s = args.get(i + 2).ok_or("--segment requires <day> <sort_order>")?;
+                let day = d.parse::<i64>().ok().filter(|n| *n >= 1).ok_or("--segment <day> must be a positive integer")?;
+                let so = s.parse::<i64>().ok().filter(|n| *n >= 0).ok_or("--segment <sort_order> must be a non-negative integer")?;
+                p.segment = Some((day, so));
+                i += 3
+            }
+            f if crate::plan_resolver::is_resolver_flag(f) => i += 2,
             "--help" | "-h" => unreachable!("help handled before parsing"),
             x if x.starts_with('-') => return Err(format!("unknown argument: {x}")),
             x => return Err(format!("unexpected positional argument: {x} (use --from/--to/--via)")),
         }
     }
+    if p.segment.is_some() && (p.from.is_some() || p.to.is_some() || !p.via.is_empty()) {
+        return Err("--segment cannot be combined with --from/--to/--via (they come from the stored segment)".to_string());
+    }
     Ok(p)
+}
+
+/// The refetch inputs a stored segment implies: its from/to labels and its stored via as
+/// `lat,lon` tokens (so `resolve_token` takes them literally — no geocoding of a via).
+pub(crate) fn segment_refetch_inputs(
+    from_place: &str,
+    to_place: &str,
+    via: &[(f64, f64)],
+) -> (String, String, Vec<String>) {
+    (
+        from_place.to_string(),
+        to_place.to_string(),
+        via.iter().map(|(a, b)| format!("{a},{b}")).collect(),
+    )
 }
 
 /// "25.22188,121.63619" → coords; anything else is a place label.
@@ -240,12 +271,25 @@ async fn refetch(args: &[String]) -> Result<(), String> {
         println!("{}", usage());
         return Ok(());
     }
-    let p = parse_refetch(args)?;
-    let from_tok = p.from.clone().ok_or("missing --from (place or lat,lon)")?;
-    let to_tok = p.to.clone().ok_or("missing --to (place or lat,lon)")?;
-
+    let mut p = parse_refetch(args)?;
     let read = crate::db::connect_read().await?;
     let write = crate::db::connect_write().await?;
+    if let Some((day, so)) = p.segment {
+        let plan_id = crate::plan_resolver::resolve_plan_id(args).await?;
+        let dest = crate::cascade::common::resolve_active_destination(&read, &plan_id, p.dest.as_deref()).await?;
+        let seg = travel_db::repo::route_segments::read_segment(&read, &plan_id, &dest, day, so)
+            .await?
+            .ok_or_else(|| format!("no route segment at day {day} sort_order {so} (plan {plan_id}, {dest})"))?;
+        let via = travel_db::repo::route_segments::list_via(&read, &plan_id, &dest, day, so).await?;
+        let (f, t, v) = segment_refetch_inputs(&seg.from_place, &seg.to_place, &via);
+        println!("segment D{day} S{so}: {f} → {t}  ({} stored via point(s))", via.len());
+        p.from = Some(f);
+        p.to = Some(t);
+        p.via = v;
+        p.dest = Some(dest);
+    }
+    let from_tok = p.from.clone().ok_or("missing --from (place or lat,lon)")?;
+    let to_tok = p.to.clone().ok_or("missing --to (place or lat,lon)")?;
 
     let dest_pois = match p.dest.as_deref() {
         Some(d) => crate::snapshot_maps::query_destination_pois(&read, d).await?,
@@ -343,7 +387,41 @@ async fn refetch(args: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolved_line;
+    use super::{parse_latlon, parse_refetch, resolved_line, segment_refetch_inputs};
+
+    fn sv(a: &[&str]) -> Vec<String> {
+        a.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn segment_flag_parses_two_values_and_resolver_flags() {
+        let p = parse_refetch(&sv(&["--segment", "3", "2", "--plan-id", "p", "--dest", "d"])).unwrap();
+        assert_eq!(p.segment, Some((3, 2)));
+        assert_eq!(p.dest.as_deref(), Some("d"));
+        assert!(parse_refetch(&sv(&["--segment", "3"])).is_err());
+        assert!(parse_refetch(&sv(&["--segment", "0", "1"])).is_err());
+        assert!(parse_refetch(&sv(&["--segment", "1", "-1"])).is_err());
+    }
+
+    #[test]
+    fn segment_is_exclusive_with_from_to_via() {
+        for extra in [["--from", "a"], ["--to", "b"], ["--via", "25.1,121.5"]] {
+            let mut a = sv(&["--segment", "1", "0"]);
+            a.extend(extra.iter().map(|x| x.to_string()));
+            assert!(parse_refetch(&a).unwrap_err().contains("--segment cannot be combined"));
+        }
+    }
+
+    #[test]
+    fn segment_inputs_take_labels_and_literal_via_tokens() {
+        let (f, t, v) = segment_refetch_inputs("關渡", "川岩", &[(25.2897, 121.569), (25.2317, 121.5018)]);
+        assert_eq!((f.as_str(), t.as_str()), ("關渡", "川岩"));
+        assert_eq!(v.len(), 2);
+        // resolve_token reads these literally (parse_latlon), so nothing is geocoded.
+        assert_eq!(parse_latlon(&v[0]), Some((25.2897, 121.569)));
+        assert_eq!(parse_latlon(&v[1]), Some((25.2317, 121.5018)));
+    }
+
     use crate::snapshot_maps::ResolvedPlace;
 
     fn rp(coords: (f64, f64), display: &str, area: bool) -> ResolvedPlace {

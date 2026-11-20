@@ -97,6 +97,10 @@ pub(crate) struct Point {
     /// `map_legend_stops` (the PNG bitmap font has no CJK glyphs, so the
     /// number→name mapping cannot be drawn into the image itself).
     label: String,
+    /// An activity's own pin (`activities.lat/lon`): drawn, numbered and legended, but
+    /// NEVER an end of a road line and never a "first/last sight" of the day's commute.
+    /// False = an ordinary route stop. (Not `RouteLine.routed`, which means "road-following".)
+    pin_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +119,17 @@ struct Segment {
     duration_min: Option<i64>,
     /// `record_status = 'skipped'`: the leg was not travelled, so it is not drawn.
     skipped: bool,
+    /// Stored waypoints (`day_route_segment_via`), used only when the road leg is a cache miss.
+    via: Vec<(f64, f64)>,
+}
+
+/// One activity's own pin (`activities.lat/lon`, spec 2026-11-20 §2).
+#[derive(Debug, Clone, PartialEq)]
+struct ActPin {
+    day: i64,
+    label: String,
+    lat: f64,
+    lon: f64,
 }
 
 /// Straight-line km a leg of `mode` could plausibly cover in `duration_min`, plus
@@ -220,7 +235,10 @@ pub(crate) struct MapSource {
     segments: Vec<Segment>,
     pois: Vec<(i64, String, f64, f64)>,
     /// Skipped activities' (day, lat, lon): their pin and the legs touching it are not drawn.
+    /// Includes skipped activities that carry their own coordinates.
     skipped_pois: Vec<(i64, f64, f64)>,
+    /// Non-skipped activities with their own coordinates, in itinerary order.
+    act_pins: Vec<ActPin>,
     dest_pois: Vec<PoiRow>,
     hotel_names: Vec<String>,
     flights: Vec<FlightRow>,
@@ -261,7 +279,12 @@ impl MapSource {
             excursion,
             segments: query_segments(read, plan_id, dest).await?,
             pois: query_pois(read, plan_id, dest).await?,
-            skipped_pois: query_skipped_pois(read, plan_id, dest).await?,
+            skipped_pois: {
+                let mut v = query_skipped_pois(read, plan_id, dest).await?;
+                v.extend(query_skipped_activity_pins(read, plan_id, dest).await?);
+                v
+            },
+            act_pins: query_activity_pins(read, plan_id, dest).await?,
             dest_pois: query_destination_pois(read, dest).await?,
             hotel_names: query_hotel_names(read, plan_id, dest).await?,
             flights: query_flight_rows(read, plan_id, dest).await?,
@@ -282,6 +305,9 @@ pub(crate) trait MapResolver {
     async fn geocode(&mut self, place: &str) -> Result<Option<(f64, f64)>, String>;
     /// Road-following lines for consecutive stop pairs.
     async fn routes(&mut self, points: &[Point]) -> Result<Vec<RouteLine>, String>;
+    /// A stored via list for the leg between two resolved stops. Only a resolver that can
+    /// fetch road geometry uses it (cache misses); the default ignores it.
+    fn note_via(&mut self, _from: (f64, f64), _to: (f64, f64), _via: &[(f64, f64)]) {}
     /// Print snapshot-maps' stderr diagnostics (unresolved stops, implausible
     /// legs, excursion hints).
     fn diagnostics(&self) -> bool;
@@ -310,6 +336,8 @@ pub(crate) struct DbResolver<'a> {
     /// OSRM legs fetched this run, shared by the per-day and overview renders so
     /// the same pair is fetched (and persisted) at most once per snapshot run.
     osrm_live: HashMap<String, Vec<(f64, f64)>>,
+    /// Stored via waypoints per leg, keyed by the endpoints' `coord_key`s (spec §6.3).
+    via_hints: HashMap<(String, String), Vec<(f64, f64)>>,
     misses: Vec<String>,
 }
 
@@ -321,6 +349,7 @@ impl<'a> DbResolver<'a> {
             context: geocode_context(read, dest).await?,
             cache: load_geocodes(read).await?,
             osrm_live: HashMap::new(),
+            via_hints: HashMap::new(),
             misses: Vec::new(),
         })
     }
@@ -350,7 +379,16 @@ impl MapResolver for DbResolver<'_> {
             NetMode::Fetch(w) => Some(w),
             NetMode::CacheOnly => None,
         };
-        cached_routes(self.read, write, &mut self.osrm_live, points).await
+        cached_routes(self.read, write, &mut self.osrm_live, &self.via_hints, points).await
+    }
+
+    fn note_via(&mut self, from: (f64, f64), to: (f64, f64), via: &[(f64, f64)]) {
+        if !via.is_empty() {
+            self.via_hints.insert(
+                (coord_key(from.0, from.1), coord_key(to.0, to.1)),
+                via.to_vec(),
+            );
+        }
     }
 
     fn diagnostics(&self) -> bool {
@@ -555,7 +593,15 @@ impl HubGate {
 
     /// The pin for a resolved stop, or None when it lies beyond
     /// MAX_HUB_DISTANCE_KM of the hub (then recorded and set aside).
-    fn point(&mut self, label: String, (lat, lon): (f64, f64), color: [u8; 3], kind: Kind, day: Option<u32>) -> Option<Point> {
+    fn point(
+        &mut self,
+        label: String,
+        (lat, lon): (f64, f64),
+        color: [u8; 3],
+        kind: Kind,
+        day: Option<u32>,
+        pin_only: bool,
+    ) -> Option<Point> {
         let point = Point {
             lat,
             lon,
@@ -563,6 +609,7 @@ impl HubGate {
             kind,
             day,
             label,
+            pin_only,
         };
         let Some(hub) = self.hub else {
             return Some(point);
@@ -611,7 +658,8 @@ async fn day_routes<R: MapResolver>(
     legs: Option<&Vec<(Point, Point)>>,
 ) -> Result<Vec<RouteLine>, String> {
     let Some(legs) = legs else {
-        return net.routes(points).await;
+        // Activity pins are drawn but never joined by a road line.
+        return net.routes(&routed_points(points)).await;
     };
     let on_map = |p: &Point| points.iter().any(|q| coord_key(q.lat, q.lon) == coord_key(p.lat, p.lon));
     let mut out = Vec::new();
@@ -670,6 +718,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
             .iter()
             .filter(|s| s.0 == *day)
             .filter(|s| !src.pois.iter().any(|p| p.0 == *day && coord_key(p.2, p.3) == coord_key(s.1, s.2)))
+            .filter(|s| !src.act_pins.iter().any(|a| a.day == *day && coord_key(a.lat, a.lon) == coord_key(s.1, s.2)))
             .map(|s| coord_key(s.1, s.2))
             .collect();
         let day_segs = src.segments.iter().filter(|s| s.day == *day).count();
@@ -699,12 +748,16 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         for seg in src.segments.iter().filter(|s| s.day == *day && !s.skipped) {
             let mut ends: [Option<Point>; 2] = [None, None];
             let mut away_ends: [Option<Point>; 2] = [None, None];
+            let mut resolved_ends: [Option<(f64, f64)>; 2] = [None, None];
             for (end, label) in [&seg.from, &seg.to].into_iter().enumerate() {
                 if label.trim().is_empty() {
                     continue;
                 }
                 let resolved =
                     resolve_segment_label(net, label, &src.dest_pois, &src.hotel_names).await?;
+                if let Some((lat, lon, _)) = resolved {
+                    resolved_ends[end] = Some((lat, lon));
+                }
                 if resolved.is_none() && unresolved.insert(label.clone()) && net.diagnostics() {
                     // With exactly one hotel the bare word resolved to it; a miss
                     // there is that hotel's geocode failing — the generic warning.
@@ -730,6 +783,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                         color,
                         kind,
                         Some(*day as u32),
+                        false,
                     )
                 {
                     if seen.insert(coord_key(lat, lon)) {
@@ -742,6 +796,12 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                 {
                     away_ends[end] = gate.away_pin(lat, lon);
                 }
+            }
+            // The stored via is only ever used when this leg's road geometry is a cache miss.
+            if let [Some(a), Some(b)] = resolved_ends
+                && !seg.via.is_empty()
+            {
+                net.note_via(a, b, &seg.via);
             }
             if leg_mode
                 && let [Some(a), Some(b)] = &away_ends
@@ -802,11 +862,30 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
         // were all skipped keeps its pins but must not re-link them.
         if points.is_empty() {
             for p in src.pois.iter().filter(|p| p.0 == *day) {
-                if let Some(point) = gate.point(p.1.clone(), (p.2, p.3), color, Kind::Sightseeing, Some(*day as u32))
+                if let Some(point) = gate.point(p.1.clone(), (p.2, p.3), color, Kind::Sightseeing, Some(*day as u32), false)
                     && seen.insert(coord_key(p.2, p.3))
                 {
                     points.push(point);
                 }
+            }
+        }
+        // Activity pins (`activities.lat/lon`): after the route stops (and the POI
+        // fallback), in itinerary order. Drawn, numbered and legended, never joined by a
+        // road line. A pin within ACTIVITY_PIN_DEDUPE_M of anything already on the day's
+        // map reuses that point instead of adding a second marker.
+        for ap in src.act_pins.iter().filter(|a| a.day == *day) {
+            if activity_pin_is_duplicate(&points, ap.lat, ap.lon) {
+                continue;
+            }
+            if let Some(point) = gate.point(
+                ap.label.clone(),
+                (ap.lat, ap.lon),
+                color,
+                Kind::Sightseeing,
+                Some(*day as u32),
+                true,
+            ) {
+                points.push(point);
             }
         }
         day_points.insert(*day, points);
@@ -989,7 +1068,7 @@ pub(crate) async fn assemble_maps<R: MapResolver>(
                     }
                     out
                 }
-                None => net.routes(&points).await?,
+                None => net.routes(&routed_points(&points)).await?,
             };
             maps.push(PlannedMap::render_titled(
                 &key,
@@ -1515,6 +1594,9 @@ fn map_input_sha256(
         hasher.update(&p.color);
         // The DAY legend names the day; colors cycle after 7 days.
         hasher.update(p.day.unwrap_or(0).to_le_bytes());
+        // An activity pin is not a road-line end: the same coordinates as a route stop
+        // draw different lines, so the flag is part of the input.
+        hasher.update([u8::from(p.pin_only)]);
     }
     // A multi-day map numbers its pins per day, so the drawn numbers are part of
     // its image. Every other map draws 1..N in the point order hashed above —
@@ -1887,13 +1969,44 @@ fn mercator(lat: f64, lon: f64) -> (f64, f64) {
 fn coord_key(lat: f64, lon: f64) -> String {
     format!("{lat:.5},{lon:.5}")
 }
+/// An activity pin within this many metres of a point already on the day's map (a route
+/// stop or an earlier activity pin) is not drawn again — it reuses the first one's label.
+/// Roughly "same building / same car park". Deliberately its own constant: NOT
+/// `leg_match_radius_m`, which scales with the leg length to match cached road legs.
+const ACTIVITY_PIN_DEDUPE_M: f64 = 120.0;
+
+/// True when a candidate activity pin duplicates something already on the day's map.
+fn activity_pin_is_duplicate(existing: &[Point], lat: f64, lon: f64) -> bool {
+    existing.iter().any(|p| {
+        coord_key(p.lat, p.lon) == coord_key(lat, lon)
+            || haversine_m((p.lat, p.lon), (lat, lon)) <= ACTIVITY_PIN_DEDUPE_M
+    })
+}
+
+/// Legend label of an activity pin: the title's first non-empty line with any inline URL
+/// cut off ("川岩 https://…" → "川岩").
+fn activity_pin_label(title: &str) -> String {
+    let line = title
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or(title.trim());
+    let cut = line.find("http").map_or(line, |i| &line[..i]).trim();
+    if cut.is_empty() { line.to_string() } else { cut.to_string() }
+}
+
+/// The points a road line may be drawn through: activity pins are excluded.
+fn routed_points(points: &[Point]) -> Vec<Point> {
+    points.iter().filter(|p| !p.pin_only).cloned().collect()
+}
+
 fn same_place(a: &Point, b: &Point) -> bool {
     coord_key(a.lat, a.lon) == coord_key(b.lat, b.lon)
 }
 
 /// Bumped whenever the renderer draws the SAME inputs differently, so the
 /// no-background reuse path cannot keep a PNG drawn by an older renderer.
-const RENDER_REV: &str = "pins-declutter+day-legend/2-no-plan-chain";
+const RENDER_REV: &str = "pins-declutter+day-legend/3-activity-pins";
 /// Horizontal step per overview DAY legend entry: dot + "DAY NN" + gap.
 const PLAN_LEGEND_STEP: i32 = 62;
 /// Vertical step between wrapped overview legend rows.
@@ -2017,6 +2130,11 @@ fn day_logistics_legend_entries(points: &[Point]) -> Vec<(&'static str, [u8; 3])
 /// hotel↔airport transfer day renders as its single hop. Returns the dedup'd
 /// points and legs; a day with no commute (e.g. a bare hotel pin) is empty.
 fn day_logistics_legs(all_pts: &[Point]) -> (Vec<Point>, Vec<(Point, Point)>) {
+    // H1: an activity pin is also `Kind::Sightseeing`, but it has no road behind it — it must
+    // never become the day's "first"/"last" sight (that would chain the hotel round trip
+    // to a pin) nor shift the sight order the airport gateway logic compares.
+    let routed = routed_points(all_pts);
+    let all_pts = &routed[..];
     let hotel = all_pts.iter().find(|p| p.kind == Kind::Hotel);
     let airport = all_pts.iter().find(|p| p.kind == Kind::Airport);
     let first = all_pts.iter().find(|p| p.kind == Kind::Sightseeing);
@@ -2621,12 +2739,30 @@ pub(crate) async fn fetch_osrm_leg(
 /// `live`) so a fresh trip follows roads on its FIRST render. With `w = None`
 /// (cache-only) a miss is not fetched and draws the same straight connector a
 /// failed fetch draws.
+/// The waypoints a CACHE-MISS fetch of the leg `f → t` passes to OSRM: the stored via for
+/// that endpoint pair, else none. A cache hit never calls this (v1: no via invalidation —
+/// after changing a via, `road-leg refetch --segment` replaces the cached geometry).
+fn via_for_miss(
+    hints: &HashMap<(String, String), Vec<(f64, f64)>>,
+    f: (f64, f64),
+    t: (f64, f64),
+) -> Vec<(f64, f64)> {
+    hints
+        .get(&(coord_key(f.0, f.1), coord_key(t.0, t.1)))
+        .cloned()
+        .unwrap_or_default()
+}
+
 async fn cached_routes(
     c: &Connection,
     w: Option<&Connection>,
     live: &mut HashMap<String, Vec<(f64, f64)>>,
+    hints: &HashMap<(String, String), Vec<(f64, f64)>>,
     points: &[Point],
 ) -> Result<Vec<RouteLine>, String> {
+    // Defensive: activity pins are never road-line ends (callers already filter them).
+    let routed = routed_points(points);
+    let points = &routed[..];
     let mut leg_rows = c
         .query(
             "SELECT leg_key, from_lat, from_lon, to_lat, to_lon FROM route_road_legs WHERE status='ok'",
@@ -2699,7 +2835,7 @@ async fn cached_routes(
             if let Some(pts) = live.get(&live_key) {
                 road = pts.clone();
             } else if let Some(w) = w {
-                match fetch_osrm_leg(w, f, t, vec![]).await {
+                match fetch_osrm_leg(w, f, t, via_for_miss(hints, f, t)).await {
                     Ok(pts) => {
                         live.insert(live_key, pts.clone());
                         road = pts;
@@ -2728,10 +2864,14 @@ async fn cached_routes(
 }
 
 async fn query_segments(c: &Connection, p: &str, d: &str) -> Result<Vec<Segment>, String> {
-    let mut r=c.query("SELECT day_number, from_place, to_place, mode, duration_min, COALESCE(record_status='skipped',0) FROM day_route_segments WHERE plan_id=?1 AND destination=?2 ORDER BY day_number, sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("route segments query"))?;
+    let mut r=c.query("SELECT day_number, from_place, to_place, mode, duration_min, COALESCE(record_status='skipped',0), sort_order FROM day_route_segments WHERE plan_id=?1 AND destination=?2 ORDER BY day_number, sort_order",params![p.to_string(),d.to_string()]).await.map_err(err("route segments query"))?;
+    let vias = travel_db::repo::route_segments::list_all_via(c, p, d).await?;
     let mut v = Vec::new();
     while let Some(x) = r.next().await.map_err(err("route segments read"))? {
+        let day: i64 = x.get(0).map_err(err("route day"))?;
+        let sort_order: i64 = x.get(6).map_err(err("route sort_order"))?;
         v.push(Segment {
+            via: vias.get(&(day, sort_order)).cloned().unwrap_or_default(),
             day: x.get(0).map_err(err("route day"))?,
             from: x
                 .get::<Option<String>>(1)
@@ -2775,6 +2915,46 @@ async fn query_skipped_pois(c: &Connection, p: &str, d: &str) -> Result<Vec<(i64
     let mut r=c.query("SELECT a.day_number, p.lat, p.lon FROM activities a JOIN destination_pois p ON (p.poi_id=a.poi_id OR (a.poi_id IS NULL AND p.title=a.title)) AND p.slug=?2 WHERE a.plan_id=?1 AND a.record_status = 'skipped' AND p.lat IS NOT NULL AND p.lon IS NOT NULL",params![p.to_string(),d.to_string()]).await.map_err(err("skipped POI query"))?;
     let mut v = Vec::new();
     while let Some(x) = r.next().await.map_err(err("skipped POI read"))? {
+        if let (Ok(day), Ok(lat), Ok(lon)) = (x.get(0), x.get(1), x.get(2)) {
+            v.push((day, lat, lon));
+        }
+    }
+    Ok(v)
+}
+/// Activities with their own coordinates, not skipped, in itinerary order.
+async fn query_activity_pins(c: &Connection, p: &str, d: &str) -> Result<Vec<ActPin>, String> {
+    let mut r = c
+        .query(
+            "SELECT day_number, title, lat, lon FROM activities \
+             WHERE plan_id=?1 AND destination=?2 AND lat IS NOT NULL AND lon IS NOT NULL \
+               AND (record_status IS NULL OR record_status <> 'skipped') \
+             ORDER BY day_number, CASE session_type WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 \
+               WHEN 'afternoon' THEN 2 ELSE 3 END, sort_order",
+            params![p.to_string(), d.to_string()],
+        )
+        .await
+        .map_err(err("activity pins query"))?;
+    let mut v = Vec::new();
+    while let Some(x) = r.next().await.map_err(err("activity pins read"))? {
+        if let (Ok(day), Ok(title), Ok(lat), Ok(lon)) = (x.get(0), x.get::<String>(1), x.get(2), x.get(3)) {
+            v.push(ActPin { day, label: activity_pin_label(&title), lat, lon });
+        }
+    }
+    Ok(v)
+}
+/// Skipped activities that carry their own coordinates (their pin is not drawn).
+async fn query_skipped_activity_pins(c: &Connection, p: &str, d: &str) -> Result<Vec<(i64, f64, f64)>, String> {
+    let mut r = c
+        .query(
+            "SELECT day_number, lat, lon FROM activities \
+             WHERE plan_id=?1 AND destination=?2 AND lat IS NOT NULL AND lon IS NOT NULL \
+               AND record_status = 'skipped'",
+            params![p.to_string(), d.to_string()],
+        )
+        .await
+        .map_err(err("skipped activity pins query"))?;
+    let mut v = Vec::new();
+    while let Some(x) = r.next().await.map_err(err("skipped activity pins read"))? {
         if let (Ok(day), Ok(lat), Ok(lon)) = (x.get(0), x.get(1), x.get(2)) {
             v.push((day, lat, lon));
         }
@@ -3372,7 +3552,7 @@ async fn assemble_logistics<R: MapResolver>(
             .find(|poi| norm(&poi.title).contains(&norm(&hotel)))
         {
             Some(poi) => {
-                if let Some(point) = gate.point(hotel, (poi.lat, poi.lon), HOTEL_INK, Kind::Hotel, None)
+                if let Some(point) = gate.point(hotel, (poi.lat, poi.lon), HOTEL_INK, Kind::Hotel, None, false)
                     && seen.insert((coord_key(poi.lat, poi.lon), Kind::Hotel as u8))
                 {
                     out.push(point);
@@ -3399,7 +3579,7 @@ async fn assemble_logistics<R: MapResolver>(
             } else {
                 AIRPORT_INK
             };
-            if let Some(point) = gate.point(display_label(&label, hotel_names), (lat, lon), color, kind, None)
+            if let Some(point) = gate.point(display_label(&label, hotel_names), (lat, lon), color, kind, None, false)
                 && seen.insert((coord_key(lat, lon), kind as u8))
             {
                 out.push(point);
@@ -3548,6 +3728,7 @@ pub(crate) mod test_render {
             kind: Kind::Sightseeing,
             day: Some(1),
             label: String::new(),
+        pin_only: false,
         };
         let points = vec![stop(35.0, 135.0), stop(35.01, 135.012), stop(35.004, 135.02)];
         let routes = vec![RouteLine {
@@ -3581,6 +3762,7 @@ pub(crate) mod test_render {
             kind,
             day: Some(day),
             label: String::new(),
+        pin_only: false,
         };
         let points = vec![
             stop(35.0, 135.0, Kind::Sightseeing, 1),
@@ -3651,9 +3833,14 @@ mod tests {
     struct FakeNet {
         coords: HashMap<&'static str, (f64, f64)>,
         misses: Vec<String>,
+        /// `note_via` calls received: (from, to, via).
+        vias: Vec<((f64, f64), (f64, f64), Vec<(f64, f64)>)>,
     }
 
     impl MapResolver for FakeNet {
+        fn note_via(&mut self, from: (f64, f64), to: (f64, f64), via: &[(f64, f64)]) {
+            self.vias.push((from, to, via.to_vec()));
+        }
         async fn geocode(&mut self, place: &str) -> Result<Option<(f64, f64)>, String> {
             match self.coords.get(place) {
                 Some(c) => Ok(Some(*c)),
@@ -3711,6 +3898,7 @@ mod tests {
                 ("Kyoto Station", KYOTO_STN),
             ]),
             misses: Vec::new(),
+            vias: Vec::new(),
         }
     }
 
@@ -3722,6 +3910,7 @@ mod tests {
             mode: "transit".into(),
             duration_min: None,
             skipped: false,
+            via: Vec::new(),
         }
     }
 
@@ -3739,6 +3928,7 @@ mod tests {
             ],
             pois: Vec::new(),
             skipped_pois: Vec::new(),
+            act_pins: Vec::new(),
             dest_pois: vec![
                 poi("kinkakuji", "Kinkakuji", KINKAKU.0, KINKAKU.1),
                 poi("kiyomizu", "Kiyomizu", KIYOMIZU.0, KIYOMIZU.1),
@@ -3779,6 +3969,7 @@ mod tests {
             kind,
             day,
             label: String::new(),
+        pin_only: false,
         }
     }
 
@@ -4335,6 +4526,7 @@ mod tests {
             kind,
             day: Some(day),
             label: format!("{lat},{lon}"),
+        pin_only: false,
         };
         // Far enough apart that no pin is decluttered off its anchor.
         let points = vec![
@@ -4458,6 +4650,7 @@ mod tests {
             day: None,
             label: "test".into(),
             color: [0; 3],
+            pin_only: false,
         };
         let hotels = vec![point(35.0, Kind::Hotel)];
         let local = vec![point(35.3, Kind::Sightseeing), point(36.0, Kind::Airport)];
@@ -4482,6 +4675,7 @@ mod tests {
             day: None,
             label: "test".into(),
             color: [0; 3],
+            pin_only: false,
         };
         let hotel = point(35.0, Kind::Hotel);
         let air = point(34.6, Kind::Airport);
@@ -4529,6 +4723,7 @@ mod tests {
             day: None,
             label: "test".into(),
             color: [0; 3],
+            pin_only: false,
         };
         let hotel = point(35.0, Kind::Hotel);
         let air = point(34.6, Kind::Airport);
@@ -4539,6 +4734,7 @@ mod tests {
             day: None,
             label: "test".into(),
             color: [60, 180, 75],
+            pin_only: false,
         };
         // Sightseeing day: HOTEL + DESTINATION in the day's color.
         assert_eq!(
@@ -4746,6 +4942,7 @@ mod tests {
         let mut net = FakeNet {
             coords: HashMap::from([("hotel", bogus), ("飯店", bogus), ("APA Hotel", HOTEL)]),
             misses: Vec::new(),
+            vias: Vec::new(),
         };
         let two = vec!["APA Hotel".to_string(), "Hearton Hotel".to_string()];
         for hotels in [Vec::new(), two] {
@@ -4801,8 +4998,8 @@ mod tests {
     #[test]
     fn padded_bounds_pads_by_span_fraction() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
-            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
         ];
         let (s, w, n, e) = padded_bounds(&points, &[]);
         assert!((s - 34.98).abs() < 1e-9, "south pad = 0.02 (20% of 0.1°): {s}");
@@ -4843,8 +5040,8 @@ mod tests {
         // Two pins, no routes: e.g. an airport inset whose legs both end at the
         // hotel (KIX → hotel, hotel → ITM) keeps the two terminals unjoined.
         let points = vec![
-            Point { lat: 34.43, lon: 135.23, color: [230, 25, 75], kind: Kind::Airport, day: Some(1), label: String::new() },
-            Point { lat: 34.79, lon: 135.44, color: [230, 25, 75], kind: Kind::Airport, day: Some(1), label: String::new() },
+            Point { lat: 34.43, lon: 135.23, color: [230, 25, 75], kind: Kind::Airport, day: Some(1), label: String::new(), pin_only: false },
+            Point { lat: 34.79, lon: 135.44, color: [230, 25, 75], kind: Kind::Airport, day: Some(1), label: String::new(), pin_only: false },
         ];
         let connector = |kind| {
             let rgba = decode_rgba_png(&render_png("T", &points, &[], &[], None, kind).unwrap()).unwrap();
@@ -4857,8 +5054,8 @@ mod tests {
     #[test]
     fn render_png_with_road_web_changes_output() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
-            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
         ];
         let roads = vec![RoadWay {
             points: vec![(35.0, 135.0), (35.005, 135.008), (35.01, 135.01)],
@@ -4873,8 +5070,8 @@ mod tests {
     #[test]
     fn render_png_with_basemap_replaces_grid_background() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
-            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
+            Point { lat: 35.01, lon: 135.01, color: [200, 50, 120], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
         ];
         let mut base = vec![255u8; (WIDTH * HEIGHT * 4) as usize];
         for i in 0..(WIDTH * HEIGHT) as usize {
@@ -4892,8 +5089,8 @@ mod tests {
     #[test]
     fn basemap_bbox_covers_full_canvas_in_mercator_meters() {
         let points = vec![
-            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
-            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new() },
+            Point { lat: 35.0, lon: 135.0, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
+            Point { lat: 35.1, lon: 135.2, color: [0, 0, 0], kind: Kind::Sightseeing, day: None, label: String::new(), pin_only: false },
         ];
         let p = map_projection(&points, &[]);
         let (min_x, min_y, max_x, max_y) = basemap_bbox(&p);
@@ -5088,6 +5285,7 @@ mod tests {
             kind: Kind::Sightseeing,
             day: Some(day),
             label: String::new(),
+        pin_only: false,
         };
         // Day 1 and day 8 share DAY_COLORS[0]; the legend differs, so must the hash.
         assert_ne!(
@@ -5107,6 +5305,7 @@ mod tests {
             kind,
             day,
             label: String::new(),
+        pin_only: false,
         };
         // Day 8 shares day 1's color; the legend must still name both, in
         // day order, once each, and skip the day-less hotel pin. An airport
@@ -5136,6 +5335,7 @@ mod tests {
             kind: Kind::Sightseeing,
             day: None,
             label: "金閣寺".into(),
+        pin_only: false,
         };
         let renamed = Point { label: "Kinkaku-ji".into(), ..base.clone() };
         assert_eq!(
@@ -5154,6 +5354,7 @@ mod tests {
                 kind: Kind::Sightseeing,
                 day: None,
                 label: String::new(),
+            pin_only: false,
             },
             Point {
                 lat: 35.1,
@@ -5162,6 +5363,7 @@ mod tests {
                 kind: Kind::Hotel,
                 day: None,
                 label: String::new(),
+            pin_only: false,
             },
         ];
         let routes = vec![RouteLine {
@@ -5190,6 +5392,8 @@ mod tests {
             "CREATE TABLE days (plan_id TEXT, destination TEXT, day_number INTEGER, variant_of INTEGER);
              CREATE TABLE day_route_segments (plan_id TEXT, destination TEXT, day_number INTEGER, sort_order INTEGER,
                from_place TEXT, to_place TEXT, mode TEXT, duration_min INTEGER, record_status TEXT);
+             CREATE TABLE day_route_segment_via (plan_id TEXT, destination TEXT, day_number INTEGER, sort_order INTEGER,
+               via_order INTEGER, lat REAL, lon REAL);
              CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, day_number INTEGER, sort_order INTEGER,
                title TEXT, poi_id TEXT, record_status TEXT);
              CREATE TABLE destination_pois (slug TEXT, poi_id TEXT, title TEXT, lat REAL, lon REAL);
@@ -5462,5 +5666,176 @@ mod tests {
             "skipped Daegu→Busan is chained back"
         );
         assert_ne!(plain[key].input_sha256(), skip[key].input_sha256());
+    }
+
+    // ── activity pins (spec 2026-11-20 §2) ───────────────────────────────
+
+    /// `m` metres north of `lat` (1 degree of latitude = 111,195 m on the haversine sphere).
+    fn north(c: (f64, f64), m: f64) -> (f64, f64) {
+        (c.0 + m / 111_195.08, c.1)
+    }
+
+    fn act(day: i64, label: &str, c: (f64, f64)) -> ActPin {
+        ActPin { day, label: label.into(), lat: c.0, lon: c.1 }
+    }
+
+    fn day_map<'a>(maps: &'a HashMap<String, PlannedMap>, key: &str) -> (&'a Vec<Point>, &'a Vec<RouteLine>) {
+        match &maps[key].plan {
+            MapPlan::Render { points, routes, .. } => (points, routes),
+            MapPlan::Skip { reason, .. } => panic!("{key} skipped: {reason}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn activity_pins_are_drawn_numbered_after_route_stops_but_add_no_lines() {
+        let base = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        let (base_pts, base_routes) = day_map(&base, "day-1.png");
+        let mut src = fixture_source("Kiyomizu");
+        src.act_pins = vec![
+            act(1, "川岩", north(KINKAKU, 5_000.0)),
+            act(1, "滿山望海", north(KIYOMIZU, 6_000.0)),
+        ];
+        let maps = assembled(&src, &mut fake_net()).await;
+        let (pts, routes) = day_map(&maps, "day-1.png");
+        assert_eq!(pts.len(), base_pts.len() + 2);
+        // bite: a pin that joined the road chain would add RouteLines.
+        assert_eq!(routes.len(), base_routes.len(), "pins must not add or lengthen road lines");
+        assert!(pts[pts.len() - 2..].iter().all(|p| p.pin_only));
+        assert!(pts[..pts.len() - 2].iter().all(|p| !p.pin_only));
+        let legend = legend_of(&maps["day-1.png"]);
+        let nos: Vec<i64> = legend.iter().map(|r| r.pin_no).collect();
+        assert_eq!(nos, (1..=pts.len() as i64).collect::<Vec<_>>(), "numbering continues after route stops");
+        assert_eq!(legend[legend.len() - 2].label, "川岩");
+        assert_eq!(legend[legend.len() - 1].label, "滿山望海");
+    }
+
+    #[tokio::test]
+    async fn a_day_with_only_activity_pins_numbers_them_from_one() {
+        let mut src = fixture_source("Kiyomizu");
+        src.days = vec![1];
+        src.segments.clear();
+        src.route_endpoints.clear();
+        src.act_pins = vec![
+            act(1, "川岩", north(KINKAKU, 2_000.0)),
+            act(1, "三民大飯店", north(KINKAKU, 4_000.0)),
+        ];
+        let maps = assembled(&src, &mut fake_net()).await;
+        let (pts, routes) = day_map(&maps, "day-1.png");
+        assert_eq!(pts.len(), 2);
+        assert!(routes.is_empty(), "two pins and no route segment draw no line");
+        let nos: Vec<i64> = legend_of(&maps["day-1.png"]).iter().map(|r| r.pin_no).collect();
+        assert_eq!(nos, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn activity_pin_dedupe_boundary_is_120_m() {
+        // 119 m from a route stop → folded into it; 121 m → its own pin.
+        for (m, extra) in [(119.0, 0usize), (121.0, 1usize)] {
+            let base = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+            let n0 = day_map(&base, "day-1.png").0.len();
+            let mut src = fixture_source("Kiyomizu");
+            src.act_pins = vec![act(1, "近い", north(KINKAKU, m))];
+            let maps = assembled(&src, &mut fake_net()).await;
+            assert_eq!(day_map(&maps, "day-1.png").0.len(), n0 + extra, "{m} m");
+        }
+        assert_eq!(ACTIVITY_PIN_DEDUPE_M, 120.0);
+    }
+
+    #[tokio::test]
+    async fn identical_coordinate_pins_and_a_far_pin_dedupe_among_themselves() {
+        let mut src = fixture_source("Kiyomizu");
+        let far = north(KINKAKU, 3_000.0);
+        src.act_pins = vec![act(1, "A", far), act(1, "B", far), act(1, "C", north(far, 90.0))];
+        let maps = assembled(&src, &mut fake_net()).await;
+        let (pts, _) = day_map(&maps, "day-1.png");
+        let pins: Vec<&str> = pts.iter().filter(|p| p.pin_only).map(|p| p.label.as_str()).collect();
+        assert_eq!(pins, vec!["A"], "same point and within 120 m of the first → first label kept");
+    }
+
+    #[tokio::test]
+    async fn a_pin_beyond_the_hub_gate_goes_to_the_away_map_not_the_day_map() {
+        let mut src = fixture_source("Kiyomizu");
+        src.act_pins = vec![act(1, "遠方", BUSAN)];
+        let maps = assembled(&src, &mut fake_net()).await;
+        let base = assembled(&fixture_source("Kiyomizu"), &mut fake_net()).await;
+        assert_eq!(day_map(&maps, "day-1.png").0.len(), day_map(&base, "day-1.png").0.len());
+        let (away, away_routes) = day_map(&maps, "day-1-away.png");
+        assert_eq!(away.len(), 1);
+        assert!(away[0].pin_only && away_routes.is_empty());
+    }
+
+    #[test]
+    fn map_input_hash_is_sensitive_to_pin_only() {
+        let a = pt(KINKAKU, Kind::Sightseeing, Some(1));
+        let mut b = a.clone();
+        b.pin_only = true;
+        assert_ne!(
+            map_input_sha256("t", MapKind::Day, &[a.clone()], &[]),
+            map_input_sha256("t", MapKind::Day, &[b], &[])
+        );
+    }
+
+    #[test]
+    fn render_rev_was_bumped_for_activity_pins() {
+        assert!(RENDER_REV.contains("activity-pins"), "{RENDER_REV}");
+    }
+
+    /// H1: a pin ordered before the first / after the last route sight must not become
+    /// the day's first/last sight in the hotel commute map.
+    #[test]
+    fn day_logistics_legs_ignore_activity_pins() {
+        let hotel = pt(HOTEL, Kind::Hotel, Some(1));
+        let s1 = pt(KINKAKU, Kind::Sightseeing, Some(1));
+        let s2 = pt(KIYOMIZU, Kind::Sightseeing, Some(1));
+        let mut first = pt(north(KINKAKU, 9_000.0), Kind::Sightseeing, Some(1));
+        first.pin_only = true;
+        let mut last = pt(north(KIYOMIZU, 9_000.0), Kind::Sightseeing, Some(1));
+        last.pin_only = true;
+        let plain = day_logistics_legs(&[hotel.clone(), s1.clone(), s2.clone()]);
+        let with = day_logistics_legs(&[first.clone(), hotel.clone(), s1.clone(), s2.clone(), last.clone()]);
+        let key = |r: &(Vec<Point>, Vec<(Point, Point)>)| {
+            (
+                r.0.iter().map(|p| coord_key(p.lat, p.lon)).collect::<Vec<_>>(),
+                r.1.iter()
+                    .map(|(a, b)| (coord_key(a.lat, a.lon), coord_key(b.lat, b.lon)))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(key(&plain), key(&with));
+        // A day whose ONLY sight is a pin has no commute at all.
+        let only = day_logistics_legs(&[hotel.clone(), first]);
+        assert!(only.1.is_empty(), "{:?}", only.1);
+    }
+
+    #[test]
+    fn activity_pin_label_takes_first_line_without_inline_url() {
+        assert_eq!(activity_pin_label("川岩 https://example.com/x\n第二行"), "川岩");
+        assert_eq!(activity_pin_label("\n  滿山望海  \nnote"), "滿山望海");
+        assert_eq!(activity_pin_label("https://only.example"), "https://only.example");
+    }
+
+    #[tokio::test]
+    async fn stored_via_is_handed_to_the_resolver_with_the_resolved_endpoints() {
+        let mut src = fixture_source("Kiyomizu");
+        // Day 2: hotel → Fushimi Inari, with a stored via.
+        let via = vec![(34.99, 135.77), (34.98, 135.775)];
+        let idx = src.segments.iter().position(|s| s.day == 2).unwrap();
+        src.segments[idx].via = via.clone();
+        let mut net = fake_net();
+        assemble_maps(&src, &mut net, "p", "kyoto_2026").await.unwrap();
+        assert_eq!(net.vias.len(), 1, "only the segment that stores a via is noted");
+        assert_eq!(net.vias[0].0, HOTEL);
+        assert_eq!(net.vias[0].1, INARI);
+        assert_eq!(net.vias[0].2, via);
+    }
+
+    #[test]
+    fn via_for_miss_uses_the_stored_pair_and_nothing_else() {
+        let mut hints = HashMap::new();
+        let (f, t) = ((25.1, 121.5), (25.2, 121.6));
+        hints.insert((coord_key(f.0, f.1), coord_key(t.0, t.1)), vec![(25.15, 121.55)]);
+        assert_eq!(via_for_miss(&hints, f, t), vec![(25.15, 121.55)]);
+        assert!(via_for_miss(&hints, t, f).is_empty(), "direction matters");
+        assert!(via_for_miss(&HashMap::new(), f, t).is_empty());
     }
 }

@@ -120,6 +120,7 @@ mod verify_site_record; // verify-site record layer: trip-record rows vs the liv
 mod verify_site_sheet;  // verify-site layer 4: --contact-sheet thumbnail grid
 mod verify_site_render; // verify-site layer 5: --render rendered-page checks (CDP Chrome)
 mod road_leg;           // road-leg list|refetch — OSRM road-geometry cache management
+mod update_route_segment; // update-route-segment / delete-route-segment
 mod set_accommodation;  // set-accommodation — domestic Taiwan accommodation booking (P4 booked)
 mod clear_accommodation; // clear-accommodation — cancel domestic accommodation (P4 -> selecting)
 mod list_accommodations; // list-accommodations — list domestic_accommodations (slug-keyed, no --plan-id)
@@ -619,6 +620,22 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_route_segment::run(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "update-route-segment" => {
+            if wants_help(rest, update_route_segment::UPDATE_USAGE) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            update_route_segment::run_update(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "delete-route-segment" => {
+            if wants_help(rest, update_route_segment::DELETE_USAGE) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            update_route_segment::run_delete(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "set-route-segments-bulk" => {
