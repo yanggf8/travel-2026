@@ -679,6 +679,8 @@ pub struct ActivityRow {
     pub priority: String,
     pub notes: Option<String>,
     pub poi_id: Option<String>,
+    /// Who asked for this stop (1-16 chars, validated by the CLI); NULL = nobody.
+    pub requested_by: Option<String>,
 }
 
 /// Partial update for [`ActivityRow`]. Outer `Option` = was the field given; inner `Option`
@@ -695,6 +697,10 @@ pub struct ActivityPatch {
     pub is_fixed_time: Option<bool>,
     pub priority: Option<String>,
     pub notes: Option<Option<String>>,
+    /// `--append-notes`: merged into the CURRENT stored notes inside the caller's
+    /// transaction (see [`ActivityPatch::apply`]); mutually exclusive with `notes`.
+    pub append_notes: Option<String>,
+    pub requested_by: Option<Option<String>>,
 }
 
 impl ActivityPatch {
@@ -704,8 +710,15 @@ impl ActivityPatch {
     }
 
     /// The row as it would look after the patch (pure; `poi_id` is left as-is).
-    pub fn apply(&self, row: &ActivityRow) -> ActivityRow {
-        ActivityRow {
+    /// `Err` only for an empty `--append-notes` text. An append whose lines are
+    /// already present leaves `notes` unchanged (= "No change" via the diff).
+    pub fn apply(&self, row: &ActivityRow) -> Result<ActivityRow, String> {
+        let notes = match &self.append_notes {
+            Some(add) => crate::repo::text_merge::append_note(row.notes.as_deref(), add, "\n")?
+                .or_else(|| row.notes.clone()),
+            None => self.notes.clone().unwrap_or_else(|| row.notes.clone()),
+        };
+        Ok(ActivityRow {
             title: self.title.clone().unwrap_or_else(|| row.title.clone()),
             area: self.area.clone().unwrap_or_else(|| row.area.clone()),
             nearest_station: self
@@ -717,15 +730,19 @@ impl ActivityPatch {
             end_time: self.end_time.clone().unwrap_or_else(|| row.end_time.clone()),
             is_fixed_time: self.is_fixed_time.unwrap_or(row.is_fixed_time),
             priority: self.priority.clone().unwrap_or_else(|| row.priority.clone()),
-            notes: self.notes.clone().unwrap_or_else(|| row.notes.clone()),
+            notes,
             poi_id: row.poi_id.clone(),
-        }
+            requested_by: self
+                .requested_by
+                .clone()
+                .unwrap_or_else(|| row.requested_by.clone()),
+        })
     }
 }
 
 /// Field-by-field differences `(column, from, to)` between two rows, with NULL rendered as
 /// `None`. Order is fixed (title, area, nearest_station, duration_min, start_time, end_time,
-/// is_fixed_time, priority, notes, poi_id). Empty = the patch is a no-op.
+/// is_fixed_time, priority, notes, poi_id, requested_by). Empty = the patch is a no-op.
 pub fn activity_row_diff(
     before: &ActivityRow,
     after: &ActivityRow,
@@ -758,6 +775,11 @@ pub fn activity_row_diff(
     push("priority", Some(before.priority.clone()), Some(after.priority.clone()));
     push("notes", before.notes.clone(), after.notes.clone());
     push("poi_id", before.poi_id.clone(), after.poi_id.clone());
+    push(
+        "requested_by",
+        before.requested_by.clone(),
+        after.requested_by.clone(),
+    );
     out
 }
 
@@ -773,7 +795,7 @@ pub async fn read_activity_row(
     let mut rows = conn
         .query(
             "SELECT title, area, nearest_station, duration_min, start_time, end_time, \
-                    is_fixed_time, priority, notes, poi_id \
+                    is_fixed_time, priority, notes, poi_id, requested_by \
              FROM activities WHERE plan_id = ?1 AND destination = ?2 AND id = ?3 \
                AND day_number = ?4 AND session_type = ?5",
             libsql::params![
@@ -801,6 +823,7 @@ pub async fn read_activity_row(
         priority: row.get::<String>(7).map_err(g)?,
         notes: row.get::<Option<String>>(8).map_err(g)?,
         poi_id: row.get::<Option<String>>(9).map_err(g)?,
+        requested_by: row.get::<Option<String>>(10).map_err(g)?,
     }))
 }
 
@@ -823,9 +846,9 @@ pub async fn update_activity_fields(
         .execute(
             "UPDATE activities SET title = ?1, area = ?2, nearest_station = ?3, duration_min = ?4, \
                start_time = ?5, end_time = ?6, is_fixed_time = ?7, priority = ?8, notes = ?9, \
-               poi_id = ?10, updated_at = ?11 \
-             WHERE plan_id = ?12 AND destination = ?13 AND day_number = ?14 \
-               AND session_type = ?15 AND id = ?16",
+               poi_id = ?10, updated_at = ?11, requested_by = ?12 \
+             WHERE plan_id = ?13 AND destination = ?14 AND day_number = ?15 \
+               AND session_type = ?16 AND id = ?17",
             libsql::params![
                 row.title.clone(),
                 row.area.clone(),
@@ -838,6 +861,7 @@ pub async fn update_activity_fields(
                 row.notes.clone(),
                 row.poi_id.clone(),
                 now.to_string(),
+                row.requested_by.clone(),
                 plan_id.to_string(),
                 destination.to_string(),
                 day,
@@ -1018,13 +1042,21 @@ pub async fn insert_activity(
     notes: Option<String>,
     source: &str,
     now: &str,
+    requested_by: Option<String>,
+    geo: Option<ActivityGeo>,
 ) -> Result<(), String> {
+    let (lat, lon, geo_source) = match geo {
+        Some(g) => (Some(g.lat), Some(g.lon), g.source),
+        None => (None, None, None),
+    };
     conn.execute(
         "INSERT INTO activities \
             (id, plan_id, destination, day_number, session_type, sort_order, \
              title, area, nearest_station, duration_min, start_time, end_time, \
-             is_fixed_time, priority, notes, source, booking_required, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, ?17)",
+             is_fixed_time, priority, notes, source, booking_required, updated_at, \
+             requested_by, lat, lon, geo_source) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, ?17, \
+                 ?18, ?19, ?20, ?21)",
         libsql::params![
             activity_id.to_string(),
             plan_id.to_string(),
@@ -1042,11 +1074,106 @@ pub async fn insert_activity(
             priority.to_string(),
             notes,
             source.to_string(),
-            now.to_string()
+            now.to_string(),
+            requested_by,
+            lat,
+            lon,
+            geo_source
         ],
     )
     .await
     .map_err(|e| format!("activities INSERT failed: {e}"))?;
+    Ok(())
+}
+
+/// A map pin carried by an activity row itself (spec 2026-11-20 §2.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActivityGeo {
+    pub lat: f64,
+    pub lon: f64,
+    /// Free-text provenance (e.g. "OSM node 123"); no constraint.
+    pub source: Option<String>,
+}
+
+/// Read one activity's pin (None = no coordinates), pinned to its `(day, session)`.
+/// `Err` when the activity is not there.
+pub async fn read_activity_geo(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+) -> Result<Option<ActivityGeo>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT lat, lon, geo_source FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 AND id = ?3 \
+               AND day_number = ?4 AND session_type = ?5",
+            libsql::params![
+                plan_id.to_string(),
+                destination.to_string(),
+                activity_id.to_string(),
+                day,
+                session.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities geo read failed: {e}"))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("activity {activity_id} not found in D{day}/{session}"))?;
+    let g = |e: libsql::Error| e.to_string();
+    let lat = row.get::<Option<f64>>(0).map_err(g)?;
+    let lon = row.get::<Option<f64>>(1).map_err(g)?;
+    let source = row.get::<Option<String>>(2).map_err(g)?;
+    Ok(match (lat, lon) {
+        (Some(lat), Some(lon)) => Some(ActivityGeo { lat, lon, source }),
+        _ => None,
+    })
+}
+
+/// Set (`Some`) or clear (`None`) one activity's pin with ONE UPDATE (fixed column
+/// names, every value bound). Does not touch `updated_at` — a pin is map metadata.
+/// Pinned to `(day, session, id)`: 0 rows changed fails loud.
+pub async fn set_activity_geocode(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+    day: i64,
+    session: &str,
+    activity_id: &str,
+    geo: Option<&ActivityGeo>,
+) -> Result<(), String> {
+    let (lat, lon, source) = match geo {
+        Some(g) => (Some(g.lat), Some(g.lon), g.source.clone()),
+        None => (None, None, None),
+    };
+    let n = conn
+        .execute(
+            "UPDATE activities SET lat = ?1, lon = ?2, geo_source = ?3 \
+             WHERE plan_id = ?4 AND destination = ?5 AND day_number = ?6 \
+               AND session_type = ?7 AND id = ?8",
+            libsql::params![
+                lat,
+                lon,
+                source,
+                plan_id.to_string(),
+                destination.to_string(),
+                day,
+                session.to_string(),
+                activity_id.to_string()
+            ],
+        )
+        .await
+        .map_err(|e| format!("activities geocode UPDATE failed: {e}"))?;
+    if n == 0 {
+        return Err(format!(
+            "activity {activity_id} not found in D{day}/{session} of plan {plan_id} ({destination})"
+        ));
+    }
     Ok(())
 }
 
@@ -1660,6 +1787,10 @@ pub async fn swap_session_day_numbers(
         // content; leaving them behind strands the old day's route on the swapped day.
         "day_route_segments",
         "day_landmarks",
+        // Per-segment via points are keyed by (day_number, sort_order) of their
+        // segment: they must move with the segment, or the swapped day inherits the
+        // other day's via geometry (spec §5, review H4).
+        "day_route_segment_via",
     ];
     const TMP: i64 = -999_999;
     for table in SESSION_TABLES {
@@ -1761,6 +1892,7 @@ mod update_activity_fields_tests {
             priority: "want".into(),
             notes: Some("n".into()),
             poi_id: Some("poi1".into()),
+            requested_by: Some("Ping".into()),
         }
     }
 
@@ -1772,7 +1904,7 @@ mod update_activity_fields_tests {
             area: Some(Some("鼻頭".into())),
             ..Default::default()
         };
-        let a = p.apply(&r);
+        let a = p.apply(&r).unwrap();
         assert_eq!(a.duration_min, Some(45));
         assert_eq!(a.area.as_deref(), Some("鼻頭"));
         assert_eq!(a.nearest_station, r.nearest_station);
@@ -1788,12 +1920,12 @@ mod update_activity_fields_tests {
             notes: Some(None),
             ..Default::default()
         };
-        let a = p.apply(&r);
+        let a = p.apply(&r).unwrap();
         assert_eq!(a.start_time, None);
         assert_eq!(a.notes, None);
         assert!(ActivityPatch::default().is_empty());
         assert!(!p.is_empty());
-        assert!(activity_row_diff(&r, &ActivityPatch::default().apply(&r)).is_empty());
+        assert!(activity_row_diff(&r, &ActivityPatch::default().apply(&r).unwrap()).is_empty());
     }
 
     #[test]
@@ -1805,7 +1937,8 @@ mod update_activity_fields_tests {
             is_fixed_time: Some(true),
             ..Default::default()
         }
-        .apply(&r);
+        .apply(&r)
+        .unwrap();
         let d = activity_row_diff(&r, &a);
         let cols: Vec<&str> = d.iter().map(|(c, _, _)| *c).collect();
         assert_eq!(cols, ["duration_min", "is_fixed_time", "notes"]);
@@ -1832,13 +1965,14 @@ mod update_activity_fields_tests {
             "CREATE TABLE activities (id TEXT, plan_id TEXT, destination TEXT, title TEXT, area TEXT, \
              nearest_station TEXT, duration_min INTEGER, start_time TEXT, end_time TEXT, \
              is_fixed_time INTEGER, priority TEXT, notes TEXT, poi_id TEXT, sort_order INTEGER, \
-             record_status TEXT, updated_at TEXT, day_number INTEGER, session_type TEXT)",
+             record_status TEXT, updated_at TEXT, day_number INTEGER, session_type TEXT, \
+             requested_by TEXT, lat REAL, lon REAL, geo_source TEXT)",
             (),
         )
         .await
         .unwrap();
         conn.execute(
-            "INSERT INTO activities VALUES ('a','p','d','鼻頭角',NULL,'龍洞',60,'09:00',NULL,0,'want','n','poi1',7,'done','old',1,'morning')",
+            "INSERT INTO activities VALUES ('a','p','d','鼻頭角',NULL,'龍洞',60,'09:00',NULL,0,'want','n','poi1',7,'done','old',1,'morning','Ping',NULL,NULL,NULL)",
             (),
         )
         .await
@@ -1850,7 +1984,8 @@ mod update_activity_fields_tests {
             start_time: Some(None),
             ..Default::default()
         }
-        .apply(&before);
+        .apply(&before)
+        .unwrap();
         update_activity_fields(&conn, "p", "d", 1, "morning", "a", &after, "now").await.unwrap();
         let got = read_activity_row(&conn, "p", "d", 1, "morning", "a").await.unwrap().unwrap();
         assert_eq!(got.duration_min, Some(45));

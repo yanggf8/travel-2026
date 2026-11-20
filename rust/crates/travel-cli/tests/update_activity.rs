@@ -400,3 +400,235 @@ fn validation_failure_writes_nothing() {
     assert_eq!(version(&plan), "5");
     assert_eq!(events(&plan, "activity_updated"), "0");
 }
+
+// ── L1: --append-notes ────────────────────────────────────────────────────────
+
+fn notes_of(plan: &str, suffix: &str) -> String {
+    n(&format!(
+        "SELECT REPLACE(COALESCE(notes, '<NULL>'), char(10), '|') AS n FROM activities WHERE id = '{plan}_{suffix}'"
+    ))
+}
+
+fn kv_of(plan: &str, k: &str) -> String {
+    n(&format!(
+        "SELECT value AS v FROM plan_event_data WHERE plan_id = '{plan}' AND scope = 'timeline' AND key = '{k}'"
+    ))
+}
+
+#[test]
+fn append_notes_adds_a_line_and_keeps_the_old_text() {
+    fixture!(plan, dest);
+    let (ok, stdout, stderr) = run_cmd(&[
+        "update-activity", "1", "morning", &format!("{plan}_a"), "--append-notes", "停車 50 元",
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok, "append failed; stdout={stdout} stderr={stderr}");
+    assert_eq!(notes_of(&plan, "a"), "舊備註|停車 50 元");
+    assert_eq!(version(&plan), "6");
+    assert_eq!(kv_of(&plan, "notes_mode"), "append");
+    assert_eq!(kv_of(&plan, "from.notes"), "舊備註");
+    // no overwrite warning for an append
+    assert!(!stdout.contains("warn:"), "{stdout}");
+    // NULL notes: the appended text becomes the whole note
+    let (ok, _o, e) = run_cmd(&[
+        "update-activity", "1", "morning", &format!("{plan}_b"), "--append-notes", "營業 10-18",
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok, "{e}");
+    assert_eq!(notes_of(&plan, "b"), "營業 10-18");
+}
+
+#[test]
+fn append_notes_same_text_rerun_is_a_noop() {
+    fixture!(plan, dest);
+    let args = [
+        "update-activity", "1", "morning", &format!("{plan}_a"), "--append-notes", "舊備註",
+        "--plan-id", &plan, "--dest", &dest,
+    ];
+    let (ok, stdout, stderr) = run_cmd(&args);
+    assert!(ok, "{stdout}{stderr}");
+    assert!(stdout.contains("No change"), "{stdout}");
+    assert_eq!(version(&plan), "5");
+    assert_eq!(events(&plan, "activity_updated"), "0");
+    assert_eq!(notes_of(&plan, "a"), "舊備註");
+    // append once, rerun: still exactly one copy and one extra version
+    let add = [
+        "update-activity", "1", "morning", &format!("{plan}_a"), "--append-notes", "停車 50 元",
+        "--plan-id", &plan, "--dest", &dest,
+    ];
+    assert!(run_cmd(&add).0);
+    let (ok, stdout, _e) = run_cmd(&add);
+    assert!(ok && stdout.contains("No change"), "{stdout}");
+    assert_eq!(version(&plan), "6");
+    assert_eq!(notes_of(&plan, "a"), "舊備註|停車 50 元");
+}
+
+#[test]
+fn replacing_notes_warns_when_old_text_is_dropped() {
+    fixture!(plan, dest);
+    let (ok, stdout, stderr) = run_cmd(&[
+        "update-activity", "1", "morning", &format!("{plan}_a"), "--notes", "全新內容",
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok, "{stdout}{stderr}");
+    assert!(stdout.contains("warn: 取代了 3 字備註"), "{stdout}");
+    assert!(stdout.contains("--append-notes"), "{stdout}");
+    assert_eq!(kv_of(&plan, "from.notes"), "舊備註");
+    // a replacement that still contains the old text does not warn
+    let (ok, stdout, _e) = run_cmd(&[
+        "update-activity", "1", "morning", &format!("{plan}_a"), "--notes", "全新內容 舊備註",
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok);
+    assert!(!stdout.contains("warn:"), "{stdout}");
+}
+
+// ── L1: --requested-by ────────────────────────────────────────────────────────
+
+#[test]
+fn requested_by_set_change_clear_and_noop() {
+    fixture!(plan, dest);
+    let rb = || n(&format!("SELECT COALESCE(requested_by, '<NULL>') AS n FROM activities WHERE id = '{plan}_a'"));
+    let cmd = |extra: &[&str]| {
+        let mut a = vec!["update-activity", "1", "morning", "鼻頭角"];
+        a.extend_from_slice(extra);
+        a.extend_from_slice(&["--plan-id", &plan, "--dest", &dest]);
+        run_cmd(&a)
+    };
+    let (ok, stdout, stderr) = cmd(&["--requested-by", "Ping"]);
+    assert!(ok, "{stdout}{stderr}");
+    assert_eq!(rb(), "Ping");
+    assert_eq!(kv_of(&plan, "changed"), "requested_by");
+    assert_eq!(version(&plan), "6");
+    // same value: zero audit
+    let (ok, stdout, _e) = cmd(&["--requested-by", "Ping"]);
+    assert!(ok && stdout.contains("No change"), "{stdout}");
+    assert_eq!(version(&plan), "6");
+    assert_eq!(events(&plan, "activity_updated"), "2");
+    // change, then clear
+    assert!(cmd(&["--requested-by", "Yang"]).0);
+    assert_eq!(rb(), "Yang");
+    assert!(cmd(&["--clear", "requested_by"]).0);
+    assert_eq!(rb(), "<NULL>");
+}
+
+#[test]
+fn requested_by_too_long_fails_with_zero_write() {
+    fixture!(plan, dest);
+    let long = "指".repeat(17);
+    let (ok, _o, stderr) = run_cmd(&[
+        "update-activity", "1", "morning", "鼻頭角", "--requested-by", &long,
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(!ok);
+    assert!(stderr.contains("1-16"), "{stderr}");
+    assert_eq!(
+        n(&format!("SELECT COUNT(*) AS n FROM activities WHERE plan_id = '{plan}' AND requested_by IS NOT NULL")),
+        "0"
+    );
+    assert_eq!(version(&plan), "5");
+    // exactly 16 passes
+    let ok16 = "指".repeat(16);
+    let (ok, o, e) = run_cmd(&[
+        "update-activity", "1", "morning", "鼻頭角", "--requested-by", &ok16,
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok, "{o}{e}");
+}
+
+#[test]
+fn move_activity_keeps_requested_by_and_pin() {
+    fixture!(plan, dest);
+    exec_ok(&format!(
+        "UPDATE activities SET requested_by = 'Ping', lat = 25.1, lon = 121.8, geo_source = 'osm' \
+         WHERE id = '{plan}_b'"
+    ));
+    let (ok, o, e) = run_cmd(&[
+        "move-activity", "1", "morning", "afternoon", &format!("{plan}_b"),
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok, "{o}{e}");
+    assert!(o.contains("reorder-activities"), "{o}");
+    assert_eq!(
+        n(&format!(
+            "SELECT session_type || '|' || requested_by || '|' || lat || '|' || lon || '|' || geo_source AS n \
+             FROM activities WHERE id = '{plan}_b'"
+        )),
+        "afternoon|Ping|25.1|121.8|osm"
+    );
+}
+
+// ── L1: title edit keeps the pin and says so ─────────────────────────────────
+
+#[test]
+fn title_change_keeps_pin_and_prints_coordinates() {
+    fixture!(plan, dest);
+    exec_ok(&format!("UPDATE activities SET lat = 25.1234, lon = 121.8765 WHERE id = '{plan}_b'"));
+    let (ok, stdout, stderr) = run_cmd(&[
+        "update-activity", "1", "morning", &format!("{plan}_b"), "--title", "龍洞灣公園",
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok, "{stdout}{stderr}");
+    assert!(stdout.contains("活動已有座標 (25.1234,121.8765)"), "{stdout}");
+    assert_eq!(
+        n(&format!("SELECT lat || ',' || lon AS n FROM activities WHERE id = '{plan}_b'")),
+        "25.1234,121.8765"
+    );
+    // an activity without a pin prints no coordinate note
+    let (ok, stdout, _e) = run_cmd(&[
+        "update-activity", "1", "morning", &format!("{plan}_a"), "--title", "鼻頭角公園",
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok);
+    assert!(!stdout.contains("活動已有座標"), "{stdout}");
+}
+
+// ── L1: add-activity --requested-by / --lat --lon --source ───────────────────
+
+#[test]
+fn add_activity_with_requested_by_and_pin() {
+    fixture!(plan, dest);
+    let (ok, o, e) = run_cmd(&[
+        "add-activity", "1", "afternoon", "滿山望海", "--requested-by", "Ping",
+        "--lat", "25.0123", "--lon", "121.9", "--source", "OSM way 1",
+        "--plan-id", &plan, "--dest", &dest,
+    ]);
+    assert!(ok, "{o}{e}");
+    assert_eq!(
+        n(&format!(
+            "SELECT requested_by || '|' || lat || '|' || lon || '|' || geo_source AS n \
+             FROM activities WHERE plan_id = '{plan}' AND title = '滿山望海'"
+        )),
+        "Ping|25.0123|121.9|OSM way 1"
+    );
+    // half a pair / null island / overlong name: zero rows written
+    for bad in [
+        vec!["--lat", "25.0"],
+        vec!["--lat", "0", "--lon", "0"],
+        vec!["--requested-by", "超過十六個字的名字超過十六個字的名字"],
+    ] {
+        let mut a = vec!["add-activity", "1", "afternoon", "壞的"];
+        a.extend(bad);
+        a.extend_from_slice(&["--plan-id", &plan, "--dest", &dest]);
+        assert!(!run_cmd(&a).0);
+    }
+    assert_eq!(
+        n(&format!("SELECT COUNT(*) AS n FROM activities WHERE plan_id = '{plan}' AND title = '壞的'")),
+        "0"
+    );
+}
+
+// ── L1: view-itinerary prints notes and requester ────────────────────────────
+
+#[test]
+fn view_itinerary_prints_activity_notes_and_requester() {
+    fixture!(plan, dest);
+    exec_ok(&format!(
+        "UPDATE activities SET requested_by = 'Ping', notes = '週一公休\n停車免費' WHERE id = '{plan}_b'"
+    ));
+    let (ok, stdout, stderr) = run_cmd(&["itinerary", "--plan-id", &plan, "--dest", &dest]);
+    assert!(ok, "{stdout}{stderr}");
+    assert!(stdout.contains("龍洞灣 〔指定：Ping〕"), "{stdout}");
+    assert!(stdout.contains("      ↳ 週一公休\n        停車免費"), "{stdout}");
+    assert!(stdout.contains("      ↳ 舊備註"), "{stdout}");
+}

@@ -553,8 +553,24 @@ fn render_activity(a: &plan::ActivityView) -> String {
     if a.booking_status == "pending" && !a.book_by.is_empty() {
         suffix.push_str(&format!(" (book by {})", a.book_by));
     }
-    format!("    {} {}{}\n", icon, a.title, suffix)
+    if !a.requested_by.is_empty() {
+        suffix.push_str(&format!(" {}{}〕", REQUESTED_BY_LABEL, a.requested_by));
+    }
+    let mut out = format!("    {} {}{}\n", icon, a.title, suffix);
+    // Notes (營業時間、停車、補充…) under the title: first line after the arrow, every
+    // further line indented to the same column. Plain text, blank lines skipped.
+    let mut lines = a.notes.lines().map(str::trim).filter(|l| !l.is_empty());
+    if let Some(first) = lines.next() {
+        out.push_str(&format!("      ↳ {first}\n"));
+        for l in lines {
+            out.push_str(&format!("        {l}\n"));
+        }
+    }
+    out
 }
+
+/// Label before the requester's name on an activity line (human-read CLI output).
+const REQUESTED_BY_LABEL: &str = "〔指定：";
 
 fn render_route_segment(seg: &RouteSegment) -> String {
     // Mode icon — matches TS line 171:
@@ -627,5 +643,58 @@ fn capitalize(s: &str) -> String {
     match chars.next() {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod activity_line_tests {
+    use super::*;
+
+    fn act(notes: &str, by: &str) -> plan::ActivityView {
+        plan::ActivityView {
+            title: "川岩咖啡".into(),
+            booking_required: false,
+            booking_status: String::new(),
+            booking_ref: String::new(),
+            is_fixed_time: false,
+            start_time: String::new(),
+            end_time: String::new(),
+            book_by: String::new(),
+            sort_order: 0,
+            notes: notes.into(),
+            requested_by: by.into(),
+        }
+    }
+
+    #[test]
+    fn no_notes_no_requester_is_the_old_single_line() {
+        assert_eq!(render_activity(&act("", "")), "    • 川岩咖啡\n");
+    }
+
+    #[test]
+    fn single_line_note_prints_under_the_title() {
+        assert_eq!(
+            render_activity(&act("週一公休", "")),
+            "    • 川岩咖啡\n      ↳ 週一公休\n"
+        );
+    }
+
+    #[test]
+    fn multi_line_note_continues_indented_and_skips_blank_lines() {
+        assert_eq!(
+            render_activity(&act("營業 10:00-18:00\n\n  停車免費  ", "")),
+            "    • 川岩咖啡\n      ↳ 營業 10:00-18:00\n        停車免費\n"
+        );
+    }
+
+    #[test]
+    fn requester_suffix_follows_booking_suffix_and_precedes_notes() {
+        let mut a = act("備註", "Ping");
+        a.booking_status = "booked".into();
+        a.booking_ref = "R1".into();
+        assert_eq!(
+            render_activity(&a),
+            "    🎫 川岩咖啡 [R1] 〔指定：Ping〕\n      ↳ 備註\n"
+        );
     }
 }

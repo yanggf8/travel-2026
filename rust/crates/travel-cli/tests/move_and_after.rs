@@ -141,3 +141,83 @@ fn add_activity_after_inserts_in_order() {
         "Charlie must sit between Alpha and Bravo"
     );
 }
+
+// ── move-activity: ambiguous title fails (no silent first-match), and rolls back ──
+#[test]
+fn move_activity_ambiguous_title_fails_with_zero_change() {
+    let tag = nanos();
+    let plan_id = format!("zz_test_{tag}");
+    let dest = format!("zz_test_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
+    if !seed(&plan_id, &dest) {
+        return;
+    }
+    for title in ["Cafe North", "Cafe South"] {
+        let (ok, o, e) = run_cmd(&["add-activity", "1", "morning", title, "--plan-id", &plan_id, "--dest", &dest]);
+        assert!(ok, "add {title} failed: {o}{e}");
+    }
+    let version_before = scalar(&format!("SELECT version AS v FROM plans WHERE plan_id='{plan_id}'"), "v");
+    let (ok, _o, err) = run_cmd(&[
+        "move-activity", "1", "morning", "afternoon", "Cafe", "--plan-id", &plan_id, "--dest", &dest,
+    ]);
+    assert!(!ok, "ambiguous title must fail");
+    assert!(err.contains("Cafe North") && err.contains("Cafe South"), "candidates listed: {err}");
+    let in_afternoon = scalar(
+        &format!("SELECT COUNT(*) AS n FROM activities WHERE plan_id='{plan_id}' AND session_type='afternoon'"),
+        "n",
+    );
+    assert_eq!(in_afternoon.as_deref(), Some("0"), "nothing may move on an ambiguous match");
+    assert_eq!(
+        scalar(&format!("SELECT version AS v FROM plans WHERE plan_id='{plan_id}'"), "v"),
+        version_before,
+        "no version bump"
+    );
+    assert_eq!(
+        scalar(
+            &format!("SELECT COUNT(*) AS n FROM plan_events WHERE plan_id='{plan_id}' AND event='activity_moved'"),
+            "n"
+        )
+        .as_deref(),
+        Some("0")
+    );
+    // the exact id still works
+    let id = scalar(
+        &format!("SELECT id AS i FROM activities WHERE plan_id='{plan_id}' AND title='Cafe South'"),
+        "i",
+    )
+    .unwrap();
+    let (ok, o, e) = run_cmd(&[
+        "move-activity", "1", "morning", "afternoon", &id, "--plan-id", &plan_id, "--dest", &dest,
+    ]);
+    assert!(ok, "{o}{e}");
+}
+
+// ── move-activity: target session missing → rolled back, source untouched ─────
+#[test]
+fn move_activity_to_missing_session_changes_nothing() {
+    let tag = nanos();
+    let plan_id = format!("zz_test_{tag}");
+    let dest = format!("zz_test_{tag}");
+    let _g = Guard::new({
+        let (plan_id, dest) = (plan_id.clone(), dest.clone());
+        move || teardown(&plan_id, &dest)
+    });
+    if !seed(&plan_id, &dest) {
+        return;
+    }
+    let (ok, o, e) = run_cmd(&["add-activity", "1", "morning", "Solo", "--plan-id", &plan_id, "--dest", &dest]);
+    assert!(ok, "{o}{e}");
+    // D1 has no evening session row: require_session_exists fails inside the tx.
+    let (ok, _o, _e) = run_cmd(&[
+        "move-activity", "1", "morning", "evening", "Solo", "--plan-id", &plan_id, "--dest", &dest,
+    ]);
+    assert!(!ok);
+    let still = scalar(
+        &format!("SELECT session_type AS s FROM activities WHERE plan_id='{plan_id}' AND title='Solo'"),
+        "s",
+    );
+    assert_eq!(still.as_deref(), Some("morning"));
+}

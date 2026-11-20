@@ -42,6 +42,7 @@ mod query_accommodation; // query-accommodation — domestic stays (destination-
 mod omiyage_worklist; // omiyage-worklist — read-only research worklist of omiyage-tagged POIs (writes nothing)
 mod set_activity;
 mod set_activity_poi;
+mod set_activity_geocode; // set-activity-geocode — pin an activity on the day map
 mod confirm_recommendations;
 mod derive_routes;
 mod transit_key; // shared destination_transit pair-key math (derive-routes lookup + add-transit write)
@@ -697,6 +698,14 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_set_notes(rest, plan_id).await?;
+            Ok(())
+        }
+        [cmd, rest @ ..] if cmd == "set-activity-geocode" => {
+            if wants_help(rest, set_activity_geocode::USAGE) {
+                return Ok(());
+            }
+            let plan_id = plan_resolver::resolve_plan_id(rest).await?;
+            set_activity_geocode::run(rest, plan_id).await?;
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "update-activity" => {

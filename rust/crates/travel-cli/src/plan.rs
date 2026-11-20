@@ -247,6 +247,10 @@ pub struct ActivityView {
     /// preserves DB order without re-sorting on the client).
     #[allow(dead_code)]
     pub sort_order: i64,
+    /// `activities.notes` ("" = none) — view-itinerary prints it under the title.
+    pub notes: String,
+    /// `activities.requested_by` ("" = none) — view-itinerary prints `〔指定：<name>〕`.
+    pub requested_by: String,
 }
 
 #[derive(Debug, Clone)]
@@ -572,6 +576,8 @@ pub async fn load(plan_id: &str) -> Result<PlanView, String> {
             end_time: a.end_time,
             book_by: a.book_by,
             sort_order: a.sort_order,
+            notes: a.notes,
+            requested_by: a.requested_by,
         };
         if let Some(d) = view.days.iter_mut().find(|d| d.day_number == a.day_number)
             && let Some(s) = d.sessions.get_mut(&a.session_type)

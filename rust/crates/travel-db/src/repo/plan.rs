@@ -485,6 +485,10 @@ pub struct ActivityRow {
     pub start_time: String,
     pub end_time: String,
     pub book_by: String,
+    /// `activities.notes` ("" when NULL) — shown by view-itinerary.
+    pub notes: String,
+    /// `activities.requested_by` ("" when NULL).
+    pub requested_by: String,
 }
 
 pub async fn activities(
@@ -495,7 +499,8 @@ pub async fn activities(
     let mut rows = conn
         .query(
             "SELECT day_number, session_type, sort_order, title, booking_required, \
-                    booking_status, booking_ref, is_fixed_time, start_time, end_time, book_by \
+                    booking_status, booking_ref, is_fixed_time, start_time, end_time, book_by, \
+                    notes, requested_by \
              FROM activities \
              WHERE plan_id = ?1 AND destination = ?2 \
              ORDER BY day_number, session_type, sort_order",
@@ -517,6 +522,8 @@ pub async fn activities(
             start_time: r.get(8).unwrap_or_default(),
             end_time: r.get(9).unwrap_or_default(),
             book_by: r.get(10).unwrap_or_default(),
+            notes: r.get(11).unwrap_or_default(),
+            requested_by: r.get(12).unwrap_or_default(),
         });
     }
     Ok(out)

@@ -366,7 +366,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 if v == "clear" {
                     lat_clear = true;
                 } else {
-                    a.latitude = Some(coord_value(&v, k, -90.0, 90.0)?);
+                    a.latitude = Some(coord_value(&v, k)?);
                 }
                 i += 2;
             }
@@ -375,7 +375,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 if v == "clear" {
                     lon_clear = true;
                 } else {
-                    a.longitude = Some(coord_value(&v, k, -180.0, 180.0)?);
+                    a.longitude = Some(coord_value(&v, k)?);
                 }
                 i += 2;
             }
@@ -413,12 +413,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             return Err("--lat and --lon must be given together".to_string())
         }
         (false, false, Some(lat), Some(lon)) => {
-            if lat.abs() < 1e-9 && lon.abs() < 1e-9 {
-                return Err(
-                    "--lat/--lon look like null island (0,0) — geocode a real place, never guess"
-                        .to_string(),
-                );
-            }
+            // Range / finiteness / null-island rules live in ONE place.
+            crate::checks::validate_coords(lat, lon)?;
         }
         (false, false, None, None) => {}
     }
@@ -432,15 +428,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-/// Parse a coordinate flag value as f64 within [min, max] (shared by lat/lon).
-fn coord_value(v: &str, flag: &str, min: f64, max: f64) -> Result<f64, String> {
-    let n: f64 = v
-        .parse()
-        .map_err(|_| format!("{flag} must be a decimal number (got '{v}')"))?;
-    if !(min..=max).contains(&n) {
-        return Err(format!("{flag} must be between {min} and {max} (got {v})"));
-    }
-    Ok(n)
+/// Parse a coordinate flag value as a number; range / null-island checks are done on
+/// the PAIR by `checks::validate_coords` once both flags are known.
+fn coord_value(v: &str, flag: &str) -> Result<f64, String> {
+    v.parse()
+        .map_err(|_| format!("{flag} must be a decimal number (got '{v}')"))
 }
 
 pub(crate) fn val(raw: &[String], i: usize, flag: &str) -> Result<String, String> {

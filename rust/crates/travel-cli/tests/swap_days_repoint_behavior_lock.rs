@@ -45,8 +45,9 @@ fn seed_plan_days_and_sessions(plan: &str, dest: &str) {
          UPDATE days SET excursion = 1 WHERE plan_id = {p} AND destination = {d} AND day_number = 1;"
     ));
 
-    for (day, label, morning_start, evening_start) in
-        [(1, "A", "08:00", "18:00"), (2, "B", "09:00", "19:00")]
+    // A's via sits at lat 25.1, B's at 25.2 — the swap must carry them with the segment.
+    for (day, label, morning_start, evening_start, via_lat) in
+        [(1, "A", "08:00", "18:00", "25.1"), (2, "B", "09:00", "19:00", "25.2")]
     {
         exec_ok(&format!(
             "INSERT INTO timesofday \
@@ -91,7 +92,10 @@ fn seed_plan_days_and_sessions(plan: &str, dest: &str) {
              VALUES \
                 ({p}, {d}, {day}, 0, '{label}_from', '{label}_to', 'walking', 'confirmed'); \
              INSERT INTO day_landmarks (plan_id, destination, day_number, sort_order, landmark) \
-             VALUES ({p}, {d}, {day}, 0, '{label}_landmark');"
+             VALUES ({p}, {d}, {day}, 0, '{label}_landmark'); \
+             INSERT INTO day_route_segment_via \
+                (plan_id, destination, day_number, sort_order, via_order, lat, lon) \
+             VALUES ({p}, {d}, {day}, 0, 1, {via_lat}, 121.5);"
         ));
     }
 }
@@ -292,6 +296,15 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
     );
     assert_values(
         &format!(
+            "SELECT day_number || '|' || sort_order || '|' || via_order || '|' || lat AS rowval \
+             FROM day_route_segment_via WHERE plan_id = {p} AND destination = {d} \
+             ORDER BY day_number, sort_order, via_order"
+        ),
+        &["1|0|1|25.2", "2|0|1|25.1"],
+        "day_route_segment_via rows travel with their day's route segment (SESSION_TABLES)",
+    );
+    assert_values(
+        &format!(
             "SELECT day_number || '|' || landmark AS rowval \
              FROM day_landmarks WHERE plan_id = {p} AND destination = {d} \
              ORDER BY day_number, sort_order"
@@ -313,6 +326,7 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
         "activities",
         "session_meals",
         "session_activities_zh",
+        "day_route_segment_via",
     ] {
         let out = exec_ok(&format!(
             "SELECT COUNT(*) AS n FROM {table} \
@@ -351,4 +365,31 @@ fn swap_days_repoints_every_session_scoped_table_and_audits_once() {
         Some("42"),
         "plans.version should bump by one; out={version}"
     );
+}
+/// `day_route_segment_via` is plan-keyed: the canonical `teardown_plan` must clear it
+/// (it reads sqlite_master live), so a test that seeds via rows can never leak them.
+#[test]
+fn teardown_plan_leaves_no_via_rows() {
+    let _lock = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if db_exec("SELECT 1 AS n").is_none() {
+        return;
+    }
+    let tag = nanos();
+    let plan = format!("zz_test_{tag}");
+    let dest = format!("zz_test_{tag}");
+    let _g = Guard::new({
+        let (plan, dest) = (plan.clone(), dest.clone());
+        move || teardown_plan(&plan, &dest)
+    });
+    seed_plan(&plan, &dest, 1);
+    exec_ok(&format!(
+        "INSERT INTO day_route_segment_via \
+           (plan_id, destination, day_number, sort_order, via_order, lat, lon) \
+         VALUES ('{plan}', '{dest}', 1, 0, 1, 25.1, 121.5)"
+    ));
+    teardown_plan(&plan, &dest);
+    let n = exec_ok(&format!(
+        "SELECT COUNT(*) AS n FROM day_route_segment_via WHERE plan_id = '{plan}'"
+    ));
+    assert_eq!(n.scalar().as_deref(), Some("0"), "via rows leaked past teardown_plan; out={n}");
 }
