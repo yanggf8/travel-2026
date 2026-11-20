@@ -779,7 +779,7 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "move-activity" => {
-            if wants_help(rest, "travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]\n  (move an activity to another session/day, preserving its id + poi link; appended at the end of the target session)") { return Ok(()); }
+            if wants_help(rest, "travel move-activity <day> <from-session> <to-session> <id|title> [--to-day N] [--dest slug]\n  (move an activity to another session/day, preserving its id + poi link + pin + requested_by; appended at the END of the target session — to set a position use reorder-activities; a title matching several activities fails and lists them, pass the id)") { return Ok(()); }
             let plan_id = plan_resolver::resolve_plan_id(rest).await?;
             set_activity::run_move(rest, plan_id).await?;
             Ok(())
@@ -1248,7 +1248,8 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   add-meal <day> <session> --meal \"<text>\" [--recommended]  Append one meal, nothing replaced (audited)\n\
   set-meal <day> <session> <text-match> --meal \"<new text>\"  Change ONE meal in place (audited)\n\
   set-activity-notes <day> <session> <id|title> --notes \"<t>\" | --clear  Edit notes in place; id/poi_id kept (audited)\n\
-  update-activity <day> <session> <id|title> [--title --area --station --duration --start --end --fixed --priority --notes] [--clear f,..]  Edit any activity field in place (audited)\n\
+  update-activity <day> <session> <id|title> [--title --area --station --duration --start --end --fixed --priority --notes|--append-notes --requested-by] [--clear f,..]  Edit any activity field in place (audited)\n\
+  set-activity-geocode <day> <session> <id|title> (--lat <f> --lon <f> [--source <t>] | --clear)  Pin one activity on the day map (no route segment)\n\
   clear-meals <day> <session> [--dest <slug>]  Delete every meal of one session (audited)\n\
   record-activity <day> <session> <id|title> done|skipped [--note \"<t>\"]  Mark what actually happened (audited)\n\
   record-meal <day> <session> <text-match> done|skipped [--note \"<t>\"]  Mark one meal (audited)\n\
@@ -1259,6 +1260,8 @@ ITINERARY EDITS (mutations — audited; most take [--dest slug])\n\
   derive-routes [--day N] [--dest <slug>]  Derive ai_recommended transit route segments from activity stations\n\
   set-tod-focus | set-tod-time-range | set-tod-zh <day> <session> [...]\n\
   set-route-segment | set-route-segments-bulk <day> --seg \"from|to|mode[|...]\"\n\
+  update-route-segment <day> <sort_order> [--from --to --mode --duration --start-time --notes|--append-notes --via \"lat,lon;..\"] [--clear f,..|via]  Partial edit of one segment (keeps source)\n\
+  delete-route-segment <day> <sort_order>  Delete one segment + renumber later ones\n\
   set-flight | set-hotel | set-accommodation --hotel <name> --room-type <type> [--price <twd>] | clear-accommodation --hotel <name> | set-airport-transfer | mark-booked | sync-bookings\n\
 \n\
 SHOP / OFFERS\n\
@@ -1275,7 +1278,7 @@ VALIDATE / CHECKS\n\
   set-poi-coords <slug> <poi_id> <lat> <lon>  (geocode a POI; global/slug-keyed, no --plan-id)\n\
   set-poi-title <slug> <poi_id> <title> [--segments]  (rename a POI title, optionally matching segment labels too)\n\
   set-place-geocode \"<place>\" --lat N --lon N (--dest slug|--context ctx)  (manually pin a label Nominatim can't resolve)\n\
-  road-leg {{list|refetch --from <p|lat,lon> --to <p|lat,lon> [--via a;b] [--dest slug]}}  (OSRM road cache; --via forces a specific road)\n\
+  road-leg {{list|refetch --from <p|lat,lon> --to <p|lat,lon> [--via a;b] [--dest slug] | refetch --segment <day> <sort_order>}}  (OSRM road cache; --via forces a specific road; --segment uses the stored endpoints + via)\n\
   add-transit | add-omiyage | query-omiyage | omiyage-worklist  (slug-keyed reference data; no --plan-id)\n\
   set-clothing-tip <tip_id> --kind <k> [--threshold N] --sort N --zh <t> --en <t> [--item \"<zh>|<en>\"]...  (dashboard clothing-advice band + its packing items; global, no --plan-id)\n\
   set-weather-provider <provider_id> --name-zh <t> --name-en <t> --url <u> --license <t> | weather-providers  (weather attribution shown on day cards; global, no --plan-id)\n\

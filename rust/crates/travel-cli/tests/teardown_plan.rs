@@ -131,7 +131,7 @@ async fn canonical_teardown_plan_cleans_all_plan_keyed_tables() {
     assert!(ok_list, "table list query must succeed; err={err_list}");
 
     let tables = column(&list_out);
-    assert_eq!(tables.len(), 64, "expected 64 plan-keyed tables (incl. plan_documents, plan_document_days); got {}: {:?}", tables.len(), tables);
+    assert_eq!(tables.len(), 66, "expected 66 plan-keyed tables (incl. plan_documents, plan_document_days, day_weather_sessions, day_route_segment_via); got {}: {:?}", tables.len(), tables);
 
     // CRITICAL: each COUNT as SINGLE db exec (not batched) so parse yields plain 'n: 0'
     // (batched would be '[N/M] n: 0')
