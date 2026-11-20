@@ -1201,6 +1201,49 @@ pub async fn list_plan_records(
     Ok(out)
 }
 
+/// One activity that carries notes and is NOT recorded as skipped — i.e. one
+/// the plan page must render with its notes (a past skipped row collapses to
+/// the 未前往 line without them). Read by verify-site's notes check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActivityNote {
+    pub id: String,
+    pub day: i64,
+    pub session: String,
+    pub title: String,
+    pub notes: String,
+}
+
+/// Every non-skipped activity of one (plan, destination) whose `notes` is
+/// non-blank, in itinerary order.
+pub async fn list_activity_notes(
+    conn: &Connection,
+    plan_id: &str,
+    destination: &str,
+) -> Result<Vec<ActivityNote>, String> {
+    let mut rows = conn
+        .query(
+            "SELECT id, day_number, session_type, title, notes FROM activities \
+             WHERE plan_id = ?1 AND destination = ?2 \
+               AND notes IS NOT NULL AND TRIM(notes) <> '' \
+               AND (record_status IS NULL OR record_status <> 'skipped') \
+             ORDER BY day_number, sort_order",
+            libsql::params![plan_id.to_string(), destination.to_string()],
+        )
+        .await
+        .map_err(|e| format!("activity notes query failed: {e}"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+        out.push(ActivityNote {
+            id: row.get(0).map_err(|e| e.to_string())?,
+            day: row.get(1).map_err(|e| e.to_string())?,
+            session: row.get(2).map_err(|e| e.to_string())?,
+            title: row.get(3).map_err(|e| e.to_string())?,
+            notes: row.get(4).map_err(|e| e.to_string())?,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1223,6 +1266,26 @@ mod tests {
             conn.execute(sql, ()).await.unwrap();
         }
         conn
+    }
+
+    #[tokio::test]
+    async fn list_activity_notes_skips_blank_and_skipped_rows() {
+        let conn = db().await;
+        conn.execute("ALTER TABLE activities ADD COLUMN notes TEXT", ()).await.unwrap();
+        for sql in [
+            "INSERT INTO activities VALUES ('n2','p','d',1,'noon',1,'有備註','done',NULL,'營業 9-17')",
+            "INSERT INTO activities VALUES ('n1','p','d',1,'noon',0,'先','',NULL,'停車 A')",
+            "INSERT INTO activities VALUES ('n3','p','d',1,'noon',2,'空','',NULL,'  ')",
+            "INSERT INTO activities VALUES ('n4','p','d',1,'noon',3,'略過','skipped',NULL,'不顯示')",
+            "INSERT INTO activities VALUES ('n5','p','d',1,'noon',4,'無',NULL,NULL,NULL)",
+            "INSERT INTO activities VALUES ('n6','p','other',1,'noon',0,'別處',NULL,NULL,'x')",
+        ] {
+            conn.execute(sql, ()).await.unwrap();
+        }
+        let got = list_activity_notes(&conn, "p", "d").await.unwrap();
+        let ids: Vec<_> = got.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["n1", "n2"], "{got:?}");
+        assert_eq!(got[1].notes, "營業 9-17");
     }
 
     #[tokio::test]

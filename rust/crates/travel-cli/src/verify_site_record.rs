@@ -28,7 +28,7 @@ use std::path::Path;
 
 use libsql::Connection;
 use scraper::{ElementRef, Html, Selector};
-use travel_db::repo::records::PlanRecords;
+use travel_db::repo::records::{ActivityNote, PlanRecords};
 
 use crate::verify_site::{http_get, redact, Check, Next, Tally};
 
@@ -56,6 +56,9 @@ struct RowShown {
     unrecorded: bool,
     /// `span.record-note` text.
     note: Option<String>,
+    /// Text of the activity's `div.act-notes` block (worker
+    /// render/session.rs `activity_extras`); None when it has none.
+    notes_text: Option<String>,
 }
 
 /// One session block as the page renders it (worker render/session.rs
@@ -122,8 +125,16 @@ pub(crate) fn parse_record_page(html: &str) -> RecordPage {
         // simply not selected, so the pairing survives them).
         let mut current: Option<RowKey> = None;
         for el in sess.select(&sel(
-            ".activity[data-activity-id], .meal[data-meal-order], .record-badge, .record-note",
+            ".activity[data-activity-id], .meal[data-meal-order], .record-badge, .record-note, .act-notes",
         )) {
+            if has_class(el, "act-notes") {
+                if let Some(RowKey::Activity(id)) = &current {
+                    if let Some(row) = shown.activities.get_mut(id) {
+                        row.notes_text = Some(text_of(el));
+                    }
+                }
+                continue;
+            }
             if el.value().name() != "span" {
                 current = if has_class(el, "activity") {
                     let id = el.value().attr("data-activity-id").unwrap_or_default().to_string();
@@ -240,6 +251,49 @@ fn missing_session(anc: &str) -> Check {
         format!("no session block #{anc} on the page (undated day or variant: the record never renders)"),
         Some(Next::Deploy),
     )
+}
+
+/// The first line of `notes` as the page shows it: text before any URL (the
+/// worker may fold a URL into a short labeled link), whitespace collapsed.
+fn notes_probe(notes: &str) -> String {
+    let first = notes.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let cut = first.find("http").map_or(first, |i| &first[..i]);
+    cut.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Notes check: every non-skipped activity with notes must render them inside
+/// its own `div.activity` (the first line, HTML-unescaped, appears in the
+/// `div.act-notes`). One verdict per (activity x language).
+pub(crate) fn notes_checks(pages: &[(&str, &RecordPage)], notes: &[ActivityNote]) -> Vec<(String, Check)> {
+    let mut out = Vec::new();
+    for (lang, page) in pages {
+        for n in notes {
+            let anc = anchor(n.day, &n.session);
+            let key = format!("{lang}:notes:{}", n.id);
+            let Some(sess) = page.sessions.get(&anc) else {
+                out.push((key, missing_session(&anc)));
+                continue;
+            };
+            let probe = notes_probe(&n.notes);
+            let shown = sess.activities.get(&n.id).and_then(|r| r.notes_text.as_deref());
+            let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            let check = match shown {
+                Some(t) if norm(t).contains(&probe) => {
+                    Check::pass(format!("notes of 「{}」 shown in #{anc}", n.title))
+                }
+                Some(t) => Check::fail(
+                    format!("notes of 「{}」 render {:?}, want {:?}", n.title, norm(t), probe),
+                    None,
+                ),
+                None => Check::fail(
+                    format!("activity 「{}」 has notes but renders no act-notes block in #{anc}", n.title),
+                    None,
+                ),
+            };
+            out.push((key, check));
+        }
+    }
+    out
 }
 
 /// The pure judge: every record row against every parsed page. Emits one
@@ -458,7 +512,14 @@ pub(crate) async fn run(
             return;
         }
     };
-    if records.is_empty() {
+    let notes = match travel_db::repo::records::list_activity_notes(conn, plan, &dest).await {
+        Ok(n) => n,
+        Err(e) => {
+            tally.emit(plan, LAYER, "notes", &Check::fail(format!("activity notes read failed: {e}"), None));
+            return;
+        }
+    };
+    if records.is_empty() && notes.is_empty() {
         tally.emit(plan, LAYER, "none", &Check::pass("no record rows (nothing recorded yet)"));
         return;
     }
@@ -509,7 +570,7 @@ pub(crate) async fn run(
         }
     }
     let borrowed: Vec<(&str, &RecordPage)> = pages.iter().map(|(l, p)| (*l, p)).collect();
-    for (key, check) in record_checks(&borrowed, &records) {
+    for (key, check) in record_checks(&borrowed, &records).into_iter().chain(notes_checks(&borrowed, &notes)) {
         tally.emit(plan, LAYER, &key, &check);
     }
 }
@@ -640,7 +701,7 @@ mod tests {
         // The meal's sibling badge/note were paired onto the right row.
         assert_eq!(
             parsed.sessions["day-2-noon"].meals[&0],
-            RowShown { actual: true, unrecorded: false, note: Some("好吃".into()) }
+            RowShown { actual: true, unrecorded: false, note: Some("好吃".into()), notes_text: None }
         );
         // One verdict per row (plus the summary), all keyed and lang-prefixed.
         let mut keys: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
@@ -804,6 +865,46 @@ mod tests {
         assert_eq!(out.iter().filter(|(k, _)| k.starts_with("zh:")).count(), out.iter().filter(|(k, _)| k.starts_with("en:")).count());
     }
 
+    fn note(id: &str, notes: &str) -> ActivityNote {
+        ActivityNote { id: id.into(), day: 2, session: "noon".into(), title: "東寺".into(), notes: notes.into() }
+    }
+    fn noted_page(block: &str) -> RecordPage {
+        parse_record_page(&page(&format!(
+            "<div class=\"session session-noon\" id=\"day-2-noon\"><div class=\"activity\" data-activity-id=\"a1\">東寺 <span class=\"req-chip\">Ping 指定</span>{block}</div></div>"
+        )))
+    }
+    #[test]
+    fn notes_check_passes_when_first_line_is_in_the_act_notes_block() {
+        let p = noted_page("<div class=\"act-notes\">營業 9-17 &lt;b&gt;<br>停車 <a href=\"https://x\">地圖</a></div>");
+        let out = notes_checks(&[("zh", &p)], &[note("a1", "營業 9-17 <b>\n停車 https://x")]);
+        assert_eq!(levels(&out), vec![("zh:notes:a1".into(), crate::verify_site::Level::Pass)], "{out:?}");
+    }
+    #[test]
+    fn notes_check_fails_on_missing_block_wrong_text_and_missing_session() {
+        let none = noted_page("");
+        let out = notes_checks(&[("en", &none)], &[note("a1", "營業 9-17")]);
+        assert!(matches!(out[0].1.level, crate::verify_site::Level::Fail), "{out:?}");
+        let wrong = noted_page("<div class=\"act-notes\">別的字</div>");
+        let out = notes_checks(&[("en", &wrong)], &[note("a1", "營業 9-17")]);
+        assert!(matches!(out[0].1.level, crate::verify_site::Level::Fail), "{out:?}");
+        let mut other = note("a1", "x");
+        other.day = 9;
+        let out = notes_checks(&[("en", &wrong)], &[other]);
+        assert!(matches!(out[0].1.level, crate::verify_site::Level::Fail), "{out:?}");
+    }
+    #[test]
+    fn req_chip_and_notes_block_never_disturb_the_record_pairing() {
+        let p = parse_record_page(&page("<div class=\"session session-noon\" id=\"day-2-noon\"><div class=\"activity\" data-activity-id=\"a1\">東寺 <span class=\"req-chip\">Ping 指定</span><div class=\"act-notes\">n</div> <span class=\"record-badge record-badge--actual\">實際</span> <span class=\"record-note\">很棒</span></div></div>"));
+        let r = &p.sessions["day-2-noon"].activities["a1"];
+        assert!(r.actual && !r.unrecorded, "{r:?}");
+        assert_eq!(r.note.as_deref(), Some("很棒"));
+        assert_eq!(r.notes_text.as_deref(), Some("n"));
+    }
+    #[test]
+    fn notes_probe_cuts_at_url_and_takes_first_nonblank_line() {
+        assert_eq!(notes_probe("\n  營業  9-17 \n停車"), "營業 9-17");
+        assert_eq!(notes_probe("地圖：https://x/y"), "地圖：");
+    }
     #[test]
     fn after_trip_pin_is_the_day_after_the_last_main_day() {
         assert_eq!(after_trip_pin("2026-11-16").as_deref(), Some("2026-11-17T12:00"));
