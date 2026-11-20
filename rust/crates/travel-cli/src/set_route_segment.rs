@@ -105,24 +105,34 @@ pub async fn run(
     } else {
         "confirmed"
     };
-    match execute_single(
-        &conn_write().await?,
-        &plan_id,
-        &destination,
-        day,
-        sort_order,
-        &from,
-        &to,
-        &mode,
-        duration,
-        notes.as_deref(),
-        start_time.as_deref(),
-        source,
-    )
-    .await
-    {
-        Ok(_) => {
+    // One transaction: delete + insert + via carry + audit commit or roll back together
+    // (a failed insert must not lose the old segment's via).
+    let conn = conn_write().await?;
+    let outcome = async {
+        crate::cascade::common::begin_immediate(&conn, "set-route-segment").await?;
+        execute_single(
+            &conn,
+            &plan_id,
+            &destination,
+            day,
+            sort_order,
+            &from,
+            &to,
+            &mode,
+            duration,
+            notes.as_deref(),
+            start_time.as_deref(),
+            source,
+        )
+        .await
+    }
+    .await;
+    match crate::cascade::common::finish_tx(&conn, "set-route-segment", outcome).await {
+        Ok((_, via_report)) => {
             println!("✅ Route segment updated");
+            for line in route_segments::format_via_report(day, &via_report) {
+                println!("{line}");
+            }
             if source == "ai_recommended" {
                 println!("   ℹ this leg is ai_recommended — the next `derive-routes` run replaces every ai_recommended leg on this day (add without --recommended to store it as confirmed and make derive-routes skip the day).");
             } else {
@@ -229,18 +239,18 @@ pub async fn run_bulk(
     } else {
         "confirmed"
     };
-    match execute_bulk(
-        &conn_write().await?,
-        &plan_id,
-        &destination,
-        day,
-        &segments,
-        source,
-    )
-    .await
-    {
-        Ok(_) => {
+    let conn = conn_write().await?;
+    let outcome = async {
+        crate::cascade::common::begin_immediate(&conn, "set-route-segments-bulk").await?;
+        execute_bulk(&conn, &plan_id, &destination, day, &segments, source).await
+    }
+    .await;
+    match crate::cascade::common::finish_tx(&conn, "set-route-segments-bulk", outcome).await {
+        Ok((_, via_report)) => {
             println!("✅ Route segments replaced");
+            for line in route_segments::format_via_report(day, &via_report) {
+                println!("{line}");
+            }
             if source == "ai_recommended" {
                 println!("   ℹ these legs are ai_recommended — the next `derive-routes` run replaces every ai_recommended leg on this day (omit --recommended to store as confirmed and make derive-routes skip the day).");
             } else {
@@ -394,7 +404,7 @@ async fn execute_single(
     notes: Option<&str>,
     start_time: Option<&str>,
     source: &str,
-) -> Result<i64, String> {
+) -> Result<(i64, route_segments::ViaCarryReport), String> {
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
 
@@ -416,6 +426,16 @@ async fn execute_single(
     // 1. DELETE the existing segment for (day, sort_order), then INSERT the new
     //    one (domain writes via the DAL). The TS path also touches days.updated_at
     //    for the affected day; we mirror that.
+    //    The old slot's via is snapshotted first and carried onto the new segment when
+    //    the endpoint text is identical (spec 2026-11-20 §6.3).
+    let old_snap = route_segments::snapshot_segments(
+        conn,
+        plan_id,
+        destination,
+        day,
+        route_segments::SnapScope::Slot(sort_order),
+    )
+    .await?;
     route_segments::delete_slot(conn, plan_id, destination, day, sort_order).await?;
     route_segments::insert_segment(
         conn,
@@ -433,6 +453,15 @@ async fn execute_single(
         },
         source,
         "",
+    )
+    .await?;
+    let via_report = route_segments::carry_via_over(
+        conn,
+        plan_id,
+        destination,
+        day,
+        &old_snap,
+        &[(sort_order, from.to_string(), to.to_string())],
     )
     .await?;
 
@@ -524,7 +553,7 @@ async fn execute_single(
     )
     .await?;
 
-    Ok(version_after)
+    Ok((version_after, via_report))
 }
 
 async fn execute_bulk(
@@ -534,7 +563,7 @@ async fn execute_bulk(
     day: i64,
     segments: &[SegmentInput],
     source: &str,
-) -> Result<i64, String> {
+) -> Result<(i64, route_segments::ViaCarryReport), String> {
     let now_iso = now_rfc3339();
     let now_db = now_db_datetime();
 
@@ -550,6 +579,14 @@ async fn execute_bulk(
     let version_after = version_before + 1;
 
     // 1. DELETE ALL segments for (plan, dest, day) + INSERT new (domain writes via the DAL).
+    let old_snap = route_segments::snapshot_segments(
+        conn,
+        plan_id,
+        destination,
+        day,
+        route_segments::SnapScope::All,
+    )
+    .await?;
     route_segments::delete_all_for_day(conn, plan_id, destination, day).await?;
     for (i, s) in segments.iter().enumerate() {
         route_segments::insert_segment(
@@ -571,6 +608,15 @@ async fn execute_bulk(
         )
         .await?;
     }
+
+    let new_labels: Vec<(i64, String, String)> = segments
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i as i64, s.from.clone(), s.to.clone()))
+        .collect();
+    let via_report =
+        route_segments::carry_via_over(conn, plan_id, destination, day, &old_snap, &new_labels)
+            .await?;
 
     // 2. Touch days.updated_at.
     route_segments::touch_day(conn, plan_id, destination, day, &now_db).await?;
@@ -648,7 +694,7 @@ async fn execute_bulk(
     )
     .await?;
 
-    Ok(version_after)
+    Ok((version_after, via_report))
 }
 
 async fn read_version(conn: &Connection, plan_id: &str) -> Result<i64, String> {
